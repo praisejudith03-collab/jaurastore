@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Checkout Form · Jaura Store</title>
+  <meta name="description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
+  <meta name="robots" content="index, follow" />
+  <link rel="canonical" href="https://jaurastore.com.ng/checkout.html" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Jaura Store" />
+  <meta property="og:title" content="Checkout Form · Jaura Store" />
+  <meta property="og:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
+  <meta property="og:url" content="https://jaurastore.com.ng/checkout.html" />
+  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Checkout Form · Jaura Store" />
+  <meta name="twitter:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
+  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg" />
+  <link rel="icon" type="image/png" href="images/brand/favicon.png" />
+  <link rel="apple-touch-icon" href="images/brand/apple-touch.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css?v=88" />
+</head>
+<body data-page="checkout">
+  <div id="site-header"></div>
+
+  <div class="ck-hero">
+    <div class="wrap">
+      <ol class="ck-steps">
+        <li><a href="cart.html" data-i18n="cart.stepCart">Shopping cart</a></li>
+        <li class="is-on" data-i18n="cart.stepCheck">Checkout</li>
+        <li data-i18n="cart.stepDone">Order complete</li>
+      </ol>
+      <h1 data-i18n="ck.title">Checkout</h1>
+    </div>
+  </div>
+
+  <div class="wrap" data-checkout-root>
+    <p class="empty" data-empty hidden><span data-i18n="ck.empty">Your cart is currently empty. Add products before checkout.</span> <a href="shop.html" data-i18n="ck.return">Return to shop</a></p>
+
+    <form class="ck-grid" data-checkout>
+      <div class="ck-main">
+        <h2 data-i18n="ck.billing">Billing details</h2>
+        <div class="form-grid">
+          <div class="field"><label data-i18n="ck.first">First name *</label><input name="firstName" required autocomplete="given-name" /></div>
+          <div class="field"><label data-i18n="ck.last">Last name *</label><input name="lastName" required autocomplete="family-name" /></div>
+          <div class="field full"><label data-i18n="ck.country">Country / Region *</label>
+            <select name="country" required>
+              <option value="Benin" data-i18n="ck.benin">Benin</option>
+              <option value="Nigeria" data-i18n="ck.nigeria">Nigeria</option>
+              <option value="Togo" data-i18n="ck.togo">Togo</option>
+              <option value="Other West Africa" data-i18n="ck.other">Other West Africa</option>
+            </select>
+          </div>
+          <div class="field full"><label data-i18n="ck.street">Street address *</label><input name="address" required data-i18n-placeholder="ck.streetPh" placeholder="House number and street name" autocomplete="street-address" /></div>
+          <div class="field"><label data-i18n="ck.city">Town / City *</label><input name="city" required data-i18n-placeholder="ck.cityPh" placeholder="Cotonou, Ikeja, Lekki…" /></div>
+          <div class="field full fare-field">
+            <label data-i18n="ck.fareTitle">Add the total amount of the items in your cart to the delivery fare for your zone *</label>
+            <p class="ck-fare-intro" data-i18n="ck.fareIntro">These are ranges only. The exact fare depends on your location and the weight of the products, and is confirmed on WhatsApp.</p>
+            <div class="fare-list">
+              <label class="fare-opt"><input type="radio" name="zone" value="Lagos Mainland" required /> <span data-i18n="ck.fare.mainland">Lagos Mainland (₦2,000 – ₦5,000)</span></label>
+              <label class="fare-opt"><input type="radio" name="zone" value="Lagos Island" /> <span data-i18n="ck.fare.island">Lagos Island (₦3,500 – ₦6,000)</span></label>
+              <label class="fare-opt"><input type="radio" name="zone" value="Other Nigeria" /> <span data-i18n="ck.fare.ngOther">Other states in Nigeria (confirm on WhatsApp)</span></label>
+              <label class="fare-opt"><input type="radio" name="zone" value="Cotonou" /> <span data-i18n="ck.fare.cotonou">Cotonou (1,000 – 3,000 CFA)</span></label>
+              <label class="fare-opt"><input type="radio" name="zone" value="Calavi" /> <span data-i18n="ck.fare.calavi">Calavi (1,500 – 3,500 CFA)</span></label>
+              <label class="fare-opt"><input type="radio" name="zone" value="Porto-Novo" /> <span data-i18n="ck.fare.porto">Porto-Novo (1,500 – 3,500 CFA)</span></label>
+              <label class="fare-opt"><input type="radio" name="zone" value="Other Benin" /> <span data-i18n="ck.fare.bjOther">Other places in Benin (confirm on WhatsApp)</span></label>
+              <label class="fare-opt"><input type="radio" name="zone" value="Lomé" /> <span data-i18n="ck.fare.lome">Lomé (2,500 – 3,500 CFA)</span></label>
+              <label class="fare-opt"><input type="radio" name="zone" value="Other Togo" /> <span data-i18n="ck.fare.tgOther">Other places in Togo (confirm on WhatsApp)</span></label>
+            </div>
+          </div>
+          <div class="field"><label data-i18n="ck.phone">Phone *</label><input name="phone" required autocomplete="tel" /></div>
+          <div class="field"><label data-i18n="ck.email">Email address *</label><input name="email" type="email" required autocomplete="email" /></div>
+          <div class="field full"><label data-i18n="ck.notes">Order notes (optional)</label><textarea name="note" rows="3" data-i18n-placeholder="ck.notesPh" placeholder="Notes about your order, e.g. special delivery instructions."></textarea></div>
+        </div>
+      </div>
+
+      <aside class="ck-side">
+        <h2 data-i18n="ck.yourOrder">Your order</h2>
+        <table class="ck-table">
+          <thead><tr><th data-i18n="ck.product">Product</th><th data-i18n="ck.subtotal">Subtotal</th></tr></thead>
+          <tbody data-ck-lines></tbody>
+          <tfoot>
+            <tr><th data-i18n="ck.subtotal">Subtotal</th><td data-ck-sub>—</td></tr>
+            <tr><th data-i18n="ck.shipping">Shipping</th><td data-i18n="ck.shipNote">Confirmed by city after order</td></tr>
+            <tr class="ck-total"><th data-i18n="ck.total">Total</th><td data-ck-total>—</td></tr>
+          </tfoot>
+        </table>
+
+        <div class="ck-pay">
+          <h3 data-i18n="ck.advance">Advance bank payment</h3>
+          <p class="ck-pay-intro" data-i18n="ck.payIntro">Pay into the account below. Use your Order ID as the transfer remark, then send a screenshot of your payment to us on WhatsApp. A confirmation message will be sent to your email. JauraStore will confirm your payment.</p>
+          <label class="pay-card">
+            <input type="radio" name="currency" value="NGN" checked />
+            <div>
+              <strong data-i18n="ck.payNgn">Direct bank transfer — ₦ Naira</strong>
+              <span data-i18n="ck.payNgnHint">Pay in Nigerian Naira to the UBA account below.</span>
+            </div>
+          </label>
+          <label class="pay-card">
+            <input type="radio" name="currency" value="CFA" />
+            <div>
+              <strong data-i18n="ck.payCfa">Direct bank transfer — F CFA</strong>
+              <span data-i18n="ck.payCfaHint">Pay in F CFA by MTN MoMo (Benin) or Moov Money (Togo).</span>
+            </div>
+          </label>
+
+          <div class="bank-sheet" data-bank-ngn>
+            <h4 data-i18n="ck.ourBank">Our bank details</h4>
+            <p class="bank-name-line" data-ngn-name>OKORAFOR PRAISE</p>
+            <div class="bank-row"><span data-i18n="ck.bank">Bank</span><strong data-ngn-bank>UBA</strong></div>
+            <div class="bank-row"><span data-i18n="ck.accNo">Account number</span><strong data-ngn-acc>23474678931</strong></div>
+          </div>
+          <div class="bank-sheet" data-bank-cfa hidden>
+            <h4 data-i18n="ck.ourBank">Our bank details</h4>
+            <p class="bank-name-line" data-cfa-name>OKORAFOR GIFT</p>
+            <div class="bank-row"><span>MoMo Benin</span><strong data-cfa-acc>01 52 01 99 30</strong></div>
+            <div class="bank-row"><span>Moov Togo</span><strong>+229 01 68 95 31 10</strong></div>
+            <p class="bank-sub">OKORAFOR GOODNESS (Togo)</p>
+          </div>
+
+          <p class="ck-ship-wa" data-i18n="ck.fareNote">Your transport fare will be discussed with you on WhatsApp after you place the order.</p>
+          <p class="ck-confirm-note" data-i18n="ck.emailNote">A confirmation message will be sent to your email. JauraStore will confirm your payment.</p>
+
+          <div class="ck-upload">
+            <label class="proof-label" data-i18n="ck.uploadReceipt">Upload the bank payment receipt</label>
+            <input type="file" name="proof" accept="image/*" />
+            <img data-proof-preview hidden class="proof-preview" alt="" />
+          </div>
+        </div>
+
+        <p class="ck-legal" data-i18n="ck.legal">Your personal data is used to process your order. Upload your payment receipt here. JauraStore will confirm your payment, and a confirmation message will be sent to your email. Transport fare is discussed on WhatsApp.</p>
+        <button class="btn ck-place" type="submit" data-i18n="ck.place">Place order</button>
+      </aside>
+    </form>
+  </div>
+
+  <div id="site-footer"></div>
+  <script src="js/products-data.js?v=88"></script>
+  <script src="js/i18n.js?v=88"></script>
+  <script src="js/store.js?v=88"></script>
+  <script src="js/app.js?v=88"></script>
+</body>
+</html>

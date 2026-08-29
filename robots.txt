@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /admin.html
+Disallow: /account.html
+Disallow: /order.html
+Disallow: /pay.html
+
+Sitemap: https://jaurastore.com.ng/sitemap.xml

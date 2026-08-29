@@ -1,0 +1,14 @@
+/*
+  Cache-Control: no-store, no-cache, must-revalidate
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; media-src 'self'; connect-src 'self' https://formsubmit.co https://open.er-api.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+
+/admin.html
+  X-Robots-Tag: noindex, nofollow
+
+/account.html
+  X-Robots-Tag: noindex, nofollow

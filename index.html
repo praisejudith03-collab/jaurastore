@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <title>Jaura Store | Fashion, beauty & lifestyle · ₦ and F CFA</title>
+  <meta name="description" content="Shop Jaura Store — clothes, shoes, bags, ankara, household, beauty and gadgets. Pay in Naira or F CFA. Lagos and Cotonou." />
+  <meta name="robots" content="index, follow" />
+  <link rel="canonical" href="https://jaurastore.com.ng/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Jaura Store" />
+  <meta property="og:title" content="Jaura Store | Fashion, beauty & lifestyle · ₦ and F CFA" />
+  <meta property="og:description" content="Shop Jaura Store — clothes, shoes, bags, ankara, household, beauty and gadgets. Pay in Naira or F CFA. Lagos and Cotonou." />
+  <meta property="og:url" content="https://jaurastore.com.ng/" />
+  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Jaura Store | Fashion, beauty & lifestyle · ₦ and F CFA" />
+  <meta name="twitter:description" content="Shop Jaura Store — clothes, shoes, bags, ankara, household, beauty and gadgets. Pay in Naira or F CFA. Lagos and Cotonou." />
+  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg" />
+  <link rel="icon" type="image/png" href="images/brand/favicon.png" />
+  <link rel="apple-touch-icon" href="images/brand/apple-touch.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css?v=88" />
+</head>
+<body data-page="home">
+  <div id="site-header"></div>
+
+  <section class="hero-slim">
+    <div class="wrap">
+      <p class="kicker" data-i18n="home.kicker">Experience effortless elegance</p>
+      <h1 data-i18n="home.heroLine">Experience effortless elegance and curated essentials</h1>
+      <a class="btn" href="shop.html" data-i18n="home.shopNow">Shop now</a>
+    </div>
+  </section>
+
+  <section class="lux-reel">
+    <div class="lux-reel-frame">
+      <video autoplay muted loop playsinline webkit-playsinline preload="auto" poster="images/brand/lux-reel.jpg">
+        <source src="images/brand/lux-reel.mp4" type="video/mp4" />
+      </video>
+      <div class="lux-reel-copy">
+        <h2 data-i18n="home.standard">The new standard of modern luxury</h2>
+        <a class="btn lux-explore" href="shop.html?cat=household" data-i18n="home.explore">Explore</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="section-tight">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <div class="kicker" data-i18n="home.justin">Just in</div>
+          <h2 data-i18n="home.moreHouse">More from the house</h2>
+        </div>
+          <a class="just-arrow" href="shop.html" data-i18n="catbar.all">Shop all →</a>
+        </div>
+        <div class="product-grid just-in-grid" data-new></div>
+    </div>
+  </section>
+
+  <section class="how-bar">
+    <div class="wrap">
+      <div class="kicker" data-i18n="home.howKicker">How to Order</div>
+      <div class="how-row">
+        <div><b>01</b><span data-i18n="home.step1">Select your items</span></div>
+        <div><b>02</b><span data-i18n="home.step2">Review your bag</span></div>
+        <div><b>03</b><span data-i18n="home.step3">Complete the form</span></div>
+        <div><b>04</b><span data-i18n="home.step4">Send payment</span></div>
+        <div><b>05</b><span data-i18n="home.step5">Confirm delivery</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section-tight">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <div class="kicker" data-i18n="cats.title">Categories</div>
+          <h2 data-i18n="shop.categories">Categories</h2>
+        </div>
+        <a href="shop.html" data-i18n="catbar.all">Shop all</a>
+      </div>
+      <div class="home-cats cat-slide" data-home-cats></div>
+    </div>
+  </section>
+
+  <section class="section-tight">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <div class="kicker" data-i18n="home.bestsellers">Bestsellers</div>
+          <h2 data-i18n="home.bestsellers">Bestsellers</h2>
+        </div>
+        <a href="shop.html" data-i18n="catbar.all">Shop all</a>
+      </div>
+      <div class="best-slide" data-bestsellers></div>
+    </div>
+  </section>
+
+  <div id="site-footer"></div>
+  <script src="js/products-data.js?v=88"></script>
+  <script src="js/i18n.js?v=88"></script>
+  <script src="js/store.js?v=88"></script>
+  <script src="js/app.js?v=88"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      setTimeout(function () {
+        var el = document.querySelector("[data-new]");
+        if (!el || el.querySelector(".card")) return;
+        var seed = window.JA_SEED || [];
+        el.innerHTML = seed.slice(0, 12).map(function (p) {
+          var img = (p.images && p.images[0]) || p.image || "";
+          var id = encodeURIComponent(p.id || "");
+          var name = (p.name || "").replace(/</g, "");
+          return '<article class="card"><a class="card-media" href="product.html?id=' + id + '"><img src="' + img + '" alt=""></a><div class="card-body"><h3><a href="product.html?id=' + id + '">' + name + "</a></h3></div></article>";
+        }).join("");
+      }, 600);
+    });
+  </script>
+</body>
+</html>

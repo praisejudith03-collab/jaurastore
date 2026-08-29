@@ -1,0 +1,4219 @@
+{
+  "10in1-raf-sandwich-maker": {
+    "slug": "10in1-raf-sandwich-maker",
+    "name": "10in1 RAF sandwich maker",
+    "description": "Non sticking coating",
+    "priceNgn": 69850,
+    "priceCfa": 28500,
+    "compareCfa": 40000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "12pcs-spice-jar-set": {
+    "slug": "12pcs-spice-jar-set",
+    "name": "12pcs spice jar set",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 15000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "100l-storage-bag": {
+    "slug": "100l-storage-bag",
+    "name": "100L storage bag",
+    "description": "A storage bag for storing clothes and other items",
+    "priceNgn": null,
+    "priceCfa": 6000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Number",
+        "type": "DROP_DOWN",
+        "values": [
+          "1",
+          "2",
+          "6",
+          "5",
+          "4",
+          "3"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "2-in-1-lipstick-lipgloss-2400": {
+    "slug": "2-in-1-lipstick-lipgloss-2400",
+    "name": "2 in 1 Lipstick lipgloss",
+    "description": "",
+    "priceNgn": 2400,
+    "priceCfa": 1000,
+    "compareCfa": 1500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "12-pcs-dessini-pot-set-85000": {
+    "slug": "12-pcs-dessini-pot-set-85000",
+    "name": "12 pcs dessini pot set",
+    "description": "",
+    "priceNgn": 85000,
+    "priceCfa": 34700,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "2-by-6-dd-birthmark": {
+    "slug": "2-by-6-dd-birthmark",
+    "name": "2 by 6 DD birthmark",
+    "description": "Have sdd quality &#010;Human hair 10 inch.",
+    "priceNgn": null,
+    "priceCfa": 42000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "10000-mah-power-bank": {
+    "slug": "10000-mah-power-bank",
+    "name": "10000 mah power bank",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 7500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "17-pcs-sealed-crisper-plastics-13000": {
+    "slug": "17-pcs-sealed-crisper-plastics-13000",
+    "name": "17 PCs sealed crisper plastics",
+    "description": "",
+    "priceNgn": 13000,
+    "priceCfa": 5300,
+    "compareCfa": 7000,
+    "options": [
+      {
+        "title": "Color",
+        "type": "COLOR",
+        "values": [
+          "#E1BCC3",
+          "#A4C6A4"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "2l-raf-mixer-with-bowl": {
+    "slug": "2l-raf-mixer-with-bowl",
+    "name": "2L RAF mixer with bowl",
+    "description": "",
+    "priceNgn": 245002,
+    "priceCfa": 10000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "24-pcs-of-gold-cutlery-set-18500": {
+    "slug": "24-pcs-of-gold-cutlery-set-18500",
+    "name": "24 PCs of gold cutlery set",
+    "description": "",
+    "priceNgn": 18500,
+    "priceCfa": 7600,
+    "compareCfa": 9500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "24-k-gold-skincare-set": {
+    "slug": "24-k-gold-skincare-set",
+    "name": "24 k gold skincare set",
+    "description": "",
+    "priceNgn": 1470024,
+    "priceCfa": 8000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "2-layers-plate-rack-28000": {
+    "slug": "2-layers-plate-rack-28000",
+    "name": "2 layers plate rack",
+    "description": "",
+    "priceNgn": 28000,
+    "priceCfa": 11500,
+    "compareCfa": 14000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "2-step-soap-holder": {
+    "slug": "2-step-soap-holder",
+    "name": "2 step soap holder",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 1200,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "24-k-nicotinamide-toner-300-ml": {
+    "slug": "24-k-nicotinamide-toner-300-ml",
+    "name": "24 K nicotinamide toner 300 ml",
+    "description": "Aims to anti-age, nourish, and firm the skin.",
+    "priceNgn": null,
+    "priceCfa": 3500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "3-layers-dish-washer-27000": {
+    "slug": "3-layers-dish-washer-27000",
+    "name": "3 layers dish washer",
+    "description": "Black available",
+    "priceNgn": 290003,
+    "priceCfa": 15000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "3-in-1-vacuum-flask-gift-set": {
+    "slug": "3-in-1-vacuum-flask-gift-set",
+    "name": "3 in 1 vacuum flask gift set",
+    "description": "",
+    "priceNgn": 6100,
+    "priceCfa": 2500,
+    "compareCfa": 3800,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Green",
+          "Grey",
+          "Nude",
+          "Peach",
+          "Blue",
+          "Black"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "3-in-1-fancy-cup-set-9100": {
+    "slug": "3-in-1-fancy-cup-set-9100",
+    "name": "3 in 1 fancy cup set",
+    "description": "",
+    "priceNgn": 9100,
+    "priceCfa": 3700,
+    "compareCfa": 4900,
+    "options": [
+      {
+        "title": "Color",
+        "type": "COLOR",
+        "values": [
+          "#83C6E3",
+          "#E1BCC3",
+          "#A4C6A4",
+          "#800080"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "3-layer-bathroom-rack": {
+    "slug": "3-layer-bathroom-rack",
+    "name": "3 layer bathroom rack",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 5000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "4-by-4-full-closure-bob": {
+    "slug": "4-by-4-full-closure-bob",
+    "name": "4 by 4 full closure bob",
+    "description": "Colour NC.&#010;12 inch 100% Human hair.",
+    "priceNgn": null,
+    "priceCfa": 21000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "3-in-1-laptop-bag": {
+    "slug": "3-in-1-laptop-bag",
+    "name": "3 in 1 laptop bag",
+    "description": "",
+    "priceNgn": 11550,
+    "priceCfa": 4700,
+    "compareCfa": 6000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Ash",
+          "Blue",
+          "Burgundy",
+          "Black"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "3-step-trolley": {
+    "slug": "3-step-trolley",
+    "name": "3 step trolley",
+    "description": "",
+    "priceNgn": 330003,
+    "priceCfa": 20000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "3in1-towel": {
+    "slug": "3in1-towel",
+    "name": null,
+    "description": "",
+    "priceNgn": 75503,
+    "priceCfa": 7000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Mint green",
+          "Blue",
+          "Peach",
+          "Brown",
+          "Purple"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "6-in-1-lipgloss-set": {
+    "slug": "6-in-1-lipgloss-set",
+    "name": "6 in 1 lipgloss set",
+    "description": "",
+    "priceNgn": 4900,
+    "priceCfa": 2000,
+    "compareCfa": 3500,
+    "options": [
+      {
+        "title": "Color",
+        "type": "COLOR",
+        "values": [
+          "#F5F4EF",
+          "#E1BCC3"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "a-soap-holder": {
+    "slug": "a-soap-holder",
+    "name": "A soap holder",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 1000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "6oup-flask": {
+    "slug": "6oup-flask",
+    "name": "6oup flask",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 1650,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Color",
+        "type": "COLOR",
+        "values": [
+          "#83C6E3",
+          "#E1BCC3",
+          "#A4C6A4",
+          "#800080"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "4-partition-lunch-plate-with-bowl": {
+    "slug": "4-partition-lunch-plate-with-bowl",
+    "name": "4 partitio",
+    "description": "",
+    "priceNgn": 127504,
+    "priceCfa": 7000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "adire-maxi-skirt-24000": {
+    "slug": "adire-maxi-skirt-24000",
+    "name": "Adire maxi skirt",
+    "description": "",
+    "priceNgn": 24000,
+    "priceCfa": 15000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "7pcs-aluminum-pot-78500": {
+    "slug": "7pcs-aluminum-pot-78500",
+    "name": "7pcs aluminum pot",
+    "description": "",
+    "priceNgn": 78500,
+    "priceCfa": 32000,
+    "compareCfa": 50000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "a58-smartwatch-with-jewelry-set": {
+    "slug": "a58-smartwatch-with-jewelry-set",
+    "name": "A58 Smartwatch with Jewelry set",
+    "description": "A58 smartwatch with jewelry contains:&#010;An A58 Smartwatch,&#010;A wristwatch ,&#010;2 straps ,&#010;A necklace, earring and 2 bracelets ,&#010;A lipstick .",
+    "priceNgn": 20900,
+    "priceCfa": 12000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Grey",
+          "Black",
+          "Pink"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "ac-design-fan-13500": {
+    "slug": "ac-design-fan-13500",
+    "name": "Ac desig",
+    "description": "It blows well and comes with light too",
+    "priceNgn": 13500,
+    "priceCfa": 5600,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "aisy-watch": {
+    "slug": "aisy-watch",
+    "name": "Aisy Watch",
+    "description": "For slim wrist.",
+    "priceNgn": 8550,
+    "priceCfa": 3500,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colors",
+        "type": "DROP_DOWN",
+        "values": [
+          "Gold black",
+          "Gold white",
+          "Silver black",
+          "Silver white"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "acne-removal-face-mask-550": {
+    "slug": "acne-removal-face-mask-550",
+    "name": "Acne removal face mask",
+    "description": "",
+    "priceNgn": 550,
+    "priceCfa": 500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "ankara-chic-set": {
+    "slug": "ankara-chic-set",
+    "name": "Ankara Chic set",
+    "description": "For all body sizes",
+    "priceNgn": null,
+    "priceCfa": 8000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "ankara-pants-9000": {
+    "slug": "ankara-pants-9000",
+    "name": "Ankara pants",
+    "description": "They don’t come with the exact material print",
+    "priceNgn": 8600,
+    "priceCfa": 5000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "afro-ponytail": {
+    "slug": "afro-ponytail",
+    "name": "Afro ponytail",
+    "description": "",
+    "priceNgn": 6000,
+    "priceCfa": 2400,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "advanced-snail-cleanser-cosrx": {
+    "slug": "advanced-snail-cleanser-cosrx",
+    "name": "Advanced snail cleanser (cosrx)",
+    "description": "",
+    "priceNgn": 8550,
+    "priceCfa": 3500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "advanced-snail-toner-cosrx": {
+    "slug": "advanced-snail-toner-cosrx",
+    "name": "Advanced snail toner (cosrx)",
+    "description": "",
+    "priceNgn": 8550,
+    "priceCfa": 3500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "ankara-sundresslong-gown": {
+    "slug": "ankara-sundresslong-gown",
+    "name": "Ankara sundress/long gown",
+    "description": "Different prints available",
+    "priceNgn": null,
+    "priceCfa": 5000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "alstow-professional-clipper": {
+    "slug": "alstow-professional-clipper",
+    "name": "ALSTOW professional clipper",
+    "description": "",
+    "priceNgn": 20400,
+    "priceCfa": 15000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "ankara-shorts": {
+    "slug": "ankara-shorts",
+    "name": "Ankara shorts",
+    "description": "For all sizes",
+    "priceNgn": null,
+    "priceCfa": 3000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "bag-k-7500": {
+    "slug": "bag-k-7500",
+    "name": "Bag k",
+    "description": "Available in all colors",
+    "priceNgn": 7500,
+    "priceCfa": 3200,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "apple-manicure-set": {
+    "slug": "apple-manicure-set",
+    "name": "Apple manicure set",
+    "description": "",
+    "priceNgn": 1950,
+    "priceCfa": 800,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "argan-body-oil": {
+    "slug": "argan-body-oil",
+    "name": "Argan body oil",
+    "description": "",
+    "priceNgn": 6150,
+    "priceCfa": 2500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "ashake-gown": {
+    "slug": "ashake-gown",
+    "name": "Ashake gown",
+    "description": "They are made with beautiful, high-quality printed materials. Smoky Top an pant . Sizes all body size &#010;Note: The exact print may vary from what is shown, but we carefully select the best options for you and will always share them with you before delivery.",
+    "priceNgn": null,
+    "priceCfa": 8000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "bag": {
+    "slug": "bag",
+    "name": "Pu leather hand bag",
+    "description": "",
+    "priceNgn": 9300,
+    "priceCfa": 5000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Brown",
+          "Pink",
+          "Wine",
+          "White"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "bag-c-19150": {
+    "slug": "bag-c-19150",
+    "name": "Bag C",
+    "description": "",
+    "priceNgn": 19150,
+    "priceCfa": 10000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Light blue",
+          "Nude",
+          "Black",
+          "Peach",
+          "Wine"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "beach-bag-and-hat": {
+    "slug": "beach-bag-and-hat",
+    "name": "Beach bag and hat",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 8200,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Brown",
+          "Pink",
+          "Orange"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "beard-balm": {
+    "slug": "beard-balm",
+    "name": "Beard balm",
+    "description": "",
+    "priceNgn": 2950,
+    "priceCfa": 2000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "big-baby-wipes": {
+    "slug": "big-baby-wipes",
+    "name": "Big baby wipes",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 1500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "big-hair-dryer-set": {
+    "slug": "big-hair-dryer-set",
+    "name": "Big hair dryer set",
+    "description": "",
+    "priceNgn": 18000,
+    "priceCfa": 9000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "big-professional-hair-straightener": {
+    "slug": "big-professional-hair-straightener",
+    "name": "Big professional hair straightener",
+    "description": "",
+    "priceNgn": 9800,
+    "priceCfa": 6000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "big-wig-bag": {
+    "slug": "big-wig-bag",
+    "name": "Big wig bag",
+    "description": "",
+    "priceNgn": 4700,
+    "priceCfa": 2800,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Pink",
+          "Purple"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "bioaqua-vitamin-c-brightening-essence-water": {
+    "slug": "bioaqua-vitamin-c-brightening-essence-water",
+    "name": "Bioaqua vitami",
+    "description": "",
+    "priceNgn": 4850,
+    "priceCfa": 2000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "bracelet-a": {
+    "slug": "bracelet-a",
+    "name": "Bracelet A",
+    "description": "",
+    "priceNgn": 3000,
+    "priceCfa": 1250,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "bracelet-b": {
+    "slug": "bracelet-b",
+    "name": "Bracelet B",
+    "description": "",
+    "priceNgn": 3000,
+    "priceCfa": 1250,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "bioaqua-vitamin-c-moisturizing-cleanser": {
+    "slug": "bioaqua-vitamin-c-moisturizing-cleanser",
+    "name": "Bioaqua vitami",
+    "description": "",
+    "priceNgn": 3200,
+    "priceCfa": 1300,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "bioaqua-vitamin-c-set": {
+    "slug": "bioaqua-vitamin-c-set",
+    "name": "Bioaqua vitami",
+    "description": "BIOAQUA Vitamin C Moisturizing Beautiful Skin Box, a comprehensive 6-piece skincare kit designed for brightening, hydrating, and improving skin texture. Enriched with Vitamin C, hyaluronic acid, and antioxidants, it targets dullness, uneven skin tone, and early signs of aging like fine lines. &#010;It contains:&#010;ode&#010;All&#010;Exact matches&#010;Visual matches&#010;&#010;&#010;&#010;&#010;19 sites&#010;The image shows the BIOAQUA Vitamin C Moisturizing Beautiful Skin Box, a comprehensive 6-piece skincare kit designed for brightening, hydrating, and improving skin texture. Enriched with Vitamin C, hyaluronic acid, and antioxidants, it targets dullness, uneven skin tone, and early signs of aging like fine lines.&#010;Kit Contents :&#010;1. Vitamin C Cleanser (100g): Deeply cleanses and removes impurities.&#010;2. Vitamin C Toner (120ml): Refreshes and preps the skin for better product absorption.&#010;3. Vitamin C Essence/Serum (15ml): Delivers concentrated hydration and targets dark spots or fine lines.&#010;4. Vitamin C Lotion (120ml): A lightweight formula that helps balance skin oils and moisture.&#010;5. Vitamin C Eye Cream (20g): Specifically formulated to reduce the appearance of dark circles and puffiness around the eyes.&#010;6. Vitamin C Face Cream (50g): The final step to lock in hydration and firm the skin.",
+    "priceNgn": 17000,
+    "priceCfa": 8500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "burgundy-heels": {
+    "slug": "burgundy-heels",
+    "name": "Burgundy heels",
+    "description": "",
+    "priceNgn": 24700,
+    "priceCfa": 12000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Length",
+        "type": "DROP_DOWN",
+        "values": [
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "black-3-in-1-water-bottle-set": {
+    "slug": "black-3-in-1-water-bottle-set",
+    "name": "3 in 1 water bottle set",
+    "description": "",
+    "priceNgn": 8550,
+    "priceCfa": 3500,
+    "compareCfa": 4500,
+    "options": [
+      {
+        "title": "Colors",
+        "type": "DROP_DOWN",
+        "values": [
+          "Blue",
+          "Purple",
+          "Pink/blue",
+          "Blue/ orange",
+          "Blue /purple",
+          "Black"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "bp-monitor-12000": {
+    "slug": "bp-monitor-12000",
+    "name": "Bp monitor",
+    "description": "",
+    "priceNgn": 12500,
+    "priceCfa": 6500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "blue-idea-rechargeable-clipper": {
+    "slug": "blue-idea-rechargeable-clipper",
+    "name": "Blue idea rechargeable clipper",
+    "description": "",
+    "priceNgn": 11750,
+    "priceCfa": 6000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "bracelet-d": {
+    "slug": "bracelet-d",
+    "name": "Bracelet D",
+    "description": "",
+    "priceNgn": 3000,
+    "priceCfa": 1250,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "bracelet-c": {
+    "slug": "bracelet-c",
+    "name": "Bracelet C",
+    "description": "",
+    "priceNgn": 3000,
+    "priceCfa": 1250,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "car-air-freshener-a": {
+    "slug": "car-air-freshener-a",
+    "name": "Car air freshener",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 3000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Scents",
+        "type": "DROP_DOWN",
+        "values": [
+          "Berries scent",
+          "Cold ice",
+          "Oud",
+          "Strawberry",
+          "Vanilla"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "car-diffuser": {
+    "slug": "car-diffuser",
+    "name": "Car diffuser",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 950,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "ceramic-mug": {
+    "slug": "ceramic-mug",
+    "name": "Ceramic mug",
+    "description": "",
+    "priceNgn": 4400,
+    "priceCfa": 2800,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "children-12lcd-writing-tablet": {
+    "slug": "children-12lcd-writing-tablet",
+    "name": "Childre",
+    "description": "",
+    "priceNgn": 4150,
+    "priceCfa": 2000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "clothes-pegs": {
+    "slug": "clothes-pegs",
+    "name": "Clothes pegs",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 1000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "choker-set-9500": {
+    "slug": "choker-set-9500",
+    "name": "Choker set",
+    "description": "",
+    "priceNgn": 9500,
+    "priceCfa": 4000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colors",
+        "type": "DROP_DOWN",
+        "values": [
+          "Gold",
+          "Silver"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "collagen-snail-serum-30ml": {
+    "slug": "collagen-snail-serum-30ml",
+    "name": "Collage",
+    "description": "",
+    "priceNgn": 2750,
+    "priceCfa": 1500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "coconut-oil-deodorant": {
+    "slug": "coconut-oil-deodorant",
+    "name": "Coconut oil deodorant",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 900,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "cold-keeping-vacuum-cup": {
+    "slug": "cold-keeping-vacuum-cup",
+    "name": "Cold keeping vacuum cup",
+    "description": "",
+    "priceNgn": 11000,
+    "priceCfa": 7000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Blue",
+          "Pink",
+          "Mustard yellow",
+          "White"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "cover-heels": {
+    "slug": "cover-heels",
+    "name": "Cover heels",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 16000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Shoe color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Red",
+          "Silver",
+          "Gold",
+          "Brown"
+        ]
+      },
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "corset-defined-bubu-gown": {
+    "slug": "corset-defined-bubu-gown",
+    "name": "Corset Defined Bubu gowns 15 types",
+    "description": "Our Bubu gowns are made to fit all body types with comfort and elegance.&#010;&#010;Please note that prints may vary based on availability, but quality is always guaranteed.&#010;&#010;If your chosen design is unavailable, we will provide equally beautiful options before delivery .",
+    "priceNgn": null,
+    "priceCfa": 8000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Number",
+        "type": "DROP_DOWN",
+        "values": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "dark-brown-7-in-1-gift-set-for-men-2": {
+    "slug": "dark-brown-7-in-1-gift-set-for-men-2",
+    "name": "Dark brow",
+    "description": "",
+    "priceNgn": 22000,
+    "priceCfa": 10000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "deblve-unisex-set-12750": {
+    "slug": "deblve-unisex-set-12750",
+    "name": "Deblve unisex set",
+    "description": "",
+    "priceNgn": 12750,
+    "priceCfa": 5200,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "decor": {
+    "slug": "decor",
+    "name": "Decor",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 3000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Number",
+        "type": "DROP_DOWN",
+        "values": [
+          "1",
+          "2"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "diary-gift-set": {
+    "slug": "diary-gift-set",
+    "name": "Diary gift set",
+    "description": "",
+    "priceNgn": 20800,
+    "priceCfa": 10000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Green",
+          "Grey",
+          "Black",
+          "Brown",
+          "Blue",
+          "Red"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "dr-rashel-sun-cream": {
+    "slug": "dr-rashel-sun-cream",
+    "name": "Dr Rashel Su",
+    "description": "The Dr Rashel Anti-Aging Moisture Sun Cream is a lightweight, non-greasy sunscreen that provides high SPF 60 broad-spectrum protection against UVA/UVB rays.",
+    "priceNgn": 6000,
+    "priceCfa": 3500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "dr-rashel-vitamin-c-set": {
+    "slug": "dr-rashel-vitamin-c-set",
+    "name": "Dr Rashel Vitami",
+    "description": "Dr Rachel Vitamin c set&#010;&#010;It has essence toner,face serum,face cream, facial cleanser",
+    "priceNgn": 24500,
+    "priceCfa": 13500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "dry-grinder": {
+    "slug": "dry-grinder",
+    "name": "Dry grinder",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 6800,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "enny-big-bag-comes-with-a-scarf-22000": {
+    "slug": "enny-big-bag-comes-with-a-scarf-22000",
+    "name": "Enny big bag  Comes with a scarf",
+    "description": "Very big Quality is great 💯",
+    "priceNgn": 22000,
+    "priceCfa": 9000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "electric-hand-mixer": {
+    "slug": "electric-hand-mixer",
+    "name": "Electric Hand mixer",
+    "description": "",
+    "priceNgn": 11750,
+    "priceCfa": 6000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "electric-foot-grinder": {
+    "slug": "electric-foot-grinder",
+    "name": "Electric foot grinder",
+    "description": "",
+    "priceNgn": 6600,
+    "priceCfa": 4000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "electric-steam-iron-16000": {
+    "slug": "electric-steam-iron-16000",
+    "name": "Electric Steam iro",
+    "description": "",
+    "priceNgn": 16000,
+    "priceCfa": 6800,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "essential-oil-for-humidifier": {
+    "slug": "essential-oil-for-humidifier",
+    "name": "Essential oil for humidifier",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 850,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "electronic-personal-scale-9000": {
+    "slug": "electronic-personal-scale-9000",
+    "name": "Electronic personal scale",
+    "description": "",
+    "priceNgn": 9000,
+    "priceCfa": 5000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "exfoliating-foot-peel-mask": {
+    "slug": "exfoliating-foot-peel-mask",
+    "name": "Exfoliating foot peel mask",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 1500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "face-mask-sheet": {
+    "slug": "face-mask-sheet",
+    "name": "Face mask sheet",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 400,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "It's quantity",
+        "type": "DROP_DOWN",
+        "values": [
+          "1 pcs",
+          "10 pcs"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "fashion-bracelet-5600-1": {
+    "slug": "fashion-bracelet-5600-1",
+    "name": "Fashio",
+    "description": "",
+    "priceNgn": 5600,
+    "priceCfa": 2300,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "fashion-tote-bag": {
+    "slug": "fashion-tote-bag",
+    "name": "Fashio",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 4500,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Pink",
+          "White"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "f15-wireless-mic-double-18000": {
+    "slug": "f15-wireless-mic-double-18000",
+    "name": "F15 WIRELESS MIC - double",
+    "description": "F15 WIRELESS MIC - double &#010;&#010;It is widely used in live streaming,video shooting,content creators ,online tutorials, interviews, etc &#010;It is rechargeable &#010;light weight and convenient &#010;It captures sound and neglect noise&#010;Comes with 2 mic &#010;&#010;Works for both iphone and type c .",
+    "priceNgn": 18000,
+    "priceCfa": 9500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "flat-sandals-23300": {
+    "slug": "flat-sandals-23300",
+    "name": "Flat sandals",
+    "description": "",
+    "priceNgn": 23300,
+    "priceCfa": 9500,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Shoe color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Burgundy"
+        ]
+      },
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "f15-wireless-mic-single-13000": {
+    "slug": "f15-wireless-mic-single-13000",
+    "name": "F15 WIRELESS MIC - single",
+    "description": "",
+    "priceNgn": 13000,
+    "priceCfa": 7500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "female-bag": {
+    "slug": "female-bag",
+    "name": "Female bag",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 9000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Blue",
+          "Peach",
+          "Grey",
+          "Purple",
+          "Red"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "female-bag-1": {
+    "slug": "female-bag-1",
+    "name": "Female bag",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 10000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Brown",
+          "Blue",
+          "Grey",
+          "Pink",
+          "White",
+          "Red",
+          "Light blue"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "fife-set": {
+    "slug": "fife-set",
+    "name": "Fife set",
+    "description": "They are made with beautiful, high-quality printed materials. Smoky Top an pant . Sizes all body size &#010;Note: The exact print may vary from what is shown, but we carefully select the best options for you and will always share them with you before delivery.",
+    "priceNgn": null,
+    "priceCfa": 10000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "flat-sandals-a-23300": {
+    "slug": "flat-sandals-a-23300",
+    "name": "Flat sandals A",
+    "description": "",
+    "priceNgn": 23300,
+    "priceCfa": 9500,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Shoe color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Gold"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "flower-pot-1": {
+    "slug": "flower-pot-1",
+    "name": "Flower pot 1",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 2000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "flower-bouquet-with-light": {
+    "slug": "flower-bouquet-with-light",
+    "name": "Flower bouquet with light",
+    "description": "",
+    "priceNgn": 6150,
+    "priceCfa": 4500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "flower-tote-bag": {
+    "slug": "flower-tote-bag",
+    "name": "Flower Tote bag",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 3500,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Number",
+        "type": "DROP_DOWN",
+        "values": [
+          "1",
+          "2"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "foldable-bag": {
+    "slug": "foldable-bag",
+    "name": "Foldable bag",
+    "description": "",
+    "priceNgn": 3000,
+    "priceCfa": 2500,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Wine",
+          "Black",
+          "Blue",
+          "Peach",
+          "Mint green"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "foldable-strip-bag": {
+    "slug": "foldable-strip-bag",
+    "name": "Foldable strip bag",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 6000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Blue",
+          "Wine"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "foldable-water-bottle": {
+    "slug": "foldable-water-bottle",
+    "name": "Foldable water bottle",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 2400,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colors",
+        "type": "DROP_DOWN",
+        "values": [
+          "Multi color",
+          "Light blue",
+          "Light Pink",
+          "Grey",
+          "Purple/blue",
+          "Pink/orange"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "foldable-travelling-bag-with-wheels": {
+    "slug": "foldable-travelling-bag-with-wheels",
+    "name": "Foldable travelling bag with wheels",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 7000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Purple",
+          "Grey",
+          "Black",
+          "Blue",
+          "Peach"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "foldable-travelling-bag": {
+    "slug": "foldable-travelling-bag",
+    "name": "Foldable travelling bag",
+    "description": "",
+    "priceNgn": 9300,
+    "priceCfa": 5000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Blue",
+          "Peach",
+          "Grey",
+          "Purple",
+          "Lilac"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "fringe-bob": {
+    "slug": "fringe-bob",
+    "name": "Fringe bob",
+    "description": "100% human hair.&#010;10 inch.",
+    "priceNgn": null,
+    "priceCfa": 16500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "gift-box-with-rose": {
+    "slug": "gift-box-with-rose",
+    "name": "Gift box with rose",
+    "description": "",
+    "priceNgn": 5400,
+    "priceCfa": 3000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Box color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Blue",
+          "Peach"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "fur-cap": {
+    "slug": "fur-cap",
+    "name": "Fur cap",
+    "description": "",
+    "priceNgn": 3700,
+    "priceCfa": 2000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Peach",
+          "Black",
+          "Nude",
+          "Brown"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "gucci-bag": {
+    "slug": "gucci-bag",
+    "name": "Gucci bag",
+    "description": "Comes with a box.",
+    "priceNgn": null,
+    "priceCfa": 7500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "hair-band-3pcs": {
+    "slug": "hair-band-3pcs",
+    "name": "Hair band (3pcs)",
+    "description": "Colors randomly selected",
+    "priceNgn": 1700,
+    "priceCfa": 1200,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "glow-in-the-dark": {
+    "slug": "glow-in-the-dark",
+    "name": "Glow i",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 1200,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "hair-clip": {
+    "slug": "hair-clip",
+    "name": "Hair clip",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 2000,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Color",
+        "type": "COLOR",
+        "values": [
+          "#F5F0B2",
+          "#E1BCC3",
+          "#800080"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "hair-brush-set-4-in-1": {
+    "slug": "hair-brush-set-4-in-1",
+    "name": "Hair brush set 5 i",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 4000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "hair-scrunchies-4-in-1": {
+    "slug": "hair-scrunchies-4-in-1",
+    "name": "Hair Scrunchies 4 in 1",
+    "description": "",
+    "priceNgn": 3000,
+    "priceCfa": 1250,
+    "compareCfa": 1800,
+    "options": [
+      {
+        "title": "Color",
+        "type": "COLOR",
+        "values": [
+          "#E1BCC3",
+          "#800080"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "hair-dryer": {
+    "slug": "hair-dryer",
+    "name": "Hair dryer",
+    "description": "",
+    "priceNgn": 6100,
+    "priceCfa": 2500,
+    "compareCfa": 5000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "hand-cream-30g-550": {
+    "slug": "hand-cream-30g-550",
+    "name": "Hand cream 30g",
+    "description": "",
+    "priceNgn": 550,
+    "priceCfa": 250,
+    "compareCfa": 400,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "hand-cream": {
+    "slug": "hand-cream",
+    "name": "Vaseline Hand cream",
+    "description": "Colour randomly picked",
+    "priceNgn": 1100,
+    "priceCfa": 450,
+    "compareCfa": 800,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "headphone": {
+    "slug": "headphone",
+    "name": "Headphone",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 8500,
+    "compareCfa": 10000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Red",
+          "Mint green"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "handpat": {
+    "slug": "handpat",
+    "name": "Handpat",
+    "description": "",
+    "priceNgn": 8100,
+    "priceCfa": 3300,
+    "compareCfa": 5000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "heels-27000": {
+    "slug": "heels-27000",
+    "name": "Heels",
+    "description": "",
+    "priceNgn": 27000,
+    "priceCfa": 11000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "heels": {
+    "slug": "heels",
+    "name": "Heels",
+    "description": "",
+    "priceNgn": 27000,
+    "priceCfa": 11000,
+    "compareCfa": 15500,
+    "options": [
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "heels-a-1": {
+    "slug": "heels-a-1",
+    "name": "Heels A",
+    "description": "",
+    "priceNgn": 24500,
+    "priceCfa": 10000,
+    "compareCfa": 14500,
+    "options": [
+      {
+        "title": "Shoe color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Red",
+          "Silver",
+          "Black&Brown",
+          "Gold"
+        ]
+      },
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "heels-b": {
+    "slug": "heels-b",
+    "name": "Heels B",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 8500,
+    "compareCfa": 10000,
+    "options": [
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41",
+          "42"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "heels-d": {
+    "slug": "heels-d",
+    "name": "Heels D",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 8500,
+    "compareCfa": 11000,
+    "options": [
+      {
+        "title": "Shoe color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Burgundy",
+          "White",
+          "Gold",
+          "Silver",
+          "Black"
+        ]
+      },
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "heels-c": {
+    "slug": "heels-c",
+    "name": "Heels C",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 9000,
+    "compareCfa": 13000,
+    "options": [
+      {
+        "title": "Shoe color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Gold",
+          "Purple",
+          "Silver",
+          "Black"
+        ]
+      },
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41",
+          "42"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "heels-e": {
+    "slug": "heels-e",
+    "name": "Heels E",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 8500,
+    "compareCfa": 9500,
+    "options": [
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "heels-f": {
+    "slug": "heels-f",
+    "name": "Heels F",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 9500,
+    "compareCfa": 15000,
+    "options": [
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "heels-g": {
+    "slug": "heels-g",
+    "name": "Heels G",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 10000,
+    "compareCfa": 16000,
+    "options": [
+      {
+        "title": "Shoe color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Pink",
+          "Brown",
+          "Purple",
+          "Black"
+        ]
+      },
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "heels-h": {
+    "slug": "heels-h",
+    "name": "Heels H",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 9000,
+    "compareCfa": 12000,
+    "options": [
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "heels-h-1": {
+    "slug": "heels-h-1",
+    "name": "Heels H",
+    "description": "",
+    "priceNgn": 24500,
+    "priceCfa": 10000,
+    "compareCfa": 13000,
+    "options": [
+      {
+        "title": "Size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "hello-master-bottle-2450": {
+    "slug": "hello-master-bottle-2450",
+    "name": "Hello master bottle",
+    "description": "",
+    "priceNgn": 2450,
+    "priceCfa": 1000,
+    "compareCfa": 1800,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Green",
+          "Blue",
+          "Pink",
+          "White"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "hot-comb-1": {
+    "slug": "hot-comb-1",
+    "name": "Hot comb",
+    "description": "",
+    "priceNgn": 11000,
+    "priceCfa": 4500,
+    "compareCfa": 10000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "i18pro-flip-phone-26500": {
+    "slug": "i18pro-flip-phone-26500",
+    "name": "i18pro flip phone",
+    "description": "",
+    "priceNgn": 26500,
+    "priceCfa": 10900,
+    "compareCfa": 15000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "i60-suit-extreme-12-in-1-set": {
+    "slug": "i60-suit-extreme-12-in-1-set",
+    "name": "i60 Suit Extreme 12 in 1 set",
+    "description": "This comprehensive \"suit\" typically contains 12 items :\n2 Smartwatch bodies (Ultra and Series styles)\n7 Interchangeable straps in various materials like silicone, metal, nylon, and leather.\n5th generation airpods\nTwo pouches\nMagnetic wireless chargers",
+    "priceNgn": null,
+    "priceCfa": 12000,
+    "compareCfa": 18000,
+    "options": [
+      {
+        "title": "Colors",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Silver",
+          "Gold"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "i20-ultra-2-max-suit": {
+    "slug": "i20-ultra-2-max-suit",
+    "name": "i20 ultra 2 max suit",
+    "description": "• 7 Straps: A variety of styles, including metal, silicone, and multi-colored options.\n • Wireless Earphones: A set of TWS earbuds for audio and communication.\n • Charger: Supports wireless charging for the smartwatch.\n • Protection: includes a protective watch case.",
+    "priceNgn": 19600,
+    "priceCfa": 8000,
+    "compareCfa": 11000,
+    "options": [
+      {
+        "title": "Colors",
+        "type": "DROP_DOWN",
+        "values": [
+          "Gold",
+          "Silver",
+          "Black"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "ice-bottle": {
+    "slug": "ice-bottle",
+    "name": "Ice bottle",
+    "description": "",
+    "priceNgn": 4900,
+    "priceCfa": 2000,
+    "compareCfa": 3500,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Purple",
+          "Peach",
+          "Brown",
+          "Pink",
+          "Green"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "inflatable-sofa-with-leg-rest-28500": {
+    "slug": "inflatable-sofa-with-leg-rest-28500",
+    "name": "Inflatable sofa with leg rest",
+    "description": "",
+    "priceNgn": 28500,
+    "priceCfa": 11700,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Light blue",
+          "Wine"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "insulated-mugs-10500": {
+    "slug": "insulated-mugs-10500",
+    "name": "Insulated mugs",
+    "description": "",
+    "priceNgn": 10500,
+    "priceCfa": 4350,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "jelly-baby-bag": {
+    "slug": "jelly-baby-bag",
+    "name": "Jelly baby bag",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 1900,
+    "compareCfa": 3000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Nude",
+          "Black",
+          "Mustard yellow",
+          "Red",
+          "Blue",
+          "Green",
+          "Pink",
+          "Purple",
+          "Peach",
+          "White"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "jewelry-case": {
+    "slug": "jewelry-case",
+    "name": "Jewelry case",
+    "description": "",
+    "priceNgn": 4300,
+    "priceCfa": 1750,
+    "compareCfa": 2500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "july-diffuser": {
+    "slug": "july-diffuser",
+    "name": "July diffuser",
+    "description": "Randomly picked",
+    "priceNgn": 4900,
+    "priceCfa": 2000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "key-chain": {
+    "slug": "key-chain",
+    "name": "Key chain",
+    "description": "A dozen (12pcs) is 3000cfa",
+    "priceNgn": null,
+    "priceCfa": 300,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "It's quantity",
+        "type": "DROP_DOWN",
+        "values": [
+          "12 pcs",
+          "1 pcs"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "key-holder-750": {
+    "slug": "key-holder-750",
+    "name": "Key holder",
+    "description": "12- ₦ 7500 / 3200 fcfa",
+    "priceNgn": 750,
+    "priceCfa": 325,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "kitchen-tissue-3000": {
+    "slug": "kitchen-tissue-3000",
+    "name": "Kitchen tissue",
+    "description": "",
+    "priceNgn": 3000,
+    "priceCfa": 1250,
+    "compareCfa": 2800,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "kitten-heels": {
+    "slug": "kitten-heels",
+    "name": "Kitten heels",
+    "description": "Quality and Comfortable for day to day activities",
+    "priceNgn": null,
+    "priceCfa": 9000,
+    "compareCfa": 15000,
+    "options": [
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41",
+          "42"
+        ]
+      },
+      {
+        "title": "Kitten heels colors",
+        "type": "DROP_DOWN",
+        "values": [
+          "White",
+          "Wine",
+          "Mustard yellow",
+          "Black",
+          "Dark brown"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "knuckles-ring-a": {
+    "slug": "knuckles-ring-a",
+    "name": "Knuckles ring a",
+    "description": "",
+    "priceNgn": 2950,
+    "priceCfa": 1200,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "knuckles-ring-b": {
+    "slug": "knuckles-ring-b",
+    "name": "Knuckles ring b",
+    "description": "",
+    "priceNgn": 3700,
+    "priceCfa": 1500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "l16-tripod": {
+    "slug": "l16-tripod",
+    "name": "L16 Tripod",
+    "description": "",
+    "priceNgn": 22000,
+    "priceCfa": 9000,
+    "compareCfa": 15000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "lacoste-bag": {
+    "slug": "lacoste-bag",
+    "name": "Lacoste bag",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 5300,
+    "compareCfa": 7000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Blue",
+          "Light blue"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "laptop-school-bag": {
+    "slug": "laptop-school-bag",
+    "name": "Laptop / School Bag",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 4200,
+    "compareCfa": 6000,
+    "options": [
+      {
+        "title": "Color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Blue"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "leather-crocs-bag-19000": {
+    "slug": "leather-crocs-bag-19000",
+    "name": "Leather Crocs bag",
+    "description": "",
+    "priceNgn": 19000,
+    "priceCfa": 7800,
+    "compareCfa": 10000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "led-cube-light": {
+    "slug": "led-cube-light",
+    "name": "LED cube light",
+    "description": "",
+    "priceNgn": 7350,
+    "priceCfa": 3000,
+    "compareCfa": 5000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "lip-gel": {
+    "slug": "lip-gel",
+    "name": "Lip Gel",
+    "description": "",
+    "priceNgn": 1150,
+    "priceCfa": 450,
+    "compareCfa": 600,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "lip-gloss-c": {
+    "slug": "lip-gloss-c",
+    "name": "Lip gloss C",
+    "description": "",
+    "priceNgn": 2200,
+    "priceCfa": 900,
+    "compareCfa": 1300,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "lip-gloss-g": {
+    "slug": "lip-gloss-g",
+    "name": "Lip gloss G",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 900,
+    "compareCfa": 1200,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "lip-scrub": {
+    "slug": "lip-scrub",
+    "name": "Lip scrub",
+    "description": "",
+    "priceNgn": 2450,
+    "priceCfa": 1000,
+    "compareCfa": 1500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "lipgloss-f": {
+    "slug": "lipgloss-f",
+    "name": "Lipgloss F",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 900,
+    "compareCfa": 1200,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "love-decor-with-light": {
+    "slug": "love-decor-with-light",
+    "name": "Love decor with light",
+    "description": "",
+    "priceNgn": 5650,
+    "priceCfa": 2300,
+    "compareCfa": 4000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Blue",
+          "Pink",
+          "Purple",
+          "Red"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "luki-2-in-1-bag-20000": {
+    "slug": "luki-2-in-1-bag-20000",
+    "name": "Luki 2 in 1 bag",
+    "description": "",
+    "priceNgn": 20000,
+    "priceCfa": 8500,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Brown",
+          "White",
+          "Blue",
+          "Green",
+          "Wine",
+          "Peach"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "lv-bag": {
+    "slug": "lv-bag",
+    "name": "LV bag",
+    "description": "Comes in a box.",
+    "priceNgn": null,
+    "priceCfa": 7000,
+    "compareCfa": 10000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Brown",
+          "Pink",
+          "White"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "m10-earpod-9500": {
+    "slug": "m10-earpod-9500",
+    "name": "M10 earpod",
+    "description": "",
+    "priceNgn": 9500,
+    "priceCfa": 3900,
+    "compareCfa": 5000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "mailer-bag-25-pcs": {
+    "slug": "mailer-bag-25-pcs",
+    "name": "Mailer bag (25 PCs)",
+    "description": "",
+    "priceNgn": 4400,
+    "priceCfa": 1800,
+    "compareCfa": 2500,
+    "options": [
+      {
+        "title": "Color",
+        "type": "COLOR",
+        "values": [
+          "#800080",
+          "#E1BCC3"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "manicure-set": {
+    "slug": "manicure-set",
+    "name": "Manicure set",
+    "description": "",
+    "priceNgn": 2000,
+    "priceCfa": 850,
+    "compareCfa": 1200,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "marble-center-table-85500": {
+    "slug": "marble-center-table-85500",
+    "name": "Marble center table",
+    "description": "",
+    "priceNgn": 85500,
+    "priceCfa": 35000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "marble-twin-center-table-100000": {
+    "slug": "marble-twin-center-table-100000",
+    "name": "Marble twin center table",
+    "description": "",
+    "priceNgn": 100000,
+    "priceCfa": 41000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "matturi-wristwatch-22000": {
+    "slug": "matturi-wristwatch-22000",
+    "name": "Matturi wristwatch",
+    "description": "",
+    "priceNgn": 22000,
+    "priceCfa": 9000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "men-5-in-1-set": {
+    "slug": "men-5-in-1-set",
+    "name": "Men 5 in 1 set",
+    "description": "Comprises of a belt, wallet, cufflinks, pen ,watch",
+    "priceNgn": 19150,
+    "priceCfa": 7800,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Brown"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "men-7-in-1-gift-set": {
+    "slug": "men-7-in-1-gift-set",
+    "name": "Men 7 in 1 gift set",
+    "description": "Comprises of\n1 wristwatch\n1 cufflinks\n1 pen\n1 tye\n1 perfume\n1 belt\n1 wallet",
+    "priceNgn": 22500,
+    "priceCfa": 9400,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Brown",
+          "Black"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "menstrual-relief-belt-12000": {
+    "slug": "menstrual-relief-belt-12000",
+    "name": "Menstrual relief belt",
+    "description": "",
+    "priceNgn": 12000,
+    "priceCfa": 4900,
+    "compareCfa": 6000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "min-min-bag-10000": {
+    "slug": "min-min-bag-10000",
+    "name": "Min min bag",
+    "description": "",
+    "priceNgn": 10000,
+    "priceCfa": 4200,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Dark brown"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "mini-diffuser": {
+    "slug": "mini-diffuser",
+    "name": "Mini diffuser",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 950,
+    "compareCfa": 1500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "mini-fan-3850": {
+    "slug": "mini-fan-3850",
+    "name": "Mini fan. ₦. 3850",
+    "description": "",
+    "priceNgn": 3850,
+    "priceCfa": 1600,
+    "compareCfa": 3000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "mini-influencer-light": {
+    "slug": "mini-influencer-light",
+    "name": "Mini influencer light",
+    "description": "",
+    "priceNgn": 11800,
+    "priceCfa": 4800,
+    "compareCfa": 7200,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "mini-mirror": {
+    "slug": "mini-mirror",
+    "name": "Mini Mirror",
+    "description": "",
+    "priceNgn": 950,
+    "priceCfa": 400,
+    "compareCfa": 800,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "mini-potted-flower": {
+    "slug": "mini-potted-flower",
+    "name": "Mini potted flower",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 650,
+    "compareCfa": 1200,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "mini-q-light": {
+    "slug": "mini-q-light",
+    "name": "Mini q light",
+    "description": "",
+    "priceNgn": 2450,
+    "priceCfa": 1000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "mop-17500": {
+    "slug": "mop-17500",
+    "name": "Mop",
+    "description": "",
+    "priceNgn": 17500,
+    "priceCfa": 7200,
+    "compareCfa": 10000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "mouth-spray-1400": {
+    "slug": "mouth-spray-1400",
+    "name": "Mouth spray",
+    "description": "",
+    "priceNgn": 1400,
+    "priceCfa": 600,
+    "compareCfa": 1000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "multi-light-decor": {
+    "slug": "multi-light-decor",
+    "name": "Sand painting table lamp",
+    "description": "",
+    "priceNgn": 11800,
+    "priceCfa": 4800,
+    "compareCfa": 6000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "naidu-pearl-watch-9800": {
+    "slug": "naidu-pearl-watch-9800",
+    "name": "Naidu pearl watch",
+    "description": "",
+    "priceNgn": 9800,
+    "priceCfa": 4000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "necklace-1": {
+    "slug": "necklace-1",
+    "name": "Necklace 1",
+    "description": "",
+    "priceNgn": 2950,
+    "priceCfa": 1200,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "necklace-2": {
+    "slug": "necklace-2",
+    "name": "Necklace 2",
+    "description": "",
+    "priceNgn": 3700,
+    "priceCfa": 1500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "necklace-3": {
+    "slug": "necklace-3",
+    "name": "Necklace 3",
+    "description": "",
+    "priceNgn": 3900,
+    "priceCfa": 1600,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "necklace-4": {
+    "slug": "necklace-4",
+    "name": "Necklace 4",
+    "description": "",
+    "priceNgn": 5000,
+    "priceCfa": 2000,
+    "compareCfa": 2500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "necklace-4-1": {
+    "slug": "necklace-4-1",
+    "name": "Necklace 4",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 2000,
+    "compareCfa": 3000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "necklace-4-2": {
+    "slug": "necklace-4-2",
+    "name": "Necklace 4",
+    "description": "",
+    "priceNgn": 5000,
+    "priceCfa": 2000,
+    "compareCfa": 3000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "neckpiece": {
+    "slug": "neckpiece",
+    "name": "Neckpiece",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 2400,
+    "compareCfa": 4000,
+    "options": [
+      {
+        "title": "Type",
+        "type": "DROP_DOWN",
+        "values": [
+          "Gold",
+          "Silver"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "niacinamide-5-serum": {
+    "slug": "niacinamide-5-serum",
+    "name": "Niacinamide 5% Serum",
+    "description": "",
+    "priceNgn": 2450,
+    "priceCfa": 1000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "order-me-light": {
+    "slug": "order-me-light",
+    "name": "Order me light",
+    "description": "",
+    "priceNgn": 10500,
+    "priceCfa": 4300,
+    "compareCfa": 7000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "owambe-turbo-fan": {
+    "slug": "owambe-turbo-fan",
+    "name": "Owambe turbo fan",
+    "description": "",
+    "priceNgn": 14000,
+    "priceCfa": 5750,
+    "compareCfa": 10000,
+    "options": [
+      {
+        "title": "Type",
+        "type": "DROP_DOWN",
+        "values": [
+          "Gold",
+          "Silver"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "peach-fashion-2-in-1-bag": {
+    "slug": "peach-fashion-2-in-1-bag",
+    "name": "H fashion 2 in 1 bag",
+    "description": "",
+    "priceNgn": 18400,
+    "priceCfa": 7500,
+    "compareCfa": 10000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Orange",
+          "Dark brown",
+          "Peach",
+          "Grey",
+          "Beige"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "pink-silk-pillowcase": {
+    "slug": "pink-silk-pillowcase",
+    "name": "Ankara two pieces",
+    "description": "Experience luxury with our Ankara two pieces, designed for all sizes. Made from vibrant materials, each set is durable and unique. J Aura Store celebrates diversity and quality, offering unmatched comfort. Elevate your style with collections blending culture and modernity. Discover a confident, radiant you through our designs.",
+    "priceNgn": 14700,
+    "priceCfa": 6000,
+    "compareCfa": 10000,
+    "options": [
+      {
+        "title": "Size",
+        "type": "DROP_DOWN",
+        "values": [
+          "S",
+          "M",
+          "L",
+          "XL"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "po1-auto-face-tracking-selfie-tripod": {
+    "slug": "po1-auto-face-tracking-selfie-tripod",
+    "name": "PO1 auto face tracking selfie tripod",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 10500,
+    "compareCfa": 12000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "poedagar-watch": {
+    "slug": "poedagar-watch",
+    "name": "Poedagar Watch",
+    "description": "Poedagar watch comes with a box.",
+    "priceNgn": 22000,
+    "priceCfa": 9000,
+    "compareCfa": 15000,
+    "options": [
+      {
+        "title": "Watch color",
+        "type": "DROP_DOWN",
+        "values": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "portable-rechargeable-fan": {
+    "slug": "portable-rechargeable-fan",
+    "name": "Portable rechargeable fan",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 6000,
+    "compareCfa": 8000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "press-on-nail": {
+    "slug": "press-on-nail",
+    "name": "Press on nail",
+    "description": "24 PCs of press on nail with a glue",
+    "priceNgn": 2950,
+    "priceCfa": 1200,
+    "compareCfa": 1500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "press-on-nail-1": {
+    "slug": "press-on-nail-1",
+    "name": "Press on nail B",
+    "description": "24 PCs of press on nails with a glue",
+    "priceNgn": 2950,
+    "priceCfa": 1200,
+    "compareCfa": 1500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "press-on-nail-2": {
+    "slug": "press-on-nail-2",
+    "name": "Press on Nail",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 1200,
+    "compareCfa": 2000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "press-on-nail-c": {
+    "slug": "press-on-nail-c",
+    "name": "Press on nail C",
+    "description": "24 PCs of press on nail with a glue",
+    "priceNgn": 2950,
+    "priceCfa": 1200,
+    "compareCfa": 1500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "press-on-nail-d": {
+    "slug": "press-on-nail-d",
+    "name": "Press on nail D",
+    "description": "24 PCs of press on nail with a glue",
+    "priceNgn": 3200,
+    "priceCfa": 1300,
+    "compareCfa": 1600,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "press-on-nail-e": {
+    "slug": "press-on-nail-e",
+    "name": "Press on nail E",
+    "description": "24 PCs of press on nail with a glue",
+    "priceNgn": 2950,
+    "priceCfa": 1200,
+    "compareCfa": 1400,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "q13-ai-smart-tracking-tripod-with-light-40000": {
+    "slug": "q13-ai-smart-tracking-tripod-with-light-40000",
+    "name": "Q13 Ai smart tracking tripod with light",
+    "description": "",
+    "priceNgn": 40000,
+    "priceCfa": 16350,
+    "compareCfa": 20000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "q8-wireless-mircophone-15700": {
+    "slug": "q8-wireless-mircophone-15700",
+    "name": "Q8 wireless Mircophone",
+    "description": "",
+    "priceNgn": 15700,
+    "priceCfa": 6500,
+    "compareCfa": 15000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "quality-shoes": {
+    "slug": "quality-shoes",
+    "name": "Quality shoes 1",
+    "description": "Latest heels for your glam",
+    "priceNgn": 22100,
+    "priceCfa": 9000,
+    "compareCfa": 15000,
+    "options": [
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41",
+          "42"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "r-on-the-edge-watch": {
+    "slug": "r-on-the-edge-watch",
+    "name": "R on the edge Watch",
+    "description": "",
+    "priceNgn": 24000,
+    "priceCfa": 9800,
+    "compareCfa": 13500,
+    "options": [
+      {
+        "title": "Colors",
+        "type": "DROP_DOWN",
+        "values": [
+          "Silver green",
+          "Silver blue",
+          "Gold",
+          "Silver black"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "rabbit-phone-holder": {
+    "slug": "rabbit-phone-holder",
+    "name": "Rabbit Phone holder",
+    "description": "",
+    "priceNgn": 1850,
+    "priceCfa": 750,
+    "compareCfa": 1000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "rock-006-smartwatch-gift-set": {
+    "slug": "rock-006-smartwatch-gift-set",
+    "name": "Rock 006 Smartwatch gift set",
+    "description": "Rock 006 smartwatch gift set\nContains:\n A smartwatch\nA magnetic powerbank\nTorch light\nFan\nBluetooth headset",
+    "priceNgn": 23250,
+    "priceCfa": 9500,
+    "compareCfa": 12500,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Blue",
+          "Pink",
+          "Green"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "s11-pro-max-smart-watch": {
+    "slug": "s11-pro-max-smart-watch",
+    "name": "S11 pro Max Smartwatch",
+    "description": "",
+    "priceNgn": 9800,
+    "priceCfa": 4000,
+    "compareCfa": 6500,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Pink",
+          "Blue",
+          "Grey",
+          "Black",
+          "White"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "s25-ultra-pro-tab": {
+    "slug": "s25-ultra-pro-tab",
+    "name": "S25 ultra pro Tab",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 50000,
+    "compareCfa": 70000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Green",
+          "Black",
+          "Blue",
+          "Grey",
+          "Pink"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "selfie-stick-5000": {
+    "slug": "selfie-stick-5000",
+    "name": "Selfie stick",
+    "description": "",
+    "priceNgn": 5000,
+    "priceCfa": 2100,
+    "compareCfa": 3500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "shoe-wipes-1600": {
+    "slug": "shoe-wipes-1600",
+    "name": "Shoe wipes",
+    "description": "",
+    "priceNgn": 1600,
+    "priceCfa": 680,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "silicone-spoon-12-in-1-set": {
+    "slug": "silicone-spoon-12-in-1-set",
+    "name": "Silicone spoon 12 in 1 set",
+    "description": "",
+    "priceNgn": 11800,
+    "priceCfa": 4800,
+    "compareCfa": 7000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "single-hexagon-floating-shelf": {
+    "slug": "single-hexagon-floating-shelf",
+    "name": "Single hexagon floating shelf",
+    "description": "",
+    "priceNgn": 10300,
+    "priceCfa": 4200,
+    "compareCfa": 5000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "skull-cap": {
+    "slug": "skull-cap",
+    "name": "Skull cap",
+    "description": "Skull cap 100% human hair.\nColour 1b.",
+    "priceNgn": null,
+    "priceCfa": 6800,
+    "compareCfa": 8500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "skull-cap-1": {
+    "slug": "skull-cap-1",
+    "name": "Skull cap",
+    "description": "Color: 350.\n100% Human hair",
+    "priceNgn": null,
+    "priceCfa": 8000,
+    "compareCfa": 11000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "skull-cap-jerry": {
+    "slug": "skull-cap-jerry",
+    "name": "Skull cap jerry",
+    "description": "100% human hair.",
+    "priceNgn": null,
+    "priceCfa": 8000,
+    "compareCfa": 10500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "small-beaded-jelly-back": {
+    "slug": "small-beaded-jelly-back",
+    "name": "Small beaded jelly back",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 1700,
+    "compareCfa": 3000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Yellow",
+          "Mint green",
+          "Lilac",
+          "Red",
+          "White",
+          "Pink",
+          "Peach",
+          "Blue",
+          "Black",
+          "Nude"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "small-foldable-washing-machine": {
+    "slug": "small-foldable-washing-machine",
+    "name": "Small foldable washing machine",
+    "description": "",
+    "priceNgn": 36750,
+    "priceCfa": 15000,
+    "compareCfa": 20000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "small-scented-candles": {
+    "slug": "small-scented-candles",
+    "name": "Small scented candles 100g",
+    "description": "",
+    "priceNgn": 2950,
+    "priceCfa": 1200,
+    "compareCfa": 2000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "smartwatch-with-game-pad": {
+    "slug": "smartwatch-with-game-pad",
+    "name": "Smartwatch with Game pad",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 9000,
+    "compareCfa": 12500,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Green",
+          "White"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "smoothing-solution-hair-removal-chair": {
+    "slug": "smoothing-solution-hair-removal-chair",
+    "name": "Smoothing solution hair removal care rollon",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 1450,
+    "compareCfa": 2500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "sports-big-bag": {
+    "slug": "sports-big-bag",
+    "name": "Sports big bag",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 4500,
+    "compareCfa": 6000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Wine",
+          "Grey",
+          "Black",
+          "Blue"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "stanley-cup-13000": {
+    "slug": "stanley-cup-13000",
+    "name": "Stanley cup",
+    "description": "",
+    "priceNgn": 13000,
+    "priceCfa": 5400,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "summer-tote-bag": {
+    "slug": "summer-tote-bag",
+    "name": "Summer tote bag",
+    "description": "",
+    "priceNgn": 9300,
+    "priceCfa": 3800,
+    "compareCfa": 5000,
+    "options": [
+      {
+        "title": "Number",
+        "type": "DROP_DOWN",
+        "values": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "t-frontal-ag-bounce": {
+    "slug": "t-frontal-ag-bounce",
+    "name": "T frontal AG Bounce",
+    "description": "Low grade Human hair.",
+    "priceNgn": null,
+    "priceCfa": 14500,
+    "compareCfa": 18800,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "talking-cactus": {
+    "slug": "talking-cactus",
+    "name": "Talking cactus",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 3500,
+    "compareCfa": 6000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "thank-you-sticker": {
+    "slug": "thank-you-sticker",
+    "name": "Thank you sticker",
+    "description": "",
+    "priceNgn": 1350,
+    "priceCfa": 550,
+    "compareCfa": null,
+    "options": [
+      {
+        "title": "Color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Brown",
+          "White"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "thank-you-sticker-2": {
+    "slug": "thank-you-sticker-2",
+    "name": "Thank you sticker 2",
+    "description": "",
+    "priceNgn": 2400,
+    "priceCfa": 1000,
+    "compareCfa": 2000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "toilet-fragrance": {
+    "slug": "toilet-fragrance",
+    "name": "Toilet fragrance",
+    "description": "",
+    "priceNgn": 1500,
+    "priceCfa": 600,
+    "compareCfa": 900,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "tomi-wrist-watch-02-23000": {
+    "slug": "tomi-wrist-watch-02-23000",
+    "name": "Tomi wrist watch 02",
+    "description": "",
+    "priceNgn": 23000,
+    "priceCfa": 9600,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "tomi-wrist-watch-16000": {
+    "slug": "tomi-wrist-watch-16000",
+    "name": "Tomi wrist watch",
+    "description": "",
+    "priceNgn": 16000,
+    "priceCfa": 6500,
+    "compareCfa": 12000,
+    "options": [
+      {
+        "title": "Number",
+        "type": "DROP_DOWN",
+        "values": [
+          "1",
+          "2",
+          "4"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "tory-burch-bag": {
+    "slug": "tory-burch-bag",
+    "name": "Tory Burch bag",
+    "description": "Comes in a box .",
+    "priceNgn": null,
+    "priceCfa": 6500,
+    "compareCfa": 8000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Croc black",
+          "Nude",
+          "Black"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "tote-bag-a-1": {
+    "slug": "tote-bag-a-1",
+    "name": "Tote bag A",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 2800,
+    "compareCfa": 4000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "transparent-jewelry-box": {
+    "slug": "transparent-jewelry-box",
+    "name": "Transparent Jewelry box",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 4000,
+    "compareCfa": 6500,
+    "options": [
+      {
+        "title": "Color",
+        "type": "DROP_DOWN",
+        "values": [
+          "White",
+          "Black"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "trapezoid-bag": {
+    "slug": "trapezoid-bag",
+    "name": "Trapezoid bag",
+    "description": "",
+    "priceNgn": 14700,
+    "priceCfa": 6000,
+    "compareCfa": 8000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Brown",
+          "Dark brown"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "tumeric-peel-off-mask": {
+    "slug": "tumeric-peel-off-mask",
+    "name": "Tumeric peel off mask",
+    "description": "",
+    "priceNgn": 3700,
+    "priceCfa": 1500,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "two-piece-white-top-with-ankara-trousers": {
+    "slug": "two-piece-white-top-with-ankara-trousers",
+    "name": "Two piece (white top with ankara trousers )",
+    "description": "Suitable for any occasion",
+    "priceNgn": null,
+    "priceCfa": 7000,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "underwear-hanger-5000": {
+    "slug": "underwear-hanger-5000",
+    "name": "Underwear hanger",
+    "description": "",
+    "priceNgn": 5000,
+    "priceCfa": 2100,
+    "compareCfa": 3500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "vacuum-phone-holder": {
+    "slug": "vacuum-phone-holder",
+    "name": "Vacuum phone holder",
+    "description": "",
+    "priceNgn": 4900,
+    "priceCfa": 2000,
+    "compareCfa": 2500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "vacuum-phone-holder-4900": {
+    "slug": "vacuum-phone-holder-4900",
+    "name": "Vacuum phone holder",
+    "description": "",
+    "priceNgn": 4900,
+    "priceCfa": 2000,
+    "compareCfa": 3500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "valentino-bag": {
+    "slug": "valentino-bag",
+    "name": "Valentino bag",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 5500,
+    "compareCfa": 7500,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Brown",
+          "Blue",
+          "Pink",
+          "White",
+          "Red"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "valenzo-watch": {
+    "slug": "valenzo-watch",
+    "name": "Valenzo watch",
+    "description": "",
+    "priceNgn": 9800,
+    "priceCfa": 4000,
+    "compareCfa": 6000,
+    "options": [
+      {
+        "title": "Number",
+        "type": "DROP_DOWN",
+        "values": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "vegetable-peeler": {
+    "slug": "vegetable-peeler",
+    "name": "Vegetable peeler",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 6000,
+    "compareCfa": 8000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "veggies-slicer": {
+    "slug": "veggies-slicer",
+    "name": "Veggies slicer 16 in 1",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 5000,
+    "compareCfa": 7500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "vicky-midi-bag": {
+    "slug": "vicky-midi-bag",
+    "name": "Vicky midi bag",
+    "description": "",
+    "priceNgn": 18400,
+    "priceCfa": 7500,
+    "compareCfa": 10500,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Brown",
+          "Dark brown",
+          "Blue",
+          "Peach",
+          "Nude"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "video-making-kit": {
+    "slug": "video-making-kit",
+    "name": "Video making kit",
+    "description": "",
+    "priceNgn": 10250,
+    "priceCfa": 4200,
+    "compareCfa": 10000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "vogue-frame": {
+    "slug": "vogue-frame",
+    "name": "Vogue frame",
+    "description": "Vogue props",
+    "priceNgn": 8550,
+    "priceCfa": 3500,
+    "compareCfa": 5000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "waist-cross-bag": {
+    "slug": "waist-cross-bag",
+    "name": "Waist/ Cross Bag",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 2200,
+    "compareCfa": 3500,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Blue",
+          "Peach",
+          "Purple",
+          "Red"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "wall-suction-hanger": {
+    "slug": "wall-suction-hanger",
+    "name": "Wall suction hanger",
+    "description": "Can be used in the kitchen or bathroom.",
+    "priceNgn": 1600,
+    "priceCfa": 650,
+    "compareCfa": 1200,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "white-gift-set": {
+    "slug": "white-gift-set",
+    "name": "White gift set",
+    "description": "",
+    "priceNgn": 15400,
+    "priceCfa": 6300,
+    "compareCfa": 8500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "wipes-5-packs-2500": {
+    "slug": "wipes-5-packs-2500",
+    "name": "Wipes 5 packs",
+    "description": "5 packs are given for a set",
+    "priceNgn": 2500,
+    "priceCfa": 1100,
+    "compareCfa": 2000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "wireless-resonance-speaker": {
+    "slug": "wireless-resonance-speaker",
+    "name": "Wireless Resonance speaker",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 6000,
+    "compareCfa": 8000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "wooden-hanger": {
+    "slug": "wooden-hanger",
+    "name": "Wooden hanger",
+    "description": "",
+    "priceNgn": 4150,
+    "priceCfa": 1700,
+    "compareCfa": 2500,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "work-table": {
+    "slug": "work-table",
+    "name": "Work table",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 5500,
+    "compareCfa": 8000,
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Blue",
+          "Black",
+          "Brown",
+          "Pink",
+          "Nude"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "wrist-bp-monitor-12500": {
+    "slug": "wrist-bp-monitor-12500",
+    "name": "Wrist bp monitor",
+    "description": "",
+    "priceNgn": 12500,
+    "priceCfa": 5200,
+    "compareCfa": 7000,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "wrist-watch-box-2200": {
+    "slug": "wrist-watch-box-2200",
+    "name": "Wrist watch box",
+    "description": "",
+    "priceNgn": 2200,
+    "priceCfa": 900,
+    "compareCfa": null,
+    "options": [],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  },
+  "zara-heels": {
+    "slug": "zara-heels",
+    "name": "Zara heels",
+    "description": "",
+    "priceNgn": null,
+    "priceCfa": 10500,
+    "compareCfa": 16000,
+    "options": [
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "additionalInfo": [],
+    "sku": "",
+    "ok": true
+  }
+}
