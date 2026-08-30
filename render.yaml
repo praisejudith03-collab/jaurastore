@@ -1,0 +1,92 @@
+# Render blueprint - creates the staging and production services from one repo.
+# Dashboard -> New -> Blueprint, then point it at this repo.
+services:
+  - name: jaurastore-staging
+    type: web
+    runtime: python
+    repo: https://github.com/praisejudith03-collab/jaurastore
+    branch: develop
+    region: frankfurt
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn "app:create_app()" --workers 2 --timeout 90
+    healthCheckPath: /healthz
+    envVars:
+      - key: FLASK_ENV
+        value: staging
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_EMAILS
+        value: jaurastore@gmail.com
+      - key: MAIL_MODE
+        value: smtp
+      - key: MAIL_FROM
+        value: jaurastore@gmail.com
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        value: jaurastore@gmail.com
+      # set SMTP_PASS in the dashboard (sync: false keeps the secret out of git)
+      - key: SMTP_PASS
+        sync: false
+      - key: SITE_ORIGIN
+        value: https://jaurastore-staging.onrender.com
+      # the SQLite database and uploaded proofs live here - keep this disk
+      # mounted or the data resets on every deploy
+      - key: DB_PATH
+        value: /var/data/jaura.db
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      # admin products - MUST sit on the disk or they vanish on every deploy
+      - key: CATALOG_PATH
+        value: /var/data/catalog.json
+    disk:
+      name: jaura-staging-data
+      mountPath: /var/data
+      sizeGB: 1
+
+  - name: jaurastore-production
+    type: web
+    runtime: python
+    repo: https://github.com/praisejudith03-collab/jaurastore
+    branch: main
+    region: frankfurt
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn "app:create_app()" --workers 2 --timeout 90
+    healthCheckPath: /healthz
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_EMAILS
+        value: jaurastore@gmail.com
+      - key: MAIL_MODE
+        value: smtp
+      - key: MAIL_FROM
+        value: jaurastore@gmail.com
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        value: jaurastore@gmail.com
+      # set SMTP_PASS in the dashboard (sync: false keeps the secret out of git)
+      - key: SMTP_PASS
+        sync: false
+      - key: SITE_ORIGIN
+        value: https://jaurastore.com.ng
+      - key: DB_PATH
+        value: /var/data/jaura.db
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      # admin products - MUST sit on the disk or they vanish on every deploy
+      - key: CATALOG_PATH
+        value: /var/data/catalog.json
+    disk:
+      name: jaura-production-data
+      mountPath: /var/data
+      sizeGB: 1

@@ -1,0 +1,21 @@
+To: jaurastore@gmail.com
+Subject: Payment receipt · JA-FK8OEJ · Grace Mensah
+Attachment: payment-JA-FK8OEJ-receipt.pdf (application/pdf)
+
+A customer just uploaded a payment receipt.
+
+Customer name : Grace Mensah
+Phone         : +229 97 00 11 22
+Email         : grace@example.com
+Order ID      : JA-FK8OEJ
+Product(s)    : 2x Valentino bag (Black), 1x Zara heels
+Quantity      : 3
+Payment method: MTN MoMo Benin (F CFA)
+Total paid    : 
+Amount shown  : FCFA 25 000
+Sent at       : 2026-08-30T09:02:04
+
+Note from the customer: Paid from my MoMo, please confirm
+
+The receipt (payment-JA-FK8OEJ-receipt.pdf) is attached to this email exactly as it was uploaded.
+It is also stored in the admin portal: http://localhost:8080/admin.html

@@ -22,7 +22,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=88" />
+  <link rel="stylesheet" href="css/style.css?v=89" />
 </head>
 <body data-page="checkout">
   <div id="site-header"></div>
@@ -58,13 +58,13 @@
           <div class="field full"><label data-i18n="ck.street">Street address *</label><input name="address" required data-i18n-placeholder="ck.streetPh" placeholder="House number and street name" autocomplete="street-address" /></div>
           <div class="field"><label data-i18n="ck.city">Town / City *</label><input name="city" required data-i18n-placeholder="ck.cityPh" placeholder="Cotonou, Ikeja, Lekki…" /></div>
           <div class="field full fare-field">
-            <label data-i18n="ck.fareTitle">Add the total amount of the items in your cart to the delivery fare for your zone *</label>
-            <p class="ck-fare-intro" data-i18n="ck.fareIntro">These are ranges only. The exact fare depends on your location and the weight of the products, and is confirmed on WhatsApp.</p>
-            <div class="fare-list">
+            <label for="zone-cotonou" data-delivery-label>Delivery location — where should we bring your order? *</label>
+            <p class="ck-fare-intro">We deliver to the street address you wrote above. Choose the town or area it is in so we can quote your fare. Pick-up is not offered.</p>
+            <div class="fare-list" data-delivery-zones>
               <label class="fare-opt"><input type="radio" name="zone" value="Lagos Mainland" required /> <span data-i18n="ck.fare.mainland">Lagos Mainland (₦2,000 – ₦5,000)</span></label>
               <label class="fare-opt"><input type="radio" name="zone" value="Lagos Island" /> <span data-i18n="ck.fare.island">Lagos Island (₦3,500 – ₦6,000)</span></label>
               <label class="fare-opt"><input type="radio" name="zone" value="Other Nigeria" /> <span data-i18n="ck.fare.ngOther">Other states in Nigeria (confirm on WhatsApp)</span></label>
-              <label class="fare-opt"><input type="radio" name="zone" value="Cotonou" /> <span data-i18n="ck.fare.cotonou">Cotonou (1,000 – 3,000 CFA)</span></label>
+              <label class="fare-opt"><input type="radio" name="zone" value="Cotonou" id="zone-cotonou" /> <span data-i18n="ck.fare.cotonou">Cotonou (1,000 – 3,000 CFA)</span></label>
               <label class="fare-opt"><input type="radio" name="zone" value="Calavi" /> <span data-i18n="ck.fare.calavi">Calavi (1,500 – 3,500 CFA)</span></label>
               <label class="fare-opt"><input type="radio" name="zone" value="Porto-Novo" /> <span data-i18n="ck.fare.porto">Porto-Novo (1,500 – 3,500 CFA)</span></label>
               <label class="fare-opt"><input type="radio" name="zone" value="Other Benin" /> <span data-i18n="ck.fare.bjOther">Other places in Benin (confirm on WhatsApp)</span></label>
@@ -127,8 +127,10 @@
 
           <div class="ck-upload">
             <label class="proof-label" data-i18n="ck.uploadReceipt">Upload the bank payment receipt</label>
-            <input type="file" name="proof" accept="image/*" />
+            <input type="file" name="proof" accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf" />
+            <p class="ck-file-types">JPG, PNG or PDF — up to 8 MB. We keep the file exactly as you send it.</p>
             <img data-proof-preview hidden class="proof-preview" alt="" />
+            <div data-proof-pdf hidden class="proof-frame-wrap"></div>
           </div>
         </div>
 
@@ -139,9 +141,11 @@
   </div>
 
   <div id="site-footer"></div>
-  <script src="js/products-data.js?v=88"></script>
-  <script src="js/i18n.js?v=88"></script>
-  <script src="js/store.js?v=88"></script>
-  <script src="js/app.js?v=88"></script>
+  <script src="js/products-data.js?v=90"></script>
+  <script src="js/i18n-phrases.js?v=90"></script>
+  <script src="js/i18n.js?v=90"></script>
+  <script src="js/net.js?v=90"></script>
+  <script src="js/store.js?v=90"></script>
+  <script src="js/app.js?v=90"></script>
 </body>
 </html>
