@@ -344,12 +344,46 @@ function renderShop() {
 
   const pager = document.querySelector("[data-pager]");
   if (pager && pages > 1) {
+    // data-href, not onclick: inline handlers are blocked by our CSP
     pager.innerHTML = Array.from({ length: pages }, (_, i) => {
       const n = i + 1;
       const url = `shop.html?cat=${cat}&q=${encodeURIComponent(q)}&page=${n}`;
-      return `<button ${n === page ? "disabled" : ""} onclick="location.href='${url}'">${n}</button>`;
+      return `<button type="button" ${n === page ? "disabled" : ""} data-goto="${JA.escape(url)}">${n}</button>`;
     }).join("");
+    pager.querySelectorAll("[data-goto]").forEach((b) => {
+      b.addEventListener("click", () => { location.href = b.dataset.goto; });
+    });
   } else if (pager) pager.innerHTML = "";
+}
+
+async function renderMostViewed() {
+  const host = document.querySelector("[data-most-viewed]");
+  if (!host || host.dataset.done === "1") return;
+  let items = [];
+  try {
+    const res = await fetch("api/most-viewed?limit=12", { credentials: "same-origin", cache: "no-store" });
+    const d = await res.json();
+    if (d && d.ok) {
+      items = (d.items || [])
+        .map((x) => ({ views: x.views || 0, carts: x.carts || 0, p: JA.product(x.productId) }))
+        .filter((x) => x.p);
+    }
+  } catch (e) { items = []; }
+  if (items.length < 4) return;                 // an empty rail is worse than none
+  host.dataset.done = "1";
+  const cur = JA.currency();
+  host.innerHTML = `
+    <div class="mv-head">
+      <h2 class="serif-title">Most viewed right now</h2>
+      <a class="mv-more" href="shop.html">Shop all ›</a>
+    </div>
+    <div class="mv-rail">${items.map((x) => `
+      <a class="mv-card" href="product.html?id=${encodeURIComponent(x.p.id)}">
+        <img src="${JA.asset(x.p.image)}" alt="" loading="lazy" />
+        <strong>${JA.escape(JA.displayName(x.p))}</strong>
+        <span>${JA.escape(JA.money(JA.priceOf(x.p, cur), cur))}</span>
+        <em>${x.views} view${x.views === 1 ? "" : "s"}${x.carts ? " · " + x.carts + " in carts" : ""}</em>
+      </a>`).join("")}</div>`;
 }
 
 function namedSwatch(val) {
@@ -710,7 +744,8 @@ function showOrderDone(order) {
         <tfoot><tr class="ck-total"><th>${t("ck.total")}</th><td>${JA.money(order.total, order.currency)}</td></tr></tfoot>
       </table>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:22px">
-        <a class="btn" href="https://wa.me/${JA.settings().whatsapp}?text=${encodeURIComponent("Hello JauraStore, my order ID is " + order.id + ". Here is my payment screenshot.")}" target="_blank" rel="noopener">${t("ck.uploadNow")}</a>
+        <a class="btn" href="pay.html?id=${encodeURIComponent(order.id)}">${t("ck.uploadHere")}</a>
+        <a class="btn btn-line" href="https://wa.me/${JA.settings().whatsapp}?text=${encodeURIComponent("Hello JauraStore, my order ID is " + order.id + ". Here is my payment screenshot.")}" target="_blank" rel="noopener">${t("ck.uploadNow")}</a>
         <a class="btn btn-line" href="order.html?id=${encodeURIComponent(order.id)}">${t("ck.track")}</a>
         <a class="btn btn-line" href="shop.html">${t("ck.return")}</a>
       </div>
@@ -788,6 +823,13 @@ function renderCheckout() {
 
   if (form.dataset.bound) return;
   form.dataset.bound = "1";
+  // Delivery only: a "Pick up" choice is never offered, in any language.
+  document.querySelectorAll("[data-delivery-zones] .fare-opt, .fare-list .fare-opt").forEach((opt) => {
+    const input = opt.querySelector("input");
+    const text = (opt.textContent || "") + " " + (input && input.value ? input.value : "");
+    if (/pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
+  });
+  try { JA.track("checkout_start", { page: "checkout" }); } catch (e) {}
 
   form.addEventListener("change", (e) => {
     if (e.target.name === "currency") {
@@ -799,17 +841,54 @@ function renderCheckout() {
 
   const shot = form.querySelector("[name=proof]");
   const preview = form.querySelector("[data-proof-preview]");
-  shot?.addEventListener("change", async () => {
+  let proofJob = null;            // the compression still running, if any
+  let proofFailed = false;
+  let proofFile = null;           // a PDF (or any non-image) travels as-is
+  const isPdf = (f) => /pdf/i.test(f?.type || "") || /\.pdf$/i.test(f?.name || "");
+
+  shot?.addEventListener("change", () => {
     const file = shot.files?.[0];
-    if (!file || !preview) return;
-    try {
-      const data = await compressImage(file);
-      preview.src = data;
-      preview.hidden = false;
-      form.dataset.proof = data;
-    } catch {
-      JA.toast(t("toast.badImg"));
+    if (!file) return;
+    proofFailed = false;
+    proofFile = null;
+    delete form.dataset.proof;
+
+    // A PDF cannot be drawn on a canvas, and shrinking it would mean the shop
+    // no longer holds the customer's real receipt - send it untouched.
+    if (isPdf(file)) {
+      if (file.size > 8 * 1024 * 1024) {
+        proofFailed = true;
+        JA.toast("That PDF is over 8 MB. Please send a smaller file.");
+        return;
+      }
+      proofFile = file;
+      proofJob = Promise.resolve(file);
+      if (preview) {
+        preview.hidden = true;
+        const box = form.querySelector("[data-proof-pdf]");
+        if (box) {
+          box.hidden = false;
+          box.innerHTML = `<iframe class="proof-frame" src="${URL.createObjectURL(file)}"
+            title="Your payment receipt"></iframe>`;
+        }
+      }
+      return;
     }
+    if (preview) {
+      const box = form.querySelector("[data-proof-pdf]");
+      if (box) { box.hidden = true; box.innerHTML = ""; }
+    }
+    proofJob = compressImage(file).then((data) => {
+      if (preview) {
+        preview.src = data;
+        preview.hidden = false;
+      }
+      form.dataset.proof = data;
+      return data;
+    }).catch(() => {
+      proofFailed = true;         // a camera photo can be huge - wait for it
+      return null;
+    });
   });
 
   form.addEventListener("submit", async (e) => {
@@ -819,8 +898,15 @@ function renderCheckout() {
     const cur = data.currency || JA.currency();
     const liveItems = JA.cartDetailed();
     if (!liveItems.length) return;
-    if (!form.dataset.proof) {
-      JA.toast(t("toast.needShot"));
+    // A big phone photo can still be compressing when the customer taps
+    // "Place order". Wait for it instead of refusing the order.
+    if (!form.dataset.proof && proofJob) {
+      if (btn) { btn.disabled = true; btn.textContent = t("ck.preparing"); }
+      await proofJob.catch(() => null);
+    }
+    if (!form.dataset.proof && !proofFile) {
+      if (btn) { btn.disabled = false; btn.textContent = t("ck.place"); }
+      JA.toast(proofFailed ? t("toast.badImg") : t("toast.needShot"));
       shot?.focus();
       return;
     }
@@ -830,8 +916,11 @@ function renderCheckout() {
     }
     const clean = (v) => String(v || "").replace(/[<>]/g, "").trim().slice(0, 400);
     const fullName = [clean(data.firstName), clean(data.lastName)].filter(Boolean).join(" ") || clean(data.name);
+    const proofBlob = proofFile
+      || ((JA.dataUrlToBlob && form.dataset.proof) ? JA.dataUrlToBlob(form.dataset.proof) : null);
     const order = JA.saveOrder({
       id: JA.nextOrderId(),
+      proofBlob: proofBlob || undefined,
       at: new Date().toISOString(),
       status: "pending",
       customer: {
@@ -860,6 +949,17 @@ function renderCheckout() {
     JA.clearCart();
     form.dataset.done = "1";
     showOrderDone(order);
+    const waiting = JA.syncPending ? JA.syncPending() : 0;
+    if (waiting) {
+      const root2 = document.querySelector("[data-checkout-root]");
+      if (root2) {
+        const note = document.createElement("p");
+        note.className = "ck-queued";
+        note.textContent = "No internet right now — your order and screenshot are saved on this phone and will reach us the moment you are back online. Keep your order ID.";
+        root2.insertBefore(note, root2.firstChild);
+      }
+    }
+    if (btn) { btn.disabled = false; btn.textContent = t("ck.place"); }
     document.querySelector("[data-copy-id]")?.addEventListener("click", (ev) => {
       const id = ev.currentTarget.getAttribute("data-copy-id");
       navigator.clipboard?.writeText(id).then(() => JA.toast("Order ID copied: " + id));
@@ -868,11 +968,108 @@ function renderCheckout() {
   });
 }
 
-function renderOrder() {
+function renderConfirm() {
+  const root = document.querySelector("[data-confirm]");
+  if (!root) return;
+  const q = new URLSearchParams(location.search);
+  const id = (q.get("id") || "").trim().toUpperCase();
+  const action = (q.get("action") || "confirm").toLowerCase();
+  const token = q.get("token") || "";
+  const ask = action === "decline" ? "decline" : "confirm";
+
+  const shell = (inner) => `
+    <div class="order-done">
+      <div class="kicker">${ask === "confirm" ? "Confirm payment" : "Decline order"}</div>
+      <h1 class="serif-title">${JA.escape(id || "Order")}</h1>
+      ${inner}
+    </div>`;
+
+  if (!id || !token) {
+    root.innerHTML = shell(`<p class="empty">This link is incomplete. Open the email
+      again, or sign in to the admin portal to confirm the order.</p>`);
+    return;
+  }
+
+  // The page never acts on its own: a mail scanner pre-fetching the link must
+  // not confirm anything. It waits for a human to press the button.
+  root.innerHTML = shell(`
+    <p id="c-summary" class="empty">Loading this order…</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:18px">
+      <button type="button" class="btn" data-c-go="${ask}">
+        ${ask === "confirm" ? "Yes — payment received" : "Decline this order"}
+      </button>
+      <a class="btn btn-line" href="admin.html">Open admin portal</a>
+    </div>
+    <p id="c-result" class="ck-fare-help" style="margin-top:18px"></p>`);
+
+  fetch(`api/orders/${encodeURIComponent(id)}`)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      const el = document.getElementById("c-summary");
+      if (!el) return;
+      if (!d) { el.textContent = "We could not read this order."; return; }
+      const cur = d.currency === "NGN" ? "\u20a6" : "F CFA";
+      el.innerHTML = `
+        <p><strong>${JA.escape(String(d.id || id))}</strong> ·
+           <span class="status-pill ${JA.escape(d.status || "pending")}">${JA.escape(d.status || "pending")}</span></p>
+        <p>${JA.escape(d.customer_name || "")}${d.city ? " · " + JA.escape(d.city) : ""}</p>
+        <p>Total <strong>${cur}${JA.escape(String(d.total || ""))}</strong></p>`;
+    })
+    .catch(() => {});
+
+  const btn = root.querySelector("[data-c-go]");
+  btn?.addEventListener("click", async () => {
+    btn.disabled = true;
+    const res = document.getElementById("c-result");
+    res.textContent = "Working…";
+    try {
+      const r = await fetch(
+        `api/orders/${encodeURIComponent(id)}/confirm?action=${encodeURIComponent(ask)}`
+        + `&token=${encodeURIComponent(token)}`, { cache: "no-store" });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) {
+        root.innerHTML = shell(`
+          <p class="ck-confirm-note">${ask === "confirm"
+            ? "Payment confirmed. The customer has been emailed a receipt."
+            : "Order declined. The customer has been emailed about it."}</p>
+          <p class="status-pill ${d.status}">${JA.escape(d.status)}</p>
+          <p style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:18px">
+            <a class="btn" href="admin.html">Open admin portal</a>
+            <a class="btn btn-line" href="shop.html">Back to the shop</a>
+          </p>`);
+        return;
+      }
+      res.textContent = (d && d.error) || "That link did not work. Sign in to the admin portal instead.";
+      btn.disabled = false;
+    } catch (e) {
+      res.textContent = "No connection. Try again, or confirm from the admin portal.";
+      btn.disabled = false;
+    }
+  });
+}
+
+async function renderOrder() {
   const root = document.querySelector("[data-order]");
   if (!root) return;
   const id = param("id") || "";
-  const found = id ? JA.getOrder(id) : null;
+  let found = id ? JA.getOrder(id) : null;
+  if (!found && id) {
+    // the permanent copy lives on the server, so tracking works from any phone
+    try {
+      const res = await fetch("api/orders/" + encodeURIComponent(id.trim().toUpperCase()),
+        { credentials: "same-origin", cache: "no-store" });
+      if (res.ok) {
+        const d = await res.json();
+        if (d && d.ok && d.order) {
+          const o = d.order;
+          found = {
+            id: o.id, at: o.at, status: o.status, total: o.total, currency: o.currency,
+            items: [], customer: { name: o.customer_name || "", city: o.city || "", zone: "", phone: "" },
+          };
+        }
+      }
+    } catch (e) {}
+  }
   if (found) {
     const statusLabel = found.status === "confirmed" ? t("order.confirmed") : found.status === "declined" ? t("order.declined") : t("order.pending");
     const statusMsg = found.status === "confirmed" ? t("order.prep") : found.status === "declined" ? t("order.declineMsg") : t("order.waitMsg");
@@ -881,11 +1078,14 @@ function renderOrder() {
         <div class="kicker">${t("order.status")}</div>
         <h1 class="serif-title">${t("ck.orderNo")} ${JA.escape(found.id)}</h1>
         <p class="status-pill ${found.status}">${statusLabel}</p>
-        <p>${JA.escape(found.customer.name || "")} · ${JA.escape(found.customer.phone || "")}</p>
+        <p>${JA.escape(found.customer.name || "")}${found.customer.phone ? " · " + JA.escape(found.customer.phone) : ""}</p>
         <p>${t("order.paidIn")} <strong>${found.currency === "NGN" ? "₦" : "F CFA"}</strong> — <strong>${JA.money(found.total, found.currency)}</strong></p>
-        <ul class="order-items">${found.items.map((i) => `<li>${i.qty}× ${JA.escape(i.name)}${i.color ? " · " + JA.escape(i.color) : ""} — ${JA.money(i.price * i.qty, found.currency)}</li>`).join("")}</ul>
+        ${(found.items || []).length ? `<ul class="order-items">${found.items.map((i) => `<li>${i.qty}× ${JA.escape(i.name)}${i.color ? " · " + JA.escape(i.color) : ""} — ${JA.money(i.price * i.qty, found.currency)}</li>`).join("")}</ul>` : ""}
         <p class="ck-fare-help">${t("ck.fareRange")}</p>
-        <p><a class="btn" href="${fareWaUrl(found)}" target="_blank" rel="noopener">${t("ck.uploadNow")}</a></p>
+        <p style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+          ${found.status === "confirmed" ? "" : `<a class="btn" href="pay.html?id=${encodeURIComponent(found.id)}">${t("ck.uploadHere")}</a>`}
+          <a class="btn btn-line" href="${fareWaUrl(found)}" target="_blank" rel="noopener">${t("ck.uploadNow")}</a>
+        </p>
         <p style="color:var(--taupe);margin-top:16px">${statusMsg}</p>
       </div>`;
     return;
@@ -904,22 +1104,201 @@ function renderOrder() {
   });
 }
 
+const PAY_METHODS = [
+  "UBA bank transfer (₦ Naira)",
+  "MTN MoMo Benin (F CFA)",
+  "Moov Money Togo (F CFA)",
+  "Other bank transfer",
+];
+const RECEIPT_MAX = 8 * 1024 * 1024;                       // 8 MB
+const RECEIPT_OK = /\.(jpe?g|png|pdf)$/i;
+
+function payItemsText(order) {
+  if (order && (order.items || []).length) {
+    return order.items.map((i) => `${i.qty}× ${i.name}${i.color ? " (" + i.color + ")" : ""}`).join(", ");
+  }
+  const lines = JA.cartDetailed();
+  if (!lines.length) return "";
+  return lines.map((i) => `${i.qty}× ${JA.displayName(i.product)}${i.color ? " (" + i.color + ")" : ""}`).join(", ");
+}
+function payQtyText(order) {
+  if (order && (order.items || []).length) {
+    return String(order.items.reduce((n, i) => n + (Number(i.qty) || 0), 0));
+  }
+  return String(JA.cartCount() || "");
+}
+function payTotalText(order) {
+  if (order) return JA.money(order.total, order.currency);
+  return JA.money(JA.cartTotal(JA.currency()), JA.currency());
+}
+
 function renderPay() {
   const root = document.querySelector("[data-pay]");
   if (!root) return;
-  const preset = param("id") || "";
-  const waText = preset
-    ? "Hello JauraStore, my order ID is " + preset + ". Here is my payment screenshot."
-    : "Hello JauraStore, here is my payment screenshot.";
+  const preset = (param("id") || "").trim().toUpperCase();
+  const me = (JA.customer && JA.customer()) || {};
+  const cur = JA.currency();
+  const bank = cur === "NGN" ? JA.settings().bankNgn : JA.settings().bankCfa;
+
   root.innerHTML = `
-    <div class="order-lookup">
-      <div class="kicker">${t("pay.kicker")}</div>
-      <h1 class="serif-title">${t("pay.title")}</h1>
-      <p style="color:var(--muted);margin:10px 0 20px">${t("pay.lead")}</p>
-      ${preset ? `<p class="order-id-label">${t("ck.orderNo")}</p><p class="order-id">${JA.escape(preset)}</p>` : ""}
-      <p class="ck-confirm-note">${t("ck.emailNote")}</p>
-      <p style="margin-top:18px"><a class="btn" href="https://wa.me/${JA.settings().whatsapp}?text=${encodeURIComponent(waText)}" target="_blank" rel="noopener">${t("pay.whatsapp")}</a></p>
+    <div class="pay-card-wrap">
+      <div class="kicker">Payment confirmation</div>
+      <h1 class="serif-title">Send your payment receipt</h1>
+      <p class="pay-lead">Upload the receipt or screenshot from your bank or MoMo. We email it to
+        <strong>jaurastore@gmail.com</strong> with your details, so nothing gets lost on WhatsApp.</p>
+
+      <div class="pay-bank">
+        <p class="proof-label">Pay into</p>
+        <p class="pay-note">${String(JA.escape(String(bank || "")).replace(/\n/g, "<br>"))}</p>
+      </div>
+
+      <form class="pay-form" data-pay-form enctype="multipart/form-data">
+        <input type="hidden" name="currency" value="${JA.escape(cur)}" />
+        <div class="field"><label>Full name *</label>
+          <input name="name" required autocomplete="name" maxlength="80" /></div>
+        <div class="field"><label>Phone number *</label>
+          <input name="phone" type="tel" required inputmode="tel" autocomplete="tel" maxlength="40" /></div>
+        <div class="field"><label>Email address *</label>
+          <input name="email" type="email" required inputmode="email" autocomplete="email"
+                 value="${JA.escape(me.email || "")}" /></div>
+        <div class="field"><label>Order ID <span class="pay-opt">if you have one</span></label>
+          <input name="orderId" placeholder="JA-XXXXXX" value="${JA.escape(preset)}" /></div>
+        <div class="field pay-wide"><label>Products as ordered</label>
+          <textarea name="items" rows="2" maxlength="600" data-pay-items
+            placeholder="e.g. 2× Valentino bag (Black), 1× Zara heels">${JA.escape(payItemsText(null))}</textarea></div>
+        <div class="field"><label>Quantity</label>
+          <input name="quantity" inputmode="numeric" maxlength="20" data-pay-qty value="${JA.escape(payQtyText(null))}" /></div>
+        <div class="field"><label>Amount paid</label>
+          <input name="amount" maxlength="40" data-pay-total value="${JA.escape(payTotalText(null))}" /></div>
+        <div class="field"><label>Payment method *</label>
+          <select name="method" required>
+            ${PAY_METHODS.map((m) => `<option value="${JA.escape(m)}"${(cur === "NGN" ? m.indexOf("UBA") === 0 : m.indexOf("MTN") === 0) ? " selected" : ""}>${JA.escape(m)}</option>`).join("")}
+          </select></div>
+        <div class="field pay-wide"><label>Note (optional)</label>
+          <textarea name="note" rows="2" maxlength="600" placeholder="Anything we should know about this payment"></textarea></div>
+
+        <div class="field pay-wide">
+          <label>Your receipt — JPG, PNG or PDF (max 8 MB) *</label>
+          <input type="file" name="receipt" accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf" required />
+          <p class="pay-file-note" data-pay-file-note>We attach the original file to the email, exactly as you upload it.</p>
+          <div class="pay-preview" data-pay-preview hidden></div>
+        </div>
+
+        <div class="field pay-wide">
+          <button class="btn pay-send" type="submit">Send receipt to Jaura Store</button>
+          <p class="pay-privacy">Your details are used only to match your payment to your order.</p>
+        </div>
+      </form>
     </div>`;
+
+  const form = root.querySelector("[data-pay-form]");
+  const fileInput = form.querySelector("[name=receipt]");
+  const note = form.querySelector("[data-pay-file-note]");
+  const preview = form.querySelector("[data-pay-preview]");
+  let chosen = null;
+
+  // pre-fill from the order id when the page was opened with one
+  if (preset) {
+    fetch("api/orders/" + encodeURIComponent(preset), { credentials: "same-origin", cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const o = d && d.order;
+        if (!o) return;
+        if (o.items && o.items.length) {
+          const it = form.querySelector("[data-pay-items]");
+          if (it && !it.value.trim()) it.value = payItemsText(o);
+          const q = form.querySelector("[data-pay-qty]");
+          if (q && !q.value.trim()) q.value = payQtyText(o);
+        }
+        const amt = form.querySelector("[data-pay-total]");
+        if (amt && !amt.value.trim()) amt.value = JA.money(o.total, o.currency);
+      })
+      .catch(() => {});
+  }
+
+  const showFile = (file) => {
+    if (!file) { chosen = null; preview.hidden = true; preview.innerHTML = ""; return; }
+    const badType = !RECEIPT_OK.test(file.name) || !/^(image\/(jpeg|png)|application\/pdf)$/.test(file.type || "");
+    if (badType) {
+      JA.toast("Only JPG, PNG or PDF files can be sent.");
+      fileInput.value = ""; chosen = null; preview.hidden = true; return;
+    }
+    if (file.size > RECEIPT_MAX) {
+      JA.toast("That file is " + (file.size / 1048576).toFixed(1) + " MB. The limit is 8 MB.");
+      fileInput.value = ""; chosen = null; preview.hidden = true; return;
+    }
+    chosen = file;
+    note.textContent = file.name + " · " + (file.size / 1024).toFixed(0) + " KB — ready to send";
+    preview.hidden = false;
+    if (/^image\//.test(file.type)) {
+      const url = URL.createObjectURL(file);
+      preview.innerHTML = `<img src="${url}" alt="Your receipt" />`;
+    } else {
+      preview.innerHTML = `<div class="pay-pdf"><strong>PDF</strong><span>${JA.escape(file.name)}</span></div>`;
+    }
+  };
+  fileInput.addEventListener("change", () => showFile(fileInput.files && fileInput.files[0]));
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!chosen) { JA.toast("Choose your receipt file first."); return; }
+    const fd = new FormData(form);
+    const btn = form.querySelector(".pay-send");
+    const extras = [];
+    ["name", "phone", "email", "orderId", "items", "quantity", "amount", "method", "note", "currency"]
+      .forEach((k) => extras.push([k, String(fd.get(k) || "")]));
+    if (!String(fd.get("email") || "").includes("@")) { JA.toast("Enter a valid email address."); return; }
+    // no order id? they may be paying outside the checkout - still send it
+
+    if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+    const res = await (window.JA_NET
+      ? window.JA_NET.api("api/payment-proof", {
+          method: "POST", blob: chosen, field: "file", filename: chosen.name,
+          extra: extras, queue: true, label: "Receipt", timeout: 60000,
+        })
+      : Promise.resolve(null));
+    if (btn) { btn.disabled = false; btn.textContent = "Send receipt to Jaura Store"; }
+    if (res && res.queued) {
+      JA.toast("Saved on your phone — it will send as soon as you are back online.");
+      root.innerHTML = `
+        <div class="pay-card-wrap pay-done">
+          <div class="kicker">Saved</div>
+          <h1 class="serif-title">We have your receipt</h1>
+          <p class="pay-lead">You are offline, so your receipt is stored on this phone. It will reach
+            <strong>jaurastore@gmail.com</strong> the moment your connection comes back — keep this page open if you can.</p>
+          <p class="pay-privacy">Order ${JA.escape(String(fd.get("orderId") || "").toUpperCase())} · ${JA.escape(chosen.name)}</p>
+          <div class="pay-done-btns"><a class="btn btn-line" href="shop.html">Continue shopping</a></div>
+        </div>`;
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    if (!res || res.ok === false) {
+      if (res && res.error) JA.toast(res.error);
+      return;
+    }
+    root.innerHTML = `
+      <div class="pay-card-wrap pay-done">
+        <div class="kicker">Thank you</div>
+        <h1 class="serif-title">Receipt received</h1>
+        <p class="pay-lead">${res && res.emailed
+          ? `Your receipt has been emailed to <strong>jaurastore@gmail.com</strong> with the original file attached. We will confirm your payment shortly.`
+          : `Your receipt is saved with us. We will confirm your payment shortly.`}</p>
+        <ul class="woo-meta">
+          <li><span>Order</span><strong>${JA.escape(String(fd.get("orderId") || "").toUpperCase())}</strong></li>
+          <li><span>Name</span><strong>${JA.escape(String(fd.get("name") || ""))}</strong></li>
+          <li><span>Phone</span><strong>${JA.escape(String(fd.get("phone") || ""))}</strong></li>
+          <li><span>Paid by</span><strong>${JA.escape(String(fd.get("method") || ""))}</strong></li>
+          <li><span>File</span><strong>${JA.escape(String(fd.get("amount") || ""))} · ${JA.escape((res && res.fileName) || chosen.name)}</strong></li>
+        </ul>
+        <p class="pay-privacy">A copy of this confirmation was also sent to ${JA.escape(String(fd.get("email") || ""))}.</p>
+        <div class="pay-done-btns">
+          <a class="btn" href="https://wa.me/${JA.settings().whatsapp}?text=${encodeURIComponent("Hello JauraStore, I just sent my payment receipt for order " + String(fd.get("orderId") || "").toUpperCase() + ".")}" target="_blank" rel="noopener">Message us on WhatsApp</a>
+          <a class="btn btn-line" href="order.html?id=${encodeURIComponent(String(fd.get("orderId") || "").toUpperCase())}">Track my order</a>
+          <a class="btn btn-line" href="shop.html">Continue shopping</a>
+        </div>
+      </div>`;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
 }
 
 function renderWishlist() {
@@ -1044,11 +1423,13 @@ async function boot() {
     if (page === "categories") renderCategories();
     if (page === "shop") renderShop();
     if (page === "product") renderProduct();
+    if (page === "home" || page === "shop") renderMostViewed();
     try { JA.startCardPlay && JA.startCardPlay(); } catch (e) {}
     if (page === "cart") renderCart();
     if (page === "checkout") renderCheckout();
     if (page === "order") renderOrder();
     if (page === "pay") renderPay();
+    if (page === "confirm") renderConfirm();
     if (page === "wishlist") renderWishlist();
     if (page === "account") renderAccount();
     if (page === "contact") bindContactForm();

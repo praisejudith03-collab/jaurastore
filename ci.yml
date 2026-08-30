@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Backend tests
+        run: python -m pytest tests/test_api.py -q
+
+      - name: Boot the app and check it serves the store
+        env:
+          FLASK_ENV: production
+          SECRET_KEY: ci-secret-key
+          ADMIN_EMAILS: jaurastore@gmail.com
+        run: |
+          python -m gunicorn "app:create_app()" --bind 127.0.0.1:8080 --daemon
+          sleep 4
+          curl -fsS http://127.0.0.1:8080/healthz
+          curl -fsS http://127.0.0.1:8080/ -o /dev/null
+          curl -fsS http://127.0.0.1:8080/api/catalog -o /dev/null
+          curl -fsS http://127.0.0.1:8080/api/config -o /dev/null
+          pkill -f gunicorn || true
+
+  pages-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every internal link points at a file that exists
+        run: |
+          python3 - <<'PY'
+          import re, os, sys
+          bad = []
+          pages = [f for f in os.listdir('.') if f.endswith('.html')]
+          for page in pages:
+              html = open(page, encoding='utf-8').read()
+              for href in re.findall(r'(?:href|src)="([^"#?]+)', html):
+                  if href.startswith(('http', 'mailto:', 'tel:', '//', 'data:')):
+                      continue
+                  target = href.split('?')[0].split('#')[0]
+                  if not target:
+                      continue
+                  if not os.path.exists(target):
+                      bad.append(f"{page} -> {href}")
+          if bad:
+              print("Broken links:")
+              print("\n".join(bad))
+              sys.exit(1)
+          print(f"{len(pages)} pages, no broken internal links")
+          PY

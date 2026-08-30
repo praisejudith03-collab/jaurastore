@@ -13,7 +13,7 @@ window.I18N = (() => {
     "nav.checkout": "Checkout",
     "nav.bag": "Bag",
     "nav.track": "Track order",
-    "nav.pay": "Send payment screenshot",
+    "nav.pay": "Send payment receipt",
     "nav.atelier": "Atelier",
     "nav.search": "Search",
     "nav.cart": "Cart",
@@ -240,6 +240,7 @@ window.I18N = (() => {
     "ck.legal": "Your personal data is used to process your order. Upload your payment receipt here. JauraStore will confirm your payment, and a confirmation message will be sent to your email. Transport fare is discussed on WhatsApp.",
     "ck.place": "Place order",
     "ck.placing": "Placing order…",
+    "ck.preparing": "Preparing your photo…",
     "ck.doneKicker": "Order complete",
     "ck.thanks": "Thank you. Your order has been received.",
     "ck.orderNo": "Order number",
@@ -250,6 +251,7 @@ window.I18N = (() => {
     "ck.idHelp": "Give this ID to JauraStore or put it on your transfer.",
     "ck.track": "Track this order",
     "ck.fareRange": "Transportation fare ranges depending on your location and the weight of the products. Tap the button below to WhatsApp us with your order ID and location so we can give you your specific fare.",
+    "ck.uploadHere": "Upload payment receipt",
     "ck.uploadNow": "WhatsApp for transport fare",
     "ck.copyId": "Copy order ID",
     "ck.waId": "WhatsApp this ID",
@@ -299,13 +301,13 @@ window.I18N = (() => {
     "order.paidIn": "Paid in",
     "order.prep": "Thank you — we are preparing your delivery.",
     "order.declineMsg": "Please contact us on WhatsApp with this order ID.",
-    "order.waitMsg": "Send your payment screenshot to us on WhatsApp. JauraStore will confirm your payment, and a confirmation message will be sent to your email.",
+    "order.waitMsg": "Upload your payment receipt here or send it on WhatsApp. JauraStore will confirm your payment, and a confirmation message will be sent to your email.",
     "pay.kicker": "Payment",
     "pay.title": "Send your payment screenshot",
-    "pay.lead": "No upload is needed on this site. After you transfer, send a screenshot of your payment to us on WhatsApp. A confirmation message will be sent to your email. JauraStore will confirm your payment.",
+    "pay.lead": "Upload the receipt or screenshot from your bank or MoMo. We email it to Jaura Store with the file attached, then confirm your payment.",
     "pay.id": "Order ID *",
     "pay.file": "Payment screenshot",
-    "pay.send": "Send screenshot on WhatsApp",
+    "pay.send": "Send receipt to Jaura Store",
     "pay.whatsapp": "Send it on WhatsApp",
     "cats.kicker": "The aisles",
     "cats.title": "Categories",
@@ -409,7 +411,7 @@ window.I18N = (() => {
     "nav.checkout": "Paiement",
     "nav.bag": "Panier",
     "nav.track": "Suivre une commande",
-    "nav.pay": "Envoyer la capture",
+    "nav.pay": "Envoyer le reçu",
     "nav.atelier": "Atelier",
     "nav.search": "Recherche",
     "nav.cart": "Panier",
@@ -632,6 +634,7 @@ window.I18N = (() => {
     "ck.legal": "Vos données servent à traiter la commande. Téléchargez votre reçu ici. JauraStore confirmera votre paiement, et un message de confirmation sera envoyé à votre e-mail. Les frais de transport se discutent sur WhatsApp.",
     "ck.place": "Passer la commande",
     "ck.placing": "Envoi de la commande…",
+    "ck.preparing": "Préparation de votre photo…",
     "ck.doneKicker": "Commande reçue",
     "ck.thanks": "Merci. Votre commande a bien été reçue.",
     "ck.orderNo": "N° de commande",
@@ -642,6 +645,7 @@ window.I18N = (() => {
     "ck.idHelp": "Donnez cet identifiant à JauraStore ou indiquez-le sur le virement.",
     "ck.track": "Suivre cette commande",
     "ck.fareRange": "Les frais de transport varient selon votre localité et le poids des produits. Appuyez ci-dessous pour WhatsApp avec votre n° de commande et votre adresse, afin de recevoir votre tarif.",
+    "ck.uploadHere": "Upload payment receipt",
     "ck.uploadNow": "WhatsApp pour le transport",
     "ck.copyId": "Copier le n° de commande",
     "ck.waId": "WhatsApp cet identifiant",
@@ -691,7 +695,7 @@ window.I18N = (() => {
     "order.paidIn": "Payé en",
     "order.prep": "Merci — nous préparons la livraison.",
     "order.declineMsg": "Contactez-nous sur WhatsApp avec ce n° de commande.",
-    "order.waitMsg": "Envoyez-nous la capture du paiement sur WhatsApp. JauraStore confirmera votre paiement, et un message de confirmation sera envoyé à votre e-mail.",
+    "order.waitMsg": "Téléversez votre reçu de paiement ici ou envoyez-le sur WhatsApp. JauraStore confirmera votre paiement, et un message de confirmation sera envoyé à votre e-mail.",
     "pay.kicker": "Paiement",
     "pay.title": "Envoyer votre capture",
     "pay.lead": "Aucun envoi n’est nécessaire sur le site. Après le virement, envoyez-nous la capture du paiement sur WhatsApp. Un message de confirmation sera envoyé à votre e-mail. JauraStore confirmera votre paiement.",
@@ -841,6 +845,137 @@ window.I18N = (() => {
     return s;
   }
 
+  /* ------------------------------------------------------------------
+   * JavaScript builds most of the wording: the payment form, the category
+   * names, the whole admin portal, every toast. Those strings cannot carry
+   * a data-i18n attribute, so once a page has rendered we read the text and
+   * swap anything we know the French for. A whole string is replaced or
+   * nothing is, which is why product names the owner typed are left alone.
+   * ---------------------------------------------------------------- */
+  const SKIP_TAGS = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEXTAREA: 1, CODE: 1, PRE: 1 };
+  const SWEEP_ATTRS = ["placeholder", "aria-label", "title", "alt", "value"];
+
+  function frValues() {
+    const table = dict.fr || {};
+    const out = new Set();
+    Object.keys(table).forEach((k) => out.add(table[k]));
+    Object.keys(window.I18N_PHRASES || {}).forEach((k) => out.add(window.I18N_PHRASES[k]));
+    return out;
+  }
+  let french = null;
+
+  /* sentences worth swapping inside a longer paragraph, longest first so a
+   * short phrase never eats part of a longer one */
+  let subKeys = null;
+  function subKeysSorted() {
+    if (subKeys) return subKeys;
+    const table = window.I18N_PHRASES || {};
+    subKeys = Object.keys(table)
+      .filter((k) => k.length >= 12 && !/[{}]$/.test(k))
+      .sort((a, b) => b.length - a.length);
+    return subKeys;
+  }
+
+  function translate(s) {
+    if (!s || !/[A-Za-z]/.test(s)) return null;
+    const flat = s.replace(/\s+/g, " ").trim();
+    if (lang() !== "fr") return null;
+    const table = window.I18N_PHRASES || {};
+    if (table[flat]) return table[flat];
+    const rules = window.I18N_RULES || [];
+    for (let i = 0; i < rules.length; i += 1) {
+      const m = flat.match(rules[i][0]);
+      if (m) return rules[i][1](m, flat);
+    }
+    // a paragraph holding several sentences: swap the ones we know
+    if (flat.length > 40) {
+      let out = flat;
+      subKeysSorted().forEach((k) => {
+        if (out.indexOf(k) === -1) return;
+        out = out.split(k).join(table[k]);
+      });
+      if (out !== flat) return out;
+    }
+    return null;
+  }
+
+  function sweep(root) {
+    if (!root) return;
+    if (lang() !== "fr") return;
+    if (!french) french = frValues();
+    // text nodes
+    const walker = document.createTreeWalker(
+      root.nodeType === 1 ? root : document.body, NodeFilter.SHOW_TEXT, null, false);
+    const seen = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const parent = node.parentNode;
+      if (!parent || SKIP_TAGS[parent.nodeName]) continue;
+      if (parent.closest && parent.closest("[data-no-i18n]")) continue;
+      const raw = node.nodeValue;
+      if (!raw || !/[A-Za-z]/.test(raw)) continue;
+      const flat = raw.replace(/\s+/g, " ").trim();
+      if (french.has(flat)) continue;           // already French
+      const out = translate(flat);
+      if (out && out !== flat) seen.push([node, out]);
+    }
+    seen.forEach(([node, out]) => { node.nodeValue = out; });
+    // attributes
+    if (root.querySelectorAll) {
+      root.querySelectorAll("*").forEach((el) => {
+        if (el.closest && el.closest("[data-no-i18n]")) return;
+        SWEEP_ATTRS.forEach((attr) => {
+          if (!el.hasAttribute(attr)) return;
+          const v = el.getAttribute(attr);
+          if (!v || !/[A-Za-z]/.test(v)) return;
+          const flat = v.replace(/\s+/g, " ").trim();
+          if (french.has(flat)) return;
+          const out = translate(flat);
+          if (out && out !== flat) el.setAttribute(attr, out);
+        });
+      });
+    }
+  }
+
+  /* Content added later (a toast, the payment form, a freshly loaded admin
+   * tab) is swept as it appears, so French keeps up with the page. */
+  let sweepTimer = null;
+  function watch() {
+    if (typeof MutationObserver === "undefined") return;
+    const queue = [];
+    const obs = new MutationObserver((records) => {
+      records.forEach((r) => {
+        r.addedNodes.forEach((n) => { if (n.nodeType === 1) queue.push(n); });
+        if (r.type === "characterData" && r.target.parentNode) queue.push(r.target.parentNode);
+      });
+      if (sweepTimer) return;
+      sweepTimer = setTimeout(() => {
+        sweepTimer = null;
+        const seenAttr = [];
+        while (queue.length) {
+          const node = queue.shift();
+          if (!node || !node.isConnected) continue;
+          sweep(node);
+          if (node.querySelectorAll) {
+            node.querySelectorAll("[placeholder],[aria-label],[title],[alt]")
+              .forEach((el) => seenAttr.push(el));
+          }
+        }
+        seenAttr.forEach((el) => {
+          SWEEP_ATTRS.forEach((attr) => {
+            if (!el.hasAttribute(attr)) return;
+            const flat = el.getAttribute(attr).replace(/\s+/g, " ").trim();
+            const out = translate(flat);
+            if (out && out !== flat) el.setAttribute(attr, out);
+          });
+        });
+      }, 60);
+    });
+    obs.observe(document.documentElement, {
+      childList: true, subtree: true, characterData: true,
+    });
+  }
+
   function apply(root = document) {
     document.documentElement.lang = lang();
     root.querySelectorAll("[data-i18n]").forEach((el) => {
@@ -857,10 +992,12 @@ window.I18N = (() => {
     });
     const titleEl = root.querySelector("[data-i18n-title]");
     if (titleEl) document.title = t(titleEl.dataset.i18nTitle);
+    sweep(document.body);
+    watch();
   }
 
   if (document.documentElement) document.documentElement.lang = lang();
 
-  return { lang, setLang, t, apply };
+  return { lang, setLang, t, apply, sweep };
 })();
 var I18N = window.I18N;

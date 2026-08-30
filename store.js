@@ -14,6 +14,8 @@ const JA = (() => {
     stats: "jaura_stats",
     cats: "jaura_categories",
     reviews: "jaura_reviews",
+    pending: "jaura_pending_products",
+    events: "jaura_pending_events",
   };
 
   const FALLBACK = {
@@ -29,7 +31,7 @@ const JA = (() => {
     "nav.checkoutForm": "Checkout Form",
     "nav.bag": "Bag",
     "nav.track": "Track order",
-    "nav.pay": "Send payment screenshot",
+    "nav.pay": "Send payment receipt",
     "nav.search": "Search",
     "nav.cart": "Cart",
     "nav.menu": "Menu",
@@ -111,7 +113,6 @@ const JA = (() => {
     phoneNg: "+234 916 167 0236",
     email: "jaurastore@gmail.com",
     tiktok: "https://www.tiktok.com/@j_aura_store",
-    adminPin: "jaura2026",
     bankCfaName: "OKORAFOR GIFT",
     bankCfaBank: "MTN MoMo Benin",
     bankCfaAccount: "01 52 01 99 30",
@@ -156,8 +157,47 @@ const JA = (() => {
   };
   const saveSettings = (s) => write(KEYS.settings, { ...settings(), ...s });
 
+  // ------------------------------------------------------------ the catalogue
+  // The server catalogue is the single source of truth. Local edits are kept
+  // only while they are still waiting to sync, so a second device never shows
+  // a stale copy of a product someone else already changed.
+  let catalogMeta = { server: false };
+
+  function pendingMap() { return read(KEYS.pending, {}) || {}; }
+  function markPending(id) { const p = pendingMap(); p[id] = Date.now(); write(KEYS.pending, p); }
+  function clearPending(id) { const p = pendingMap(); delete p[id]; write(KEYS.pending, p); }
+
+  function applyServerProduct(p) {
+    if (!p || !p.id) return;
+    const i = seed.findIndex((x) => x.id === p.id);
+    if (i >= 0) seed[i] = p;
+    else seed.unshift(p);
+    write(KEYS.custom, read(KEYS.custom, []).filter((x) => x.id !== p.id));
+    clearPending(p.id);
+    if (window.JA_SEED) {
+      const j = window.JA_SEED.findIndex((x) => x.id === p.id);
+      if (j >= 0) window.JA_SEED[j] = p; else window.JA_SEED.unshift(p);
+    }
+  }
+
   async function loadSeed() {
     if (seed.length) return seed;
+    try {
+      const res = await fetch("api/catalog", { credentials: "same-origin" });
+      if (res.ok) {
+        const d = await res.json();
+        if (d && Array.isArray(d.products) && d.products.length) {
+          catalogMeta = Object.assign({ server: true }, d.meta || {});
+          // keep only edits that have not reached the server yet
+          const pend = pendingMap();
+          const stillPending = (read(KEYS.custom, []) || []).filter((p) => p && pend[p.id]);
+          write(KEYS.custom, stillPending);
+          seed = d.products;
+          window.JA_SEED = seed;
+          return seed;
+        }
+      }
+    } catch (e) { /* offline or static hosting: fall back below */ }
     if (Array.isArray(window.JA_SEED) && window.JA_SEED.length) {
       seed = window.JA_SEED;
       return seed;
@@ -471,11 +511,26 @@ const JA = (() => {
       next.priceCfa = toCfa(next.priceNgn);
       next.compareCfa = Number(next.compareNgn) > 0 ? toCfa(next.compareNgn) : null;
     }
+    // 1. show it immediately, 2. push it to the server (queued if offline)
     const custom = read(KEYS.custom, []);
     const i = custom.findIndex((x) => x.id === next.id);
     if (i >= 0) custom[i] = next;
     else custom.unshift(next);
     write(KEYS.custom, custom);
+    markPending(next.id);
+    if (!window.JA_NET) return Promise.resolve({ ok: false, offline: true });
+    return window.JA_NET.api("api/admin/products", {
+      method: "POST",
+      json: { product: next },
+      queue: true,
+      label: "Product",
+      onDone: (data) => { if (data && data.product) applyServerProduct(data.product); },
+    }).then((d) => ({ ok: true, queued: !!(d && d.queued), data: d }))
+      .catch((err) => {
+        if (err && err.status === 401) { toast("Session expired — sign in again."); return { ok: false, error: err.message }; }
+        toast(err && err.error ? err.error : "Saved on this device; it will sync when you are back online.");
+        return { ok: false, error: err && err.message };
+      });
   }
   function removeProduct(id) {
     write(KEYS.custom, read(KEYS.custom, []).filter((p) => p.id !== id));
@@ -484,6 +539,13 @@ const JA = (() => {
     write(KEYS.deleted, deleted);
     saveCart(cart().filter((i) => i.id !== id));
     write(KEYS.wish, wish().filter((x) => x !== id));
+    // remove it from the in-memory catalogue so it disappears at once
+    seed = seed.filter((p) => p.id !== id);
+    if (Array.isArray(window.JA_SEED)) window.JA_SEED = window.JA_SEED.filter((p) => p.id !== id);
+    if (!window.JA_NET) return Promise.resolve({ ok: false });
+    return window.JA_NET.api("api/admin/products/" + encodeURIComponent(id), {
+      method: "DELETE", queue: true, label: "Delete",
+    }).catch(() => ({ ok: false }));
   }
   function importProducts(list) {
     list.forEach(upsertProduct);
@@ -523,7 +585,7 @@ const JA = (() => {
   function getProof(id, fallback) {
     const p = proofs()[id];
     if (p && String(p).length > 8) return p;
-    if (fallback && String(fallback).startsWith("data:")) return fallback;
+    if (fallback && String(fallback).length > 8) return fallback;
     return "";
   }
   function dataUrlToBlob(dataUrl) {
@@ -539,42 +601,80 @@ const JA = (() => {
     }
   }
 
+  /* The receipt keeps its own type: a PDF must not be renamed .jpg. */
+  function proofFileName(orderId, blob) {
+    const type = String((blob && blob.type) || "").toLowerCase();
+    const name = String((blob && blob.name) || "").toLowerCase();
+    let ext = "jpg";
+    if (type === "application/pdf" || /\.pdf$/.test(name)) ext = "pdf";
+    else if (type === "image/png" || /\.png$/.test(name)) ext = "png";
+    else if (type === "image/webp" || /\.webp$/.test(name)) ext = "webp";
+    return "payment-" + orderId + "." + ext;
+  }
+
   function saveOrder(order) {
     const proof = order.proof || "";
-    if (proof) saveProof(order.id, proof);
-    const slim = { ...order, proof: proof ? "attached" : "" };
+    const blob = order.proofBlob || (String(proof).startsWith("data:") ? dataUrlToBlob(proof) : null);
+    const slim = { ...order, proof: blob || proof ? "attached" : "", proofBlob: undefined };
+    delete slim.proofBlob;
     try {
       const all = orders();
       all.unshift(slim);
       write(KEYS.orders, all);
     } catch (e) {
-      const all = orders();
-      all.unshift({ ...slim, proof: "attached" });
-      try { write(KEYS.orders, all); } catch (e2) {}
+      try { write(KEYS.orders, [{ ...slim, proof: "attached" }]); } catch (e2) {}
     }
     if (order.customer?.email) setCustomer({ email: order.customer.email, name: order.customer.name });
-    notifyOrder({ ...order, proof });
-    track("checkout", {
+
+    // ---- the permanent copy: the whole form, plus the receipt image ----
+    const payload = {
       id: order.id,
-      name: order.customer && order.customer.name,
-      page: "checkout",
-      order: {
-        id: order.id,
-        at: order.at,
-        total: order.total,
-        currency: order.currency,
-        customer: {
-          name: order.customer && order.customer.name,
-          email: order.customer && order.customer.email,
-          phone: order.customer && order.customer.phone,
-          city: order.customer && order.customer.city,
-          zone: order.customer && order.customer.zone,
-          address: order.customer && order.customer.address,
-          note: order.customer && order.customer.note,
-        },
-        items: (order.items || []).map((i) => ({ qty: i.qty, name: i.name, color: i.color })),
+      at: order.at,
+      currency: order.currency,
+      total: order.total,
+      payment: order.currency,
+      source: "web",
+      customer: {
+        firstName: order.customer.firstName,
+        lastName: order.customer.lastName,
+        name: order.customer.name,
+        phone: order.customer.phone,
+        email: order.customer.email,
+        country: order.customer.country,
+        city: order.customer.city,
+        zone: order.customer.zone,
+        address: order.customer.address,
+        note: order.customer.note,
       },
-    });
+      items: (order.items || []).map((i) => ({
+        id: i.id, name: i.name, qty: i.qty, price: i.price, color: i.color,
+      })),
+    };
+
+    if (window.JA_NET) {
+      const opts = {
+        method: "POST",
+        queue: true,
+        label: "Order " + order.id,
+        onDone: (data) => {
+          if (data && data.proofUrl) saveProof(order.id, data.proofUrl);
+          const all = orders().map((o) => o.id === order.id
+            ? { ...o, synced: true, proofUrl: (data && data.proofUrl) || "" } : o);
+          write(KEYS.orders, all);
+        },
+      };
+      if (blob) {
+        opts.blob = blob;
+        opts.field = "proof";
+        opts.filename = proofFileName(order.id, blob);
+        opts.extra = [["order", JSON.stringify(payload)]];
+      } else {
+        opts.json = payload;
+      }
+      window.JA_NET.api("api/orders", opts).catch(() => {});
+    }
+
+    notifyOrder({ ...order, proof });
     return order;
   }
 
@@ -611,7 +711,7 @@ const JA = (() => {
     fd.append("message", lines);
     if (order.customer.email) fd.append("_autoresponse", fr ? autoFr : autoEn);
     const blob = shot ? dataUrlToBlob(shot) : null;
-    const fname = "payment-" + order.id + ".jpg";
+    const fname = proofFileName(order.id, blob);
     if (blob) {
       fd.append("attachment", blob, fname);
       fd.append("file", blob, fname);
@@ -621,56 +721,8 @@ const JA = (() => {
       headers: { Accept: "application/json" },
       body: fd,
     }).catch(() => {});
-    postMailForm({
-      _subject: "JauraStore order " + order.id + " · payment screenshot attached",
-      _template: "box",
-      _captcha: "false",
-      name: order.customer.name || "Customer",
-      email: order.customer.email || "jaurastore@gmail.com",
-      _replyto: order.customer.email || "jaurastore@gmail.com",
-      phone: order.customer.phone || "",
-      order_id: order.id,
-      total: total,
-      message: lines + (blob ? "\n\nThe payment screenshot is attached to this email as " + fname + "." : ""),
-    }, blob, fname);
   }
-  function postMailForm(fields, blob, fname) {
-    try {
-      let iframe = document.getElementById("ja-mail-frame");
-      if (!iframe) {
-        iframe = document.createElement("iframe");
-        iframe.name = "ja-mail-frame";
-        iframe.id = "ja-mail-frame";
-        iframe.setAttribute("style", "display:none;width:0;height:0;border:0");
-        document.body.appendChild(iframe);
-      }
-      const form = document.createElement("form");
-      form.method = "POST";
-      form.action = "https://formsubmit.co/jaurastore@gmail.com";
-      form.enctype = "multipart/form-data";
-      form.target = "ja-mail-frame";
-      Object.keys(fields).forEach((k) => {
-        const inp = document.createElement("input");
-        inp.type = "hidden";
-        inp.name = k;
-        inp.value = String(fields[k] == null ? "" : fields[k]);
-        form.appendChild(inp);
-      });
-      if (blob && typeof DataTransfer !== "undefined") {
-        const inp = document.createElement("input");
-        inp.type = "file";
-        inp.name = "attachment";
-        const file = new File([blob], fname || "payment.jpg", { type: blob.type || "image/jpeg" });
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        inp.files = dt.files;
-        form.appendChild(inp);
-      }
-      document.body.appendChild(form);
-      form.submit();
-      setTimeout(() => form.remove(), 4000);
-    } catch (e) {}
-  }
+
   function getOrder(id) {
     return orders().find((o) => o.id === id);
   }
@@ -778,10 +830,44 @@ const JA = (() => {
       days: {}, pages: {}, products: {}, events: [],
     }, read(KEYS.stats, {}));
   }
+
+  // ------------------------------------------------------- analytics (server)
+  // Events are counted on the server, so the numbers survive a cleared cache,
+  // a new phone or a different browser. Everything is batched and sent with
+  // keepalive so a page close never loses the last batch; if it does fail, the
+  // batch waits in localStorage and goes out with the next visit.
+  let eventQueue = [];
+  let eventTimer = null;
+
+  function bufferedEvents() {
+    try { return JSON.parse(localStorage.getItem(KEYS.events) || "[]") || []; } catch (e) { return []; }
+  }
+  function bufferEvents(list) {
+    if (!list.length) return;
+    try { localStorage.setItem(KEYS.events, JSON.stringify(bufferedEvents().concat(list).slice(-100))); } catch (e) {}
+  }
+
+  function flushEvents(keepalive) {
+    if (!eventQueue.length || !window.JA_NET) return Promise.resolve(0);
+    const geo = window.__jaGeo || {};
+    const batch = eventQueue.slice().map((e) => Object.assign({}, e, {
+      city: geo.city || "", region: geo.region || "", country: geo.country || "",
+    }));
+    eventQueue = [];
+    return window.JA_NET.api("api/track", {
+      method: "POST",
+      json: { events: batch },
+      keepalive: !!keepalive,
+      timeout: 8000,
+    }).then(() => { try { localStorage.removeItem(KEYS.events); } catch (e) {} return batch.length; },
+      () => { bufferEvents(batch); return 0; });
+  }
+
   function track(type, extra) {
     try {
       if ((document.body.dataset.page || "") === "admin") return;
       extra = extra || {};
+      // local counters keep working offline and feed the admin's own view
       const s = getStats();
       const day = todayStamp();
       if (!s.days[day]) s.days[day] = { visits: 0, carts: 0, views: 0, checkouts: 0 };
@@ -799,70 +885,144 @@ const JA = (() => {
       }
       s.events = [{ type, at: new Date().toISOString(), name: extra.name, page }, ...(s.events || [])].slice(0, 80);
       write(KEYS.stats, s);
-      geoInfo().then((geo) => {
-        pingRemote({
-          type, page, geo,
-          id: extra.id || "",
-          name: extra.name || "",
-          order: extra.order || null,
-        });
+
+      eventQueue.push({
+        type: type === "checkout" ? "purchase" : type,
+        path: location.pathname,
+        page: page,
+        productId: extra.id || "",
+        productName: extra.name || "",
+        value: extra.value || 0,
+        currency: extra.currency || "",
+        sid: sessionId(),
+        ref: document.referrer || "",
       });
+      if (eventQueue.length >= 10) flushEvents();
+      else { clearTimeout(eventTimer); eventTimer = setTimeout(() => flushEvents(), 3000); }
     } catch (e) {}
   }
-  async function fetchRemoteEvents() {
-    const urls = [
-      "https://proxy.cors.sh/" + HOOK_READ,
-      HOOK_READ,
-    ];
-    for (let i = 0; i < urls.length; i++) {
-      try {
-        const res = await fetch(urls[i]);
-        if (!res.ok) continue;
-        const json = await res.json();
-        const rows = json.data || json || [];
-        return rows.map((row) => {
-          let c = {};
-          try { c = JSON.parse(row.content || "{}"); } catch (e) {}
-          if (c.k !== "jaura") return null;
-          const geo = c.geo || {};
-          return {
-            type: c.type || "visit",
-            page: c.page || "",
-            id: c.id || "",
-            name: c.name || "",
-            sid: c.sid || "",
-            order: c.order || null,
-            city: geo.city || row.city || "",
-            region: geo.region || row.region || "",
-            country: geo.country || row.country || "",
-            ip: row.ip || "",
-            t: Number(c.t) || Date.parse(row.created_at || row.time || "") || 0,
-          };
-        }).filter(Boolean);
-      } catch (e) {}
-    }
-    return [];
-  }
+
   function startPresence() {
     if ((document.body.dataset.page || "") === "admin") return;
-    const beat = () => {
-      geoInfo().then((geo) => {
-        pingRemote({ type: "live", page: document.body.dataset.page || "page", geo });
-      });
-    };
-    beat();
-    setInterval(beat, 25000);
+    const buffered = bufferedEvents();
+    if (buffered.length) { eventQueue = eventQueue.concat(buffered); setTimeout(() => flushEvents(), 1200); }
+    setInterval(() => { if (!document.hidden) track("heartbeat"); }, 30000);
+    window.addEventListener("pagehide", () => { try { flushEvents(true); } catch (e) {} });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) { try { flushEvents(true); } catch (e) {} }
+    });
   }
 
-  function isAdmin() { return sessionStorage.getItem(KEYS.session) === "ok"; }
-  function loginAdmin(pin) {
-    if (pin === settings().adminPin) {
-      sessionStorage.setItem(KEYS.session, "ok");
-      return true;
+  // ---------------------------------------------------------- admin session
+  // The gate lives on the server: the browser only ever holds a session cookie.
+  let adminCache = { at: 0, email: null, checked: false };
+
+  async function adminSession(force) {
+    if (!force && adminCache.checked && Date.now() - adminCache.at < 60000) return adminCache.email;
+    try {
+      const res = await fetch("api/admin/session", { credentials: "same-origin", cache: "no-store" });
+      const d = await res.json();
+      adminCache = { at: Date.now(), email: d && d.authenticated ? d.email : null, checked: true };
+      if (d && d.csrf) { try { sessionStorage.setItem("jaura_csrf", d.csrf); } catch (e) {} }
+    } catch (e) {
+      adminCache = { at: Date.now(), email: null, checked: true };
     }
-    return false;
+    return adminCache.email;
   }
-  function logoutAdmin() { sessionStorage.removeItem(KEYS.session); }
+  async function isAdmin() {
+    const email = await adminSession();
+    return !!email;
+  }
+  async function loginAdmin(email, password) {
+    try {
+      const res = await fetch("api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ email: String(email || "").trim(), password: String(password || "") }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || !d.ok) return { ok: false, error: (d && d.error) || "Could not sign in." };
+      adminCache = { at: Date.now(), email: d.email, checked: true };
+      if (d.csrf) { try { sessionStorage.setItem("jaura_csrf", d.csrf); } catch (e) {} }
+      return { ok: true, email: d.email };
+    } catch (e) {
+      return { ok: false, error: "No connection. Try again when you are back online." };
+    }
+  }
+  async function logoutAdmin() {
+    try { await fetch("api/admin/logout", { method: "POST", credentials: "same-origin" }); } catch (e) {}
+    adminCache = { at: 0, email: null, checked: true };
+  }
+  async function changePassword(currentPassword, newPassword) {
+    const res = await fetch("api/admin/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": await window.JA_NET.csrf() },
+      credentials: "same-origin",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: (d && d.error) || "Could not change the password." };
+    return { ok: true, message: d.message || "Password updated." };
+  }
+  async function requestOtp(email) {
+    const res = await fetch("api/admin/otp/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": await window.JA_NET.csrf() },
+      credentials: "same-origin",
+      body: JSON.stringify({ email }),
+    });
+    const d = await res.json().catch(() => ({}));
+    return { ok: !!res.ok, message: d.message, error: d.error };
+  }
+  async function verifyOtp(email, code) {
+    const res = await fetch("api/admin/otp/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": await window.JA_NET.csrf() },
+      credentials: "same-origin",
+      body: JSON.stringify({ email, code }),
+    });
+    const d = await res.json().catch(() => ({}));
+    return { ok: !!res.ok, message: d.message, error: d.error };
+  }
+  async function resetPassword(newPassword) {
+    const res = await fetch("api/admin/otp/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": await window.JA_NET.csrf() },
+      credentials: "same-origin",
+      body: JSON.stringify({ newPassword }),
+    });
+    const d = await res.json().catch(() => ({}));
+    return { ok: !!res.ok, message: d.message, error: d.error };
+  }
+
+  // ------------------------------------------------------- admin data (server)
+  async function adminAnalytics(days) {
+    const res = await fetch("api/admin/analytics?days=" + encodeURIComponent(days || 30),
+      { credentials: "same-origin", cache: "no-store" });
+    if (!res.ok) return null;
+    return res.json();
+  }
+  async function adminOrders(opts) {
+    const q = new URLSearchParams(Object.assign({ limit: 200 }, opts || {})).toString();
+    const res = await fetch("api/admin/orders?" + q, { credentials: "same-origin", cache: "no-store" });
+    if (!res.ok) return [];
+    const d = await res.json();
+    return (d && d.orders) || [];
+  }
+  async function setOrderStatus(id, status) {
+    if (!window.JA_NET) return { ok: false };
+    return window.JA_NET.api("api/admin/orders/" + encodeURIComponent(id), {
+      method: "PATCH", json: { status }, label: "Order " + id, queue: false,
+    }).catch((e) => ({ ok: false, error: e.message }));
+  }
+  function syncPending() { return window.JA_NET ? window.JA_NET.pending() : 0; }
+  async function reloadCatalog() {
+    seed = [];
+    catalogMeta = { server: false };
+    await loadSeed();
+    return seed.length;
+  }
 
   function asset(path) {
     if (!path) return "images/products/mouth-spray.jpg";
@@ -1162,6 +1322,7 @@ const JA = (() => {
           <p><a href="delivery.html">${tx("nav.delivery")}</a></p>
           <p><a href="contact.html">${tx("nav.care")}</a></p>
           <p><a href="faq.html">${tx("nav.faq")}</a></p>
+          <p><a href="pay.html">${tx("nav.pay")}</a></p>
           <p><a href="order.html">${tx("nav.track")}</a></p>
         </div>
         <div>
@@ -1404,10 +1565,7 @@ const JA = (() => {
     showWelcome();
     try {
       if ((document.body.dataset.page || "") !== "admin") {
-        if (!sessionStorage.getItem("jaura_hit")) {
-          sessionStorage.setItem("jaura_hit", "1");
-          track("visit", { page: document.body.dataset.page || "home" });
-        }
+        track("visit", { page: document.body.dataset.page || "home" });
         startPresence();
       }
     } catch (e) {}
@@ -1626,10 +1784,12 @@ const JA = (() => {
     currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, BULK_QTY,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     wish, isWished, toggleWish, wishDetailed, openMini, closeMini,
-    toast, upsertProduct, removeProduct, importProducts,
-    orders, saveOrder, getOrder, updateOrder, nextOrderId, sendReceipt, isAdmin, loginAdmin, logoutAdmin,
-    customer, setCustomer, logoutCustomer, ordersForEmail, getProof,
-    cardHTML, asset, escape, mountChrome, track, getStats, fetchRemoteEvents, setSeo, absUrl, SITE,
+    toast, upsertProduct, removeProduct, importProducts, applyServerProduct, syncPending, reloadCatalog,
+    orders, saveOrder, getOrder, updateOrder, nextOrderId, sendReceipt,
+    isAdmin, loginAdmin, logoutAdmin, adminSession, changePassword, requestOtp, verifyOtp, resetPassword,
+    adminAnalytics, adminOrders, setOrderStatus, flushEvents,
+    customer, setCustomer, logoutCustomer, ordersForEmail, getProof, dataUrlToBlob,
+    cardHTML, asset, escape, mountChrome, track, getStats, setSeo, absUrl, SITE,
     galleryOf, startCardPlay, reviews, addReview, removeReview, setReviews, reviewStats, starsHTML,
   };
 })();
