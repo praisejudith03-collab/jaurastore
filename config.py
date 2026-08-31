@@ -35,14 +35,23 @@ class Config:
     SITE_ORIGIN = os.environ.get("SITE_ORIGIN", "http://localhost:8080")
 
     # ------------------------------------------------------------ Supabase
-    # When SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are set, the catalogue,
-    # carts, orders and admin auth are stored in Supabase instead of the
-    # local SQLite DB / JSON files. The app keeps working (with the existing
-    # local persistence) when they are not configured, so a fresh checkout
-    # and the test suite run without any credentials.
+    # When SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) are set,
+    # the catalogue, carts, orders and admin auth are stored in Supabase
+    # instead of the local SQLite DB / JSON files. The app keeps working (with
+    # the existing local persistence) when they are not configured, so a fresh
+    # checkout and the test suite run without any credentials.
+    #
+    # SUPABASE_SERVICE_ROLE_KEY is the canonical server-side key. `SUPABASE_KEY`
+    # is accepted as an alias (some providers / dashboards name it that way) so
+    # either spelling enables the Supabase backend. The value is read at import
+    # time, so it also picks up runtime/process environment variables in
+    # production where .env is not present.
     SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
     SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
-    SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    SUPABASE_SERVICE_ROLE_KEY = (
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        or os.environ.get("SUPABASE_KEY", "")
+    )
     # True only when a URL + service role key are configured. Access it as a
     # plain class attribute (not a @property, which the class access would
     # return the descriptor object for and always be truthy).

@@ -23,7 +23,11 @@ admin auth, add to `.env`:
 SUPABASE_URL=...
 SUPABASE_ANON_KEY=...          # reserved; not required for server calls
 SUPABASE_SERVICE_ROLE_KEY=...   # server-side only — never ship to the browser
+# SUPABASE_KEY=...              # optional alias for SUPABASE_SERVICE_ROLE_KEY
 ```
+
+`SUPABASE_KEY` is accepted as an alias for `SUPABASE_SERVICE_ROLE_KEY`, so either
+spelling turns the Supabase backend on.
 
 Then run the one-time import so Supabase has the catalogue before you switch
 over:

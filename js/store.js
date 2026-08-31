@@ -198,17 +198,16 @@ const JA = (() => {
         }
       }
     } catch (e) { /* offline or static hosting: fall back below */ }
+    // The bundled catalogue (js/products-data.js) is loaded on every page and is
+    // the static fallback; the server catalogue (api/catalog) is the source of
+    // truth. We deliberately do not fetch data/seed.json in the browser: that
+    // was a legacy static-JSON dependency that duplicated the catalogue and is
+    // now served on the server (api/catalog) instead.
     if (Array.isArray(window.JA_SEED) && window.JA_SEED.length) {
       seed = window.JA_SEED;
       return seed;
     }
-    try {
-      const res = await fetch("data/seed.json");
-      seed = await res.json();
-    } catch (e) {
-      seed = [];
-    }
-    return seed;
+    return [];
   }
 
   function todayStamp() {
