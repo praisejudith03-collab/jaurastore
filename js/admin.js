@@ -34,8 +34,9 @@ function slugify(name) {
 }
 
 let loginEmail = "";
+let loginNeedsEmail = false;
 
-function paintLogin(msg) {
+function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="admin-login">
       <div class="kicker">Atelier</div>
@@ -43,11 +44,11 @@ function paintLogin(msg) {
       <p style="color:var(--muted);margin-bottom:20px">Sign in to edit products, prices and stock, and to read your store analytics. You can sign in from any phone or laptop.</p>
       ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
       <form id="login-form" class="field">
-        <label>Email</label>
-        <input type="email" name="email" required autocomplete="username" value="${JA.escape(loginEmail)}" />
-        <label style="margin-top:14px">Password</label>
+        ${needsEmail ? `<label>Email</label>
+        <input type="email" name="email" required autocomplete="username" value="${JA.escape(loginEmail)}" />` : ""}
+        <label ${needsEmail ? 'style="margin-top:14px"' : ""} data-no-i18n>Password</label>
         <input type="password" name="password" required autocomplete="current-password" />
-        <button class="btn" style="margin-top:18px" id="login-btn">Sign in</button>
+        <button class="btn" style="margin-top:18px" id="login-btn" data-no-i18n>Sign in</button>
       </form>
       <button type="button" class="wix-link-btn" id="forgot-btn" style="margin-top:16px">Forgot password? Reset it by email</button>
       <div id="otp-slot"></div>
@@ -64,7 +65,11 @@ function paintLogin(msg) {
     const res = await JA.loginAdmin(loginEmail, fd.get("password"));
     btn.disabled = false;
     btn.textContent = "Sign in";
-    if (res.ok) paintDesk();
+    if (res.ok) { loginNeedsEmail = false; paintDesk(); }
+    else if (/email/i.test(res.error || "")) {
+      loginNeedsEmail = true;
+      paintLogin(res.error || "Could not sign in.");
+    }
     else paintLogin(res.error || "Could not sign in.");
   });
 
@@ -138,7 +143,7 @@ function mediaStripHTML(imgs) {
       ${i === 0 ? `<span>Main</span>` : `<span>${i + 1}</span>`}
       <button type="button" class="wix-tile-x" data-del-img="${i}" aria-label="Remove">×</button>
     </div>`).join("");
-  const plus = imgs.length < 20 ? `<label class="wix-tile wix-plus">+<input type="file" id="more-media" accept="image/*" multiple hidden /></label>` : "";
+  const plus = imgs.length < 20 ? `<label class="wix-tile wix-plus">+<input type="file" id="more-media" accept="image/*" capture="environment" multiple hidden /></label>` : "";
   return `<div class="wix-media-row">${tiles}${plus}</div>
     <p class="admin-note">Add more than 5 photos — tap + and pick several at once. Up to 20.</p>
     <button type="button" class="wix-view-media" id="view-media">View All Media (${imgs.length}/20) ›</button>`;
@@ -570,6 +575,15 @@ function productsTable() {
         <span class="wix-cfa">${cfaWas ? `<s>${cfaWas}</s> ` : ""}${cfaNow}</span>
         <span class="wix-stock">${stock}</span>
         ${hidden}
+      </div>
+      <div class="wix-quick">
+        <label>₦ price</label>
+        <input class="q-price" data-qp="${esc(p.id)}" value="${esc(Number(p.priceNgn) || 0)}" inputmode="numeric" />
+        <label>Stock</label>
+        <input class="q-stock" data-qs="${esc(p.id)}" type="number" min="0" value="${esc(Number(p.stock) || 0)}" />
+        <label class="wix-tog"><span>Sale</span><input type="checkbox" class="q-sale" data-qbadge="${esc(p.id)}" ${p.badge === "sale" ? "checked" : ""} /></label>
+        <label class="wix-tog"><span>Online</span><input type="checkbox" class="q-online" data-qo="${esc(p.id)}" ${p.online !== false ? "checked" : ""} /></label>
+        <button type="button" class="wix-link-btn" data-quick="${esc(p.id)}">Save</button>
       </div>
       <button type="button" class="wix-stock-tog ${inStock ? "is-in" : "is-out"}" data-stock="${p.id}" data-qty="${inStock ? 0 : 24}">${inStock ? "In stock" : "Out of stock"}</button>
       <button type="button" class="wix-del-row" data-del="${p.id}">Delete</button>
@@ -1177,6 +1191,28 @@ function paintDesk(tab = "analytics") {
       }
     };
   });
+  document.querySelectorAll("[data-quick]").forEach((b) => {
+    b.onclick = async () => {
+      const pid = b.dataset.quick;
+      const p = JA.product(pid);
+      if (!p) return;
+      const price = `[data-qp="${CSS.escape(pid)}"]`;
+      const stock = `[data-qs="${CSS.escape(pid)}"]`;
+      const badge = `[data-qbadge="${CSS.escape(pid)}"]`;
+      const online = `[data-qo="${CSS.escape(pid)}"]`;
+      const next = {
+        ...p,
+        priceNgn: parseInt(document.querySelector(price)?.value || "0", 10) || 0,
+        priceCfa: 0,
+        stock: parseInt(document.querySelector(stock)?.value || "0", 10) || 0,
+        badge: document.querySelector(badge)?.checked ? "sale" : "",
+        online: document.querySelector(online)?.checked !== false,
+      };
+      await JA.upsertProduct(next);
+      JA.toast("Quick edit saved.");
+      paintDesk("products");
+    };
+  });
   document.getElementById("del-picked")?.addEventListener("click", async () => {
     const ids = [...document.querySelectorAll("[data-pick]:checked")].map((el) => el.getAttribute("data-pick"));
     if (!ids.length) { JA.toast("Tick the products to delete first."); return; }
@@ -1247,7 +1283,7 @@ function categoryManager() {
     return `<article class="wix-cat-card" data-cat-i="${i}" data-cat-id="${JA.escape(c.id)}">
       <div class="wix-cat-pic">
         <img src="${JA.asset(c.image)}" alt="" />
-        <label class="wix-cat-up">Change photo<input type="file" accept="image/*" data-cat-img="${i}" hidden /></label>
+        <label class="wix-cat-up">Change photo<input type="file" accept="image/*" capture="environment" data-cat-img="${i}" hidden /></label>
       </div>
       <div class="wix-cat-fields">
         <input name="cat-id-${i}" type="hidden" value="${JA.escape(c.id)}" />
@@ -1437,6 +1473,7 @@ function runCSV() {
 async function bootAdmin() {
   await JA.ready;
   JA.mountChrome();
+  await (JA.loadServerCategories ? JA.loadServerCategories() : Promise.resolve());
   const ok = await JA.isAdmin();
   if (ok) paintDesk();
   else paintLogin();

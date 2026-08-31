@@ -59,6 +59,11 @@ def is_known_admin(email):
     return (email or "").strip().lower() in Config.ADMIN_EMAILS
 
 
+def sole_admin_email():
+    """The single admin address when exactly one is configured, else None."""
+    return Config.ADMIN_EMAILS[0] if len(Config.ADMIN_EMAILS) == 1 else None
+
+
 def _hash_for(email):
     row = one("SELECT password_hash FROM admins WHERE email=?",
               ((email or "").strip().lower(),))

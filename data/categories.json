@@ -1,0 +1,104 @@
+{
+  "categories": [
+    {
+      "id": "clothing",
+      "name": "Clothings for men and women",
+      "nameFr": "",
+      "image": "images/categories/fashion.jpg",
+      "hidden": false
+    },
+    {
+      "id": "household",
+      "name": "Household items",
+      "nameFr": "",
+      "image": "images/categories/household.jpg",
+      "hidden": false
+    },
+    {
+      "id": "ankara",
+      "name": "Ankara ready to wear",
+      "nameFr": "",
+      "image": "images/categories/fashion.jpg",
+      "hidden": false
+    },
+    {
+      "id": "accessories",
+      "name": "Accessories",
+      "nameFr": "",
+      "image": "images/categories/gadgets.jpg",
+      "hidden": false
+    },
+    {
+      "id": "beauty",
+      "name": "Beauty & skincare",
+      "nameFr": "Beauté & soins",
+      "image": "images/categories/beauty.jpg",
+      "hidden": false
+    },
+    {
+      "id": "shoes",
+      "name": "Shoes",
+      "nameFr": "",
+      "image": "images/categories/shoes.jpg",
+      "hidden": false
+    },
+    {
+      "id": "gadgets",
+      "name": "Gadgets / Electronics",
+      "nameFr": "",
+      "image": "images/categories/gadgets.jpg",
+      "hidden": false
+    },
+    {
+      "id": "packaging",
+      "name": "Packaging",
+      "nameFr": "",
+      "image": "images/categories/household.jpg",
+      "hidden": false
+    },
+    {
+      "id": "bags",
+      "name": "Bags",
+      "nameFr": "",
+      "image": "images/categories/bags.jpg",
+      "hidden": false
+    },
+    {
+      "id": "hair-care",
+      "name": "Hair care",
+      "nameFr": "",
+      "image": "images/categories/beauty.jpg",
+      "hidden": false
+    },
+    {
+      "id": "nails",
+      "name": "Nails",
+      "nameFr": "",
+      "image": "images/categories/beauty.jpg",
+      "hidden": false
+    },
+    {
+      "id": "gift-set",
+      "name": "Gift set",
+      "nameFr": "",
+      "image": "images/categories/household.jpg",
+      "hidden": false
+    },
+    {
+      "id": "children",
+      "name": "Children items",
+      "nameFr": "",
+      "image": "images/categories/fashion.jpg",
+      "hidden": false
+    },
+    {
+      "id": "decor",
+      "name": "Decor",
+      "nameFr": "",
+      "image": "images/categories/household.jpg",
+      "hidden": false
+    }
+  ],
+  "updatedAt": "2026-08-31T21:54:10",
+  "updatedBy": "seed"
+}

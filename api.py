@@ -18,6 +18,56 @@ def _ip():
     fwd = request.headers.get("X-Forwarded-For", "")
     return (fwd.split(",")[0].strip() if fwd else "") or request.remote_addr or ""
 
+# -------------------------------------------------------------- categories
+import os as _os
+CATEGORIES_FILE = _os.environ.get(
+    "CATEGORIES_PATH",
+    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "categories.json"))
+DEFAULT_CATEGORIES = [
+    {"id": "clothing", "name": "Clothings for men and women", "nameFr": "", "image": "images/categories/fashion.jpg", "hidden": False},
+    {"id": "household", "name": "Household items", "nameFr": "", "image": "images/categories/household.jpg", "hidden": False},
+    {"id": "ankara", "name": "Ankara ready to wear", "nameFr": "", "image": "images/categories/fashion.jpg", "hidden": False},
+    {"id": "accessories", "name": "Accessories", "nameFr": "", "image": "images/categories/gadgets.jpg", "hidden": False},
+    {"id": "beauty", "name": "Beauty & skincare", "nameFr": "Beauté & soins", "image": "images/categories/beauty.jpg", "hidden": False},
+    {"id": "shoes", "name": "Shoes", "nameFr": "", "image": "images/categories/shoes.jpg", "hidden": False},
+    {"id": "gadgets", "name": "Gadgets / Electronics", "nameFr": "", "image": "images/categories/gadgets.jpg", "hidden": False},
+    {"id": "packaging", "name": "Packaging", "nameFr": "", "image": "images/categories/household.jpg", "hidden": False},
+    {"id": "bags", "name": "Bags", "nameFr": "", "image": "images/categories/bags.jpg", "hidden": False},
+    {"id": "hair-care", "name": "Hair care", "nameFr": "", "image": "images/categories/beauty.jpg", "hidden": False},
+    {"id": "nails", "name": "Nails", "nameFr": "", "image": "images/categories/beauty.jpg", "hidden": False},
+    {"id": "gift-set", "name": "Gift set", "nameFr": "", "image": "images/categories/household.jpg", "hidden": False},
+    {"id": "children", "name": "Children items", "nameFr": "", "image": "images/categories/fashion.jpg", "hidden": False},
+    {"id": "decor", "name": "Decor", "nameFr": "", "image": "images/categories/household.jpg", "hidden": False},
+]
+
+
+def _categories_data():
+    """Read categories from disk, falling back to the defaults."""
+    try:
+        with open(CATEGORIES_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, list) and data:
+            return {"categories": data, "updatedAt": "", "updatedBy": ""}
+        if isinstance(data, dict) and isinstance(data.get("categories"), list):
+            return data
+    except (OSError, ValueError):
+        pass
+    return {"categories": [dict(c) for c in DEFAULT_CATEGORIES], "updatedAt": "", "updatedBy": ""}
+
+
+def _save_categories(categories, actor=None):
+    payload = {
+        "categories": categories,
+        "updatedAt": _utcnow(),
+        "updatedBy": actor or "",
+    }
+    tmp = CATEGORIES_FILE + ".tmp"
+    _os.makedirs(_os.path.dirname(CATEGORIES_FILE) or ".", exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+    _os.replace(tmp, CATEGORIES_FILE)
+    return payload
+
 def _utcnow():
     return datetime.datetime.utcnow().isoformat(timespec="seconds")
 
@@ -65,6 +115,51 @@ def catalog():
     resp.headers["ETag"] = etag
     resp.headers["Cache-Control"] = "public, max-age=30"
     return resp
+
+# ========================================================== public: categories
+@api.get("/categories")
+def categories_public():
+    """The category list used by the shop, filters and admin manager."""
+    return jsonify(ok=True, categories=_categories_data().get("categories") or [])
+
+
+@api.put("/admin/categories")
+@authmod.require_admin
+@sec.require_csrf
+def categories_admin_set():
+    """Save the category table server-side (data/categories.json)."""
+    d = request.get_json(silent=True) or {}
+    cats = d.get("categories")
+    if not isinstance(cats, list):
+        return jsonify(ok=False, error="Send {categories: [...]}."), 400
+    clean = []
+    seen = set()
+    for c in cats[:200]:
+        if not isinstance(c, dict):
+            continue
+        cid = sec.clean(c.get("id"), 40)
+        name = sec.clean(c.get("name"), 120)
+        if not cid or not name or cid in seen:
+            continue
+        seen.add(cid)
+        clean.append({
+            "id": cid,
+            "name": name,
+            "nameFr": sec.clean(c.get("nameFr"), 120),
+            "image": sec.safe_url(c.get("image") or ""),
+            "hidden": bool(c.get("hidden")),
+        })
+    payload = _save_categories(clean, authmod.current_admin())
+    # Best-effort Supabase mirror (never blocks the save).
+    if Config.SUPABASE_ENABLED:
+        try:
+            from supabase_store import replace_categories
+            replace_categories(clean)
+        except Exception:
+            pass
+    audit(authmod.current_admin(), "categories.update", f"saved={len(clean)}", _ip())
+    return jsonify(ok=True, count=len(clean), **payload)
+
 
 # ========================================================== public: analytics
 @api.post("/track")
@@ -456,14 +551,20 @@ def public_order(oid):
 # =================================================================== admin
 @api.post("/admin/login")
 def admin_login():
-    limited = sec.guard("admin-login", limit=6, window=300,
-                        key_extra=sec.clean((request.get_json(silent=True) or {}).get("email"), 120))
-    if limited: return limited
     d = request.get_json(silent=True) or {}
+    limited = sec.guard("admin-login", limit=6, window=300,
+                        key_extra=sec.clean((d or {}).get("email"), 120) or "single")
+    if limited: return limited
     email = sec.clean_email(d.get("email"))
     pw = d.get("password") or ""
-    if not email or not pw:
-        return jsonify(ok=False, error="Email and password are required."), 400
+    if not pw:
+        return jsonify(ok=False, error="Password is required."), 400
+    if not email:
+        email = authmod.sole_admin_email()
+        if not email:
+            # several admin accounts -> the single-account convenience cannot
+            # know which shared-password account to open
+            return jsonify(ok=False, error="Enter the admin email address to sign in."), 400
     # identical response for unknown email vs wrong password (no enumeration)
     ok = authmod.is_known_admin(email) and authmod.verify_login(email, pw)
     if not ok:

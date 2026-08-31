@@ -73,6 +73,34 @@ def test_login_sets_session_and_unknown_email_is_identical(client):
     assert wrong_pw.get_json()["error"] == unknown.get_json()["error"]
 
 
+def test_sole_admin_email_when_one_account(client):
+    assert authmod.sole_admin_email() == EMAIL
+
+
+def test_admin_login_is_password_only_with_single_account(client):
+    """No email in the body: the server resolves the one admin account."""
+    r = client.post("/api/admin/login", json={"password": PW})
+    assert r.status_code == 200, r.data
+    assert r.get_json()["email"] == EMAIL
+
+
+def test_admin_login_with_multiple_accounts_asks_for_email(client, monkeypatch):
+    double = ["one@example.com", "two@example.com"]
+    monkeypatch.setattr("auth.Config.ADMIN_EMAILS", double)
+    assert authmod.sole_admin_email() is None
+    r = client.post("/api/admin/login", json={"password": PW})
+    assert r.status_code == 400, r.data
+    assert "email" in r.get_json()["error"].lower()
+
+
+def test_two_devices_can_be_signed_in_at_once(client):
+    """Per-device session cookies: two clients can stay signed in together."""
+    a = client.post("/api/admin/login", json={"password": PW})
+    b = client.post("/api/admin/login", json={"password": PW})
+    assert a.status_code == b.status_code == 200
+    assert client.get("/api/admin/analytics").status_code == 200
+
+
 def test_brute_force_lockout(client):
     execute("DELETE FROM rate_limits")
     codes = [client.post("/api/admin/login", json={"email": EMAIL, "password": "bad" + str(i)}).status_code
@@ -208,6 +236,24 @@ def test_analytics_counts_and_dashboard_shape(client):
 
 def test_analytics_is_private(client):
     assert client.get("/api/admin/analytics").status_code == 401
+
+
+def test_categories_are_public_and_admin_writable(tmp_path, monkeypatch, client):
+    import api as apimod
+    monkeypatch.setattr(apimod, "CATEGORIES_FILE", str(tmp_path / "categories.json"))
+    pub = client.get("/api/categories")
+    assert pub.status_code == 200
+    assert len(pub.get_json()["categories"]) >= 10
+
+    assert client.put("/api/admin/categories", json={"categories": []}).status_code in (401, 403)
+    tok = login(client)
+    cats = pub.get_json()["categories"][:2]
+    r = client.put("/api/admin/categories", json={"categories": cats},
+                   headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    assert r.get_json()["count"] == len(cats)
+    on_disk = json.load(open(str(tmp_path / "categories.json")))
+    assert on_disk["categories"] and on_disk["updatedBy"] == EMAIL
 
 
 def test_catalogue_round_trip_is_live_immediately(client):

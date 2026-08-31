@@ -5002,3 +5002,43 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   .home-promo__copy { gap: 14px; }
   .home-promo__copy strong { font-size: 24px; }
 }
+
+/* Admin product quick-edit */
+.wix-quick {
+  display: grid;
+  grid-template-columns: auto 80px auto 52px;
+  gap: 6px 8px;
+  align-items: center;
+  padding: 6px 0 10px;
+  min-width: 220px;
+  font-size: 12px;
+}
+.wix-quick label { color: var(--muted); font-size: 11px; min-width: auto; }
+.wix-quick input[type="text"], .wix-quick input:not([type]),
+.wix-quick input[type="number"], .wix-quick input[type="tel"] {
+  min-width: 0;
+  width: 100%;
+  padding: 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+}
+.wix-quick .wix-tog span { white-space: nowrap; }
+.ck-ship-notices p {
+  margin: 0 0 6px;
+  padding: 9px 12px;
+  background: #f7f2ec;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.ck-bj-min {
+  margin-top: 8px;
+  color: var(--taupe);
+  font-size: 13px;
+}
+@media (max-width: 620px) {
+  .wix-quick { grid-template-columns: auto 64px auto 46px; min-width: 0; }
+}
