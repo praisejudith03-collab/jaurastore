@@ -33,6 +33,14 @@ services:
         sync: false
       - key: SITE_ORIGIN
         value: https://jaurastore-staging.onrender.com
+      # Supabase (source of truth for products, carts, orders, admin auth).
+      # The service role key is server-side only: sync:false keeps it out of git.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
       # the SQLite database and uploaded proofs live here - keep this disk
       # mounted or the data resets on every deploy
       - key: DB_PATH
@@ -79,6 +87,14 @@ services:
         sync: false
       - key: SITE_ORIGIN
         value: https://jaurastore.com.ng
+      # Supabase (source of truth for products, carts, orders, admin auth).
+      # The service role key is server-side only: sync:false keeps it out of git.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
       - key: DB_PATH
         value: /var/data/jaura.db
       - key: UPLOAD_DIR

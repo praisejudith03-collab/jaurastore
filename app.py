@@ -36,6 +36,23 @@ def create_app():
         app.logger.warning("startup maintenance skipped: %s", exc)
     authmod.ensure_seed_admins()
 
+    def _flat_fallback(path):
+        """Resolve a sub-directory asset reference to its flat repo-root file.
+
+        This project ships its assets flat at the repo root (style.css,
+        js/*.js, images/**, data/seed.json, ...) but the pages reference them
+        with a route prefix (css/style.css, js/app.js, images/products/x.jpg,
+        data/seed.json). Walk the path components from the right until we find
+        a real file at the root, so existing links work without duplicating or
+        moving any asset. Returns a path relative to ROOT, or None.
+        """
+        parts = [p for p in path.split("/") if p and p not in (".", "..")]
+        for i in range(len(parts), 0, -1):
+            candidate = os.path.join(ROOT, *parts[i - 1:])
+            if os.path.isfile(candidate):
+                return os.path.join(*parts[i - 1:])
+        return None
+
     def static_for(path):
         """Serve a file from the repo root, refusing anything outside it."""
         full = os.path.normpath(os.path.join(ROOT, path.lstrip("/")))
@@ -44,7 +61,10 @@ def create_app():
         if os.path.isdir(full):
             full = os.path.join(full, "index.html")
         if not os.path.isfile(full):
-            return None
+            rel = _flat_fallback(path)
+            if rel is None:
+                return None
+            full = os.path.normpath(os.path.join(ROOT, rel))
         return send_from_directory(os.path.dirname(full), os.path.basename(full))
 
     @app.after_request

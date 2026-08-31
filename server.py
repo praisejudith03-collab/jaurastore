@@ -22,7 +22,20 @@ class Handler(SimpleHTTPRequestHandler):
             clean = PREFIX + "/"
         if clean.startswith(PREFIX + "/"):
             clean = clean[len(PREFIX):] or "/"
-        return super().translate_path(clean)
+        # Resolve a sub-directory asset reference (css/style.css, js/app.js,
+        # images/products/x.jpg, data/seed.json) to its flat repo-root file.
+        # The project ships assets flat at the root but pages reference them
+        # with a route prefix; walk the path components from the right until a
+        # real file is found so nothing is duplicated or moved.
+        mapped = super().translate_path(clean)
+        if os.path.isfile(mapped):
+            return mapped
+        parts = [p for p in clean.split("/") if p and p not in (".", "..")]
+        for i in range(len(parts), 0, -1):
+            candidate = os.path.join(self.directory, *parts[i - 1:])
+            if os.path.isfile(candidate):
+                return candidate
+        return mapped
 
     def do_GET(self):
         parsed = urlparse(self.path)

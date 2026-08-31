@@ -1,0 +1,23 @@
+# Local environment / secrets — never commit
+.env
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Runtime data that must live on a persistent disk (Render uses /var/data)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db.consistent-snapshot
+data/uploads/
+catalog.json.bak
+catalog.json.lock
+catalog.json.tmp
+data/outbox/
+data/uploads/

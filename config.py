@@ -34,6 +34,20 @@ class Config:
 
     SITE_ORIGIN = os.environ.get("SITE_ORIGIN", "http://localhost:8080")
 
+    # ------------------------------------------------------------ Supabase
+    # When SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are set, the catalogue,
+    # carts, orders and admin auth are stored in Supabase instead of the
+    # local SQLite DB / JSON files. The app keeps working (with the existing
+    # local persistence) when they are not configured, so a fresh checkout
+    # and the test suite run without any credentials.
+    SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+    SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    # True only when a URL + service role key are configured. Access it as a
+    # plain class attribute (not a @property, which the class access would
+    # return the descriptor object for and always be truthy).
+    SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+
     # ---------------------------------------------------------- uploads
     UPLOAD_MODE = os.environ.get("UPLOAD_MODE", "local").lower()
     UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "data/uploads")

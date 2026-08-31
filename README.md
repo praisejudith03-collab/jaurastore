@@ -13,6 +13,30 @@ python3 seed_admin.py jaurastore@gmail.com   # set the admin password
 python3 app.py                # http://127.0.0.1:8080
 ```
 
+### Supabase (products, carts, orders, admin auth)
+
+The shop keeps working with local files / SQLite when no credentials are set.
+To make **Supabase the source of truth** for the catalogue, carts, orders and
+admin auth, add to `.env`:
+
+```
+SUPABASE_URL=...
+SUPABASE_ANON_KEY=...          # reserved; not required for server calls
+SUPABASE_SERVICE_ROLE_KEY=...   # server-side only — never ship to the browser
+```
+
+Then run the one-time import so Supabase has the catalogue before you switch
+over:
+
+```bash
+python3 migrate_supabase.py     # reads data/seed.json + data/catalog.json
+```
+
+The Flask app talks to Supabase server-side (service role key) behind the same
+JSON API, so the storefront and existing flows are unchanged. When the env vars
+are absent the app falls back to the local persistence, so a fresh checkout and
+the test suite run with no credentials.
+
 Production: `gunicorn "app:create_app()" --workers 2 --timeout 90` (see
 `Procfile` and `render.yaml`).
 
@@ -126,11 +150,16 @@ are identical to the file the customer uploaded.
 | --- | --- |
 | `app.py` | Flask app, static hosting, `/uploads`, legacy `/JauraStore/*` redirects |
 | `api.py` | JSON endpoints (all writes CSRF-protected) |
-| `auth.py` | admin accounts, sessions, OTP reset |
+| `auth.py` | admin accounts, sessions, OTP reset (Supabase Auth when configured) |
 | `security.py` | input cleaning, CSRF, rate limits, security headers |
 | `analytics.py` | server-side visitor/engagement counting and reporting |
-| `catalog.py` | catalogue: `data/seed.json` + `data/catalog.json` overrides |
+| `catalog.py` | catalogue: `data/seed.json` + `data/catalog.json` overrides (Supabase when configured) |
+| `supabase_store.py` | server-side Supabase gateway (products, auth) — no-op without credentials |
+| `migrate_supabase.py` | one-time import of `data/seed.json` + `data/catalog.json` into Supabase |
 | `storage.py` | uploads: local disk or S3/R2 (`UPLOAD_MODE`) |
+| `css/`, `js/` | stylesheet and client JS (store, admin, i18n, offline net, service worker) |
+| `images/` | product, category and brand assets |
+| `data/` | `seed.json`, `catalog.json`, SQLite DB, uploaded proofs |
 | `js/net.js` | fetch wrapper + offline outbox |
 | `sw.js` | offline caching |
 | `tests/` | pytest API tests, Playwright end-to-end and layout audits |

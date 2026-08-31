@@ -279,6 +279,21 @@ def create_order():
          order["source"], "pending", order["at"], now),
     )
 
+    # mirror into Supabase when enabled (never blocks the sale on failure)
+    from supabase_store import create_order as _sb_create_order
+    if Config.SUPABASE_ENABLED:
+        _sb_create_order({
+            "id": oid, "email": email,
+            "customer_name": sec.clean(customer.get("name") or "", 200),
+            "phone": customer.get("phone", ""), "country": customer.get("country", ""),
+            "city": customer.get("city", ""), "zone": zone,
+            "address": customer.get("address", ""), "note": customer.get("note", ""),
+            "payment": order["payment"], "proof_url": proof_url,
+            "items_count": len(clean_items), "total": total, "currency": currency,
+            "source": order["source"], "status": "pending",
+            "payload": order, "at": order["at"], "updated_at": now,
+        })
+
     # conversion tracking: a finished checkout is the purchase event
     vid, _is_new = analytics_mod.visitor_id()
     analytics_mod.record([{
@@ -380,6 +395,17 @@ def payment_proof():
          details["amount"], details["note"], url, attach_name, len(data), mime,
          1 if delivered else 0, str(info)[:300]),
     )
+    # mirror into Supabase when enabled (receipts live in the `receipts` table)
+    from supabase_store import create_receipt as _sb_create_receipt
+    if Config.SUPABASE_ENABLED:
+        _sb_create_receipt({
+            "id": order_id, "order_id": order_id, "name": name, "phone": phone,
+            "email": email, "method": method, "items": details["items"],
+            "quantity": details["quantity"], "amount": details["amount"],
+            "note": details["note"], "file_url": url, "file_name": attach_name,
+            "file_size": len(data), "file_type": mime,
+            "emailed": bool(delivered), "email_info": str(info)[:300],
+        })
     audit("customer", "payment_proof", f"{order_id} {attach_name} emailed={delivered}", _ip())
 
     return jsonify(ok=True, emailed=delivered, info=info, url=url,
