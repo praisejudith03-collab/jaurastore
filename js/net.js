@@ -110,7 +110,6 @@ window.JA_NET = (function () {
     if (token && !force && Date.now() - tokenAt < 20 * 60 * 1000) return Promise.resolve(token);
     if (inflight && !force) return inflight;
   inflight = fetch("https://jaurastore.com.ng/api/config", { credentials: "include" })
-
       .then(function (r) { return r.json(); })
       .then(function (d) {
         token = (d && d.csrf) || "";
@@ -154,7 +153,7 @@ window.JA_NET = (function () {
         method: job.method,
         headers: headersFor(job, tok),
         body: buildBody(job),
-        credentials: "same-origin",
+       credentials: "include",
         signal: ctl ? ctl.signal : undefined,
         cache: "no-store",
         keepalive: !!job.keepalive,
