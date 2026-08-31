@@ -1394,7 +1394,7 @@ const JA = (() => {
           </div>
         </div>
       </div>
-      <img class="foot-wave" src="images/brand/footer-wave.jpg" alt="" />
+      <img class="foot-wave" src="images/brand/footer-wave-6400.png" alt="" />
     </footer>
     <nav class="dock">
       <a href="shop.html"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span>${tx("dock.shop")}</span></a>

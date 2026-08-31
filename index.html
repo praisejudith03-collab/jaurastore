@@ -29,22 +29,25 @@
 <body data-page="home">
   <div id="site-header"></div>
 
-  <section class="home-hero-video">
-    <video class="home-hero-video__media" autoplay muted loop playsinline webkit-playsinline preload="auto"
-           poster="images/brand/lux-reel.jpg" aria-label="Jaura Store background video">
-      <source src="images/brand/lux-reel.mp4" type="video/mp4" />
-    </video>
-    <div class="home-hero-video__shade"></div>
-    <div class="home-hero-video__overlay">
-      <div class="wrap">
-        <p class="kicker" data-i18n="home.kicker">Experience effortless elegance</p>
-        <h1 data-i18n="home.heroLine">Experience effortless elegance and curated essentials</h1>
-        <p class="home-hero-video__sub" data-i18n="home.standard">The new standard of modern luxury</p>
-        <div class="home-hero-video__cta">
-          <a class="btn" href="shop.html" data-i18n="home.shopNow">Shop now</a>
-        </div>
+  <section class="home-hero-static">
+    <div class="wrap">
+      <p class="kicker" data-i18n="home.kicker">Experience effortless elegance</p>
+      <h1 class="serif-title" data-i18n="home.heroLine">Experience effortless elegance and curated essentials</h1>
+      <div class="home-hero-static__cta">
+        <a class="btn btn-purple" href="shop.html" data-i18n="home.shopNow">Shop now</a>
       </div>
     </div>
+  </section>
+
+  <section class="wrap home-promo-wrap">
+    <a class="home-promo" href="shop.html?cat=gadgets" aria-label="Explore gadgets">
+      <img src="images/products/smartwatch-with-game-pad.jpg" alt="" onerror="fallbackImg(event)" />
+      <span class="home-promo__scrim"></span>
+      <span class="home-promo__copy">
+        <strong data-i18n="home.standard">The new standard of modern luxury</strong>
+        <span class="btn btn-dark-pill" data-i18n="home.explore">Explore</span>
+      </span>
+    </a>
   </section>
 
   <section class="section-tight">
