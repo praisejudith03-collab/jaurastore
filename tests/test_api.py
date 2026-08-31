@@ -152,6 +152,40 @@ def test_pickup_is_not_a_delivery_option(client, zone):
     assert r.status_code == 400
 
 
+def _post_min_order(client, oid, currency, total, zone):
+    tok = csrf(client)
+    return client.post("/api/orders", json={
+        "id": oid, "currency": currency, "total": total,
+        "customer": {"name": "Min Tester", "email": "min@example.com",
+                     "phone": "+229 90 00 00 00", "city": "Cotonou", "zone": zone},
+        "items": [{"id": "wix-001", "name": "Min item", "qty": 1, "price": total}],
+    }, headers={"X-CSRF-Token": tok})
+
+
+def test_benin_minimum_is_enforced_on_orders(client):
+    r = _post_min_order(client, "JA-BJ1", "CFA", 2999, "Cotonou")
+    assert r.status_code == 400, r.data
+    assert "3,000 F CFA" in r.get_json()["error"]
+
+
+def test_benin_minimum_in_naira_is_enforced(client):
+    r = _post_min_order(client, "JA-BJ2", "NGN", 6799, "Calavi")
+    assert r.status_code == 400, r.data
+    assert "6,800" in r.get_json()["error"]
+
+
+def test_benin_minimum_exact_cfa_and_ngn_are_accepted(client):
+    a = _post_min_order(client, "JA-BJ3", "CFA", 3000, "Cotonou")
+    b = _post_min_order(client, "JA-BJ4", "NGN", 6800, "Porto-Novo")
+    assert a.status_code == 200, a.data
+    assert b.status_code == 200, b.data
+
+
+def test_lagos_orders_have_no_benin_minimum(client):
+    r = _post_min_order(client, "JA-LAG", "NGN", 100, "Lagos Mainland")
+    assert r.status_code == 200, r.data
+
+
 def test_analytics_counts_and_dashboard_shape(client):
     tok = csrf(client)
     client.post("/api/track", json={"events": [

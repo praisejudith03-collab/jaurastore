@@ -224,6 +224,19 @@ def create_order():
     if re.search(r"(?i)\bpick[\s-]?up\b|collect\s+in\s+store|self[\s-]?collect", zone):
         return jsonify(ok=False, error="Choose a delivery location."), 400
 
+    # Benin deliveries carry a minimum order (or its naira equivalent).
+    if re.search(r"(?i)\bbenin\b|cotonou|calavi|porto", zone):
+        min_cfa = 3000
+        min_ngn = 6800
+        if currency == "CFA" and total < min_cfa:
+            return jsonify(ok=False, error=(
+                "Benin deliveries: minimum order 3,000 F CFA (about 6,800 naira). "
+                "Please add a few more items to meet the minimum.")), 400
+        if currency == "NGN" and total < min_ngn:
+            return jsonify(ok=False, error=(
+                "Benin deliveries: minimum order 6,800 naira (about 3,000 F CFA). "
+                "Please add a few more items to meet the minimum.")), 400
+
     oid = sec.clean(d.get("id"), 24).upper()
     if not ORDER_ID.match(oid or ""):
         oid = "JA-" + secrets.token_hex(3).upper()

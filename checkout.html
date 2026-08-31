@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Checkout Form · Jaura Store</title>
+  <title>Checkout · Jaura Store</title>
   <meta name="description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
   <meta name="robots" content="index, follow" />
   <link rel="canonical" href="https://jaurastore.com.ng/checkout.html" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Jaura Store" />
-  <meta property="og:title" content="Checkout Form · Jaura Store" />
+  <meta property="og:title" content="Checkout · Jaura Store" />
   <meta property="og:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
   <meta property="og:url" content="https://jaurastore.com.ng/checkout.html" />
   <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Checkout Form · Jaura Store" />
+  <meta name="twitter:title" content="Checkout · Jaura Store" />
   <meta name="twitter:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
   <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg" />
   <link rel="icon" type="image/png" href="images/brand/favicon.png" />
@@ -22,7 +22,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=100" />
+  <link rel="stylesheet" href="css/style.css?v=101" />
 </head>
 <body data-page="checkout">
   <div id="site-header"></div>
@@ -58,7 +58,8 @@
           <div class="field full"><label data-i18n="ck.street">Street address *</label><input name="address" required data-i18n-placeholder="ck.streetPh" placeholder="House number and street name" autocomplete="street-address" /></div>
           <div class="field"><label data-i18n="ck.city">Town / City *</label><input name="city" required data-i18n-placeholder="ck.cityPh" placeholder="Cotonou, Ikeja, Lekki…" /></div>
           <div class="field full fare-field">
-            <label for="zone-cotonou" data-delivery-label>Delivery location — where should we bring your order? *</label>
+            <label for="zone-cotonou" data-delivery-label data-i18n="ck.zone">State / Zone *</label>
+            <p class="ck-zone-placeholder" data-i18n="ck.zonePlaceholder">Choose a delivery zone</p>
             <p class="ck-fare-intro">We deliver to the street address you wrote above. Choose the town or area it is in so we can quote your fare. Pick-up is not offered.</p>
             <div class="fare-list" data-delivery-zones>
               <label class="fare-opt"><input type="radio" name="zone" value="Lagos Mainland" required /> <span data-i18n="ck.fare.mainland">Lagos Mainland (₦2,000 – ₦5,000)</span></label>
@@ -71,6 +72,11 @@
               <label class="fare-opt"><input type="radio" name="zone" value="Lomé" /> <span data-i18n="ck.fare.lome">Lomé (2,500 – 3,500 CFA)</span></label>
               <label class="fare-opt"><input type="radio" name="zone" value="Other Togo" /> <span data-i18n="ck.fare.tgOther">Other places in Togo (confirm on WhatsApp)</span></label>
             </div>
+            <p class="ck-bj-min" data-i18n="ck.bjMin">Benin deliveries: minimum order 3,000 F CFA (about 6,800 naira).</p>
+          </div>
+          <div class="field full ck-ship-notices">
+            <p data-i18n="ck.shipNigeria">Nigeria: 3–7 working days, according to location.</p>
+            <p data-i18n="ck.shipBenin">Benin 🇧🇯: goods come in batches to keep fare cheaper. Delivery is on the dates on the banner, unless you pay for express delivery.</p>
           </div>
           <div class="field"><label data-i18n="ck.phone">Phone *</label><input name="phone" required autocomplete="tel" /></div>
           <div class="field"><label data-i18n="ck.email">Email address *</label><input name="email" type="email" required autocomplete="email" /></div>
@@ -141,11 +147,11 @@
   </div>
 
   <div id="site-footer"></div>
-  <script src="js/products-data.js?v=100"></script>
-  <script src="js/i18n-phrases.js?v=100"></script>
-  <script src="js/i18n.js?v=100"></script>
-  <script src="js/net.js?v=100"></script>
-  <script src="js/store.js?v=100"></script>
-  <script src="js/app.js?v=100"></script>
+  <script src="js/products-data.js?v=101"></script>
+  <script src="js/i18n-phrases.js?v=101"></script>
+  <script src="js/i18n.js?v=101"></script>
+  <script src="js/net.js?v=101"></script>
+  <script src="js/store.js?v=101"></script>
+  <script src="js/app.js?v=101"></script>
 </body>
 </html>
