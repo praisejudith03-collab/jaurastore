@@ -58,7 +58,11 @@ def products_table_rows():
         return None
     try:
         res = c.table("products").select("*").eq("source", "admin").execute()
-        return res.data or []
+        rows = res.data or []
+        # Reconcile each row's image to a path the browser can display (repo
+        # file when present, else the Wix CDN photo, else the placeholder).
+        from catalog import resolve_image
+        return [resolve_image(r) for r in rows]
     except Exception as exc:
         print(f"[supabase] products read failed: {exc}")
         return None
@@ -69,10 +73,15 @@ def upsert_products(products):
     c = client()
     if c is None or not products:
         return []
-    rows = [dict(p) for p in products if p]
-    for r in rows:
+    rows = []
+    for p in products:
+        if not p:
+            continue
+        from catalog import resolve_image
+        r = resolve_image(dict(p))
         r.setdefault("source", "admin")
         r.setdefault("updated_at", _now())
+        rows.append(r)
     try:
         c.table("products").upsert(rows).execute()
     except Exception as exc:

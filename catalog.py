@@ -29,6 +29,15 @@ CATALOG_FILE = Config.CATALOG_PATH
 SEED_PATH = os.environ.get(
     "SEED_PATH", os.path.join(ROOT, "data", "seed.json"))
 
+# Local placeholder used when a product has no image file in the repo. It is a
+# real committed path, so no card ever 404s or shows a broken-image icon.
+PLACEHOLDER_IMG = "images/products/_placeholder.jpg"
+
+# The Wix-exported catalogue carries the original media URLs in `imageUrl`.
+# We use these as the remote fallback for products whose photo was never
+# committed to the repo.
+WIX_IMAGE_URLS = None          # lazily loaded dict: id -> imageUrl
+
 # Prices the shop shows are entered in Naira and converted at the house rate.
 NGN_TO_CFA = 0.44
 
@@ -64,6 +73,84 @@ def _seed_products():
         if isinstance(data, list) and data:
             return data
     return []
+
+
+def _wix_image_urls():
+    """id -> Wix CDN imageUrl map, loaded lazily from the exported catalogue.
+
+    Only used as a remote fallback so a product whose photo was never
+    committed to the repo still renders. Kept out of the local path by default.
+    """
+    global WIX_IMAGE_URLS
+    if WIX_IMAGE_URLS is not None:
+        return WIX_IMAGE_URLS
+    WIX_IMAGE_URLS = {}
+    for cand in (os.path.join(ROOT, "data", "wix_products.json"),
+                 os.path.join(ROOT, "wix_products.json")):
+        data = _read_json(cand, None)
+        if isinstance(data, list):
+            for p in data:
+                if isinstance(p, dict) and p.get("id"):
+                    WIX_IMAGE_URLS[p["id"]] = p.get("imageUrl") or ""
+            break
+    return WIX_IMAGE_URLS
+
+
+def _file_exists(path):
+    """True when a repo-relative asset path resolves to a real file (or a
+    served virtual path we know the static layer maps to flat root). Also
+    accepts root-relative (/...) and absolute file paths."""
+    if not path:
+        return False
+    if path.startswith(("http://", "https://", "/", "data:", "blob:")):
+        return True                      # external / root-relative serve fine
+    candidate = os.path.join(ROOT, path)
+    return os.path.isfile(candidate)
+
+
+def resolve_image(product):
+    """Guarantee a renderable image for one product.
+
+    Returns a product whose `image` is a path the browser can actually show:
+
+    * If the product has a committed repo photo (images/products/x.jpg that
+      exists on disk) -> keep that repository path.
+    * Else if the product carries its original Wix CDN URL -> use it, so the
+      real product photo still displays (the site CSP allows https: images).
+    * Else -> the committed branded placeholder repo path (never a 404).
+
+    The local placeholder path is also preserved on `placeholderImage` so the
+    frontend `onerror` handler can swap to it if the remote photo fails.
+    """
+    p = dict(product or {})
+    img = p.get("image") or ""
+    imageUrl = p.get("imageUrl") or _wix_image_urls().get(p.get("id"), "")
+    if imageUrl:
+        p["imageUrl"] = imageUrl
+    # A committed repo photo wins (the user asked to link repository paths).
+    if _is_local(img) and _file_exists(img):
+        p["placeholderImage"] = PLACEHOLDER_IMG
+        return p
+    # No usable local file. Show the real remote photo (so the product looks
+    # right); keep the committed placeholder as the onerror fallback.
+    p["placeholderImage"] = PLACEHOLDER_IMG
+    if imageUrl:
+        p["image"] = imageUrl
+        p["usesRemoteImage"] = True
+    else:
+        p["image"] = PLACEHOLDER_IMG
+        p["usesPlaceholder"] = True
+    return p
+
+
+def _is_local(path):
+    """True for a repo-relative asset path (not external / root-relative)."""
+    return bool(path) and not path.startswith(("http://", "https://", "/", "data:", "blob:"))
+
+
+def resolve_images(products):
+    """Apply resolve_image to a list of products."""
+    return [resolve_image(p) for p in (products or [])]
 
 
 def _supabase_products():
@@ -252,7 +339,7 @@ def merged(include_hidden=False):
 
     if not include_hidden:
         products = [p for p in products if p.get("online") is not False]
-    return products
+    return resolve_images(products)
 
 
 def meta():

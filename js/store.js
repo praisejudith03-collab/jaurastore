@@ -1030,9 +1030,10 @@ const JA = (() => {
     return path;
   }
 
-  // Show a clean branded card if a product photo has no file yet, instead of
-  // the browser's broken-image icon. The 81 products in the seed that shipped
-  // without an uploaded photo render as a tidy "photo coming soon" tile.
+  // Show a clean branded card if a product photo fails to load, instead of
+  // the browser's broken-image icon. Every product now ships a working
+  // `image` (a committed repo path or the Wix CDN URL) plus a
+  // `placeholderImage` repo path to fall back to, so nothing ever 404s.
   function fallbackImg(ev) {
     const el = ev && ev.currentTarget;
     if (!el) return;
@@ -1040,9 +1041,20 @@ const JA = (() => {
     if (src.indexOf("_placeholder") >= 0) return;
     if (el.getAttribute("data-fb") === "1") return;
     el.setAttribute("data-fb", "1");
-    el.src = "images/products/_placeholder.jpg";
+    // Use the product-specific placeholder path when known.
+    const ph = el.getAttribute("data-ph") || "images/products/_placeholder.jpg";
+    el.src = ph;
+    el.classList.add("is-placeholder");
   }
   window.fallbackImg = fallbackImg;
+
+  // HTML for one product image with a working src + placeholder fallback.
+  function imgTag(p, cls, extra) {
+    const base = asset(p.image);
+    const ph = p.placeholderImage || "images/products/_placeholder.jpg";
+    const onErr = typeof window.fallbackImg === "function" ? " onerror=\"fallbackImg(event)\"" : "";
+    return `<img src="${base}" alt="${escape(p.name || "")}" ${cls ? `class="${cls}"` : ""} data-ph="${ph}"${onErr} />`;
+  }
 
   function galleryOf(p) {
     const list = [];
@@ -1112,8 +1124,8 @@ const JA = (() => {
     const home = (document.body.dataset.page || "") === "home";
     const many = home && gals.length > 1;
     const slides = many
-      ? gals.map((src, i) => `<img src="${asset(src)}" alt="${escape(nm)}" data-slide="${i}" class="${i === 0 ? "is-show" : ""}" onerror="fallbackImg(event)" />`).join("")
-      : `<img src="${asset(gals[0] || p.image)}" alt="${escape(nm)}" onerror="fallbackImg(event)" />`;
+      ? gals.map((src, i) => `<img src="${asset(src)}" alt="${escape(nm)}" data-slide="${i}" class="${i === 0 ? "is-show" : ""}" data-ph="${p.placeholderImage || "images/products/_placeholder.jpg"}" onerror="fallbackImg(event)" />`).join("")
+      : `<img src="${asset(gals[0] || p.image)}" alt="${escape(nm)}" data-ph="${p.placeholderImage || "images/products/_placeholder.jpg"}" onerror="fallbackImg(event)" />`;
     return `<article class="card${sold ? " is-oos" : ""}">
       <a class="card-media${many ? " has-slides" : ""}" ${many ? "data-card-slides" : ""} href="product.html?id=${encodeURIComponent(p.id)}">
         ${slides}

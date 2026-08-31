@@ -9,13 +9,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/10000-mah-power-bank.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_a1d4bb13ec414197a1e9dd964718e34d~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_a1d4bb13ec414197a1e9dd964718e34d~mv2.jpg",
     "description": "10000 mah power bank",
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-002",
@@ -27,13 +29,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/100l-storage-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_820e24382c8a489e8cacc023a55abc56~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_820e24382c8a489e8cacc023a55abc56~mv2.jpg",
     "description": "100l storage bag",
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-003",
@@ -51,7 +55,8 @@
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-004",
@@ -69,7 +74,8 @@
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-005",
@@ -87,7 +93,8 @@
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-006",
@@ -99,13 +106,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/17-pcs-sealed-crisper-plastics-13000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_9fc610af95404b9cb7d2080579ec59c9~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_9fc610af95404b9cb7d2080579ec59c9~mv2.jpg",
     "description": "17 pcs sealed crisper plastics",
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-007",
@@ -117,13 +126,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/2-by-6-dd-birthmark.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_0c5bd1dd4e4c4e06857edc86e7266e59~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_0c5bd1dd4e4c4e06857edc86e7266e59~mv2.jpg",
     "description": "2 by 6 dd birthmark",
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-008",
@@ -141,7 +152,8 @@
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-009",
@@ -159,7 +171,8 @@
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-010",
@@ -177,7 +190,8 @@
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-011",
@@ -195,7 +209,8 @@
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-012",
@@ -213,7 +228,8 @@
     "stock": 0,
     "badge": "",
     "featured": true,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-013",
@@ -231,7 +247,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-014",
@@ -249,7 +266,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-015",
@@ -267,7 +285,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-016",
@@ -285,7 +304,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-017",
@@ -303,7 +323,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-018",
@@ -321,7 +342,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-019",
@@ -339,7 +361,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-020",
@@ -357,7 +380,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-021",
@@ -375,7 +399,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-022",
@@ -387,13 +412,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/4-by-4-full-closure-bob.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_82f12a6c802d4948a2623f64c1759bb9~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_82f12a6c802d4948a2623f64c1759bb9~mv2.jpg",
     "description": "4 by 4 full closure bob",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-023",
@@ -411,7 +438,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-024",
@@ -429,7 +457,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-025",
@@ -447,7 +476,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-026",
@@ -459,13 +489,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/7pcs-aluminum-pot-78500.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_735cca94089c4ae999db2e302bbfac9b~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_735cca94089c4ae999db2e302bbfac9b~mv2.jpg",
     "description": "7pcs aluminum pot",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-027",
@@ -483,7 +515,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-028",
@@ -495,13 +528,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/a58-smartwatch-with-jewelry-set.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_26922947b8e741e6aa56ebfeda46d054~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_26922947b8e741e6aa56ebfeda46d054~mv2.jpg",
     "description": "A58 smartwatch with jewelry set",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-029",
@@ -519,7 +554,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-030",
@@ -537,7 +573,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-031",
@@ -555,7 +592,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-032",
@@ -573,7 +611,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-033",
@@ -591,7 +630,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-034",
@@ -609,7 +649,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-035",
@@ -627,7 +668,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-036",
@@ -645,7 +687,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-037",
@@ -657,13 +700,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/ankara-chic-set.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_7566ed63a25c493ca3d4f3020dd896c5~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_7566ed63a25c493ca3d4f3020dd896c5~mv2.jpg",
     "description": "Ankara chic set",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-038",
@@ -675,13 +720,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/ankara-pants-9000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1fa3ab3acfc346a0a3910d14d0ebf388~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_1fa3ab3acfc346a0a3910d14d0ebf388~mv2.jpg",
     "description": "Ankara pants",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-039",
@@ -699,7 +746,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-040",
@@ -717,7 +765,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-041",
@@ -729,13 +778,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/apple-manicure-set.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_fecffad0878e4838a4d3eebd3161fab5~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_fecffad0878e4838a4d3eebd3161fab5~mv2.jpg",
     "description": "Apple manicure set",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-042",
@@ -753,7 +804,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-043",
@@ -771,7 +823,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-044",
@@ -783,13 +836,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_85befd544beb4a0493d8242340772998~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_85befd544beb4a0493d8242340772998~mv2.jpg",
     "description": "Bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-045",
@@ -801,13 +856,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/bag-c-19150.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_6b8dad38f36f4c03b3496bea39554a9f~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_6b8dad38f36f4c03b3496bea39554a9f~mv2.jpg",
     "description": "Bag c",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-046",
@@ -819,13 +876,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/bag-k-7500.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_3533d4f7233249bf98b236c6d78f1150~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_3533d4f7233249bf98b236c6d78f1150~mv2.jpg",
     "description": "Bag k",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-047",
@@ -837,13 +896,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/beach-bag-and-hat.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_98e27bddcd214930a5ab13841237b09b~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_98e27bddcd214930a5ab13841237b09b~mv2.jpg",
     "description": "Beach bag and hat",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-048",
@@ -861,7 +922,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-049",
@@ -879,7 +941,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-050",
@@ -897,7 +960,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-051",
@@ -915,7 +979,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-052",
@@ -933,7 +998,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-053",
@@ -951,7 +1017,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-054",
@@ -969,7 +1036,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-055",
@@ -981,13 +1049,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/bioaqua-vitamin-c-set.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_f24c8813449b4832a67589a3632f06ce~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_f24c8813449b4832a67589a3632f06ce~mv2.jpg",
     "description": "Bioaqua vitamin c set",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-056",
@@ -1005,7 +1075,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-057",
@@ -1023,7 +1094,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-058",
@@ -1041,7 +1113,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-059",
@@ -1059,7 +1132,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-060",
@@ -1077,7 +1151,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-061",
@@ -1095,7 +1170,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-062",
@@ -1107,13 +1183,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/bracelet-d.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1976cf0057a44c60ab3acadfc4a42925~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_1976cf0057a44c60ab3acadfc4a42925~mv2.jpg",
     "description": "Bracelet d",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-063",
@@ -1131,7 +1209,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-064",
@@ -1149,7 +1228,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-065",
@@ -1161,13 +1241,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/car-diffuser.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_561b461265404ee8a9583970fa71ebd4~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_561b461265404ee8a9583970fa71ebd4~mv2.jpg",
     "description": "Car diffuser",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-066",
@@ -1185,7 +1267,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-067",
@@ -1203,7 +1286,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-068",
@@ -1221,7 +1305,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-069",
@@ -1239,7 +1324,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-070",
@@ -1257,7 +1343,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-071",
@@ -1275,7 +1362,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-072",
@@ -1293,7 +1381,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-073",
@@ -1311,7 +1400,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-074",
@@ -1323,13 +1413,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/cover-heels.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_5ec1291bbf444fc8a28cdfb8c2fcb4d7~mv2.jpeg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_5ec1291bbf444fc8a28cdfb8c2fcb4d7~mv2.jpeg",
     "description": "Cover heels",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-075",
@@ -1347,7 +1439,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-076",
@@ -1365,7 +1458,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-077",
@@ -1383,7 +1477,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-078",
@@ -1401,7 +1496,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-079",
@@ -1419,7 +1515,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-080",
@@ -1437,7 +1534,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-081",
@@ -1455,7 +1553,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-082",
@@ -1473,7 +1572,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-083",
@@ -1491,7 +1591,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-084",
@@ -1509,7 +1610,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-085",
@@ -1527,7 +1629,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-086",
@@ -1545,7 +1648,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-087",
@@ -1563,7 +1667,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-088",
@@ -1581,7 +1686,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-089",
@@ -1593,13 +1699,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/f15-wireless-mic-double-18000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_0499574a1b9047d6aabc9ffe44465302~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_0499574a1b9047d6aabc9ffe44465302~mv2.jpg",
     "description": "F15 wireless mic double",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-090",
@@ -1611,13 +1719,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/f15-wireless-mic-single-13000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_54555bc80fd5423c84fc1e7626515994~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_54555bc80fd5423c84fc1e7626515994~mv2.jpg",
     "description": "F15 wireless mic single",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-091",
@@ -1635,7 +1745,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-092",
@@ -1653,7 +1764,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-093",
@@ -1665,13 +1777,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/fashion-tote-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1d15da40925c443eb438c92eb9132cd9~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_1d15da40925c443eb438c92eb9132cd9~mv2.jpg",
     "description": "Fashion tote bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-094",
@@ -1689,7 +1803,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-095",
@@ -1707,7 +1822,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-096",
@@ -1725,7 +1841,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-097",
@@ -1743,7 +1860,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-098",
@@ -1755,13 +1873,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/flat-sandals-a-23300.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_f014a75fe3b84fca8e171548620d92d1~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_f014a75fe3b84fca8e171548620d92d1~mv2.jpg",
     "description": "Flat sandals a",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-099",
@@ -1773,13 +1893,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/flower-bouquet-with-light.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_a1b95082f41c4c429dcb1670853a5a39~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_a1b95082f41c4c429dcb1670853a5a39~mv2.jpg",
     "description": "Flower bouquet with light",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-100",
@@ -1797,7 +1919,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-101",
@@ -1815,7 +1938,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-102",
@@ -1833,7 +1957,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-103",
@@ -1851,7 +1976,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-104",
@@ -1869,7 +1995,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-105",
@@ -1887,7 +2014,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-106",
@@ -1899,13 +2027,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/foldable-water-bottle.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_7aff0633251645ea982cd071d84c009d~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_7aff0633251645ea982cd071d84c009d~mv2.jpg",
     "description": "Foldable water bottle",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-107",
@@ -1917,13 +2047,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/fringe-bob.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_3033efa3a23d4e08b24b0361e5481cb9~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_3033efa3a23d4e08b24b0361e5481cb9~mv2.jpg",
     "description": "Fringe bob",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-108",
@@ -1935,13 +2067,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/fur-cap.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_3450f80f6780456c87549d2829175b3f~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_3450f80f6780456c87549d2829175b3f~mv2.jpg",
     "description": "Fur cap",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-109",
@@ -1953,13 +2087,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/gift-box-with-rose.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_f8fcda7b5f414ecf830147cb3761a54a~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_f8fcda7b5f414ecf830147cb3761a54a~mv2.jpg",
     "description": "Gift box with rose",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-110",
@@ -1977,7 +2113,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-111",
@@ -1989,13 +2126,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/gucci-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_360d3da00e9a462c83a199bbff81a5db~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_360d3da00e9a462c83a199bbff81a5db~mv2.jpg",
     "description": "Gucci bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-112",
@@ -2007,13 +2146,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/hair-band-3pcs.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_7c031708478448d7996105c58ba9a4d4~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_7c031708478448d7996105c58ba9a4d4~mv2.jpg",
     "description": "Hair band 3pcs",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-113",
@@ -2031,7 +2172,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-114",
@@ -2049,7 +2191,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-115",
@@ -2061,13 +2204,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/hair-dryer.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_dddcd82b27224a7e82fa674edeb5fb7c~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_dddcd82b27224a7e82fa674edeb5fb7c~mv2.jpg",
     "description": "Hair dryer",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-116",
@@ -2085,7 +2230,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-117",
@@ -2103,7 +2249,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-118",
@@ -2121,7 +2268,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-119",
@@ -2139,7 +2287,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-120",
@@ -2151,13 +2300,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/headphone.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_cc6f34abf9444010a30e167899c21d7d~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_cc6f34abf9444010a30e167899c21d7d~mv2.jpg",
     "description": "Headphone",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-121",
@@ -2169,13 +2320,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/heels.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_3fff16209b304845ad9a960f03fd5fd7~mv2.jpeg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_3fff16209b304845ad9a960f03fd5fd7~mv2.jpeg",
     "description": "Heels",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-122",
@@ -2187,13 +2340,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/heels-27000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1d572b3fc33d483da9be0177c8be1e69~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_1d572b3fc33d483da9be0177c8be1e69~mv2.jpg",
     "description": "Heels",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-123",
@@ -2205,13 +2360,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/heels-a-1.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_68fba9497d504e81955b4bd1d9669a8c~mv2.jpeg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_68fba9497d504e81955b4bd1d9669a8c~mv2.jpeg",
     "description": "Heels a 1",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-124",
@@ -2223,13 +2380,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/heels-b.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_bea4180619da4ec69c7d631fafccb176~mv2.jpeg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_bea4180619da4ec69c7d631fafccb176~mv2.jpeg",
     "description": "Heels b",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-125",
@@ -2241,13 +2400,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/heels-c.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_12a6fa75595c4c4a9be4fcabbbd50df8~mv2.jpeg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_12a6fa75595c4c4a9be4fcabbbd50df8~mv2.jpeg",
     "description": "Heels c",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-126",
@@ -2259,13 +2420,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/heels-d.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_326d9b300cc948508f5a17615e0df8c8~mv2.jpeg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_326d9b300cc948508f5a17615e0df8c8~mv2.jpeg",
     "description": "Heels d",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-127",
@@ -2277,13 +2440,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/heels-e.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_c49de1da07524edcbdb55c0152e92044~mv2.jpeg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_c49de1da07524edcbdb55c0152e92044~mv2.jpeg",
     "description": "Heels e",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-128",
@@ -2295,13 +2460,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/heels-f.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_922497c3f9c1459eba2f4ce9c0ac7272~mv2.jpeg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_922497c3f9c1459eba2f4ce9c0ac7272~mv2.jpeg",
     "description": "Heels f",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-129",
@@ -2313,13 +2480,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/heels-g.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_705a8acd24b240e085e16cc1be0dc841~mv2.jpeg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_705a8acd24b240e085e16cc1be0dc841~mv2.jpeg",
     "description": "Heels g",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-130",
@@ -2331,13 +2500,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/heels-h.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_2b5d989e31cb4400bd3f2a298b3b4b0a~mv2.jpeg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_2b5d989e31cb4400bd3f2a298b3b4b0a~mv2.jpeg",
     "description": "Heels h",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-131",
@@ -2349,13 +2520,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/heels-h-1.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_26e324a7bf1a47829087c6a933893aa1~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_26e324a7bf1a47829087c6a933893aa1~mv2.jpg",
     "description": "Heels h 1",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-132",
@@ -2373,7 +2546,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-133",
@@ -2391,7 +2565,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-134",
@@ -2409,7 +2584,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-135",
@@ -2427,7 +2603,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-136",
@@ -2445,7 +2622,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-137",
@@ -2463,7 +2641,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-138",
@@ -2481,7 +2660,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-139",
@@ -2499,7 +2679,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-140",
@@ -2517,7 +2698,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-141",
@@ -2535,7 +2717,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-142",
@@ -2553,7 +2736,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-143",
@@ -2565,13 +2749,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/key-chain.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_406f4c8723e942de9af232133a758cbc~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_406f4c8723e942de9af232133a758cbc~mv2.jpg",
     "description": "Key chain",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-144",
@@ -2583,13 +2769,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/key-holder-750.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_627bba2351804b63be8061d9bc634b05~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_627bba2351804b63be8061d9bc634b05~mv2.jpg",
     "description": "Key holder",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-145",
@@ -2607,7 +2795,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-146",
@@ -2619,13 +2808,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/kitten-heels.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_dfdd7442ef35423a8727c41c70352bdb~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_dfdd7442ef35423a8727c41c70352bdb~mv2.jpg",
     "description": "Kitten heels",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-147",
@@ -2643,7 +2834,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-148",
@@ -2655,13 +2847,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/knuckles-ring-b.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_240177449d7f4f288069c118fc548a1f~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_240177449d7f4f288069c118fc548a1f~mv2.jpg",
     "description": "Knuckles ring b",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-149",
@@ -2673,13 +2867,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/l16-tripod.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1c2491fb164d421e9daea254b824f1d1~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_1c2491fb164d421e9daea254b824f1d1~mv2.jpg",
     "description": "L16 tripod",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-150",
@@ -2691,13 +2887,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/lacoste-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_f7fc16cc0bd34c8694e2babf2ced5758~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_f7fc16cc0bd34c8694e2babf2ced5758~mv2.jpg",
     "description": "Lacoste bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-151",
@@ -2709,13 +2907,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/laptop-school-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_c643f486ee3147af934c2e8b2ddc5b9a~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_c643f486ee3147af934c2e8b2ddc5b9a~mv2.jpg",
     "description": "Laptop school bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-152",
@@ -2727,13 +2927,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/leather-crocs-bag-19000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_7a99ae464bdb4f97b700a0e50633704b~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_7a99ae464bdb4f97b700a0e50633704b~mv2.jpg",
     "description": "Leather crocs bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-153",
@@ -2745,13 +2947,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/led-cube-light.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_7625aa45c9df48689d40b6d1047c6dcf~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_7625aa45c9df48689d40b6d1047c6dcf~mv2.jpg",
     "description": "Led cube light",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-154",
@@ -2769,7 +2973,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-155",
@@ -2781,13 +2986,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/lip-gloss-c.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_391ad9022fc243e3a36913fbe535a4e1~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_391ad9022fc243e3a36913fbe535a4e1~mv2.jpg",
     "description": "Lip gloss c",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-156",
@@ -2799,13 +3006,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/lip-gloss-g.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_4c46c9a6518b4e6697ab228a40466c13~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_4c46c9a6518b4e6697ab228a40466c13~mv2.jpg",
     "description": "Lip gloss g",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-157",
@@ -2817,13 +3026,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/lip-scrub.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_3013adb0c3c1408da68c5ac8b7e02aa0~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_3013adb0c3c1408da68c5ac8b7e02aa0~mv2.jpg",
     "description": "Lip scrub",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-158",
@@ -2835,13 +3046,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/lipgloss-f.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_0d9f5b49dd6341dc84d52b988ae553ae~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_0d9f5b49dd6341dc84d52b988ae553ae~mv2.jpg",
     "description": "Lipgloss f",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-159",
@@ -2853,13 +3066,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/love-decor-with-light.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_beeb6b6acd4746bdbfadab6eb1e8204f~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_beeb6b6acd4746bdbfadab6eb1e8204f~mv2.jpg",
     "description": "Love decor with light",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-160",
@@ -2871,13 +3086,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/luki-2-in-1-bag-20000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_5d1eb2511b0c44c3938726593be7eecc~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_5d1eb2511b0c44c3938726593be7eecc~mv2.jpg",
     "description": "Luki 2 in 1 bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-161",
@@ -2889,13 +3106,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/lv-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1a7e9684769d434cb07253dffe6e6f54~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_1a7e9684769d434cb07253dffe6e6f54~mv2.jpg",
     "description": "Lv bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-162",
@@ -2913,7 +3132,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-163",
@@ -2931,7 +3151,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-164",
@@ -2949,7 +3170,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-165",
@@ -2967,7 +3189,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-166",
@@ -2985,7 +3208,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-167",
@@ -3003,7 +3227,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-168",
@@ -3021,7 +3246,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-169",
@@ -3039,7 +3265,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-170",
@@ -3057,7 +3284,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-171",
@@ -3069,13 +3297,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/min-min-bag-10000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_2b9d44bfe69b45cc8054388ae43977e5~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_2b9d44bfe69b45cc8054388ae43977e5~mv2.jpg",
     "description": "Min min bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-172",
@@ -3093,7 +3323,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-173",
@@ -3105,13 +3336,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/mini-fan-3850.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_80e864f1cc614d2889c6141f456a97f1~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_80e864f1cc614d2889c6141f456a97f1~mv2.jpg",
     "description": "Mini fan",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-174",
@@ -3129,7 +3362,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-175",
@@ -3147,7 +3381,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-176",
@@ -3159,13 +3394,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/mini-potted-flower.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_20d0ca6d024a4f2b91071e20b4e9772e~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_20d0ca6d024a4f2b91071e20b4e9772e~mv2.jpg",
     "description": "Mini potted flower",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-177",
@@ -3183,7 +3420,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-178",
@@ -3201,7 +3439,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-179",
@@ -3219,7 +3458,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-180",
@@ -3237,7 +3477,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-181",
@@ -3255,7 +3496,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-182",
@@ -3273,7 +3515,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-183",
@@ -3291,7 +3534,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-184",
@@ -3309,7 +3553,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-185",
@@ -3327,7 +3572,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-186",
@@ -3345,7 +3591,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-187",
@@ -3363,7 +3610,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-188",
@@ -3381,7 +3629,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-189",
@@ -3399,7 +3648,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-190",
@@ -3417,7 +3667,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-191",
@@ -3429,13 +3680,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/owambe-turbo-fan.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_21e9f37f5e214d34a32c16125f395b05~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_21e9f37f5e214d34a32c16125f395b05~mv2.jpg",
     "description": "Owambe turbo fan",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-192",
@@ -3447,13 +3700,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/peach-fashion-2-in-1-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_eb83b6e5c4c548a7a509872b5c7eb9a2~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_eb83b6e5c4c548a7a509872b5c7eb9a2~mv2.jpg",
     "description": "Peach fashion 2 in 1 bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-193",
@@ -3471,7 +3726,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-194",
@@ -3489,7 +3745,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-195",
@@ -3507,7 +3764,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-196",
@@ -3519,13 +3777,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/portable-rechargeable-fan.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_4d931574847c46048dafc6a7652f849e~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_4d931574847c46048dafc6a7652f849e~mv2.jpg",
     "description": "Portable rechargeable fan",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-197",
@@ -3537,13 +3797,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/press-on-nail.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_2c46e3f2f6fb4e5bb35c14d2120dc99e~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_2c46e3f2f6fb4e5bb35c14d2120dc99e~mv2.jpg",
     "description": "Press on nail",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-198",
@@ -3561,7 +3823,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-199",
@@ -3579,7 +3842,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-200",
@@ -3597,7 +3861,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-201",
@@ -3615,7 +3880,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-202",
@@ -3633,7 +3899,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-203",
@@ -3651,7 +3918,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-204",
@@ -3663,13 +3931,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/q8-wireless-mircophone-15700.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_61f44229356c405b9679d05989396d6d~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_61f44229356c405b9679d05989396d6d~mv2.jpg",
     "description": "Q8 wireless mircophone",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-205",
@@ -3681,13 +3951,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/quality-shoes.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_b5c21cf8713149ddb9e5657bffe08c42~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_b5c21cf8713149ddb9e5657bffe08c42~mv2.jpg",
     "description": "Quality shoes",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-206",
@@ -3705,7 +3977,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-207",
@@ -3723,7 +3996,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-208",
@@ -3741,7 +4015,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-209",
@@ -3759,7 +4034,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-210",
@@ -3777,7 +4053,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-211",
@@ -3795,7 +4072,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-212",
@@ -3813,7 +4091,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-213",
@@ -3831,7 +4110,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-214",
@@ -3849,7 +4129,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-215",
@@ -3861,13 +4142,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/skull-cap.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_57b504e5809e4cdfa70169041cd1d69e~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_57b504e5809e4cdfa70169041cd1d69e~mv2.jpg",
     "description": "Skull cap",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-216",
@@ -3879,13 +4162,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/skull-cap-1.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_e7ec9f7231c846f7a609a79fab5cd1fc~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_e7ec9f7231c846f7a609a79fab5cd1fc~mv2.jpg",
     "description": "Skull cap 1",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-217",
@@ -3897,13 +4182,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/skull-cap-jerry.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_e477900a3b6f431287447cd6df31be39~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_e477900a3b6f431287447cd6df31be39~mv2.jpg",
     "description": "Skull cap jerry",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-218",
@@ -3921,7 +4208,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-219",
@@ -3939,7 +4227,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-220",
@@ -3957,7 +4246,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-221",
@@ -3975,7 +4265,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-222",
@@ -3993,7 +4284,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-223",
@@ -4011,7 +4303,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-224",
@@ -4029,7 +4322,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-225",
@@ -4047,7 +4341,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-226",
@@ -4059,13 +4354,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/t-frontal-ag-bounce.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_b91b32524fe444b093f2c7d75e1c3148~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_b91b32524fe444b093f2c7d75e1c3148~mv2.jpg",
     "description": "T frontal ag bounce",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-227",
@@ -4083,7 +4380,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-228",
@@ -4101,7 +4399,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-229",
@@ -4119,7 +4418,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-230",
@@ -4137,7 +4437,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-231",
@@ -4155,7 +4456,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-232",
@@ -4173,7 +4475,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-233",
@@ -4185,13 +4488,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/tory-burch-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_9b84dc3b44f34a45a6aa2eabb308f1d5~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_9b84dc3b44f34a45a6aa2eabb308f1d5~mv2.jpg",
     "description": "Tory burch bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-234",
@@ -4209,7 +4514,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-235",
@@ -4227,7 +4533,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-236",
@@ -4239,13 +4546,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/trapezoid-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_bc182e8ac8b54598bc677b790ce12818~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_bc182e8ac8b54598bc677b790ce12818~mv2.jpg",
     "description": "Trapezoid bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-237",
@@ -4263,7 +4572,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-238",
@@ -4281,7 +4591,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-239",
@@ -4299,7 +4610,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-240",
@@ -4311,13 +4623,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/vacuum-phone-holder.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_2e7d2e59c1d74f27b0f2e8296a9b31c6~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_2e7d2e59c1d74f27b0f2e8296a9b31c6~mv2.jpg",
     "description": "Vacuum phone holder",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-241",
@@ -4335,7 +4649,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-242",
@@ -4347,13 +4662,15 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/valentino-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_2dfb121fbb994f238fe8644e8fe42381~mv2.jpg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_2dfb121fbb994f238fe8644e8fe42381~mv2.jpg",
     "description": "Valentino bag",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-243",
@@ -4371,7 +4688,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-244",
@@ -4389,7 +4707,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-245",
@@ -4407,7 +4726,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-246",
@@ -4425,7 +4745,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-247",
@@ -4443,7 +4764,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-248",
@@ -4461,7 +4783,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-249",
@@ -4479,7 +4802,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-250",
@@ -4497,7 +4821,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-251",
@@ -4515,7 +4840,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-252",
@@ -4533,7 +4859,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-253",
@@ -4551,7 +4878,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-254",
@@ -4569,7 +4897,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-255",
@@ -4587,7 +4916,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-256",
@@ -4605,7 +4935,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-257",
@@ -4623,7 +4954,8 @@
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-258",
@@ -4635,12 +4967,14 @@
     "compareCfa": null,
     "priceNgn": 0,
     "compareNgn": null,
-    "image": "images/products/zara-heels.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_c237f7f0729a4b75aee87bc807ef5b9a~mv2.jpeg",
     "imageUrl": "https://static.wixstatic.com/media/0a7193_c237f7f0729a4b75aee87bc807ef5b9a~mv2.jpeg",
     "description": "Zara heels",
     "stock": 0,
     "badge": "",
     "featured": false,
-    "colors": []
+    "colors": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   }
 ]

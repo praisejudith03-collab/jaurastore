@@ -9,14 +9,17 @@
     "compareCfa": null,
     "priceNgn": 10000,
     "compareNgn": null,
-    "image": "images/products/10000-mah-power-bank.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_a1d4bb13ec414197a1e9dd964718e34d~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
     "featured": true,
     "colors": [],
     "nameFr": "10000 mah batterie externe",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_a1d4bb13ec414197a1e9dd964718e34d~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-002",
@@ -28,7 +31,7 @@
     "compareCfa": 6000,
     "priceNgn": 10300,
     "compareNgn": 14700,
-    "image": "images/products/100l-storage-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_820e24382c8a489e8cacc023a55abc56~mv2.jpg",
     "description": "A storage bag for storing clothes and other items",
     "stock": 24,
     "badge": "sale",
@@ -48,7 +51,10 @@
           "3"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_820e24382c8a489e8cacc023a55abc56~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-003",
@@ -67,7 +73,9 @@
     "featured": true,
     "colors": [],
     "nameFr": "10in1 raf appareil à sandwich",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c45d2124d54d4f7f99a179aa5e236b6b~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-004",
@@ -86,7 +94,9 @@
     "featured": true,
     "colors": [],
     "nameFr": "12 pcs dessini coffret de casseroles",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_d399262641ab494387b5fbfeccc6927c~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-005",
@@ -105,7 +115,9 @@
     "featured": true,
     "colors": [],
     "nameFr": "12pcs coffret de pots à épices",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_6d8cf687d2e74439ac343c7f0c3b07f4~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-006",
@@ -117,7 +129,7 @@
     "compareCfa": 7000,
     "priceNgn": 13000,
     "compareNgn": null,
-    "image": "images/products/17-pcs-sealed-crisper-plastics-13000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_9fc610af95404b9cb7d2080579ec59c9~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -133,7 +145,10 @@
           "#A4C6A4"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_9fc610af95404b9cb7d2080579ec59c9~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-007",
@@ -145,14 +160,17 @@
     "compareCfa": 42000,
     "priceNgn": 83300,
     "compareNgn": 102900,
-    "image": "images/products/2-by-6-dd-birthmark.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_0c5bd1dd4e4c4e06857edc86e7266e59~mv2.jpg",
     "description": "Have sdd quality &#010;Human hair 10 inch.",
     "stock": 24,
     "badge": "sale",
     "featured": true,
     "colors": [],
     "nameFr": "2 by 6 dd birthmark",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_0c5bd1dd4e4c4e06857edc86e7266e59~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-008",
@@ -171,7 +189,9 @@
     "featured": true,
     "colors": [],
     "nameFr": "2 en 1 rouge à lèvres gloss",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_9a5f31d527b347a2ade56347e3aadcb1~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-009",
@@ -190,7 +210,9 @@
     "featured": true,
     "colors": [],
     "nameFr": "2 niveaux égouttoir à assiettes",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_6efd77ce5f80491f849e874224428c64~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-010",
@@ -209,7 +231,9 @@
     "featured": true,
     "colors": [],
     "nameFr": "2 marche porte-savon",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7ded5d9407a9427cb762292fb97c3b27~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-011",
@@ -228,7 +252,9 @@
     "featured": true,
     "colors": [],
     "nameFr": "24 k or coffret soin",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c555457f14464da98c3f83d01afbd143~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-012",
@@ -247,7 +273,9 @@
     "featured": true,
     "colors": [],
     "nameFr": "24 k nicotinamide toner 300 ml",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_e69a8963a9524fcbaafed48e2b5538ea~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-013",
@@ -266,7 +294,9 @@
     "featured": true,
     "colors": [],
     "nameFr": "24 pcs de ménagère dorée coffret",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_3e7535b253d5472caa91c875148b3279~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-014",
@@ -285,7 +315,9 @@
     "featured": true,
     "colors": [],
     "nameFr": "2l raf mixer avec bowl",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2d876c04f3db42ca8d20217ec1bd2bbb~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-015",
@@ -315,7 +347,9 @@
           "#800080"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1ed54126a62f4702998c6d94ed41cccc~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-016",
@@ -350,7 +384,9 @@
           "Black"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f998f749e44149f18b7de2f342987926~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-017",
@@ -389,7 +425,9 @@
           "Black"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b6d1a3811ccc4198820ca8c1d9c01905~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-018",
@@ -408,7 +446,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "3 niveau étagère de salle de bain",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_563f227db0ad48edadcfc7582d1d3e9e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-019",
@@ -427,7 +467,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "3 niveaux égouttoir",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_8ed21dcdc1c24c88afc0eb04e6ce21f7~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-020",
@@ -446,7 +488,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "3 marche trolley",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_4a955cfb1ce04a4882a0625eeaf9f069~mv2.png",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-021",
@@ -483,7 +527,9 @@
           "Purple"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1a6ac7ea30a8445bb47828a660fc2dfd~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-022",
@@ -495,14 +541,17 @@
     "compareCfa": 21000,
     "priceNgn": 45325,
     "compareNgn": 51450,
-    "image": "images/products/4-by-4-full-closure-bob.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_82f12a6c802d4948a2623f64c1759bb9~mv2.jpg",
     "description": "Colour NC.&#010;12 inch 100% Human hair.",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "4 by 4 carré full closure",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_82f12a6c802d4948a2623f64c1759bb9~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-023",
@@ -521,7 +570,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "4 partition assiette compartimentée avec bowl",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1cad292e44f8436b839a169448cc3737~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-024",
@@ -549,7 +600,9 @@
           "#E1BCC3"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f778e4df698e46ecb63833e816dabbf3~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-025",
@@ -579,7 +632,9 @@
           "#800080"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_583c70dbf15c4ff5a012eb9143ceb5e1~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-026",
@@ -591,14 +646,17 @@
     "compareCfa": 50000,
     "priceNgn": 78500,
     "compareNgn": null,
-    "image": "images/products/7pcs-aluminum-pot-78500.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_735cca94089c4ae999db2e302bbfac9b~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "7pcs casseroles en aluminium",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_735cca94089c4ae999db2e302bbfac9b~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-027",
@@ -617,7 +675,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "A porte-savon",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_53e72d1de9f44726847a944f7a20165e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-028",
@@ -629,7 +689,7 @@
     "compareCfa": null,
     "priceNgn": 20900,
     "compareNgn": null,
-    "image": "images/products/a58-smartwatch-with-jewelry-set.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_26922947b8e741e6aa56ebfeda46d054~mv2.jpg",
     "description": "A58 smartwatch with jewelry contains:&#010;An A58 Smartwatch,&#010;A wristwatch ,&#010;2 straps ,&#010;A necklace, earring and 2 bracelets ,&#010;A lipstick .",
     "stock": 24,
     "badge": "",
@@ -650,7 +710,10 @@
           "Pink"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_26922947b8e741e6aa56ebfeda46d054~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-029",
@@ -669,7 +732,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Ac design ventilateur",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1af612dbc5de46579869e00545ed873a~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-030",
@@ -688,7 +753,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Acne removal masque visage",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_952c6cc528dd4cb8994f7a0593d5b805~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-031",
@@ -707,7 +774,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Adire jupe longue",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c03353bd34324557bbeda1b3e544ed5c~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-032",
@@ -726,7 +795,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Advanced snail cleanser cosrx",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2f8f9b47c9b14451976dde8ad5ab92fc~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-033",
@@ -745,7 +816,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Advanced snail toner cosrx",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7cb320accb3a4e8a96f8e68a6ca653ce~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-034",
@@ -764,7 +837,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Queue de cheval afro",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_ed08e73c503045548962b744c58b2d6d~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-035",
@@ -799,7 +874,9 @@
           "Silver white"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_3bb654408155493c848d591864d2231b~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-036",
@@ -818,7 +895,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Alstow tondeuse professionnelle",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_907bdf51f2824e95be926d3e8a2aaf2c~mv2.png",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-037",
@@ -830,14 +909,17 @@
     "compareCfa": 8000,
     "priceNgn": 15925,
     "compareNgn": 19600,
-    "image": "images/products/ankara-chic-set.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_7566ed63a25c493ca3d4f3020dd896c5~mv2.jpg",
     "description": "For all body sizes",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Ensemble ankara",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7566ed63a25c493ca3d4f3020dd896c5~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-038",
@@ -849,14 +931,17 @@
     "compareCfa": null,
     "priceNgn": 8600,
     "compareNgn": null,
-    "image": "images/products/ankara-pants-9000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1fa3ab3acfc346a0a3910d14d0ebf388~mv2.jpg",
     "description": "They don’t come with the exact material print",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "Pantalon ankara",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1fa3ab3acfc346a0a3910d14d0ebf388~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-039",
@@ -875,7 +960,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Short ankara",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1f24a30879f34faba9f77cfaa96ba52b~mv2.png",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-040",
@@ -894,7 +981,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Ankara sundresslong gown",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_12787316baa1454293a5f5cf7a3796aa~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-041",
@@ -906,14 +995,17 @@
     "compareCfa": null,
     "priceNgn": 1950,
     "compareNgn": null,
-    "image": "images/products/apple-manicure-set.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_fecffad0878e4838a4d3eebd3161fab5~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "Apple coffret de manucure",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_fecffad0878e4838a4d3eebd3161fab5~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-042",
@@ -932,7 +1024,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Argan huile corps",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_8d9bc0a6e6044149a6b392da00e5f518~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-043",
@@ -951,7 +1045,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Ashake gown",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_79936b46632c4d8aae7220d2aaab2df0~mv2.png",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-044",
@@ -963,7 +1059,7 @@
     "compareCfa": null,
     "priceNgn": 9300,
     "compareNgn": null,
-    "image": "images/products/bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_85befd544beb4a0493d8242340772998~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
@@ -988,7 +1084,10 @@
           "White"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_85befd544beb4a0493d8242340772998~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-045",
@@ -1000,7 +1099,7 @@
     "compareCfa": null,
     "priceNgn": 19150,
     "compareNgn": null,
-    "image": "images/products/bag-c-19150.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_6b8dad38f36f4c03b3496bea39554a9f~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
@@ -1025,7 +1124,10 @@
           "Wine"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_6b8dad38f36f4c03b3496bea39554a9f~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-046",
@@ -1037,14 +1139,17 @@
     "compareCfa": null,
     "priceNgn": 7500,
     "compareNgn": null,
-    "image": "images/products/bag-k-7500.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_3533d4f7233249bf98b236c6d78f1150~mv2.jpg",
     "description": "Available in all colors",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "Sac k",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_3533d4f7233249bf98b236c6d78f1150~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-047",
@@ -1056,7 +1161,7 @@
     "compareCfa": null,
     "priceNgn": 19000,
     "compareNgn": null,
-    "image": "images/products/beach-bag-and-hat.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_98e27bddcd214930a5ab13841237b09b~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
@@ -1079,7 +1184,10 @@
           "Orange"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_98e27bddcd214930a5ab13841237b09b~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-048",
@@ -1098,7 +1206,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Baume barbe",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_9fc77e2ed9c94223a38895339597dfce~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-049",
@@ -1117,7 +1227,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Grand lingettes bébé",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_dc1dd79916704d8c9bd273b216e36f4e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-050",
@@ -1136,7 +1248,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Grand sèche-cheveux coffret",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_0349f7d8380d40a19fb315e30bdc93f7~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-051",
@@ -1155,7 +1269,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Grand professionnel lisseur",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_360019640e0744a19d1b42006a889c2b~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-052",
@@ -1188,7 +1304,9 @@
           "Purple"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b06b6aaba14c4f6c93bb97d31ea75868~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-053",
@@ -1207,7 +1325,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Bioaqua vitamin c brightening essence water",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_33f910a125a54bf790e56e548e9e6ba6~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-054",
@@ -1226,7 +1346,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Bioaqua vitamin c moisturizing cleanser",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b034eac86052460f9251854d2760d776~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-055",
@@ -1238,14 +1360,17 @@
     "compareCfa": null,
     "priceNgn": 17000,
     "compareNgn": null,
-    "image": "images/products/bioaqua-vitamin-c-set.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_f24c8813449b4832a67589a3632f06ce~mv2.jpg",
     "description": "BIOAQUA Vitamin C Moisturizing Beautiful Skin Box, a comprehensive 6-piece skincare kit designed for brightening, hydrating, and improving skin texture. Enriched with Vitamin C, hyaluronic acid, and antioxidants, it targets dullness, uneven skin tone, and early signs of aging like fine lines. &#010;It contains:&#010;ode&#010;All&#010;Exact matches&#010;Visual matches&#010;&#010;&#010;&#010;&#010;19 sites&#010;The image shows the BIOAQUA Vitamin C Moisturizing Beautiful Skin Box, a comprehensive 6-piece skincare kit designed for brightening, hydrating, and improving skin texture. Enriched with Vitamin C, hyaluronic acid, and antioxidants, it targets dullness, uneven skin tone, and early signs of aging like fine lines.&#010;Kit Contents :&#010;1. Vitamin C Cleanser (100g): Deeply cleanses and removes impurities.&#010;2. Vitamin C Toner (120ml): Refreshes and preps the skin for better produ",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "Bioaqua vitamin c coffret",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f24c8813449b4832a67589a3632f06ce~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-056",
@@ -1284,7 +1409,9 @@
           "Black"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2e15a475afbf4a40a269bead13d1b4b9~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-057",
@@ -1303,7 +1430,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Blue idea tondeuse rechargeable",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_d3ae86f79ca24926bcdb8d4c6dbd2b3f~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-058",
@@ -1322,7 +1451,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Tensiomètre",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_e8e9301d537e427d9e21b4e6f188b87f~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-059",
@@ -1341,7 +1472,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Bracelet a",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f04a4fba0b5f4742894ea4c98398c0af~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-060",
@@ -1360,7 +1493,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Bracelet b",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1a57d08e4dff4aaa8a6d3472113b13f8~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-061",
@@ -1379,7 +1514,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Bracelet c",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_4afd8651efac49f1920bc06e90af0c83~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-062",
@@ -1391,14 +1528,17 @@
     "compareCfa": null,
     "priceNgn": 3000,
     "compareNgn": null,
-    "image": "images/products/bracelet-d.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1976cf0057a44c60ab3acadfc4a42925~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "Bracelet d",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1976cf0057a44c60ab3acadfc4a42925~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-063",
@@ -1428,7 +1568,9 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2a725e54929c4a418b5f811b06fc465a~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-064",
@@ -1459,7 +1601,9 @@
           "Vanilla"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_24e8acecfd1f476dbea5d306e58ef98a~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-065",
@@ -1471,14 +1615,17 @@
     "compareCfa": 950,
     "priceNgn": 1225,
     "compareNgn": 2328,
-    "image": "images/products/car-diffuser.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_561b461265404ee8a9583970fa71ebd4~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Diffuseur voiture",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_561b461265404ee8a9583970fa71ebd4~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-066",
@@ -1497,7 +1644,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Ceramic mug",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_77f14f1eccc8422d89ecc6bfdd3c72dd~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-067",
@@ -1516,7 +1665,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Enfants 12lcd tablette d'écriture",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_8b87cc07f736488fa05144bbf5805543~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-068",
@@ -1547,7 +1698,9 @@
           "Silver"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_bc5d68a0a0d54042aadd6f982e24f8c9~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-069",
@@ -1566,7 +1719,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Pinces à linge",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_09da67d2d0f34c50af139179f8741b5b~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-070",
@@ -1585,7 +1740,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Coconut oil deodorant",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_9256ecac7b0b4a04a20b10dfb219c060~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-071",
@@ -1622,7 +1779,9 @@
           "White"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c325064d22334bba85ae47f742792ea1~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-072",
@@ -1641,7 +1800,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Collagen snail serum 30ml",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_682a79b6471e40b6bceb85d51187b8f9~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-073",
@@ -1682,7 +1843,9 @@
           "15"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_633f41aaef084a8193fa26895fe0c3d3~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-074",
@@ -1694,7 +1857,7 @@
     "compareCfa": 16000,
     "priceNgn": 24500,
     "compareNgn": 39200,
-    "image": "images/products/cover-heels.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_5ec1291bbf444fc8a28cdfb8c2fcb4d7~mv2.jpeg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -1730,7 +1893,10 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_5ec1291bbf444fc8a28cdfb8c2fcb4d7~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-075",
@@ -1749,7 +1915,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Dark brown 7 en 1 coffret cadeau pour homme 2",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7394512c7544482689fcf2729c3b59f9~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-076",
@@ -1768,7 +1936,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Deblve unisexe coffret",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_bf48f7947ec4416c8fdd0a9fb56d7df0~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-077",
@@ -1796,7 +1966,9 @@
           "2"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_099955c10f2e4a10a403363789888541~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-078",
@@ -1835,7 +2007,9 @@
           "Red"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_8f10aa3895db4426af7a6dd7327b5ae2~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-079",
@@ -1854,7 +2028,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Dr rashel crème solaire",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_80b1d07da0824b17972a50ce3c723ed2~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-080",
@@ -1873,7 +2049,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Dr rashel vitamin c coffret",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b04573d897e344be9eb956533fdb38ca~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-081",
@@ -1892,7 +2070,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Moulin",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_3a8169f0038a40b998d9861fec13e8cc~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-082",
@@ -1911,7 +2091,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Électrique foot grinder",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_dda4cc6522c84961bbd6bfc2c8b271c3~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-083",
@@ -1930,7 +2112,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Batteur électrique",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c2b9cf1acc414229a702d4f38b71f879~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-084",
@@ -1949,7 +2133,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Électrique fer à vapeur",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2b11bdfe669445afa8740f917fec2824~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-085",
@@ -1968,7 +2154,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Electronic pèse-personne",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_3ca5303132274fa380e9462c4f27bcfb~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-086",
@@ -1987,7 +2175,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Enny grand sac comes avec a scarf",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_85ba0a01a854443084400e30ed23aef7~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-087",
@@ -2006,7 +2196,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Huile essentielle pour humidifier",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_9454f4a0396644a9a805245fa4f60e31~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-088",
@@ -2025,7 +2217,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Exfoliating masque pieds",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_0f028dff4c0f41e4a5d8eeaa4a281393~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-089",
@@ -2037,14 +2231,17 @@
     "compareCfa": null,
     "priceNgn": 18000,
     "compareNgn": null,
-    "image": "images/products/f15-wireless-mic-double-18000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_0499574a1b9047d6aabc9ffe44465302~mv2.jpg",
     "description": "F15 WIRELESS MIC - double &#010;&#010;It is widely used in live streaming,video shooting,content creators ,online tutorials, interviews, etc &#010;It is rechargeable &#010;light weight and convenient &#010;It captures sound and neglect noise&#010;Comes with 2 mic &#010;&#010;Works for both iphone and type c .",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "F15 micro sans fil double",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_0499574a1b9047d6aabc9ffe44465302~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-090",
@@ -2056,14 +2253,17 @@
     "compareCfa": null,
     "priceNgn": 13000,
     "compareNgn": null,
-    "image": "images/products/f15-wireless-mic-single-13000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_54555bc80fd5423c84fc1e7626515994~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "F15 micro sans fil simple",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_54555bc80fd5423c84fc1e7626515994~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-091",
@@ -2091,7 +2291,9 @@
           "10 pcs"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_25db7403f3b24446a63e44212a35b5d4~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-092",
@@ -2110,7 +2312,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Fashion bracelet 5600 1",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b469e0d3a61f4948ae1da79d018ac89e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-093",
@@ -2122,7 +2326,7 @@
     "compareCfa": null,
     "priceNgn": 19000,
     "compareNgn": null,
-    "image": "images/products/fashion-tote-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1d15da40925c443eb438c92eb9132cd9~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
@@ -2143,7 +2347,10 @@
           "White"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1d15da40925c443eb438c92eb9132cd9~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-094",
@@ -2182,7 +2389,9 @@
           "Red"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_5553dd2c4f42456a84fb078a909f3181~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-095",
@@ -2225,7 +2434,9 @@
           "Light blue"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7b13c19716b342fab1c60613bbf39d60~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-096",
@@ -2244,7 +2455,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Fife coffret",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_d3a7ef32330d4a5793c86ff3e566d7b4~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-097",
@@ -2286,7 +2499,9 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_bd8fbe79d0334e1a947c3a7505cfebaa~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-098",
@@ -2298,7 +2513,7 @@
     "compareCfa": null,
     "priceNgn": 23300,
     "compareNgn": null,
-    "image": "images/products/flat-sandals-a-23300.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_f014a75fe3b84fca8e171548620d92d1~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
@@ -2317,7 +2532,10 @@
           "Gold"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f014a75fe3b84fca8e171548620d92d1~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-099",
@@ -2329,14 +2547,17 @@
     "compareCfa": null,
     "priceNgn": 6150,
     "compareNgn": null,
-    "image": "images/products/flower-bouquet-with-light.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_a1b95082f41c4c429dcb1670853a5a39~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "Bouquet de fleurs avec light",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_a1b95082f41c4c429dcb1670853a5a39~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-100",
@@ -2355,7 +2576,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Pot de fleurs 1",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_00d585177a5e47e7bf0e4c1be743a5b0~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-101",
@@ -2383,7 +2606,9 @@
           "2"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_590e04b11cb2486c9a883994ac01727b~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-102",
@@ -2420,7 +2645,9 @@
           "Mint green"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_ec9af8fc24824a57b5224c31151cec08~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-103",
@@ -2453,7 +2680,9 @@
           "Wine"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_e223398f89b84f10aa22020b183e5eb6~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-104",
@@ -2492,7 +2721,9 @@
           "Lilac"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_4f4dd0c15c5144fa8223d25a00416ffe~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-105",
@@ -2529,7 +2760,9 @@
           "Peach"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_58ffd0f43e3f4f7b8df221d95e84dbb0~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-106",
@@ -2541,7 +2774,7 @@
     "compareCfa": 2400,
     "priceNgn": 4410,
     "compareNgn": 5880,
-    "image": "images/products/foldable-water-bottle.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_7aff0633251645ea982cd071d84c009d~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -2568,7 +2801,10 @@
           "Pink/orange"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7aff0633251645ea982cd071d84c009d~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-107",
@@ -2580,14 +2816,17 @@
     "compareCfa": 16500,
     "priceNgn": 33075,
     "compareNgn": 40425,
-    "image": "images/products/fringe-bob.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_3033efa3a23d4e08b24b0361e5481cb9~mv2.jpg",
     "description": "100% human hair.&#010;10 inch.",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Carré à frange",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_3033efa3a23d4e08b24b0361e5481cb9~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-108",
@@ -2599,7 +2838,7 @@
     "compareCfa": null,
     "priceNgn": 3700,
     "compareNgn": null,
-    "image": "images/products/fur-cap.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_3450f80f6780456c87549d2829175b3f~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
@@ -2622,7 +2861,10 @@
           "Brown"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_3450f80f6780456c87549d2829175b3f~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-109",
@@ -2634,7 +2876,7 @@
     "compareCfa": null,
     "priceNgn": 5400,
     "compareNgn": null,
-    "image": "images/products/gift-box-with-rose.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_f8fcda7b5f414ecf830147cb3761a54a~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
@@ -2653,7 +2895,10 @@
           "Peach"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f8fcda7b5f414ecf830147cb3761a54a~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-110",
@@ -2672,7 +2917,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Phosphorescent",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_04fcf2fc0ed44027afcb4db4749eb98e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-111",
@@ -2684,14 +2931,17 @@
     "compareCfa": null,
     "priceNgn": 19000,
     "compareNgn": null,
-    "image": "images/products/gucci-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_360d3da00e9a462c83a199bbff81a5db~mv2.jpg",
     "description": "Comes with a box.",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "Gucci sac",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_360d3da00e9a462c83a199bbff81a5db~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-112",
@@ -2703,14 +2953,17 @@
     "compareCfa": null,
     "priceNgn": 1700,
     "compareNgn": null,
-    "image": "images/products/hair-band-3pcs.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_7c031708478448d7996105c58ba9a4d4~mv2.jpg",
     "description": "Colors randomly selected",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "Bandeau 3pcs",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7c031708478448d7996105c58ba9a4d4~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-113",
@@ -2729,7 +2982,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Brosse à cheveux coffret 4 en 1",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_a4997386bc2743f0931a908159874a80~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-114",
@@ -2758,7 +3013,9 @@
           "#800080"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_84a5508117594b8d8a1f0311c1feb8a7~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-115",
@@ -2770,14 +3027,17 @@
     "compareCfa": 5000,
     "priceNgn": 6100,
     "compareNgn": null,
-    "image": "images/products/hair-dryer.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_dddcd82b27224a7e82fa674edeb5fb7c~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Sèche-cheveux",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_dddcd82b27224a7e82fa674edeb5fb7c~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-116",
@@ -2805,7 +3065,9 @@
           "#800080"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_9c8c5e9206104eb581c5b4c47952d20c~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-117",
@@ -2824,7 +3086,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Crème pour les mains",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_dacad75bb10e4f62a91cb6edabbee6a5~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-118",
@@ -2843,7 +3107,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Crème pour les mains 30g",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_996f6eb95b9f4cd1a4578743c4ba2b74~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-119",
@@ -2862,7 +3128,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Handpat",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_fe322afb2054464580ba8823137f6097~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-120",
@@ -2874,7 +3142,7 @@
     "compareCfa": 10000,
     "priceNgn": 12500,
     "compareNgn": null,
-    "image": "images/products/headphone.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_cc6f34abf9444010a30e167899c21d7d~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -2895,7 +3163,10 @@
           "Mint green"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_cc6f34abf9444010a30e167899c21d7d~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-121",
@@ -2907,7 +3178,7 @@
     "compareCfa": 15500,
     "priceNgn": 27000,
     "compareNgn": null,
-    "image": "images/products/heels.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_3fff16209b304845ad9a960f03fd5fd7~mv2.jpeg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -2926,7 +3197,10 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_3fff16209b304845ad9a960f03fd5fd7~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-122",
@@ -2938,14 +3212,17 @@
     "compareCfa": null,
     "priceNgn": 27000,
     "compareNgn": null,
-    "image": "images/products/heels-27000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1d572b3fc33d483da9be0177c8be1e69~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "Talons",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1d572b3fc33d483da9be0177c8be1e69~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-123",
@@ -2957,7 +3234,7 @@
     "compareCfa": 14500,
     "priceNgn": 24500,
     "compareNgn": null,
-    "image": "images/products/heels-a-1.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_68fba9497d504e81955b4bd1d9669a8c~mv2.jpeg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -2993,7 +3270,10 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_68fba9497d504e81955b4bd1d9669a8c~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-124",
@@ -3005,7 +3285,7 @@
     "compareCfa": 10000,
     "priceNgn": 24500,
     "compareNgn": null,
-    "image": "images/products/heels-b.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_bea4180619da4ec69c7d631fafccb176~mv2.jpeg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -3025,7 +3305,10 @@
           "42"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_bea4180619da4ec69c7d631fafccb176~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-125",
@@ -3037,7 +3320,7 @@
     "compareCfa": 13000,
     "priceNgn": 24500,
     "compareNgn": null,
-    "image": "images/products/heels-c.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_12a6fa75595c4c4a9be4fcabbbd50df8~mv2.jpeg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -3072,7 +3355,10 @@
           "42"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_12a6fa75595c4c4a9be4fcabbbd50df8~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-126",
@@ -3084,7 +3370,7 @@
     "compareCfa": 11000,
     "priceNgn": 20825,
     "compareNgn": 26950,
-    "image": "images/products/heels-d.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_326d9b300cc948508f5a17615e0df8c8~mv2.jpeg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -3120,7 +3406,10 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_326d9b300cc948508f5a17615e0df8c8~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-127",
@@ -3132,7 +3421,7 @@
     "compareCfa": 9500,
     "priceNgn": 20825,
     "compareNgn": 23275,
-    "image": "images/products/heels-e.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_c49de1da07524edcbdb55c0152e92044~mv2.jpeg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -3151,7 +3440,10 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c49de1da07524edcbdb55c0152e92044~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-128",
@@ -3163,7 +3455,7 @@
     "compareCfa": 15000,
     "priceNgn": 23275,
     "compareNgn": 36750,
-    "image": "images/products/heels-f.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_922497c3f9c1459eba2f4ce9c0ac7272~mv2.jpeg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -3182,7 +3474,10 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_922497c3f9c1459eba2f4ce9c0ac7272~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-129",
@@ -3194,7 +3489,7 @@
     "compareCfa": 16000,
     "priceNgn": 24500,
     "compareNgn": 39200,
-    "image": "images/products/heels-g.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_705a8acd24b240e085e16cc1be0dc841~mv2.jpeg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -3228,7 +3523,10 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_705a8acd24b240e085e16cc1be0dc841~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-130",
@@ -3240,7 +3538,7 @@
     "compareCfa": 12000,
     "priceNgn": 22050,
     "compareNgn": 29400,
-    "image": "images/products/heels-h.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_2b5d989e31cb4400bd3f2a298b3b4b0a~mv2.jpeg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -3259,7 +3557,10 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2b5d989e31cb4400bd3f2a298b3b4b0a~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-131",
@@ -3271,7 +3572,7 @@
     "compareCfa": 13000,
     "priceNgn": 24500,
     "compareNgn": null,
-    "image": "images/products/heels-h-1.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_26e324a7bf1a47829087c6a933893aa1~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -3290,7 +3591,10 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_26e324a7bf1a47829087c6a933893aa1~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-132",
@@ -3325,7 +3629,9 @@
           "White"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_cab7101d89e6423a84ba0298faddb5a0~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-133",
@@ -3344,7 +3650,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Peigne chauffant 1",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_cbcdf7798f7e4ccbad27f6bab3e58bd9~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-134",
@@ -3363,7 +3671,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "I18pro téléphone à clapet",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_edee1d68587d4911970916c1b407a57e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-135",
@@ -3396,7 +3706,9 @@
           "Black"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_444975b326e949b18034d600624e3dbb~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-136",
@@ -3429,7 +3741,9 @@
           "Gold"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_6e7d57c6f7184055aea3310e195c2186~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-137",
@@ -3466,7 +3780,9 @@
           "Green"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_3248383071364ff4a145df444f28596b~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-138",
@@ -3497,7 +3813,9 @@
           "Wine"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_07708f96aaad47a6929babe8dfc0bcb2~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-139",
@@ -3516,7 +3834,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Mugs isothermes",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_67adacd1481545cdae7fbf3e5d29741e~mv2.png",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-140",
@@ -3563,7 +3883,9 @@
           "White"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_eb7e42e284354a25bb236d4d3e67d591~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-141",
@@ -3582,7 +3904,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Boîte à bijoux",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_fea2a1b88aae4379b01b164ac3906eec~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-142",
@@ -3601,7 +3925,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "July diffuser",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_00ce81a97b1c4fada7954c0fb83d9351~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-143",
@@ -3613,7 +3939,7 @@
     "compareCfa": null,
     "priceNgn": 9800,
     "compareNgn": null,
-    "image": "images/products/key-chain.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_406f4c8723e942de9af232133a758cbc~mv2.jpg",
     "description": "A dozen (12pcs) is 3000cfa",
     "stock": 24,
     "badge": "",
@@ -3629,7 +3955,10 @@
           "1 pcs"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_406f4c8723e942de9af232133a758cbc~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-144",
@@ -3641,14 +3970,17 @@
     "compareCfa": null,
     "priceNgn": 750,
     "compareNgn": null,
-    "image": "images/products/key-holder-750.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_627bba2351804b63be8061d9bc634b05~mv2.jpg",
     "description": "12- ₦ 7500 / 3200 fcfa",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "Porte-clés",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_627bba2351804b63be8061d9bc634b05~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-145",
@@ -3667,7 +3999,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Essuie-tout",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_922968acf09c4ee6ae051d43ba3a0fd0~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-146",
@@ -3679,7 +4013,7 @@
     "compareCfa": 15000,
     "priceNgn": 24500,
     "compareNgn": null,
-    "image": "images/products/kitten-heels.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_dfdd7442ef35423a8727c41c70352bdb~mv2.jpg",
     "description": "Quality and Comfortable for day to day activities",
     "stock": 24,
     "badge": "sale",
@@ -3716,7 +4050,10 @@
           "Dark brown"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_dfdd7442ef35423a8727c41c70352bdb~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-147",
@@ -3735,7 +4072,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Knuckles ring a",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_15823730a1bb46e2bb2db73c4252e083~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-148",
@@ -3747,14 +4086,17 @@
     "compareCfa": null,
     "priceNgn": 3700,
     "compareNgn": null,
-    "image": "images/products/knuckles-ring-b.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_240177449d7f4f288069c118fc548a1f~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
     "featured": false,
     "colors": [],
     "nameFr": "Knuckles ring b",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_240177449d7f4f288069c118fc548a1f~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-149",
@@ -3766,14 +4108,17 @@
     "compareCfa": 15000,
     "priceNgn": 22000,
     "compareNgn": null,
-    "image": "images/products/l16-tripod.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1c2491fb164d421e9daea254b824f1d1~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "L16 tripod",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1c2491fb164d421e9daea254b824f1d1~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-150",
@@ -3785,7 +4130,7 @@
     "compareCfa": 7000,
     "priceNgn": 19000,
     "compareNgn": null,
-    "image": "images/products/lacoste-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_f7fc16cc0bd34c8694e2babf2ced5758~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -3804,7 +4149,10 @@
           "Light blue"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f7fc16cc0bd34c8694e2babf2ced5758~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-151",
@@ -3816,7 +4164,7 @@
     "compareCfa": 6000,
     "priceNgn": 19000,
     "compareNgn": null,
-    "image": "images/products/laptop-school-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_c643f486ee3147af934c2e8b2ddc5b9a~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -3835,7 +4183,10 @@
           "Blue"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c643f486ee3147af934c2e8b2ddc5b9a~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-152",
@@ -3847,14 +4198,17 @@
     "compareCfa": 10000,
     "priceNgn": 19000,
     "compareNgn": null,
-    "image": "images/products/leather-crocs-bag-19000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_7a99ae464bdb4f97b700a0e50633704b~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Leather crocs sac",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7a99ae464bdb4f97b700a0e50633704b~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-153",
@@ -3866,14 +4220,17 @@
     "compareCfa": 5000,
     "priceNgn": 7350,
     "compareNgn": null,
-    "image": "images/products/led-cube-light.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_7625aa45c9df48689d40b6d1047c6dcf~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Cube lumineux LED",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7625aa45c9df48689d40b6d1047c6dcf~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-154",
@@ -3892,7 +4249,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Gel lèvres",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2f02ea9933ca45ecbbece08df738ac63~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-155",
@@ -3904,14 +4263,17 @@
     "compareCfa": 1300,
     "priceNgn": 2200,
     "compareNgn": null,
-    "image": "images/products/lip-gloss-c.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_391ad9022fc243e3a36913fbe535a4e1~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Gloss c",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_391ad9022fc243e3a36913fbe535a4e1~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-156",
@@ -3923,14 +4285,17 @@
     "compareCfa": 1200,
     "priceNgn": 2205,
     "compareNgn": 2940,
-    "image": "images/products/lip-gloss-g.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_4c46c9a6518b4e6697ab228a40466c13~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Gloss g",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_4c46c9a6518b4e6697ab228a40466c13~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-157",
@@ -3942,14 +4307,17 @@
     "compareCfa": 1500,
     "priceNgn": 2450,
     "compareNgn": null,
-    "image": "images/products/lip-scrub.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_3013adb0c3c1408da68c5ac8b7e02aa0~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Gommage lèvres",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_3013adb0c3c1408da68c5ac8b7e02aa0~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-158",
@@ -3961,14 +4329,17 @@
     "compareCfa": 1200,
     "priceNgn": 2205,
     "compareNgn": 2940,
-    "image": "images/products/lipgloss-f.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_0d9f5b49dd6341dc84d52b988ae553ae~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Gloss f",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_0d9f5b49dd6341dc84d52b988ae553ae~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-159",
@@ -3980,7 +4351,7 @@
     "compareCfa": 4000,
     "priceNgn": 5650,
     "compareNgn": null,
-    "image": "images/products/love-decor-with-light.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_beeb6b6acd4746bdbfadab6eb1e8204f~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -4003,7 +4374,10 @@
           "Red"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_beeb6b6acd4746bdbfadab6eb1e8204f~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-160",
@@ -4015,7 +4389,7 @@
     "compareCfa": null,
     "priceNgn": 20000,
     "compareNgn": null,
-    "image": "images/products/luki-2-in-1-bag-20000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_5d1eb2511b0c44c3938726593be7eecc~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
@@ -4044,7 +4418,10 @@
           "Peach"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_5d1eb2511b0c44c3938726593be7eecc~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-161",
@@ -4056,7 +4433,7 @@
     "compareCfa": 10000,
     "priceNgn": 19000,
     "compareNgn": null,
-    "image": "images/products/lv-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_1a7e9684769d434cb07253dffe6e6f54~mv2.jpg",
     "description": "Comes in a box.",
     "stock": 24,
     "badge": "sale",
@@ -4079,7 +4456,10 @@
           "White"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1a7e9684769d434cb07253dffe6e6f54~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-162",
@@ -4098,7 +4478,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "M10 earpod",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_da83e3230ca74f0893018bd18220e11e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-163",
@@ -4126,7 +4508,9 @@
           "#E1BCC3"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_758e22991fee4c8d9683756c17dd8b82~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-164",
@@ -4145,7 +4529,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Coffret de manucure",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_0d9976978727428f9007ec9a14a1a702~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-165",
@@ -4164,7 +4550,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Marble table basse",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_202619267a244efa8762460b41b93aca~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-166",
@@ -4183,7 +4571,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Marble twin table basse 100000",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_65e22b25930642f48b6dcf8ac6e794ec~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-167",
@@ -4202,7 +4592,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Matturi wristwatch",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c8f1aff9ef1540a193af0a37e7b52d49~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-168",
@@ -4233,7 +4625,9 @@
           "Brown"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2b143b20f41244219853716e747136e0~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-169",
@@ -4264,7 +4658,9 @@
           "Black"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_8458f6c1d3e74b799752f02fbfaabc49~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-170",
@@ -4283,7 +4679,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Ceinture menstruelle",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_49c2c1fd4c6a4b32bbd0ef6cb84a5fa7~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-171",
@@ -4295,7 +4693,7 @@
     "compareCfa": null,
     "priceNgn": 10000,
     "compareNgn": null,
-    "image": "images/products/min-min-bag-10000.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_2b9d44bfe69b45cc8054388ae43977e5~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "",
@@ -4314,7 +4712,10 @@
           "Dark brown"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2b9d44bfe69b45cc8054388ae43977e5~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-172",
@@ -4333,7 +4734,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Mini diffuseur",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_65f213fa8e6b4d3fb6c6ff63c7cfebc6~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-173",
@@ -4345,14 +4748,17 @@
     "compareCfa": 3000,
     "priceNgn": 3850,
     "compareNgn": null,
-    "image": "images/products/mini-fan-3850.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_80e864f1cc614d2889c6141f456a97f1~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Mini ventilateur",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_80e864f1cc614d2889c6141f456a97f1~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-174",
@@ -4371,7 +4777,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Mini influencer light",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_50aef4354137472394ef9f5e5159c0c8~mv2.png",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-175",
@@ -4390,7 +4798,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Mini miroir",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f32861a624ae44ec9e9ba7447b4720a4~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-176",
@@ -4402,14 +4812,17 @@
     "compareCfa": 1200,
     "priceNgn": 1593,
     "compareNgn": 2940,
-    "image": "images/products/mini-potted-flower.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_20d0ca6d024a4f2b91071e20b4e9772e~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Mini plante en pot",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_20d0ca6d024a4f2b91071e20b4e9772e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-177",
@@ -4428,7 +4841,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Mini q light",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b3ed8a35376b47c6844e06d2d7a438c5~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-178",
@@ -4447,7 +4862,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Serpillière",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f27f322d658146a58bcdcc1503048c9c~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-179",
@@ -4466,7 +4883,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Spray buccal",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_4e0cdfce29494897b72f8e5d63b20e12~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-180",
@@ -4485,7 +4904,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Multi light décoration",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_abcdc559543e4fe38a3d233206f1f3ef~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-181",
@@ -4504,7 +4925,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Naidu pearl montre",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_da3165a22bfb43ecb526816f35af3b2c~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-182",
@@ -4523,7 +4946,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Collier 1",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_5f8fab4aa5414f13b6812e954eadf2de~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-183",
@@ -4542,7 +4967,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Collier 2",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_d305001594874a9f979a9269a95794af~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-184",
@@ -4561,7 +4988,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Collier 3",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7f8a89e898eb4d66bee62efa4de6c12d~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-185",
@@ -4580,7 +5009,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Collier 4",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b82864829482468fadaf8cbaae951098~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-186",
@@ -4599,7 +5030,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Collier 4 1",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b82864829482468fadaf8cbaae951098~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-187",
@@ -4618,7 +5051,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Collier 4 2",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b82864829482468fadaf8cbaae951098~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-188",
@@ -4646,7 +5081,9 @@
           "Silver"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_19c08a6a0fd44a69a584cc4a12d11f19~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-189",
@@ -4665,7 +5102,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Niacinamide 5 serum",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_aa88360995824d8cb9cef57b1fb06695~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-190",
@@ -4684,7 +5123,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Order me light",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_22abd780a9a2479da29c07ad51b0fb6f~mv2.png",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-191",
@@ -4696,7 +5137,7 @@
     "compareCfa": 10000,
     "priceNgn": 14000,
     "compareNgn": null,
-    "image": "images/products/owambe-turbo-fan.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_21e9f37f5e214d34a32c16125f395b05~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -4712,7 +5153,10 @@
           "Silver"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_21e9f37f5e214d34a32c16125f395b05~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-192",
@@ -4724,7 +5168,7 @@
     "compareCfa": 10000,
     "priceNgn": 18400,
     "compareNgn": null,
-    "image": "images/products/peach-fashion-2-in-1-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_eb83b6e5c4c548a7a509872b5c7eb9a2~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -4751,7 +5195,10 @@
           "Beige"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_eb83b6e5c4c548a7a509872b5c7eb9a2~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-193",
@@ -4781,7 +5228,9 @@
           "XL"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c7998c581fc644ca9b253d57f3525e48~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-194",
@@ -4800,7 +5249,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Po1 auto face tracking trépied selfie",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_48ceb3512f7f421aafa06b2096ebb47a~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-195",
@@ -4841,7 +5292,9 @@
           "7"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_40a2f423fb8c4c1ba3cfb9aa1c833d37~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-196",
@@ -4853,14 +5306,17 @@
     "compareCfa": 8000,
     "priceNgn": 14700,
     "compareNgn": 19600,
-    "image": "images/products/portable-rechargeable-fan.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_4d931574847c46048dafc6a7652f849e~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Ventilateur rechargeable",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_4d931574847c46048dafc6a7652f849e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-197",
@@ -4872,14 +5328,17 @@
     "compareCfa": 1500,
     "priceNgn": 2950,
     "compareNgn": null,
-    "image": "images/products/press-on-nail.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_2c46e3f2f6fb4e5bb35c14d2120dc99e~mv2.jpg",
     "description": "24 PCs of press on nail with a glue",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Faux ongles",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2c46e3f2f6fb4e5bb35c14d2120dc99e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-198",
@@ -4898,7 +5357,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Faux ongles 1",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1140c41d460b4c14bff5d387529a6acd~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-199",
@@ -4917,7 +5378,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Faux ongles 2",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_e73391f645f14a28ba6c1fccfb043470~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-200",
@@ -4936,7 +5399,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Faux ongles c",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_5d85d02bd69d433c88912f1ae7cd904c~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-201",
@@ -4955,7 +5420,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Faux ongles d",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c5417b2be3a747bf9a8f7361188fd49c~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-202",
@@ -4974,7 +5441,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Faux ongles e",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7254e292ff1d41358497f51f31ccec63~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-203",
@@ -4993,7 +5462,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Q13 ai smart trépied suiveur avec light",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7be8f8570cec4f23a3d33be86af9e6a9~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-204",
@@ -5005,14 +5476,17 @@
     "compareCfa": 15000,
     "priceNgn": 15700,
     "compareNgn": null,
-    "image": "images/products/q8-wireless-mircophone-15700.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_61f44229356c405b9679d05989396d6d~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Q8 sans fil mircophone",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_61f44229356c405b9679d05989396d6d~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-205",
@@ -5024,7 +5498,7 @@
     "compareCfa": 15000,
     "priceNgn": 22100,
     "compareNgn": null,
-    "image": "images/products/quality-shoes.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_b5c21cf8713149ddb9e5657bffe08c42~mv2.jpg",
     "description": "Latest heels for your glam",
     "stock": 24,
     "badge": "sale",
@@ -5044,7 +5518,10 @@
           "42"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b5c21cf8713149ddb9e5657bffe08c42~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-206",
@@ -5079,7 +5556,9 @@
           "Silver black"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b04dbe1883c6480ca3a8d137e1399980~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-207",
@@ -5098,7 +5577,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Rabbit support téléphone",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_01f2b4edf39546d48c6d8cc2c3688338~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-208",
@@ -5133,7 +5614,9 @@
           "Green"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_6668cda5b82f41e4a1b0e966bb991bd5~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-209",
@@ -5170,7 +5653,9 @@
           "White"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_e66503cbef664c549fa032add837e5a0~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-210",
@@ -5207,7 +5692,9 @@
           "Pink"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2cb88169a36c470e879300d19baec190~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-211",
@@ -5226,7 +5713,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Perche à selfie",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_801adc5bff204980b9bcd738cbfb2248~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-212",
@@ -5245,7 +5734,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Lingettes chaussures",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_4e0e8b7198414a85a35561d5f7a5039d~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-213",
@@ -5264,7 +5755,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Silicone spoon 12 en 1 coffret",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_fbdc7d1bb35a4d92950076a7db2caeca~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-214",
@@ -5283,7 +5776,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Simple hexagon étagère murale",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_dffdc21dbdca4f0e9e71277dad6bb749~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-215",
@@ -5295,14 +5790,17 @@
     "compareCfa": 8500,
     "priceNgn": 16660,
     "compareNgn": 20825,
-    "image": "images/products/skull-cap.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_57b504e5809e4cdfa70169041cd1d69e~mv2.jpg",
     "description": "Skull cap 100% human hair.\nColour 1b.",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Bonnet skull",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_57b504e5809e4cdfa70169041cd1d69e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-216",
@@ -5314,14 +5812,17 @@
     "compareCfa": 11000,
     "priceNgn": 19600,
     "compareNgn": 26950,
-    "image": "images/products/skull-cap-1.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_e7ec9f7231c846f7a609a79fab5cd1fc~mv2.jpg",
     "description": "Color: 350.\n100% Human hair",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Bonnet skull 1",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_e7ec9f7231c846f7a609a79fab5cd1fc~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-217",
@@ -5333,14 +5834,17 @@
     "compareCfa": 10500,
     "priceNgn": 19600,
     "compareNgn": 25725,
-    "image": "images/products/skull-cap-jerry.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_e477900a3b6f431287447cd6df31be39~mv2.jpg",
     "description": "100% human hair.",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Bonnet skull jerry",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_e477900a3b6f431287447cd6df31be39~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-218",
@@ -5387,7 +5891,9 @@
           "Nude"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b0624878a3054c14a45cfcd1bfd7c3eb~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-219",
@@ -5406,7 +5912,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Petit pliable machine à laver",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7a215211e7e846fea2b26bba99e71942~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-220",
@@ -5425,7 +5933,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Petit bougies parfumées",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_738d3bf9b50b4517aa5e000cec2b3041~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-221",
@@ -5458,7 +5968,9 @@
           "White"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_5aea8b34dac141d4960f83d1bfd1cb1b~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-222",
@@ -5477,7 +5989,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Smoothing solution hair removal chair",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_870be757835941ccb5cceaae2b9ce74e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-223",
@@ -5512,7 +6026,9 @@
           "Blue"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_4ebbae8dc931457ebe42599fdb088b82~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-224",
@@ -5531,7 +6047,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Stanley cup",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_8985a8eaba4e4e38a92d25a08e901aae~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-225",
@@ -5563,7 +6081,9 @@
           "6"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_6d46e5fb77b24b60a5184678cdd3dd7d~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-226",
@@ -5575,14 +6095,17 @@
     "compareCfa": 18800,
     "priceNgn": 35525,
     "compareNgn": 46060,
-    "image": "images/products/t-frontal-ag-bounce.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_b91b32524fe444b093f2c7d75e1c3148~mv2.jpg",
     "description": "Low grade Human hair.",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "T frontal ag bounce",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b91b32524fe444b093f2c7d75e1c3148~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-227",
@@ -5601,7 +6124,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Cactus parlant",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_b43d62960cab46bb90d363b757cd849c~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-228",
@@ -5632,7 +6157,9 @@
           "White"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_3c31485cca3b4a4d80e7e5410bd817ef~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-229",
@@ -5651,7 +6178,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Sticker merci 2",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_cdb70552b4b747e6a0af49d489daeb39~mv2.png",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-230",
@@ -5670,7 +6199,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Toilet fragrance",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f46c31462fd44fb5b10d10b013039aba~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-231",
@@ -5689,7 +6220,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Tomi montre 02",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_cd543e09fe794fd89771524ff8501e37~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-232",
@@ -5718,7 +6251,9 @@
           "4"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c7121dfad2b5417b9873bfd9c9c4e191~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-233",
@@ -5730,7 +6265,7 @@
     "compareCfa": 8000,
     "priceNgn": 19000,
     "compareNgn": null,
-    "image": "images/products/tory-burch-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_9b84dc3b44f34a45a6aa2eabb308f1d5~mv2.jpg",
     "description": "Comes in a box .",
     "stock": 24,
     "badge": "sale",
@@ -5751,7 +6286,10 @@
           "Black"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_9b84dc3b44f34a45a6aa2eabb308f1d5~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-234",
@@ -5770,7 +6308,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Cabas a 1",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_956559e953b64e5fa9d53fefddc797a8~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-235",
@@ -5801,7 +6341,9 @@
           "Black"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_88504fd9322447ada94c75ec8f21e701~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-236",
@@ -5813,7 +6355,7 @@
     "compareCfa": 8000,
     "priceNgn": 14700,
     "compareNgn": null,
-    "image": "images/products/trapezoid-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_bc182e8ac8b54598bc677b790ce12818~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -5834,7 +6376,10 @@
           "Dark brown"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_bc182e8ac8b54598bc677b790ce12818~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-237",
@@ -5853,7 +6398,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Tumeric masque peel-off",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f684bed5296242229e3456274959637d~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-238",
@@ -5872,7 +6419,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Two piece blanc top avec ankara trousers",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_15deb1fb50244a6c896a407450e2c9f8~mv2.png",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-239",
@@ -5891,7 +6440,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Cintre lingerie",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_f41980634f5644a19413060c3708ac1c~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-240",
@@ -5903,14 +6454,17 @@
     "compareCfa": 2500,
     "priceNgn": 4900,
     "compareNgn": null,
-    "image": "images/products/vacuum-phone-holder.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_2e7d2e59c1d74f27b0f2e8296a9b31c6~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
     "featured": false,
     "colors": [],
     "nameFr": "Vacuum support téléphone",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2e7d2e59c1d74f27b0f2e8296a9b31c6~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-241",
@@ -5929,7 +6483,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Vacuum support téléphone",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_cced58c6e401445ea754273664ba8be1~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-242",
@@ -5941,7 +6497,7 @@
     "compareCfa": 7500,
     "priceNgn": 19000,
     "compareNgn": null,
-    "image": "images/products/valentino-bag.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_2dfb121fbb994f238fe8644e8fe42381~mv2.jpg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -5968,7 +6524,10 @@
           "Red"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2dfb121fbb994f238fe8644e8fe42381~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   },
   {
     "id": "wix-243",
@@ -6003,7 +6562,9 @@
           "9"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_cd22187edc0d40bab32b4d3a4340d320~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-244",
@@ -6022,7 +6583,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Épluche-légumes",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_65df1ef4bc974b448ee4012a48c7d4a7~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-245",
@@ -6041,7 +6604,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Coupe-légumes",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_6d53fb2560214661a2b587b0f736bf0e~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-246",
@@ -6080,7 +6645,9 @@
           "Nude"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c9bc89c99f0848c7af36f24c0cb9ffdc~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-247",
@@ -6099,7 +6666,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Kit vidéo",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_6c5f792c899b4d9d810c857441cd6351~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-248",
@@ -6118,7 +6687,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Vogue frame",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_7ada51874c66405fa4ee31170dd5a881~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-249",
@@ -6155,7 +6726,9 @@
           "Red"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_1eda457d2bac4a03b574a5c8828dccb4~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-250",
@@ -6174,7 +6747,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Crochet ventouse",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_92fc90ad90844e5ebf6a267c52e35615~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-251",
@@ -6193,7 +6768,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Blanc coffret cadeau",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_eef5429171f04b199c7d6d36fd3ffac6~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-252",
@@ -6212,7 +6789,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Wipes 5 packs",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_db4cd825f156457696e1a738b94d74a3~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-253",
@@ -6231,7 +6810,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Enceinte résonante",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_9f0a01a3bbc44cb8a3bba2eaa5809d57~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-254",
@@ -6250,7 +6831,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Cintre en bois",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_9a663c5c8d0a4239a71154d4a5dfdcab~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-255",
@@ -6287,7 +6870,9 @@
           "Nude"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_efe13450188a40028d1bf80510d69148~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-256",
@@ -6306,7 +6891,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Wrist tensiomètre",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_d9bf83a698ab43e1923423361e07f68c~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-257",
@@ -6325,7 +6912,9 @@
     "featured": false,
     "colors": [],
     "nameFr": "Montre box",
-    "options": []
+    "options": [],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_2b334ba02c9d45c1b230c600f4960837~mv2.jpg",
+    "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
     "id": "wix-258",
@@ -6337,7 +6926,7 @@
     "compareCfa": 16000,
     "priceNgn": 25725,
     "compareNgn": 39200,
-    "image": "images/products/zara-heels.jpg",
+    "image": "https://static.wixstatic.com/media/0a7193_c237f7f0729a4b75aee87bc807ef5b9a~mv2.jpeg",
     "description": "",
     "stock": 24,
     "badge": "sale",
@@ -6356,6 +6945,9 @@
           "41"
         ]
       }
-    ]
+    ],
+    "imageUrl": "https://static.wixstatic.com/media/0a7193_c237f7f0729a4b75aee87bc807ef5b9a~mv2.jpeg",
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesRemoteImage": true
   }
 ]

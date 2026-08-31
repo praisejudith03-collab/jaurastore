@@ -73,18 +73,42 @@ def main():
     merged = _load_seed()
     merged.update(_load_overrides())
 
+    # Reconcile every product's image against the repository so the Supabase
+    # rows link to a path the browser can actually show: a committed repo
+    # image (images/products/x.jpg) when it exists, else the original Wix CDN
+    # photo (the real product picture), with the branded placeholder as the
+    # offline fallback. See catalog.resolve_image().
+    import catalog as catalog_mod
+    merged = {pid: catalog_mod.resolve_image(p) for pid, p in merged.items()}
+
     rows = []
     now = _now()
     for pid, p in merged.items():
-        row = dict(p)
-        row.setdefault("id", pid)
-        row.setdefault("source", "admin" if pid in _load_overrides() else "seed")
-        row.setdefault("stock", 0)
-        row.setdefault("priceNgn", 0)
-        row.setdefault("priceCfa", 0)
-        row.setdefault("featured", False)
-        row.setdefault("online", True)
-        row["updated_at"] = now
+        # Keep Supabase rows to the same fields the storefront reads.
+        row = {
+            "id": pid,
+            "sku": p.get("sku", ""),
+            "slug": p.get("slug", ""),
+            "name": p.get("name", ""),
+            "nameFr": p.get("nameFr", ""),
+            "category": p.get("category", ""),
+            "priceCfa": p.get("priceCfa", 0),
+            "compareCfa": p.get("compareCfa", None),
+            "priceNgn": p.get("priceNgn", 0),
+            "compareNgn": p.get("compareNgn", None),
+            "image": p.get("image", ""),
+            "imageUrl": p.get("imageUrl", ""),
+            "placeholderImage": p.get("placeholderImage", ""),
+            "description": p.get("description", ""),
+            "stock": p.get("stock", 0),
+            "badge": p.get("badge", ""),
+            "featured": bool(p.get("featured", False)),
+            "online": p.get("online", True) is not False,
+            "colors": p.get("colors", []),
+            "options": p.get("options", []),
+            "source": "admin" if pid in _load_overrides() else "seed",
+            "updated_at": now,
+        }
         rows.append(row)
 
     if rows:
