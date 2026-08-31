@@ -116,7 +116,17 @@ def resolve_image(product):
     if _is_local(img) and _file_exists(img):
         p["image"] = img
         p["placeholderImage"] = PLACEHOLDER_IMG
+        p.pop("usesPlaceholder", None)
         return p
+    # A matching committed photo (same slug / alt-<slug>) also wins. This is
+    # the auto-wire that makes the owner's collected root photos appear on
+    # their products without manually editing every product.
+    for candidate in photo_repair_candidates(p):
+        if _file_exists(candidate):
+            p["image"] = candidate
+            p["placeholderImage"] = PLACEHOLDER_IMG
+            p.pop("usesPlaceholder", None)
+            return p
     # No usable local file: show the committed branded placeholder.
     p["image"] = PLACEHOLDER_IMG
     p["placeholderImage"] = PLACEHOLDER_IMG
@@ -127,6 +137,73 @@ def resolve_image(product):
 def _is_local(path):
     """True for a repo-relative asset path (not external / root-relative)."""
     return bool(path) and not path.startswith(("http://", "https://", "/", "data:", "blob:"))
+
+
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+
+
+def _image_stem(path):
+    """The filename's stem, e.g. ``smartwatch-with-game-pad.jpg`` -> ``...``."""
+    base = os.path.basename(str(path or ""))
+    lower = base.lower()
+    for ext in _IMAGE_EXTS:
+        if lower.endswith(ext):
+            return base[: -len(ext)]
+    return os.path.splitext(base)[0]
+
+
+def _candidate_score(slug, stem):
+    """A simple similarity used to wire committed photos to products.
+
+    Prefers identical slug/basename matches, then alt-<slug> copies (kept when
+    a root photo had the same name but different bytes), then stem/slug
+    containment. Returns -1 when the two are not related enough to trust.
+    """
+    slug = (slug or "").lower()
+    stem = (stem or "").lower()
+    if not slug or not stem:
+        return -1
+    if slug == stem:
+        return 120
+    if stem.startswith("alt-") and slug == stem[4:]:
+        return 110
+    if stem in slug or slug in stem:
+        # short containment would match tiny fragments (e.g. "bag" in "battery")
+        shorter, longer = (stem, slug) if len(stem) <= len(slug) else (slug, stem)
+        if len(shorter) >= 4:
+            return 100 - abs(len(slug) - len(stem))
+    return -1
+
+
+def photo_repair_candidates(product):
+    """Committed photos that could belong to a product.
+
+    Returns repo-relative ``images/products/...`` paths whose filename relates
+    to the product slug (or its ``alt-`` duplicate copy). Used by
+    :func:`resolve_image` so owner photos uploaded loose at the repo root and
+    collected by ``collect_uploaded_photos.py`` automatically appear on the
+    matching products.
+    """
+    p = dict(product or {})
+    slug = (p.get("slug") or _slugify(p.get("name") or "")).strip().lower()
+    if not slug:
+        return []
+    folder = os.path.join(ROOT, "images", "products")
+    try:
+        names = [n for n in os.listdir(folder) if n.lower().endswith(_IMAGE_EXTS)]
+    except OSError:
+        return []
+    scored = []
+    for name in names:
+        stem = _image_stem(name)
+        score = _candidate_score(slug, stem)
+        if score < 0:
+            continue
+        rel = os.path.join("images", "products", name)
+        scored.append((score, len(name), rel))
+    # Highest score first, shortest name first for ties.
+    scored.sort(key=lambda t: (-t[0], t[1], t[2]))
+    return [rel for _s, _n, rel in scored]
 
 
 def resolve_images(products):
