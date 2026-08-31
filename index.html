@@ -29,22 +29,21 @@
 <body data-page="home">
   <div id="site-header"></div>
 
-  <section class="hero-slim">
-    <div class="wrap">
-      <p class="kicker" data-i18n="home.kicker">Experience effortless elegance</p>
-      <h1 data-i18n="home.heroLine">Experience effortless elegance and curated essentials</h1>
-      <a class="btn" href="shop.html" data-i18n="home.shopNow">Shop now</a>
-    </div>
-  </section>
-
-  <section class="lux-reel">
-    <div class="lux-reel-frame">
-      <video autoplay muted loop playsinline webkit-playsinline preload="auto" poster="images/brand/lux-reel.jpg">
-        <source src="images/brand/lux-reel.mp4" type="video/mp4" />
-      </video>
-      <div class="lux-reel-copy">
-        <h2 data-i18n="home.standard">The new standard of modern luxury</h2>
-        <a class="btn lux-explore" href="shop.html?cat=household" data-i18n="home.explore">Explore</a>
+  <section class="home-hero-video">
+    <video class="home-hero-video__media" autoplay muted loop playsinline webkit-playsinline preload="auto"
+           poster="images/brand/lux-reel.jpg" aria-label="Jaura Store background video">
+      <source src="images/brand/lux-reel.mp4" type="video/mp4" />
+    </video>
+    <div class="home-hero-video__shade"></div>
+    <div class="home-hero-video__overlay">
+      <div class="wrap">
+        <p class="kicker" data-i18n="home.kicker">Experience effortless elegance</p>
+        <h1 data-i18n="home.heroLine">Experience effortless elegance and curated essentials</h1>
+        <p class="home-hero-video__sub" data-i18n="home.standard">The new standard of modern luxury</p>
+        <div class="home-hero-video__cta">
+          <a class="btn" href="shop.html" data-i18n="home.shopNow">Shop now</a>
+          <a class="btn btn-ghost" href="shop.html?cat=household" data-i18n="home.explore">Explore</a>
+        </div>
       </div>
     </div>
   </section>

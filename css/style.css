@@ -2238,6 +2238,74 @@ body.menu-open { overflow: hidden; }
   object-fit: cover;
   display: block;
 }
+
+/* Homepage hero: full-bleed background video (same asset as the Wix
+   "New standard of modern luxury" band). Autoplay + muted + loop, with a
+   dark shade and the hero copy layered on top. Serving it locally keeps it
+   under the site CSP's media-src 'self'. */
+.home-hero-video {
+  position: relative;
+  min-height: min(84vh, 620px);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #1a1410;
+}
+.home-hero-video__media {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+  filter: brightness(0.62);
+}
+.home-hero-video__shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(20,16,12,.30) 0%, rgba(20,16,12,.18) 40%, rgba(20,16,12,.55) 100%);
+  pointer-events: none;
+}
+.home-hero-video__overlay {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  text-align: center;
+  color: var(--ivory);
+  padding: 72px 20px;
+}
+.home-hero-video__overlay .kicker {
+  color: var(--champagne);
+  margin-bottom: 14px;
+}
+.home-hero-video__overlay h1 {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: clamp(38px, 6.8vw, 84px);
+  line-height: 0.98;
+  letter-spacing: -0.02em;
+  max-width: 900px;
+  margin: 0 auto 16px;
+}
+.home-hero-video__sub {
+  margin: 0 auto 26px;
+  max-width: 520px;
+  font-size: 16px;
+  letter-spacing: 0.06em;
+  color: rgba(247, 243, 236, 0.86);
+}
+.home-hero-video__cta {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+@media (max-width: 800px) {
+  .home-hero-video { min-height: min(66vh, 440px); }
+  .home-hero-video__overlay { padding: 44px 16px; }
+  .home-hero-video__overlay h1 { font-size: clamp(30px, 8vw, 44px); }
+}
 .lux-reel-copy {
   position: absolute;
   inset: 0;
@@ -3120,6 +3188,7 @@ html, body, body.wix-shop { background: #e8d5c0 !important; }
 html, body, body.wix-shop { background: #f4efe9 !important; }
 
 body[data-page="home"] .hero-slim,
+body[data-page="home"] .home-hero-video,
 body[data-page="home"] .section-tight,
 body[data-page="home"] .lux-reel,
 body[data-page="home"] .how-bar,
@@ -4101,6 +4170,7 @@ body[data-page="home"] { padding-bottom: 78px !important; }
 body[data-page="admin"] .dock { display: none !important; }
 .site-waves { z-index: 0 !important; pointer-events: none !important; }
 body[data-page="home"] .hero-slim,
+body[data-page="home"] .home-hero-video,
 body[data-page="home"] .lux-reel,
 body[data-page="home"] .section-tight,
 body[data-page="home"] .how-bar {
