@@ -109,7 +109,8 @@ window.JA_NET = (function () {
   function csrf(force) {
     if (token && !force && Date.now() - tokenAt < 20 * 60 * 1000) return Promise.resolve(token);
     if (inflight && !force) return inflight;
-    inflight = fetch("api/config", { credentials: "same-origin", cache: "no-store" })
+  inflight = fetch("https://jaurastore.com.ng/api/config", { credentials: "include" })
+
       .then(function (r) { return r.json(); })
       .then(function (d) {
         token = (d && d.csrf) || "";
