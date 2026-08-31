@@ -82,20 +82,47 @@ def verify_login(email, pw):
     return check_password_hash(h, str(pw))
 
 
-def set_password(email, pw):
-    """Set (or reset) an admin's password hash locally."""
+def set_password(email, pw, shared=True):
+    """Set (or reset) an admin's password.
+
+    The shop uses ONE shared admin password across every admin account, so
+    several staff can sign in at once with the same password and any of their
+    admin emails. `set_password` applies the new password to every known admin
+    email (when `shared=True`, the default), and always stores a local hash so
+    the app keeps working even when Supabase is not configured.
+    """
     email = (email or "").strip().lower()
-    if not is_known_admin(email):
+    if email and not is_known_admin(email):
         return False
     ok, _msg = password_strong(pw)
     if not ok:
         return False
-    execute(
-        "INSERT INTO admins (email, password_hash, role) VALUES (?,?,?) "
-        "ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash",
-        (email, generate_password_hash(str(pw)), "admin"),
-    )
+    hash_ = generate_password_hash(str(pw))
+    targets = Config.ADMIN_EMAILS if shared else ([email] if email else [])
+    for e in targets:
+        execute(
+            "INSERT INTO admins (email, password_hash, role) VALUES (?,?,?) "
+            "ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash",
+            (e, hash_, "admin"),
+        )
+    # When Supabase Auth is the login backend, mirror the same (shared) password
+    # onto every admin account there so all of them sign in with it. Best effort.
+    if Config.SUPABASE_ENABLED:
+        try:
+            from supabase_store import supabase_set_shared_password
+            supabase_set_shared_password(str(pw))
+        except Exception:
+            pass
     return True
+
+
+def set_shared_password(pw):
+    """Set the ONE password every admin account shares.
+
+    Convenience wrapper for the admin "Change password" flow: it does not need
+    an email because the password is shared by all admin emails.
+    """
+    return set_password("", pw, shared=True)
 
 
 def _ensure_local_admin(email):

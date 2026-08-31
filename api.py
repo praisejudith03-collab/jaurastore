@@ -789,6 +789,50 @@ def admin_products_replace():
     kept, rejected = catalog_mod.replace_all(products, authmod.current_admin())
     return jsonify(ok=True, saved=len(kept), rejected=rejected, meta=catalog_mod.meta())
 
+# ---------------------------------------------------- admin: repo / dual sync
+@api.get("/admin/sync/status")
+@authmod.require_admin
+def admin_sync_status():
+    """Report whether Supabase and the GitHub repo sync are configured."""
+    sb = Config.SUPABASE_ENABLED
+    ght = bool(Config.GITHUB_TOKEN)
+    repo = Config.GITHUB_REPOSITORY or ""
+    # try to resolve the repo from git remote when not set explicitly
+    if not repo:
+        try:
+            import repo_sync
+            repo = repo_sync._resolve_repo()
+        except Exception:
+            repo = ""
+    return jsonify(ok=True, supabase=sb, gitToken=ght,
+                   gitRepo=repo, gitBranch=Config.GITHUB_BRANCH,
+                   onWrite=bool(Config.REPO_SYNC_ON_WRITE))
+
+
+@api.post("/admin/sync/repo")
+@authmod.require_admin
+@sec.require_csrf
+def admin_sync_repo():
+    """Regenerate the repository data files and commit/push to GitHub.
+
+    This is the manual "Sync to GitHub" button in the admin portal. It applies
+    the same best-effort path as the automatic post-write sync but runs it
+    synchronously so the admin gets an immediate result.
+    """
+    limited = sec.guard("repo-sync", limit=10, window=600)
+    if limited:
+        return limited
+    try:
+        import repo_sync
+        ok, report = repo_sync.regenerate(commit=True, push=True)
+    except Exception as exc:
+        return jsonify(ok=False, error=f"Sync failed: {exc}"), 500
+    audit(authmod.current_admin(), "admin.repo_sync",
+          f"ok={ok} committed={report.get('committed')} pushed={report.get('pushed')}",
+          _ip())
+    return jsonify(ok=bool(ok), **report)
+
+
 @api.post("/admin/uploads/image")
 @authmod.require_admin
 @sec.require_csrf

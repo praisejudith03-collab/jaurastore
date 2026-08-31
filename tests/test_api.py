@@ -567,3 +567,99 @@ def test_the_seed_products_endpoint_serves_the_catalogue(client):
     assert body["ok"] is True
     assert len(body["products"]) > 100
     assert all("name" in p for p in body["products"][:20])
+
+
+# ------------------------------------------- no Wix / third-party references
+
+def test_no_product_references_an_external_image_host(client):
+    """No Wix / third-party photo may be served: every product's image must be
+    a repository-relative asset or the committed branded placeholder."""
+    cat = client.get("/api/catalog").get_json()["products"]
+    assert len(cat) > 100
+    for p in cat:
+        img = p.get("image") or ""
+        assert not img.startswith(("http://", "https://", "data:", "blob:")), \
+            f"{p.get('id')} still points at an external image: {img}"
+        assert "imageUrl" not in p, f"{p.get('id')} still carries an imageUrl"
+
+
+def test_genuinely_local_products_keep_their_repo_image(client):
+    """A product whose repo photo exists keeps it; only missing ones fall back."""
+    import catalog as catalog_mod
+    merged = catalog_mod.resolve_images(catalog_mod.merged(include_hidden=True))
+    local = [p for p in merged if (p.get("image") or "").startswith("images/products/")]
+    assert local, "expected at least some products to use a committed repo photo"
+
+
+def test_seed_file_and_snapshot_contain_no_external_image_urls():
+    """Both the canonical seed and the static snapshot must be Wix-free."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for path in (os.path.join(root, "data", "seed.json"),
+                 os.path.join(root, "js", "products-data.js")):
+        raw = open(path, encoding="utf-8").read()
+        assert "wixstatic" not in raw, f"{path} still references the Wix CDN"
+
+
+# ------------------------------------------- shared admin password
+
+def test_shared_password_applies_to_every_admin(client):
+    """New password set once must work for any admin account (multi-user)."""
+    import auth as authmod
+    assert authmod.set_shared_password("Shared2026x") is True
+    assert authmod.verify_login(EMAIL, "Shared2026x") is True
+    assert authmod.verify_login(EMAIL, PW) is False
+    assert authmod.verify_login("not-an-admin@example.com", "Shared2026x") is False
+    authmod.set_shared_password(PW)   # restore for the rest of the suite
+
+
+def test_password_change_route_updates_the_shared_password(client):
+    """The admin 'Change shared password' flow sets one password for all."""
+    import auth as authmod
+    tok = login(client)
+    r = client.post("/api/admin/password",
+                    json={"currentPassword": PW, "newPassword": "Another2026x"},
+                    headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    assert authmod.verify_login(EMAIL, "Another2026x") is True
+    assert authmod.verify_login(EMAIL, PW) is False
+    authmod.set_shared_password(PW)   # restore
+
+
+# ------------------------------------------- Supabase + GitHub dual-sync
+
+def test_sync_status_endpoint_is_admin_only(client):
+    assert client.get("/api/admin/sync/status").status_code in (401, 403)
+    login(client)
+    body = client.get("/api/admin/sync/status").get_json()
+    assert body["ok"] is True
+    assert "supabase" in body and "gitRepo" in body and "onWrite" in body
+
+
+def test_repo_sync_dry_run_reports_a_complete_catalogue():
+    import repo_sync
+    ok, report = repo_sync._check()
+    assert ok is True
+    assert report["productsInCatalogue"] >= 100
+    assert report["pushConfigured"] is False or report["gitRepo"]
+
+
+def test_catalog_json_repo_copy_is_refreshed_from_overrides(tmp_path, monkeypatch, client):
+    """After an admin write, repo_sync regenerates js/products-data.js and the
+    repo catalog.json from the live catalogue (no product loss).
+
+    REPO_ROOT is pointed at a temp folder so the test never mutates the real
+    repository data files.
+    """
+    import catalog as catalog_mod, repo_sync
+    monkeypatch.setattr(repo_sync, "REPO_ROOT", str(tmp_path))
+    login(client)
+    catalog_mod.upsert({"id": "jau-sync-bag", "name": "Sync Bag", "priceNgn": 5000}, "tester")
+    catalog_mod.upsert({"id": "jau-sync-shoe", "name": "Sync Shoe", "priceNgn": 3000}, "tester")
+    ok, report = repo_sync.regenerate(commit=False, push=False)
+    assert ok is True
+    assert report.get("js/products-data.js") is not None
+    snapshot = open(os.path.join(str(tmp_path), "js", "products-data.js"),
+                    encoding="utf-8").read()
+    assert "Sync Bag" in snapshot and "Sync Shoe" in snapshot
+    catalog_mod.remove("jau-sync-bag", "tester")
+    catalog_mod.remove("jau-sync-shoe", "tester")

@@ -18,6 +18,11 @@ import os, json, secrets, datetime, contextlib
 from config import Config
 
 try:
+    import threading
+except ImportError:  # pragma: no cover
+    threading = None
+
+try:
     import fcntl                      # POSIX advisory locks (gunicorn workers)
 except ImportError:                   # pragma: no cover - non-POSIX fallback
     fcntl = None
@@ -32,11 +37,6 @@ SEED_PATH = os.environ.get(
 # Local placeholder used when a product has no image file in the repo. It is a
 # real committed path, so no card ever 404s or shows a broken-image icon.
 PLACEHOLDER_IMG = "images/products/_placeholder.jpg"
-
-# The Wix-exported catalogue carries the original media URLs in `imageUrl`.
-# We use these as the remote fallback for products whose photo was never
-# committed to the repo.
-WIX_IMAGE_URLS = None          # lazily loaded dict: id -> imageUrl
 
 # Prices the shop shows are entered in Naira and converted at the house rate.
 NGN_TO_CFA = 0.44
@@ -53,8 +53,6 @@ def _seed_candidates():
     return [
         os.path.join(ROOT, "data", "seed.json"),
         os.path.join(ROOT, "seed.json"),
-        os.path.join(ROOT, "data", "wix_products.json"),
-        os.path.join(ROOT, "wix_products.json"),
     ]
 
 
@@ -75,35 +73,20 @@ def _seed_products():
     return []
 
 
-def _wix_image_urls():
-    """id -> Wix CDN imageUrl map, loaded lazily from the exported catalogue.
-
-    Only used as a remote fallback so a product whose photo was never
-    committed to the repo still renders. Kept out of the local path by default.
-    """
-    global WIX_IMAGE_URLS
-    if WIX_IMAGE_URLS is not None:
-        return WIX_IMAGE_URLS
-    WIX_IMAGE_URLS = {}
-    for cand in (os.path.join(ROOT, "data", "wix_products.json"),
-                 os.path.join(ROOT, "wix_products.json")):
-        data = _read_json(cand, None)
-        if isinstance(data, list):
-            for p in data:
-                if isinstance(p, dict) and p.get("id"):
-                    WIX_IMAGE_URLS[p["id"]] = p.get("imageUrl") or ""
-            break
-    return WIX_IMAGE_URLS
-
-
 def _file_exists(path):
-    """True when a repo-relative asset path resolves to a real file (or a
-    served virtual path we know the static layer maps to flat root). Also
-    accepts root-relative (/...) and absolute file paths."""
+    """True when a repo-relative asset path resolves to a real file.
+
+    External URLs (http/https/data:/blob:) are never treated as a repository
+    file - the site does not fetch product photos from anywhere but its own
+    committed assets. Root-relative (/...) paths are accepted because they are
+    served by the static layer of this origin.
+    """
     if not path:
         return False
-    if path.startswith(("http://", "https://", "/", "data:", "blob:")):
-        return True                      # external / root-relative serve fine
+    if path.startswith(("http://", "https://", "data:", "blob:")):
+        return False
+    if path.startswith("/"):
+        return True                      # root-relative, served from this origin
     candidate = os.path.join(ROOT, path)
     return os.path.isfile(candidate)
 
@@ -111,35 +94,33 @@ def _file_exists(path):
 def resolve_image(product):
     """Guarantee a renderable image for one product.
 
-    Returns a product whose `image` is a path the browser can actually show:
+    Returns a product whose `image` is a path the browser can actually show,
+    using only the repository's own committed assets (never a third-party /
+    Wix photo):
 
     * If the product has a committed repo photo (images/products/x.jpg that
       exists on disk) -> keep that repository path.
-    * Else if the product carries its original Wix CDN URL -> use it, so the
-      real product photo still displays (the site CSP allows https: images).
     * Else -> the committed branded placeholder repo path (never a 404).
 
-    The local placeholder path is also preserved on `placeholderImage` so the
-    frontend `onerror` handler can swap to it if the remote photo fails.
+    The placeholder path is also preserved on `placeholderImage` so the
+    frontend `onerror` handler can swap to it if a photo ever fails.
     """
     p = dict(product or {})
     img = p.get("image") or ""
-    imageUrl = p.get("imageUrl") or _wix_image_urls().get(p.get("id"), "")
-    if imageUrl:
-        p["imageUrl"] = imageUrl
+    # Strip any third-party / Wix URL that may still be present in the data.
+    if img.startswith(("http://", "https://", "data:", "blob:")):
+        img = ""
+    p.pop("imageUrl", None)
+    p.pop("usesRemoteImage", None)
     # A committed repo photo wins (the user asked to link repository paths).
     if _is_local(img) and _file_exists(img):
+        p["image"] = img
         p["placeholderImage"] = PLACEHOLDER_IMG
         return p
-    # No usable local file. Show the real remote photo (so the product looks
-    # right); keep the committed placeholder as the onerror fallback.
+    # No usable local file: show the committed branded placeholder.
+    p["image"] = PLACEHOLDER_IMG
     p["placeholderImage"] = PLACEHOLDER_IMG
-    if imageUrl:
-        p["image"] = imageUrl
-        p["usesRemoteImage"] = True
-    else:
-        p["image"] = PLACEHOLDER_IMG
-        p["usesPlaceholder"] = True
+    p["usesPlaceholder"] = True
     return p
 
 
@@ -151,6 +132,41 @@ def _is_local(path):
 def resolve_images(products):
     """Apply resolve_image to a list of products."""
     return [resolve_image(p) for p in (products or [])]
+
+
+def _sync_repo_async():
+    """Best-effort, non-blocking sync of the repository data state.
+
+    Runs after an admin product write so js/products-data.js (and the repo copy
+    of data/catalog.json) reflects the new catalogue immediately. Never raises
+    and never delays the product save - the shop must not be blocked by a git
+    operation. Only actually runs when REPO_SYNC_ON_WRITE is enabled and the
+    app is not running the test suite (which must never touch the git repo).
+    """
+    if not getattr(Config, "REPO_SYNC_ON_WRITE", True):
+        return
+    if getattr(Config, "ENV", "development") == "testing":
+        return  # never touch the git repo from the test suite
+    # Import lazily so repo_sync (which imports catalog) is only loaded here,
+    # and to avoid a circular import at module load time.
+    try:
+        import repo_sync
+    except Exception:
+        return
+
+    def _run():
+        try:
+            repo_sync.regenerate(commit=True, push=True)
+        except Exception:
+            pass  # sync is best-effort; a failure must never break a save
+
+    if threading is not None:
+        try:
+            threading.Thread(target=_run, daemon=True).start()
+            return
+        except Exception:
+            pass
+    _run()
 
 
 def _supabase_products():
@@ -389,6 +405,7 @@ def upsert(product, actor=None):
         _write_overrides(data, path)
     from supabase_store import upsert_products
     upsert_products([clean])
+    _sync_repo_async()
     return clean, action
 
 
@@ -407,6 +424,7 @@ def remove(pid, actor=None):
     _mutate(actor, _apply)
     from supabase_store import delete_products
     delete_products([pid])
+    _sync_repo_async()
     return None
 
 
@@ -433,6 +451,7 @@ def replace_all(products, actor=None):
     _mutate(actor, _apply)
     from supabase_store import replace_all_products
     replace_all_products(kept)
+    _sync_repo_async()
     return kept, rejected
 
 
