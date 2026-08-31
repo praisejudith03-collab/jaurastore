@@ -180,6 +180,30 @@ const JA = (() => {
     }
   }
 
+  // One copy of every product, ever. The same piece can reach the browser
+  // under two ids (a Supabase row re-created next to its seed row, or a
+  // locally queued edit next to the synced server copy), so products are
+  // keyed by id, then slug, then sku and the first copy seen wins. The list
+  // passed in is ordered so the preferred copy comes first.
+  function dedupeProducts(list) {
+    const byId = new Map(), bySlug = new Map(), bySku = new Map();
+    const out = [];
+    (Array.isArray(list) ? list : []).forEach((p) => {
+      if (!p || !p.id) return;
+      const id = String(p.id).trim();
+      const slug = String(p.slug || "").trim().toLowerCase();
+      const sku = String(p.sku || "").trim().toLowerCase();
+      if (byId.has(id)) return;
+      if (slug && bySlug.has(slug)) return;
+      if (sku && bySku.has(sku)) return;
+      byId.set(id, p);
+      if (slug) bySlug.set(slug, p);
+      if (sku) bySku.set(sku, p);
+      out.push(p);
+    });
+    return out;
+  }
+
   async function loadSeed() {
     if (seed.length) return seed;
     try {
@@ -192,7 +216,11 @@ const JA = (() => {
           const pend = pendingMap();
           const stillPending = (read(KEYS.custom, []) || []).filter((p) => p && pend[p.id]);
           write(KEYS.custom, stillPending);
-          seed = d.products;
+          // The whole catalogue, one copy of each product: the server merges
+          // seed + admin + Supabase rows, and any duplicate that survives
+          // that merge (same product under two ids) is dropped here so the
+          // shop can never render the same piece twice.
+          seed = dedupeProducts(d.products);
           window.JA_SEED = seed;
           return seed;
         }
@@ -204,7 +232,7 @@ const JA = (() => {
     // was a legacy static-JSON dependency that duplicated the catalogue and is
     // now served on the server (api/catalog) instead.
     if (Array.isArray(window.JA_SEED) && window.JA_SEED.length) {
-      seed = window.JA_SEED;
+      seed = dedupeProducts(window.JA_SEED);
       return seed;
     }
     return [];
@@ -257,7 +285,7 @@ const JA = (() => {
         }
         return out;
       };
-      const all = [...custom, ...base].map(remap).filter(Boolean);
+      const all = dedupeProducts([...custom, ...base].map(remap).filter(Boolean));
       if ((document.body.dataset.page || "") === "admin") return all;
       return all.filter((p) => p.online !== false);
     } catch (e) {

@@ -317,9 +317,12 @@ function renderShop() {
   if (sort === "price-desc") list.sort((a, b) => JA.priceOf(b) - JA.priceOf(a));
   if (sort === "name") list.sort((a, b) => a.name.localeCompare(b.name));
 
-  const page = Math.max(1, parseInt(param("page") || "1", 10));
-  const per = 258;
+  // Every product renders on one page - no cap. The catalogue is the whole
+  // list the server returns (see store.js dedupeProducts / catalog.merged),
+  // so whatever the shop holds is what the shopper sees.
+  const per = Math.max(list.length, 1);
   const pages = Math.max(1, Math.ceil(list.length / per));
+  const page = Math.min(Math.max(1, parseInt(param("page") || "1", 10) || 1), pages);
   const slice = list.slice((page - 1) * per, page * per);
 
   const title = document.querySelector("[data-shop-title]");

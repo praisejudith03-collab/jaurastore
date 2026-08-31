@@ -51,19 +51,98 @@ def client():
 
 
 # ------------------------------------------------------------------ products
+# Rows whose `source` marks them as a tombstone (a soft delete or a superseded
+# bulk import) are not live products. Everything else is: 'admin' (saved from
+# the admin portal), 'seed' (imported by migrate_supabase.py) and rows created
+# directly in the Supabase dashboard (source empty / anything else). Filtering
+# to `source = 'admin'` only ever saw a subset of the catalogue, which capped
+# the shop at fewer products than the database actually holds.
+DEAD_SOURCES = ("deleted", "replaced")
+
+# Rows are fetched page by page so the shop always sees the whole table.
+# PostgREST applies a server-side max-rows limit (Supabase defaults to 1000)
+# and silently truncates oversized responses, so a single unbounded select
+# would quietly cap the catalogue. A page size well under that limit, a
+# deterministic order, and the exact row count (used to detect a truncation
+# and retry with a smaller window) keep every row coming back exactly once.
+PAGE_SIZE = 500
+MAX_ROWS = 100_000        # a sane ceiling against a runaway loop
+
+
+def _res_data(res):
+    """The data list off a PostgREST response, whatever shape it comes in."""
+    if hasattr(res, "data"):
+        return res.data or []
+    return (res or {}).get("data") or []
+
+
+def _fetch_product_pages(c):
+    """Yield every live product row from the products table, page by page.
+
+    Orders by id so a page boundary can never shift between requests (without
+    a deterministic order, rows can repeat or vanish across .range() pages).
+    The first response also carries the exact table count (count="exact"): if
+    a page comes back short but the count says rows remain, the server capped
+    the response below our page size, so the window shrinks to what the
+    server will actually send and the walk continues to the very last row.
+    """
+    start = 0
+    page_size = PAGE_SIZE
+    total = None
+    collected = 0
+    while collected < MAX_ROWS:
+        res = (c.table("products").select("*", count="exact")
+               .order("id")
+               .range(start, start + page_size - 1)
+               .execute())
+        rows = _res_data(res)
+        if total is None:
+            try:
+                total = getattr(res, "count", None)
+            except Exception:
+                total = None
+        if not rows:
+            return
+        for r in rows:
+            source = str((r or {}).get("source") or "").strip().lower()
+            if source in DEAD_SOURCES:
+                continue                     # a tombstone, not a live product
+            yield r
+        got = len(rows)
+        collected += got
+        start += got
+        if got < page_size:
+            # Short page: either the table ended, or the server truncated the
+            # response. Only stop when the count agrees everything is fetched.
+            if total is None or collected >= int(total or 0):
+                return
+            page_size = max(1, got)          # adapt to the server's row cap
+
+
 def products_table_rows():
-    """Admin products from the Supabase products table, or None.
+    """Every live product from the Supabase products table, or None.
 
     None means 'not configured / unreachable', which the catalogue falls back
     to the local override file. Returns an empty list only when the table is
     genuinely reachable but empty.
+
+    Duplicates are impossible on the way out: rows are keyed by id (a table
+    without a primary key could theoretically return the same row twice), and
+    the same piece appearing under two ids is reconciled by slug/sku in
+    catalog.merged().
     """
     c = client()
     if c is None:
         return None
     try:
-        res = c.table("products").select("*").eq("source", "admin").execute()
-        rows = res.data or []
+        seen_ids = set()
+        rows = []
+        for r in _fetch_product_pages(c):
+            pid = str((r or {}).get("id") or "").strip()
+            if not pid or pid in seen_ids:
+                continue
+            seen_ids.add(pid)
+            rows.append(r)
         # Reconcile each row's image to a path the browser can display (a
         # committed repo file when present, else the branded placeholder).
         # No third-party / Wix photo is ever referenced.
