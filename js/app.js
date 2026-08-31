@@ -1182,7 +1182,7 @@ function renderPay() {
 
         <div class="field pay-wide">
           <label>Your receipt — JPG, PNG or PDF (max 8 MB) *</label>
-          <input type="file" name="receipt" accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf" required />
+          <input type="file" name="receipt" accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf" capture="environment" required />
           <p class="pay-file-note" data-pay-file-note>We attach the original file to the email, exactly as you upload it.</p>
           <div class="pay-preview" data-pay-preview hidden></div>
         </div>
