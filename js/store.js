@@ -1030,6 +1030,20 @@ const JA = (() => {
     return path;
   }
 
+  // Show a clean branded card if a product photo has no file yet, instead of
+  // the browser's broken-image icon. The 81 products in the seed that shipped
+  // without an uploaded photo render as a tidy "photo coming soon" tile.
+  function fallbackImg(ev) {
+    const el = ev && ev.currentTarget;
+    if (!el) return;
+    const src = el.getAttribute("src") || "";
+    if (src.indexOf("_placeholder") >= 0) return;
+    if (el.getAttribute("data-fb") === "1") return;
+    el.setAttribute("data-fb", "1");
+    el.src = "images/products/_placeholder.jpg";
+  }
+  window.fallbackImg = fallbackImg;
+
   function galleryOf(p) {
     const list = [];
     const push = (src) => {
@@ -1098,8 +1112,8 @@ const JA = (() => {
     const home = (document.body.dataset.page || "") === "home";
     const many = home && gals.length > 1;
     const slides = many
-      ? gals.map((src, i) => `<img src="${asset(src)}" alt="${escape(nm)}" data-slide="${i}" class="${i === 0 ? "is-show" : ""}" />`).join("")
-      : `<img src="${asset(gals[0] || p.image)}" alt="${escape(nm)}" />`;
+      ? gals.map((src, i) => `<img src="${asset(src)}" alt="${escape(nm)}" data-slide="${i}" class="${i === 0 ? "is-show" : ""}" onerror="fallbackImg(event)" />`).join("")
+      : `<img src="${asset(gals[0] || p.image)}" alt="${escape(nm)}" onerror="fallbackImg(event)" />`;
     return `<article class="card${sold ? " is-oos" : ""}">
       <a class="card-media${many ? " has-slides" : ""}" ${many ? "data-card-slides" : ""} href="product.html?id=${encodeURIComponent(p.id)}">
         ${slides}
@@ -1280,7 +1294,7 @@ const JA = (() => {
     body.innerHTML = items.map((i) => {
       const nm = displayName(i.product) + (i.color ? " — " + i.color : "");
       return `<div class="mini-row">
-        <a href="product.html?id=${encodeURIComponent(i.id)}"><img src="${asset(i.product.image)}" alt="" /></a>
+        <a href="product.html?id=${encodeURIComponent(i.id)}"><img src="${asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a>
         <div class="mini-info">
           <p>${escape(nm)}</p>
           <div class="mini-qty">
@@ -1625,7 +1639,7 @@ const JA = (() => {
       }
       box.innerHTML = shown.map((p) => `
         <a class="search-hit" href="product.html?id=${encodeURIComponent(p.id)}">
-          <img src="${asset(p.image)}" alt="${escape(p.name)}" />
+          <img src="${asset(p.image)}" alt="${escape(p.name)}" onerror="fallbackImg(event)" />
           <span><small>${categoryName(p.category)}</small><br>${escape(displayName(p))}</span>
           <span>${money(priceOf(p))}</span>
         </a>`).join("") + (q && hits.length > 12
@@ -1676,7 +1690,7 @@ const JA = (() => {
       menuLive.hidden = false;
       menuLive.innerHTML = (hits.length
         ? hits.map((p) => `<a class="wix-hit" href="product.html?id=${encodeURIComponent(p.id)}">
-            <img src="${asset(p.image)}" alt="" />
+            <img src="${asset(p.image)}" alt="" onerror="fallbackImg(event)" />
             <span>${escape(displayName(p))}</span>
             <em>${money(priceOf(p))}</em>
           </a>`).join("")

@@ -94,7 +94,7 @@ function renderHome() {
         const img = (p.images && p.images[0]) || p.image || "";
         const id = p.id || "";
         const name = p.name || "";
-        return `<article class="card"><a class="card-media" href="product.html?id=${encodeURIComponent(id)}"><img src="${img}" alt=""></a><div class="card-body"><h3><a href="product.html?id=${encodeURIComponent(id)}">${name}</a></h3></div></article>`;
+        return `<article class="card"><a class="card-media" href="product.html?id=${encodeURIComponent(id)}"><img src="${img}" alt="" onerror="fallbackImg(event)"></a><div class="card-body"><h3><a href="product.html?id=${encodeURIComponent(id)}">${name}</a></h3></div></article>`;
       }).join("");
     }
   }
@@ -379,7 +379,7 @@ async function renderMostViewed() {
     </div>
     <div class="mv-rail">${items.map((x) => `
       <a class="mv-card" href="product.html?id=${encodeURIComponent(x.p.id)}">
-        <img src="${JA.asset(x.p.image)}" alt="" loading="lazy" />
+        <img src="${JA.asset(x.p.image)}" alt="" loading="lazy" onerror="fallbackImg(event)" />
         <strong>${JA.escape(JA.displayName(x.p))}</strong>
         <span>${JA.escape(JA.money(JA.priceOf(x.p, cur), cur))}</span>
         <em>${x.views} view${x.views === 1 ? "" : "s"}${x.carts ? " · " + x.carts + " in carts" : ""}</em>
@@ -499,10 +499,10 @@ function paintProduct(root, p) {
     <div class="pdp-gallery">
       <div class="pdp-img">
         ${gallery.length > 1 ? `<button type="button" class="pdp-nav pdp-prev" data-gal="-1" aria-label="Previous">‹</button>` : ""}
-        <img src="${JA.asset(gallery[0])}" alt="${JA.escape(p.name)}" data-main-img />
+        <img src="${JA.asset(gallery[0])}" alt="${JA.escape(p.name)}" data-main-img onerror="fallbackImg(event)" />
         ${gallery.length > 1 ? `<button type="button" class="pdp-nav pdp-next" data-gal="1" aria-label="Next">›</button>` : ""}
       </div>
-      ${gallery.length > 1 ? `<div class="pdp-thumbs">${gallery.map((src, i) => `<button type="button" class="pdp-thumb${i === 0 ? " is-on" : ""}" data-src="${JA.escape(JA.asset(src))}" data-thumb="${i}"><img src="${JA.asset(src)}" alt="" /></button>`).join("")}</div>` : ""}
+      ${gallery.length > 1 ? `<div class="pdp-thumbs">${gallery.map((src, i) => `<button type="button" class="pdp-thumb${i === 0 ? " is-on" : ""}" data-src="${JA.escape(JA.asset(src))}" data-thumb="${i}"><img src="${JA.asset(src)}" alt="" onerror="fallbackImg(event)" /></button>`).join("")}</div>` : ""}
     </div>
     <div>
       <div class="kicker">${JA.categoryName(p.category)}</div>
@@ -659,7 +659,7 @@ function renderCart() {
       <thead><tr><th></th><th>${t("ck.product")}</th><th>Price</th><th>${t("pdp.qty")}</th><th>${t("ck.subtotal")}</th></tr></thead>
       <tbody>${items.map((i) => `
       <tr class="cart-row-tr">
-        <td><a href="product.html?id=${i.id}"><img src="${JA.asset(i.product.image)}" alt="" /></a></td>
+        <td><a href="product.html?id=${i.id}"><img src="${JA.asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a></td>
         <td>
           <a href="product.html?id=${i.id}"><strong>${JA.escape(JA.displayName(i.product))}</strong></a>
           ${i.color ? `<div class="card-cat">${JA.escape(i.color)}</div>` : ""}
@@ -765,7 +765,7 @@ function paintCheckoutTotals(form) {
       <tr>
         <td>
           <div class="ck-line">
-            <img src="${JA.asset(i.product.image)}" alt="" />
+            <img src="${JA.asset(i.product.image)}" alt="" onerror="fallbackImg(event)" />
             <span>${JA.escape(JA.displayName(i.product))}${i.color ? " — " + JA.escape(i.color) : ""} <b>× ${i.qty}</b></span>
           </div>
         </td>
