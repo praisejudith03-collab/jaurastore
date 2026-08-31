@@ -67,6 +67,20 @@ class Config:
     S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY", "")
     S3_PUBLIC_BASE = os.environ.get("S3_PUBLIC_BASE", "")
 
+    # ------------------------------------------------- GitHub repo sync
+    # When the shop is configured to push its product/data state back to the
+    # GitHub repository (so admin edits survive a redeploy and stay in sync
+    # with Supabase), these are read by repo_sync.py. They are optional: the
+    # data files are still regenerated and committed locally without them.
+    GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "") or os.environ.get("GITHUB_API_TOKEN", "")
+    GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "")
+    GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+    # Optional "Name <email>" used by repo_sync for the commit author.
+    GITHUB_COMMITTER = os.environ.get("GITHUB_COMMITTER", "")
+    # When set, admin product mutations also trigger a best-effort repo sync
+    # (regenerate js/products-data.js + commit any changed data files).
+    REPO_SYNC_ON_WRITE = (os.environ.get("REPO_SYNC_ON_WRITE", "1") or "1") == "1"
+
     # --------------------------------------------------------- analytics
     ANALYTICS_RETENTION_DAYS = int(os.environ.get("ANALYTICS_RETENTION_DAYS", "400") or 400)
     LIVE_WINDOW_SECONDS = 120      # a visitor counts as "on the site" this long

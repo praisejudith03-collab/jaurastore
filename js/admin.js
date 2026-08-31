@@ -942,23 +942,25 @@ function accountPanel() {
   return `
     <div class="admin-card">
       <h3 class="admin-h">Your account</h3>
-      <p class="admin-note">Signed in as <strong id="acct-email">…</strong>. Changing your password here works on every phone and laptop you sign in from.</p>
+      <p class="admin-note">Signed in as <strong id="acct-email">…</strong>. The shop uses <strong>one shared admin password</strong> — changing it here updates it for every admin account, so any teammate can sign in with it from their own phone or laptop.</p>
       <form id="pw-form" class="form-grid" style="max-width:560px">
         <div class="field"><label>Current password</label><input type="password" name="current" required autocomplete="current-password" /></div>
-        <div class="field"><label>New password</label><input type="password" name="next" required autocomplete="new-password" /></div>
-        <div class="field"><label>Repeat new password</label><input type="password" name="again" required autocomplete="new-password" /></div>
-        <div class="field full"><button class="btn" id="pw-btn">Change password</button></div>
+        <div class="field"><label>New shared password</label><input type="password" name="next" required autocomplete="new-password" /></div>
+        <div class="field"><label>Repeat new shared password</label><input type="password" name="again" required autocomplete="new-password" /></div>
+        <div class="field full"><button class="btn" id="pw-btn">Change shared password</button></div>
       </form>
-      <p class="admin-note">At least 10 characters, with an upper case letter, a lower case letter and a number. If you ever forget it, use <em>Forgot password? Reset it by email</em> on the sign-in screen — a 6-digit code is emailed to the admin address.</p>
+      <p class="admin-note">At least 10 characters, with an upper case letter, a lower case letter and a number. It applies to every admin account, so the one password is what any of you type on the sign-in screen. If you ever forget it, use <em>Forgot password? Reset it by email</em> on the sign-in screen — a 6-digit code is emailed to the admin address.</p>
     </div>
     <div class="admin-card" style="margin-top:22px">
-      <h3 class="admin-h">Connection</h3>
+      <h3 class="admin-h">Connection &amp; sync</h3>
       <p class="admin-note" id="sync-note">Checking for unsaved changes…</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn btn-line" id="retry-sync">Retry now</button>
         <button class="btn btn-line" id="reload-cat">Reload catalogue</button>
+        <button class="btn" id="sync-github">Sync to GitHub</button>
       </div>
-      <p class="admin-note" style="margin-top:12px">Saved changes go straight to the store. If your Wi-Fi drops, they wait in this device and push themselves up when the connection returns.</p>
+      <div id="sync-status" class="admin-note" style="margin-top:12px"></div>
+      <p class="admin-note" style="margin-top:12px">Saved changes go straight to the store. If your Wi-Fi drops, they wait in this device and push themselves up when the connection returns. The <strong>Sync to GitHub</strong> button also saves the latest product data into the repository so it never disappears on a redeploy.</p>
     </div>`;
 }
 
@@ -1000,6 +1002,56 @@ function bindAccount() {
       JA.toast("Reloading…");
       await JA.reloadCatalog();
       paintDesk("products");
+    }
+  });
+
+  // Supabase + GitHub dual-sync status and the manual "Sync to GitHub" button.
+  const statusBox = $("#sync-status");
+  async function refreshSyncStatus() {
+    if (!statusBox) return;
+    try {
+      const res = await fetch("api/admin/sync/status", { credentials: "same-origin", cache: "no-store" });
+      if (!res.ok) { statusBox.textContent = "Could not read the sync status."; return; }
+      const d = await res.json();
+      const bits = [];
+      bits.push("Supabase: " + (d.supabase ? "connected" : "not configured (local files)"));
+      bits.push(d.gitToken ? "GitHub push: on" : "GitHub push: off");
+      if (d.gitRepo) bits.push("repo: " + d.gitRepo);
+      if (d.gitBranch) bits.push("branch: " + d.gitBranch);
+      statusBox.innerHTML = bits.map((b) => JA.escape(b)).join(" &middot; ")
+        + "<br><small>" + (d.onWrite ? "Admin changes are committed to the repo automatically." : "Automatic repo commit is off — use the Sync button.") + "</small>";
+    } catch (e) {
+      statusBox.textContent = "Sync status unavailable.";
+    }
+  }
+  refreshSyncStatus();
+  $("#sync-github")?.addEventListener("click", async () => {
+    const b = $("#sync-github");
+    if (b) { b.disabled = true; b.textContent = "Syncing…"; }
+    try {
+      const res = await fetch("api/admin/sync/repo", {
+        method: "POST", credentials: "same-origin", cache: "no-store",
+        headers: { "X-CSRF-Token": JA.csrf() || "" },
+      });
+      const d = await res.json();
+      if (!res.ok || d.ok === false) {
+        JA.toast((d && d.error) || "Sync failed — see the response below.");
+        if (statusBox) statusBox.textContent = (d && d.error) || "Sync failed.";
+        return;
+      }
+      JA.toast(d.pushed ? "Synced, committed and pushed to GitHub." : "Committed to the repo." + (d.note ? " " + d.note : ""));
+      if (statusBox) {
+        statusBox.textContent = [
+          d.committed ? "Committed to the repository." : "Nothing to sync.",
+          d.pushed ? "Pushed to " + (d.branch || "main") + "." : (d.note || "Not pushed — no GitHub token configured."),
+        ].filter(Boolean).join(" ");
+      }
+      refreshSyncStatus();
+    } catch (e) {
+      JA.toast("Could not reach the sync endpoint.");
+      if (statusBox) statusBox.textContent = "Sync request failed — check your connection.";
+    } finally {
+      if (b) { b.disabled = false; b.textContent = "Sync to GitHub"; }
     }
   });
 }

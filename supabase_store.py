@@ -14,6 +14,11 @@ Needed environment variables (see .env.example):
 """
 import os, json
 from config import Config
+try:
+    import urllib.parse
+except ImportError:             # pragma: no cover
+    urllib = None
+    urllib.parse = None
 
 _client = None
 _loaded = False
@@ -59,8 +64,9 @@ def products_table_rows():
     try:
         res = c.table("products").select("*").eq("source", "admin").execute()
         rows = res.data or []
-        # Reconcile each row's image to a path the browser can display (repo
-        # file when present, else the Wix CDN photo, else the placeholder).
+        # Reconcile each row's image to a path the browser can display (a
+        # committed repo file when present, else the branded placeholder).
+        # No third-party / Wix photo is ever referenced.
         from catalog import resolve_image
         return [resolve_image(r) for r in rows]
     except Exception as exc:
@@ -131,6 +137,47 @@ def supabase_verify_login(email, password):
         return bool(user)
     except Exception:
         return False
+
+
+def supabase_set_shared_password(password):
+    """Set the SAME password on every admin Supabase Auth account.
+
+    The shop uses one shared admin password across all admin emails, so when
+    Supabase Auth is the login backend we must update every admin user there -
+    not just the local mirror. Best effort: a Supabase failure is logged and
+    swallowed so a password change never blocks the admin.
+    """
+    if not enabled():
+        return False
+    import urllib.request, urllib.error
+    base = Config.SUPABASE_URL
+    key = Config.SUPABASE_SERVICE_ROLE_KEY
+    ok_total = False
+    for email in Config.ADMIN_EMAILS:
+        try:
+            # Resolve the user id by looking up the email (admin API).
+            req = urllib.request.Request(
+                base + "/auth/v1/admin/users?filter=email%20eq%20" +
+                urllib.parse.quote(str(email)),
+                headers={"apikey": key, "Authorization": "Bearer " + key})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                users = json.loads(resp.read().decode("utf-8", "replace"))
+            usr = (users.get("users") or [{}])[0]
+            uid = usr.get("id")
+            if not uid:
+                continue
+            body = json.dumps({"password": password}).encode("utf-8")
+            req2 = urllib.request.Request(
+                base + "/auth/v1/admin/users/" + urllib.parse.quote(str(uid)),
+                data=body, method="PUT",
+                headers={"apikey": key, "Authorization": "Bearer " + key,
+                         "Content-Type": "application/json"})
+            with urllib.request.urlopen(req2, timeout=15) as resp2:
+                resp2.read()
+            ok_total = True
+        except Exception as exc:
+            print(f"[supabase] password update failed for {email}: {exc}")
+    return ok_total
 
 
 # ------------------------------------------------------------------ orders

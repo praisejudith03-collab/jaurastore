@@ -21,3 +21,5 @@ catalog.json.lock
 catalog.json.tmp
 data/outbox/
 data/uploads/
+.git-repo-sync.lock
+node_modules/

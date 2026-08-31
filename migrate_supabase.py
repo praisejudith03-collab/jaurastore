@@ -75,9 +75,9 @@ def main():
 
     # Reconcile every product's image against the repository so the Supabase
     # rows link to a path the browser can actually show: a committed repo
-    # image (images/products/x.jpg) when it exists, else the original Wix CDN
-    # photo (the real product picture), with the branded placeholder as the
-    # offline fallback. See catalog.resolve_image().
+    # image (images/products/x.jpg) when it exists, else the committed branded
+    # placeholder. No third-party / Wix photo is ever referenced. See
+    # catalog.resolve_image().
     import catalog as catalog_mod
     merged = {pid: catalog_mod.resolve_image(p) for pid, p in merged.items()}
 
@@ -97,7 +97,6 @@ def main():
             "priceNgn": p.get("priceNgn", 0),
             "compareNgn": p.get("compareNgn", None),
             "image": p.get("image", ""),
-            "imageUrl": p.get("imageUrl", ""),
             "placeholderImage": p.get("placeholderImage", ""),
             "description": p.get("description", ""),
             "stock": p.get("stock", 0),
