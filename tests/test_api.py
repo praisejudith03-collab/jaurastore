@@ -191,20 +191,20 @@ def _post_min_order(client, oid, currency, total, zone):
 
 
 def test_benin_minimum_is_enforced_on_orders(client):
-    r = _post_min_order(client, "JA-BJ1", "CFA", 2999, "Cotonou")
+    r = _post_min_order(client, "JA-BJ1", "CFA", 4999, "Cotonou")
     assert r.status_code == 400, r.data
-    assert "3,000 F CFA" in r.get_json()["error"]
+    assert "5,000 F CFA" in r.get_json()["error"]
 
 
 def test_benin_minimum_in_naira_is_enforced(client):
-    r = _post_min_order(client, "JA-BJ2", "NGN", 6799, "Calavi")
+    r = _post_min_order(client, "JA-BJ2", "NGN", 11399, "Calavi")
     assert r.status_code == 400, r.data
-    assert "6,800" in r.get_json()["error"]
+    assert "11,400" in r.get_json()["error"]
 
 
 def test_benin_minimum_exact_cfa_and_ngn_are_accepted(client):
-    a = _post_min_order(client, "JA-BJ3", "CFA", 3000, "Cotonou")
-    b = _post_min_order(client, "JA-BJ4", "NGN", 6800, "Porto-Novo")
+    a = _post_min_order(client, "JA-BJ3", "CFA", 5000, "Cotonou")
+    b = _post_min_order(client, "JA-BJ4", "NGN", 11400, "Porto-Novo")
     assert a.status_code == 200, a.data
     assert b.status_code == 200, b.data
 

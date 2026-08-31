@@ -901,17 +901,17 @@ function renderCheckout() {
     const cur = data.currency || JA.currency();
     const liveItems = JA.cartDetailed();
     if (!liveItems.length) return;
-    // Benin deliveries: 3,000 F CFA or its 6,800 naira equivalent. Guard
+    // Benin deliveries: 5,000 F CFA or its 11,400 naira equivalent. Guard
     // before any proof handling / queueing so an under-minimum order is
     // never saved locally or sent to the server.
     const beninZone = /benin|cotonou|calavi|porto/i.test(String(data.zone || ""));
     const totalNow = JA.cartTotal(cur);
-    if (beninZone && cur === "CFA" && totalNow < 3000) {
+    if (beninZone && cur === "CFA" && totalNow < 5000) {
       JA.toast(t("ck.minOrderCfa"));
       shot?.focus?.();
       return;
     }
-    if (beninZone && cur === "NGN" && totalNow < 6800) {
+    if (beninZone && cur === "NGN" && totalNow < 11400) {
       JA.toast(t("ck.minOrderNgn"));
       shot?.focus?.();
       return;
