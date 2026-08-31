@@ -331,6 +331,48 @@ def _int_or_none(v):
 
 
 # ------------------------------------------------------------------- merged
+def _dedupe_products(primary, secondary):
+    """Merge two product lists, keeping every distinct product exactly once.
+
+    ``primary`` (Supabase - the live source of truth) wins: when the same
+    piece appears in both lists it is matched by id, then slug, then sku, and
+    the primary version is kept. Products only present in ``secondary`` (the
+    shipped seed) are appended, so nothing is lost when one side has not
+    synced yet - but the same product never renders twice.
+
+    This is what removes the duplicates shoppers saw: a Supabase row whose id
+    differs from the seed row of the same product (a re-created or re-imported
+    item) used to be unioned in as a second copy of that product.
+    """
+    def _key(v):
+        return str(v or "").strip().lower()
+
+    by_id, by_slug, by_sku = {}, {}, {}
+    out = []
+
+    def _place(p):
+        pid = str((p or {}).get("id") or "").strip()
+        if not pid:
+            return False
+        slug = _key(p.get("slug"))
+        sku = _key(p.get("sku"))
+        if pid in by_id or (slug and slug in by_slug) or (sku and sku in by_sku):
+            return False
+        by_id[pid] = p
+        if slug:
+            by_slug[slug] = p
+        if sku:
+            by_sku[sku] = p
+        out.append(p)
+        return True
+
+    for p in (primary or []):
+        _place(p)
+    for p in (secondary or []):
+        _place(p)
+    return out
+
+
 def merged(include_hidden=False):
     """Seed products + every admin edit, minus what was deleted.
 
@@ -339,11 +381,13 @@ def merged(include_hidden=False):
     """
     sb = _supabase_products()
     if sb is not None:
-        # Supabase rows are the admin products; the seed supplies the rest.
-        by_id = {p["id"]: p for p in _seed_products()}
-        by_id.update({p["id"]: p for p in sb})
-        products = list(by_id.values())
-        deleted = overrides().get("deleted") or []
+        # Supabase rows are the live catalogue; the seed only supplies
+        # products Supabase does not have. _dedupe_products keeps one copy of
+        # each product (matched by id, then slug, then sku), so a row saved
+        # under a different id never shows up next to its own duplicate.
+        deleted = set(overrides().get("deleted") or [])
+        products = _dedupe_products(sb, _seed_products())
+        products = [p for p in products if str(p.get("id")) not in deleted]
     else:
         data, _p = _load_overrides()
         overrides_list = data.get("products") or []

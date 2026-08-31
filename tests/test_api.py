@@ -429,6 +429,188 @@ def test_the_catalogue_path_is_configurable():
         "CATALOG_PATH missing: admin products would reset on every deploy"
 
 
+# ------------------------------------------- Supabase product fetching query
+
+class _FakeSupabaseQuery:
+    """Chainable stand-in for the supabase-py select/order/range builder.
+
+    ``cap`` simulates a PostgREST ``max-rows`` limit: the server silently
+    truncates any response longer than that, exactly like the real API.
+    """
+
+    def __init__(self, rows, calls, cap=None):
+        self._rows = rows
+        self._calls = calls
+        self._cap = cap
+        self._count = None
+        self._start = 0
+        self._end = -1
+
+    def select(self, _cols, count=None):
+        self._count = count
+        return self
+
+    def order(self, _col, **_kw):
+        return self
+
+    def range(self, start, end):
+        self._start, self._end = start, end
+        return self
+
+    def execute(self):
+        self._calls.append((self._start, self._end))
+        window = self._rows[self._start:self._end + 1]
+        if self._cap is not None:
+            window = window[:self._cap]      # the server-side truncation
+        res = type("Res", (), {"data": window})()
+        if self._count == "exact":
+            res.count = len(self._rows)
+        return res
+
+
+class _FakeSupabaseTable:
+    def __init__(self, rows, calls, cap=None):
+        # sorted the way a PostgREST `.order("id")` would return them, so
+        # page windows behave exactly like the real API
+        self._rows = sorted(rows, key=lambda r: str(r.get("id") or ""))
+        self._calls = calls
+        self._cap = cap
+
+    def select(self, cols, count=None):
+        return _FakeSupabaseQuery(self._rows, self._calls, self._cap).select(cols, count)
+
+
+class _FakeSupabaseClient:
+    def __init__(self, rows, cap=None):
+        self.calls = []
+        self._rows = rows
+        self._cap = cap
+
+    def table(self, _name):
+        return _FakeSupabaseTable(self._rows, self.calls, self._cap)
+
+
+def _supabase_style_rows():
+    """The live situation that broke the shop: all 258 catalogue products in
+    the Supabase table, mixed sources (only some marked 'admin'), plus
+    tombstone rows from deletes / bulk imports."""
+    import catalog as catalog_mod
+    rows = []
+    for i, p in enumerate(catalog_mod._seed_products()):
+        row = {k: v for k, v in p.items()}
+        row["id"] = f"sb-{i:03d}"               # ids differ from the seed
+        row["source"] = "admin" if i % 5 else ("seed" if i % 2 else None)
+        rows.append(row)
+    rows.append({"id": "sb-tomb-1", "slug": "deleted-piece", "source": "deleted"})
+    rows.append({"id": "sb-tomb-2", "slug": "replaced-piece", "source": "replaced"})
+    return rows
+
+
+def test_supabase_query_reads_every_live_row_and_pages(monkeypatch):
+    """"The fetching query must not cap or filter the catalogue:
+    every source except tombstones comes back, and the read pages through
+    the table so a PostgREST max-rows limit can never truncate it."""
+    import supabase_store
+    rows = _supabase_style_rows()
+    fake = _FakeSupabaseClient(rows)
+    monkeypatch.setattr(supabase_store, "client", lambda: fake)
+    monkeypatch.setattr(supabase_store, "PAGE_SIZE", 100)
+
+    out = supabase_store.products_table_rows()
+
+    assert out is not None
+    assert len(out) == 258, f"expected all 258 live rows, got {len(out)}"
+    slugs = [p["slug"] for p in out]
+    assert len(slugs) == len(set(slugs)), "the same product came back twice"
+    assert "deleted-piece" not in slugs and "replaced-piece" not in slugs
+    # paged: 260 rows / 100 per page -> 3 range windows, never one big select
+    assert len(fake.calls) == 3, f"expected 3 pages, saw {fake.calls}"
+    assert fake.calls[0] == (0, 99) and fake.calls[-1] == (200, 299)
+
+
+def test_supabase_query_never_caps_at_a_single_page(monkeypatch):
+    """A 500-row first page must not be the end: the loop keeps asking for
+    the next window until the table runs dry."""
+    import supabase_store
+    rows = _supabase_style_rows()[:258]
+    rows += [{"id": f"sb-x-{i:03d}", "slug": f"extra-piece-{i}", "source": "admin"}
+             for i in range(300)]
+    fake = _FakeSupabaseClient(rows)
+    monkeypatch.setattr(supabase_store, "client", lambda: fake)
+    monkeypatch.setattr(supabase_store, "PAGE_SIZE", 250)
+
+    out = supabase_store.products_table_rows()
+    assert len(out) == 558, f"expected every row (558), got {len(out)}"
+    assert len(fake.calls) == 3, f"expected 3 pages, saw {fake.calls}"
+
+
+def test_supabase_query_survives_a_server_side_row_cap(monkeypatch):
+    """The regression behind the shop capping at 240 items: a PostgREST
+    max-rows limit silently truncates oversized responses. A short page that
+    still has rows left must shrink the window and keep walking, not stop."""
+    import supabase_store
+    rows = _supabase_style_rows()[:258]      # 258 live products, no tombstones
+    fake = _FakeSupabaseClient(rows, cap=240)  # the server caps at 240 rows
+    monkeypatch.setattr(supabase_store, "client", lambda: fake)
+    monkeypatch.setattr(supabase_store, "PAGE_SIZE", 500)
+
+    out = supabase_store.products_table_rows()
+    assert len(out) == 258, f"a 240-row server cap truncated the catalogue to {len(out)}"
+    # page 1 is cut at 240; the walk must continue past it
+    assert len(fake.calls) >= 2, f"pagination stopped after one page: {fake.calls}"
+    assert fake.calls[0] == (0, 499)         # asked for the full window
+    assert fake.calls[1][0] == 240           # resumed where the server stopped
+
+
+def test_merged_catalogue_has_no_duplicates_when_supabase_ids_differ(monkeypatch):
+    """The bug shoppers saw: the same product in Supabase under a fresh id
+    was unioned next to its seed copy and rendered twice. merged() must keep
+    one copy of each product (matched by id, then slug, then sku), keeping
+    the live Supabase version."""
+    import catalog as catalog_mod
+    seed = catalog_mod._seed_products()
+    sb = []
+    for i, p in enumerate(seed):
+        row = dict(p)
+        row["id"] = f"sb-{i:03d}"               # same product, different id
+        row["name"] = p["name"] + " (live)"     # prove the Supabase copy wins
+        sb.append(row)
+    sb.append({"id": "sb-new", "sku": "JAUNEW", "slug": "only-in-supabase",
+               "name": "Only in Supabase", "category": "bags", "priceNgn": 1000})
+    monkeypatch.setattr(catalog_mod, "_supabase_products", lambda: sb)
+    monkeypatch.setattr(catalog_mod, "overrides",
+                        lambda: {"products": [], "deleted": []})
+
+    merged = catalog_mod.merged()
+
+    slugs = [p["slug"] for p in merged]
+    assert len(merged) == len(seed) + 1 == 259, \
+        f"expected 259 unique products, got {len(merged)}"
+    assert len(slugs) == len(set(slugs)), "a product appears twice in the catalogue"
+    assert all("(live)" in p["name"] for p in merged
+               if p["id"].startswith("sb-") and p["id"] != "sb-new"), \
+        "the stale seed copy won over the live Supabase row"
+    assert not any(p["id"].startswith("wix-") for p in merged), \
+        "seed duplicates of Supabase products were not replaced"
+
+
+def test_merged_catalogue_applies_deleted_ids_with_supabase(monkeypatch):
+    """A product the admin deleted must not come back to life just because
+    Supabase is the source of truth (the deleted list used to be ignored)."""
+    import catalog as catalog_mod
+    seed = catalog_mod._seed_products()
+    sb = [dict(p) for p in seed]                # same ids as the seed
+    target = seed[0]["id"]
+    monkeypatch.setattr(catalog_mod, "_supabase_products", lambda: sb)
+    monkeypatch.setattr(catalog_mod, "overrides",
+                        lambda: {"products": [], "deleted": [target]})
+
+    merged = catalog_mod.merged()
+    ids = [p["id"] for p in merged]
+    assert target not in ids, "a soft-deleted product was resurrected"
+    assert len(merged) == len(seed) - 1
+
+
 def test_offline_outbox_survives_a_page_refresh(client):
     """js/net.js must keep a queued save somewhere that outlives the page.
 
