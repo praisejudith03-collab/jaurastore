@@ -1,6 +1,6 @@
 # J Aura Store
 
-Premium fashion, beauty and lifestyle store for West Africa. Prices are entered
+Premium household items,skincare, Ankara wears,fashion, beauty and lifestyle store for West Africa. Prices are entered
 in Naira and shown in F CFA at 1 ₦ = 0.44 F CFA. Payments are taken by bank
 transfer (UBA ₦ / MTN MoMo & Moov CFA) and confirmed by the shop.
 
