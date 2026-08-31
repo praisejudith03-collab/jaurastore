@@ -73,6 +73,34 @@ def test_login_sets_session_and_unknown_email_is_identical(client):
     assert wrong_pw.get_json()["error"] == unknown.get_json()["error"]
 
 
+def test_sole_admin_email_when_one_account(client):
+    assert authmod.sole_admin_email() == EMAIL
+
+
+def test_admin_login_is_password_only_with_single_account(client):
+    """No email in the body: the server resolves the one admin account."""
+    r = client.post("/api/admin/login", json={"password": PW})
+    assert r.status_code == 200, r.data
+    assert r.get_json()["email"] == EMAIL
+
+
+def test_admin_login_with_multiple_accounts_asks_for_email(client, monkeypatch):
+    double = ["one@example.com", "two@example.com"]
+    monkeypatch.setattr("auth.Config.ADMIN_EMAILS", double)
+    assert authmod.sole_admin_email() is None
+    r = client.post("/api/admin/login", json={"password": PW})
+    assert r.status_code == 400, r.data
+    assert "email" in r.get_json()["error"].lower()
+
+
+def test_two_devices_can_be_signed_in_at_once(client):
+    """Per-device session cookies: two clients can stay signed in together."""
+    a = client.post("/api/admin/login", json={"password": PW})
+    b = client.post("/api/admin/login", json={"password": PW})
+    assert a.status_code == b.status_code == 200
+    assert client.get("/api/admin/analytics").status_code == 200
+
+
 def test_brute_force_lockout(client):
     execute("DELETE FROM rate_limits")
     codes = [client.post("/api/admin/login", json={"email": EMAIL, "password": "bad" + str(i)}).status_code
@@ -152,6 +180,40 @@ def test_pickup_is_not_a_delivery_option(client, zone):
     assert r.status_code == 400
 
 
+def _post_min_order(client, oid, currency, total, zone):
+    tok = csrf(client)
+    return client.post("/api/orders", json={
+        "id": oid, "currency": currency, "total": total,
+        "customer": {"name": "Min Tester", "email": "min@example.com",
+                     "phone": "+229 90 00 00 00", "city": "Cotonou", "zone": zone},
+        "items": [{"id": "wix-001", "name": "Min item", "qty": 1, "price": total}],
+    }, headers={"X-CSRF-Token": tok})
+
+
+def test_benin_minimum_is_enforced_on_orders(client):
+    r = _post_min_order(client, "JA-BJ1", "CFA", 2999, "Cotonou")
+    assert r.status_code == 400, r.data
+    assert "3,000 F CFA" in r.get_json()["error"]
+
+
+def test_benin_minimum_in_naira_is_enforced(client):
+    r = _post_min_order(client, "JA-BJ2", "NGN", 6799, "Calavi")
+    assert r.status_code == 400, r.data
+    assert "6,800" in r.get_json()["error"]
+
+
+def test_benin_minimum_exact_cfa_and_ngn_are_accepted(client):
+    a = _post_min_order(client, "JA-BJ3", "CFA", 3000, "Cotonou")
+    b = _post_min_order(client, "JA-BJ4", "NGN", 6800, "Porto-Novo")
+    assert a.status_code == 200, a.data
+    assert b.status_code == 200, b.data
+
+
+def test_lagos_orders_have_no_benin_minimum(client):
+    r = _post_min_order(client, "JA-LAG", "NGN", 100, "Lagos Mainland")
+    assert r.status_code == 200, r.data
+
+
 def test_analytics_counts_and_dashboard_shape(client):
     tok = csrf(client)
     client.post("/api/track", json={"events": [
@@ -174,6 +236,24 @@ def test_analytics_counts_and_dashboard_shape(client):
 
 def test_analytics_is_private(client):
     assert client.get("/api/admin/analytics").status_code == 401
+
+
+def test_categories_are_public_and_admin_writable(tmp_path, monkeypatch, client):
+    import api as apimod
+    monkeypatch.setattr(apimod, "CATEGORIES_FILE", str(tmp_path / "categories.json"))
+    pub = client.get("/api/categories")
+    assert pub.status_code == 200
+    assert len(pub.get_json()["categories"]) >= 10
+
+    assert client.put("/api/admin/categories", json={"categories": []}).status_code in (401, 403)
+    tok = login(client)
+    cats = pub.get_json()["categories"][:2]
+    r = client.put("/api/admin/categories", json={"categories": cats},
+                   headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    assert r.get_json()["count"] == len(cats)
+    on_disk = json.load(open(str(tmp_path / "categories.json")))
+    assert on_disk["categories"] and on_disk["updatedBy"] == EMAIL
 
 
 def test_catalogue_round_trip_is_live_immediately(client):
@@ -510,7 +590,9 @@ def test_supabase_query_reads_every_live_row_and_pages(monkeypatch):
     """"The fetching query must not cap or filter the catalogue:
     every source except tombstones comes back, and the read pages through
     the table so a PostgREST max-rows limit can never truncate it."""
+    import catalog as catalog_mod
     import supabase_store
+    n = len(catalog_mod._seed_products())
     rows = _supabase_style_rows()
     fake = _FakeSupabaseClient(rows)
     monkeypatch.setattr(supabase_store, "client", lambda: fake)
@@ -519,12 +601,12 @@ def test_supabase_query_reads_every_live_row_and_pages(monkeypatch):
     out = supabase_store.products_table_rows()
 
     assert out is not None
-    assert len(out) == 258, f"expected all 258 live rows, got {len(out)}"
+    assert len(out) == n, f"expected all {n} live rows, got {len(out)}"
     slugs = [p["slug"] for p in out]
     assert len(slugs) == len(set(slugs)), "the same product came back twice"
     assert "deleted-piece" not in slugs and "replaced-piece" not in slugs
-    # paged: 260 rows / 100 per page -> 3 range windows, never one big select
-    assert len(fake.calls) == 3, f"expected 3 pages, saw {fake.calls}"
+    # paged: (n + tombstones) / 100 per page -> at least two windows
+    assert len(fake.calls) >= 2, f"expected multiple pages, saw {fake.calls}"
     assert fake.calls[0] == (0, 99) and fake.calls[-1] == (200, 299)
 
 
@@ -532,7 +614,8 @@ def test_supabase_query_never_caps_at_a_single_page(monkeypatch):
     """A 500-row first page must not be the end: the loop keeps asking for
     the next window until the table runs dry."""
     import supabase_store
-    rows = _supabase_style_rows()[:258]
+    import catalog as catalog_mod
+    rows = _supabase_style_rows()[:len(catalog_mod._seed_products())]
     rows += [{"id": f"sb-x-{i:03d}", "slug": f"extra-piece-{i}", "source": "admin"}
              for i in range(300)]
     fake = _FakeSupabaseClient(rows)
@@ -540,7 +623,7 @@ def test_supabase_query_never_caps_at_a_single_page(monkeypatch):
     monkeypatch.setattr(supabase_store, "PAGE_SIZE", 250)
 
     out = supabase_store.products_table_rows()
-    assert len(out) == 558, f"expected every row (558), got {len(out)}"
+    assert len(out) == len(catalog_mod._seed_products()) + 300, f"expected all live + extra rows, got {len(out)}"
     assert len(fake.calls) == 3, f"expected 3 pages, saw {fake.calls}"
 
 
@@ -549,13 +632,15 @@ def test_supabase_query_survives_a_server_side_row_cap(monkeypatch):
     max-rows limit silently truncates oversized responses. A short page that
     still has rows left must shrink the window and keep walking, not stop."""
     import supabase_store
-    rows = _supabase_style_rows()[:258]      # 258 live products, no tombstones
+    import catalog as catalog_mod
+    n = len(catalog_mod._seed_products())
+    rows = _supabase_style_rows()[:n]      # n live products, no tombstones
     fake = _FakeSupabaseClient(rows, cap=240)  # the server caps at 240 rows
     monkeypatch.setattr(supabase_store, "client", lambda: fake)
     monkeypatch.setattr(supabase_store, "PAGE_SIZE", 500)
 
     out = supabase_store.products_table_rows()
-    assert len(out) == 258, f"a 240-row server cap truncated the catalogue to {len(out)}"
+    assert len(out) == n, f"a 240-row server cap truncated the catalogue to {len(out)}"
     # page 1 is cut at 240; the walk must continue past it
     assert len(fake.calls) >= 2, f"pagination stopped after one page: {fake.calls}"
     assert fake.calls[0] == (0, 499)         # asked for the full window
@@ -584,8 +669,8 @@ def test_merged_catalogue_has_no_duplicates_when_supabase_ids_differ(monkeypatch
     merged = catalog_mod.merged()
 
     slugs = [p["slug"] for p in merged]
-    assert len(merged) == len(seed) + 1 == 259, \
-        f"expected 259 unique products, got {len(merged)}"
+    assert len(merged) == len(seed) + 1, \
+        f"expected {len(seed) + 1} unique products, got {len(merged)}"
     assert len(slugs) == len(set(slugs)), "a product appears twice in the catalogue"
     assert all("(live)" in p["name"] for p in merged
                if p["id"].startswith("sb-") and p["id"] != "sb-new"), \

@@ -359,14 +359,46 @@ const JA = (() => {
     if ((document.body.dataset.page || "") === "admin") return all;
     return all.filter((c) => !c.hidden);
   }
+  async function loadServerCategories() {
+    if ((document.body.dataset.page || "") !== "admin") return categories();
+    try {
+      const r = await fetch("api/categories", { credentials: "same-origin", cache: "no-store" });
+      const d = await r.json();
+      if (d && Array.isArray(d.categories) && d.categories.length) {
+        write(KEYS.cats, d.categories.map((c) => ({
+          id: c.id, name: c.name, nameFr: c.nameFr || "",
+          image: c.image || "", hidden: !!c.hidden,
+        })));
+      }
+    } catch (e) { /* fall back to local defaults */ }
+    return categories();
+  }
   function saveCategories(list) {
-    write(KEYS.cats, normalizeCatList(list || []).map((c) => ({
+    const cleaned = normalizeCatList(list || []).map((c) => ({
       id: c.id,
       name: c.name,
       nameFr: c.nameFr || "",
       image: c.image || "",
       hidden: !!c.hidden,
-    })));
+    }));
+    write(KEYS.cats, cleaned);
+    // In the admin portal also persist to the server so every device and the
+    // live storefront see the same category table.
+    if ((document.body.dataset.page || "") === "admin") {
+      (async () => {
+        try {
+          await fetch("api/admin/categories", {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRF-Token": await (window.JA_NET && window.JA_NET.csrf ? window.JA_NET.csrf() : Promise.resolve("")),
+            },
+            credentials: "same-origin",
+            body: JSON.stringify({ categories: cleaned }),
+          });
+        } catch (e) { /* admin still has the local copy */ }
+      })();
+    }
   }
   function moveCategoryProducts(fromId, toId) {
     if (!fromId || !toId || fromId === toId) return 0;
@@ -1394,7 +1426,7 @@ const JA = (() => {
           </div>
         </div>
       </div>
-      <img class="foot-wave" src="images/brand/footer-wave.jpg" alt="" />
+      <img class="foot-wave" src="images/brand/footer-wave-6400.png" alt="" />
     </footer>
     <nav class="dock">
       <a href="shop.html"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span>${tx("dock.shop")}</span></a>
@@ -1832,7 +1864,7 @@ const JA = (() => {
   ready = loadSeed();
 
   return {
-    ready, CATEGORIES: DEFAULT_CATS, categories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings,
+    ready, CATEGORIES: DEFAULT_CATS, categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings,
     products, product, searchProducts, categoryName, displayName,
     currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, BULK_QTY,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
