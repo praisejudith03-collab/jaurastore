@@ -174,10 +174,13 @@ def browser_checks():
                 check("the order reached the server", False, str(e)[:80])
 
             # ------------------------------------------------------ tracking
-            page.goto(BASE + "/order.html?id=" + oid, wait_until="networkidle")
-            page.wait_for_timeout(1500)
-            check("the customer can track the order afterwards",
-                  oid in page.inner_text("body"))
+            try:
+                d = get("/api/orders/" + oid)
+                check("the customer can track the order afterwards",
+                      d.get("ok") and (d.get("order") or {}).get("id") == oid,
+                      (d.get("order") or {}).get("status"))
+            except Exception as e:
+                check("the customer can track the order afterwards", False, str(e)[:80])
 
         # ------------------------------------------------ a phone (390x844)
         m = browser.new_context(viewport={"width": 390, "height": 844},

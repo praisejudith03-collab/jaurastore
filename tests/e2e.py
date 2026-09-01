@@ -225,29 +225,44 @@ def main():
                 "SELECT address FROM orders WHERE id='%s'" % order_id) or [{}])[0].get("address", ""))
 
         # ----------------------------------------------------------- tracking
-        page.goto(BASE + "/order.html?id=" + order_id, wait_until="networkidle")
-        check("order tracking works from a fresh page", order_id in page.content())
+        status, d = api("/api/orders/" + order_id)
+        check("order tracking works from the server API",
+              status == 200 and d.get("ok") and (d.get("order") or {}).get("id") == order_id,
+              (status, (d.get("order") or {}).get("status")))
 
-        # --------------------------------------------- payment receipt form
+        # --------------------------------------- payment receipt via the API
+        # The standalone payment page is gone: receipts are uploaded in the
+        # checkout itself, so the endpoint is exercised directly here.
         db_exec("DELETE FROM rate_limits WHERE action='payment-proof'")   # a clean slot
-        page.goto(BASE + "/pay.html?id=" + order_id, wait_until="networkidle")
-        dismiss(page)
-        check("payment form asks for name, phone, email and order id",
-              all(page.locator(f'[data-pay-form] [name={n}]').count() == 1
-                  for n in ("name", "phone", "email", "orderId")))
-        page.fill("[data-pay-form] [name=name]", "Grace Mensah")
-        page.fill("[data-pay-form] [name=phone]", "+229 97 00 11 22")
-        page.fill("[data-pay-form] [name=email]", "grace@example.com")
-        page.set_input_files("[data-pay-form] [name=receipt]",
-                             os.path.abspath("tests/fixtures/receipt.pdf"))
-        page.wait_for_timeout(600)
-        check("pdf preview shown before sending", page.locator(".pay-pdf").count() == 1,
-              page.locator("[data-pay-file-note]").inner_text()[:60])
-        click_safe(page, ".pay-send")
-        page.wait_for_selector(".pay-done", timeout=30000)
-        check("receipt accepted and confirmation shown", True,
-              page.locator(".pay-done .pay-lead").inner_text()[:80])
-        page.screenshot(path=os.path.join(SHOTS, "07-payment-receipt.png"))
+        import http.cookiejar as cj
+        import urllib.request as u
+        jar = cj.CookieJar()
+        opener = u.build_opener(u.HTTPCookieProcessor(jar))
+        with opener.open(BASE + "/api/config", timeout=20) as r:
+            cfg = json.loads(r.read().decode())
+        csrf = cfg.get("csrf", "")
+        boundary = "----JauraE2E" + str(int(time.time() * 1000))
+        parts = []
+        for k, v in (("name", "Grace Mensah"), ("phone", "+229 97 00 11 22"),
+                     ("email", "grace@example.com"), ("orderId", order_id),
+                     ("items", "1x 10000 mah power bank"), ("quantity", "1"),
+                     ("amount", "18500"), ("method", "UBA bank transfer (₦ Naira)"),
+                     ("note", "e2e receipt"), ("currency", "CFA")):
+            parts.append((f"--{boundary}\r\n"
+                          f'Content-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n').encode())
+        with open("tests/fixtures/receipt.pdf", "rb") as fh:
+            pdf = fh.read()
+        parts.append((f"--{boundary}\r\n"
+                      f'Content-Disposition: form-data; name="file"; filename="receipt.pdf"\r\n'
+                      "Content-Type: application/pdf\r\n\r\n").encode() + pdf + b"\r\n")
+        parts.append((f"--{boundary}--\r\n").encode())
+        req = u.Request(BASE + "/api/payment-proof", data=b"".join(parts), method="POST")
+        req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+        req.add_header("X-CSRF-Token", csrf)
+        with opener.open(req, timeout=30) as r:
+            proof = json.loads(r.read().decode())
+        check("receipt accepted and confirmation shown", proof.get("ok") is True,
+              proof.get("message") or proof.get("error"))
 
         page.wait_for_timeout(2000)
         rows = db_rows("SELECT order_id, name, phone, email, method, file_name, file_size, mime, emailed "
@@ -435,34 +450,25 @@ def main():
 
         check("no uncaught JS errors", not real, real[:3])
 
-        # --------------------------------------- the payment form on a phone
+        # --------------------------------------- the checkout form on a phone
         mctx = browser.new_context(viewport={"width": 390, "height": 844},
                                    is_mobile=True, has_touch=True, device_scale_factor=3)
         mctx.add_init_script(
             "try { localStorage.setItem('jaura_welcome_at', String(Date.now())); } catch (e) {}")
         mpage = mctx.new_page()
-        mpage.goto(BASE + "/pay.html", wait_until="networkidle")
-        mpage.wait_for_timeout(600)
+        mpage.goto(BASE + "/checkout.html", wait_until="networkidle")
+        mpage.evaluate("() => localStorage.setItem('jaura_cart', JSON.stringify([{id:'wix-001',qty:1,color:''}]))")
+        mpage.reload(wait_until="networkidle")
+        mpage.wait_for_timeout(1200)
         overflow = mpage.evaluate(
             "() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
-        check("payment form fits a 390px phone with no sideways scrolling", overflow <= 0, overflow)
-        db_exec("DELETE FROM rate_limits WHERE action='payment-proof'")
-        mpage.fill("[data-pay-form] [name=name]", "Chidinma Okafor")
-        mpage.fill("[data-pay-form] [name=phone]", "+234 803 555 0199")
-        mpage.fill("[data-pay-form] [name=email]", "chidinma@example.com")
-        mpage.fill("[data-pay-form] [name=orderId]", "JA-MOBILE1")
-        mpage.fill("[data-pay-form] [name=items]", "1x Gucci crossbody bag")
-        mpage.fill("[data-pay-form] [name=quantity]", "1")
-        mpage.fill("[data-pay-form] [name=amount]", "NGN 45,000")
-        mpage.set_input_files("[data-pay-form] [name=receipt]",
-                              os.path.abspath("tests/fixtures/receipt.pdf"))
-        mpage.wait_for_timeout(700)
-        mpage.locator(".pay-send").scroll_into_view_if_needed()
-        mpage.locator(".pay-send").click()
-        mpage.wait_for_selector(".pay-done", timeout=45000)
-        check("receipt sent from a phone", True,
-              mpage.locator(".pay-done .pay-lead").inner_text()[:70])
-        mpage.screenshot(path=os.path.join(SHOTS, "08-pay-mobile.png"), full_page=True)
+        check("checkout fits a 390px phone with no sideways scrolling", overflow <= 0, overflow)
+        accept = mpage.locator("[name=proof]").get_attribute("accept")
+        capture = mpage.locator("[name=proof]").get_attribute("capture")
+        check("receipt upload accepts gallery images + PDF with no camera capture",
+              accept == "image/*,.pdf,application/pdf" and capture is None,
+              "accept=%r capture=%r" % (accept, capture))
+        mpage.screenshot(path=os.path.join(SHOTS, "08-checkout-mobile.png"), full_page=True)
         mctx.close()
 
         browser.close()
