@@ -1258,3 +1258,77 @@ def test_whatsapp_notifier_safe_when_unconfigured(client):
         "customer": {"name": "Ada", "city": "Lagos", "zone": "Ikeja", "address": "1 Road"},
         "items": [{"qty": 1, "name": "Bag"}]})
     assert sent is False and "not configured" in detail
+
+
+# ====================================================== adjustable CFA rate
+def test_cfa_rate_default_and_admin_adjustable(client):
+    tok = login(client)
+    s = client.get("/api/admin/growth/settings").get_json()["settings"]
+    assert s["cfaRate"] == 0.44
+
+    # raise the rate: 1 NGN = 2 CFA, so 10,000 F CFA is only ~N5,000 and
+    # no longer qualifies for a referral code (threshold N20,000)
+    r = client.post("/api/admin/growth/settings", headers={"X-CSRF-Token": tok},
+                    json={"cfaRate": 2.0})
+    assert r.get_json()["settings"]["cfaRate"] == 2.0
+    d = _growth_order(client, "JA-RATE01", "rate1@example.com",
+                      total=10000, currency="CFA")
+    assert d.get("referralCode") == ""
+
+    # back to the default rate the same order qualifies again
+    client.post("/api/admin/growth/settings", headers={"X-CSRF-Token": tok},
+                json={"cfaRate": 0.44})
+    d = client.get("/api/admin/growth/settings").get_json()["settings"]
+    assert d["cfaRate"] == 0.44
+    d = _growth_order(client, "JA-RATE02", "rate2@example.com",
+                      total=10000, currency="CFA")
+    assert d.get("referralCode", "").startswith("JA-")
+
+    # nonsense rates are rejected and fall back to the safe default
+    s = client.post("/api/admin/growth/settings", headers={"X-CSRF-Token": tok},
+                    json={"cfaRate": 0}).get_json()["settings"]
+    assert s["cfaRate"] == 0.44
+    s = client.post("/api/admin/growth/settings", headers={"X-CSRF-Token": tok},
+                    json={"cfaRate": "banana"}).get_json()["settings"]
+    assert s["cfaRate"] == 0.44
+
+
+def test_supabase_growth_mirrors_are_safe_noops_when_disabled(client):
+    import supabase_store as sb
+    assert sb.client() is None  # tests never talk to Supabase
+    sb.mirror_referral_code({"code": "JA-XX", "email": "a@b.c"})
+    sb.mirror_referral_use({"code": "JA-XX", "order_id": "JA-1"})
+    sb.mirror_coupon({"code": "SALE", "percent": 5})
+    sb.mirror_growth_settings({"cfaRate": 0.44})
+    import growth
+    growth._mirror_referral("JA-NOPE")     # unknown code: silently ignored
+    growth._mirror_coupon("NOPE")
+
+
+# =================================================== homepage & shop polish
+def test_homepage_hero_video_and_single_wave_layer(client):
+    html = client.get("/index.html").get_data(as_text=True)
+    # hero video: autoplay muted loop inline, aggressive preload, no PiP
+    assert 'id="hero-video"' in html
+    for attr in ("autoplay", "muted", "loop", "playsinline",
+                 'preload="auto"', "disablepictureinpicture"):
+        assert attr in html, f"hero video is missing {attr}"
+    # centered overlay statement + Explore button
+    assert 'id="hero-video-copy"' in html
+    assert 'data-i18n="home.standard"' in html and 'data-i18n="home.explore"' in html
+    # the payment-upload widget is gone from the homepage
+    assert "how-upload" not in html and "uploadProofText" not in html
+    # only ONE wave layer remains: the footer wave, not the fixed overlay
+    store_js = client.get("/js/store.js").get_data(as_text=True)
+    assert "foot-wavez" in store_js
+    assert "paintWaves" not in store_js and "site-waves" not in store_js
+    css = client.get("/css/style.css").get_data(as_text=True)
+    assert ".site-waves" not in css.replace("/* Footer flies up; just-in rows (the old fixed .site-waves overlay was removed:", "")
+
+
+def test_shop_pagination_is_real(client):
+    app_js = client.get("/js/app.js").get_data(as_text=True)
+    assert "const per = 24;" in app_js          # a real page size, not the whole list
+    assert "pager.prev" in app_js and "pager.next" in app_js
+    shop = client.get("/shop.html").get_data(as_text=True)
+    assert "data-pager" in shop

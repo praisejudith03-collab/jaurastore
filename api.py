@@ -1199,6 +1199,7 @@ def admin_coupon_create():
     execute("INSERT INTO coupons (code, percent, kind, note, active, max_uses, expires_at) "
             "VALUES (?,?,?,?,1,?,?)", (code, percent, "manual", note, max_uses, expires))
     audit(authmod.current_admin(), "coupon.created", f"{code} {percent}%", _ip())
+    growth._mirror_coupon(code)
     return jsonify(ok=True, code=code)
 
 @api.patch("/admin/coupons/<code>")
@@ -1225,6 +1226,7 @@ def admin_coupon_update(code):
     if "note" in d:
         execute("UPDATE coupons SET note=? WHERE code=?", (sec.clean(d.get("note"), 200), code))
     audit(authmod.current_admin(), "coupon.updated", code, _ip())
+    growth._mirror_coupon(code)
     return jsonify(ok=True, code=code)
 
 @api.delete("/admin/coupons/<code>")
@@ -1235,6 +1237,13 @@ def admin_coupon_delete(code):
     code = growth.normalize_code(code)
     execute("DELETE FROM coupons WHERE code=?", (code,))
     audit(authmod.current_admin(), "coupon.deleted", code, _ip())
+    try:
+        from supabase_store import client as _sb_client
+        c = _sb_client()
+        if c is not None:
+            c.table("coupons").delete().eq("code", code).execute()
+    except Exception:                              # pragma: no cover
+        pass
     return jsonify(ok=True)
 
 @api.get("/admin/abandoned")

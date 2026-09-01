@@ -22,6 +22,7 @@ DEFAULTS = {
     "referralEnabled": 1,
     "abandonedEnabled": 1,
     "minSpendNgn": 20000,      # order value that earns a referral code
+    "cfaRate": 0.44,           # adjustable NGN -> CFA rate (1 NGN = cfaRate F CFA)
     "buyerPercent": 5,         # discount for the referred buyer
     "referrerPercent": 10,     # reward coupon, hard-capped at 10
     "milestone": 2,            # successful purchases that trigger the reward
@@ -37,6 +38,7 @@ DEFAULTS = {
 
 INT_KEYS = ("referralEnabled", "abandonedEnabled", "minSpendNgn",
             "buyerPercent", "referrerPercent", "milestone", "abandonedHours")
+FLOAT_KEYS = ("cfaRate",)
 
 
 def _utcnow():
@@ -50,7 +52,15 @@ def settings():
     for k, v in rows.items():
         if k not in DEFAULTS:
             continue
-        out[k] = int(float(v)) if k in INT_KEYS else str(v)
+        if k in INT_KEYS:
+            out[k] = int(float(v))
+        elif k in FLOAT_KEYS:
+            try:
+                out[k] = float(v)
+            except (TypeError, ValueError):
+                pass
+        else:
+            out[k] = str(v)
     return _cap(out)
 
 
@@ -63,6 +73,12 @@ def _cap(s):
     s["abandonedHours"] = max(1, min(int(s.get("abandonedHours", 2)), 168))
     s["referralEnabled"] = 1 if int(s.get("referralEnabled", 1)) else 0
     s["abandonedEnabled"] = 1 if int(s.get("abandonedEnabled", 1)) else 0
+    try:
+        s["cfaRate"] = round(float(s.get("cfaRate", NGN_TO_CFA)), 4)
+    except (TypeError, ValueError):
+        s["cfaRate"] = NGN_TO_CFA
+    if not (0.01 <= s["cfaRate"] <= 100):
+        s["cfaRate"] = NGN_TO_CFA
     return s
 
 
@@ -80,6 +96,11 @@ def save_settings(patch, actor=""):
             if v is None:
                 continue
             cur[k] = v
+        elif k in FLOAT_KEYS:
+            try:
+                cur[k] = float(patch.get(k))
+            except (TypeError, ValueError):
+                continue
         else:
             cur[k] = sec.clean(str(patch.get(k) or ""), 4000)
     cur = _cap(cur)
@@ -87,17 +108,27 @@ def save_settings(patch, actor=""):
         execute("INSERT INTO growth_settings (key, value) VALUES (?,?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, str(v)))
     audit(actor or "admin", "growth.settings", json.dumps(cur)[:400], "")
+    try:
+        from supabase_store import mirror_growth_settings
+        mirror_growth_settings(cur)
+    except Exception:                                  # pragma: no cover
+        pass
     return cur
 
 
 # ------------------------------------------------------------------ helpers
-def total_in_ngn(total, currency):
+def total_in_ngn(total, currency, rate=None):
+    """Convert an order total to NGN using the admin-adjustable rate
+    (growth setting `cfaRate`, default 0.44 F CFA per ₦)."""
     try:
         total = float(total or 0)
     except (TypeError, ValueError):
         return 0
     if (currency or "").upper() in ("CFA", "XOF", "FCFA"):
-        return int(round(total / NGN_TO_CFA))
+        if rate is None:
+            rate = settings()["cfaRate"]
+        rate = rate or NGN_TO_CFA
+        return int(round(total / rate))
     return int(round(total))
 
 
@@ -148,6 +179,29 @@ def check_code(raw_code):
 
 
 # ------------------------------------------------------------- order hooks
+def _mirror_referral(code):
+    """Best-effort Supabase copy of one referral row (never blocks a sale)."""
+    try:
+        from supabase_store import mirror_referral_code
+        r = one("SELECT code, email, name, uses, reward_issued, reward_coupon, created_at "
+                "FROM referral_codes WHERE code=?", (code,))
+        if r:
+            mirror_referral_code(dict(r))
+    except Exception:                              # pragma: no cover
+        pass
+
+
+def _mirror_coupon(code):
+    try:
+        from supabase_store import mirror_coupon
+        r = one("SELECT code, percent, kind, email, note, active, max_uses, uses, "
+                "expires_at, created_at FROM coupons WHERE code=?", (code,))
+        if r:
+            mirror_coupon(dict(r))
+    except Exception:                              # pragma: no cover
+        pass
+
+
 def record_code_use(code, buyer_email, order_id):
     """Count a successful purchase against a code. On the exact milestone,
     automatically issue the referrer their capped reward coupon.
@@ -164,6 +218,7 @@ def record_code_use(code, buyer_email, order_id):
         if c["max_uses"] is not None and c["uses"] + 1 >= c["max_uses"]:
             execute("UPDATE coupons SET active=0 WHERE code=?", (code,))
         audit("system", "coupon.used", f"{code} on {order_id}", "")
+        _mirror_coupon(code)
         report["counted"] = True
         return report
 
@@ -175,6 +230,13 @@ def record_code_use(code, buyer_email, order_id):
     uses = r["uses"] + 1
     execute("UPDATE referral_codes SET uses=? WHERE code=?", (uses, code))
     audit("system", "referral.used", f"{code} ({uses} so far) on {order_id}", "")
+    try:
+        from supabase_store import mirror_referral_use
+        mirror_referral_use({"code": code, "order_id": order_id,
+                             "buyer_email": (buyer_email or "").lower(),
+                             "at": _utcnow()})
+    except Exception:                              # pragma: no cover
+        pass
     report["counted"] = True
 
     # No reward at 1. At EXACTLY `milestone` successful purchases, mint the
@@ -191,7 +253,9 @@ def record_code_use(code, buyer_email, order_id):
         audit("system", "referral.reward", f"{code} -> {reward} ({pct}%)", "")
         report["rewardIssued"] = True
         report["rewardCoupon"] = reward
+        _mirror_coupon(reward)
         _email_reward(r, reward, pct)
+    _mirror_referral(code)
     return report
 
 
@@ -226,6 +290,7 @@ def maybe_issue_referral(email, name, total, currency):
     execute("INSERT INTO referral_codes (code, email, name) VALUES (?,?,?)",
             (code, email.lower(), name or ""))
     audit("system", "referral.minted", f"{code} for {email}", "")
+    _mirror_referral(code)
     return code
 
 
