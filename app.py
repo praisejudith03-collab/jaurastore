@@ -36,6 +36,17 @@ def create_app():
         app.logger.warning("startup maintenance skipped: %s", exc)
     authmod.ensure_seed_admins()
 
+    # One-shot access recovery: when ADMIN_BOOTSTRAP_PASSWORD is present in the
+    # environment, the shared admin password is forced to it on boot so access
+    # can be regained with no email at all. Set it in the host dashboard, boot
+    # once, sign in, then delete the variable. It is never read from the repo.
+    bootstrap = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "").strip()
+    if bootstrap:
+        try:
+            authmod.set_shared_password(bootstrap)
+        except Exception as exc:                       # pragma: no cover
+            app.logger.warning("admin bootstrap password not applied: %s", exc)
+
     # abandoned-cart reminders + the midnight products/orders backup
     if Config.SCHEDULER_ENABLED and Config.ENV not in ("testing",):
         try:

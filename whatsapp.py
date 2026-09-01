@@ -69,9 +69,9 @@ def _via_callmebot(text):
         return 200 <= r.status < 300
 
 
-def send_order_notification(order):
-    """Returns (sent, detail). Configured provider is tried; nothing raises."""
-    text = _order_text(order)
+def send_text(text):
+    """Send a plain text message to the owner's WhatsApp (admin alerts, reset
+    codes). Returns (sent, detail). Never raises."""
     try:
         if Config.WHATSAPP_TOKEN and Config.WHATSAPP_PHONE_ID:
             return _via_cloud_api(text), "cloud-api"
@@ -80,3 +80,8 @@ def send_order_notification(order):
         return False, "not configured (set WHATSAPP_TOKEN + WHATSAPP_PHONE_ID or WHATSAPP_CALLMEBOT_KEY)"
     except Exception as exc:
         return False, f"{exc.__class__.__name__}: {exc}"
+
+
+def send_order_notification(order):
+    """Returns (sent, detail). Configured provider is tried; nothing raises."""
+    return send_text(_order_text(order))

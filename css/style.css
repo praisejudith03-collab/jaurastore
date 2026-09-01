@@ -5364,8 +5364,28 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 .home-hero-static .wrap { position: relative; z-index: 2; }
 /* When the video is live: edge-to-edge cover, the default copy steps aside
    and the centered statement takes over. */
-.home-hero-static.has-video { min-height: clamp(380px, 62vh, 640px); display: grid; align-items: center; }
+/* When the video is live it sits in a slightly larger, clearly-framed player:
+   inset from the section edges so it never collides with surrounding layout,
+   with a crisp (small-radius) border and a soft shadow for definition. */
+.home-hero-static.has-video {
+  min-height: clamp(420px, 70vh, 760px);
+  display: grid; align-items: center;
+  padding: clamp(14px, 3.5vw, 36px);
+}
 .home-hero-static.has-video .wrap { display: none; }
+.home-hero-static.has-video .home-hero-video {
+  position: absolute;
+  inset: clamp(14px, 3.5vw, 36px);
+  width: auto; height: auto;
+  border-radius: 6px;                 /* sharper, defined corners */
+  border: 1px solid rgba(253, 250, 245, .5);
+  outline: 1px solid rgba(43, 32, 24, .4);
+  box-shadow: 0 16px 48px rgba(24, 14, 8, .38), 0 4px 14px rgba(24, 14, 8, .3);
+}
+.home-hero-static.has-video .home-hero-scrim {
+  inset: clamp(14px, 3.5vw, 36px);
+  border-radius: 6px;
+}
 .home-hero-video-copy {
   position: relative; z-index: 2;
   display: grid; justify-items: center; gap: 22px;

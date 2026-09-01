@@ -51,7 +51,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
           <input type="password" name="password" required autocomplete="current-password" placeholder="Your admin password" />
           <button class="btn adx-login-btn" id="login-btn" data-no-i18n>Sign in</button>
         </form>
-        <button type="button" class="wix-link-btn" id="forgot-btn" style="margin-top:16px">Forgot password? Reset it by email</button>
+        <button type="button" class="wix-link-btn" id="forgot-btn" style="margin-top:16px">Forgot password? Reset it via WhatsApp</button>
         <div id="otp-slot"></div>
       </div>
     </div>`;
@@ -84,7 +84,7 @@ function paintOtpRequest(msg) {
   slot.innerHTML = `
     <div class="otp-box">
       <h3>Reset your password</h3>
-      <p class="admin-note">We email a 6-digit code to the admin address. Enter it below with a new password.</p>
+      <p class="admin-note">Enter the admin email so we know which account, then we send a 6-digit code to the owner's WhatsApp. Enter it below with a new password.</p>
       ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
       <form id="otp-req" class="field">
         <label>Admin email</label>
@@ -1204,7 +1204,7 @@ function accountPanel() {
         <div class="field"><label>Repeat new shared password</label><input type="password" name="again" required autocomplete="new-password" /></div>
         <div class="field full"><button class="btn" id="pw-btn">Change shared password</button></div>
       </form>
-      <p class="admin-note">At least 10 characters, with an upper case letter, a lower case letter and a number. It applies to every admin account, so the one password is what any of you type on the sign-in screen. If you ever forget it, use <em>Forgot password? Reset it by email</em> on the sign-in screen — a 6-digit code is emailed to the admin address.</p>
+      <p class="admin-note">At least 10 characters, with an upper case letter, a lower case letter and a number. It applies to every admin account, so the one password is what any of you type on the sign-in screen. If you ever forget it, use <em>Forgot password? Reset it via WhatsApp</em> on the sign-in screen — a 6-digit code is sent to the owner's WhatsApp. You can also change it right here at any time; it saves straight to the database with no email needed.</p>
     </div>
     <div class="admin-card" style="margin-top:22px">
       <h3 class="admin-h">Connection &amp; sync</h3>

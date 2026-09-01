@@ -1441,8 +1441,6 @@ const JA = (() => {
           <p><a href="delivery.html">${tx("nav.delivery")}</a></p>
           <p><a href="contact.html">${tx("nav.care")}</a></p>
           <p><a href="faq.html">${tx("nav.faq")}</a></p>
-          <p><a href="pay.html">${tx("nav.pay")}</a></p>
-          <p><a href="order.html">${tx("nav.track")}</a></p>
         </div>
         <div>
           <h4>${tx("footer.follow")}</h4>

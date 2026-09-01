@@ -169,8 +169,11 @@ async function main() {
   check("'Pick up' is NOT in the delivery zone menu", !/pick\s*-?\s*up/i.test(zoneText),
         zoneText.replace(/\s+/g, " ").trim().slice(0, 90));
   check("delivery includes Cotonou option", /Cotonou/i.test(zoneText), "zoneText=" + zoneText.replace(/\s+/g, " ").slice(0, 60));
-  check("receipt upload accepts PDF/JPG/PNG",
-        /application\/pdf/.test(ckHtml) && /image\/jpeg/.test(ckHtml) && /image\/png/.test(ckHtml));
+  // Receipt input must let the customer pick from the gallery (image/*), send a
+  // PDF, or take a fresh photo - and must NOT be locked to camera capture.
+  check("receipt upload accepts gallery images + PDF and is not camera-only",
+        /image\/\*/.test(ckHtml) && /application\/pdf/.test(ckHtml) && /\.pdf/.test(ckHtml)
+        && !/capture\s*=/.test(ckHtml));
 
   // ---- Real backend order (PDF receipt) ------------------------------------
   const cfg = await (await doFetch(BASE + "/api/config")).json();

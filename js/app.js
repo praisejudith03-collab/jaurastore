@@ -850,9 +850,7 @@ function showOrderDone(order) {
         <tfoot><tr class="ck-total"><th>${t("ck.total")}</th><td>${JA.money(order.total, order.currency)}</td></tr></tfoot>
       </table>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:22px">
-        <a class="btn" href="pay.html?id=${encodeURIComponent(order.id)}">${t("ck.uploadHere")}</a>
-        <a class="btn btn-line" href="https://wa.me/${JA.settings().whatsapp}?text=${encodeURIComponent("Hello JauraStore, my order ID is " + order.id + ". Here is my payment screenshot.")}" target="_blank" rel="noopener">${t("ck.uploadNow")}</a>
-        <a class="btn btn-line" href="order.html?id=${encodeURIComponent(order.id)}">${t("ck.track")}</a>
+        <a class="btn" href="https://wa.me/${JA.settings().whatsapp}?text=${encodeURIComponent("Hello JauraStore, my order ID is " + order.id + ". Here is my payment screenshot.")}" target="_blank" rel="noopener">${t("ck.uploadNow")}</a>
         <a class="btn btn-line" href="shop.html">${t("ck.return")}</a>
       </div>
     </div>`;
@@ -1365,8 +1363,7 @@ async function renderOrder() {
         ${(found.items || []).length ? `<ul class="order-items">${found.items.map((i) => `<li>${i.qty}× ${JA.escape(i.name)}${i.color ? " · " + JA.escape(i.color) : ""} — ${JA.money(i.price * i.qty, found.currency)}</li>`).join("")}</ul>` : ""}
         <p class="ck-fare-help">${t("ck.fareRange")}</p>
         <p style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
-          ${found.status === "confirmed" ? "" : `<a class="btn" href="pay.html?id=${encodeURIComponent(found.id)}">${t("ck.uploadHere")}</a>`}
-          <a class="btn btn-line" href="${fareWaUrl(found)}" target="_blank" rel="noopener">${t("ck.uploadNow")}</a>
+          <a class="btn" href="${fareWaUrl(found)}" target="_blank" rel="noopener">${t("ck.uploadNow")}</a>
         </p>
         <p style="color:var(--taupe);margin-top:16px">${statusMsg}</p>
       </div>`;
@@ -1382,7 +1379,9 @@ async function renderOrder() {
     </form>`;
   root.querySelector("[data-lookup]")?.addEventListener("submit", (e) => {
     e.preventDefault();
-    location.href = "order.html?id=" + encodeURIComponent(new FormData(e.target).get("id").trim());
+    const oid = encodeURIComponent(new FormData(e.target).get("id").trim());
+    location.href = "https://wa.me/" + JA.settings().whatsapp + "?text=" +
+      encodeURIComponent("Hello JauraStore, here is my order ID: " + oid);
   });
 }
 
@@ -1575,7 +1574,6 @@ function renderPay() {
         <p class="pay-privacy">A copy of this confirmation was also sent to ${JA.escape(String(fd.get("email") || ""))}.</p>
         <div class="pay-done-btns">
           <a class="btn" href="https://wa.me/${JA.settings().whatsapp}?text=${encodeURIComponent("Hello JauraStore, I just sent my payment receipt for order " + String(fd.get("orderId") || "").toUpperCase() + ".")}" target="_blank" rel="noopener">Message us on WhatsApp</a>
-          <a class="btn btn-line" href="order.html?id=${encodeURIComponent(String(fd.get("orderId") || "").toUpperCase())}">Track my order</a>
           <a class="btn btn-line" href="shop.html">Continue shopping</a>
         </div>
       </div>`;
@@ -1609,7 +1607,7 @@ function renderAccount() {
         <button class="btn" type="submit" style="margin-top:16px">${t("account.login")}</button>
       </form>
       <p style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:22px">
-        <a class="btn btn-line" href="order.html">${t("nav.track")}</a>
+        <a class="btn btn-line" href="https://wa.me/${JA.settings().whatsapp}" target="_blank" rel="noopener">${t("footer.contactUs")}</a>
       </p>`;
     root.querySelector("[data-account-login]")?.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -1625,11 +1623,11 @@ function renderAccount() {
     <p class="ck-confirm-note">${t("account.hello", { email: me.email })}</p>
     <p style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:22px">
       <button type="button" class="btn btn-line" data-account-out>${t("account.logout")}</button>
-      <a class="btn btn-line" href="order.html">${t("nav.track")}</a>
+      <a class="btn btn-line" href="https://wa.me/${JA.settings().whatsapp}" target="_blank" rel="noopener">${t("footer.contactUs")}</a>
     </p>
     <h2 class="serif-title" style="font-size:22px;margin-bottom:14px">${t("account.orders")}</h2>
     ${list.length ? list.slice(0, 20).map((o) => `
-      <a class="order-card" href="order.html?id=${encodeURIComponent(o.id)}">
+      <a class="order-card" href="https://wa.me/${JA.settings().whatsapp}?text=${encodeURIComponent("Hello JauraStore, I have a question about order " + o.id + ".")}" target="_blank" rel="noopener">
         <div class="order-card-top">
           <strong>${JA.escape(o.id)}</strong>
           <span class="status-pill ${o.status || "pending"}">${t(o.status === "confirmed" ? "order.confirmed" : o.status === "declined" ? "order.declined" : "order.pending")}</span>

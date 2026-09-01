@@ -662,12 +662,24 @@ def otp_request():
     if authmod.otp_requested_recently(email):
         return jsonify(ok=False, error="A code was just sent. Wait a minute before requesting another."), 429
     code = authmod.create_otp(email)
-    delivered, info = emailer.send_otp(email, code)
-    audit(email, "admin.otp_requested", f"delivered={delivered} {info}", _ip())
-    note = "" if delivered else " (mail delivery failed - check server logs / MAIL_MODE)"
-    return jsonify(ok=True, message=f"Verification code sent to {email}.{note}"
-                                    + (" It was printed to the server console because MAIL_MODE=none."
-                                       if Config.MAIL_MODE == "none" else ""))
+    # The reset code goes to the owner's WhatsApp - email delivery proved
+    # unreliable. Email is only a last-resort fallback when WhatsApp is not
+    # configured at all.
+    import whatsapp
+    delivered, info = whatsapp.send_text(
+        f"Jaura Store admin reset code for {email}: {code}\n"
+        f"It expires in 10 minutes and can be used once. "
+        f"If you did not request it, ignore this message.")
+    channel = "WhatsApp"
+    if not delivered:
+        delivered, info = emailer.send_otp(email, code)
+        channel = "email"
+    audit(email, "admin.otp_requested", f"via={channel} delivered={delivered} {info}", _ip())
+    if not delivered:
+        return jsonify(ok=False, error="The code could not be sent by WhatsApp or email. "
+                                        "Message the shop directly to recover access."), 502
+    return jsonify(ok=True, message=(f"Verification code sent by {channel} to the owner's phone."
+                   if channel == "WhatsApp" else f"Verification code sent to {email}."))
 
 @api.post("/admin/otp/verify")
 def otp_verify():
