@@ -23,8 +23,8 @@ ADMIN_EMAIL = "jaurastore@gmail.com"
 ADMIN_PASS = "JauraStore2026x"
 
 PAGES = ["index.html", "shop.html", "categories.html", "cart.html", "checkout.html",
-         "pay.html", "contact.html", "delivery.html", "faq.html", "wishlist.html",
-         "account.html", "order.html"]
+         "contact.html", "delivery.html", "faq.html", "wishlist.html",
+         "account.html"]
 
 TEXT_JS = """() => {
   const out = new Set();
@@ -192,14 +192,14 @@ def main():
                   f"{len(fr)} French strings" + (f", still English: {stuck[:4]}" if stuck else ""))
 
         print("\n--- spot checks ---")
-        fr_pay = collect("pay.html", "fr", browser)
-        for wanted in ("Envoyez votre reçu de paiement", "Nom complet *",
-                       "Moyen de paiement *", "Indiquez votre numéro de commande"):
-            check(f"the payment page says {wanted!r}",
-                  any(wanted in s for s in fr_pay))
-        for gone in ("Send your payment receipt", "Full name *", "Payment method *"):
-            check(f"the payment page no longer says {gone!r}",
-                  not any(gone == s for s in fr_pay))
+        # The standalone /pay.html page is gone: receipts are now uploaded in
+        # the checkout itself, so the payment strings are checked there.
+        fr_checkout = collect("checkout.html", "fr", browser)
+        check("the checkout receipt label is French",
+              any("Télécharger le reçu de paiement" in s for s in fr_checkout))
+        for gone in ("Upload the bank payment receipt",):
+            check(f"the checkout no longer says {gone!r}",
+                  not any(gone == s for s in fr_checkout))
 
         fr_shop = collect("shop.html", "fr", browser)
         check("category names are French",

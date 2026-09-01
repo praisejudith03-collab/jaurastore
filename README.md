@@ -56,22 +56,46 @@ Production: `gunicorn "app:create_app()" --workers 2 --timeout 90` (see
   soon as it returns (the "Syncing N changes" pill shows what is waiting).
 * **Orders** — every checkout form is stored on the server with its payment
   screenshot and is never cleaned up. Confirm / decline from here. A
-  "Receipts customers uploaded" table under it lists every receipt sent
-  through `/pay.html`, with the file itself and whether the email went out.
+  "Receipts customers uploaded" table under it lists every receipt attached at
+  checkout, with the file itself and whether the email went out.
 * **My account** — change the password on this device.
-* Forgotten passwords are reset with a 6-digit code emailed to the admin address.
+* Forgotten passwords are reset with a 6-digit code **emailed** to the admin
+  address. WhatsApp is only used as a fallback when the email cannot be sent.
 * The admin email list is the only way accounts exist:
   `ADMIN_EMAILS=you@example.com,sister@example.com` in `.env`. There is no
   public registration endpoint.
 
+### Locked out completely? One-time bootstrap password
+
+If the password is lost *and* no reset code can be received (no mailbox, no
+WhatsApp), the shop can force the shared admin password once on boot:
+
+| Setting | Value | Effect |
+| --- | --- | --- |
+| `ADMIN_BOOTSTRAP_PASSWORD` | any strong password | applied to every admin email on the **first** boot after this ships |
+| *(not set)* | — | falls back to `Config.BOOTSTRAP_ADMIN_PASSWORD`, whose default lives in `config.py` |
+
+`auth.apply_bootstrap_password()` stamps an `admin_bootstrap_applied` marker in
+`growth_settings` the moment it succeeds, so it **never fires twice** — a later
+password change from the admin portal survives every reboot. The step is
+skipped entirely when `FLASK_ENV=testing`.
+
+> **Security:** the built-in default is public (it is in the repository). Sign
+> in, change the password from **Admin → My account** immediately, and set
+> `ADMIN_BOOTSTRAP_PASSWORD` in the host dashboard before relying on a second
+> recovery. The event is written to the audit log as
+> `admin.bootstrap_password_applied`.
+
 ## Payment receipts
 
-Customers send proof of payment from **`/pay.html`** (linked in the footer, from
-the checkout confirmation, and from the order-tracking page). They fill in
-their name, phone, email, order ID, the products as ordered, the quantity, the
-amount and the payment method, then attach their receipt.
+Customers send proof of payment from the **checkout page** (`/checkout.html`),
+where the receipt field sits with the rest of the order. They attach their
+receipt (or a photo of it) alongside their name, phone, email and address.
 
-* Accepted: **JPG, PNG, PDF** up to **8 MB**.
+* Accepted: **JPG, PNG, PDF** up to **8 MB**. The input is
+  `accept="image/*,.pdf,application/pdf"` with **no `capture` attribute**, so
+  the phone offers both "take a photo" and "choose from files / PDF" instead of
+  forcing the camera.
 * Every file is re-identified from its own bytes before it is stored, so an
   `.exe` renamed to `.pdf` is refused, and a truncated PDF is refused too.
 * The shop receives **one email per receipt at `jaurastore@gmail.com`** with
@@ -83,8 +107,7 @@ amount and the payment method, then attach their receipt.
   listed in the admin portal, so a receipt is never lost to a spam folder.
 * If the phone is offline the receipt is queued on the device and sent when
   the connection returns (`js/net.js`).
-* Works on a phone: single-column layout, `capture` on the file input so
-  customers can shoot the receipt, and no sideways scrolling at 390 px.
+* Works on a phone: single-column layout and no sideways scrolling at 390 px.
 
 ### Which Gmail should send the receipts?
 

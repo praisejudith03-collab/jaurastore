@@ -124,4 +124,17 @@ class Config:
     OTP_MAX_ATTEMPTS = 5
     OTP_RESEND_COOLDOWN = 60
 
+    # ------------------------------------------------- admin access recovery
+    # Last-resort way back into the admin portal when the password is lost and
+    # no reset code can be received. On the FIRST boot after this ships, the
+    # shared admin password is forced to this value exactly once (see
+    # auth.apply_bootstrap_password, which stamps an `admin_bootstrap_applied`
+    # marker so it never fires again).
+    #
+    # SECURITY: this default is public (it lives in the repo), so sign in,
+    # change the password from the admin portal immediately, and set
+    # ADMIN_BOOTSTRAP_PASSWORD in the host dashboard if you ever need a second
+    # recovery. The marker makes it one-shot per database.
+    BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "") or "Jaura#Admin2026"
+
     LOW_STOCK_THRESHOLD = 5

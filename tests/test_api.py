@@ -1332,3 +1332,150 @@ def test_shop_pagination_is_real(client):
     assert "pager.prev" in app_js and "pager.next" in app_js
     shop = client.get("/shop.html").get_data(as_text=True)
     assert "data-pager" in shop
+
+
+# ================================================== admin access recovery
+def _clear_bootstrap():
+    """Reset the one-shot recovery marker + code slots between tests."""
+    execute("DELETE FROM growth_settings WHERE key=?", (authmod.BOOTSTRAP_MARKER,))
+    execute("DELETE FROM otp_codes")
+
+
+def test_bootstrap_password_applies_once_and_is_never_reapplied(client):
+    from config import Config
+    _clear_bootstrap()
+    pw = "Recovery#Pass2026"
+
+    # first boot after the deploy: the shared password is forced once
+    assert authmod.apply_bootstrap_password(pw) is True
+    assert one("SELECT key FROM growth_settings WHERE key=?",
+               (authmod.BOOTSTRAP_MARKER,)) is not None
+    assert authmod.verify_login(EMAIL, pw)
+    # ... and it is written for EVERY configured admin email
+    assert authmod.verify_login(Config.ADMIN_EMAILS[0], pw)
+    assert one("SELECT action FROM audit_log WHERE action='admin.bootstrap_password_applied'")
+
+    # the owner signs in and picks their own password ...
+    changed = "OwnerChoice2026x"
+    assert authmod.set_shared_password(changed) is True
+    # ... so a reboot (or any later call) must not restore the bootstrap value
+    assert authmod.apply_bootstrap_password(pw) is False
+    assert authmod.verify_login(EMAIL, pw) is False
+    assert authmod.verify_login(EMAIL, changed) is True
+
+    authmod.set_shared_password(PW)
+    _clear_bootstrap()
+
+
+def test_bootstrap_rejects_a_weak_password_without_burning_the_marker(client):
+    _clear_bootstrap()
+    # too short / empty: refused, and the marker is NOT written, so a corrected
+    # ADMIN_BOOTSTRAP_PASSWORD can still recover the account on a later boot
+    assert authmod.apply_bootstrap_password("short") is False
+    assert authmod.apply_bootstrap_password("") is False
+    assert one("SELECT key FROM growth_settings WHERE key=?",
+               (authmod.BOOTSTRAP_MARKER,)) is None
+
+    assert authmod.apply_bootstrap_password("LateRecovery2026x") is True
+    assert authmod.verify_login(EMAIL, "LateRecovery2026x") is True
+
+    authmod.set_shared_password(PW)
+    _clear_bootstrap()
+
+
+def test_bootstrap_config_default_is_always_usable():
+    import config
+    default = config.Config.BOOTSTRAP_ADMIN_PASSWORD
+    assert default, "BOOTSTRAP_ADMIN_PASSWORD must never be empty"
+    assert authmod.password_strong(default)[0], "the shipped default must pass password_strong()"
+
+
+def test_create_app_never_applies_the_bootstrap_under_testing(client, monkeypatch):
+    """FLASK_ENV=testing must leave the suite's own passwords untouched."""
+    import app as appmod2
+    _clear_bootstrap()
+    called = []
+    monkeypatch.setattr(authmod, "apply_bootstrap_password",
+                        lambda pw: called.append(pw) or True)
+    appmod2.create_app()
+    assert called == [], "create_app() applied the bootstrap while FLASK_ENV=testing"
+    assert one("SELECT key FROM growth_settings WHERE key=?",
+               (authmod.BOOTSTRAP_MARKER,)) is None
+    _clear_bootstrap()
+
+
+# ========================================== admin reset code: email first
+def test_admin_reset_code_is_emailed_first(client, monkeypatch):
+    _clear_bootstrap()
+    sent = {"email": [], "whatsapp": []}
+
+    def fake_email(to, code, purpose="reset"):
+        sent["email"].append((to, code, purpose))
+        return True, "sent"
+
+    def fake_whatsapp(text):
+        sent["whatsapp"].append(text)
+        return True, "cloud-api"
+
+    monkeypatch.setattr(emailer, "send_otp", fake_email)
+    monkeypatch.setattr("whatsapp.send_text", fake_whatsapp)
+
+    r = client.post("/api/admin/otp/request", json={"email": EMAIL})
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["ok"] is True
+    assert len(sent["email"]) == 1, "the code must be emailed"
+    assert sent["email"][0][0] == EMAIL
+    assert sent["whatsapp"] == [], "WhatsApp is only a fallback - it must not be used"
+    assert EMAIL in body["message"]
+
+    # the emailed code is a real, usable reset code
+    code = sent["email"][0][1]
+    assert len(code) == 6 and code.isdigit()
+    r2 = client.post("/api/admin/otp/verify", json={"email": EMAIL, "code": code})
+    assert r2.status_code == 200, r2.data
+    newpw = "FreshOwner2026x"
+    r3 = client.post("/api/admin/otp/reset", json={"newPassword": newpw})
+    assert r3.status_code == 200, r3.data
+    assert authmod.verify_login(EMAIL, newpw) is True
+
+    authmod.set_shared_password(PW)
+    _clear_bootstrap()
+
+
+def test_admin_reset_code_falls_back_to_whatsapp_when_mail_fails(client, monkeypatch):
+    _clear_bootstrap()
+    calls = {"email": 0, "whatsapp": []}
+
+    def fake_email(to, code, purpose="reset"):
+        calls["email"] += 1
+        return False, "smtp error: boom"
+
+    def fake_whatsapp(text):
+        calls["whatsapp"].append(text)
+        return True, "cloud-api"
+
+    monkeypatch.setattr(emailer, "send_otp", fake_email)
+    monkeypatch.setattr("whatsapp.send_text", fake_whatsapp)
+
+    r = client.post("/api/admin/otp/request", json={"email": EMAIL})
+    assert r.status_code == 200, r.data
+    assert calls["email"] == 1, "email must be attempted first"
+    assert len(calls["whatsapp"]) == 1, "WhatsApp must take over when email fails"
+    assert "WhatsApp" in r.get_json()["message"]
+
+    authmod.set_shared_password(PW)
+    _clear_bootstrap()
+
+
+def test_admin_reset_code_is_a_502_when_both_channels_fail(client, monkeypatch):
+    _clear_bootstrap()
+    monkeypatch.setattr(emailer, "send_otp",
+                        lambda to, code, purpose="reset": (False, "smtp error: boom"))
+    monkeypatch.setattr("whatsapp.send_text", lambda text: (False, "not configured"))
+
+    r = client.post("/api/admin/otp/request", json={"email": EMAIL})
+    assert r.status_code == 502, r.data
+    assert r.get_json()["ok"] is False
+    _clear_bootstrap()
+    authmod.set_shared_password(PW)

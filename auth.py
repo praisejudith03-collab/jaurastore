@@ -14,7 +14,7 @@ import html, re, secrets, time, datetime
 import sqlite3
 from flask import session
 from config import Config
-from db import connect, execute, one, query, init_db
+from db import connect, execute, one, query, init_db, audit
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # A password must be at least this long and mix letters with numbers.
@@ -128,6 +128,41 @@ def set_shared_password(pw):
     an email because the password is shared by all admin emails.
     """
     return set_password("", pw, shared=True)
+
+
+# Marker row (in growth_settings) proving the one-time recovery password has
+# already been applied to this database. Its presence disables the bootstrap
+# permanently, so a later password change is never overwritten by a reboot.
+BOOTSTRAP_MARKER = "admin_bootstrap_applied"
+
+
+def apply_bootstrap_password(pw):
+    """Force the shared admin password once, to recover access with no email.
+
+    Returns True when the password was applied, False when it was not. It fires
+    at most once per database: the first successful application stamps an
+    `admin_bootstrap_applied` marker in ``growth_settings``, and every later
+    boot (and every later call) is a no-op. That way the owner can sign in,
+    change the password from the admin portal, and reboot freely without the
+    public default being restored over the top of their own choice.
+
+    Callers are expected to skip this entirely when FLASK_ENV == "testing" so
+    the test suite's passwords are never touched.
+    """
+    pw = str(pw or "").strip()
+    if not pw:
+        return False
+    init_db()
+    if one("SELECT key FROM growth_settings WHERE key=?", (BOOTSTRAP_MARKER,)):
+        return False                      # already recovered - leave it alone
+    if not set_shared_password(pw):
+        # Weak/invalid password: do NOT stamp the marker, so a corrected
+        # ADMIN_BOOTSTRAP_PASSWORD can still recover the account later.
+        return False
+    execute("INSERT OR IGNORE INTO growth_settings (key, value) VALUES (?,?)",
+            (BOOTSTRAP_MARKER, _now()))
+    audit("system", "admin.bootstrap_password_applied")
+    return True
 
 
 def _ensure_local_admin(email):
