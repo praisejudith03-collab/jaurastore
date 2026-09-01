@@ -32,6 +32,16 @@ class Config:
     SMTP_USER = os.environ.get("SMTP_USER", "")
     SMTP_PASS = os.environ.get("SMTP_PASS", "")
 
+    # WhatsApp order notifications (either provider; see whatsapp.py)
+    WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
+    WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID", "")
+    WHATSAPP_CALLMEBOT_KEY = os.environ.get("WHATSAPP_CALLMEBOT_KEY", "")
+    WHATSAPP_NOTIFY_NUMBER = "".join(
+        c for c in os.environ.get("WHATSAPP_NOTIFY_NUMBER", "2290168953101") if c.isdigit())
+
+    # In-process scheduler (abandoned-cart reminders + midnight backup)
+    SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "1") != "0"
+
     SITE_ORIGIN = os.environ.get("SITE_ORIGIN", "http://localhost:8080")
 
     # -------------------------------------------------- Google reCAPTCHA v3

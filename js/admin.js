@@ -959,7 +959,6 @@ let serverOrders = [];
 
 function orderStatusLabel(s) {
   return s === "confirmed" ? "Confirmed"
-    : s === "delivered" ? "Delivered"
     : s === "declined" ? "Declined" : "Pending";
 }
 
@@ -1020,10 +1019,6 @@ function orderActionsHTML(o) {
       <button class="btn btn-line" data-decline="${esc(o.id)}">Decline</button>`;
   }
   if (s === "confirmed") {
-    return `<button class="btn" data-deliver="${esc(o.id)}">Mark as delivered</button>
-      <button class="btn btn-line" data-reopen="${esc(o.id)}">Back to pending</button>`;
-  }
-  if (s === "delivered") {
     return `<button class="btn btn-line" data-reopen="${esc(o.id)}">Back to pending</button>`;
   }
   return `<button class="btn btn-line" data-reopen="${esc(o.id)}">Reopen (back to pending)</button>`;
@@ -1073,7 +1068,7 @@ let orderFilter = "all";
 function ordersPanel() {
   return `
     <div class="adx-order-filters" id="order-filters">
-      ${["all", "pending", "confirmed", "delivered", "declined"].map((s) =>
+      ${["all", "pending", "confirmed", "declined"].map((s) =>
         `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}
       <a class="wix-link-btn" href="api/admin/orders.csv" style="margin-left:auto">Download CSV</a>
     </div>
@@ -1187,16 +1182,6 @@ function bindOrderButtons() {
     b.onclick = async () => {
       await JA.setOrderStatus(b.dataset.decline, "declined");
       JA.toast("Declined · " + b.dataset.decline);
-      fillOrders();
-    };
-  });
-  box.querySelectorAll("[data-deliver]").forEach((b) => {
-    b.onclick = async () => {
-      const id = b.dataset.deliver;
-      b.disabled = true;
-      const res = await JA.setOrderStatus(id, "delivered");
-      if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not update the order."); b.disabled = false; return; }
-      JA.toast("Delivered · " + id);
       fillOrders();
     };
   });
@@ -1326,10 +1311,216 @@ function bindAccount() {
   });
 }
 
+/* ------------------------------------------------ Marketing & growth tab */
+function marketingPanel() {
+  return `
+    <div class="admin-card" id="mk-settings-card">
+      <h3 class="admin-h">Referral & abandoned-cart settings</h3>
+      <p class="admin-note">Loading…</p>
+    </div>
+    <div class="admin-card" id="mk-coupons-card">
+      <h3 class="admin-h">Coupons</h3>
+      <p class="admin-note">Loading…</p>
+    </div>
+    <div class="admin-card" id="mk-referrals-card">
+      <h3 class="admin-h">Referral codes</h3>
+      <p class="admin-note">Loading…</p>
+    </div>
+    <div class="admin-card" id="mk-abandoned-card">
+      <h3 class="admin-h">Abandoned checkouts</h3>
+      <p class="admin-note">Loading…</p>
+    </div>
+    <div class="admin-card" id="mk-backup-card">
+      <h3 class="admin-h">Backups</h3>
+      <p class="admin-note">Products and orders are backed up to GitHub automatically every night at midnight. You can also run a backup right now.</p>
+      <button type="button" class="btn" id="mk-backup-now">Back up now</button>
+      <p class="admin-note" id="mk-backup-out" hidden></p>
+    </div>`;
+}
+
+async function fillMarketing() {
+  const api = (path, opts) => window.JA_NET.api(path, opts);
+  const num = (v) => esc(String(v == null ? "" : v));
+
+  // ---- settings ----
+  try {
+    const d = await api("api/admin/growth/settings");
+    const s = d.settings || {};
+    const card = $("#mk-settings-card");
+    if (card) {
+      card.innerHTML = `
+        <h3 class="admin-h">Referral & abandoned-cart settings</h3>
+        <form id="mk-set-form" class="admin-form">
+          <label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} />
+            Referral programme ON — qualifying orders get a shareable code</label>
+          <div class="admin-grid">
+            <label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label>
+            <label>Friend's discount % (code used at checkout)<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label>
+            <label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label>
+            <label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label>
+          </div>
+          <label class="mk-toggle"><input type="checkbox" name="abandonedEnabled" ${s.abandonedEnabled ? "checked" : ""} />
+            Abandoned-cart emails ON — remind shoppers who stopped at checkout</label>
+          <div class="admin-grid">
+            <label>Send the reminder after (hours)<input name="abandonedHours" type="number" min="1" max="168" value="${num(s.abandonedHours)}" /></label>
+            <label>Email subject<input name="abandonedSubject" value="${esc(s.abandonedSubject || "")}" /></label>
+          </div>
+          <label>Email template — {name}, {items} and {link} are filled in automatically
+            <textarea name="abandonedTemplate" rows="5">${esc(s.abandonedTemplate || "")}</textarea></label>
+          <button class="btn" type="submit">Save settings</button>
+        </form>`;
+      $("#mk-set-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const patch = {
+          referralEnabled: e.target.referralEnabled.checked,
+          abandonedEnabled: e.target.abandonedEnabled.checked,
+          minSpendNgn: Number(fd.get("minSpendNgn")),
+          buyerPercent: Number(fd.get("buyerPercent")),
+          referrerPercent: Number(fd.get("referrerPercent")),
+          milestone: Number(fd.get("milestone")),
+          abandonedHours: Number(fd.get("abandonedHours")),
+          abandonedSubject: fd.get("abandonedSubject"),
+          abandonedTemplate: fd.get("abandonedTemplate"),
+        };
+        try {
+          await api("api/admin/growth/settings", { method: "POST", json: patch });
+          JA.toast("Marketing settings saved.");
+          fillMarketing();
+        } catch (err) { JA.toast(err.message || "Could not save."); }
+      };
+    }
+  } catch (e) { /* not signed in / offline */ }
+
+  // ---- coupons ----
+  try {
+    const d = await api("api/admin/coupons");
+    const card = $("#mk-coupons-card");
+    if (card) {
+      const rows = (d.coupons || []).map((c) => `
+        <tr>
+          <td><strong>${esc(c.code)}</strong>${c.kind === "reward" ? ' <small>(auto reward)</small>' : ""}</td>
+          <td>${num(c.percent)}%</td>
+          <td>${num(c.uses)}${c.max_uses ? " / " + num(c.max_uses) : ""}</td>
+          <td>${c.expires_at ? esc(c.expires_at) : "—"}</td>
+          <td>${c.active ? "Active" : "Off"}</td>
+          <td class="mk-row-actions">
+            <button type="button" class="btn btn-line" data-mk-cp-toggle="${esc(c.code)}" data-on="${c.active ? 1 : 0}">${c.active ? "Turn off" : "Turn on"}</button>
+            <button type="button" class="btn btn-line" data-mk-cp-del="${esc(c.code)}">Delete</button>
+          </td>
+        </tr>`).join("");
+      card.innerHTML = `
+        <h3 class="admin-h">Coupons</h3>
+        <form id="mk-cp-form" class="mk-inline-form">
+          <input name="code" placeholder="Code (blank = auto)" maxlength="24" />
+          <input name="percent" type="number" placeholder="%" min="1" max="90" required style="width:80px" />
+          <input name="maxUses" type="number" placeholder="Max uses" min="1" style="width:110px" />
+          <input name="expiresAt" type="date" title="Expiry date (optional)" />
+          <input name="note" placeholder="Note (optional)" maxlength="200" />
+          <button class="btn" type="submit">Create coupon</button>
+        </form>
+        ${rows ? `<table class="mk-table"><thead><tr><th>Code</th><th>%</th><th>Uses</th><th>Expires</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+               : `<p class="empty">No coupons yet. Create one above — customers type it in the promo box at checkout.</p>`}`;
+      $("#mk-cp-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const body = { code: fd.get("code"), percent: Number(fd.get("percent")), note: fd.get("note") };
+        if (fd.get("maxUses")) body.maxUses = Number(fd.get("maxUses"));
+        if (fd.get("expiresAt")) body.expiresAt = fd.get("expiresAt") + " 23:59:59";
+        try {
+          const res = await api("api/admin/coupons", { method: "POST", json: body });
+          JA.toast("Coupon created: " + res.code);
+          fillMarketing();
+        } catch (err) { JA.toast(err.message || "Could not create the coupon."); }
+      };
+      card.querySelectorAll("[data-mk-cp-toggle]").forEach((b) => {
+        b.onclick = async () => {
+          try {
+            await api("api/admin/coupons/" + encodeURIComponent(b.dataset.mkCpToggle),
+              { method: "PATCH", json: { active: b.dataset.on !== "1" } });
+            fillMarketing();
+          } catch (err) { JA.toast(err.message || "Could not update."); }
+        };
+      });
+      card.querySelectorAll("[data-mk-cp-del]").forEach((b) => {
+        b.onclick = async () => {
+          if (!confirm("Delete coupon " + b.dataset.mkCpDel + "? Customers will no longer be able to use it.")) return;
+          try {
+            await api("api/admin/coupons/" + encodeURIComponent(b.dataset.mkCpDel), { method: "DELETE" });
+            fillMarketing();
+          } catch (err) { JA.toast(err.message || "Could not delete."); }
+        };
+      });
+    }
+  } catch (e) {}
+
+  // ---- referral codes ----
+  try {
+    const d = await api("api/admin/referrals");
+    const card = $("#mk-referrals-card");
+    if (card) {
+      const rows = (d.referrals || []).map((r) => `
+        <tr>
+          <td><strong>${esc(r.code)}</strong></td>
+          <td>${esc(r.name || "")}<br /><small>${esc(r.email)}</small></td>
+          <td>${num(r.uses)}</td>
+          <td>${r.reward_issued ? "Rewarded — " + esc(r.reward_coupon || "") : "Not yet"}</td>
+          <td><small>${esc(r.created_at || "")}</small></td>
+        </tr>`).join("");
+      card.innerHTML = `
+        <h3 class="admin-h">Referral codes</h3>
+        <p class="admin-note">Codes are minted automatically for qualifying orders. When a code reaches the milestone, the referrer's reward coupon is issued and emailed automatically.</p>
+        ${rows ? `<table class="mk-table"><thead><tr><th>Code</th><th>Customer</th><th>Uses</th><th>Reward</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table>`
+               : `<p class="empty">No referral codes yet.</p>`}`;
+    }
+  } catch (e) {}
+
+  // ---- abandoned checkouts ----
+  try {
+    const d = await api("api/admin/abandoned");
+    const card = $("#mk-abandoned-card");
+    if (card) {
+      const st = d.stats || {};
+      const rows = (d.carts || []).slice(0, 30).map((a) => `
+        <tr>
+          <td>${esc(a.email)}</td>
+          <td>${(a.items || []).map((i) => `${i.qty}× ${esc(i.name || i.id)}`).join(", ")}</td>
+          <td>${a.completed_at ? "Recovered ✓" : a.reminded_at ? "Reminded" : "Waiting"}</td>
+          <td><small>${esc(a.updated_at || "")}</small></td>
+        </tr>`).join("");
+      card.innerHTML = `
+        <h3 class="admin-h">Abandoned checkouts</h3>
+        <p class="admin-note"><strong>${num(st.total || 0)}</strong> captured · <strong>${num(st.reminded || 0)}</strong> reminded · <strong>${num(st.recovered || 0)}</strong> recovered</p>
+        ${rows ? `<table class="mk-table"><thead><tr><th>Email</th><th>Cart</th><th>State</th><th>Last seen</th></tr></thead><tbody>${rows}</tbody></table>`
+               : `<p class="empty">No abandoned checkouts recorded yet.</p>`}`;
+    }
+  } catch (e) {}
+
+  // ---- manual backup ----
+  const bk = $("#mk-backup-now");
+  if (bk && !bk.dataset.bound) {
+    bk.dataset.bound = "1";
+    bk.onclick = async () => {
+      bk.disabled = true;
+      bk.textContent = "Backing up…";
+      const out = $("#mk-backup-out");
+      try {
+        const res = await api("api/admin/backup", { method: "POST", json: {} });
+        if (out) { out.hidden = false; out.textContent = res.ok ? "Backup completed and pushed to GitHub." : (res.error || res.note || "Backup finished with warnings."); }
+      } catch (err) {
+        if (out) { out.hidden = false; out.textContent = err.message || "Backup failed."; }
+      }
+      bk.disabled = false;
+      bk.textContent = "Back up now";
+    };
+  }
+}
+
 const TAB_TITLES = {
   analytics: "Dashboard",
   products: "Products",
   orders: "Orders",
+  marketing: "Marketing",
   categories: "Categories",
   settings: "Settings",
   account: "Account",
@@ -1339,6 +1530,7 @@ const ADX_ICONS = {
   analytics: `<svg viewBox="0 0 24 24"><path d="M4 19V9h3v10H4zm6.5 0V5h3v14h-3zm6.5 0v-7h3v7h-3z"/></svg>`,
   products: `<svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v9l-8 4-8-4V8zm8 4l8-4M12 12v9M12 12L4 8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   orders: `<svg viewBox="0 0 24 24"><path d="M5 4h14v16l-2.3-1.5L14.4 20l-2.4-1.5L9.6 20l-2.3-1.5L5 20V4zm3 5h8M8 12.5h8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
+  marketing: `<svg viewBox="0 0 24 24"><path d="M3 11l12-5v12L3 13v-2zm12-1.5L20 6v12l-5-3.5M7 14v5h3v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   categories: `<svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   settings: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1m0-12.8l-2.1 2.1M7.7 16.3l-2.1 2.1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   account: `<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
@@ -1362,6 +1554,7 @@ function paintDesk(tab = "analytics") {
           ${navBtn("analytics")}
           ${navBtn("products")}
           ${navBtn("orders", pending || "")}
+          ${navBtn("marketing")}
           ${navBtn("categories")}
           ${navBtn("settings")}
           ${navBtn("account")}
@@ -1390,6 +1583,9 @@ function paintDesk(tab = "analytics") {
         </section>
         <section class="panel ${tab === "orders" ? "is-on" : ""}" id="panel-orders">
           ${tab === "orders" ? ordersPanel() : ""}
+        </section>
+        <section class="panel ${tab === "marketing" ? "is-on" : ""}" id="panel-marketing">
+          ${tab === "marketing" ? marketingPanel() : ""}
         </section>
         <section class="panel ${tab === "categories" ? "is-on" : ""}" id="panel-categories">
           ${tab === "categories" ? categoryManager() : ""}
@@ -1430,6 +1626,7 @@ function paintDesk(tab = "analytics") {
 
   if (tab === "analytics") { fillAnalytics(); startDashTimer(); }
   if (tab === "orders") { fillOrders(); fillProofs(); }
+  if (tab === "marketing") fillMarketing();
   if (tab === "account") bindAccount();
   if (tab === "settings") bindHeroVideo();
 

@@ -709,6 +709,8 @@ const JA = (() => {
         id: i.id, name: i.name, qty: i.qty, price: i.price, color: i.color,
       })),
     };
+    if (order.promoCode) payload.promoCode = order.promoCode;
+    if (order.cartToken) payload.cartToken = order.cartToken;
 
     if (window.JA_NET) {
       const opts = {
@@ -720,6 +722,19 @@ const JA = (() => {
           const all = orders().map((o) => o.id === order.id
             ? { ...o, synced: true, proofUrl: (data && data.proofUrl) || "" } : o);
           write(KEYS.orders, all);
+          // The server mints a referral code for qualifying orders; the
+          // confirmation screen listens for it to show the share block.
+          if (data && data.referralCode) {
+            try {
+              localStorage.setItem("ja_referral_last",
+                JSON.stringify({ orderId: order.id, code: data.referralCode }));
+            } catch (e) {}
+            try {
+              document.dispatchEvent(new CustomEvent("ja:referral", {
+                detail: { orderId: order.id, code: data.referralCode },
+              }));
+            } catch (e) {}
+          }
         },
       };
       if (blob) {

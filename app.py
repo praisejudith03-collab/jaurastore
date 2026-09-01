@@ -36,6 +36,14 @@ def create_app():
         app.logger.warning("startup maintenance skipped: %s", exc)
     authmod.ensure_seed_admins()
 
+    # abandoned-cart reminders + the midnight products/orders backup
+    if Config.SCHEDULER_ENABLED and Config.ENV not in ("testing",):
+        try:
+            import scheduler
+            scheduler.start(app)
+        except Exception as exc:       # pragma: no cover
+            app.logger.warning("scheduler not started: %s", exc)
+
     def _flat_fallback(path):
         """Resolve a sub-directory asset reference to its flat repo-root file.
 

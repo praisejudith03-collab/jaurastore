@@ -947,18 +947,25 @@ def test_bulk_upload_endpoint_is_gone(client):
     assert r.status_code in (404, 405)
 
 
-def test_order_can_be_marked_delivered(client):
+def test_delivery_tracking_is_removed(client):
+    """There is no delivery-status tracking: 'delivered' must be rejected."""
     oid = _make_order(client, "JA-DELIV1")
     tok = login(client)
     r = client.patch(f"/api/admin/orders/{oid}", json={"status": "delivered"},
                      headers={"X-CSRF-Token": tok})
-    assert r.status_code == 200 and r.get_json()["status"] == "delivered"
-    assert one("SELECT status FROM orders WHERE id=?", (oid,))["status"] == "delivered"
-    # and back to pending, the way the admin panel reopens an order
+    assert r.status_code == 400
+    assert one("SELECT status FROM orders WHERE id=?", (oid,))["status"] == "pending"
+    # the admin panel offers no delivered button / filter either
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "js", "admin.js")).read()
+    assert "delivered" not in src
+    # confirmed / pending / declined still work
+    r = client.patch(f"/api/admin/orders/{oid}", json={"status": "confirmed"},
+                     headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200 and r.get_json()["status"] == "confirmed"
     r = client.patch(f"/api/admin/orders/{oid}", json={"status": "pending"},
                      headers={"X-CSRF-Token": tok})
     assert r.status_code == 200
-    # nonsense statuses are still rejected
     r = client.patch(f"/api/admin/orders/{oid}", json={"status": "shipped-to-mars"},
                      headers={"X-CSRF-Token": tok})
     assert r.status_code == 400
@@ -1021,3 +1028,233 @@ def test_option_stock_survives_product_save(client):
     assert "<script>x</script>" not in saved["optionStock"]      # keys are cleaned
     assert saved["stock"] == 7
     catalog_mod.remove("jau-optstock", "tester")
+
+
+# =============================================== growth suite (referrals,
+# coupons, abandoned carts, verified reviews, backups, WhatsApp alerts)
+
+def _growth_order(client, oid, email, total=25000, currency="NGN",
+                  promo="", cart_token="", pid="wix-001"):
+    execute("DELETE FROM rate_limits WHERE action='order'")
+    body = {
+        "id": oid, "currency": currency, "total": total,
+        "customer": {"name": "Growth Tester", "phone": "+2348012345678",
+                     "email": email, "city": "Lagos", "zone": "Lagos",
+                     "address": "1 Test Street"},
+        "items": [{"id": pid, "name": "Bag", "qty": 1, "price": total}],
+    }
+    if promo:
+        body["promoCode"] = promo
+    if cart_token:
+        body["cartToken"] = cart_token
+    r = client.post("/api/orders", headers={"X-CSRF-Token": csrf(client)}, json=body)
+    assert r.status_code == 200, r.data
+    return r.get_json()
+
+
+def test_referral_code_minted_only_for_qualifying_orders(client):
+    # under the 20,000 NGN minimum: no code
+    d = _growth_order(client, "JA-GRLOW1", "low@example.com", total=15000)
+    assert d.get("referralCode") == ""
+    # at/over the minimum: a JA- code arrives with the order response
+    d = _growth_order(client, "JA-GRHI01", "hi@example.com", total=25000)
+    code = d.get("referralCode")
+    assert code and code.startswith("JA-")
+    row = one("SELECT * FROM referral_codes WHERE code=?", (code,))
+    assert row["email"] == "hi@example.com" and row["uses"] == 0
+    # the same customer keeps the same code on their next big order
+    d2 = _growth_order(client, "JA-GRHI02", "hi@example.com", total=30000)
+    assert d2.get("referralCode") == code
+
+
+def test_referral_code_minted_for_cfa_equivalent(client):
+    # 10,000 F CFA ≈ 22,727 NGN at the storefront's 0.44 rate — qualifies
+    d = _growth_order(client, "JA-GRCFA1", "cfa@example.com", total=10000, currency="CFA")
+    assert d.get("referralCode", "").startswith("JA-")
+    # 5,000 F CFA ≈ 11,364 NGN — does not
+    d = _growth_order(client, "JA-GRCFA2", "cfa2@example.com", total=5000, currency="CFA")
+    assert d.get("referralCode") == ""
+
+
+def test_promo_check_and_referral_discount(client):
+    d = _growth_order(client, "JA-GRPC01", "owner@example.com", total=25000)
+    code = d["referralCode"]
+    # a stranger's code check: 5% for the buyer
+    execute("DELETE FROM rate_limits WHERE action='promo-check'")
+    r = client.post("/api/promo/check", json={"code": code.lower()})
+    assert r.status_code == 200
+    j = r.get_json()
+    assert j["ok"] and j["percent"] == 5 and j["kind"] == "referral" and j["code"] == code
+    # junk is refused
+    r = client.post("/api/promo/check", json={"code": "NOPE-99"})
+    assert r.status_code == 404 and r.get_json()["ok"] is False
+
+
+def test_milestone_reward_exactly_two_uses_capped_at_ten(client):
+    d = _growth_order(client, "JA-GRM001", "referrer@example.com", total=25000)
+    code = d["referralCode"]
+    # the owner using their own code never counts
+    _growth_order(client, "JA-GRM002", "referrer@example.com", promo=code)
+    assert one("SELECT uses FROM referral_codes WHERE code=?", (code,))["uses"] == 0
+    # first real use: counted, but NO reward yet
+    _growth_order(client, "JA-GRM003", "friend1@example.com", promo=code)
+    row = one("SELECT uses, reward_issued FROM referral_codes WHERE code=?", (code,))
+    assert row["uses"] == 1 and not row["reward_issued"]
+    assert one("SELECT COUNT(*) n FROM coupons WHERE email='referrer@example.com'")["n"] == 0
+    # second use: the 10% single-use reward coupon is minted automatically
+    _growth_order(client, "JA-GRM004", "friend2@example.com", promo=code)
+    row = one("SELECT uses, reward_issued, reward_coupon FROM referral_codes WHERE code=?", (code,))
+    assert row["uses"] == 2 and row["reward_issued"] and row["reward_coupon"].startswith("THANKS-")
+    cp = one("SELECT * FROM coupons WHERE code=?", (row["reward_coupon"],))
+    assert cp["percent"] == 10 and cp["kind"] == "reward" and cp["max_uses"] == 1
+    # a third use never mints a second reward
+    _growth_order(client, "JA-GRM005", "friend3@example.com", promo=code)
+    assert one("SELECT COUNT(*) n FROM coupons WHERE email='referrer@example.com'")["n"] == 1
+
+
+def test_growth_settings_admin_only_and_reward_capped(client):
+    assert client.get("/api/admin/growth/settings").status_code == 401
+    tok = login(client)
+    r = client.get("/api/admin/growth/settings")
+    s = r.get_json()["settings"]
+    assert s["minSpendNgn"] == 20000 and s["referrerPercent"] == 10 and s["milestone"] == 2
+    # the referrer reward is hard-capped at 10% no matter what is typed
+    r = client.post("/api/admin/growth/settings", headers={"X-CSRF-Token": tok},
+                    json={"referrerPercent": 50, "minSpendNgn": 30000, "milestone": 3})
+    s = r.get_json()["settings"]
+    assert s["referrerPercent"] == 10 and s["minSpendNgn"] == 30000 and s["milestone"] == 3
+    # put the defaults back for the other tests
+    client.post("/api/admin/growth/settings", headers={"X-CSRF-Token": tok},
+                json={"minSpendNgn": 20000, "milestone": 2})
+
+
+def test_admin_coupon_crud_expiry_and_max_uses(client):
+    tok = login(client)
+    # create
+    r = client.post("/api/admin/coupons", headers={"X-CSRF-Token": tok},
+                    json={"code": "SALE-10", "percent": 10, "maxUses": 1})
+    assert r.status_code == 200 and r.get_json()["code"] == "SALE-10"
+    # duplicate refused
+    assert client.post("/api/admin/coupons", headers={"X-CSRF-Token": tok},
+                       json={"code": "SALE-10", "percent": 15}).status_code == 400
+    # checkout sees it
+    execute("DELETE FROM rate_limits WHERE action='promo-check'")
+    j = client.post("/api/promo/check", json={"code": "sale-10"}).get_json()
+    assert j["ok"] and j["percent"] == 10 and j["kind"] == "coupon"
+    # one use exhausts maxUses=1 and deactivates it
+    _growth_order(client, "JA-GRCP01", "couponuser@example.com", promo="SALE-10")
+    assert client.post("/api/promo/check", json={"code": "SALE-10"}).status_code == 404
+    # edit: reactivate with more uses
+    r = client.patch("/api/admin/coupons/SALE-10", headers={"X-CSRF-Token": tok},
+                     json={"active": True, "maxUses": 100, "percent": 12})
+    assert r.status_code == 200
+    assert client.post("/api/promo/check", json={"code": "SALE-10"}).get_json()["percent"] == 12
+    # expire it
+    client.patch("/api/admin/coupons/SALE-10", headers={"X-CSRF-Token": tok},
+                 json={"expiresAt": "2020-01-01 00:00:00"})
+    assert client.post("/api/promo/check", json={"code": "SALE-10"}).status_code == 404
+    # delete it
+    assert client.delete("/api/admin/coupons/SALE-10",
+                         headers={"X-CSRF-Token": tok}).status_code == 200
+    assert one("SELECT 1 FROM coupons WHERE code='SALE-10'") is None
+    # admin session required for all of it
+    client.post("/api/admin/logout", headers={"X-CSRF-Token": tok})
+    assert client.get("/api/admin/coupons").status_code == 401
+
+
+def test_abandoned_cart_capture_remind_recover_complete(client):
+    import growth
+    tok_h = {"X-CSRF-Token": csrf(client)}
+    # capture early in checkout
+    r = client.post("/api/cart/abandon", headers=tok_h, json={
+        "token": "CT-TESTTOKEN1", "email": "sleepy@example.com", "currency": "NGN",
+        "items": [{"id": "wix-001", "name": "Bag", "qty": 2}]})
+    assert r.status_code == 200 and r.get_json()["ok"]
+    # the recovery link returns the saved cart
+    j = client.get("/api/cart/recover/CT-TESTTOKEN1").get_json()
+    assert j["ok"] and j["items"][0]["qty"] == 2 and j["currency"] == "NGN"
+    # nothing is emailed before the 2-hour mark
+    assert growth.send_abandoned_reminders() == 0
+    # age the record past the window: exactly one reminder goes out, once
+    import datetime as dtm
+    old = (dtm.datetime.utcnow() - dtm.timedelta(hours=3)).isoformat(timespec="seconds")
+    execute("UPDATE abandoned_carts SET updated_at=? WHERE token='CT-TESTTOKEN1'", (old,))
+    assert growth.send_abandoned_reminders() == 1
+    assert growth.send_abandoned_reminders() == 0
+    assert one("SELECT reminded_at FROM abandoned_carts WHERE token='CT-TESTTOKEN1'")["reminded_at"]
+    # the customer comes back and buys: the record closes, the link dies
+    _growth_order(client, "JA-GRAB01", "sleepy@example.com", cart_token="CT-TESTTOKEN1")
+    assert one("SELECT completed_at FROM abandoned_carts WHERE token='CT-TESTTOKEN1'")["completed_at"]
+    assert client.get("/api/cart/recover/CT-TESTTOKEN1").status_code == 404
+
+
+def test_abandoned_module_can_be_switched_off(client):
+    tok = login(client)
+    client.post("/api/admin/growth/settings", headers={"X-CSRF-Token": tok},
+                json={"abandonedEnabled": False})
+    r = client.post("/api/cart/abandon", headers={"X-CSRF-Token": csrf(client)}, json={
+        "token": "CT-OFFTOKEN", "email": "off@example.com",
+        "items": [{"id": "wix-001", "qty": 1}]})
+    assert r.get_json().get("skipped") is True
+    assert one("SELECT 1 FROM abandoned_carts WHERE token='CT-OFFTOKEN'") is None
+    client.post("/api/admin/growth/settings", headers={"X-CSRF-Token": tok},
+                json={"abandonedEnabled": True})
+
+
+def test_reviews_are_purchase_verified_and_stored_server_side(client):
+    _growth_order(client, "JA-GRRV01", "reviewer@example.com", pid="wix-007")
+    execute("DELETE FROM rate_limits WHERE action='review'")
+    H = {"X-CSRF-Token": csrf(client)}
+    # not a buyer -> refused
+    r = client.post("/api/reviews", headers=H, json={
+        "productId": "wix-007", "email": "stranger@example.com",
+        "name": "Nobody", "stars": 5, "note": "fake"})
+    assert r.status_code == 403
+    # a declined order does not count as a purchase
+    _growth_order(client, "JA-GRRV02", "declined@example.com", pid="wix-008")
+    execute("UPDATE orders SET status='declined' WHERE id='JA-GRRV02'")
+    r = client.post("/api/reviews", headers=H, json={
+        "productId": "wix-008", "email": "declined@example.com",
+        "name": "D", "stars": 5, "note": "nope"})
+    assert r.status_code == 403
+    # the real buyer posts: stored in the DB, average is served publicly
+    r = client.post("/api/reviews", headers=H, json={
+        "productId": "wix-007", "email": "reviewer@example.com",
+        "name": "Amaka", "stars": 4, "note": "Lovely <b>bag</b>"})
+    assert r.status_code == 200
+    j = client.get("/api/reviews/wix-007").get_json()
+    assert j["count"] == 1 and j["average"] == 4.0
+    assert j["reviews"][0]["name"] == "Amaka"
+    assert "<b>" not in j["reviews"][0]["note"]      # HTML stripped
+    # posting again replaces (one review per product per customer)
+    execute("DELETE FROM rate_limits WHERE action='review'")
+    client.post("/api/reviews", headers=H, json={
+        "productId": "wix-007", "email": "reviewer@example.com",
+        "name": "Amaka", "stars": 5, "note": "Even better after a week"})
+    j = client.get("/api/reviews/wix-007").get_json()
+    assert j["count"] == 1 and j["average"] == 5.0
+
+
+def test_backup_dump_and_daily_flag(client, tmp_path):
+    import backup
+    _growth_order(client, "JA-GRBK01", "backup@example.com")
+    p = tmp_path / "orders-backup.json"
+    n = backup.dump_orders(str(p))
+    assert n >= 1
+    data = json.loads(p.read_text())
+    assert "orders" in data and "paymentProofs" in data and "generatedAt" in data
+    assert any(o["id"] == "JA-GRBK01" for o in data["orders"])
+    # the midnight flag: due until marked, then not due again today
+    execute("DELETE FROM growth_settings WHERE key='lastBackupDate'")
+    assert backup.due() is True
+    backup.mark_backup_done()
+    assert backup.due() is False
+
+
+def test_whatsapp_notifier_safe_when_unconfigured(client):
+    import whatsapp
+    sent, detail = whatsapp.send_order_notification({
+        "id": "JA-X", "total": 25000, "currency": "NGN",
+        "customer": {"name": "Ada", "city": "Lagos", "zone": "Ikeja", "address": "1 Road"},
+        "items": [{"qty": 1, "name": "Bag"}]})
+    assert sent is False and "not configured" in detail

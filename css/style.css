@@ -5366,7 +5366,6 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 .adx-order-who small { font-size: 11.5px; color: #9a9086; }
 .adx-order-total { font-weight: 700; font-size: 14px; color: #2c2622; white-space: nowrap; }
 .adx-order-body { padding: 4px 16px 16px; border-top: 1px solid #f0ece6; }
-.status-pill.delivered { background: #274e8d; color: #fff; }
 
 /* ---------- settings: hero video ---------- */
 .adx-hero-card { background: #fff; }
@@ -5408,3 +5407,30 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 .admin-app-nav button { position: relative; }
 .admin-app-nav .adx-badge { position: absolute; top: 2px; right: calc(50% - 22px); }
 .admin-app-nav svg { fill: none; }
+
+/* ---- referral / promo / marketing (growth suite) ---- */
+.ck-promo { margin: 14px 0 4px; }
+.ck-promo > label { display: block; font-size: 13px; letter-spacing: .04em; margin-bottom: 6px; color: var(--taupe); }
+.ck-promo-row { display: flex; gap: 8px; }
+.ck-promo-row input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line, #ddd); text-transform: uppercase; }
+.ck-promo-msg { font-size: 13px; margin: 6px 0 0; }
+.ck-promo-msg.is-good { color: #1c7a3c; }
+.ck-promo-msg.is-bad { color: #b23c2e; }
+.ck-discount td, .ck-discount th { color: #1c7a3c; }
+
+.referral-card { border: 1px dashed var(--gold, #b99356); background: #fbf7f0; padding: 18px; margin: 4px 0 20px; text-align: center; }
+.referral-code { font-size: 26px; font-weight: 700; letter-spacing: .12em; margin: 6px 0; }
+.referral-blurb { font-size: 14px; color: var(--taupe); margin: 0 0 12px; }
+.referral-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+
+.mk-inline-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.mk-inline-form input { padding: 8px 10px; border: 1px solid var(--line, #ddd); }
+.mk-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.mk-table th, .mk-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line, #eee); vertical-align: top; }
+.mk-row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.mk-toggle { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-weight: 600; }
+.mk-toggle input { width: 18px; height: 18px; }
+#mk-set-form .admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+#mk-set-form label { display: block; font-size: 13px; }
+#mk-set-form input, #mk-set-form textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line, #ddd); margin-top: 4px; }
+.rev-gate-note { font-size: 13px; color: var(--taupe); margin: 2px 0 8px; }

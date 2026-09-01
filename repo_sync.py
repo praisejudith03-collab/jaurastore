@@ -47,6 +47,7 @@ REPO_DATA_FILES = (
     "data/seed.json",
     "data/wix_products.json",
     "data/catalog.json",
+    "data/backups/orders-backup.json",   # written by backup.py before each sync
 )
 
 # ---- git-safe serialisation -------------------------------------------------

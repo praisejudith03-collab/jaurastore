@@ -242,7 +242,7 @@ def log_activity():
 
 CUSTOMER_FIELDS = ("firstName", "lastName", "name", "phone", "email", "country",
                    "city", "zone", "address", "note")
-STATUSES = ("pending", "confirmed", "delivered", "declined")
+STATUSES = ("pending", "confirmed", "declined")
 
 
 @api.post("/uploads/proof")
@@ -343,6 +343,16 @@ def create_order():
     if existing:
         return jsonify(ok=True, id=oid, duplicate=True, status=existing["status"])
 
+    # ---- referral / promo code (validated on the server, never trusted) ----
+    import growth
+    promo = None
+    promo_in = d.get("promo") if isinstance(d.get("promo"), dict) else {}
+    promo_raw = sec.clean(d.get("promoCode") or promo_in.get("code"), 32)
+    if promo_raw:
+        chk = growth.check_code(promo_raw)
+        if chk.get("ok"):
+            promo = {"code": chk["code"], "percent": chk["percent"], "kind": chk["kind"]}
+
     proof_url = ""
     data = b""
     ext = ""
@@ -378,6 +388,8 @@ def create_order():
         "proofUrl": proof_url,
         "source": sec.clean(d.get("source"), 20) or "web",
     }
+    if promo:
+        order["promo"] = promo
     execute(
         "INSERT INTO orders (id, payload, email, customer_name, phone, country, city, zone, "
         "address, note, payment, proof_url, items_count, total, currency, source, status, at, updated_at) "
@@ -422,7 +434,32 @@ def create_order():
         except Exception:
             pass
 
-    resp = make_response(jsonify(ok=True, id=oid, status="pending", proofUrl=proof_url))
+    # WhatsApp notification to the owner (fire-and-forget; never blocks the sale)
+    import threading as _threading
+    def _notify_whatsapp(order_copy):
+        try:
+            import whatsapp
+            sent, detail = whatsapp.send_order_notification(order_copy)
+            audit("system", "order.whatsapp", f"{order_copy.get('id')} sent={sent} {detail}"[:400], "")
+        except Exception:
+            pass
+    _threading.Thread(target=_notify_whatsapp, args=(dict(order),), daemon=True).start()
+
+    # growth hooks: count the promo use, mint a referral code when the order
+    # qualifies, and close any abandoned-cart record for this checkout
+    referral_code = ""
+    try:
+        if promo:
+            growth.record_code_use(promo["code"], email, oid)
+        referral_code = growth.maybe_issue_referral(
+            email, customer.get("name") or "", total, currency)
+        growth.complete_abandoned(sec.clean(d.get("cartToken"), 64), email)
+    except Exception:
+        pass
+
+    resp = make_response(jsonify(ok=True, id=oid, status="pending", proofUrl=proof_url,
+                                 referralCode=referral_code,
+                                 promo=promo or None))
     return analytics_mod.stamp_cookie(resp, vid)
 
 
@@ -862,7 +899,7 @@ def admin_order_update(oid):
     d = request.get_json(silent=True) or {}
     status = sec.clean(d.get("status"), 20)
     if status not in STATUSES:
-        return jsonify(ok=False, error="status must be pending, confirmed, delivered or declined"), 400
+        return jsonify(ok=False, error="status must be pending, confirmed or declined"), 400
     row = one("SELECT id, payload FROM orders WHERE id=?", (oid,))
     if not row:
         return jsonify(ok=False, error="Order not found."), 404
@@ -1033,3 +1070,202 @@ def admin_site_update():
     os.replace(tmp, path)
     audit(authmod.current_admin(), "site.update", json.dumps(cur)[:200], _ip())
     return jsonify(ok=True, site=cur)
+
+# ==================================================== public: promo & referral
+@api.post("/promo/check")
+def promo_check():
+    """Validate a referral or coupon code typed at checkout."""
+    limited = sec.guard("promo-check", limit=60, window=600)
+    if limited: return limited
+    import growth
+    d = request.get_json(silent=True) or {}
+    res = growth.check_code(d.get("code"))
+    status = 200 if res.get("ok") else 404
+    return jsonify(res), status
+
+# ==================================================== public: abandoned carts
+@api.post("/cart/abandon")
+@sec.require_csrf
+def cart_abandon():
+    """Capture an in-progress checkout early (email + cart), so a stalled
+    one can be emailed a recovery link after the configured delay."""
+    limited = sec.guard("cart-abandon", limit=60, window=3600)
+    if limited: return limited
+    import growth
+    if not growth.settings()["abandonedEnabled"]:
+        return jsonify(ok=True, skipped=True)
+    d = request.get_json(silent=True) or {}
+    ok = growth.save_abandoned(d.get("token"), d.get("email"),
+                               d.get("items"), d.get("currency"))
+    return jsonify(ok=bool(ok))
+
+@api.get("/cart/recover/<token>")
+def cart_recover(token):
+    """The link in the reminder email: returns the saved cart."""
+    import growth
+    cart = growth.recover_cart(token)
+    if not cart:
+        return jsonify(ok=False, error="This cart link has expired or was already used."), 404
+    return jsonify(ok=True, **cart)
+
+# ================================================= public: verified reviews
+@api.get("/reviews/<pid>")
+def reviews_list(pid):
+    pid = sec.clean(pid, 64)
+    rows = query("SELECT name, stars, note, at FROM product_reviews "
+                 "WHERE product_id=? ORDER BY at DESC LIMIT 100", (pid,))
+    items = [dict(r) for r in rows]
+    n = len(items)
+    avg = round(sum(r["stars"] for r in items) / n, 2) if n else 0
+    return jsonify(ok=True, productId=pid, count=n, average=avg, reviews=items)
+
+@api.post("/reviews")
+@sec.require_csrf
+def reviews_create():
+    """A customer review: stars + note, only for products they bought.
+    The buyer is verified against the orders table by email."""
+    limited = sec.guard("review", limit=10, window=3600)
+    if limited: return limited
+    d = request.get_json(silent=True) or {}
+    pid = sec.clean(d.get("productId"), 64)
+    email = sec.clean_email(d.get("email"))
+    name = sec.clean(d.get("name"), 60)
+    stars = sec.clean_int(d.get("stars"), 5, 1, 5)
+    note = sec.clean(d.get("note"), 600)
+    if not pid or not note:
+        return jsonify(ok=False, error="Add a short note about the product."), 400
+    if not email:
+        return jsonify(ok=False, error="Enter the email you used for your order."), 400
+
+    bought = one("SELECT id FROM orders WHERE email=? AND status != 'declined' "
+                 "AND payload LIKE ? LIMIT 1", (email, f'%"id": "{pid}"%'))
+    if not bought:
+        return jsonify(ok=False, error="Reviews are for customers who bought this product. "
+                                       "Use the same email as your order."), 403
+
+    execute("INSERT INTO product_reviews (product_id, order_id, email, name, stars, note, at) "
+            "VALUES (?,?,?,?,?,?,?) ON CONFLICT(product_id, email) DO UPDATE SET "
+            "name=excluded.name, stars=excluded.stars, note=excluded.note, at=excluded.at",
+            (pid, bought["id"], email, name or "Customer", stars, note, _utcnow()))
+    audit("customer", "review.posted", f"{pid} {stars}★ by {email}", _ip())
+    return reviews_list(pid)
+
+# =============================================== admin: growth & marketing
+@api.get("/admin/growth/settings")
+@authmod.require_admin
+def admin_growth_settings():
+    import growth
+    return jsonify(ok=True, settings=growth.settings())
+
+@api.post("/admin/growth/settings")
+@authmod.require_admin
+@sec.require_csrf
+def admin_growth_settings_save():
+    import growth
+    d = request.get_json(silent=True) or {}
+    saved = growth.save_settings(d, authmod.current_admin())
+    return jsonify(ok=True, settings=saved)
+
+@api.get("/admin/referrals")
+@authmod.require_admin
+def admin_referrals():
+    rows = query("SELECT code, email, name, uses, reward_issued, reward_coupon, created_at "
+                 "FROM referral_codes ORDER BY created_at DESC LIMIT 500")
+    return jsonify(ok=True, referrals=[dict(r) for r in rows])
+
+@api.get("/admin/coupons")
+@authmod.require_admin
+def admin_coupons():
+    rows = query("SELECT code, percent, kind, email, note, active, max_uses, uses, "
+                 "expires_at, created_at FROM coupons ORDER BY created_at DESC LIMIT 500")
+    return jsonify(ok=True, coupons=[dict(r) for r in rows])
+
+@api.post("/admin/coupons")
+@authmod.require_admin
+@sec.require_csrf
+def admin_coupon_create():
+    import growth
+    d = request.get_json(silent=True) or {}
+    code = growth.normalize_code(d.get("code")) or growth._mint_code("PROMO")
+    percent = sec.clean_int(d.get("percent"), None, 1, 90)
+    if not percent:
+        return jsonify(ok=False, error="Percent must be between 1 and 90."), 400
+    if one("SELECT 1 FROM coupons WHERE code=?", (code,)) or \
+       one("SELECT 1 FROM referral_codes WHERE code=?", (code,)):
+        return jsonify(ok=False, error="That code already exists."), 400
+    max_uses = sec.clean_int(d.get("maxUses"), None, 1, 10**6)
+    expires = sec.clean(d.get("expiresAt"), 32) or None
+    note = sec.clean(d.get("note"), 200)
+    execute("INSERT INTO coupons (code, percent, kind, note, active, max_uses, expires_at) "
+            "VALUES (?,?,?,?,1,?,?)", (code, percent, "manual", note, max_uses, expires))
+    audit(authmod.current_admin(), "coupon.created", f"{code} {percent}%", _ip())
+    return jsonify(ok=True, code=code)
+
+@api.patch("/admin/coupons/<code>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_coupon_update(code):
+    import growth
+    code = growth.normalize_code(code)
+    row = one("SELECT code FROM coupons WHERE code=?", (code,))
+    if not row:
+        return jsonify(ok=False, error="Coupon not found."), 404
+    d = request.get_json(silent=True) or {}
+    if "percent" in d:
+        pct = sec.clean_int(d.get("percent"), None, 1, 90)
+        if pct: execute("UPDATE coupons SET percent=? WHERE code=?", (pct, code))
+    if "active" in d:
+        execute("UPDATE coupons SET active=? WHERE code=?", (1 if d.get("active") else 0, code))
+    if "expiresAt" in d:
+        execute("UPDATE coupons SET expires_at=? WHERE code=?",
+                (sec.clean(d.get("expiresAt"), 32) or None, code))
+    if "maxUses" in d:
+        execute("UPDATE coupons SET max_uses=? WHERE code=?",
+                (sec.clean_int(d.get("maxUses"), None, 1, 10**6), code))
+    if "note" in d:
+        execute("UPDATE coupons SET note=? WHERE code=?", (sec.clean(d.get("note"), 200), code))
+    audit(authmod.current_admin(), "coupon.updated", code, _ip())
+    return jsonify(ok=True, code=code)
+
+@api.delete("/admin/coupons/<code>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_coupon_delete(code):
+    import growth
+    code = growth.normalize_code(code)
+    execute("DELETE FROM coupons WHERE code=?", (code,))
+    audit(authmod.current_admin(), "coupon.deleted", code, _ip())
+    return jsonify(ok=True)
+
+@api.get("/admin/abandoned")
+@authmod.require_admin
+def admin_abandoned():
+    rows = query("SELECT id, email, cart_json, currency, created_at, updated_at, "
+                 "reminded_at, completed_at FROM abandoned_carts "
+                 "ORDER BY updated_at DESC LIMIT 200")
+    items = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["items"] = json.loads(d.pop("cart_json") or "[]")
+        except ValueError:
+            d["items"] = []
+        items.append(d)
+    stats = dict(one("SELECT COUNT(*) total, "
+                     "SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) recovered, "
+                     "SUM(CASE WHEN reminded_at IS NOT NULL THEN 1 ELSE 0 END) reminded "
+                     "FROM abandoned_carts") or {})
+    return jsonify(ok=True, carts=items, stats=stats)
+
+@api.post("/admin/backup")
+@authmod.require_admin
+@sec.require_csrf
+def admin_backup_now():
+    """Manual 'Back up now': the same job the scheduler runs at midnight."""
+    limited = sec.guard("backup", limit=6, window=3600)
+    if limited: return limited
+    import backup
+    ok, report = backup.run(actor=authmod.current_admin())
+    if ok:
+        backup.mark_backup_done()
+    return jsonify(ok=bool(ok), **report)
