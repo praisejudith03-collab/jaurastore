@@ -1470,27 +1470,6 @@ const JA = (() => {
     </a>`;
   }
 
-  function paintWaves() {
-    if (document.querySelector(".site-waves")) return;
-    const el = document.createElement("div");
-    el.className = "site-waves";
-    el.setAttribute("aria-hidden", "true");
-    el.innerHTML = `
-      <svg class="wave-top" viewBox="0 0 1440 120" preserveAspectRatio="none">
-        <path fill="#f6ddd0" fill-opacity="0.7" d="M0,28C120,48,240,18,360,32C480,46,600,22,720,30C840,38,960,20,1080,28C1200,36,1320,18,1380,22L1440,26L1440,0L0,0Z"></path>
-        <path fill="#efc9b6" fill-opacity="0.55" d="M0,40C160,22,320,50,480,36C640,22,800,48,960,34C1120,20,1280,42,1440,30L1440,0L0,0Z"></path>
-      </svg>
-      <svg class="wave-mid" viewBox="0 0 1440 120" preserveAspectRatio="none">
-        <path fill="#f3d5c4" fill-opacity="0.5" d="M0,70C180,50,360,86,540,68C720,50,900,82,1080,64C1260,46,1350,72,1440,60L1440,120L0,120Z"></path>
-      </svg>
-      <svg class="wave-bot" viewBox="0 0 1440 120" preserveAspectRatio="none">
-        <path fill="#e8c4b0" fill-opacity="0.55" d="M0,78C200,58,400,92,600,74C800,56,1000,90,1200,72C1320,62,1380,80,1440,70L1440,120L0,120Z"></path>
-        <path fill="#f0d0bc" fill-opacity="0.4" d="M0,92C240,78,480,104,720,90C960,76,1200,100,1440,88L1440,120L0,120Z"></path>
-      </svg>
-      <div class="wave-splash"></div>`;
-    document.body.insertBefore(el, document.body.firstChild);
-  }
-
   function markWelcomeSeen() {
     try { localStorage.setItem("jaura_welcome_at", String(Date.now())); } catch (e) {}
   }
@@ -1663,7 +1642,6 @@ const JA = (() => {
       const wa = bot && bot.querySelector(".wa-float");
       if (wa) document.body.appendChild(wa);
     } catch (e) {}
-    try { paintWaves(); } catch (e) {}
     try { pageSeo(); } catch (e) {}
     try { startCardPlay(); } catch (e) {}
     refreshChrome();

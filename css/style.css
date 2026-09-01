@@ -741,13 +741,19 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
   text-align: center;
   color: var(--muted);
 }
-.pager { display: flex; gap: 8px; justify-content: center; margin-top: 36px; flex-wrap: wrap; }
+.pager { display: flex; gap: 8px; justify-content: center; align-items: center; margin-top: 36px; flex-wrap: wrap; }
 .pager button {
   border: 1px solid var(--line);
   background: var(--paper);
   min-width: 40px;
   height: 40px;
+  cursor: pointer;
 }
+.pager button:hover:not([disabled]) { border-color: var(--ink); }
+.pager button.is-on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.pager .pager-nav { padding: 0 14px; letter-spacing: 0.04em; }
+.pager .pager-nav[disabled] { opacity: 0.35; cursor: default; }
+.pager .pager-gap { min-width: 24px; text-align: center; color: var(--muted); }
 
 /* Mobile nav */
 .mobile-nav {
@@ -2756,32 +2762,6 @@ html, body, body.wix-shop { background: #f6f1f5 !important; }
   background: transparent !important;
 }
 
-.site-waves {
-  position: fixed !important;
-  inset: 0 !important;
-  z-index: 0 !important;
-  pointer-events: none !important;
-  overflow: hidden;
-}
-.site-waves svg {
-  position: absolute;
-  left: -12%;
-  width: 124%;
-  height: 34vh;
-  min-height: 180px;
-  display: block;
-}
-.site-waves .wave-top { top: -8px; }
-.site-waves .wave-mid { top: 36%; height: 28vh; opacity: 0.85; }
-.site-waves .wave-bot { bottom: 58px; height: 32vh; }
-.site-waves .wave-top { animation: waveSlide 22s ease-in-out infinite alternate; }
-.site-waves .wave-mid { animation: waveSlide 28s ease-in-out infinite alternate-reverse; }
-.site-waves .wave-bot { animation: waveSlide 18s ease-in-out infinite alternate; }
-@keyframes waveSlide {
-  from { transform: translateX(-3%); }
-  to { transform: translateX(3%); }
-}
-
 #site-header {
   position: relative;
   z-index: 300 !important;
@@ -2830,7 +2810,7 @@ body.menu-open .wix-menu { display: block !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hfly, .site-waves path { animation: none; }
+  .hfly { animation: none; }
 }
 
 .card.is-oos { display: flex !important; visibility: visible !important; }
@@ -3105,12 +3085,8 @@ body[data-page="home"] .just-in-grid,
 body[data-page="home"] .dock { display: none !important; }
 body[data-page="home"] { padding-bottom: 24px !important; }
 
-/* Strong nude + brighter waves */
+/* Strong nude backdrop */
 html, body, body.wix-shop { background: #e8d5c0 !important; }
-.site-waves svg { opacity: 1; }
-.site-waves .wave-top { opacity: 1; }
-.site-waves .wave-mid { opacity: 1; }
-.site-waves .wave-bot { opacity: 1; }
 
 /* Background butterflies */
 .bg-flies { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
@@ -3194,14 +3170,6 @@ html, body, body.wix-shop { background: #e8d5c0 !important; }
   background: #111111 !important;
   color: #ffffff !important;
 }
-.site-waves {
-  z-index: -1 !important;
-  pointer-events: none !important;
-}
-.site-waves svg,
-.site-waves .wave-top,
-.site-waves .wave-mid,
-.site-waves .wave-bot { opacity: 0.28 !important; }
 html, body, body.wix-shop { background: #f4efe9 !important; }
 
 body[data-page="home"] .hero-slim,
@@ -3336,11 +3304,6 @@ body[data-page="home"] .just-in-grid,
 /* v45 — just in 3-col, categories slide, lavender chrome, nude waves, red sale */
 :root { --lav: #c4a8e6; --lav-deep: #a888d0; }
 html, body, body.wix-shop { background: #e8d5c0 !important; }
-.site-waves { z-index: 0 !important; pointer-events: none !important; }
-.site-waves svg,
-.site-waves .wave-top,
-.site-waves .wave-mid,
-.site-waves .wave-bot { opacity: 0.72 !important; }
 #site-header, #site-footer, .wrap, .hero-slim, .lux-reel, .how-bar, .section-tight,
 .shop-page, .ck-hero, #admin-root, .admin-login, .admin-shell {
   position: relative;
@@ -3787,34 +3750,8 @@ html, body, body.wix-shop { background: #e8d5c0 !important; }
 }
 
 
-/* Nude-peach splash waves, shorter teeth; footer flies up; just-in rows */
-.site-waves { z-index: 0 !important; overflow: hidden; }
-.site-waves svg {
-  height: 16vh !important;
-  min-height: 72px !important;
-  max-height: 140px !important;
-  opacity: 0.85 !important;
-}
-.site-waves .wave-top { top: 0 !important; }
-.site-waves .wave-mid { top: 38% !important; height: 16vh !important; }
-.site-waves .wave-bot { bottom: 48px !important; height: 16vh !important; }
-.wave-splash {
-  position: absolute;
-  left: -10%;
-  right: -10%;
-  top: 22%;
-  height: 46%;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse 42% 28% at 18% 40%, rgba(243, 197, 176, 0.45) 0%, transparent 70%),
-    radial-gradient(ellipse 38% 32% at 78% 55%, rgba(246, 221, 208, 0.5) 0%, transparent 72%),
-    radial-gradient(ellipse 50% 24% at 48% 62%, rgba(232, 196, 176, 0.38) 0%, transparent 70%);
-  animation: splashShift 16s ease-in-out infinite alternate;
-}
-@keyframes splashShift {
-  from { transform: translateX(-3%) scale(1); }
-  to { transform: translateX(3%) scale(1.04); }
-}
+/* Footer flies up; just-in rows (the old fixed .site-waves overlay was removed:
+   the single footer wave .foot-wavez is the only wave layer sitewide) */
 
 .footer.wix-footer { position: relative !important; overflow: hidden !important; }
 .foot-flies {
@@ -3980,7 +3917,6 @@ body[data-page="admin"] {
   background: #12151c !important;
   color: #e8eaed;
 }
-body[data-page="admin"] .site-waves,
 body[data-page="admin"] .wa-float,
 body[data-page="admin"] .header-flies { display: none !important; }
 body[data-page="admin"] .header {
@@ -4185,7 +4121,6 @@ body[data-page="home"] .dock,
 }
 body[data-page="home"] { padding-bottom: 78px !important; }
 body[data-page="admin"] .dock { display: none !important; }
-.site-waves { z-index: 0 !important; pointer-events: none !important; }
 body[data-page="home"] .hero-slim,
 body[data-page="home"] .home-hero-video,
 body[data-page="home"] .lux-reel,
@@ -5387,7 +5322,27 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
   z-index: 1;
 }
 .home-hero-static .wrap { position: relative; z-index: 2; }
+/* When the video is live: edge-to-edge cover, the default copy steps aside
+   and the centered statement takes over. */
 .home-hero-static.has-video { min-height: clamp(380px, 62vh, 640px); display: grid; align-items: center; }
+.home-hero-static.has-video .wrap { display: none; }
+.home-hero-video-copy {
+  position: relative; z-index: 2;
+  display: grid; justify-items: center; gap: 22px;
+  text-align: center; padding: 0 20px;
+}
+.home-hero-video-copy[hidden] { display: none !important; }
+.home-hero-video-copy h1 {
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: clamp(26px, 4.6vw, 54px);
+  line-height: 1.18;
+  max-width: 880px;
+  margin: 0;
+  text-shadow: 0 2px 26px rgba(0, 0, 0, .45);
+}
+.home-hero-video-copy .btn { min-width: 168px; text-transform: uppercase; letter-spacing: .1em; }
 .home-hero-static.has-video h1 { color: #fff; text-shadow: 0 2px 22px rgba(0,0,0,.35); }
 .home-hero-static.has-video .kicker { color: #e9ddf5; }
 

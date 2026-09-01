@@ -1355,10 +1355,12 @@ async function fillMarketing() {
             Referral programme ON — qualifying orders get a shareable code</label>
           <div class="admin-grid">
             <label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label>
+            <label>NGN → CFA rate (1 ₦ = ? F CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label>
             <label>Friend's discount % (code used at checkout)<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label>
             <label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label>
             <label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label>
           </div>
+          <p class="admin-note" id="mk-cfa-note"></p>
           <label class="mk-toggle"><input type="checkbox" name="abandonedEnabled" ${s.abandonedEnabled ? "checked" : ""} />
             Abandoned-cart emails ON — remind shoppers who stopped at checkout</label>
           <div class="admin-grid">
@@ -1369,6 +1371,22 @@ async function fillMarketing() {
             <textarea name="abandonedTemplate" rows="5">${esc(s.abandonedTemplate || "")}</textarea></label>
           <button class="btn" type="submit">Save settings</button>
         </form>`;
+      // Live preview: what the NGN threshold means in F CFA at the set rate.
+      const cfaNote = () => {
+        const f = $("#mk-set-form");
+        const note = $("#mk-cfa-note");
+        if (!f || !note) return;
+        const spend = Number(f.minSpendNgn.value) || 0;
+        const rate = Number(f.cfaRate.value) || 0;
+        note.textContent = rate > 0
+          ? `CFA shoppers qualify from ${Math.round(spend * rate).toLocaleString()} F CFA (₦${spend.toLocaleString()} × ${rate}).`
+          : "";
+      };
+      cfaNote();
+      ["minSpendNgn", "cfaRate"].forEach((n) => {
+        const el = $("#mk-set-form") && $("#mk-set-form")[n];
+        if (el) el.addEventListener("input", cfaNote);
+      });
       $("#mk-set-form").onsubmit = async (e) => {
         e.preventDefault();
         const fd = new FormData(e.target);
@@ -1376,6 +1394,7 @@ async function fillMarketing() {
           referralEnabled: e.target.referralEnabled.checked,
           abandonedEnabled: e.target.abandonedEnabled.checked,
           minSpendNgn: Number(fd.get("minSpendNgn")),
+          cfaRate: Number(fd.get("cfaRate")),
           buyerPercent: Number(fd.get("buyerPercent")),
           referrerPercent: Number(fd.get("referrerPercent")),
           milestone: Number(fd.get("milestone")),

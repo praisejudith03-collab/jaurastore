@@ -88,14 +88,20 @@ function mountHeroVideo() {
   const hero = document.getElementById("home-hero");
   if (!vid || !hero) return;
   const KEY = "jaura.site";
+  const copy = document.getElementById("hero-video-copy");
   const apply = (url) => {
     if (url) {
       if (vid.getAttribute("src") !== url) vid.src = url;
       vid.muted = true;
+      vid.preload = "auto";
+      vid.setAttribute("preload", "auto");
       vid.setAttribute("playsinline", "");
       vid.setAttribute("webkit-playsinline", "");
+      vid.setAttribute("disablepictureinpicture", "");
+      try { vid.disablePictureInPicture = true; } catch (e) {}
       vid.hidden = false;
       if (scrim) scrim.hidden = false;
+      if (copy) copy.hidden = false;
       hero.classList.add("has-video");
       const play = () => vid.play().catch(() => {});
       play();
@@ -105,6 +111,7 @@ function mountHeroVideo() {
       vid.hidden = true;
       vid.removeAttribute("src");
       if (scrim) scrim.hidden = true;
+      if (copy) copy.hidden = true;
       hero.classList.remove("has-video");
     }
   };
@@ -360,10 +367,10 @@ function renderShop() {
   if (sort === "price-desc") list.sort((a, b) => JA.priceOf(b) - JA.priceOf(a));
   if (sort === "name") list.sort((a, b) => a.name.localeCompare(b.name));
 
-  // Every product renders on one page - no cap. The catalogue is the whole
-  // list the server returns (see store.js dedupeProducts / catalog.merged),
-  // so whatever the shop holds is what the shopper sees.
-  const per = Math.max(list.length, 1);
+  // Clean pagination: 24 products per page with numbered controls plus
+  // Previous/Next. Every product stays reachable — the pages cover the whole
+  // list the server returns (see store.js dedupeProducts / catalog.merged).
+  const per = 24;
   const pages = Math.max(1, Math.ceil(list.length / per));
   const page = Math.min(Math.max(1, parseInt(param("page") || "1", 10) || 1), pages);
   const slice = list.slice((page - 1) * per, page * per);
@@ -391,14 +398,23 @@ function renderShop() {
   const pager = document.querySelector("[data-pager]");
   if (pager && pages > 1) {
     // data-href, not onclick: inline handlers are blocked by our CSP
-    pager.innerHTML = Array.from({ length: pages }, (_, i) => {
-      const n = i + 1;
-      const url = `shop.html?cat=${cat}&q=${encodeURIComponent(q)}&page=${n}`;
-      return `<button type="button" ${n === page ? "disabled" : ""} data-goto="${JA.escape(url)}">${n}</button>`;
-    }).join("");
-    pager.querySelectorAll("[data-goto]").forEach((b) => {
+    const url = (n) => `shop.html?cat=${cat}&q=${encodeURIComponent(q)}&page=${n}`;
+    // page-number window: 1 … around current … last, with ellipses
+    const nums = [];
+    for (let n = 1; n <= pages; n++) {
+      if (n === 1 || n === pages || Math.abs(n - page) <= 1) nums.push(n);
+      else if (nums[nums.length - 1] !== "…") nums.push("…");
+    }
+    pager.innerHTML =
+      `<button type="button" class="pager-nav" ${page <= 1 ? "disabled" : ""} data-goto="${JA.escape(url(page - 1))}" aria-label="Previous page">‹ <span data-i18n="pager.prev">Prev</span></button>`
+      + nums.map((n) => n === "…"
+        ? `<span class="pager-gap">…</span>`
+        : `<button type="button" ${n === page ? 'class="is-on" disabled aria-current="page"' : ""} data-goto="${JA.escape(url(n))}">${n}</button>`).join("")
+      + `<button type="button" class="pager-nav" ${page >= pages ? "disabled" : ""} data-goto="${JA.escape(url(page + 1))}" aria-label="Next page"><span data-i18n="pager.next">Next</span> ›</button>`;
+    pager.querySelectorAll("[data-goto]:not([disabled])").forEach((b) => {
       b.addEventListener("click", () => { location.href = b.dataset.goto; });
     });
+    if (window.I18N && typeof window.I18N.apply === "function") try { window.I18N.apply(pager); } catch (e) {}
   } else if (pager) pager.innerHTML = "";
 }
 

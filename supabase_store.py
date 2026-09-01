@@ -315,3 +315,55 @@ def create_receipt(receipt):
 def _now():
     import datetime
     return datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+# ---------------------------------------------------------- growth mirroring
+# Referral codes, their usage log, coupons and the growth settings are the
+# shop's marketing memory. SQLite stays the working copy; every write is
+# mirrored into Supabase (PostgreSQL) so the data also survives outside the
+# Render disk. Table DDL lives in supabase_schema.sql (committed to the repo).
+def mirror_referral_code(row):
+    """Upsert one referral_codes row: {code, email, name, uses,
+    reward_issued, reward_coupon, created_at}."""
+    c = client()
+    if c is None:
+        return
+    try:
+        c.table("referral_codes").upsert(dict(row)).execute()
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] referral upsert failed: {exc}")
+
+
+def mirror_referral_use(row):
+    """Append one referral_uses row: {code, order_id, buyer_email, at}."""
+    c = client()
+    if c is None:
+        return
+    try:
+        c.table("referral_uses").insert(dict(row)).execute()
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] referral use insert failed: {exc}")
+
+
+def mirror_coupon(row):
+    """Upsert one coupons row: {code, percent, kind, email, note, active,
+    max_uses, uses, expires_at, created_at}."""
+    c = client()
+    if c is None:
+        return
+    try:
+        c.table("coupons").upsert(dict(row)).execute()
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] coupon upsert failed: {exc}")
+
+
+def mirror_growth_settings(settings_dict):
+    """Upsert the whole growth_settings key/value map."""
+    c = client()
+    if c is None:
+        return
+    try:
+        rows = [{"key": k, "value": str(v)} for k, v in dict(settings_dict).items()]
+        c.table("growth_settings").upsert(rows).execute()
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] growth settings upsert failed: {exc}")
