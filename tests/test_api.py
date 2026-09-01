@@ -930,3 +930,94 @@ def test_catalog_json_repo_copy_is_refreshed_from_overrides(tmp_path, monkeypatc
     assert "Sync Bag" in snapshot and "Sync Shoe" in snapshot
     catalog_mod.remove("jau-sync-bag", "tester")
     catalog_mod.remove("jau-sync-shoe", "tester")
+
+
+# ===================================================== admin panel rebuild
+os.environ.setdefault("SITE_CONFIG_PATH", "/tmp/jaura_test_site.json")
+
+
+def test_bulk_upload_endpoint_is_gone(client):
+    """The admin bulk-upload feature was removed entirely."""
+    tok = login(client)
+    r = client.post("/api/admin/bulk-upload",
+                    data={"csv": "name,category\nX,bags"},
+                    headers={"X-CSRF-Token": tok})
+    # 404/405: the API route no longer exists (405 = only the static-file
+    # catch-all GET route matches this URL now)
+    assert r.status_code in (404, 405)
+
+
+def test_order_can_be_marked_delivered(client):
+    oid = _make_order(client, "JA-DELIV1")
+    tok = login(client)
+    r = client.patch(f"/api/admin/orders/{oid}", json={"status": "delivered"},
+                     headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200 and r.get_json()["status"] == "delivered"
+    assert one("SELECT status FROM orders WHERE id=?", (oid,))["status"] == "delivered"
+    # and back to pending, the way the admin panel reopens an order
+    r = client.patch(f"/api/admin/orders/{oid}", json={"status": "pending"},
+                     headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200
+    # nonsense statuses are still rejected
+    r = client.patch(f"/api/admin/orders/{oid}", json={"status": "shipped-to-mars"},
+                     headers={"X-CSRF-Token": tok})
+    assert r.status_code == 400
+
+
+def test_site_config_public_read_and_admin_write(client):
+    if os.path.exists("/tmp/jaura_test_site.json"):
+        os.remove("/tmp/jaura_test_site.json")
+    # public read works logged out and starts empty
+    r = client.get("/api/site")
+    assert r.status_code == 200
+    assert r.get_json()["site"]["heroVideo"] == ""
+    # writing needs an admin session
+    assert client.post("/api/admin/site", json={"heroVideo": "/uploads/videos/x.mp4"},
+                       headers={"X-CSRF-Token": csrf(client)}).status_code == 401
+    tok = login(client)
+    r = client.post("/api/admin/site", json={"heroVideo": "/uploads/videos/x.mp4"},
+                    headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200
+    assert client.get("/api/site").get_json()["site"]["heroVideo"] == "/uploads/videos/x.mp4"
+    # dangerous schemes are stripped, and clearing works
+    client.post("/api/admin/site", json={"heroVideo": "javascript:alert(1)"},
+                headers={"X-CSRF-Token": tok})
+    assert client.get("/api/site").get_json()["site"]["heroVideo"] == ""
+
+
+def test_hero_video_upload_validates_real_bytes(client):
+    tok = login(client)
+    # a renamed exe is refused
+    r = client.post("/api/admin/uploads/video",
+                    data={"file": (io.BytesIO(b"MZ\x90\x00" + b"\x00" * 200), "movie.mp4")},
+                    headers={"X-CSRF-Token": tok},
+                    content_type="multipart/form-data")
+    assert r.status_code == 400
+    # a real MP4 header is accepted and stored under /uploads/
+    mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 400
+    r = client.post("/api/admin/uploads/video",
+                    data={"file": (io.BytesIO(mp4), "hero.mp4")},
+                    headers={"X-CSRF-Token": tok},
+                    content_type="multipart/form-data")
+    assert r.status_code == 200, r.data
+    url = r.get_json()["url"]
+    assert url.startswith("/uploads/") and url.endswith(".mp4")
+    # the stored video is served back
+    assert client.get(url).status_code == 200
+
+
+def test_option_stock_survives_product_save(client):
+    import catalog as catalog_mod
+    tok = login(client)
+    r = client.post("/api/admin/products", headers={"X-CSRF-Token": tok}, json={
+        "id": "jau-optstock", "name": "Option Stock Tee", "priceNgn": 4000,
+        "category": "fashion", "stock": 7,
+        "options": [{"title": "Size", "type": "DROP_DOWN", "values": ["S", "M", "L"]}],
+        "optionStock": {"S": 3, "M": 4, "L": 0, "<script>x</script>": 2},
+    })
+    assert r.status_code == 200, r.data
+    saved = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == "jau-optstock")
+    assert saved["optionStock"]["S"] == 3 and saved["optionStock"]["L"] == 0
+    assert "<script>x</script>" not in saved["optionStock"]      # keys are cleaned
+    assert saved["stock"] == 7
+    catalog_mod.remove("jau-optstock", "tester")

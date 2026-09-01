@@ -22,11 +22,14 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 
 MAX_BYTES = 6 * 1024 * 1024              # 6 MB: product photos
 MAX_RECEIPT_BYTES = 8 * 1024 * 1024      # 8 MB: payment receipts / PDFs
+MAX_VIDEO_BYTES = 40 * 1024 * 1024       # 40 MB: homepage hero video
 ALLOWED_EXT = ("jpg", "jpeg", "png", "webp", "pdf")
+VIDEO_EXT = ("mp4", "webm")
 MIME = {
     "jpg": "image/jpeg", "jpeg": "image/jpeg",
     "png": "image/png", "webp": "image/webp",
     "pdf": "application/pdf",
+    "mp4": "video/mp4", "webm": "video/webm",
 }
 
 # (extension, tuple of accepted magic-byte prefixes)
@@ -91,6 +94,55 @@ def validate_image(data: bytes, filename: str = ""):
     if ext == "pdf":
         return False, "That is a PDF. Upload a JPG or PNG image here.", ""
     return False, msg, ext
+
+
+def _video_ext_from_bytes(head: bytes) -> str:
+    """Identify MP4 / WebM from the file's own bytes, never from its name."""
+    if len(head) >= 12 and head[4:8] == b"ftyp":          # ISO base media (MP4/MOV)
+        brand = head[8:12]
+        if brand[:3] in (b"mp4", b"iso", b"avc", b"M4V", b"m4v", b"dash", b"MSN") or brand in (b"mmp4", b"3gp4", b"3gp5"):
+            return "mp4"
+        return "mp4"                                       # any ftyp container plays as mp4
+    if head.startswith(b"\x1a\x45\xdf\xa3"):               # EBML → WebM/Matroska
+        return "webm"
+    return ""
+
+
+def validate_video(data: bytes, filename: str = ""):
+    """Hero video: MP4 or WebM only, capped at MAX_VIDEO_BYTES."""
+    if not data:
+        return False, "The file was empty.", ""
+    if len(data) > MAX_VIDEO_BYTES:
+        return False, (f"That video is {len(data) / 1048576:.1f} MB. "
+                       f"The limit is {MAX_VIDEO_BYTES // (1024 * 1024)} MB — "
+                       "export it smaller (720p is plenty for a hero)."), ""
+    ext = _video_ext_from_bytes(data[:16])
+    if not ext:
+        return False, "Only MP4 or WebM videos can be uploaded here.", ""
+    return True, "ok", ext
+
+
+def save_video(data: bytes, folder: str = "videos", filename: str = ""):
+    """Stores a hero video and returns (ok, message, url)."""
+    ok, msg, ext = validate_video(data, filename)
+    if not ok:
+        return False, msg, ""
+    digest = hashlib.sha256(data).hexdigest()
+    key = _object_name(folder, ext, digest)
+    if Config.UPLOAD_MODE == "s3":
+        ok2, _msg2, url = _save_s3(data, key, ext)
+        if ok2:
+            return True, "stored", url
+    full = _local_path(key)
+    try:
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        tmp = full + ".part"
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, full)
+    except OSError as exc:  # pragma: no cover - filesystem failure
+        return False, f"Could not save the upload ({exc.__class__.__name__}).", ""
+    return True, "stored", "/uploads/" + key
 
 
 def _object_name(folder: str, ext: str, digest: str) -> str:

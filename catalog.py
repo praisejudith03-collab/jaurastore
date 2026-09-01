@@ -395,7 +395,23 @@ def normalize(product):
         "online": product.get("online", True) is not False,
         "colors": list(product.get("colors") or []),
         "options": list(product.get("options") or []),
+        "optionStock": _clean_option_stock(product.get("optionStock")),
     }
+    return out
+
+
+def _clean_option_stock(raw):
+    """Per-option-value stock, e.g. {"Red": 4, "Blue": 0}. The admin editor
+    tracks quantity per value of the product's first option, like Wix."""
+    import security as sec
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for k, v in list(raw.items())[:60]:
+        key = sec.clean(k, 80)
+        if not key:
+            continue
+        out[key] = sec.clean_int(v, 0, 0, 10**7) or 0
     return out
 
 

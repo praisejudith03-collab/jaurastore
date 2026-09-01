@@ -1,5 +1,5 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
-import csv, io, json, datetime, secrets, hashlib, re
+import csv, io, json, os, datetime, secrets, hashlib, re
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
 from db import execute, one, query, audit
@@ -242,7 +242,7 @@ def log_activity():
 
 CUSTOMER_FIELDS = ("firstName", "lastName", "name", "phone", "email", "country",
                    "city", "zone", "address", "note")
-STATUSES = ("pending", "confirmed", "declined")
+STATUSES = ("pending", "confirmed", "delivered", "declined")
 
 
 @api.post("/uploads/proof")
@@ -731,7 +731,8 @@ def admin_analytics():
 @authmod.require_admin
 def admin_live():
     return jsonify(ok=True, windowSeconds=Config.LIVE_WINDOW_SECONDS,
-                   visitors=analytics_mod.live_now())
+                   visitors=analytics_mod.live_now(),
+                   activity=analytics_mod.recent_activity())
 
 # ---------------------------------------------------------- admin: orders
 def _order_row(r):
@@ -861,7 +862,7 @@ def admin_order_update(oid):
     d = request.get_json(silent=True) or {}
     status = sec.clean(d.get("status"), 20)
     if status not in STATUSES:
-        return jsonify(ok=False, error="status must be pending, confirmed or declined"), 400
+        return jsonify(ok=False, error="status must be pending, confirmed, delivered or declined"), 400
     row = one("SELECT id, payload FROM orders WHERE id=?", (oid,))
     if not row:
         return jsonify(ok=False, error="Order not found."), 404
@@ -971,61 +972,64 @@ def admin_upload_image():
         return jsonify(ok=False, error=msg), 500
     return jsonify(ok=True, url=url)
 
-# ------------------------------------------------------- admin: bulk upload
-REQUIRED = ("name", "category", "priceCfa", "priceNgn")
-
-@api.post("/admin/bulk-upload")
+# ------------------------------------------------------ admin: hero video
+@api.post("/admin/uploads/video")
 @authmod.require_admin
 @sec.require_csrf
-def bulk_upload():
-    raw = ""
-    if "file" in request.files:
-        raw = request.files["file"].read().decode("utf-8", errors="replace")
-    else:
-        raw = (request.get_json(silent=True) or {}).get("csv", "") or request.form.get("csv", "")
-    if not raw.strip():
-        return jsonify(ok=False, error="No CSV content supplied."), 400
+def admin_upload_video():
+    """Homepage hero video upload (MP4 or WebM). Stored like every other
+    upload: as a real file under /uploads/, never inside the database."""
+    limited = sec.guard("admin-upload", limit=20, window=600)
+    if limited: return limited
+    f = request.files.get("file") or request.files.get("video")
+    if not f:
+        return jsonify(ok=False, error="No file received."), 400
+    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    ok, msg, url = storage.save_video(data, "videos", f.filename or "")
+    if not ok:
+        return jsonify(ok=False, error=msg), 400
+    audit(authmod.current_admin(), "site.hero_video_upload", url, _ip())
+    return jsonify(ok=True, url=url)
 
-    reader = csv.DictReader(io.StringIO(raw))
-    if not reader.fieldnames:
-        return jsonify(ok=False, error="CSV has no header row."), 400
-    headers = [(h or "").strip().lower() for h in reader.fieldnames]
-    missing = [c for c in REQUIRED if c.lower() not in headers]
-    if missing:
-        return jsonify(ok=False, error=f"CSV is missing required column(s): {', '.join(missing)}",
-                       required=list(REQUIRED)), 400
+# ----------------------------------------------------------- site settings
+# Small owner-editable settings that every visitor needs (currently the
+# homepage hero video). Kept in a JSON file next to the catalogue so it
+# survives a redeploy on a persistent disk.
+SITE_KEYS = ("heroVideo", "heroPoster")
 
-    accepted, rejected = [], []
-    seen_skus = {r["product_id"] for r in query("SELECT product_id FROM product_views")}
-    for n, row in enumerate(reader, start=2):
-        row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
-        errs = []
-        name = sec.clean(row.get("name"), 200)
-        if not name: errs.append("missing name")
-        cat = sec.clean(row.get("category"), 40)
-        if not cat: errs.append("missing category")
-        try:
-            cfa = int(float(row.get("pricecfa") or 0))
-            if cfa <= 0: errs.append("priceCfa must be greater than 0")
-        except ValueError:
-            cfa = 0; errs.append("priceCfa is not a number")
-        try:
-            ngn = int(float(row.get("pricengn") or 0))
-            if ngn < 0: errs.append("priceNgn cannot be negative")
-        except ValueError:
-            ngn = 0; errs.append("priceNgn is not a number")
-        sku = sec.valid_sku(row.get("sku") or "")
-        if row.get("sku") and not sku: errs.append("invalid SKU (letters/numbers/.-_ only)")
-        img = sec.safe_url(row.get("image") or "")
-        if row.get("image") and not img: errs.append("corrupt image URL")
-        if errs:
-            rejected.append({"row": n, "name": name or row.get("name", ""), "errors": errs})
-            continue
-        accepted.append({"name": name, "category": cat, "priceCfa": cfa, "priceNgn": ngn,
-                         "sku": sku, "image": img,
-                         "stock": sec.clean_int(row.get("stock"), 0, 0, 10**7),
-                         "description": sec.clean(row.get("description"), 2000)})
-    audit(authmod.current_admin(), "bulk_upload",
-          f"accepted={len(accepted)} rejected={len(rejected)}", _ip())
-    return jsonify(ok=True, accepted=len(accepted), rejected=len(rejected),
-                   rows=accepted, errors=rejected)
+def _site_path():
+    return os.environ.get("SITE_CONFIG_PATH") or os.path.join(
+        os.path.dirname(Config.CATALOG_PATH) or ".", "site.json")
+
+def _load_site():
+    try:
+        with open(_site_path(), "r", encoding="utf-8") as fh:
+            d = json.load(fh) or {}
+    except (OSError, ValueError):
+        d = {}
+    return {k: sec.safe_url(str(d.get(k) or "")) for k in SITE_KEYS}
+
+@api.get("/site")
+def site_config():
+    """Public: the homepage reads this to know whether a hero video exists."""
+    return jsonify(ok=True, site=_load_site())
+
+@api.post("/admin/site")
+@authmod.require_admin
+@sec.require_csrf
+def admin_site_update():
+    d = request.get_json(silent=True) or {}
+    cur = _load_site()
+    for k in SITE_KEYS:
+        if k in d:
+            cur[k] = sec.safe_url(str(d.get(k) or ""))
+    path = _site_path()
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(cur, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    audit(authmod.current_admin(), "site.update", json.dumps(cur)[:200], _ip())
+    return jsonify(ok=True, site=cur)

@@ -38,20 +38,22 @@ let loginNeedsEmail = false;
 
 function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
-    <div class="admin-login">
-      <div class="kicker">Atelier</div>
-      <h1 class="serif-title" style="margin-bottom:12px">Jaura Store</h1>
-      <p style="color:var(--muted);margin-bottom:20px">Sign in to edit products, prices and stock, and to read your store analytics. You can sign in from any phone or laptop.</p>
-      ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
-      <form id="login-form" class="field">
-        ${needsEmail ? `<label>Email</label>
-        <input type="email" name="email" required autocomplete="username" value="${JA.escape(loginEmail)}" />` : ""}
-        <label ${needsEmail ? 'style="margin-top:14px"' : ""} data-no-i18n>Password</label>
-        <input type="password" name="password" required autocomplete="current-password" />
-        <button class="btn" style="margin-top:18px" id="login-btn" data-no-i18n>Sign in</button>
-      </form>
-      <button type="button" class="wix-link-btn" id="forgot-btn" style="margin-top:16px">Forgot password? Reset it by email</button>
-      <div id="otp-slot"></div>
+    <div class="adx-login">
+      <div class="adx-login-card">
+        <img class="adx-login-logo" src="images/brand/logo.jpg" alt="Jaura Store" />
+        <h1 class="serif-title">Jaura Store</h1>
+        <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
+        ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
+        <form id="login-form" class="field adx-login-form">
+          ${needsEmail ? `<label>Email</label>
+          <input type="email" name="email" required autocomplete="username" value="${JA.escape(loginEmail)}" />` : ""}
+          <label ${needsEmail ? 'style="margin-top:14px"' : ""} data-no-i18n>Password</label>
+          <input type="password" name="password" required autocomplete="current-password" placeholder="Your admin password" />
+          <button class="btn adx-login-btn" id="login-btn" data-no-i18n>Sign in</button>
+        </form>
+        <button type="button" class="wix-link-btn" id="forgot-btn" style="margin-top:16px">Forgot password? Reset it by email</button>
+        <div id="otp-slot"></div>
+      </div>
     </div>`;
 
   const form = $("#login-form");
@@ -145,7 +147,7 @@ function mediaStripHTML(imgs) {
     </div>`).join("");
   const plus = imgs.length < 20 ? `<label class="wix-tile wix-plus">+<input type="file" id="more-media" accept="image/*" capture="environment" multiple hidden /></label>` : "";
   return `<div class="wix-media-row">${tiles}${plus}</div>
-    <p class="admin-note">Add more than 5 photos — tap + and pick several at once. Up to 20.</p>
+    <p class="admin-note">Drag &amp; drop photos here, or tap + to pick several at once. Up to 20.</p>
     <button type="button" class="wix-view-media" id="view-media">View All Media (${imgs.length}/20) ›</button>`;
 }
 function editorOptions(p) {
@@ -198,9 +200,11 @@ function refreshOptionChips() {
   const status = document.getElementById("stock-status")?.value;
   const qty = Number(document.getElementById("stock-qty")?.value);
   const stock = status === "out" ? 0 : (qty > 0 ? qty : 24);
-  const fake = { ...existing, options: collectOptions(box || document), stock };
+  const typed = currentOptionStock();
+  const optionStock = { ...(existing.optionStock || {}), ...typed };
+  const fake = { ...existing, options: collectOptions(box || document), stock, optionStock };
   const varBox = document.getElementById("var-box");
-  if (varBox) varBox.innerHTML = variantsHTML(fake);
+  if (varBox) varBox.innerHTML = optionStockHTML(fake);
 }
 function addOptionRow(title, values) {
   const box = document.getElementById("opt-box");
@@ -217,6 +221,24 @@ function bindMedia() {
   const box = document.getElementById("media-box");
   if (!box || box.dataset.bound === "1") return;
   box.dataset.bound = "1";
+  // Drag & drop photos straight onto the media strip (Wix-style).
+  ["dragenter", "dragover"].forEach((ev) => box.addEventListener(ev, (e) => {
+    e.preventDefault();
+    box.classList.add("is-drop");
+  }));
+  ["dragleave", "drop"].forEach((ev) => box.addEventListener(ev, (e) => {
+    e.preventDefault();
+    box.classList.remove("is-drop");
+  }));
+  box.addEventListener("drop", (e) => {
+    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])].filter((f) => /^image\//.test(f.type));
+    if (!files.length) return;
+    if (!window.__editImages) window.__editImages = [];
+    for (const file of files) {
+      if (window.__editImages.length >= 20) break;
+      uploadProductImage(file, box);
+    }
+  });
   box.addEventListener("change", async (e) => {
     const input = e.target && e.target.matches && e.target.matches("input[type=file]") ? e.target : null;
     if (!input || !input.files || !input.files.length) return;
@@ -290,6 +312,13 @@ function bindOptions() {
       refreshOptionChips();
     });
   }
+  const varBox = document.getElementById("var-box");
+  if (varBox && varBox.dataset.bound !== "1") {
+    varBox.dataset.bound = "1";
+    varBox.addEventListener("input", (e) => {
+      if (e.target && e.target.matches && e.target.matches("[data-opt-stock]")) syncOptionStockTotals();
+    });
+  }
   document.getElementById("add-opt")?.addEventListener("click", () => addOptionRow("", ""));
   document.querySelectorAll("[data-preset]").forEach((b) => {
     b.onclick = () => addOptionRow(b.dataset.preset, "");
@@ -353,18 +382,70 @@ function bindReviewsAdmin(id) {
     paint();
   });
 }
-function variantsHTML(p) {
+function currentOptionStock() {
+  /* Read whatever is typed in the per-option stock boxes right now. */
+  const map = {};
+  document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
+    const v = inp.getAttribute("data-opt-stock");
+    if (inp.value !== "") map[v] = Math.max(0, parseInt(inp.value, 10) || 0);
+  });
+  return map;
+}
+
+function optionStockHTML(p) {
   const opt = (p.options || [])[0];
   const vals = (opt && opt.values) || p.colors || [];
-  if (!vals.length) return `<p class="admin-note">Add a colour or size option to create variants.</p>`;
-  return vals.map((v) => `
-    <div class="wix-var">
-      <div>
-        <strong>${JA.escape(v)}</strong>
-        <span>${Number(p.compareNgn) > Number(p.priceNgn) ? `<s>${JA.money(p.compareNgn, "NGN")}</s> ` : ""}${JA.money(p.priceNgn || 0, "NGN")} · ${JA.money(JA.toCfa ? JA.toCfa(p.priceNgn) : Math.round((Number(p.priceNgn) || 0) * 0.44), "CFA")}</span>
-      </div>
-      <em>${Number(p.stock) > 0 ? "In stock" : "Out of stock"}</em>
-    </div>`).join("");
+  if (!vals.length) {
+    return `<h3>Stock per option</h3>
+      <p class="admin-note">Add an option above (Colour, Size…) and a stock box appears here for each choice — exactly like Wix. Until then the single Quantity below is used.</p>`;
+  }
+  const os = p.optionStock || {};
+  const toCfa = JA.toCfa || ((n) => Math.round(Number(n || 0) * 0.44));
+  const price = `${Number(p.compareNgn) > Number(p.priceNgn) ? `<s>${JA.money(p.compareNgn, "NGN")}</s> ` : ""}${JA.money(p.priceNgn || 0, "NGN")} · ${JA.money(toCfa(p.priceNgn), "CFA")}`;
+  const rows = vals.map((v) => {
+    const qty = os[v] != null ? Number(os[v]) : "";
+    const state = qty === "" ? "" : (qty > 0 ? "in" : "out");
+    return `<div class="adx-var" data-var-row>
+      <div class="adx-var-name"><strong>${JA.escape(v)}</strong><span>${price}</span></div>
+      <label class="adx-var-qty">Stock
+        <input type="number" min="0" inputmode="numeric" data-opt-stock="${JA.escape(v)}" value="${qty}" placeholder="0" />
+      </label>
+      <em class="adx-var-state ${state}" data-var-state>${qty === "" ? "—" : (qty > 0 ? "In stock" : "Sold out")}</em>
+    </div>`;
+  }).join("");
+  const total = vals.reduce((n, v) => n + (Number(os[v]) > 0 ? Number(os[v]) : 0), 0);
+  return `<h3>Stock per ${JA.escape((opt && opt.title) || "option")}</h3>
+    <p class="admin-note">Type how many pieces you have of each ${JA.escape((opt && opt.title) || "option").toLowerCase()}. The total quantity below updates by itself; a choice with 0 shows as sold out.</p>
+    <div class="adx-vars">${rows}</div>
+    <p class="admin-note" id="opt-stock-total"><strong>Total: ${total}</strong> piece(s) across ${vals.length} ${JA.escape((opt && opt.title) || "option")} choice(s).</p>`;
+}
+
+function syncOptionStockTotals() {
+  const inputs = [...document.querySelectorAll("[data-opt-stock]")];
+  if (!inputs.length) return;
+  let total = 0, touched = false;
+  inputs.forEach((inp) => {
+    const row = inp.closest("[data-var-row]");
+    const state = row && row.querySelector("[data-var-state]");
+    if (inp.value === "") {
+      if (state) { state.textContent = "—"; state.className = "adx-var-state"; }
+      return;
+    }
+    touched = true;
+    const n = Math.max(0, parseInt(inp.value, 10) || 0);
+    total += n;
+    if (state) {
+      state.textContent = n > 0 ? "In stock" : "Sold out";
+      state.className = "adx-var-state " + (n > 0 ? "in" : "out");
+    }
+  });
+  const totalEl = document.getElementById("opt-stock-total");
+  if (totalEl) totalEl.innerHTML = `<strong>Total: ${total}</strong> piece(s). This becomes the product quantity when you save.`;
+  if (!touched) return;
+  const qty = document.getElementById("stock-qty");
+  const status = document.getElementById("stock-status");
+  if (qty) qty.value = total;
+  if (status) status.value = total > 0 ? "in" : "out";
 }
 
 function bindCfaPreview() {
@@ -401,6 +482,7 @@ function productForm(p = {}) {
     <h2>Product</h2>
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
     <div class="field"><label>Product Name</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
+    <div class="field"><label>Product Name (French — shown when the site is in French)</label><input name="nameFr" maxlength="80" value="${JA.escape(p.nameFr || "")}" placeholder="Optional" /></div>
     <input type="hidden" name="id" value="${p.id || ""}" />
     <div class="wix-2">
       <div class="field"><label>Price ₦</label><div class="wix-price"><input name="priceNgn" type="number" min="0" required value="${p.priceNgn || ""}" /><i>₦</i></div></div>
@@ -428,8 +510,7 @@ function productForm(p = {}) {
       <button type="button" data-preset="Scent">+ Scent</button>
     </div>
     <button type="button" class="wix-link-btn" id="add-opt">+ Add Option</button>
-    <h3>Variants</h3>
-    <div id="var-box">${variantsHTML({ ...p, options: opts })}</div>
+    <div id="var-box">${optionStockHTML({ ...p, options: opts })}</div>
     <h3>Inventory</h3>
     <div class="wix-2">
       <div class="field"><label>Availability</label>
@@ -508,6 +589,18 @@ async function handleProductSubmit(e, existing) {
   if (status === "out") stock = 0;
   else if (!(stock > 0)) stock = (existing && Number(existing.stock) > 0) ? Number(existing.stock) : 24;
   const options = collectOptions(e.target);
+  // Per-option stock (Wix-style): if any per-choice quantity was typed, the
+  // sum of those quantities IS the product quantity.
+  const optionStock = {};
+  let hasOptionStock = false;
+  const firstVals = (options[0] && options[0].values) || [];
+  e.target.querySelectorAll("[data-opt-stock]").forEach((inp) => {
+    const v = inp.getAttribute("data-opt-stock");
+    if (!firstVals.includes(v) || inp.value === "") return;
+    optionStock[v] = Math.max(0, parseInt(inp.value, 10) || 0);
+    hasOptionStock = true;
+  });
+  if (hasOptionStock) stock = Object.values(optionStock).reduce((n, q) => n + q, 0);
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
   const priceNgn = num("priceNgn") || 0;
   const compareNgn = num("compareNgn");
@@ -537,7 +630,8 @@ async function handleProductSubmit(e, existing) {
       online: !!fd.get("online"),
       colors: colorOpt ? colorOpt.values : [],
       options,
-      nameFr: existing?.nameFr || "",
+      optionStock: hasOptionStock ? optionStock : (existing?.optionStock || {}),
+      nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
   });
   if (window.__editReviews && JA.setReviews) JA.setReviews(id, window.__editReviews);
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = existing ? "Save" : "Add a Product"; }
@@ -553,51 +647,68 @@ async function handleProductSubmit(e, existing) {
 
 function productsTable() {
   const all = JA.products();
+  const cats = JA.categories ? JA.categories() : JA.CATEGORIES;
+  const catName = (id) => (cats.find((c) => c.id === id) || {}).name || id || "";
   const cards = all.map((p) => {
     const ngnNow = Number(p.priceNgn) || 0;
     const ngnWas = Number(p.compareNgn) || 0;
     const ngn = ngnNow > 0 ? JA.money(ngnNow, "NGN") : "";
     const ngnStrike = ngnWas > ngnNow ? JA.money(ngnWas, "NGN") : "";
     const cfaNowN = ngnNow > 0 ? (JA.toCfa ? JA.toCfa(ngnNow) : Math.round(ngnNow * 0.44)) : (Number(p.priceCfa) || 0);
-    const cfaWasN = ngnWas > 0 ? (JA.toCfa ? JA.toCfa(ngnWas) : Math.round(ngnWas * 0.44)) : 0;
     const cfaNow = JA.money(cfaNowN, "CFA");
-    const cfaWas = cfaWasN > cfaNowN ? JA.money(cfaWasN, "CFA") : "";
-    const inStock = p.id ? Number(p.stock) > 0 : true;   // a brand-new product starts in stock
-    const stock = inStock ? (p.stock + " in Stock") : "Out of stock";
-    const hidden = p.online === false ? `<em class="wix-off">Hidden</em>` : "";
-    const rowq = JA.escape((p.name + " " + (p.sku || "") + " " + p.category).toLowerCase());
-    return `<article class="wix-row" data-row="${rowq}">
-      <label class="wix-pick"><input type="checkbox" data-pick="${p.id}" /></label>
-      <img src="${JA.asset(p.image)}" alt="" />
-      <div class="wix-row-info">
+    const stockN = Number(p.stock) || 0;
+    const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>`
+      : stockN <= 5 ? `<span class="adx-pill low">${stockN} left</span>`
+      : `<span class="adx-pill in">${stockN} in stock</span>`;
+    const rowq = JA.escape((p.name + " " + (p.nameFr || "") + " " + (p.sku || "") + " " + p.category).toLowerCase());
+    return `<article class="adx-card" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
+      <div class="adx-card-pic">
+        <img src="${JA.asset(p.image)}" alt="" loading="lazy" />
+        ${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}
+        ${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}
+      </div>
+      <div class="adx-card-body">
         <strong>${JA.escape(p.name)}</strong>
-        ${ngn ? `<span class="wix-ngn">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn}</span>` : ""}
-        <span class="wix-cfa">${cfaWas ? `<s>${cfaWas}</s> ` : ""}${cfaNow}</span>
-        <span class="wix-stock">${stock}</span>
-        ${hidden}
+        <span class="adx-card-cat">${JA.escape(catName(p.category))}</span>
+        <span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span>
+        <span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>
+        ${pill}
       </div>
-      <div class="wix-quick">
-        <label>₦ price</label>
-        <input class="q-price" data-qp="${esc(p.id)}" value="${esc(Number(p.priceNgn) || 0)}" inputmode="numeric" />
-        <label>Stock</label>
-        <input class="q-stock" data-qs="${esc(p.id)}" type="number" min="0" value="${esc(Number(p.stock) || 0)}" />
-        <label class="wix-tog"><span>Sale</span><input type="checkbox" class="q-sale" data-qbadge="${esc(p.id)}" ${p.badge === "sale" ? "checked" : ""} /></label>
-        <label class="wix-tog"><span>Online</span><input type="checkbox" class="q-online" data-qo="${esc(p.id)}" ${p.online !== false ? "checked" : ""} /></label>
-        <button type="button" class="wix-link-btn" data-quick="${esc(p.id)}">Save</button>
-      </div>
-      <button type="button" class="wix-stock-tog ${inStock ? "is-in" : "is-out"}" data-stock="${p.id}" data-qty="${inStock ? 0 : 24}">${inStock ? "In stock" : "Out of stock"}</button>
-      <button type="button" class="wix-del-row" data-del="${p.id}">Delete</button>
-      <button type="button" class="wix-more" data-edit="${p.id}" aria-label="Edit">⋯</button>
+      <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete ${JA.escape(p.name)}" title="Delete">
+        <svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
     </article>`;
   }).join("");
-  return `<div class="wix-list-head">
-      <button type="button" class="wix-cats-link" data-tab="categories">Manage Categories</button>
-      <div class="field wix-search"><input id="prod-search" type="search" placeholder="Search" autocomplete="off" /></div>
-      <p class="wix-count">Products: ${all.length}</p>
-      <button type="button" class="wix-del-row" id="del-picked">Delete selected from website</button>
+  const catOpts = cats.map((c) => `<option value="${JA.escape(c.id)}">${JA.escape(c.name)}</option>`).join("");
+  return `<div class="adx-list-head">
+      <button type="button" class="btn adx-add-btn" id="add-product">+ New Product</button>
+      <div class="adx-filters">
+        <input id="prod-search" type="search" placeholder="Search products…" autocomplete="off" />
+        <select id="prod-cat" aria-label="Filter by category">
+          <option value="">All categories</option>${catOpts}
+        </select>
+      </div>
+      <p class="adx-count"><span id="prod-count">${all.length}</span> of ${all.length} products · <button type="button" class="wix-cats-link" data-tab="categories">Manage categories</button></p>
     </div>
-    <div class="wix-list">${cards}</div>
-    <button type="button" class="wix-add" id="add-product">+ Add a Product</button>`;
+    <div class="adx-grid" id="prod-grid">${cards}</div>
+    <p class="empty" id="prod-none" hidden>No products match that search.</p>`;
+}
+
+function applyProductFilter() {
+  const q = String(document.getElementById("prod-search")?.value || "").toLowerCase().trim();
+  const cat = String(document.getElementById("prod-cat")?.value || "");
+  let shown = 0;
+  document.querySelectorAll("#prod-grid .adx-card").forEach((row) => {
+    const okQ = !q || (row.getAttribute("data-row") || "").includes(q);
+    const okC = !cat || row.getAttribute("data-cat") === cat;
+    const on = okQ && okC;
+    row.style.display = on ? "" : "none";
+    if (on) shown += 1;
+  });
+  const count = document.getElementById("prod-count");
+  if (count) count.textContent = shown;
+  const none = document.getElementById("prod-none");
+  if (none) none.hidden = shown > 0;
 }
 
 let dashRange = 30;
@@ -614,25 +725,34 @@ function analyticsPanel() {
         <button type="button" class="an-rng" id="an-refresh">Refresh</button>
       </div>
     </div>
-    <p class="admin-note">Traffic is counted on the server, so these numbers follow your store — not one phone or browser. This panel refreshes on its own every 30 seconds.</p>
+    <p class="admin-note">Counted on the server, so the numbers follow your store — not one phone or browser. Refreshes by itself: live feed every 10 seconds, everything else every 30.</p>
+    <h3 class="admin-h">Visits</h3>
+    <div class="adx-periods" id="an-periods">
+      <div class="adx-period"><span>Today</span><b>…</b></div>
+      <div class="adx-period"><span>This week</span><b>…</b></div>
+      <div class="adx-period"><span>This month</span><b>…</b></div>
+    </div>
     <div class="stats" id="an-kpis"><div class="stat"><span class="kicker">Loading</span><b>…</b></div></div>
-    <h3 class="admin-h">On the site right now</h3>
+    <h3 class="admin-h">Live on the store right now <span class="adx-live-dot" aria-hidden="true"></span></h3>
     <div id="an-live-box" class="live-box">Loading live visitors…</div>
+    <div id="an-feed" class="adx-feed"><p class="empty">Loading the live activity feed…</p></div>
+    <h3 class="admin-h">Sales over time</h3>
+    <div class="an-chart" id="an-sales"><p class="empty">Loading…</p></div>
     <h3 class="admin-h">Visitors &amp; page views</h3>
     <div class="an-chart" id="an-chart"><p class="empty">Loading…</p></div>
+    <div class="adx-2col">
+      <div><h3 class="admin-h">Top viewed products</h3><div id="an-products" class="empty">Loading…</div></div>
+      <div><h3 class="admin-h">Top selling products</h3><div id="an-sellers" class="empty">Loading…</div></div>
+    </div>
     <h3 class="admin-h">Most visited pages</h3>
     <div id="an-pages" class="empty">Loading…</div>
-    <h3 class="admin-h">Top products</h3>
-    <div id="an-products" class="empty">Loading…</div>
     <h3 class="admin-h">Conversion</h3>
     <div class="stats" id="an-conv"></div>
     <div id="an-revenue"></div>
     <h3 class="admin-h">Visitor locations</h3>
     <div id="an-loc" class="empty">Loading…</div>
     <h3 class="admin-h">Latest orders</h3>
-    <div id="an-orders" class="empty">Loading…</div>
-    <h3 class="admin-h">Recent activity</h3>
-    <ul class="an-log" id="an-activity"></ul>`;
+    <div id="an-orders" class="empty">Loading…</div>`;
 }
 
 function dayLabel(day) {
@@ -658,6 +778,76 @@ function tableHTML(headers, rows) {
   return `<div class="table-wrap"><table><thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+function salesChart(series) {
+  if (!series || !series.length) return `<p class="empty">No sales in this period yet.</p>`;
+  const max = Math.max(1, ...series.map((d) => d.revenue));
+  const total = series.reduce((n, d) => n + (d.revenue || 0), 0);
+  const orders = series.reduce((n, d) => n + (d.orders || 0), 0);
+  return `<div class="an-scroll"><div class="an-bars">${series.map((d) => `
+      <div class="an-col" title="${esc(d.day)} · ${d.orders} order(s) · ${esc(JA.money(d.revenue, "NGN"))}">
+        <div class="an-bar-wrap">
+          <div class="an-bar an-bar-sales" style="height:${Math.round((d.revenue / max) * 120)}px"></div>
+        </div>
+        <span>${esc(dayLabel(d.day))}</span>
+        <em>${d.orders || ""}</em>
+      </div>`).join("")}</div></div>
+    <p class="admin-note">${orders} order(s) · ${esc(JA.money(total, "NGN"))} in this period. The number under each bar is that day's orders.</p>`;
+}
+
+function timeAgo(iso) {
+  if (!iso) return "";
+  const t = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z").getTime();
+  if (!t) return "";
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " day(s) ago";
+}
+
+function activityLine(a) {
+  const what = a.productName || a.productId || "";
+  const where = [a.city, a.country].filter(Boolean).join(", ");
+  let icon = "👀", text = `Viewing <strong>${esc(what || a.page || "the store")}</strong>`;
+  if (a.type === "cart") { icon = "🛒"; text = `Added <strong>${esc(what)}</strong> to their cart`; }
+  else if (a.type === "checkout_start") { icon = "💳"; text = `Started checkout`; }
+  else if (a.type === "purchase") {
+    icon = "🎉";
+    text = `Placed an order${a.value ? " · <strong>" + esc(JA.money(a.value, a.currency || "NGN")) + "</strong>" : ""}`;
+  }
+  return `<li class="adx-feed-row is-${esc(a.type)}">
+    <i>${icon}</i>
+    <div>${text}${where ? ` <span class="adx-feed-geo">· ${esc(where)}</span>` : ""}</div>
+    <em>${esc(timeAgo(a.at))}</em>
+  </li>`;
+}
+
+function renderLive(visitors, activity) {
+  const liveBox = $("#an-live-box");
+  if (liveBox) {
+    liveBox.innerHTML = (visitors || []).length
+      ? visitors.map((v) => `<div class="live-row"><i></i><span>${esc([v.city, v.country].filter(Boolean).join(", ") || "Visitor")}</span><em>on ${esc(v.page || v.path || "the store")}</em><small>${esc(timeAgo(v.at))}</small></div>`).join("")
+      : `<p class="empty">Nobody is browsing right now.</p>`;
+  }
+  const feed = $("#an-feed");
+  if (feed) {
+    feed.innerHTML = (activity || []).length
+      ? `<ul class="adx-feed-list">${activity.slice(0, 25).map(activityLine).join("")}</ul>`
+      : `<p class="empty">No activity in the last hour. It appears here the moment someone opens a product, adds to cart or orders.</p>`;
+  }
+  const pill = $("#live-pill");
+  if (pill && visitors) pill.textContent = visitors.length;
+}
+
+async function fillLiveFeed() {
+  try {
+    const res = await fetch("api/admin/live", { credentials: "same-origin", cache: "no-store" });
+    if (!res.ok) return;
+    const d = await res.json();
+    renderLive(d.visitors || [], d.activity || []);
+  } catch (e) { /* offline — the 30s full refresh will retry */ }
+}
+
 async function fillAnalytics() {
   const data = await JA.adminAnalytics(dashRange);
   if (!data) {
@@ -669,6 +859,19 @@ async function fillAnalytics() {
 
   const t = data.totals || {};
   const c = data.conversion || {};
+  const pr = data.periods || {};
+
+  const periodCard = (label, p) => {
+    p = p || {};
+    return `<div class="adx-period">
+      <span>${label}</span>
+      <b>${p.visits || 0}</b>
+      <small>${p.pageViews || 0} page views · ${p.visitors || 0} visitor(s)</small>
+      <small class="adx-period-rev">${p.orders || 0} order(s)${p.revenue ? " · " + esc(JA.money(p.revenue, "NGN")) : ""}</small>
+    </div>`;
+  };
+  $("#an-periods").innerHTML =
+    periodCard("Today", pr.today) + periodCard("This week", pr.week) + periodCard("This month", pr.month);
 
   $("#an-kpis").innerHTML = [
     ["Live now", t.liveNow || 0, "on the site"],
@@ -676,13 +879,12 @@ async function fillAnalytics() {
     ["Visits", t.visits || 0, "sessions"],
     ["Page views", t.pageViews || 0, ""],
     ["Orders", c.orders || 0, `${c.units || 0} items`],
+    ["Revenue", (c.revenueByCurrency || []).map((r) => JA.money(r.value, r.currency)).join(" · ") || "—", `last ${dashRange} days`],
   ].map(([k, v, s]) => `<div class="stat"><span class="kicker">${k}</span><b>${v}</b>${s ? `<i>${esc(s)}</i>` : ""}</div>`).join("");
 
-  const live = data.live || [];
-  $("#an-live-box").innerHTML = live.length
-    ? live.map((v) => `<div class="live-row"><i></i><span>${esc([v.city, v.country].filter(Boolean).join(", ") || "Unknown location")}</span><em>${esc(v.page || v.path || "")}</em></div>`).join("")
-    : `<p class="empty">Nobody is browsing right now.</p>`;
+  renderLive(data.live || [], data.activity || []);
 
+  $("#an-sales").innerHTML = salesChart(data.sales || []);
   $("#an-chart").innerHTML = trafficChart(data.series || []);
 
   const pages = data.topPages || [];
@@ -693,9 +895,17 @@ async function fillAnalytics() {
 
   const prods = data.topProducts || [];
   $("#an-products").innerHTML = prods.length
-    ? tableHTML(["Product", "Views", "Added to cart", "Orders"],
-      prods.map((p) => `<tr><td>${esc(p.name || p.productId)}</td><td>${p.views || 0}</td><td>${p.carts || 0}</td><td>${p.purchases || 0}</td></tr>`).join(""))
+    ? tableHTML(["Product", "Views", "In carts"],
+      prods.slice().sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 8)
+        .map((p) => `<tr><td>${esc(p.name || p.productId)}</td><td>${p.views || 0}</td><td>${p.carts || 0}</td></tr>`).join(""))
     : `<p class="empty">No product activity yet. Open the shop and tap a product to start the count.</p>`;
+
+  const sellers = prods.filter((p) => (p.purchases || 0) > 0 || (p.carts || 0) > 0)
+    .sort((a, b) => (b.purchases || 0) - (a.purchases || 0) || (b.carts || 0) - (a.carts || 0)).slice(0, 8);
+  $("#an-sellers").innerHTML = sellers.length
+    ? tableHTML(["Product", "Sold", "In carts"],
+      sellers.map((p) => `<tr><td>${esc(p.name || p.productId)}</td><td>${p.purchases || 0}</td><td>${p.carts || 0}</td></tr>`).join(""))
+    : `<p class="empty">No sales recorded yet.</p>`;
 
   $("#an-conv").innerHTML = [
     ["Total sales", (c.revenueByCurrency || []).map((r) => JA.money(r.value, r.currency)).join(" · ") || "—", `${c.orders || 0} orders`],
@@ -718,13 +928,8 @@ async function fillAnalytics() {
   const orders = data.recentOrders || [];
   $("#an-orders").innerHTML = orders.length
     ? tableHTML(["Order", "Customer", "Total", "Status"],
-      orders.map((o) => `<tr><td>${esc(o.id)}</td><td>${esc(o.customer_name || "")}</td><td>${esc(JA.money(o.total, o.currency))}</td><td>${esc(o.status)}</td></tr>`).join(""))
+      orders.map((o) => `<tr><td>${esc(o.id)}</td><td>${esc(o.customer_name || "")}</td><td>${esc(JA.money(o.total, o.currency))}</td><td><span class="status-pill ${esc(o.status || "pending")}">${esc(orderStatusLabel(o.status))}</span></td></tr>`).join(""))
     : `<p class="empty">No orders yet.</p>`;
-
-  const s = (JA.getStats && JA.getStats()) || {};
-  $("#an-activity").innerHTML = (s.events || []).slice(0, 12)
-    .map((e) => `<li><strong>${esc(e.type)}</strong> · ${esc(e.name || e.page || "")} · ${e.at ? new Date(e.at).toLocaleString() : ""}</li>`).join("")
-    || "<li>Nothing yet on this device.</li>";
 
   document.querySelectorAll("[data-range]").forEach((b) => {
     b.onclick = () => { dashRange = Number(b.dataset.range); paintDesk("analytics"); };
@@ -733,6 +938,8 @@ async function fillAnalytics() {
   if (ref) ref.onclick = () => { paintDesk("analytics"); JA.toast("Refreshed."); };
 }
 
+let liveTimer = null;
+
 function startDashTimer() {
   clearInterval(dashTimer);
   dashTimer = setInterval(() => {
@@ -740,12 +947,20 @@ function startDashTimer() {
     const on = document.querySelector("#panel-analytics.is-on");
     if (on && !document.hidden) fillAnalytics();
   }, 30000);
+  clearInterval(liveTimer);
+  liveTimer = setInterval(() => {
+    if (document.body.dataset.page !== "admin") return;
+    const on = document.querySelector("#panel-analytics.is-on");
+    if (on && !document.hidden && $("#an-feed")) fillLiveFeed();
+  }, 10000);
 }
 
 let serverOrders = [];
 
 function orderStatusLabel(s) {
-  return s === "confirmed" ? "Confirmed" : s === "declined" ? "Declined" : "Pending";
+  return s === "confirmed" ? "Confirmed"
+    : s === "delivered" ? "Delivered"
+    : s === "declined" ? "Declined" : "Pending";
 }
 
 document.addEventListener("click", (e) => {
@@ -798,53 +1013,71 @@ function receiptViewer(url, label, name) {
     </p>`;
 }
 
+function orderActionsHTML(o) {
+  const s = o.status || "pending";
+  if (s === "pending") {
+    return `<button class="btn" data-confirm="${esc(o.id)}">Confirm payment</button>
+      <button class="btn btn-line" data-decline="${esc(o.id)}">Decline</button>`;
+  }
+  if (s === "confirmed") {
+    return `<button class="btn" data-deliver="${esc(o.id)}">Mark as delivered</button>
+      <button class="btn btn-line" data-reopen="${esc(o.id)}">Back to pending</button>`;
+  }
+  if (s === "delivered") {
+    return `<button class="btn btn-line" data-reopen="${esc(o.id)}">Back to pending</button>`;
+  }
+  return `<button class="btn btn-line" data-reopen="${esc(o.id)}">Reopen (back to pending)</button>`;
+}
+
 function orderCardHTML(o) {
   const c = o.customer || {};
   const shot = o.proofUrl || (JA.getProof && JA.getProof(o.id, o.proof)) || "";
   const when = o.at ? new Date(o.at).toLocaleString() : "";
+  const s = o.status || "pending";
+  const nItems = (o.items || []).reduce((n, i) => n + (Number(i.qty) || 0), 0);
   return `
-    <article class="order-card" data-order="${esc(o.id)}">
-      <div class="order-card-top">
-        <div>
-          <div class="kicker">${esc(o.id)}</div>
-          <strong>${esc(c.name || "Customer")}</strong>
-          <p>${esc(c.email || "")}</p>
-          <p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p>
-          <p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>
-          ${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}
-          <p>${esc(when)}</p>
+    <details class="adx-order" data-order="${esc(o.id)}">
+      <summary class="adx-order-row">
+        <span class="adx-order-id">${esc(o.id)}</span>
+        <span class="adx-order-who"><strong>${esc(c.name || "Customer")}</strong><small>${esc(when)} · ${nItems} item(s)</small></span>
+        <span class="adx-order-total">${esc(JA.money(o.total, o.currency))}</span>
+        <span class="status-pill ${esc(s)}">${esc(orderStatusLabel(s))}</span>
+      </summary>
+      <div class="adx-order-body">
+        <div class="order-card-top">
+          <div>
+            <p><strong>${esc(c.name || "Customer")}</strong></p>
+            <p>${esc(c.email || "")}</p>
+            <p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p>
+            <p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>
+            ${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}
+            <p>${esc(when)}</p>
+          </div>
+          <div>
+            <p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p>
+            <p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p>
+          </div>
         </div>
-        <div>
-          <p class="status-pill ${esc(o.status || "pending")}">${esc(orderStatusLabel(o.status))}</p>
-          <p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p>
-          <p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p>
-        </div>
+        <ul class="order-items">${(o.items || []).map((i) => `<li>${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}</li>`).join("")}</ul>
+        ${shot
+          ? receiptViewer(shot, `Payment receipt for ${o.id} — stored on the server, never cleaned up`,
+                          `${o.id}-receipt`)
+          : `<p class="empty">No receipt attached.</p>`}
+        <div class="order-actions">${orderActionsHTML(o)}</div>
       </div>
-      <ul class="order-items">${(o.items || []).map((i) => `<li>${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}</li>`).join("")}</ul>
-      ${shot
-        ? receiptViewer(shot, `Payment receipt for ${o.id} — stored on the server, never cleaned up`,
-                        `${o.id}-receipt`)
-        : `<p class="empty">No receipt attached.</p>`}
-      <div class="order-actions">
-        <button class="btn" data-confirm="${esc(o.id)}">Confirm purchase</button>
-        <button class="btn btn-line" data-decline="${esc(o.id)}">Decline</button>
-        ${(o.status || "pending") !== "pending" ? `<button class="btn btn-line" data-reopen="${esc(o.id)}">Back to pending</button>` : ""}
-      </div>
-    </article>`;
+    </details>`;
 }
+
+let orderFilter = "all";
 
 function ordersPanel() {
   return `
-    <div class="confirm-how">
-      <h3>Every checkout is kept</h3>
-      <ol>
-        <li>A customer fills the checkout form and uploads their bank screenshot.</li>
-        <li>The whole form — name, phone, email, address, delivery location, payment choice and notes — is saved on the server, together with the screenshot.</li>
-        <li>It stays in this tab forever, even after you confirm or decline it. Nothing is cleaned up.</li>
-        <li>Tap <strong>Confirm purchase</strong> to email them a receipt, or <strong>Decline</strong> if the payment did not land.</li>
-      </ol>
-      <p><a class="btn btn-line" href="api/admin/orders.csv">Download all orders (CSV)</a></p>
+    <div class="adx-order-filters" id="order-filters">
+      ${["all", "pending", "confirmed", "delivered", "declined"].map((s) =>
+        `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}
+      <a class="wix-link-btn" href="api/admin/orders.csv" style="margin-left:auto">Download CSV</a>
     </div>
+    <p class="admin-note">Tap an order to see everything — customer details, items, the payment receipt and the action buttons. Every checkout is kept forever, even after you confirm or decline it.</p>
     <div id="orders-box"><p class="empty">Loading orders…</p></div>
     <h3 class="admin-h">Receipts customers uploaded</h3>
     <div id="proofs-box"><p class="empty">Loading receipts…</p></div>`;
@@ -898,13 +1131,22 @@ let ordersShown = ORDER_PAGE;
 function renderOrderPage() {
   const box = $("#orders-box");
   if (!box) return;
-  const page = serverOrders.slice(0, ordersShown);
+  const list = orderFilter === "all"
+    ? serverOrders
+    : serverOrders.filter((o) => (o.status || "pending") === orderFilter);
+  if (!list.length) {
+    box.innerHTML = `<p class="empty">${orderFilter === "all"
+      ? "No orders yet. Every completed checkout lands here and stays here."
+      : "No " + orderStatusLabel(orderFilter).toLowerCase() + " orders."}</p>`;
+    return;
+  }
+  const page = list.slice(0, ordersShown);
   box.innerHTML = page.map(orderCardHTML).join("")
-    + (serverOrders.length > ordersShown
+    + (list.length > ordersShown
       ? `<p class="admin-more"><button type="button" class="btn btn-line" id="orders-more">
-           Show ${Math.min(ORDER_PAGE, serverOrders.length - ordersShown)} more
-           of ${serverOrders.length}</button></p>`
-      : `<p class="admin-note">Showing all ${serverOrders.length} orders.</p>`);
+           Show ${Math.min(ORDER_PAGE, list.length - ordersShown)} more
+           of ${list.length}</button></p>`
+      : `<p class="admin-note">Showing all ${list.length} order(s).</p>`);
   const more = $("#orders-more");
   if (more) more.onclick = () => { ordersShown += ORDER_PAGE; renderOrderPage(); };
   bindOrderButtons();
@@ -915,10 +1157,14 @@ async function fillOrders() {
   if (!box) return;
   serverOrders = await JA.adminOrders({ limit: 200 });
   ordersShown = ORDER_PAGE;
-  if (!serverOrders.length) {
-    box.innerHTML = `<p class="empty">No orders yet. Every completed checkout lands here and stays here.</p>`;
-    return;
-  }
+  document.querySelectorAll("[data-ofilter]").forEach((b) => {
+    b.onclick = () => {
+      orderFilter = b.dataset.ofilter;
+      ordersShown = ORDER_PAGE;
+      document.querySelectorAll("[data-ofilter]").forEach((x) => x.classList.toggle("is-on", x === b));
+      renderOrderPage();
+    };
+  });
   renderOrderPage();
 }
 
@@ -941,6 +1187,16 @@ function bindOrderButtons() {
     b.onclick = async () => {
       await JA.setOrderStatus(b.dataset.decline, "declined");
       JA.toast("Declined · " + b.dataset.decline);
+      fillOrders();
+    };
+  });
+  box.querySelectorAll("[data-deliver]").forEach((b) => {
+    b.onclick = async () => {
+      const id = b.dataset.deliver;
+      b.disabled = true;
+      const res = await JA.setOrderStatus(id, "delivered");
+      if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not update the order."); b.disabled = false; return; }
+      JA.toast("Delivered · " + id);
       fillOrders();
     };
   });
@@ -1070,96 +1326,112 @@ function bindAccount() {
   });
 }
 
+const TAB_TITLES = {
+  analytics: "Dashboard",
+  products: "Products",
+  orders: "Orders",
+  categories: "Categories",
+  settings: "Settings",
+  account: "Account",
+};
+
+const ADX_ICONS = {
+  analytics: `<svg viewBox="0 0 24 24"><path d="M4 19V9h3v10H4zm6.5 0V5h3v14h-3zm6.5 0v-7h3v7h-3z"/></svg>`,
+  products: `<svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v9l-8 4-8-4V8zm8 4l8-4M12 12v9M12 12L4 8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
+  orders: `<svg viewBox="0 0 24 24"><path d="M5 4h14v16l-2.3-1.5L14.4 20l-2.4-1.5L9.6 20l-2.3-1.5L5 20V4zm3 5h8M8 12.5h8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
+  categories: `<svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
+  settings: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1m0-12.8l-2.1 2.1M7.7 16.3l-2.1 2.1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
+  account: `<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
+};
+
 function paintDesk(tab = "analytics") {
-  const all = JA.products();
   const pending = serverOrders.filter((o) => (o.status || "pending") === "pending").length;
+  const navBtn = (id, badge) => `
+    <button type="button" data-tab="${id}" class="adx-nav-btn ${tab === id ? "is-on" : ""}">
+      ${ADX_ICONS[id]}<span>${TAB_TITLES[id]}</span>${badge ? `<em class="adx-badge">${badge}</em>` : ""}
+    </button>`;
+
   $("#admin-root").innerHTML = `
-    <div class="admin-shell wrap">
-      <div class="admin-top">
-        <div>
-          <div class="kicker">Atelier</div>
-          <h1 class="serif-title">Admin · Jaura Store</h1>
+    <div class="adx">
+      <aside class="adx-side">
+        <div class="adx-brand">
+          <img src="images/brand/logo.jpg" alt="" />
+          <div><strong>Jaura Store</strong><span>Store manager</span></div>
         </div>
-        <div style="display:flex;gap:10px">
-          <a class="btn btn-line" href="index.html">View store</a>
-          <button class="btn btn-line" id="logout">Sign out</button>
+        <nav class="adx-nav">
+          ${navBtn("analytics")}
+          ${navBtn("products")}
+          ${navBtn("orders", pending || "")}
+          ${navBtn("categories")}
+          ${navBtn("settings")}
+          ${navBtn("account")}
+        </nav>
+        <div class="adx-side-foot">
+          <a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a>
+          <button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button>
         </div>
-      </div>
-      <div class="stats">
-        <div class="stat"><span class="kicker">Products</span><b>${all.length}</b></div>
-        <div class="stat"><span class="kicker">In stock</span><b>${all.filter((p) => Number(p.stock) > 0).length}</b></div>
-        <div class="stat"><span class="kicker">Pending orders</span><b id="pending-orders">${pending || "…"}</b></div>
-        <div class="stat"><span class="kicker">Live on site</span><b id="live-pill">…</b></div>
-      </div>
-      <div class="tabs">
-        <button data-tab="analytics" class="${tab === "analytics" ? "is-on" : ""}">Insights</button>
-        <button data-tab="products" class="${tab === "products" ? "is-on" : ""}">Edit products</button>
-        <button data-tab="bulk" class="${tab === "bulk" ? "is-on" : ""}">Bulk upload</button>
-        <button data-tab="orders" class="${tab === "orders" ? "is-on" : ""}">Orders</button>
-        <button data-tab="categories" class="${tab === "categories" ? "is-on" : ""}">Categories</button>
-        <button data-tab="settings" class="${tab === "settings" ? "is-on" : ""}">Store settings</button>
-        <button data-tab="account" class="${tab === "account" ? "is-on" : ""}">My account</button>
-      </div>
-      <section class="panel ${tab === "analytics" ? "is-on" : ""}" id="panel-analytics">
-        ${tab === "analytics" ? analyticsPanel() : ""}
-      </section>
-      <section class="panel ${tab === "products" ? "is-on" : ""}" id="panel-products">
-        ${editingId === "new" ? `<div id="form-slot">${productForm()}</div>`
-          : (editingId ? `<div id="form-slot">${productForm(JA.product(editingId) || {})}</div>`
-          : productsTable())}
-      </section>
-      <section class="panel ${tab === "bulk" ? "is-on" : ""}" id="panel-bulk">
-        <p style="color:var(--muted);max-width:640px;margin-bottom:16px">
-          Import products from a CSV. Columns:
-          <code>name, category, priceNgn, compareNgn, stock, badge, description, colors</code>.
-          Enter Naira only — F CFA is converted at 1 ₦ = 0.44.
-          Category must be one of: ${(JA.categories ? JA.categories() : JA.CATEGORIES).map((c) => c.id).join(", ")}.
-          Photos can be attached afterwards by editing each piece — originals are never altered.
-        </p>
-        <p><a class="btn btn-line" id="dl-template" href="#">Download CSV template</a></p>
-        <div class="field" style="max-width:520px;margin-top:18px">
-          <label>CSV file</label>
-          <input type="file" id="csv-file" accept=".csv,text/csv" />
-        </div>
-        <button class="btn" id="run-import" style="margin-top:16px">Import products</button>
-        <p id="import-msg" style="margin-top:12px;color:var(--taupe)"></p>
-      </section>
-      <section class="panel ${tab === "orders" ? "is-on" : ""}" id="panel-orders">
-        ${tab === "orders" ? ordersPanel() : ""}
-      </section>
-      <section class="panel ${tab === "categories" ? "is-on" : ""}" id="panel-categories">
-        ${categoryManager()}
-      </section>
-      <section class="panel ${tab === "settings" ? "is-on" : ""}" id="panel-settings">
-        ${settingsForm()}
-      </section>
-      <section class="panel ${tab === "account" ? "is-on" : ""}" id="panel-account">
-        ${tab === "account" ? accountPanel() : ""}
-      </section>
+      </aside>
+      <main class="adx-main">
+        <header class="adx-head">
+          <h1>${TAB_TITLES[tab] || "Dashboard"}</h1>
+          <div class="adx-head-actions">
+            <a class="btn btn-line" href="index.html">View store</a>
+            <button type="button" class="btn btn-line" id="logout-m">Sign out</button>
+          </div>
+        </header>
+        <section class="panel ${tab === "analytics" ? "is-on" : ""}" id="panel-analytics">
+          ${tab === "analytics" ? analyticsPanel() : ""}
+        </section>
+        <section class="panel ${tab === "products" ? "is-on" : ""}" id="panel-products">
+          ${tab !== "products" ? ""
+            : editingId === "new" ? `<div id="form-slot">${productForm()}</div>`
+            : (editingId ? `<div id="form-slot">${productForm(JA.product(editingId) || {})}</div>`
+            : productsTable())}
+        </section>
+        <section class="panel ${tab === "orders" ? "is-on" : ""}" id="panel-orders">
+          ${tab === "orders" ? ordersPanel() : ""}
+        </section>
+        <section class="panel ${tab === "categories" ? "is-on" : ""}" id="panel-categories">
+          ${tab === "categories" ? categoryManager() : ""}
+        </section>
+        <section class="panel ${tab === "settings" ? "is-on" : ""}" id="panel-settings">
+          ${tab === "settings" ? settingsForm() : ""}
+        </section>
+        <section class="panel ${tab === "account" ? "is-on" : ""}" id="panel-account">
+          ${tab === "account" ? accountPanel() : ""}
+        </section>
+      </main>
     </div>
     <nav class="admin-app-nav">
-      <button type="button" data-tab="products" class="${tab === "products" ? "is-on" : ""}">
-        <svg viewBox="0 0 24 24"><path d="M4 10l8-7 8 7v9H4z"/></svg><span>Products</span>
-      </button>
       <button type="button" data-tab="analytics" class="${tab === "analytics" ? "is-on" : ""}">
-        <svg viewBox="0 0 24 24"><path d="M4 19V9h3v10H4zm6 0V5h3v14h-3zm6 0v-7h3v7h-3z"/></svg><span>Insights</span>
+        ${ADX_ICONS.analytics}<span>Dashboard</span>
+      </button>
+      <button type="button" data-tab="products" class="${tab === "products" ? "is-on" : ""}">
+        ${ADX_ICONS.products}<span>Products</span>
       </button>
       <button type="button" data-tab="orders" class="${tab === "orders" ? "is-on" : ""}">
-        <svg viewBox="0 0 24 24"><path d="M4 5h16v10H7l-3 3V5z"/></svg><span>Orders</span>
+        ${ADX_ICONS.orders}<span>Orders</span>${pending ? `<em class="adx-badge">${pending}</em>` : ""}
+      </button>
+      <button type="button" data-tab="settings" class="${tab === "settings" ? "is-on" : ""}">
+        ${ADX_ICONS.settings}<span>Settings</span>
       </button>
       <button type="button" data-tab="account" class="${tab === "account" ? "is-on" : ""}">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4z"/></svg><span>Account</span>
+        ${ADX_ICONS.account}<span>Account</span>
       </button>
     </nav>`;
 
-  $("#logout").onclick = async () => { await JA.logoutAdmin(); paintLogin("Signed out."); };
+  const signOut = async () => { await JA.logoutAdmin(); paintLogin("Signed out."); };
+  $("#logout").onclick = signOut;
+  const logoutM = $("#logout-m");
+  if (logoutM) logoutM.onclick = signOut;
   document.querySelectorAll("[data-tab]").forEach((b) => {
     b.onclick = () => paintDesk(b.dataset.tab);
   });
 
-  if (tab === "analytics") { fillAnalytics(); startDashTimer(); refreshLivePill(); }
+  if (tab === "analytics") { fillAnalytics(); startDashTimer(); }
   if (tab === "orders") { fillOrders(); fillProofs(); }
   if (tab === "account") bindAccount();
+  if (tab === "settings") bindHeroVideo();
 
   const form = $("#prod-form");
   const existing = editingId && editingId !== "new" ? JA.product(editingId) : null;
@@ -1176,81 +1448,28 @@ function paintDesk(tab = "analytics") {
   bindReviewsAdmin(existing ? existing.id : "");
 
   document.querySelectorAll("[data-edit]").forEach((b) => {
-    b.onclick = () => {
+    const open = () => {
       editingId = b.dataset.edit;
       paintDesk("products");
       window.scrollTo({ top: 0, behavior: "smooth" });
     };
+    b.onclick = open;
+    b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
   });
   document.querySelectorAll("[data-del]").forEach((b) => {
-    b.onclick = async () => {
+    b.onclick = async (e) => {
+      e.stopPropagation();                 // a delete tap must never open the editor
       if (confirm("Delete this product from the website? Customers will not see it.")) {
         await JA.removeProduct(b.dataset.del);
         JA.toast("Deleted from the website.");
+        editingId = null;
         paintDesk("products");
       }
     };
   });
-  document.querySelectorAll("[data-quick]").forEach((b) => {
-    b.onclick = async () => {
-      const pid = b.dataset.quick;
-      const p = JA.product(pid);
-      if (!p) return;
-      const price = `[data-qp="${CSS.escape(pid)}"]`;
-      const stock = `[data-qs="${CSS.escape(pid)}"]`;
-      const badge = `[data-qbadge="${CSS.escape(pid)}"]`;
-      const online = `[data-qo="${CSS.escape(pid)}"]`;
-      const next = {
-        ...p,
-        priceNgn: parseInt(document.querySelector(price)?.value || "0", 10) || 0,
-        priceCfa: 0,
-        stock: parseInt(document.querySelector(stock)?.value || "0", 10) || 0,
-        badge: document.querySelector(badge)?.checked ? "sale" : "",
-        online: document.querySelector(online)?.checked !== false,
-      };
-      await JA.upsertProduct(next);
-      JA.toast("Quick edit saved.");
-      paintDesk("products");
-    };
-  });
-  document.getElementById("del-picked")?.addEventListener("click", async () => {
-    const ids = [...document.querySelectorAll("[data-pick]:checked")].map((el) => el.getAttribute("data-pick"));
-    if (!ids.length) { JA.toast("Tick the products to delete first."); return; }
-    if (!confirm("Delete " + ids.length + " product(s) from the website?")) return;
-    for (const id of ids) await JA.removeProduct(id);
-    JA.toast(ids.length + " product(s) deleted.");
-    paintDesk("products");
-  });
-  document.querySelectorAll("[data-stock]").forEach((b) => {
-    b.onclick = async () => {
-      const p = JA.product(b.dataset.stock);
-      if (!p) return;
-      const qty = Number(b.dataset.qty);
-      await JA.upsertProduct({ ...p, stock: qty });
-      JA.toast(qty > 0 ? p.name + " is in stock." : p.name + " is out of stock.");
-      paintDesk("products");
-    };
-  });
 
-  $("#dl-template")?.addEventListener("click", (e) => {
-    e.preventDefault();
-    const header = "name,category,priceNgn,compareNgn,stock,badge,description,colors\n";
-    const sample = "Aura Mini Crossbody,bags,9200,12000,14,new,Structured everyday bag,\"Black, Tan\"\n";
-    const blob = new Blob([header + sample], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "jaura-products-template.csv";
-    a.click();
-  });
-
-  $("#prod-search")?.addEventListener("input", (e) => {
-    const q = String(e.target.value || "").toLowerCase().trim();
-    document.querySelectorAll("#panel-products .wix-row").forEach((row) => {
-      row.style.display = !q || (row.getAttribute("data-row") || "").includes(q) ? "" : "none";
-    });
-  });
-
-  $("#run-import")?.addEventListener("click", runCSV);
+  $("#prod-search")?.addEventListener("input", applyProductFilter);
+  $("#prod-cat")?.addEventListener("change", applyProductFilter);
 
   $("#set-form")?.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -1269,12 +1488,6 @@ function paintDesk(tab = "analytics") {
   });
 }
 
-async function refreshLivePill() {
-  const el = $("#live-pill");
-  if (!el) return;
-  const data = await JA.adminAnalytics(1);
-  if (el) el.textContent = (data && data.totals && data.totals.liveNow) || 0;
-}
 
 function categoryManager() {
   const cats = JA.categories();
@@ -1391,7 +1604,21 @@ function bindCategories() {
 
 function settingsForm() {
   const s = JA.settings();
-  return categoryManager() + `<form id="set-form" class="form-grid" style="background:var(--paper);border:1px solid var(--line);padding:20px;margin-top:28px">
+  return `
+  <div class="admin-card adx-hero-card">
+    <h3 class="admin-h">Homepage hero video</h3>
+    <p class="admin-note">Upload an MP4 or WebM (up to 40 MB) and it plays silently on a loop at the top of the homepage — like a Wix video hero. No video? The homepage keeps its current static hero. You can change or remove it any time, no code needed.</p>
+    <div id="hero-video-now"><p class="empty">Checking the current video…</p></div>
+    <div class="adx-hero-actions">
+      <label class="btn adx-upload-btn">Upload video
+        <input type="file" id="hero-video-file" accept="video/mp4,video/webm,.mp4,.webm" hidden />
+      </label>
+      <button type="button" class="btn btn-line" id="hero-video-remove" hidden>Remove video</button>
+    </div>
+    <p class="admin-note" id="hero-video-msg"></p>
+  </div>
+  <form id="set-form" class="form-grid admin-card" style="margin-top:22px">
+    <h3 class="admin-h full">Contact &amp; payment details</h3>
     <p class="admin-note full">Naira is the only price you enter on products. The website converts F CFA at <strong>1 ₦ = 0.44 F CFA</strong>.</p>
     <div class="field"><label>WhatsApp (digits only)</label><input name="whatsapp" value="${s.whatsapp}" /></div>
     <div class="field"><label>Phone Benin</label><input name="phoneBj" value="${s.phoneBj}" /></div>
@@ -1403,71 +1630,68 @@ function settingsForm() {
   </form>`;
 }
 
-function parseCSV(text) {
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((l) => l.trim());
-  if (!lines.length) return [];
-  const headers = splitCSVLine(lines[0]).map((h) => h.trim());
-  return lines.slice(1).map((line) => {
-    const cols = splitCSVLine(line);
-    const row = {};
-    headers.forEach((h, i) => { row[h] = cols[i] ?? ""; });
-    return row;
-  });
-}
-function splitCSVLine(line) {
-  const out = [];
-  let cur = "", q = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (q && line[i + 1] === '"') { cur += '"'; i++; }
-      else q = !q;
-    } else if (ch === "," && !q) { out.push(cur); cur = ""; }
-    else cur += ch;
-  }
-  out.push(cur);
-  return out;
+async function saveSiteConfig(patch) {
+  return window.JA_NET
+    ? window.JA_NET.api("api/admin/site", { method: "POST", json: patch })
+    : Promise.resolve(null);
 }
 
-function runCSV() {
-  const file = $("#csv-file")?.files?.[0];
-  const msg = $("#import-msg");
-  if (!file) { msg.textContent = "Choose a CSV first."; return; }
-  const reader = new FileReader();
-  reader.onload = () => {
-    const rows = parseCSV(String(reader.result));
-    const validCats = new Set((JA.categories ? JA.categories() : JA.CATEGORIES).map((c) => c.id));
-    let n = 0;
-    rows.forEach((r, idx) => {
-      if (!r.name) return;
-      const cat = (r.category || "household").trim();
-      const catsNow = JA.categories ? JA.categories() : JA.CATEGORIES;
-      const image = (catsNow.find((c) => c.id === cat) || catsNow[1] || {}).image;
-      const priceNgn = Number(r.priceNgn) || 0;
-      const compareNgn = r.compareNgn ? Number(r.compareNgn) : null;
-      JA.upsertProduct({
-        id: "ja-csv-" + Date.now().toString(36) + "-" + idx,
-        sku: "JAU" + String(idx + 1).padStart(3, "0"),
-        slug: slugify(r.name) + "-" + idx,
-        name: r.name.trim(),
-        category: validCats.has(cat) ? cat : "household",
-        priceNgn,
-        compareNgn,
-        priceCfa: priceNgn > 0 ? 0 : (Number(r.priceCfa) || 0),
-        compareCfa: null,
-        image,
-        description: r.description || "",
-        stock: r.stock === "" ? 10 : Number(r.stock),
-        badge: r.badge || "",
-        featured: false,
-        colors: String(r.colors || "").split(",").map((s) => s.trim()).filter(Boolean),
-      });
-      n += 1;
+function paintHeroVideoNow(url) {
+  const box = $("#hero-video-now");
+  const rm = $("#hero-video-remove");
+  if (!box) return;
+  if (url) {
+    box.innerHTML = `<video class="adx-hero-preview" src="${JA.escape(url)}" muted loop playsinline controls preload="metadata"></video>
+      <p class="admin-note">This video is live on the homepage right now.</p>`;
+    if (rm) rm.hidden = false;
+  } else {
+    box.innerHTML = `<p class="empty">No video uploaded — the homepage shows its static hero.</p>`;
+    if (rm) rm.hidden = true;
+  }
+}
+
+function bindHeroVideo() {
+  const file = $("#hero-video-file");
+  const msg = $("#hero-video-msg");
+  if (!file) return;
+  fetch("api/site", { cache: "no-store" })
+    .then((r) => r.json())
+    .then((d) => paintHeroVideoNow((d && d.site && d.site.heroVideo) || ""))
+    .catch(() => paintHeroVideoNow(""));
+  file.addEventListener("change", async () => {
+    const f = file.files && file.files[0];
+    if (!f) return;
+    if (!window.JA_NET) { JA.toast("Video upload needs the live server."); return; }
+    if (msg) msg.textContent = "Uploading " + (f.name || "video") + " (" + Math.round(f.size / 1048576) + " MB)… keep this tab open.";
+    const res = await window.JA_NET.api("api/admin/uploads/video", {
+      method: "POST", blob: f, field: "file", filename: f.name || "hero.mp4", timeout: 180000,
     });
-    msg.textContent = `Imported ${n} products. Open Products to add photos — images stay exactly as you upload them.`;
-    JA.toast(`${n} products added.`);
-  };
-  reader.readAsText(file);
+    file.value = "";
+    if (!res || !res.url) {
+      if (msg) msg.textContent = (res && res.error) || "The upload failed. Check your connection and try again.";
+      JA.toast((res && res.error) || "Could not upload the video.");
+      return;
+    }
+    const saved = await saveSiteConfig({ heroVideo: res.url });
+    if (saved && saved.ok !== false) {
+      if (msg) msg.textContent = "Done — the homepage hero now plays your video.";
+      JA.toast("Hero video is live on the homepage.");
+      paintHeroVideoNow(res.url);
+    } else {
+      if (msg) msg.textContent = (saved && saved.error) || "Uploaded, but saving the setting failed. Try again.";
+    }
+  });
+  $("#hero-video-remove")?.addEventListener("click", async () => {
+    if (!confirm("Remove the hero video? The homepage goes back to its static hero.")) return;
+    const saved = await saveSiteConfig({ heroVideo: "" });
+    if (saved && saved.ok !== false) {
+      JA.toast("Video removed — static hero is back.");
+      paintHeroVideoNow("");
+      if (msg) msg.textContent = "";
+    } else {
+      JA.toast((saved && saved.error) || "Could not remove the video.");
+    }
+  });
 }
 
 async function bootAdmin() {

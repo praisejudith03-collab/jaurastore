@@ -2,7 +2,7 @@
    Pages are network-first so a visitor with a connection always sees the
    newest store; when the connection drops, the last copy is served instead of
    an error. Saving is handled separately by js/net.js (outbox + retry). */
-const VERSION = "jaura-v106";
+const VERSION = "jaura-v107";
 const CORE = [
   "./",
   "./index.html",
@@ -11,12 +11,12 @@ const CORE = [
   "./cart.html",
   "./checkout.html",
   "./order.html",
-  "./css/style.css?v=106",
-  "./js/products-data.js?v=106",
-  "./js/i18n.js?v=106",
-  "./js/net.js?v=106",
-  "./js/store.js?v=106",
-  "./js/app.js?v=106",
+  "./css/style.css?v=107",
+  "./js/products-data.js?v=107",
+  "./js/i18n.js?v=107",
+  "./js/net.js?v=107",
+  "./js/store.js?v=107",
+  "./js/app.js?v=107",
   "./images/brand/logo.jpg",
 ];
 const MAX_ASSETS = 140;

@@ -137,6 +137,59 @@ def live_now():
     return [dict(r) for r in rows]
 
 
+def recent_activity(minutes=60, limit=40):
+    """The live feed: who viewed which product, what went into carts and
+    which orders were placed — most recent first."""
+    cutoff = _iso(_now() - datetime.timedelta(minutes=max(1, min(int(minutes or 60), 24 * 60))))
+    rows = query(
+        "SELECT type, vid, product_id productId, product_name productName, "
+        "page, path, value, currency, city, country, at "
+        "FROM events WHERE at >= ? AND type IN ('view','cart','checkout_start','purchase') "
+        "ORDER BY at DESC LIMIT ?", (cutoff, max(1, min(int(limit or 40), 200))))
+    return [dict(r) for r in rows]
+
+
+def _period_block(since_day, since_iso):
+    pv = dict(one("SELECT COUNT(*) n, COUNT(DISTINCT vid) uniq, COUNT(DISTINCT sid) sessions "
+                  "FROM page_views WHERE day >= ?", (since_day,)) or {})
+    o = dict(one("SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN status != 'declined' THEN total END),0) value "
+                 "FROM orders WHERE at >= ?", (since_iso,)) or {})
+    return {
+        "pageViews": pv.get("n", 0) or 0,
+        "visitors": pv.get("uniq", 0) or 0,
+        "visits": pv.get("sessions", 0) or 0,
+        "orders": o.get("n", 0) or 0,
+        "revenue": o.get("value", 0) or 0,
+    }
+
+
+def periods():
+    """Visits today / this week / this month — the Wix-style headline cards."""
+    return {
+        "today": _period_block(_day(), _iso(_now().replace(hour=0, minute=0, second=0, microsecond=0))),
+        "week": _period_block(_days_ago(6), _iso(_now() - datetime.timedelta(days=6))),
+        "month": _period_block(_days_ago(29), _iso(_now() - datetime.timedelta(days=29))),
+    }
+
+
+def sales_series(days=30):
+    """Orders and revenue per day, for the sales-over-time chart."""
+    days = max(1, min(int(days or 30), 400))
+    since_day = _days_ago(days - 1)
+    rows = query(
+        "SELECT substr(at, 1, 10) day, COUNT(*) orders, "
+        "COALESCE(SUM(CASE WHEN status != 'declined' THEN total END),0) revenue "
+        "FROM orders WHERE substr(at, 1, 10) >= ? GROUP BY substr(at, 1, 10)", (since_day,))
+    by_day = {r["day"]: dict(r) for r in rows}
+    out = []
+    for i in range(days - 1, -1, -1):
+        d = _days_ago(i)
+        row = by_day.get(d) or {}
+        out.append({"day": d, "orders": row.get("orders", 0) or 0,
+                    "revenue": row.get("revenue", 0) or 0})
+    return out
+
+
 def report(days=30):
     days = max(1, min(int(days or 30), 400))
     since_day = _days_ago(days - 1)
@@ -220,13 +273,16 @@ def report(days=30):
         "ok": True,
         "range": {"days": days, "from": since_day, "to": _day()},
         "totals": totals,
+        "periods": periods(),
         "series": series,
+        "sales": sales_series(days),
         "topPages": top_pages,
         "topProducts": top_products,
         "conversion": conversion,
         "recentOrders": recent_orders,
         "locations": locations,
         "live": live_now(),
+        "activity": recent_activity(),
     }
 
 

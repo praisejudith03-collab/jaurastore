@@ -78,6 +78,49 @@ function startCatSlide() {
   }, 2800);
 }
 
+/* Homepage hero video (Fix: owner-editable from Admin → Settings).
+   If the owner uploaded a video it autoplays silently on a loop behind the
+   hero text; with no video the static hero stays exactly as it is. The last
+   known URL is cached so the video starts instantly on repeat visits. */
+function mountHeroVideo() {
+  const vid = document.getElementById("hero-video");
+  const scrim = document.getElementById("hero-scrim");
+  const hero = document.getElementById("home-hero");
+  if (!vid || !hero) return;
+  const KEY = "jaura.site";
+  const apply = (url) => {
+    if (url) {
+      if (vid.getAttribute("src") !== url) vid.src = url;
+      vid.muted = true;
+      vid.setAttribute("playsinline", "");
+      vid.setAttribute("webkit-playsinline", "");
+      vid.hidden = false;
+      if (scrim) scrim.hidden = false;
+      hero.classList.add("has-video");
+      const play = () => vid.play().catch(() => {});
+      play();
+      vid.addEventListener("canplay", play, { once: true });
+      document.addEventListener("touchstart", play, { once: true });
+    } else {
+      vid.hidden = true;
+      vid.removeAttribute("src");
+      if (scrim) scrim.hidden = true;
+      hero.classList.remove("has-video");
+    }
+  };
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
+  if (cached && cached.heroVideo) apply(cached.heroVideo);
+  fetch("api/site", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      const site = (d && d.site) || {};
+      try { localStorage.setItem(KEY, JSON.stringify(site)); } catch (e) {}
+      apply(site.heroVideo || "");
+    })
+    .catch(() => {});   // offline / static hosting: keep whatever is showing
+}
+
 function renderHome() {
   const newIn = document.querySelector("[data-new]");
   if (newIn) {
@@ -1440,6 +1483,7 @@ async function boot() {
     document.addEventListener("click", play, { once: true });
   });
   const page = document.body.dataset.page;
+  if (page === "home") mountHeroVideo();
   const draw = () => {
     if (page === "home") renderHome();
     if (page === "categories") renderCategories();
