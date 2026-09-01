@@ -36,14 +36,21 @@ def create_app():
         app.logger.warning("startup maintenance skipped: %s", exc)
     authmod.ensure_seed_admins()
 
-    # One-shot access recovery: when ADMIN_BOOTSTRAP_PASSWORD is present in the
-    # environment, the shared admin password is forced to it on boot so access
-    # can be regained with no email at all. Set it in the host dashboard, boot
-    # once, sign in, then delete the variable. It is never read from the repo.
-    bootstrap = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "").strip()
-    if bootstrap:
+    # One-shot access recovery: when the admin password is lost and no reset
+    # code can be received, the shared admin password is forced once on boot to
+    # ADMIN_BOOTSTRAP_PASSWORD (or Config.BOOTSTRAP_ADMIN_PASSWORD when the
+    # variable is absent). auth.apply_bootstrap_password stamps an
+    # `admin_bootstrap_applied` marker so this can never fire twice - sign in,
+    # change the password from the admin portal, and reboot as often as needed.
+    # Skipped under FLASK_ENV=testing so test passwords are never overwritten.
+    if Config.ENV != "testing":
         try:
-            authmod.set_shared_password(bootstrap)
+            if authmod.apply_bootstrap_password(
+                    os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "")
+                    or Config.BOOTSTRAP_ADMIN_PASSWORD):
+                app.logger.warning(
+                    "admin bootstrap password applied once - sign in and change "
+                    "it from the admin portal now")
         except Exception as exc:                       # pragma: no cover
             app.logger.warning("admin bootstrap password not applied: %s", exc)
 
