@@ -832,6 +832,10 @@ function renderCheckout() {
     const text = (opt.textContent || "") + " " + (input && input.value ? input.value : "");
     if (/pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
   });
+  document.querySelectorAll("select[data-delivery-zones] option").forEach((opt) => {
+    const text = (opt.textContent || "") + " " + (opt.value || "");
+    if (/pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
+  });
   try { JA.track("checkout_start", { page: "checkout" }); } catch (e) {}
 
   form.addEventListener("change", (e) => {

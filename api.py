@@ -79,7 +79,8 @@ def csrf():
 @api.get("/config")
 def public_config():
     return jsonify(ok=True, csrf=sec.issue_csrf(), env=Config.ENV,
-                   lowStockThreshold=Config.LOW_STOCK_THRESHOLD)
+                   lowStockThreshold=Config.LOW_STOCK_THRESHOLD,
+                   recaptchaSiteKey=Config.RECAPTCHA_SITE_KEY)
 
 @api.get("/products")
 def products():
@@ -274,6 +275,8 @@ def create_order():
     # 30/hour: plenty for a real shopper, and mobile networks share one IP
     limited = sec.guard("order", limit=30, window=3600)
     if limited: return limited
+    bounced = sec.recaptcha_gate("checkout")
+    if bounced: return bounced
 
     if request.files or "order" in request.form:
         try:
@@ -440,6 +443,8 @@ def payment_proof():
     limited = sec.guard("payment-proof", limit=20, window=3600,
                         key_extra=sec.clean(request.form.get("email"), 120))
     if limited: return limited
+    bounced = sec.recaptcha_gate("receipt")
+    if bounced: return bounced
 
     f = request.files.get("file") or request.files.get("receipt")
     if not f:

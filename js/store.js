@@ -1299,7 +1299,7 @@ const JA = (() => {
         <a class="wix-link ${on("vision")}" href="about.html">${tx("nav.vision")}</a>
         <a class="wix-link ${on("delivery")}" href="delivery.html">${tx("nav.delivery")}</a>
         <a class="wix-link ${on("contact")}" href="contact.html">${tx("nav.care")}</a>
-        <a class="wix-link ${on("checkout")}" href="checkout.html">${tx("nav.checkoutForm")}</a>
+        <a class="wix-link ${on("checkout")}" href="checkout.html">${tx("nav.checkout")}</a>
         <a class="wix-link ${on("account")}" href="account.html">${tx("nav.account")}</a>
         <a class="wix-link ${on("wishlist")}" href="wishlist.html">${tx("nav.wishlist")}</a>
         <div class="wix-menu-tools">
@@ -1426,7 +1426,14 @@ const JA = (() => {
           </div>
         </div>
       </div>
-      <img class="foot-wave" src="images/brand/footer-wave-6400.png" alt="" />
+      <p class="foot-copy">${tx("footer.copy", { year: new Date().getFullYear() })}</p>
+      <div class="foot-wavez" aria-hidden="true">
+        <svg viewBox="0 0 1440 130" preserveAspectRatio="none" focusable="false">
+          <path fill="#e6cfc3" d="M0,58 C180,24 400,20 620,44 C860,70 1080,78 1280,58 C1340,52 1400,44 1440,38 L1440,130 L0,130 Z"/>
+          <path fill="#d3afa2" opacity="0.9" d="M0,84 C220,52 460,48 700,68 C940,88 1180,94 1440,66 L1440,130 L0,130 Z"/>
+          <path fill="#bb9186" d="M0,104 C260,80 540,76 820,92 C1060,105 1280,108 1440,96 L1440,130 L0,130 Z"/>
+        </svg>
+      </div>
     </footer>
     <nav class="dock">
       <a href="shop.html"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span>${tx("dock.shop")}</span></a>

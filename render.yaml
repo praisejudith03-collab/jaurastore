@@ -33,6 +33,12 @@ services:
         sync: false
       - key: SITE_ORIGIN
         value: https://jaurastore-staging.onrender.com
+      # Google reCAPTCHA v3 (https://www.google.com/recaptcha/admin) — set
+      # both keys in the dashboard; sync:false keeps the secret out of git.
+      - key: RECAPTCHA_SITE_KEY
+        sync: false
+      - key: RECAPTCHA_SECRET_KEY
+        sync: false
       # Supabase (source of truth for products, carts, orders, admin auth).
       # The service role key is server-side only: sync:false keeps it out of git.
       - key: SUPABASE_URL
@@ -98,6 +104,12 @@ services:
         sync: false
       - key: SITE_ORIGIN
         value: https://jaurastore.com.ng
+      # Google reCAPTCHA v3 (https://www.google.com/recaptcha/admin) — set
+      # both keys in the dashboard; sync:false keeps the secret out of git.
+      - key: RECAPTCHA_SITE_KEY
+        sync: false
+      - key: RECAPTCHA_SECRET_KEY
+        sync: false
       # Supabase (source of truth for products, carts, orders, admin auth).
       # The service role key is server-side only: sync:false keeps it out of git.
       - key: SUPABASE_URL

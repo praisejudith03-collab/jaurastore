@@ -106,6 +106,8 @@ window.JA_NET = (function () {
   }
 
   // ------------------------------------------------------------ CSRF token
+  var recaptchaKey = "";
+  var recaptchaLoad = null;
   function csrf(force) {
     if (token && !force && Date.now() - tokenAt < 20 * 60 * 1000) return Promise.resolve(token);
     if (inflight && !force) return inflight;
@@ -114,6 +116,7 @@ window.JA_NET = (function () {
       .then(function (d) {
         token = (d && d.csrf) || "";
         tokenAt = Date.now();
+        if (d && d.recaptchaSiteKey) recaptchaKey = String(d.recaptchaSiteKey);
         try { sessionStorage.setItem(CSRF_KEY, token); } catch (e) {}
         return token;
       })
@@ -124,6 +127,55 @@ window.JA_NET = (function () {
       .then(function (t) { inflight = null; return t; });
     return inflight;
   }
+
+  // -------------------------------------------------- Google reCAPTCHA v3
+  // The site key comes from api/config (set RECAPTCHA_SITE_KEY on the
+  // server). When it is not configured nothing loads and every call
+  // resolves to "" - the shop works exactly as before.
+  function siteKey() {
+    if (recaptchaKey) return Promise.resolve(recaptchaKey);
+    return csrf().then(function () { return recaptchaKey; }).catch(function () { return ""; });
+  }
+  function loadRecaptcha(key) {
+    if (recaptchaLoad) return recaptchaLoad;
+    recaptchaLoad = new Promise(function (resolve) {
+      if (window.grecaptcha && window.grecaptcha.execute) return resolve(true);
+      var s = document.createElement("script");
+      s.src = "https://www.google.com/recaptcha/api.js?render=" + encodeURIComponent(key);
+      s.async = true;
+      s.onload = function () { resolve(!!window.grecaptcha); };
+      s.onerror = function () { resolve(false); };
+      document.head.appendChild(s);
+      setTimeout(function () { resolve(!!window.grecaptcha); }, 8000);
+    });
+    return recaptchaLoad;
+  }
+  function recaptcha(action) {
+    return siteKey().then(function (key) {
+      if (!key) return "";
+      return loadRecaptcha(key).then(function (ok) {
+        if (!ok || !window.grecaptcha || !window.grecaptcha.execute) return "";
+        return new Promise(function (resolve) {
+          var done = false;
+          var finish = function (t) { if (!done) { done = true; resolve(t || ""); } };
+          setTimeout(function () { finish(""); }, 6000);
+          try {
+            window.grecaptcha.ready(function () {
+              try {
+                window.grecaptcha.execute(key, { action: action || "submit" })
+                  .then(finish, function () { finish(""); });
+              } catch (e) { finish(""); }
+            });
+          } catch (e) { finish(""); }
+        });
+      });
+    }).catch(function () { return ""; });
+  }
+  // Show the reCAPTCHA notice on pages that carry one, badge stays tidy.
+  siteKey().then(function (key) {
+    if (!key) return;
+    document.querySelectorAll("[data-recaptcha-note]").forEach(function (el) { el.hidden = false; });
+  });
 
   // ------------------------------------------------------------- outbox
   function newId() { return "j" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -147,11 +199,17 @@ window.JA_NET = (function () {
 
   function send(job) {
     return csrf().then(function (tok) {
+      // A fresh reCAPTCHA token per attempt: v3 tokens expire in ~2 minutes,
+      // so a queued offline retry must never reuse the original one.
+      var rcp = job.recaptcha ? recaptcha(job.recaptcha) : Promise.resolve("");
+      return rcp.then(function (rct) {
       var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
       var timer = ctl ? setTimeout(function () { ctl.abort(); }, job.timeout || 25000) : null;
+      var hdrs = headersFor(job, tok);
+      if (rct) hdrs["X-Recaptcha-Token"] = rct;
       return fetch(job.url, {
         method: job.method,
-        headers: headersFor(job, tok),
+        headers: hdrs,
         body: buildBody(job),
        credentials: "include",
         signal: ctl ? ctl.signal : undefined,
@@ -176,6 +234,7 @@ window.JA_NET = (function () {
         err.retryable = true;
         throw err;
       });
+      });
     });
   }
 
@@ -186,6 +245,7 @@ window.JA_NET = (function () {
       url: job.url, method: job.method, bodyKind: job.bodyKind || "none",
       body: job.body || null, blob: job.blob || null, field: job.field || "file",
       filename: job.filename || "", extra: job.extra || null,
+      recaptcha: job.recaptcha || "",
       label: job.label || "", tries: 0, nextAt: 0, createdAt: Date.now(),
     };
     return idbPut(rec).then(function (stored) {
@@ -257,6 +317,12 @@ window.JA_NET = (function () {
       keepalive: !!opts.keepalive,
       onDone: opts.onDone || null,
     };
+    // The forms Google reCAPTCHA v3 protects: checkout + payment receipt.
+    if (job.method === "POST") {
+      if (/api\/orders(\?|$)/.test(path)) job.recaptcha = "checkout";
+      else if (/api\/payment-proof(\?|$)/.test(path)) job.recaptcha = "receipt";
+    }
+    if (opts.recaptcha) job.recaptcha = opts.recaptcha;
     // GETs are never queued - a cached read is fine to lose.
     if (job.method === "GET" || !opts.queue) return send(job);
     if (navigator.onLine === false) return enqueue(job);
@@ -311,7 +377,7 @@ window.JA_NET = (function () {
   setInterval(function () { if (jobs.length && navigator.onLine !== false) flush(); }, 45000);
 
   return {
-    api: api, csrf: csrf, flush: flush, boot: boot,
+    api: api, csrf: csrf, flush: flush, boot: boot, recaptcha: recaptcha,
     pending: pending, onStatus: onStatus, isOnline: isOnline,
     _jobs: function () { return jobs.slice(); },
   };
