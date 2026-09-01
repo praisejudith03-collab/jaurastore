@@ -78,6 +78,49 @@ function startCatSlide() {
   }, 2800);
 }
 
+/* Homepage hero video (Fix: owner-editable from Admin → Settings).
+   If the owner uploaded a video it autoplays silently on a loop behind the
+   hero text; with no video the static hero stays exactly as it is. The last
+   known URL is cached so the video starts instantly on repeat visits. */
+function mountHeroVideo() {
+  const vid = document.getElementById("hero-video");
+  const scrim = document.getElementById("hero-scrim");
+  const hero = document.getElementById("home-hero");
+  if (!vid || !hero) return;
+  const KEY = "jaura.site";
+  const apply = (url) => {
+    if (url) {
+      if (vid.getAttribute("src") !== url) vid.src = url;
+      vid.muted = true;
+      vid.setAttribute("playsinline", "");
+      vid.setAttribute("webkit-playsinline", "");
+      vid.hidden = false;
+      if (scrim) scrim.hidden = false;
+      hero.classList.add("has-video");
+      const play = () => vid.play().catch(() => {});
+      play();
+      vid.addEventListener("canplay", play, { once: true });
+      document.addEventListener("touchstart", play, { once: true });
+    } else {
+      vid.hidden = true;
+      vid.removeAttribute("src");
+      if (scrim) scrim.hidden = true;
+      hero.classList.remove("has-video");
+    }
+  };
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
+  if (cached && cached.heroVideo) apply(cached.heroVideo);
+  fetch("api/site", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      const site = (d && d.site) || {};
+      try { localStorage.setItem(KEY, JSON.stringify(site)); } catch (e) {}
+      apply(site.heroVideo || "");
+    })
+    .catch(() => {});   // offline / static hosting: keep whatever is showing
+}
+
 function renderHome() {
   const newIn = document.querySelector("[data-new]");
   if (newIn) {
@@ -546,7 +589,9 @@ function paintProduct(root, p) {
           </article>`).join("") : ""}</div>
         <form class="rev-form" data-rev-form>
           <h4>${t("rev.write")}</h4>
+          <p class="rev-gate-note">${t("rev.gate")}</p>
           <label>${t("rev.name")}<input name="name" maxlength="60" required autocomplete="name" /></label>
+          <label>${t("rev.email")}<input name="email" type="email" maxlength="120" required autocomplete="email" /></label>
           <p class="rev-pick-lab">${t("rev.stars")}</p>
           <div class="rev-pick" data-star-pick>${starsOf(5, true)}</div>
           <input type="hidden" name="stars" value="5" />
@@ -636,11 +681,52 @@ function paintProduct(root, p) {
     const fd = new FormData(e.target);
     const note = String(fd.get("note") || "").trim();
     const name = String(fd.get("name") || "").trim();
-    if (!note || !name) { JA.toast(t("rev.need")); return; }
-    JA.addReview(p.id, { name, note, stars: Number(fd.get("stars") || 5) });
-    JA.toast(t("rev.thanks"));
-    renderProduct();
+    const email = String(fd.get("email") || "").trim();
+    if (!note || !name || !email) { JA.toast(t("rev.need")); return; }
+    const body = { productId: p.id, name, email, note, stars: Number(fd.get("stars") || 5) };
+    const btn = e.target.querySelector("button[type=submit]");
+    if (btn) btn.disabled = true;
+    const req = window.JA_NET
+      ? JA_NET.api("api/reviews", { method: "POST", json: body })
+      : Promise.reject(new Error("offline"));
+    req.then((d) => {
+      if (d && d.ok) {
+        if (JA.setReviews) JA.setReviews(p.id, d.reviews || []);
+        JA.toast(t("rev.thanks"));
+        renderProduct();
+      } else {
+        JA.toast((d && d.error) || t("rev.notBought"));
+      }
+    }).catch((err) => {
+      if (err && err.status === 403) JA.toast(t("rev.notBought"));
+      else JA.toast((err && err.message) || t("rev.notBought"));
+    }).finally(() => { if (btn) btn.disabled = false; });
   });
+  // Pull the shared, server-stored reviews so every visitor sees the same
+  // verified list (the local copy is only a cache for offline viewing).
+  fetch("api/reviews/" + encodeURIComponent(p.id))
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      if (!d || !d.ok || !Array.isArray(d.reviews)) return;
+      const cur = (JA.reviews && JA.reviews(p.id)) || [];
+      if (JA.setReviews && JSON.stringify(cur) !== JSON.stringify(d.reviews)) {
+        JA.setReviews(p.id, d.reviews);
+        const box = document.querySelector(`[data-reviews="${(window.CSS && CSS.escape) ? CSS.escape(p.id) : p.id}"]`);
+        if (box) {
+          const n = d.reviews.length;
+          const avgEl = box.querySelector(".rev-avg");
+          if (avgEl) avgEl.innerHTML = n ? starsOf(d.average) + " " + t(n === 1 ? "rev.count" : "rev.countMany", { n }) : t("rev.empty");
+          const list = box.querySelector(".rev-list");
+          if (list) list.innerHTML = d.reviews.map((r) => `
+            <article class="rev-note">
+              ${starsOf(r.stars)}
+              <strong>${JA.escape(r.name || "Customer")}</strong>
+              <p>${JA.escape(r.note || "")}</p>
+            </article>`).join("");
+        }
+      }
+    })
+    .catch(() => {});
 
   const related = JA.products().filter((x) => x.category === p.category && x.id !== p.id).slice(0, 4);
   const rel = document.querySelector("[data-related]");
@@ -727,6 +813,7 @@ function showOrderDone(order) {
         <button type="button" class="btn" data-copy-id="${JA.escape(order.id)}">${t("ck.copyId")}</button>
         <a class="btn btn-line" href="${fareWaUrl(order)}" target="_blank" rel="noopener">${t("ck.waId")}</a>
       </div>
+      <div data-referral-slot></div>
       <ul class="woo-meta">
         <li><span>${t("ck.orderNo")}</span><strong>${JA.escape(order.id)}</strong></li>
         <li><span>${t("ck.date")}</span><strong>${new Date(order.at).toLocaleString(locale)}</strong></li>
@@ -753,10 +840,58 @@ function showOrderDone(order) {
         <a class="btn btn-line" href="shop.html">${t("ck.return")}</a>
       </div>
     </div>`;
+  paintReferralSlot(order.id);
+}
+
+/* The server mints a referral code for qualifying orders. It arrives in the
+   order-sync response (store.js stashes it and fires "ja:referral"), which
+   can land before or after this screen is painted — cover both. */
+function paintReferralSlot(orderId) {
+  const paint = (code) => {
+    const slot = document.querySelector("[data-referral-slot]");
+    if (!slot || !code || slot.dataset.done) return;
+    slot.dataset.done = "1";
+    const shopUrl = location.origin + location.pathname.replace(/[^/]*$/, "") + "shop.html";
+    const shareText = t("ref.shareText", { code, url: shopUrl });
+    slot.innerHTML = `
+      <div class="referral-card">
+        <p class="kicker">${t("ref.kicker")}</p>
+        <p class="referral-code">${JA.escape(code)}</p>
+        <p class="referral-blurb">${t("ref.blurb")}</p>
+        <div class="referral-actions">
+          <button type="button" class="btn" data-ref-share>${t("ref.share")}</button>
+          <a class="btn btn-line" data-ref-wa href="https://wa.me/?text=${encodeURIComponent(shareText)}" target="_blank" rel="noopener">WhatsApp</a>
+          <button type="button" class="btn btn-line" data-ref-copy>${t("ref.copy")}</button>
+        </div>
+      </div>`;
+    slot.querySelector("[data-ref-copy]")?.addEventListener("click", () => {
+      navigator.clipboard?.writeText(code).then(() => JA.toast(t("ref.copied")));
+    });
+    slot.querySelector("[data-ref-share]")?.addEventListener("click", () => {
+      if (navigator.share) {
+        navigator.share({ title: "J Aura Store", text: shareText, url: shopUrl }).catch(() => {});
+      } else {
+        navigator.clipboard?.writeText(shareText).then(() => JA.toast(t("ref.copied")));
+      }
+    });
+  };
+  let stash = null;
+  try { stash = JSON.parse(localStorage.getItem("ja_referral_last") || "null"); } catch (e) {}
+  if (stash && stash.orderId === orderId && stash.code) paint(stash.code);
+  document.addEventListener("ja:referral", (e) => {
+    if (e.detail && e.detail.orderId === orderId && e.detail.code) paint(e.detail.code);
+  });
 }
 
 function checkoutCurrency(form) {
   return form.querySelector("[name=currency]:checked")?.value || JA.currency();
+}
+
+/* The promo/referral code applied at checkout — validated by the server. */
+let ckPromo = null;
+function ckDiscountFor(sub) {
+  if (!ckPromo || !ckPromo.percent) return 0;
+  return Math.round(sub * ckPromo.percent / 100);
 }
 
 function paintCheckoutTotals(form) {
@@ -777,8 +912,15 @@ function paintCheckoutTotals(form) {
   }
   const sub = document.querySelector("[data-ck-sub]");
   const tot = document.querySelector("[data-ck-total]");
-  if (sub) sub.textContent = JA.money(JA.cartTotal(cur), cur);
-  if (tot) tot.textContent = JA.money(JA.cartTotal(cur), cur);
+  const subVal = JA.cartTotal(cur);
+  const disc = ckDiscountFor(subVal);
+  const discRow = document.querySelector("[data-ck-disc-row]");
+  const discCell = document.querySelector("[data-ck-disc]");
+  if (sub) sub.textContent = JA.money(subVal, cur);
+  if (discRow) discRow.hidden = !disc;
+  if (discCell) discCell.textContent = disc
+    ? "− " + JA.money(disc, cur) + " (" + ckPromo.percent + "%)" : "—";
+  if (tot) tot.textContent = JA.money(subVal - disc, cur);
   const s = JA.settings();
   const ngnBox = document.querySelector("[data-bank-ngn]");
   const cfaBox = document.querySelector("[data-bank-cfa]");
@@ -804,6 +946,26 @@ function renderCheckout() {
   const empty = document.querySelector("[data-empty]");
   if (!form) return;
   if (form.dataset.done === "1") return;
+
+  // A reminder email's "recover my cart" link: restore the saved cart first.
+  const recTok = new URLSearchParams(location.search).get("recover");
+  if (recTok && form.dataset.recovered !== "1") {
+    form.dataset.recovered = "1";
+    fetch("api/cart/recover/" + encodeURIComponent(recTok))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d || !d.ok || !Array.isArray(d.items) || !d.items.length) return;
+        try {
+          localStorage.setItem("jaura_cart", JSON.stringify(d.items.map((i) => ({
+            id: i.id, qty: Math.max(1, Number(i.qty) || 1), color: i.color || "",
+          }))));
+          if (d.currency) localStorage.setItem("jaura_currency", d.currency === "NGN" ? "NGN" : "CFA");
+          localStorage.setItem("ja_cart_token", recTok);
+        } catch (e) {}
+        location.replace("checkout.html");
+      })
+      .catch(() => {});
+  }
 
   const items = JA.cartDetailed();
   if (!items.length) {
@@ -832,6 +994,10 @@ function renderCheckout() {
     const text = (opt.textContent || "") + " " + (input && input.value ? input.value : "");
     if (/pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
   });
+  document.querySelectorAll("select[data-delivery-zones] option").forEach((opt) => {
+    const text = (opt.textContent || "") + " " + (opt.value || "");
+    if (/pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
+  });
   try { JA.track("checkout_start", { page: "checkout" }); } catch (e) {}
 
   form.addEventListener("change", (e) => {
@@ -841,6 +1007,82 @@ function renderCheckout() {
     }
     paintCheckoutTotals(form);
   });
+
+  // ---- referral / promo code (server-validated, discount shown at once) ----
+  const promoInput = document.querySelector("[data-ck-promo-input]");
+  const promoBtn = document.querySelector("[data-ck-promo-apply]");
+  const promoMsg = document.querySelector("[data-ck-promo-msg]");
+  const setPromoMsg = (text, good) => {
+    if (!promoMsg) return;
+    promoMsg.hidden = !text;
+    promoMsg.textContent = text || "";
+    promoMsg.classList.toggle("is-good", !!good);
+    promoMsg.classList.toggle("is-bad", !!text && !good);
+  };
+  promoBtn?.addEventListener("click", () => {
+    const code = String(promoInput?.value || "").trim().toUpperCase();
+    if (!code) {
+      ckPromo = null;
+      setPromoMsg("", true);
+      paintCheckoutTotals(form);
+      return;
+    }
+    promoBtn.disabled = true;
+    const req = window.JA_NET
+      ? JA_NET.api("api/promo/check", { method: "POST", json: { code } })
+      : fetch("api/promo/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) })
+        .then((r) => r.json().then((d) => (r.ok ? d : Promise.reject(d))));
+    req.then((d) => {
+      if (d && d.ok) {
+        ckPromo = { code: d.code, percent: d.percent, kind: d.kind };
+        setPromoMsg(t("ck.promoOk", { p: d.percent }), true);
+      } else {
+        ckPromo = null;
+        setPromoMsg(t("ck.promoBad"), false);
+      }
+    }).catch(() => {
+      ckPromo = null;
+      setPromoMsg(t("ck.promoBad"), false);
+    }).finally(() => {
+      promoBtn.disabled = false;
+      paintCheckoutTotals(form);
+    });
+  });
+  promoInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); promoBtn?.click(); }
+  });
+
+  // ---- abandoned-cart capture: save the email + cart as soon as we can,
+  // so a stalled checkout gets a recovery email with its cart intact ----
+  const cartToken = () => {
+    let tk = "";
+    try { tk = localStorage.getItem("ja_cart_token") || ""; } catch (e) {}
+    if (!tk) {
+      tk = "CT-" + Math.random().toString(36).slice(2, 10).toUpperCase() + Date.now().toString(36).toUpperCase();
+      try { localStorage.setItem("ja_cart_token", tk); } catch (e) {}
+    }
+    return tk;
+  };
+  const captureCart = () => {
+    const email = String(form.querySelector("[name=email]")?.value || "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
+    const detailed = JA.cartDetailed();
+    if (!detailed.length || !window.JA_NET) return;
+    JA_NET.api("api/cart/abandon", {
+      method: "POST",
+      json: {
+        token: cartToken(),
+        email,
+        currency: checkoutCurrency(form),
+        items: detailed.map((i) => ({
+          id: i.id, name: JA.displayName(i.product), qty: i.qty, color: i.color || "",
+        })),
+      },
+    }).catch(() => {});
+  };
+  form.querySelector("[name=email]")?.addEventListener("blur", captureCart);
+  form.querySelector("[name=email]")?.addEventListener("change", captureCart);
+  if (form.querySelector("[name=email]")?.value) captureCart();
 
   const shot = form.querySelector("[name=proof]");
   const preview = form.querySelector("[data-proof-preview]");
@@ -936,11 +1178,15 @@ function renderCheckout() {
     const fullName = [clean(data.firstName), clean(data.lastName)].filter(Boolean).join(" ") || clean(data.name);
     const proofBlob = proofFile
       || ((JA.dataUrlToBlob && form.dataset.proof) ? JA.dataUrlToBlob(form.dataset.proof) : null);
+    const subNow = JA.cartTotal(cur);
+    const discNow = ckDiscountFor(subNow);
     const order = JA.saveOrder({
       id: JA.nextOrderId(),
       proofBlob: proofBlob || undefined,
       at: new Date().toISOString(),
       status: "pending",
+      promoCode: ckPromo ? ckPromo.code : "",
+      cartToken: (() => { try { return localStorage.getItem("ja_cart_token") || ""; } catch (e) { return ""; } })(),
       customer: {
         name: fullName,
         firstName: clean(data.firstName),
@@ -954,7 +1200,7 @@ function renderCheckout() {
         note: clean(data.note),
       },
       currency: cur,
-      total: JA.cartTotal(cur),
+      total: subNow - discNow,
       proof: form.dataset.proof || "",
       items: liveItems.map((i) => ({
         id: i.id,
@@ -965,6 +1211,8 @@ function renderCheckout() {
       })),
     });
     JA.clearCart();
+    try { localStorage.removeItem("ja_cart_token"); } catch (err) {}
+    ckPromo = null;
     form.dataset.done = "1";
     showOrderDone(order);
     const waiting = JA.syncPending ? JA.syncPending() : 0;
@@ -1436,6 +1684,7 @@ async function boot() {
     document.addEventListener("click", play, { once: true });
   });
   const page = document.body.dataset.page;
+  if (page === "home") mountHeroVideo();
   const draw = () => {
     if (page === "home") renderHome();
     if (page === "categories") renderCategories();

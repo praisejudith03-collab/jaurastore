@@ -116,6 +116,66 @@ def guard(action, limit=5, window=300, key_extra=""):
         return jsonify(ok=False, error=f"Too many attempts. Try again in {retry}s.", retry_after=retry), 429
     return None
 
+# ------------------------------------------------------- Google reCAPTCHA v3
+def _recaptcha_token():
+    """The token can arrive as a header (set per attempt, so an offline
+    retry gets a fresh one), a JSON field, or a form field."""
+    tok = request.headers.get("X-Recaptcha-Token", "").strip()
+    if tok:
+        return tok
+    d = request.get_json(silent=True)
+    if isinstance(d, dict) and d.get("recaptchaToken"):
+        return str(d["recaptchaToken"]).strip()
+    return (request.form.get("recaptchaToken") or "").strip()
+
+def verify_recaptcha(token, action=""):
+    """Ask Google to score the token. Returns (ok, reason). Network problems
+    reaching Google never block a real customer - they resolve to ok."""
+    from config import Config
+    secret = Config.RECAPTCHA_SECRET_KEY
+    if not secret:
+        return True, "not configured"
+    if not token:
+        return (not Config.RECAPTCHA_REQUIRED), "missing token"
+    import json as _json
+    import urllib.parse
+    import urllib.request
+    fwd = request.headers.get("X-Forwarded-For", "")
+    ip = (fwd.split(",")[0].strip() if fwd else "") or request.remote_addr or ""
+    body = urllib.parse.urlencode({
+        "secret": secret,
+        "response": token[:2048],
+        "remoteip": ip,
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            "https://www.google.com/recaptcha/api/siteverify",
+            data=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = _json.loads(resp.read().decode("utf-8") or "{}")
+    except Exception:
+        # Google unreachable from the server: fail open so a paying customer
+        # is never turned away by our own outage.
+        return True, "verify unreachable"
+    if not data.get("success"):
+        return False, "verification failed"
+    score = data.get("score")
+    if score is not None and float(score) < Config.RECAPTCHA_MIN_SCORE:
+        return False, f"low score {score}"
+    if action and data.get("action") and data.get("action") != action:
+        return False, "action mismatch"
+    return True, "ok"
+
+def recaptcha_gate(action=""):
+    """Drop-in guard for a route: returns an error response to bounce the
+    request, or None to let it through."""
+    ok, _why = verify_recaptcha(_recaptcha_token(), action)
+    if ok:
+        return None
+    return jsonify(ok=False, error="Checkout security could not be verified. Please try again."), 400
+
 # ------------------------------------------------------------------- headers
 CSP = (
     "default-src 'self'; "
@@ -123,8 +183,9 @@ CSP = (
     "media-src 'self' https:; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "font-src https://fonts.gstatic.com data:; "
-    "script-src 'self'; "
-    "connect-src 'self' https://formsubmit.co https://open.er-api.com; "
+    "script-src 'self' https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/; "
+    "frame-src 'self' https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/; "
+    "connect-src 'self' https://formsubmit.co https://open.er-api.com https://www.google.com; "
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://formsubmit.co"
 )
 

@@ -246,6 +246,8 @@ window.I18N = (() => {
     "ck.emailNote": "A confirmation message will be sent to your email. JauraStore will confirm your payment.",
     "ck.uploadReceipt": "Upload the bank payment receipt",
     "ck.legal": "Your personal data is used to process your order. Upload your payment receipt here. JauraStore will confirm your payment, and a confirmation message will be sent to your email. Transport fare is discussed on WhatsApp.",
+    "ck.fileTypes": "JPG, PNG or PDF — up to 8 MB. We keep the file exactly as you send it.",
+    "ck.recaptcha": "This site is protected by reCAPTCHA and the Google <a href=\"https://policies.google.com/privacy\" target=\"_blank\" rel=\"noopener\">Privacy Policy</a> and <a href=\"https://policies.google.com/terms\" target=\"_blank\" rel=\"noopener\">Terms of Service</a> apply.",
     "ck.place": "Place order",
     "ck.placing": "Placing order…",
     "ck.preparing": "Preparing your photo…",
@@ -406,6 +408,24 @@ window.I18N = (() => {
     "rev.need": "Please add your name and a short note.",
     "rev.count": "{n} review",
     "rev.countMany": "{n} reviews",
+    "rev.email": "Email used for your order",
+    "rev.gate": "Reviews are for verified buyers — use the email address from your order.",
+    "rev.notBought": "Reviews are for customers who bought this product. Use the same email as your order.",
+    "ck.discount": "Discount",
+    "ck.promoLabel": "Referral / Promo code",
+    "ck.promoPh": "e.g. JA-ABC23",
+    "ck.promoApply": "Apply",
+    "ck.promoOk": "Code applied — {p}% off your order.",
+    "ck.promoBad": "That code was not recognised or has expired.",
+    "ref.kicker": "Your referral code",
+    "ref.blurb": "Share this code with friends. They get a discount at checkout — and when they order, you earn a reward coupon by email.",
+    "ref.share": "Share referral code",
+    "ref.copy": "Copy code",
+    "ref.copied": "Copied — send it to a friend!",
+    "ref.shareText": "Shop at J Aura Store and get a discount with my referral code {code} at checkout! {url}",
+    "nf.title": "This page is not in the boutique",
+    "nf.lead": "The link may have changed. Continue shopping.",
+    "nf.back": "Back to Jaura Store",
   };
 
   const fr = {
@@ -555,6 +575,10 @@ window.I18N = (() => {
     "pdp.oos": "Rupture de stock",
     "pdp.payIn": "Payer en {cur}",
     "pdp.hint": "Touchez CFA ou ₦ dans le menu pour changer les prix · SKU {sku}",
+    "pdp.bulk": "Achetez 10 exemplaires de cet article et obtenez 10 % de réduction.",
+    "pdp.bulkPrice": "10 pcs : {price} (−10 %)",
+    "cart.bulk": "−10 % · 10 articles ou plus",
+    "cart.bulkOn": "−10 % appliqué — vous avez 10 exemplaires ou plus de cet article.",
     "pdp.more": "Dans le même rayon",
     "pdp.also": "Vous aimerez aussi",
     "pdp.missing": "Cette pièce n’est plus listée.",
@@ -648,6 +672,8 @@ window.I18N = (() => {
     "ck.emailNote": "Un message de confirmation sera envoyé à votre e-mail. JauraStore confirmera votre paiement.",
     "ck.uploadReceipt": "Télécharger le reçu de paiement",
     "ck.legal": "Vos données servent à traiter la commande. Téléchargez votre reçu ici. JauraStore confirmera votre paiement, et un message de confirmation sera envoyé à votre e-mail. Les frais de transport se discutent sur WhatsApp.",
+    "ck.fileTypes": "JPG, PNG ou PDF — jusqu’à 8 Mo. Nous gardons le fichier exactement tel que vous l’envoyez.",
+    "ck.recaptcha": "Ce site est protégé par reCAPTCHA ; les <a href=\"https://policies.google.com/privacy\" target=\"_blank\" rel=\"noopener\">règles de confidentialité</a> et les <a href=\"https://policies.google.com/terms\" target=\"_blank\" rel=\"noopener\">conditions d’utilisation</a> de Google s’appliquent.",
     "ck.place": "Passer la commande",
     "ck.placing": "Envoi de la commande…",
     "ck.preparing": "Préparation de votre photo…",
@@ -808,6 +834,24 @@ window.I18N = (() => {
     "rev.need": "Ajoutez votre nom et un court commentaire.",
     "rev.count": "{n} avis",
     "rev.countMany": "{n} avis",
+    "rev.email": "E-mail utilisé pour votre commande",
+    "rev.gate": "Les avis sont réservés aux acheteurs vérifiés — utilisez l'adresse e-mail de votre commande.",
+    "rev.notBought": "Les avis sont réservés aux clients ayant acheté ce produit. Utilisez le même e-mail que votre commande.",
+    "ck.discount": "Réduction",
+    "ck.promoLabel": "Code de parrainage / promo",
+    "ck.promoPh": "ex. JA-ABC23",
+    "ck.promoApply": "Appliquer",
+    "ck.promoOk": "Code appliqué — {p}% de réduction sur votre commande.",
+    "ck.promoBad": "Ce code n'a pas été reconnu ou a expiré.",
+    "ref.kicker": "Votre code de parrainage",
+    "ref.blurb": "Partagez ce code avec vos amis. Ils profitent d'une réduction — et quand ils commandent, vous gagnez un coupon cadeau par e-mail.",
+    "ref.share": "Partager mon code",
+    "ref.copy": "Copier le code",
+    "ref.copied": "Copié — envoyez-le à un ami !",
+    "ref.shareText": "Achetez chez J Aura Store et profitez d'une réduction avec mon code de parrainage {code} au paiement ! {url}",
+    "nf.title": "Cette page n’est pas dans la boutique",
+    "nf.lead": "Le lien a peut-être changé. Continuez vos achats.",
+    "nf.back": "Retour à Jaura Store",
   };
 
   const dict = { en, fr };
@@ -961,7 +1005,10 @@ window.I18N = (() => {
     const queue = [];
     const obs = new MutationObserver((records) => {
       records.forEach((r) => {
-        r.addedNodes.forEach((n) => { if (n.nodeType === 1) queue.push(n); });
+        r.addedNodes.forEach((n) => {
+          if (n.nodeType === 1) queue.push(n);
+          else if (n.nodeType === 3 && n.parentNode && n.parentNode.nodeType === 1) queue.push(n.parentNode);
+        });
         if (r.type === "characterData" && r.target.parentNode) queue.push(r.target.parentNode);
       });
       if (sweepTimer) return;

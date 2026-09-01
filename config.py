@@ -32,7 +32,34 @@ class Config:
     SMTP_USER = os.environ.get("SMTP_USER", "")
     SMTP_PASS = os.environ.get("SMTP_PASS", "")
 
+    # WhatsApp order notifications (either provider; see whatsapp.py)
+    WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
+    WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID", "")
+    WHATSAPP_CALLMEBOT_KEY = os.environ.get("WHATSAPP_CALLMEBOT_KEY", "")
+    WHATSAPP_NOTIFY_NUMBER = "".join(
+        c for c in os.environ.get("WHATSAPP_NOTIFY_NUMBER", "2290168953101") if c.isdigit())
+
+    # In-process scheduler (abandoned-cart reminders + midnight backup)
+    SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "1") != "0"
+
     SITE_ORIGIN = os.environ.get("SITE_ORIGIN", "http://localhost:8080")
+
+    # -------------------------------------------------- Google reCAPTCHA v3
+    # Register the domain at https://www.google.com/recaptcha/admin (v3),
+    # then set both keys. The site key is public (sent to the browser via
+    # /api/config); the secret key stays server-side. When the keys are not
+    # configured the checks are skipped entirely, so local dev and the test
+    # suite keep working without any Google account.
+    RECAPTCHA_SITE_KEY = os.environ.get("RECAPTCHA_SITE_KEY", "")
+    RECAPTCHA_SECRET_KEY = os.environ.get("RECAPTCHA_SECRET_KEY", "")
+    # v3 returns a score 0.0 (bot) .. 1.0 (human); requests scoring below
+    # this are rejected. Google's suggested default is 0.5 — 0.3 is a bit
+    # kinder to shoppers on shared mobile networks.
+    RECAPTCHA_MIN_SCORE = float(os.environ.get("RECAPTCHA_MIN_SCORE", "0.3") or 0.3)
+    # When "1", requests WITHOUT a token are rejected too. Left off by
+    # default so queued offline orders (whose token expired while the phone
+    # had no signal) still arrive; failed verifications are always rejected.
+    RECAPTCHA_REQUIRED = os.environ.get("RECAPTCHA_REQUIRED", "") == "1"
 
     # ------------------------------------------------------------ Supabase
     # When SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) are set,

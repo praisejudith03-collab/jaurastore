@@ -188,6 +188,67 @@ CREATE TABLE IF NOT EXISTS presence (
   at      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_presence_at ON presence(at DESC);
+
+-- Verified customer product reviews (only shoppers who bought the product).
+CREATE TABLE IF NOT EXISTS product_reviews (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id TEXT NOT NULL,
+  order_id   TEXT,
+  email      TEXT NOT NULL,
+  name       TEXT,
+  stars      INTEGER NOT NULL DEFAULT 5,
+  note       TEXT,
+  at         TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(product_id, email)
+);
+CREATE INDEX IF NOT EXISTS idx_reviews_pid ON product_reviews(product_id);
+
+-- Referral codes: minted automatically when an order reaches the minimum
+-- spend. `uses` counts successful purchases made with the code.
+CREATE TABLE IF NOT EXISTS referral_codes (
+  code           TEXT PRIMARY KEY,
+  email          TEXT NOT NULL,
+  name           TEXT,
+  uses           INTEGER NOT NULL DEFAULT 0,
+  reward_issued  INTEGER NOT NULL DEFAULT 0,
+  reward_coupon  TEXT,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_referral_email ON referral_codes(email);
+
+-- Discount coupons: manual (admin-made) and automatic referrer rewards.
+CREATE TABLE IF NOT EXISTS coupons (
+  code       TEXT PRIMARY KEY,
+  percent    INTEGER NOT NULL,
+  kind       TEXT NOT NULL DEFAULT 'manual',
+  email      TEXT,
+  note       TEXT,
+  active     INTEGER NOT NULL DEFAULT 1,
+  max_uses   INTEGER,
+  uses       INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Abandoned checkouts: captured early, reminded once by email.
+CREATE TABLE IF NOT EXISTS abandoned_carts (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  token        TEXT UNIQUE NOT NULL,
+  email        TEXT NOT NULL,
+  cart_json    TEXT NOT NULL,
+  currency     TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  reminded_at  TEXT,
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_abandoned_email ON abandoned_carts(email);
+
+-- Growth module settings (referral / coupons / abandoned cart), key-value.
+CREATE TABLE IF NOT EXISTS growth_settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT
+);
 """
 
 def connect():
