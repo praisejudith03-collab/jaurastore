@@ -1,1 +1,1 @@
-{"products":[{"id":"jau-9389a9fd6c","sku":"","slug":"persistence-test-51700","name":"Persistence Test 51700","nameFr":"","category":"bags","priceCfa":5280,"compareCfa":null,"priceNgn":12000,"compareNgn":null,"image":"","images":[],"description":"saved by tests/persistence.py","stock":24,"badge":"","featured":false,"online":true,"colors":[],"options":[],"optionStock":{}}],"deleted":[],"updatedAt":"2026-09-01T21:02:42Z","updatedBy":"jaurastore@gmail.com"}
+{"products":[],"deleted":["jau-9389a9fd6c"],"updatedAt":"2026-09-01T21:02:42Z","updatedBy":"jaurastore@gmail.com"}
