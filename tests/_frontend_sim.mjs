@@ -7,15 +7,22 @@
 // browser CDN is network-blocked), so this uses jsdom - a pure-JS DOM that
 // actually EXECUTES the storefront's own JS in the same global scope a browser
 // would, and talks to the live Flask server over HTTP. jsdom is a dev-only
-// dependency, installed with:  npm install jsdom
+// dependency, installed with:  npm install jsdom@30  (repo root)
+// jsdom >= 26 is required: jsdom 30 removed the ResourceLoader class, so this
+// harness routes subresources through the requestInterceptor API instead.
 // Run with the app up on :8080:
 //   ADMIN_PW='...' node tests/_frontend_sim.mjs
-let JSDOM, VirtualConsole, ResourceLoader;
+let JSDOM, VirtualConsole, requestInterceptor;
 try {
   const m = await import("jsdom");
-  JSDOM = m.JSDOM; VirtualConsole = m.VirtualConsole; ResourceLoader = m.ResourceLoader;
+  JSDOM = m.JSDOM; VirtualConsole = m.VirtualConsole; requestInterceptor = m.requestInterceptor;
+  if (typeof requestInterceptor !== "function") {
+    console.error("This harness needs jsdom 26+ (requestInterceptor API). " +
+                  "Run: npm install jsdom@30  (repo root)");
+    process.exit(3);
+  }
 } catch (e) {
-  console.error("jsdom is required but not installed. Run: npm install jsdom  (repo root)");
+  console.error("jsdom is required but not installed. Run: npm install jsdom@30  (repo root)");
   process.exit(3);
 }
 
@@ -89,17 +96,20 @@ function installShims(window) {
 }
 
 // Load only same-origin scripts; ignore external fonts/CDNs (blocked in sandbox)
-// so they never abort page/script loading.
-class LocalResourceLoader extends ResourceLoader {
-  fetch(url, options) {
-    const u = String(url);
+// so they never abort page/script loading. jsdom 30 removed ResourceLoader, so
+// the policy is expressed with a requestInterceptor: return undefined to let
+// jsdom's own dispatcher fetch same-origin resources, or an empty Response
+// for anything external.
+function localInterceptor() {
+  return requestInterceptor((request) => {
+    const u = String(request.url);
     if (u.startsWith(BASE) || u.startsWith("http://127.0.0.1") || u.startsWith("http://localhost")) {
-      return super.fetch(u, options);
+      return undefined;
     }
-    // Return empty for external resources (fonts, analytics, etc.) - they are
-    // not part of the under-test logic and are network-blocked here.
-    return Promise.resolve(Buffer.from(""));
-  }
+    // Empty for external resources (fonts, analytics, etc.) - they are not part
+    // of the under-test logic and are network-blocked here.
+    return new Response("", { status: 200, headers: { "Content-Type": "application/javascript" } });
+  });
 }
 
 async function main() {
@@ -108,7 +118,7 @@ async function main() {
   const dom = new JSDOM(shopHtml, {
     url: BASE + "/shop.html",
     runScripts: "dangerously",
-    resources: new LocalResourceLoader(),
+    resources: { interceptors: [localInterceptor()] },
     pretendToBeVisual: true,
     virtualConsole: vc,
     beforeParse(window) { installShims(window); },
@@ -155,7 +165,7 @@ async function main() {
   // ---- Checkout: pickup removal + receipt accept ---------------------------
   const ckHtml = await (await realFetch(BASE + "/checkout.html")).text();
   const dom2 = new JSDOM(ckHtml, {
-    url: BASE + "/checkout.html", runScripts: "dangerously", resources: new LocalResourceLoader(),
+    url: BASE + "/checkout.html", runScripts: "dangerously", resources: { interceptors: [localInterceptor()] },
     pretendToBeVisual: true, virtualConsole: vc,
     beforeParse(window) { installShims(window); },
   });
@@ -235,7 +245,7 @@ async function main() {
   // ---- Admin portal: masked password + change ------------------------------
   const admHtml = await (await realFetch(BASE + "/admin.html")).text();
   const admDom = new JSDOM(admHtml, {
-    url: BASE + "/admin.html", runScripts: "dangerously", resources: new LocalResourceLoader(),
+    url: BASE + "/admin.html", runScripts: "dangerously", resources: { interceptors: [localInterceptor()] },
     pretendToBeVisual: true, virtualConsole: vc,
     beforeParse(window) { installShims(window); },
   });
