@@ -1619,7 +1619,7 @@ const JA = (() => {
       faq: { title: "FAQ · Jaura Store", description: "How to order from Jaura Store, delivery to Benin, Lagos and West Africa, payment in CFA or Naira." },
       delivery: { title: "Delivery · Jaura Store", description: "Jaura Store delivery: Benin 6–14 days, Lagos Mainland and Island, Lomé and West Africa. Fare on WhatsApp." },
       contact: { title: "Contact · Jaura Store", description: "WhatsApp Jaura Store +229 68 95 31 10. Email jaurastore@gmail.com. Lagos and Cotonou." },
-      checkout: { title: "Checkout Form · Jaura Store", description: "Jaura Store checkout — pay by UBA Naira, MTN MoMo CFA or Moov Togo, then upload your receipt." },
+      checkout: { title: "Checkout · Jaura Store", description: "Jaura Store checkout — pay by UBA Naira, MTN MoMo CFA or Moov Togo, then upload your receipt." },
       cart: { title: "Bag · Jaura Store", description: "Your Jaura Store bag." },
       wishlist: { title: "Wishlist · Jaura Store", description: "Saved pieces at Jaura Store." },
     };
