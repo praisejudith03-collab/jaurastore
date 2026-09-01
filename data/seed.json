@@ -21,6 +21,40 @@
     "usesPlaceholder": true
   },
   {
+    "id": "wix-002",
+    "sku": "JAU002",
+    "slug": "100l-storage-bag",
+    "name": "100L storage bag",
+    "category": "household",
+    "priceCfa": 6000,
+    "compareCfa": 6000,
+    "priceNgn": 10300,
+    "compareNgn": 14700,
+    "image": "images/products/_placeholder.jpg",
+    "description": "A storage bag for storing clothes and other items",
+    "stock": 24,
+    "badge": "sale",
+    "featured": true,
+    "colors": [],
+    "nameFr": "100l sac de rangement",
+    "options": [
+      {
+        "title": "Number",
+        "type": "DROP_DOWN",
+        "values": [
+          "1",
+          "2",
+          "6",
+          "5",
+          "4",
+          "3"
+        ]
+      }
+    ],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
     "id": "wix-003",
     "sku": "JAU003",
     "slug": "10in1-raf-sandwich-maker",
@@ -107,6 +141,27 @@
         ]
       }
     ],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
+    "id": "wix-007",
+    "sku": "JAU007",
+    "slug": "2-by-6-dd-birthmark",
+    "name": "2 by 6 DD birthmark",
+    "category": "hair-care",
+    "priceCfa": 42000,
+    "compareCfa": 42000,
+    "priceNgn": 83300,
+    "compareNgn": 102900,
+    "image": "images/products/_placeholder.jpg",
+    "description": "Have sdd quality &#010;Human hair 10 inch.",
+    "stock": 24,
+    "badge": "sale",
+    "featured": true,
+    "colors": [],
+    "nameFr": "2 by 6 dd birthmark",
+    "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
     "usesPlaceholder": true
   },
@@ -557,6 +612,27 @@
     "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
+    "id": "wix-026",
+    "sku": "JAU026",
+    "slug": "7pcs-aluminum-pot-78500",
+    "name": "7pcs aluminum pot",
+    "category": "household",
+    "priceCfa": 32000,
+    "compareCfa": 50000,
+    "priceNgn": 78500,
+    "compareNgn": null,
+    "image": "images/products/_placeholder.jpg",
+    "description": "",
+    "stock": 24,
+    "badge": "sale",
+    "featured": false,
+    "colors": [],
+    "nameFr": "7pcs casseroles en aluminium",
+    "options": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
     "id": "wix-027",
     "sku": "JAU027",
     "slug": "a-soap-holder",
@@ -809,6 +885,27 @@
     "usesPlaceholder": true
   },
   {
+    "id": "wix-038",
+    "sku": "JAU038",
+    "slug": "ankara-pants-9000",
+    "name": "Ankara pants",
+    "category": "ankara",
+    "priceCfa": 5000,
+    "compareCfa": null,
+    "priceNgn": 8600,
+    "compareNgn": null,
+    "image": "images/products/_placeholder.jpg",
+    "description": "They don’t come with the exact material print",
+    "stock": 24,
+    "badge": "",
+    "featured": false,
+    "colors": [],
+    "nameFr": "Pantalon ankara",
+    "options": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
     "id": "wix-039",
     "sku": "JAU039",
     "slug": "ankara-shorts",
@@ -984,6 +1081,27 @@
         ]
       }
     ],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
+    "id": "wix-046",
+    "sku": "JAU046",
+    "slug": "bag-k-7500",
+    "name": "Bag K",
+    "category": "bags",
+    "priceCfa": 3200,
+    "compareCfa": null,
+    "priceNgn": 7500,
+    "compareNgn": null,
+    "image": "images/products/_placeholder.jpg",
+    "description": "Available in all colors",
+    "stock": 24,
+    "badge": "",
+    "featured": false,
+    "colors": [],
+    "nameFr": "Sac k",
+    "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
     "usesPlaceholder": true
   },
@@ -1424,6 +1542,27 @@
     "placeholderImage": "images/products/_placeholder.jpg"
   },
   {
+    "id": "wix-065",
+    "sku": "JAU065",
+    "slug": "car-diffuser",
+    "name": "Car diffuser",
+    "category": "household",
+    "priceCfa": 950,
+    "compareCfa": 950,
+    "priceNgn": 1225,
+    "compareNgn": 2328,
+    "image": "images/products/_placeholder.jpg",
+    "description": "",
+    "stock": 24,
+    "badge": "sale",
+    "featured": false,
+    "colors": [],
+    "nameFr": "Diffuseur voiture",
+    "options": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
     "id": "wix-066",
     "sku": "JAU066",
     "slug": "ceramic-mug",
@@ -1634,6 +1773,56 @@
       }
     ],
     "placeholderImage": "images/products/_placeholder.jpg"
+  },
+  {
+    "id": "wix-074",
+    "sku": "JAU074",
+    "slug": "cover-heels",
+    "name": "Cover heels",
+    "category": "shoes",
+    "priceCfa": 16000,
+    "compareCfa": 16000,
+    "priceNgn": 24500,
+    "compareNgn": 39200,
+    "image": "images/products/_placeholder.jpg",
+    "description": "",
+    "stock": 24,
+    "badge": "sale",
+    "featured": false,
+    "colors": [
+      "Black",
+      "Red",
+      "Silver",
+      "Gold",
+      "Brown"
+    ],
+    "nameFr": "Escarpins fermés",
+    "options": [
+      {
+        "title": "Shoe color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Red",
+          "Silver",
+          "Gold",
+          "Brown"
+        ]
+      },
+      {
+        "title": "Shoe size",
+        "type": "DROP_DOWN",
+        "values": [
+          "37",
+          "38",
+          "39",
+          "40",
+          "41"
+        ]
+      }
+    ],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
   },
   {
     "id": "wix-075",
@@ -1966,6 +2155,27 @@
     "usesPlaceholder": true
   },
   {
+    "id": "wix-090",
+    "sku": "JAU090",
+    "slug": "f15-wireless-mic-single-13000",
+    "name": "F15 WIRELESS MIC - single",
+    "category": "gadgets",
+    "priceCfa": 7500,
+    "compareCfa": null,
+    "priceNgn": 13000,
+    "compareNgn": null,
+    "image": "images/products/_placeholder.jpg",
+    "description": "",
+    "stock": 24,
+    "badge": "",
+    "featured": false,
+    "colors": [],
+    "nameFr": "F15 micro sans fil simple",
+    "options": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
     "id": "wix-091",
     "sku": "JAU091",
     "slug": "face-mask-sheet",
@@ -2195,6 +2405,60 @@
       }
     ],
     "placeholderImage": "images/products/_placeholder.jpg"
+  },
+  {
+    "id": "wix-098",
+    "sku": "JAU098",
+    "slug": "flat-sandals-a-23300",
+    "name": "Flat sandals A",
+    "category": "shoes",
+    "priceCfa": 9500,
+    "compareCfa": null,
+    "priceNgn": 23300,
+    "compareNgn": null,
+    "image": "images/products/_placeholder.jpg",
+    "description": "",
+    "stock": 24,
+    "badge": "",
+    "featured": false,
+    "colors": [
+      "Black",
+      "Gold"
+    ],
+    "nameFr": "Sandales plates a",
+    "options": [
+      {
+        "title": "Shoe color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Black",
+          "Gold"
+        ]
+      }
+    ],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
+    "id": "wix-099",
+    "sku": "JAU099",
+    "slug": "flower-bouquet-with-light",
+    "name": "Flower bouquet with light",
+    "category": "decor",
+    "priceCfa": 4500,
+    "compareCfa": null,
+    "priceNgn": 6150,
+    "compareNgn": null,
+    "image": "images/products/_placeholder.jpg",
+    "description": "",
+    "stock": 24,
+    "badge": "",
+    "featured": false,
+    "colors": [],
+    "nameFr": "Bouquet de fleurs avec light",
+    "options": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
   },
   {
     "id": "wix-100",
@@ -2454,6 +2718,43 @@
     "colors": [],
     "nameFr": "Carré à frange",
     "options": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
+    "id": "wix-108",
+    "sku": "JAU108",
+    "slug": "fur-cap",
+    "name": "Fur cap",
+    "category": "clothing",
+    "priceCfa": 2000,
+    "compareCfa": null,
+    "priceNgn": 3700,
+    "compareNgn": null,
+    "image": "images/products/_placeholder.jpg",
+    "description": "",
+    "stock": 24,
+    "badge": "",
+    "featured": false,
+    "colors": [
+      "Peach",
+      "Black",
+      "Nude",
+      "Brown"
+    ],
+    "nameFr": "Bonnet en fourrure",
+    "options": [
+      {
+        "title": "Color",
+        "type": "DROP_DOWN",
+        "values": [
+          "Peach",
+          "Black",
+          "Nude",
+          "Brown"
+        ]
+      }
+    ],
     "placeholderImage": "images/products/_placeholder.jpg",
     "usesPlaceholder": true
   },
@@ -2777,6 +3078,27 @@
         ]
       }
     ],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
+    "id": "wix-122",
+    "sku": "JAU122",
+    "slug": "heels-27000",
+    "name": "Heels",
+    "category": "shoes",
+    "priceCfa": 11000,
+    "compareCfa": null,
+    "priceNgn": 27000,
+    "compareNgn": null,
+    "image": "images/products/_placeholder.jpg",
+    "description": "",
+    "stock": 24,
+    "badge": "",
+    "featured": false,
+    "colors": [],
+    "nameFr": "Talons",
+    "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
     "usesPlaceholder": true
   },
@@ -3737,6 +4059,27 @@
     "usesPlaceholder": true
   },
   {
+    "id": "wix-153",
+    "sku": "JAU153",
+    "slug": "led-cube-light",
+    "name": "LED cube light",
+    "category": "gadgets",
+    "priceCfa": 3000,
+    "compareCfa": 5000,
+    "priceNgn": 7350,
+    "compareNgn": null,
+    "image": "images/products/_placeholder.jpg",
+    "description": "",
+    "stock": 24,
+    "badge": "sale",
+    "featured": false,
+    "colors": [],
+    "nameFr": "Cube lumineux LED",
+    "options": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
     "id": "wix-154",
     "sku": "JAU154",
     "slug": "lip-gel",
@@ -3837,6 +4180,43 @@
     "colors": [],
     "nameFr": "Gloss f",
     "options": [],
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "usesPlaceholder": true
+  },
+  {
+    "id": "wix-159",
+    "sku": "JAU159",
+    "slug": "love-decor-with-light",
+    "name": "Love decor with light",
+    "category": "decor",
+    "priceCfa": 2300,
+    "compareCfa": 4000,
+    "priceNgn": 5650,
+    "compareNgn": null,
+    "image": "images/products/_placeholder.jpg",
+    "description": "",
+    "stock": 24,
+    "badge": "sale",
+    "featured": false,
+    "colors": [
+      "Blue",
+      "Pink",
+      "Purple",
+      "Red"
+    ],
+    "nameFr": "Love décoration avec light",
+    "options": [
+      {
+        "title": "Colour",
+        "type": "DROP_DOWN",
+        "values": [
+          "Blue",
+          "Pink",
+          "Purple",
+          "Red"
+        ]
+      }
+    ],
     "placeholderImage": "images/products/_placeholder.jpg",
     "usesPlaceholder": true
   },
