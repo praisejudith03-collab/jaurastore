@@ -24,6 +24,9 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-padding-bottom: 130px; scroll-behavior: smooth; }
 html, body { min-height: 100%; }
+/* Stop the page itself from ever scrolling sideways; wide children are clipped
+   at the viewport edge (and fixed below) instead of pushing the whole page. */
+html, body { overflow-x: hidden; overflow-x: clip; max-width: 100%; }
 body {
   font-family: var(--sans);
   background: var(--ivory);
@@ -32,8 +35,10 @@ body {
   font-size: 14px;
   font-weight: 400;
   -webkit-font-smoothing: antialiased;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
-img { max-width: 100%; display: block; }
+img, video { max-width: 100%; display: block; }
 a { color: inherit; text-decoration: none; }
 button, input, select, textarea { font-family: inherit; }
 button { cursor: pointer; }
@@ -2111,8 +2116,23 @@ body.menu-open { overflow: hidden; }
   color: #8b6b8f;
   font-size: 18px;
   line-height: 1;
+  display: grid;
+  place-items: center;
+  padding: 0;
 }
 .wish-btn.is-on { color: #6b3d7a; background: #fff; }
+/* Clean, symmetric wishlist heart (off = outline, on = filled). */
+.wish-btn .wish-heart {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  display: block;
+}
+.wish-btn.is-on .wish-heart { fill: currentColor; }
 .zones-page { padding: 10px 0 60px; }
 .zone-list { display: grid; gap: 12px; }
 .zone-list .zone { background: #fff; }
@@ -2260,11 +2280,7 @@ body.menu-open { overflow: hidden; }
    under the site CSP's media-src 'self'. */
 .home-hero-video {
   position: relative;
-  min-height: min(46vh, 380px);
-  display: grid;
-  place-items: center;
   overflow: hidden;
-  background: #1a1410;
 }
 .home-hero-video__media {
   position: absolute;
@@ -2325,7 +2341,7 @@ body.menu-open { overflow: hidden; }
   padding: 16px 40px;
 }
 @media (max-width: 800px) {
-  .home-hero-video { min-height: min(42vh, 300px); }
+  .home-hero-video { min-height: 0; }
   .home-hero-video__overlay { padding: 28px 16px; }
   .home-hero-video__overlay h1 { font-size: clamp(24px, 6.4vw, 34px); }
 }
@@ -2527,12 +2543,16 @@ body.mini-open { overflow: hidden; }
   width: auto;
   height: auto;
   border-radius: 999px;
-  padding: 8px 14px;
+  padding: 8px 16px;
   margin: 10px 0 4px;
   font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
+.pdp-wish .wish-heart { width: 16px; height: 16px; }
 .wish-count:empty, .wish-count { min-width: 16px; }
 .foot-logo img { height: 72px; max-width: 180px; object-fit: contain; }
 .foot-tag { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--gold-deep); margin: 6px 0 8px; }
@@ -2757,7 +2777,7 @@ body { padding-bottom: 72px; }
   50% { transform: translate(6px,-8px) rotate(10deg); }
 }
 
-html, body, body.wix-shop { background: #f6f1f5 !important; }
+html, body, body.wix-shop { background: #eae5e9 !important; }
 .hero-slim, .home-hero, .home-hero-slim, .shop-page, .ck-hero, .page-hero {
   background: transparent !important;
 }
@@ -2838,14 +2858,14 @@ body.welcome-open { overflow: hidden; }
 .welcome-card {
   position: relative;
   width: min(400px, 100%);
-  background: linear-gradient(180deg, #fffcfd 0%, #f6f0f4 55%, #ead5e4 100%);
-  border: 1px solid #d4b0c8;
-  border-radius: 28px;
-  padding: 28px 22px 26px;
+  background: linear-gradient(180deg, #fffcf8 0%, #f7f1ea 60%, #eadfce 100%);
+  border: 1px solid #e0d3bf;
+  border-radius: 24px;
+  padding: 30px 24px 30px;
   text-align: center;
   color: var(--espresso);
   overflow: hidden;
-  box-shadow: 0 24px 60px rgba(42, 33, 28, 0.18);
+  box-shadow: 0 22px 54px rgba(42, 33, 28, 0.16);
   transform: scale(0.88) translateY(22px);
   transition: transform 0.4s cubic-bezier(.16,1,.3,1);
 }
@@ -2881,23 +2901,13 @@ body.welcome-open { overflow: hidden; }
   margin: 4px 0 8px;
   color: var(--espresso);
 }
-.welcome-tag {
-  font-size: 11px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--gold-deep);
-  margin-bottom: 14px;
-}
-.welcome-deal { margin: 4px 0 20px; line-height: 1.1; }
-.welcome-up {
-  display: inline-block;
+.welcome-referral {
   font-family: var(--sans);
-  font-weight: 700;
-  font-size: clamp(18px, 4.6vw, 24px);
-  color: var(--purple);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  max-width: 16ch;
+  font-size: clamp(14px, 3.8vw, 16px);
+  line-height: 1.5;
+  color: var(--ink);
+  max-width: 30ch;
+  margin: 4px auto 22px;
 }
 .welcome-cta {
   display: inline-flex;
@@ -2996,7 +3006,7 @@ body.welcome-open { overflow: hidden; }
   --purple: #6b5e52 !important;
   --mauve: #c4b09a !important;
 }
-html, body, body.wix-shop { background: #f4efe9 !important; }
+html, body, body.wix-shop { background: #e8e3dd !important; }
 .header { background: rgba(255, 252, 248, 0.94) !important; border-bottom-color: #e6ddd2 !important; }
 .how-bar { background: #ebe3d8 !important; }
 .footer.wix-footer { background: #efe8de !important; border-top-color: #d4c4b0 !important; }
@@ -3086,7 +3096,7 @@ body[data-page="home"] .dock { display: none !important; }
 body[data-page="home"] { padding-bottom: 24px !important; }
 
 /* Strong nude backdrop */
-html, body, body.wix-shop { background: #e8d5c0 !important; }
+html, body, body.wix-shop { background: #dccab6 !important; }
 
 /* Background butterflies */
 .bg-flies { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
@@ -3136,8 +3146,14 @@ html, body, body.wix-shop { background: #e8d5c0 !important; }
   100% { transform: translate(12px, -8px) rotate(12deg) scaleX(1); }
 }
 
-/* Welcome: once a day, slide in */
-.welcome-pop { align-items: flex-end; }
+/* Welcome: once a visit, slide in. Centred on desktop, bottom sheet on phone. */
+@media (max-width: 640px) {
+  .welcome-pop { align-items: flex-end; }
+}
+.welcome-pop { padding: 16px; }
+@media (max-width: 640px) {
+  .welcome-pop { padding: 16px 16px 96px; }
+}
 .welcome-card {
   transform: translateY(120%) scale(0.92);
   opacity: 0;
@@ -3170,10 +3186,9 @@ html, body, body.wix-shop { background: #e8d5c0 !important; }
   background: #111111 !important;
   color: #ffffff !important;
 }
-html, body, body.wix-shop { background: #f4efe9 !important; }
+html, body, body.wix-shop { background: #e8e3dd !important; }
 
 body[data-page="home"] .hero-slim,
-body[data-page="home"] .home-hero-video,
 body[data-page="home"] .section-tight,
 body[data-page="home"] .lux-reel,
 body[data-page="home"] .how-bar,
@@ -3241,8 +3256,8 @@ body[data-page="home"] .just-in-grid,
   aspect-ratio: 1 !important;
   border-radius: 18px !important;
   overflow: hidden !important;
-  background: #fff !important;
-  border: 1px solid #eee6dc;
+  background: #f6efe7 !important;
+  border: 1px solid #e6dccb;
 }
 .card-media img,
 .wix-shop .card-media img {
@@ -3303,7 +3318,7 @@ body[data-page="home"] .just-in-grid,
 
 /* v45 — just in 3-col, categories slide, lavender chrome, nude waves, red sale */
 :root { --lav: #c4a8e6; --lav-deep: #a888d0; }
-html, body, body.wix-shop { background: #e8d5c0 !important; }
+html, body, body.wix-shop { background: #dccab6 !important; }
 #site-header, #site-footer, .wrap, .hero-slim, .lux-reel, .how-bar, .section-tight,
 .shop-page, .ck-hero, #admin-root, .admin-login, .admin-shell {
   position: relative;
@@ -3414,6 +3429,13 @@ body[data-page="home"] .just-in-grid .card-media { border-radius: 14px !importan
   .wrap { width: min(1240px, calc(100% - 20px)); }
   body[data-page="home"] .just-in-grid { gap: 8px 6px !important; }
   .lux-reel-copy h2 { font-size: 15px !important; }
+  /* Keep the header row inside the viewport on narrow phones. */
+  .nav-right { gap: 4px; }
+  .lang-switch button, .currency-switch button { padding: 6px 7px; }
+  .icon-btn { width: 34px; }
+  .logo img { max-width: 96px; }
+  /* Let the shop filter row wrap instead of pushing off-screen. */
+  .shop-meta { flex-wrap: wrap; gap: 8px 10px; }
 }
 
 .dock a, .dock button { color: #6a5a7a !important; }
@@ -3471,7 +3493,7 @@ body[data-page="home"] .just-in-grid,
 
 
 /* Darker nude (~15%) */
-html, body, body.wix-shop { background: #e8d5c0 !important; }
+html, body, body.wix-shop { background: #dccab6 !important; }
 body[data-page="home"] .hero-slim,
 body[data-page="home"] .section-tight { background: #f3eee8 !important; }
 body[data-page="home"] .how-bar { background: #ebe3d8 !important; }
@@ -3643,7 +3665,7 @@ a.btn.lux-explore,
 body.filt-open { overflow: hidden; }
 
 /* v48 bg restore — previous nude, black video button stays */
-html, body, body.wix-shop { background: #e8d5c0 !important; }
+html, body, body.wix-shop { background: #dccab6 !important; }
 .lux-explore, a.btn.lux-explore, .lux-reel .lux-explore {
   background: #111111 !important;
   border-color: #111111 !important;
@@ -4056,7 +4078,7 @@ body[data-page="home"] .just-in-grid .card-media {
   aspect-ratio: 1 / 1 !important;
   max-height: 280px !important;
   min-height: 180px !important;
-  background: #fff !important;
+  background: #f6efe7 !important;
 }
 .card-media img,
 .wix-shop .card-media img {
@@ -4101,7 +4123,7 @@ body[data-page="home"] .just-in-grid .card-media img {
 
 /* Clean homepage: header, dock, products visible */
 html, body, body[data-page="home"], body.wix-shop {
-  background: #f3eee8 !important;
+  background: #e7e2dc !important;
 }
 #site-header, .header {
   display: block !important;
@@ -4122,7 +4144,6 @@ body[data-page="home"] .dock,
 body[data-page="home"] { padding-bottom: 78px !important; }
 body[data-page="admin"] .dock { display: none !important; }
 body[data-page="home"] .hero-slim,
-body[data-page="home"] .home-hero-video,
 body[data-page="home"] .lux-reel,
 body[data-page="home"] .section-tight,
 body[data-page="home"] .how-bar {
@@ -4153,7 +4174,7 @@ body[data-page="home"] .just-in-grid,
   width: 100% !important;
   aspect-ratio: 1 / 1 !important;
   min-height: 150px !important;
-  background: #fff !important;
+  background: #f6efe7 !important;
   overflow: hidden !important;
 }
 .card-media img {
@@ -4215,7 +4236,7 @@ body[data-page="home"] .cat-slide {
 }
 
 /* Shop like the screenshot */
-body.wix-shop { background: #efe8de !important; }
+body.wix-shop { background: #e3dcd3 !important; }
 .shop-banner img {
   display: block !important;
   width: 100% !important;
@@ -4290,6 +4311,15 @@ body[data-page="admin"] .wa-float { display: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .wa-float { animation: none !important; }
   .wa-float::before, .wa-float::after { animation: none !important; display: none !important; }
+}
+
+/* Keep the floating WhatsApp bubble from sitting on top of the footer's
+   "Follow the Jaura Store channel on WhatsApp" button on phones. The bubble is
+   58px wide at right:14px, so it owns the right ~72px; give the last footer
+   column a matching right clearance so its buttons never sit underneath it. */
+@media (max-width: 640px) {
+  .wix-footer .foot-grid > div:last-child { padding-right: 74px; }
+  .wa-channel { max-width: none; }
 }
 
 /* Shop banner: bold cursive Jaura Store */
@@ -5310,6 +5340,16 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 
 /* ---------- homepage hero video ---------- */
 .home-hero-static { position: relative; overflow: hidden; }
+.home-hero-static:not(.has-video) .home-hero-video,
+.home-hero-video[hidden] {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
 .home-hero-video {
   position: absolute; inset: 0;
   width: 100%; height: 100%;

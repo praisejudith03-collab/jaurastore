@@ -33,6 +33,10 @@ services:
         sync: false
       - key: SITE_ORIGIN
         value: https://jaurastore-staging.onrender.com
+      # Keep the free host awake: the scheduler pings SITE_ORIGIN/healthz on
+      # each tick when KEEP_ALIVE is on (default: on when SITE_ORIGIN is set).
+      - key: KEEP_ALIVE
+        value: "1"
       # Google reCAPTCHA v3 (https://www.google.com/recaptcha/admin) — set
       # both keys in the dashboard; sync:false keeps the secret out of git.
       - key: RECAPTCHA_SITE_KEY
@@ -113,6 +117,10 @@ services:
         sync: false
       - key: SITE_ORIGIN
         value: https://jaurastore.com.ng
+      # Keep the free host awake: the scheduler pings SITE_ORIGIN/healthz on
+      # each tick when KEEP_ALIVE is on (default: on when SITE_ORIGIN is set).
+      - key: KEEP_ALIVE
+        value: "1"
       # Google reCAPTCHA v3 (https://www.google.com/recaptcha/admin) — set
       # both keys in the dashboard; sync:false keeps the secret out of git.
       - key: RECAPTCHA_SITE_KEY

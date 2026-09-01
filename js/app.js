@@ -579,7 +579,7 @@ function paintProduct(root, p) {
           <p>${t("pdp.bulkPrice", { price: JA.money(ten) })}</p>
         </div>`;
       })()}
-      <button type="button" class="wish-btn pdp-wish ${JA.isWished(p.id) ? "is-on" : ""}" data-wish="${p.id}">${JA.isWished(p.id) ? "♥" : "♡"} ${t("nav.wishlist")}</button>
+      <button type="button" class="wish-btn pdp-wish ${JA.isWished(p.id) ? "is-on" : ""}" data-wish="${p.id}"><svg class="wish-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg><span>${t("nav.wishlist")}</span></button>
       ${showDesc ? `<p class="pdp-desc">${JA.escape(desc)}</p>` : ""}
       ${optHTML}
       ${extra}
