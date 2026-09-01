@@ -63,6 +63,7 @@ const JA = (() => {
     "footer.visit": "Visit & deliver",
     "promo.welcome": "Welcome to JauraStore",
     "promo.reduced": "Prices have been reduced",
+    "promo.referral": "Order above ₦20,000 (or the CFA equivalent) and get your personal referral code — share it and your friends enjoy a discount at checkout.",
     "promo.shop": "Shop now",
     "promo.kicker": "Everything you love, all in one store",
     "conv.banner": "Benin 🇧🇯 customers: place your order now and get it between 15 September and 25 September",
@@ -137,6 +138,19 @@ const JA = (() => {
     }
   };
   const write = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+
+  // Build the contact address at runtime (split + join) so an email-obfuscation
+  // middlebox can never rewrite it to "[email protected]" in the footer. The
+  // mailto href uses the same rebuilt string, so tapping it still opens the
+  // mail app with the address pre-filled.
+  const emailText = () => {
+    const e = String(settings().email || DEFAULT_SETTINGS.email || "").trim();
+    const at = e.indexOf("@");
+    if (at < 1) return ["jaurastore", String.fromCharCode(64), "gmail.com"].join("");
+    const user = e.slice(0, at);
+    const domain = e.slice(at + 1);
+    return [user, domain].join(String.fromCharCode(64));
+  };
 
   const settings = () => {
     const s = { ...DEFAULT_SETTINGS, ...read(KEYS.settings, {}) };
@@ -1187,6 +1201,11 @@ const JA = (() => {
     }
     return `<span class="star-row" role="img" aria-label="${rounded} of 5">${bits.join("")}</span>`;
   }
+  // One clean, symmetric heart used by every wishlist button (card, PDP, dock).
+  // The .is-on class on the button controls the fill via CSS, so the same
+  // markup works for both the off (outline) and on (filled) states.
+  const HEART_SVG = '<svg class="wish-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+
   function cardHTML(p) {
     const sold = !(Number(p.stock) > 0);
     const showBadge = p.badge && p.badge !== "sale";
@@ -1204,7 +1223,7 @@ const JA = (() => {
       <a class="card-media${many ? " has-slides" : ""}" ${many ? "data-card-slides" : ""} href="product.html?id=${encodeURIComponent(p.id)}">
         ${slides}
         ${badge}${oos}
-        <button type="button" class="wish-btn ${loved}" data-wish="${p.id}" aria-label="Wishlist">♡</button>
+        <button type="button" class="wish-btn ${loved}" data-wish="${p.id}" aria-label="Wishlist">${HEART_SVG}</button>
       </a>
       <div class="card-body">
         <div class="card-cat">${categoryName(p.category)}</div>
@@ -1412,7 +1431,7 @@ const JA = (() => {
           <h4>${tx("footer.client")}</h4>
           <p><a href="tel:+2290168953101">+229 01 68 95 31 01</a></p>
           <p><a href="tel:+2349161670236">+234 916 167 0236</a></p>
-          <p><a href="mailto:${s.email}">${s.email}</a></p>
+          <p><a href="mailto:${emailText()}">${emailText()}</a></p>
           <p>Lagos, Nigeria</p>
           <p>Cotonou, Benin Rep.</p>
         </div>
@@ -1454,7 +1473,7 @@ const JA = (() => {
       <a href="shop.html"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span>${tx("dock.shop")}</span></a>
       <button type="button" data-open-search><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></svg><span>${tx("dock.search")}</span></button>
       <a href="account.html"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"/><path d="M5 19c1.2-3.2 3.6-5 7-5s5.8 1.8 7 5"/></svg><span>${tx("dock.account")}</span></a>
-      <a href="wishlist.html"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-9.5-8.2C.8 8.8 2.2 5 6 5c2 0 3.2 1.2 4 2.4C10.8 6.2 12 5 14 5c3.8 0 5.2 3.8 3.5 6.8C19 15.6 12 20 12 20z"/></svg><span>${tx("dock.wish")}</span><i class="dock-badge" data-wish-count>0</i></a>
+      <a href="wishlist.html"><svg class="wish-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg><span>${tx("dock.wish")}</span><i class="dock-badge" data-wish-count>0</i></a>
       <a href="cart.html" data-open-mini data-cart-icon><svg viewBox="0 0 24 24"><path d="M6 7h15l-1.5 9h-12z"/><path d="M6 7L5 4H2"/><circle cx="9" cy="20" r="1.3"/><circle cx="18" cy="20" r="1.3"/></svg><span>${tx("dock.cart")}</span><i class="dock-badge" data-cart-count>0</i></a>
     </nav>
     <div class="search-overlay" data-search>
@@ -1470,15 +1489,16 @@ const JA = (() => {
     </a>`;
   }
 
+  // Once per visit (per tab/session) — not a 20-minute cooldown.
+  const WELCOME_SEEN = "jaura_welcome_seen";
   function markWelcomeSeen() {
-    try { localStorage.setItem("jaura_welcome_at", String(Date.now())); } catch (e) {}
+    try { sessionStorage.setItem(WELCOME_SEEN, "1"); } catch (e) {}
   }
 
   function showWelcome() {
     if ((document.body.dataset.page || "") === "admin") return;
     try {
-      const last = Number(localStorage.getItem("jaura_welcome_at") || 0);
-      if (last && (Date.now() - last) < 20 * 60 * 1000) return;
+      if (sessionStorage.getItem(WELCOME_SEEN)) return;
     } catch (e) {}
     if (document.querySelector("[data-welcome]")) return;
     const el = document.createElement("div");
@@ -1489,12 +1509,9 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <span class="welcome-fly welcome-fly1" aria-hidden="true">${goldFly()}</span>
-        <span class="welcome-fly welcome-fly2" aria-hidden="true">${goldFly()}</span>
         <img class="welcome-logo" src="images/brand/logo.jpg" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
-        <p class="welcome-tag">${tx("promo.kicker")}</p>
-        <h2 class="welcome-deal"><span class="welcome-up">${tx("promo.reduced")}</span></h2>
+        <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
       </div>`;
     document.body.appendChild(el);
@@ -1508,11 +1525,8 @@ const JA = (() => {
       setTimeout(() => el.remove(), 520);
     };
     el.querySelector("[data-welcome-x]")?.addEventListener("click", close);
-    el.querySelector("[data-welcome-shop]")?.addEventListener("click", markWelcomeSeen);
+    el.querySelector("[data-welcome-shop]")?.addEventListener("click", (e) => { markWelcomeSeen(); });
     el.addEventListener("click", (e) => { if (e.target === el) close(); });
-    el.addEventListener("click", (e) => {
-      if (e.target === el) close();
-    });
   }
 
   const SITE = "https://jaurastore.com.ng";
@@ -1825,7 +1839,6 @@ const JA = (() => {
           const on = isWished(wishBtn.dataset.wish);
           document.querySelectorAll(`[data-wish="${wishBtn.dataset.wish}"]`).forEach((b) => {
             b.classList.toggle("is-on", on);
-            b.textContent = on ? "♥" : "♡";
           });
           refreshChrome();
           return;

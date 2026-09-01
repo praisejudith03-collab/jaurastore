@@ -43,6 +43,9 @@ class Config:
     SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "1") != "0"
 
     SITE_ORIGIN = os.environ.get("SITE_ORIGIN", "http://localhost:8080")
+    # Keep the free host awake: the scheduler pings SITE_ORIGIN/healthz on each
+    # tick. Defaults to on when SITE_ORIGIN is set; "0" disables it.
+    KEEP_ALIVE = os.environ.get("KEEP_ALIVE", "1" if SITE_ORIGIN and SITE_ORIGIN != "http://localhost:8080" else "0")
 
     # -------------------------------------------------- Google reCAPTCHA v3
     # Register the domain at https://www.google.com/recaptcha/admin (v3),
