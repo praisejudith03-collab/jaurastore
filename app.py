@@ -81,7 +81,14 @@ def create_app():
 
     @app.route("/healthz")
     def healthz():
-        return jsonify(ok=True, env=Config.ENV)
+        # no-store: a CDN (Cloudflare in front of the custom domain, and the
+        # edge that sits in front of *.onrender.com) must never answer the
+        # keep-alive ping from its own cache. A cached 200 never reaches the
+        # dyno, so Render would still count the service as idle and spin it
+        # down - and the next real visitor eats the ~50s cold start.
+        resp = jsonify(ok=True, env=Config.ENV)
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        return resp
 
     @app.route("/uploads/<path:p>")
     def uploaded(p):
