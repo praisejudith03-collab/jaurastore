@@ -29,6 +29,51 @@ function fileToData(file, maxSize, quality) {
   });
 }
 
+// Photos are shrunk in the browser BEFORE they are uploaded: a 6 MB phone
+// photo becomes a ~200-400 KB JPEG, which is the difference between a save
+// that takes minutes on Nigerian mobile data and one that takes seconds.
+// Videos are never touched here (they keep the 40 MB / 300 s path).
+function fileToBlob(file, maxSize, quality) {
+  return new Promise((resolve) => {
+    if (!file) { resolve(null); return; }
+    if (typeof createImageBitmap !== "function" && typeof FileReader !== "function") {
+      resolve(file); return;
+    }
+    const done = (blob) => resolve(blob && blob.size && blob.size < file.size ? blob : file);
+    const draw = (img, width, height) => {
+      try {
+        const max = maxSize || 1400;
+        const scale = Math.min(1, max / Math.max(width, height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(width * scale));
+        canvas.height = Math.max(1, Math.round(height * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        if (canvas.toBlob) canvas.toBlob((b) => done(b), "image/jpeg", quality || 0.82);
+        else done(null);
+      } catch (e) { resolve(file); }
+    };
+    if (typeof createImageBitmap === "function") {
+      createImageBitmap(file).then((bmp) => {
+        draw(bmp, bmp.width, bmp.height);
+        try { bmp.close(); } catch (e) {}
+      }, () => resolve(file));
+      return;
+    }
+    const r = new FileReader();
+    r.onerror = () => resolve(file);
+    r.onload = () => {
+      const img = new Image();
+      img.onload = () => draw(img, img.width, img.height);
+      img.onerror = () => resolve(file);
+      img.src = r.result;
+    };
+    r.readAsDataURL(file);
+  });
+}
+
 function slugify(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
@@ -171,6 +216,42 @@ function mediaTileHTML(src, i, poster) {
       <button type="button" class="wix-tile-x" data-del-img="${i}" aria-label="Remove">×</button>
     </div>`;
 }
+// Repainting the whole media strip on every upload event made the phone
+// stutter while photos were going up. Coalesce the paints into one per frame.
+let _mediaPaint = 0;
+function paintMedia(box) {
+  const target = box || document.getElementById("media-box");
+  if (!target) return;
+  if (_mediaPaint) return;
+  _mediaPaint = (typeof requestAnimationFrame === "function"
+    ? requestAnimationFrame : (fn) => setTimeout(fn, 16))(() => {
+    _mediaPaint = 0;
+    const el = document.getElementById("media-box") || target;
+    if (el) el.innerHTML = mediaStripHTML(window.__editImages || []);
+  }) || 1;
+}
+
+// Never fire more than a couple of photo uploads at once: a phone on mobile
+// data finishes 2 small uploads far sooner than 8 competing ones.
+const _PHOTO_LANES = 2;
+let _photoBusy = 0;
+const _photoWaiting = [];
+function photoSlot(run) {
+  return new Promise((resolve) => {
+    const start = () => {
+      _photoBusy += 1;
+      Promise.resolve().then(run).then((v) => v, (e) => ({ error: (e && e.message) || "upload failed" }))
+        .then((v) => {
+          _photoBusy -= 1;
+          const next = _photoWaiting.shift();
+          if (next) next();
+          resolve(v);
+        });
+    };
+    if (_photoBusy < _PHOTO_LANES) start(); else _photoWaiting.push(start);
+  });
+}
+
 function mediaStripHTML(imgs) {
   const firstImg = (imgs || []).find((s) => mediaKind(s) === "image");
   const poster = firstImg ? imgSrc(firstImg) : "";
@@ -308,21 +389,26 @@ function bindMedia() {
     }
     if (!window.JA_NET) {                       // static hosting fallback
       try { window.__editImages.push(await fileToData(file)); } catch (err) {}
-      box.innerHTML = mediaStripHTML(window.__editImages);
+      paintMedia(box);
       return;
     }
     const preview = URL.createObjectURL(file);
     const idx = window.__editImages.push({ pending: true, preview, video: isVideo }) - 1;
-    box.innerHTML = mediaStripHTML(window.__editImages);
-    const res = await window.JA_NET.api(endpoint, {
+    paintMedia(box);
+    // Shrink photos here so the upload is small and quick. Videos go up as-is.
+    let payload = file;
+    if (!isVideo && looksImage) {
+      try { payload = (await fileToBlob(file, 1400, 0.82)) || file; } catch (err) { payload = file; }
+    }
+    const res = await photoSlot(() => window.JA_NET.api(endpoint, {
       method: "POST",
-      blob: file,
+      blob: payload,
       field: "file",
       filename: file.name || (isVideo ? "video.mp4" : "photo.jpg"),
       queue: true,
-      timeout: 300000,
+      timeout: isVideo ? 300000 : 45000,
       label: isVideo ? "Video" : "Photo",
-    });
+    }));
     if (res && res.url) {
       window.__editImages[idx] = res.url;
       JA.toast(isVideo ? "Video uploaded." : "Photo uploaded.");
@@ -333,9 +419,7 @@ function bindMedia() {
       window.__editImages[idx] = { pending: true, preview, video: isVideo, failed: true };
       JA.toast((res && res.error) || "That file did not upload. It will retry by itself.");
     }
-    if (document.getElementById("media-box")) {
-      document.getElementById("media-box").innerHTML = mediaStripHTML(window.__editImages);
-    }
+    paintMedia(box);
   }
   box.addEventListener("click", (e) => {
     const del = e.target.closest("[data-del-img]");
@@ -344,7 +428,7 @@ function bindMedia() {
       const i = Number(del.getAttribute("data-del-img"));
       if (!window.__editImages) window.__editImages = [];
       window.__editImages.splice(i, 1);
-      box.innerHTML = mediaStripHTML(window.__editImages);
+      paintMedia(box);
       return;
     }
     if (e.target.closest("#view-media")) {
@@ -606,15 +690,15 @@ async function handleProductSubmit(e, existing) {
   const saveBtn = e.target.querySelector(".wix-save");
   let rawImages = (window.__editImages || []).filter(Boolean);
 
-  // Photos upload on their own. Wait for them instead of refusing the save:
-  // a slow connection used to mean the admin pressed Save and lost the
-  // product. Give the outbox a fair chance to drain, then carry on.
+  // Photos upload on their own and are compressed before they leave the
+  // phone, so they are normally done before Save is even pressed. Give the
+  // last one a short grace period (never minutes) and then save with what we
+  // have — the outbox finishes the rest by itself in the background.
   if (rawImages.some((s) => typeof s === "object") && window.JA_NET) {
     JA.toast("Finishing the photo upload…");
-    const deadline = Date.now() + 300000;
+    const deadline = Date.now() + 8000;
     while (rawImages.some((s) => typeof s === "object") && Date.now() < deadline) {
-      await window.JA_NET.flush().catch(() => {});
-      await new Promise((r) => setTimeout(r, 700));
+      await new Promise((r) => setTimeout(r, 250));
       rawImages = (window.__editImages || []).filter(Boolean);
     }
   }
@@ -1224,7 +1308,7 @@ async function fillProofs() {
   }
   const shown = rows.slice(0, proofsShown);
   box.innerHTML = `<div class="table-wrap"><table class="proofs-table">
-    <thead><tr><th>Sent</th><th>Order</th><th>Customer</th><th>Contact</th><th>Method</th><th>Receipt</th><th>Emailed</th></tr></thead>
+    <thead><tr><th>Sent</th><th>Order</th><th>Customer</th><th>Contact</th><th>Method</th><th>Receipt</th><th>Emailed</th><th>Manage</th></tr></thead>
     <tbody>${shown.map((p) => `<tr>
       <td data-label="Sent"><span class="cell-nowrap">${esc((p.at || "").replace("T", " ").slice(0, 16))}</span></td>
       <td data-label="Order"><span class="cell-nowrap">${esc(p.order_id || "")}</span></td>
@@ -1239,6 +1323,7 @@ async function fillProofs() {
              <small>${Math.max(1, Math.round((p.file_size || 0) / 1024))} KB</small>`
         : "—"}</td>
       <td data-label="Emailed">${p.emailed ? "yes" : `<span style="color:#c0392b" title="${esc(p.email_info || "")}">no</span>`}</td>
+      <td data-label="Manage"><button type="button" class="btn btn-line proof-del" data-del-proof="${esc(String(p.id))}">Delete</button></td>
     </tr>`).join("")}</tbody></table></div>
     <p class="admin-note">The original file is attached to the email we send you, and kept here so you can open it any time.</p>`
     + (rows.length > proofsShown
@@ -1246,6 +1331,25 @@ async function fillProofs() {
       : `<p class="admin-note">Showing all ${rows.length} receipts.</p>`);
   const more = $("#proofs-more");
   if (more) more.onclick = () => { proofsShown += PROOF_PAGE; fillProofs(); };
+  box.querySelectorAll("[data-del-proof]").forEach((b) => {
+    b.onclick = async () => {
+      const id = b.dataset.delProof;
+      if (!confirm("Delete this payment receipt permanently? The uploaded file is removed too. This cannot be undone.")) return;
+      b.disabled = true;
+      let res = null;
+      try {
+        res = await window.JA_NET.api("api/admin/payment-proofs/" + encodeURIComponent(id),
+          { method: "DELETE" });
+      } catch (e) { res = null; }
+      if (!res || res.ok === false) {
+        JA.toast((res && res.error) || "Could not delete that receipt.");
+        b.disabled = false;
+        return;
+      }
+      JA.toast("Receipt deleted.");
+      fillProofs();
+    };
+  });
 }
 
 const ORDER_PAGE = 15;
