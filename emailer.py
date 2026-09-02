@@ -158,6 +158,21 @@ def send_receipt(order):
     lines += [f"  - {i.get('qty')}x {i.get('name')}"
               + (f" ({i.get('color')})" if i.get("color") else "")
               for i in items]
+    ref_code = order.get("referralCode") or ""
+    if not ref_code and to:
+        try:
+            from db import one
+            row = one("SELECT code FROM referral_codes WHERE email=?", (to.lower(),))
+            if row:
+                ref_code = row["code"]
+        except Exception:
+            pass
+    if ref_code:
+        lines += [
+            "",
+            f"Your referral code: {ref_code}",
+            "Share it with friends — they get 5% off, and you earn a 10% discount after 2 friends order!",
+        ]
     lines += ["", "We will confirm your transport fare on WhatsApp using this order ID.",
               "", "With thanks,", "Jaura Store", Config.MAIL_FROM]
     return send(to, f"Jaura Store · payment confirmed · {order.get('id')}", "\n".join(lines))

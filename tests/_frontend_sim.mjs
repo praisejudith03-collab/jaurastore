@@ -55,13 +55,12 @@ async function doFetch(url, opts = {}) {
   const ck = jarHeader();
   if (ck && !headers.Cookie) headers.Cookie = ck;
   const resp = await realFetch(url, Object.assign({}, opts, { headers }));
-  const sc = resp.headers.get("set-cookie");
-  if (sc) {
-    const parts = sc.split(/,\s*(?=[^;,\s]+=[^;,\s]+)/);
-    for (const line of Array.isArray(sc) ? sc : parts) {
-      const m = line.match(/^([^=]+)=([^;]*)/);
-      if (m) cookies.set(m[1], m[2]);
-    }
+  const scs = typeof resp.headers.getSetCookie === "function"
+    ? resp.headers.getSetCookie()
+    : [resp.headers.get("set-cookie")].filter(Boolean);
+  for (const line of scs) {
+    const m = line.match(/^([^=;]+)=([^;]*)/);
+    if (m) cookies.set(m[1].trim(), m[2].trim());
   }
   return resp;
 }
