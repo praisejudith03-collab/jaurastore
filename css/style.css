@@ -5533,3 +5533,101 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 .adx-advanced > summary::-webkit-details-marker { display: none; }
 .adx-advanced > summary::after { content: " ▸"; color: var(--taupe); }
 .adx-advanced[open] > summary::after { content: " ▾"; }
+
+/* ==========================================================================
+ * Admin data tables — stop columns collapsing into vertical letters.
+ *
+ * `body` sets `word-break: break-word`, which lets the browser break a word at
+ * ANY character. Combined with `table { width: 100% }`, a 7-column receipts
+ * table on a ~360px phone left each cell only ~26px of usable width after
+ * padding, so headers and buttons stacked one letter per line ("O-R-D-E-R",
+ * "V-I-E-W P-D-F"). The fix: keep labels and identifiers whole, and let the
+ * table stay wider than the viewport so it scrolls sideways inside
+ * `.table-wrap` instead of collapsing. On phones the receipts table becomes
+ * stacked "receipt cards", so nothing needs sideways scrolling at all.
+ * ========================================================================== */
+
+/* 1. the scroll container every admin table already sits in */
+.table-wrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+/* 2. never squeeze a table down to the container width — scroll instead */
+.table-wrap > table {
+  width: 100%;
+  min-width: 640px;
+  table-layout: auto;
+}
+.table-wrap > table.proofs-table { min-width: 780px; }
+
+/* 3. whole words only: no per-letter breaking inside a data table */
+.table-wrap th,
+.table-wrap td {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+/* 4. headers, order ids, dates, amounts, phone numbers, buttons: one line */
+.table-wrap th,
+.table-wrap td .btn,
+.table-wrap td a.btn,
+.cell-nowrap,
+.adx-order-id,
+.adx-order-total,
+.adx-order-who small,
+.status-pill,
+.order-actions .btn,
+.receipt-actions .btn {
+  white-space: nowrap;
+}
+
+/* 5. phones: the receipts table becomes stacked "receipt cards" */
+@media (max-width: 640px) {
+  .table-wrap > table.proofs-table { min-width: 0; }
+  .table-wrap > table.proofs-table thead { display: none; }
+  .table-wrap > table.proofs-table,
+  .table-wrap > table.proofs-table tbody,
+  .table-wrap > table.proofs-table tr,
+  .table-wrap > table.proofs-table td {
+    display: block;
+    width: 100%;
+  }
+  .table-wrap > table.proofs-table tr {
+    border: 1px solid var(--line, #e6ddd2);
+    border-radius: 12px;
+    padding: 10px 12px;
+    margin: 0 0 12px;
+  }
+  .table-wrap > table.proofs-table td {
+    border: 0;
+    padding: 6px 0;
+    text-align: left;
+    white-space: normal;
+  }
+  .table-wrap > table.proofs-table td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--taupe, #9a9086);
+    white-space: nowrap;
+  }
+}
+
+/* 6. marketing tables (coupons / referrals / abandoned carts) — same bug */
+.mk-table { min-width: 520px; }
+.mk-table th,
+.mk-table td {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+.mk-table th { white-space: nowrap; }
+.mk-coupons-card,
+.mk-referrals-card,
+.mk-abandoned-card { overflow-x: auto; }

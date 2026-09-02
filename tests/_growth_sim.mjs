@@ -9,6 +9,8 @@ import { JSDOM } from "jsdom";
 import fs from "node:fs";
 
 const BASE = "http://127.0.0.1:8080/";
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "jaurastore@gmail.com";
+const ADMIN_PW = process.env.ADMIN_PW || "Jaura@Admin#2026x";
 let passed = 0, failed = 0;
 const ok = (cond, name) => {
   if (cond) { passed += 1; console.log("PASS", name); }
@@ -16,6 +18,84 @@ const ok = (cond, name) => {
 };
 process.on("uncaughtException", (e) => { console.log("uncaught:", e && e.message); });
 const watchdog = setTimeout(() => { console.log(`\nWATCHDOG: ${passed} passed, ${failed} failed (stalled)`); process.exit(1); }, 90000);
+
+// ---- fixture seeding -------------------------------------------------------
+// Two of the features under test (a coupon and a saved cart) live in the
+// SQLite database, which is gitignored and must never be committed - so a
+// freshly cloned checkout has no rows and these checks fail for a reason that
+// has nothing to do with the storefront. Seed both here through the app's own
+// HTTP API, the same way an admin and a shopper would, before driving the UI.
+// Idempotent: safe to re-run against a database that already has them, and it
+// never touches a row that is not a sim fixture.
+const jar = new Map();
+function absorb(resp) {
+  const raw = typeof resp.headers.getSetCookie === "function" ? resp.headers.getSetCookie() : [];
+  for (const line of raw) {
+    const m = /^([^=;]+)=([^;]*)/.exec(line);
+    if (m) jar.set(m[1].trim(), m[2].trim());
+  }
+}
+async function api(path, { json, ...opts } = {}) {
+  const headers = { ...(opts.headers || {}) };
+  const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join("; ");
+  if (cookie) headers.Cookie = cookie;
+  if (json) headers["Content-Type"] = "application/json";
+  const resp = await fetch(BASE + path, { ...opts, headers, body: json ? JSON.stringify(json) : opts.body });
+  absorb(resp);
+  return resp;
+}
+async function csrf() {
+  const r = await api("api/csrf");
+  const d = await r.json().catch(() => ({}));
+  return d.token || "";
+}
+
+async function seedFixtures() {
+  // 1. the saved cart the "recover my cart" link restores
+  let tok = await csrf();
+  let r = await api("api/cart/abandon", {
+    method: "POST",
+    json: { _csrf: tok, token: "CT-SIMRECOVER", email: "sim@example.com",
+            currency: "NGN", items: [{ id: "wix-001", name: "Sim bag", qty: 2, color: "" }] },
+  });
+  let body = await r.json().catch(() => ({}));
+  if (!body.ok || body.skipped) {
+    console.log("WARN could not seed the abandoned cart:", JSON.stringify(body), r.status);
+  }
+
+  // 2. the 15% coupon the promo box validates.
+  // Ask the public endpoint first: when the coupon is already good there is
+  // nothing to create, and we avoid spending one of the six admin logins the
+  // server allows per five minutes (so the suite can be re-run freely).
+  const probe = await api("api/promo/check", { method: "POST", json: { code: "TEST-SIM" } });
+  const probeBody = await probe.json().catch(() => ({}));
+  if (probe.ok && probeBody.ok && Number(probeBody.percent) === 15) return;
+
+  const login = await api("api/admin/login", {
+    method: "POST", json: { email: ADMIN_EMAIL, password: ADMIN_PW },
+  });
+  const loginBody = await login.json().catch(() => ({}));
+  if (!login.ok) {
+    console.log("WARN admin login failed - cannot seed the coupon:", JSON.stringify(loginBody), login.status);
+    return;
+  }
+  tok = loginBody.csrf || (await csrf());
+  r = await api("api/admin/coupons", {
+    method: "POST", json: { _csrf: tok, code: "TEST-SIM", percent: 15, note: "sim fixture" },
+  });
+  body = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    // already present (or stale): force it back to an active 15% coupon
+    tok = await csrf();
+    const p = await api("api/admin/coupons/TEST-SIM", {
+      method: "PATCH", json: { _csrf: tok, percent: 15, active: true, expiresAt: "", maxUses: null },
+    });
+    const pb = await p.json().catch(() => ({}));
+    if (!p.ok) console.log("WARN could not seed the coupon:", JSON.stringify(body), JSON.stringify(pb));
+  }
+  await api("api/admin/logout", { method: "POST" });   // never leave a session behind
+}
+await seedFixtures();
 
 async function page(path, { beforeScripts, settle = 1400 } = {}) {
   console.log("· loading", path);
