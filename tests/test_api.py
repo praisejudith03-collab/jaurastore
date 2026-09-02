@@ -1479,3 +1479,89 @@ def test_admin_reset_code_is_a_502_when_both_channels_fail(client, monkeypatch):
     assert r.get_json()["ok"] is False
     _clear_bootstrap()
     authmod.set_shared_password(PW)
+
+
+# ------------------------------------------------------------ media uploads
+def test_category_asset_upload_accepts_image_and_document(client):
+    tok = login(client)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 200
+    r = client.post("/api/admin/uploads/category", data={"file": (io.BytesIO(png), "cat.png")},
+                    headers={"X-CSRF-Token": tok}, content_type="multipart/form-data")
+    assert r.status_code == 200, r.data
+    assert r.get_json()["kind"] == "image"
+    pdf = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n"
+    r = client.post("/api/admin/uploads/category", data={"file": (io.BytesIO(pdf), "brochure.pdf")},
+                    headers={"X-CSRF-Token": tok}, content_type="multipart/form-data")
+    assert r.status_code == 200, r.data
+    assert r.get_json()["kind"] == "document"
+    url = r.get_json()["url"]
+    resp = client.get(url)
+    assert resp.status_code == 200
+    assert "attachment" in resp.headers.get("Content-Disposition", "")
+    assert "nosniff" in resp.headers.get("X-Content-Type-Options", "")
+    # a renamed executable is refused by magic bytes, never the name
+    r = client.post("/api/admin/uploads/category", data={"file": (io.BytesIO(b"MZ\x90\x00" + b"\x00" * 100), "x.jpg")},
+                    headers={"X-CSRF-Token": tok}, content_type="multipart/form-data")
+    assert r.status_code == 400
+
+
+def test_product_upload_accepts_video_and_rejects_executable(client):
+    tok = login(client)
+    mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 300
+    r = client.post("/api/admin/uploads/product", data={"file": (io.BytesIO(mp4), "item.mp4")},
+                    headers={"X-CSRF-Token": tok}, content_type="multipart/form-data")
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["kind"] == "video" and body["url"].endswith(".mp4")
+    # the stored video is served back
+    assert client.get(body["url"]).status_code == 200
+    r = client.post("/api/admin/uploads/product", data={"file": (io.BytesIO(b"MZ\x90\x00" + b"\x00" * 100), "x.mp4")},
+                    headers={"X-CSRF-Token": tok}, content_type="multipart/form-data")
+    assert r.status_code == 400
+
+
+def test_document_receipt_is_accepted_and_stored(client):
+    docx = b"PK\x03\x04" + b"\x00" * 200
+    r = post_proof(client, docx, "receipt.docx")
+    assert r.status_code == 200, r.data
+    row = dict(one("SELECT * FROM payment_proofs ORDER BY id DESC LIMIT 1"))
+    assert "openxmlformats" in row["mime"] or "msword" in row["mime"]
+
+
+def test_admin_order_delete(client):
+    tok = login(client)
+    execute("INSERT INTO orders (id,payload,total,currency,status) VALUES (?,?,?,?,?)",
+            ("JA-DELETE1", "{}", 100, "NGN", "confirmed"))
+    r = client.delete("/api/admin/orders/JA-DELETE1", headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    assert one("SELECT id FROM orders WHERE id='JA-DELETE1'") is None
+    # deleting twice is a 404, never a crash
+    assert client.delete("/api/admin/orders/JA-DELETE1", headers={"X-CSRF-Token": tok}).status_code == 404
+
+
+def test_category_merge_is_idempotent(tmp_path, client, monkeypatch):
+    import catalog as catmod
+    execute("DELETE FROM growth_settings WHERE key='category_merge_v2'")
+    cat_file = tmp_path / "categories.json"
+    cat_file.write_text(json.dumps({"categories": [
+        {"id": "nails", "name": "Nails", "nameFr": "", "image": "x"},
+        {"id": "packaging", "name": "Packaging", "nameFr": "", "image": "x"},
+        {"id": "beauty", "name": "Beauty & skincare", "nameFr": "Beauté & soins", "image": "x"},
+        {"id": "gift-set", "name": "Gift set", "nameFr": "Coffret", "image": "x"},
+    ]}))
+    ov = tmp_path / "catalog.json"
+    ov.write_text(json.dumps({"products": [{"id": "p1", "name": "Nail varnish", "category": "nails"}],
+                              "deleted": []}))
+    monkeypatch.setenv("CATEGORIES_PATH", str(cat_file))
+    monkeypatch.setattr(catmod, "CATALOG_FILE", str(ov))
+    assert catmod.merge_categories() is True
+    data = json.loads(cat_file.read_text())
+    ids = [c["id"] for c in data["categories"]]
+    assert "nails" not in ids and "packaging" not in ids
+    assert next(c["name"] for c in data["categories"] if c["id"] == "beauty") == "Beauty"
+    assert next(c["name"] for c in data["categories"] if c["id"] == "gift-set") == "Gift Sets & Packaging"
+    assert next(c["nameFr"] for c in data["categories"] if c["id"] == "gift-set") == "Coffret"
+    ovd = json.loads(ov.read_text())
+    assert next(p for p in ovd["products"] if p["id"] == "p1")["category"] == "beauty"
+    # a second run no-ops (the marker is set)
+    assert catmod.merge_categories() is False
