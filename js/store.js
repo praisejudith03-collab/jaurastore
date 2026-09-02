@@ -1104,6 +1104,12 @@ const JA = (() => {
       method: "PATCH", json: { status }, label: "Order " + id, queue: false,
     }).catch((e) => ({ ok: false, error: e.message }));
   }
+  async function deleteOrder(id) {
+    if (!window.JA_NET) return { ok: false };
+    return window.JA_NET.api("api/admin/orders/" + encodeURIComponent(id), {
+      method: "DELETE", label: "Delete " + id, queue: false,
+    }).catch((e) => ({ ok: false, error: e.message }));
+  }
   function syncPending() { return window.JA_NET ? window.JA_NET.pending() : 0; }
   async function reloadCatalog() {
     seed = [];
@@ -1143,6 +1149,35 @@ const JA = (() => {
     const onErr = typeof window.fallbackImg === "function" ? " onerror=\"fallbackImg(event)\"" : "";
     return `<img src="${base}" alt="${escape(p.name || "")}" ${cls ? `class="${cls}"` : ""} data-ph="${ph}"${onErr} />`;
   }
+
+  function mediaKind(src) {
+    const u = String(src || "").split("?")[0].toLowerCase();
+    if (/(\.mp4|\.webm|\.mov)$/.test(u)) return "video";
+    if (/(\.pdf|\.doc|\.docx)$/.test(u)) return "doc";
+    return "image";
+  }
+  // Render one gallery entry the way it can actually be shown: an <img> for a
+  // photo, a <video> for a video, and a labelled chip for a document (which
+  // must never render as a broken image or an inline-executing page).
+  function mediaHTML(src, opts) {
+    opts = opts || {};
+    const kind = mediaKind(src);
+    const assetSrc = asset(src);
+    const cls = opts.cls ? ` class="${opts.cls}"` : "";
+    const extra = Object.keys(opts.attrs || {}).map((k) => `${k}="${opts.attrs[k]}"`).join(" ");
+    const attrs = extra ? " " + extra : "";
+    if (kind === "video") {
+      return `<video src="${escape(assetSrc)}"${cls} muted loop playsinline preload="metadata"${attrs}></video>`;
+    }
+    if (kind === "doc") {
+      return `<a class="media-doc-chip" href="${escape(assetSrc)}" target="_blank" rel="noopener">${escape(opts.docLabel || "PDF")}<span>View / Download</span></a>`;
+    }
+    const ph = opts.ph || "images/products/_placeholder.jpg";
+    const onErr = typeof window.fallbackImg === "function" ? ' onerror="fallbackImg(event)"' : "";
+    return `<img src="${escape(assetSrc)}" alt="${escape(opts.alt || "")}"${cls} data-ph="${ph}"${onErr}${attrs} />`;
+  }
+  window.mediaKind = mediaKind;
+  window.mediaHTML = mediaHTML;
 
   function galleryOf(p) {
     const list = [];
@@ -1216,9 +1251,13 @@ const JA = (() => {
     const gals = galleryOf(p);
     const home = (document.body.dataset.page || "") === "home";
     const many = home && gals.length > 1;
+    const ph = p.placeholderImage || "images/products/_placeholder.jpg";
     const slides = many
-      ? gals.map((src, i) => `<img src="${asset(src)}" alt="${escape(nm)}" data-slide="${i}" class="${i === 0 ? "is-show" : ""}" data-ph="${p.placeholderImage || "images/products/_placeholder.jpg"}" onerror="fallbackImg(event)" />`).join("")
-      : `<img src="${asset(gals[0] || p.image)}" alt="${escape(nm)}" data-ph="${p.placeholderImage || "images/products/_placeholder.jpg"}" onerror="fallbackImg(event)" />`;
+      ? gals.map((src, i) => mediaHTML(src, {
+          cls: (i === 0 ? "is-show " : "") + "card-slide", alt: nm, ph,
+          attrs: { "data-slide": i, "data-ph": ph },
+        })).join("")
+      : mediaHTML(gals[0] || p.image, { alt: nm, ph });
     return `<article class="card${sold ? " is-oos" : ""}">
       <a class="card-media${many ? " has-slides" : ""}" ${many ? "data-card-slides" : ""} href="product.html?id=${encodeURIComponent(p.id)}">
         ${slides}
@@ -1468,11 +1507,11 @@ const JA = (() => {
       </div>
     </footer>
     <nav class="dock">
+      <a href="index.html" class="dock-home"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg><span>${tx("dock.home")}</span></a>
       <a href="shop.html"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span>${tx("dock.shop")}</span></a>
       <button type="button" data-open-search><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></svg><span>${tx("dock.search")}</span></button>
       <a href="account.html"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"/><path d="M5 19c1.2-3.2 3.6-5 7-5s5.8 1.8 7 5"/></svg><span>${tx("dock.account")}</span></a>
       <a href="wishlist.html"><svg class="wish-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg><span>${tx("dock.wish")}</span><i class="dock-badge" data-wish-count>0</i></a>
-      <a href="cart.html" data-open-mini data-cart-icon><svg viewBox="0 0 24 24"><path d="M6 7h15l-1.5 9h-12z"/><path d="M6 7L5 4H2"/><circle cx="9" cy="20" r="1.3"/><circle cx="18" cy="20" r="1.3"/></svg><span>${tx("dock.cart")}</span><i class="dock-badge" data-cart-count>0</i></a>
     </nav>
     <div class="search-overlay" data-search>
       <div class="search-box">
@@ -1883,9 +1922,10 @@ const JA = (() => {
     toast, upsertProduct, removeProduct, importProducts, applyServerProduct, syncPending, reloadCatalog,
     orders, saveOrder, getOrder, updateOrder, nextOrderId, sendReceipt,
     isAdmin, loginAdmin, logoutAdmin, adminSession, changePassword, requestOtp, verifyOtp, resetPassword,
-    adminAnalytics, adminOrders, setOrderStatus, flushEvents,
+    adminAnalytics, adminOrders, setOrderStatus, deleteOrder, flushEvents,
     customer, setCustomer, logoutCustomer, ordersForEmail, getProof, dataUrlToBlob,
     cardHTML, asset, escape, mountChrome, track, getStats, setSeo, absUrl, SITE,
     galleryOf, startCardPlay, reviews, addReview, removeReview, setReviews, reviewStats, starsHTML,
+    mediaHTML, mediaKind,
   };
 })();

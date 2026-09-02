@@ -1,4 +1,5 @@
-"""Where uploads live: payment proofs and admin-uploaded product photos.
+"""Where uploads live: payment proofs, admin-uploaded product photos, product
+videos, category assets and the homepage hero.
 
 Two back ends, chosen with UPLOAD_MODE in .env:
 
@@ -11,8 +12,10 @@ Two back ends, chosen with UPLOAD_MODE in .env:
                     Set S3_BUCKET / S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY
                     / S3_PUBLIC_BASE. No code change is needed to switch.
 
-Every image is validated by magic bytes before it is written, so a renamed
-.exe can never be stored and later served as an image.
+Every file is re-identified from its own bytes (magic number), never from the
+filename a browser sends. That means a renamed .exe can never be stored and
+later served as an image or a document, and an .html/.svg (which would execute
+script in the site's origin) is refused outright.
 """
 import os, io, hashlib, secrets, datetime
 from config import Config
@@ -21,15 +24,22 @@ from security import clean
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 MAX_BYTES = 6 * 1024 * 1024              # 6 MB: product photos
-MAX_RECEIPT_BYTES = 8 * 1024 * 1024      # 8 MB: payment receipts / PDFs
-MAX_VIDEO_BYTES = 40 * 1024 * 1024       # 40 MB: homepage hero video
-ALLOWED_EXT = ("jpg", "jpeg", "png", "webp", "pdf")
-VIDEO_EXT = ("mp4", "webm")
+MAX_RECEIPT_BYTES = 8 * 1024 * 1024      # 8 MB: payment receipts / PDFs / docs
+MAX_VIDEO_BYTES = 40 * 1024 * 1024       # 40 MB: product + homepage hero video
+
+IMAGE_EXT = ("jpg", "jpeg", "png", "webp", "gif", "avif", "heic")
+DOC_EXT = ("pdf", "doc", "docx")
+VIDEO_EXT = ("mp4", "webm", "mov")
+ALLOWED_EXT = IMAGE_EXT + DOC_EXT + VIDEO_EXT
+
 MIME = {
     "jpg": "image/jpeg", "jpeg": "image/jpeg",
-    "png": "image/png", "webp": "image/webp",
+    "png": "image/png", "webp": "image/webp", "gif": "image/gif",
+    "avif": "image/avif", "heic": "image/heic",
     "pdf": "application/pdf",
-    "mp4": "video/mp4", "webm": "video/webm",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
 }
 
 # (extension, tuple of accepted magic-byte prefixes)
@@ -37,18 +47,52 @@ _SIGNATURES = (
     ("jpg", (b"\xff\xd8\xff",)),
     ("png", (b"\x89PNG\r\n\x1a\n",)),
     ("webp", (b"RIFF",)),
+    ("gif", (b"GIF87a", b"GIF89a")),
     ("pdf", (b"%PDF-",)),
+    # OLE2 compound file -> legacy Word .doc
+    ("doc", (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",)),
+    # OOXML (zip) container -> .docx (magic bytes cannot distinguish docx from
+    # xlsx/pptx; the zip container is what matters for safety).
+    ("docx", (b"PK\x03\x04",)),
+    # ISO base media (MP4 / MOV / AVIF / HEIC) handled by _iso_brand below.
+    ("mp4", ()),
+    ("webm", (b"\x1a\x45\xdf\xa3",)),
 )
 
 
+def _iso_brand(head: bytes) -> bytes:
+    """The ISO-BMFF brand (the 4 bytes after 'ftyp'), or b'' when not BMFF."""
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        return head[8:12]
+    return b""
+
+
 def _ext_from_bytes(head: bytes) -> str:
-    """Identify the real file type from its first bytes."""
+    """Identify the real file type from its first bytes, never its name.
+
+    Returns one of ALLOWED_EXT, or '' when the bytes do not match anything on
+    the allowlist (a renamed .exe, an .html/.svg, a truncated file, ...).
+    """
     for ext, sigs in _SIGNATURES:
         for sig in sigs:
+            if not sig:
+                continue
             if head.startswith(sig):
                 if ext == "webp" and head[8:12] != b"WEBP":
                     continue
                 return ext
+    brand = _iso_brand(head)
+    if brand:
+        # HEIC / HEIF / AVIF are ISO-BMFF image containers. Check them before
+        # the generic video fallback so they are not mis-typed as mp4.
+        if brand in (b"avif", b"avis"):
+            return "avif"
+        if brand in (b"heic", b"heix", b"hevc", b"mif1", b"msf1"):
+            return "heic"
+        if brand in (b"qt  ", b"qt  "[:4]):
+            return "mov"
+        # Most MP4 brands. Any unrecognised ftyp container plays as mp4.
+        return "mp4"
     return ""
 
 
@@ -61,78 +105,128 @@ def mime_for(ext: str) -> str:
     return MIME.get((ext or "").lower(), "application/octet-stream")
 
 
+def kind_for(ext: str) -> str:
+    """High level category for a stored extension: image / video / document."""
+    ext = (ext or "").lower()
+    if ext in IMAGE_EXT:
+        return "image"
+    if ext in VIDEO_EXT:
+        return "video"
+    if ext in DOC_EXT:
+        return "document"
+    return "unknown"
+
+
+def is_inline_renderable(ext: str) -> bool:
+    """Only images and videos can be shown inline in an <img>/<video>."""
+    return kind_for(ext) in ("image", "video")
+
+
+def is_document(ext: str) -> bool:
+    return kind_for(ext) == "document"
+
+
 def validate_upload(data: bytes, filename: str = "", allow_pdf: bool = False,
-                    max_bytes: int = MAX_BYTES):
+                    max_bytes: int = MAX_BYTES, allow_documents: bool = None,
+                    kind: str = "media"):
     """Returns (ok, message, extension).
 
-    The extension is read from the file's own bytes, never from the name a
-    browser sends, so a renamed .exe can never be stored.
+    ``kind`` selects what the slot is allowed to hold:
+      * "media" (default) - images; PDF/DOC/DOCX only when allow_documents /
+        allow_pdf is True (customer receipts, product assets).
+      * "image"           - images only (no documents at all).
+      * "video"           - videos only.
+      * "asset"           - the broad allowlist (images, videos, documents) for
+                            category / hero assets.
+
+    The extension is always read from the file's own bytes.
     """
     if not data:
         return False, "The file was empty.", ""
     if len(data) > max_bytes:
         return False, (f"That file is {len(data) / 1048576:.1f} MB. "
                        f"The limit is {max_bytes // (1024 * 1024)} MB."), ""
-    ext = _ext_from_bytes(data[:16])
+    ext = _ext_from_bytes(data[:32])
+    k = kind_for(ext)
+
     if not ext:
-        return False, "Only JPG, PNG, WebP or PDF files can be uploaded.", ""
-    if ext == "pdf" and not allow_pdf:
-        return False, "That is a PDF. Upload a JPG or PNG image here.", ""
-    if ext == "pdf":
-        if b"\x00" in data[:1024]:
-            return False, "That PDF could not be read.", ""
-        if data.rstrip()[-6:] != b"%%EOF" and b"%%EOF" not in data[-2048:]:
-            return False, "That PDF looks incomplete. Save it again and retry.", ""
+        return False, "Only JPG, PNG, WebP, GIF, AVIF, HEIC, PDF, DOC, DOCX, MP4, WebM or MOV files can be uploaded.", ""
+
+    # The slot's own rules.
+    if kind == "image" and k != "image":
+        return False, "That is a %s. Upload a JPG, PNG, WebP or GIF image here." % (_type_label(ext)), ext
+    if kind == "video" and k != "video":
+        return False, "That is a %s. Upload an MP4 or WebM video here." % (_type_label(ext)), ext
+
+    # Documents need to be explicitly allowed (receipts, category/hero assets).
+    if k == "document":
+        if not (allow_documents or allow_pdf):
+            if kind == "image":
+                return False, "That is a %s. Upload a JPG or PNG image here." % (_type_label(ext)), ext
+            return False, "That is a %s. Upload an image here." % (_type_label(ext)), ext
+        if ext == "pdf":
+            if b"\x00" in data[:1024]:
+                return False, "That PDF could not be read.", ""
+            if data.rstrip()[-6:] != b"%%EOF" and b"%%EOF" not in data[-2048:]:
+                return False, "That PDF looks incomplete. Save it again and retry.", ""
+        elif ext in ("doc", "docx"):
+            # a bare, truncated or empty office file is usually garbage
+            if len(data) < 24:
+                return False, "That document looks incomplete. Save it again and retry.", ""
+        return True, "ok", ext
+
+    if k == "image":
+        # WebP already checked for the WEBP brand; ensure the RIFF header is
+        # consistent enough to not be a false positive.
+        if ext == "webp" and len(data) < 12:
+            return False, "That WebP looks incomplete. Try another file.", ""
     return True, "ok", ext
+
+
+def _type_label(ext: str) -> str:
+    return {"pdf": "PDF", "doc": "Word document", "docx": "Word document",
+            "mp4": "video", "webm": "video", "mov": "video",
+            "gif": "GIF", "avif": "AVIF", "heic": "HEIC"}.get((ext or "").lower(), "file")
 
 
 def validate_image(data: bytes, filename: str = ""):
     """Product photos: images only."""
-    ok, msg, ext = validate_upload(data, filename, allow_pdf=False, max_bytes=MAX_BYTES)
-    if ok:
-        return True, "ok", ext
-    if ext == "pdf":
-        return False, "That is a PDF. Upload a JPG or PNG image here.", ""
-    return False, msg, ext
+    ok, msg, ext = validate_upload(data, filename, allow_pdf=False,
+                                   max_bytes=MAX_BYTES, kind="image")
+    return ok, msg, ext
 
 
-def _video_ext_from_bytes(head: bytes) -> str:
-    """Identify MP4 / WebM from the file's own bytes, never from its name."""
-    if len(head) >= 12 and head[4:8] == b"ftyp":          # ISO base media (MP4/MOV)
-        brand = head[8:12]
-        if brand[:3] in (b"mp4", b"iso", b"avc", b"M4V", b"m4v", b"dash", b"MSN") or brand in (b"mmp4", b"3gp4", b"3gp5"):
-            return "mp4"
-        return "mp4"                                       # any ftyp container plays as mp4
-    if head.startswith(b"\x1a\x45\xdf\xa3"):               # EBML → WebM/Matroska
-        return "webm"
-    return ""
+def validate_asset(data: bytes, filename: str = "", max_bytes: int = MAX_BYTES):
+    """Category / hero assets: the broad allowlist, documents included."""
+    return validate_upload(data, filename, allow_documents=True,
+                           max_bytes=max_bytes, kind="asset")
 
 
 def validate_video(data: bytes, filename: str = ""):
-    """Hero video: MP4 or WebM only, capped at MAX_VIDEO_BYTES."""
+    """Hero / product video: video formats only, capped at MAX_VIDEO_BYTES."""
     if not data:
         return False, "The file was empty.", ""
     if len(data) > MAX_VIDEO_BYTES:
         return False, (f"That video is {len(data) / 1048576:.1f} MB. "
                        f"The limit is {MAX_VIDEO_BYTES // (1024 * 1024)} MB — "
                        "export it smaller (720p is plenty for a hero)."), ""
-    ext = _video_ext_from_bytes(data[:16])
-    if not ext:
-        return False, "Only MP4 or WebM videos can be uploaded here.", ""
+    ext = _ext_from_bytes(data[:32])
+    if kind_for(ext) != "video":
+        return False, "Only MP4, WebM or MOV videos can be uploaded here.", ""
     return True, "ok", ext
 
 
-def save_video(data: bytes, folder: str = "videos", filename: str = ""):
-    """Stores a hero video and returns (ok, message, url)."""
-    ok, msg, ext = validate_video(data, filename)
-    if not ok:
-        return False, msg, ""
+def _save(data: bytes, folder: str, ext: str, s3_content_type: str = "") -> tuple:
+    """Shared write path (S3 or local), returns (ok, message, url)."""
     digest = hashlib.sha256(data).hexdigest()
     key = _object_name(folder, ext, digest)
+
     if Config.UPLOAD_MODE == "s3":
-        ok2, _msg2, url = _save_s3(data, key, ext)
+        ok2, _msg2, url = _save_s3(data, key, ext, s3_content_type or mime_for(ext))
         if ok2:
             return True, "stored", url
+        # never silently lose a customer's proof of payment: fall back to disk
+
     full = _local_path(key)
     try:
         os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -143,6 +237,34 @@ def save_video(data: bytes, folder: str = "videos", filename: str = ""):
     except OSError as exc:  # pragma: no cover - filesystem failure
         return False, f"Could not save the upload ({exc.__class__.__name__}).", ""
     return True, "stored", "/uploads/" + key
+
+
+def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf: bool = False,
+               max_bytes: int = MAX_BYTES):
+    """Stores an image (or, when allowed, a document) and returns
+    (ok, message, url)."""
+    ok, msg, ext = validate_upload(data, filename, allow_pdf=allow_pdf,
+                                   max_bytes=max_bytes, kind="media")
+    if not ok:
+        return False, msg, ""
+    return _save(data, folder, ext)
+
+
+def save_asset(data: bytes, folder: str = "misc", filename: str = "", max_bytes: int = MAX_BYTES):
+    """Stores a broad-allowlist asset (image / video / document) and returns
+    (ok, message, url)."""
+    ok, msg, ext = validate_asset(data, filename, max_bytes=max_bytes)
+    if not ok:
+        return False, msg, ""
+    return _save(data, folder, ext)
+
+
+def save_video(data: bytes, folder: str = "videos", filename: str = ""):
+    """Stores a video and returns (ok, message, url)."""
+    ok, msg, ext = validate_video(data, filename)
+    if not ok:
+        return False, msg, ""
+    return _save(data, folder, ext)
 
 
 def _object_name(folder: str, ext: str, digest: str) -> str:
@@ -156,35 +278,7 @@ def _local_path(key: str) -> str:
     return os.path.join(base, key.replace("/", os.sep))
 
 
-def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf: bool = False,
-               max_bytes: int = MAX_BYTES):
-    """Stores an upload and returns (ok, message, url)."""
-    ok, msg, ext = validate_upload(data, filename, allow_pdf=allow_pdf, max_bytes=max_bytes)
-    if not ok:
-        return False, msg, ""
-    digest = hashlib.sha256(data).hexdigest()
-    key = _object_name(folder, ext, digest)
-
-    if Config.UPLOAD_MODE == "s3":
-        ok2, msg2, url = _save_s3(data, key, ext)
-        if ok2:
-            return True, "stored", url
-        # never silently lose a customer's proof of payment: fall back to disk
-        key = key  # noqa: F841  (reuse the same object name locally)
-
-    full = _local_path(key)
-    try:
-        os.makedirs(os.path.dirname(full), exist_ok=True)
-        tmp = full + ".part"
-        with open(tmp, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, full)
-    except OSError as exc:  # pragma: no cover - filesystem failure
-        return False, f"Could not save the upload ({exc.__class__.__name__}).", ""
-    return True, "stored", "/uploads/" + key
-
-
-def _save_s3(data: bytes, key: str, ext: str):
+def _save_s3(data: bytes, key: str, ext: str, content_type: str = ""):
     """S3 / R2 upload. Requires boto3 plus credentials in .env."""
     if not (Config.S3_BUCKET and Config.S3_ACCESS_KEY and Config.S3_SECRET_KEY):
         return False, "s3 not configured", ""
@@ -208,7 +302,7 @@ def _save_s3(data: bytes, key: str, ext: str):
             Bucket=Config.S3_BUCKET,
             Key=key,
             Body=data,
-            ContentType=f"image/{'jpeg' if ext == 'jpg' else ext}",
+            ContentType=content_type or "application/octet-stream",
             CacheControl="public, max-age=31536000",
         )
         base = (Config.S3_PUBLIC_BASE or "").rstrip("/")

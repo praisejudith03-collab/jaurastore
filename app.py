@@ -24,7 +24,8 @@ def create_app():
         SESSION_COOKIE_SECURE=(Config.ENV == "production"),
         SESSION_COOKIE_NAME="jaura_session",
         PERMANENT_SESSION_LIFETIME=Config.PERMANENT_SESSION_LIFETIME,
-        MAX_CONTENT_LENGTH=9 * 1024 * 1024,
+        # allows product + hero videos up to 40 MB (storage.MAX_VIDEO_BYTES)
+        MAX_CONTENT_LENGTH=45 * 1024 * 1024,
     )
     app.register_blueprint(api)
 
@@ -32,6 +33,17 @@ def create_app():
     try:
         migrate()                      # add columns added after the first release
         analytics_mod.prune()          # drop raw analytics past the retention window
+        # One-shot category merge (folds the old `nails` / `packaging`
+        # categories, renames `gift-set`, and re-points legacy products). Run
+        # on the deployed environments only so the local repo's category table
+        # is never rewritten by the test suite or local dev.
+        if Config.ENV in ("production", "staging"):
+            import catalog as _catalog_mod
+            try:
+                if _catalog_mod.merge_categories():
+                    app.logger.info("category merge applied on boot (category_merge_v2)")
+            except Exception as exc:
+                app.logger.warning("category merge skipped: %s", exc)
     except Exception as exc:           # never let housekeeping stop the boot
         app.logger.warning("startup maintenance skipped: %s", exc)
     authmod.ensure_seed_admins()
@@ -125,6 +137,12 @@ def create_app():
         resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+        # Every non-image / non-video type (PDF, DOC, DOCX, executable-like
+        # containers) is forced to download. A stored .html/.svg must never be
+        # served inline in this origin; attachments cannot execute scripts here.
+        ext = os.path.splitext(full)[1].lstrip(".").lower()
+        if ext and not storage.is_inline_renderable(ext):
+            resp.headers["Content-Disposition"] = "attachment"
         return resp
 
     @app.route("/")
@@ -155,7 +173,7 @@ def create_app():
     @app.errorhandler(413)
     def _too_big(_e):
         return jsonify(ok=False,
-                       error="That upload is too large. Please send a file under 8 MB."), 413
+                       error="That upload is too large. Please send an image under 6 MB or a video/doc under 40 MB."), 413
 
     @app.errorhandler(404)
     def _404(e):

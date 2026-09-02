@@ -136,19 +136,49 @@ function productImages(p) {
 function imgSrc(entry) {
   if (!entry) return "";
   if (typeof entry === "string") return entry;
-  return entry.preview || "";
+  return entry.preview || entry.url || "";
 }
-function mediaStripHTML(imgs) {
-  const tiles = imgs.map((src, i) => `
-    <div class="wix-tile${i === 0 ? " is-main" : ""}${src && src.pending ? " is-pending" : ""}" data-img-i="${i}">
-      <img src="${JA.asset(imgSrc(src) || (typeof src === "string" ? src : ""))}" alt="" />
+const _VIDEO_EXT = /(\.mp4|\.webm|\.mov)(\?.*)?$/i;
+const _DOC_EXT = /(\.pdf|\.doc|\.docx)(\?.*)?$/i;
+function mediaKind(entry) {
+  if (entry && entry.video) return "video";
+  const s = imgSrc(entry) || (typeof entry === "string" ? entry : "");
+  const u = String(s).split("?")[0].toLowerCase();
+  if (_VIDEO_EXT.test(u)) return "video";
+  if (_DOC_EXT.test(u)) return "doc";
+  return "image";
+}
+function mediaTileHTML(src, i, poster) {
+  const kind = mediaKind(src);
+  const url = JA.asset(imgSrc(src) || (typeof src === "string" ? src : ""));
+  const pending = src && src.pending;
+  const pendingCls = pending ? " is-pending" : "";
+  const main = i === 0 ? " is-main" : "";
+  let body;
+  if (kind === "video" && !pending) {
+    const pos = poster ? `poster="${JA.asset(poster)}"` : "";
+    body = `<video class="wix-tile-video" src="${url}" ${pos} muted loop playsinline preload="metadata"></video>`;
+  } else if (kind === "doc" && !pending) {
+    const label = /\.docx?$/i.test(String(imgSrc(src) || "")) ? "DOC" : "PDF";
+    body = `<a class="media-doc-chip" href="${url}" target="_blank" rel="noopener">${label}<span>View / Download</span></a>`;
+  } else {
+    body = `<img src="${url}" alt="" />`;
+  }
+  return `
+    <div class="wix-tile${main}${pendingCls}" data-img-i="${i}">
+      ${body}
       ${i === 0 ? `<span>Main</span>` : `<span>${i + 1}</span>`}
       <button type="button" class="wix-tile-x" data-del-img="${i}" aria-label="Remove">×</button>
-    </div>`).join("");
-  const plus = imgs.length < 20 ? `<label class="wix-tile wix-plus">+<input type="file" id="more-media" accept="image/*" capture="environment" multiple hidden /></label>` : "";
+    </div>`;
+}
+function mediaStripHTML(imgs) {
+  const firstImg = (imgs || []).find((s) => mediaKind(s) === "image");
+  const poster = firstImg ? imgSrc(firstImg) : "";
+  const tiles = (imgs || []).map((src, i) => mediaTileHTML(src, i, poster)).join("");
+  const plus = (imgs || []).length < 20 ? `<label class="wix-tile wix-plus">+<input type="file" id="more-media" accept="image/*,video/*" multiple hidden /></label>` : "";
   return `<div class="wix-media-row">${tiles}${plus}</div>
-    <p class="admin-note">Drag &amp; drop photos here, or tap + to pick several at once. Up to 20.</p>
-    <button type="button" class="wix-view-media" id="view-media">View All Media (${imgs.length}/20) ›</button>`;
+    <p class="admin-note">Drag &amp; drop, or tap + to pick several at once. Photos up to 6 MB, videos up to 40 MB. Your photos &amp; videos stay as they are — up to 20 items.</p>
+    <button type="button" class="wix-view-media" id="view-media">View All Media (${(imgs || []).length}/20) ›</button>`;
 }
 function editorOptions(p) {
   if (p && p.options && p.options.length) return p.options;
@@ -231,7 +261,7 @@ function bindMedia() {
     box.classList.remove("is-drop");
   }));
   box.addEventListener("drop", (e) => {
-    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])].filter((f) => /^image\//.test(f.type));
+    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])].filter((f) => /^(image|video)\//.test(f.type));
     if (!files.length) return;
     if (!window.__editImages) window.__editImages = [];
     for (const file of files) {
@@ -251,31 +281,42 @@ function bindMedia() {
   });
 
   async function uploadProductImage(file, box) {
+    const isVideo = /^video\//.test(file.type || "") || _VIDEO_EXT.test(String(file.name || ""));
+    // Say the limit up front, not after a failed upload.
+    const maxVideo = 40 * 1024 * 1024, maxPhoto = 6 * 1024 * 1024;
+    if (isVideo && file.size > maxVideo) {
+      JA.toast("That video is " + (file.size / 1048576).toFixed(1) + " MB. The limit is 40 MB — export it smaller (720p is plenty).");
+      return;
+    }
+    if (!isVideo && file.size > maxPhoto) {
+      JA.toast("That photo is " + (file.size / 1048576).toFixed(1) + " MB. The limit is 6 MB — pick a smaller photo.");
+      return;
+    }
     if (!window.JA_NET) {                       // static hosting fallback
       try { window.__editImages.push(await fileToData(file)); } catch (err) {}
       box.innerHTML = mediaStripHTML(window.__editImages);
       return;
     }
     const preview = URL.createObjectURL(file);
-    const idx = window.__editImages.push({ pending: true, preview }) - 1;
+    const idx = window.__editImages.push({ pending: true, preview, video: isVideo }) - 1;
     box.innerHTML = mediaStripHTML(window.__editImages);
-    const res = await window.JA_NET.api("api/admin/uploads/image", {
+    const res = await window.JA_NET.api(isVideo ? "api/admin/uploads/product" : "api/admin/uploads/image", {
       method: "POST",
       blob: file,
       field: "file",
-      filename: file.name || "photo.jpg",
+      filename: file.name || (isVideo ? "video.mp4" : "photo.jpg"),
       queue: true,
-      label: "Photo",
+      label: isVideo ? "Video" : "Photo",
     });
     if (res && res.url) {
       window.__editImages[idx] = res.url;
-      JA.toast("Photo uploaded.");
+      JA.toast(isVideo ? "Video uploaded." : "Photo uploaded.");
     } else if (res && res.queued) {
       // it will finish by itself; keep the placeholder so nothing looks lost
       window.__jaPendingPhoto = (window.__jaPendingPhoto || 0) + 1;
     } else {
-      window.__editImages[idx] = { pending: true, preview, failed: true };
-      JA.toast("That photo did not upload. It will retry by itself.");
+      window.__editImages[idx] = { pending: true, preview, video: isVideo, failed: true };
+      JA.toast((res && res.error) || "That file did not upload. It will retry by itself.");
     }
     if (document.getElementById("media-box")) {
       document.getElementById("media-box").innerHTML = mediaStripHTML(window.__editImages);
@@ -680,15 +721,20 @@ function productsTable() {
     </article>`;
   }).join("");
   const catOpts = cats.map((c) => `<option value="${JA.escape(c.id)}">${JA.escape(c.name)}</option>`).join("");
+  const backBtn = dashCat
+    ? `<button type="button" class="btn btn-line" id="back-all-products">← All products</button>`
+    : "";
+  const filteredNote = dashCat ? ` · <strong>${JA.escape(catName(dashCat))}</strong>` : "";
   return `<div class="adx-list-head">
       <button type="button" class="btn adx-add-btn" id="add-product">+ New Product</button>
+      ${backBtn}
       <div class="adx-filters">
         <input id="prod-search" type="search" placeholder="Search products…" autocomplete="off" />
         <select id="prod-cat" aria-label="Filter by category">
           <option value="">All categories</option>${catOpts}
         </select>
       </div>
-      <p class="adx-count"><span id="prod-count">${all.length}</span> of ${all.length} products · <button type="button" class="wix-cats-link" data-tab="categories">Manage categories</button></p>
+      <p class="adx-count"><span id="prod-count">${all.length}</span> of ${all.length} products${filteredNote} · <button type="button" class="wix-cats-link" data-tab="categories">Manage categories</button></p>
     </div>
     <div class="adx-grid" id="prod-grid">${cards}</div>
     <p class="empty" id="prod-none" hidden>No products match that search.</p>`;
@@ -713,6 +759,7 @@ function applyProductFilter() {
 
 let dashRange = 30;
 let dashTimer = null;
+let dashCat = "";   // when set, the products tab is filtered to one category
 
 function esc(v) { return JA.escape(String(v == null ? "" : v)); }
 
@@ -721,7 +768,10 @@ function analyticsPanel() {
     <div class="an-top">
       <h3 class="admin-h" style="margin:0">Store insights</h3>
       <div class="an-range">
-        ${[7, 30, 90].map((d) => `<button type="button" class="an-rng${d === dashRange ? " is-on" : ""}" data-range="${d}">${d} days</button>`).join("")}
+        ${[["1", "Today"], ["7", "7 days"], ["30", "30 days"], ["90", "90 days"]].map(([v, label]) => `<button type="button" class="an-rng${String(dashRange) === v ? " is-on" : ""}" data-range="${v}">${label}</button>`).join("")}
+        <label class="an-rng an-rng-custom" title="Pick the number of days">Custom
+          <input type="number" id="an-custom" min="1" max="400" value="${dashRange}" hidden />
+        </label>
         <button type="button" class="an-rng" id="an-refresh">Refresh</button>
       </div>
     </div>
@@ -762,15 +812,20 @@ function dayLabel(day) {
 
 function trafficChart(series) {
   const max = Math.max(1, ...series.map((d) => Math.max(d.views, d.visitors)));
-  return `<div class="an-scroll"><div class="an-bars">${series.map((d) => `
+  // Thin the labels so a wide range never collides.
+  const step = Math.max(1, Math.ceil((series || []).length / 10));
+  return `<div class="an-scroll"><div class="an-bars">${(series || []).map((d, i) => {
+    const showLab = i % step === 0;
+    return `
       <div class="an-col" title="${esc(d.day)} · ${d.views} view(s) · ${d.visitors} visitor(s)">
         <div class="an-bar-wrap">
           <div class="an-bar an-bar-views" style="height:${Math.round((d.views / max) * 120)}px" title="${d.views} page views"></div>
           <div class="an-bar an-bar-visitors" style="height:${Math.round((d.visitors / max) * 120)}px" title="${d.visitors} visitors"></div>
         </div>
-        <span>${esc(dayLabel(d.day))}</span>
-        <em>${d.views}</em>
-      </div>`).join("")}</div></div>
+        ${showLab ? `<span>${esc(dayLabel(d.day))}</span>` : ""}
+        ${showLab ? `<em>${d.views}</em>` : ""}
+      </div>`;
+  }).join("")}</div></div>
     <p class="admin-note"><span class="an-key an-key-views"></span> Page views &nbsp; <span class="an-key an-key-visitors"></span> Unique visitors</p>`;
 }
 
@@ -783,14 +838,18 @@ function salesChart(series) {
   const max = Math.max(1, ...series.map((d) => d.revenue));
   const total = series.reduce((n, d) => n + (d.revenue || 0), 0);
   const orders = series.reduce((n, d) => n + (d.orders || 0), 0);
-  return `<div class="an-scroll"><div class="an-bars">${series.map((d) => `
+  const step = Math.max(1, Math.ceil(series.length / 10));
+  return `<div class="an-scroll"><div class="an-bars">${series.map((d, i) => {
+    const showLab = i % step === 0;
+    return `
       <div class="an-col" title="${esc(d.day)} · ${d.orders} order(s) · ${esc(JA.money(d.revenue, "NGN"))}">
         <div class="an-bar-wrap">
           <div class="an-bar an-bar-sales" style="height:${Math.round((d.revenue / max) * 120)}px"></div>
         </div>
-        <span>${esc(dayLabel(d.day))}</span>
-        <em>${d.orders || ""}</em>
-      </div>`).join("")}</div></div>
+        ${showLab ? `<span>${esc(dayLabel(d.day))}</span>` : ""}
+        ${showLab ? `<em>${d.orders || ""}</em>` : ""}
+      </div>`;
+  }).join("")}</div></div>
     <p class="admin-note">${orders} order(s) · ${esc(JA.money(total, "NGN"))} in this period. The number under each bar is that day's orders.</p>`;
 }
 
@@ -934,6 +993,15 @@ async function fillAnalytics() {
   document.querySelectorAll("[data-range]").forEach((b) => {
     b.onclick = () => { dashRange = Number(b.dataset.range); paintDesk("analytics"); };
   });
+  const custom = $("#an-custom");
+  const customLabel = document.querySelector(".an-rng-custom");
+  if (customLabel) customLabel.addEventListener("click", () => {
+    if (custom) { custom.hidden = false; custom.focus(); custom.select(); }
+  });
+  if (custom) custom.addEventListener("change", () => {
+    const v = Math.max(1, Math.min(400, Number(custom.value) || 30));
+    dashRange = v; custom.value = v; paintDesk("analytics");
+  });
   const ref = $("#an-refresh");
   if (ref) ref.onclick = () => { paintDesk("analytics"); JA.toast("Refreshed."); };
 }
@@ -963,31 +1031,72 @@ function orderStatusLabel(s) {
 }
 
 document.addEventListener("click", (e) => {
-  const btn = e.target.closest && e.target.closest("[data-pdf-open]");
-  if (!btn) return;
-  const slot = btn.parentElement && btn.parentElement.querySelector(".proof-pdf-slot");
-  if (!slot) return;
-  if (slot.querySelector("iframe")) {          // second click closes it again
-    slot.innerHTML = "";
-    btn.textContent = "Show the PDF here";
-    return;
+  const btn = e.target.closest && e.target.closest("[data-receipt-open]");
+  if (btn) {
+    openReceiptModal(btn.getAttribute("data-receipt-open"),
+                     btn.getAttribute("data-receipt-label") || "Payment receipt",
+                     btn.getAttribute("data-receipt-name") || "receipt");
   }
-  slot.innerHTML = `<iframe class="proof-frame" src="${btn.getAttribute("data-pdf-open")}"
-    title="Payment receipt"></iframe>`;
-  btn.textContent = "Hide the PDF";
 });
 
 function fileTypeOf(url) {
   const u = String(url || "").split("?")[0].toLowerCase();
-  if (u.endsWith(".pdf")) return "pdf";
-  if (u.endsWith(".png") || u.endsWith(".jpg") || u.endsWith(".jpeg")
-      || u.endsWith(".webp") || u.endsWith(".gif")) return "image";
+  if (/\.pdf$/.test(u)) return "pdf";
+  if (/\.(png|jpe?g|webp|gif|avif|heic)$/.test(u)) return "image";
   return "other";
 }
 
-/* Show the receipt itself inside the admin panel - not a link to go and
-   find it. PDFs open in an embedded viewer, images render inline, and
-   there is always a download button for the original file. */
+/* Receipts open inside an in-app modal, not by forcing a browser download.
+ * Images render directly; PDF/DOC/DOCX are fetched as a Blob and shown in an
+ * embedded viewer (the stored file is still served as an attachment). */
+function closeReceiptModal() {
+  const mod = document.getElementById("receipt-modal");
+  if (mod) mod.classList.remove("is-open");
+}
+
+function openReceiptModal(url, label, name) {
+  const kind = fileTypeOf(url);
+  const title = (label || "Receipt");
+  const fname = esc(name || String(url).split("/").pop() || "receipt");
+  let mod = document.getElementById("receipt-modal");
+  if (!mod) {
+    mod = document.createElement("div");
+    mod.id = "receipt-modal";
+    mod.className = "receipt-modal";
+    mod.innerHTML = `<div class="receipt-modal-card">
+        <button type="button" class="receipt-modal-close" aria-label="Close">×</button>
+        <div class="receipt-modal-head"></div>
+        <div class="receipt-modal-body"></div>
+        <div class="receipt-modal-actions"></div>
+      </div>`;
+    document.body.appendChild(mod);
+    mod.addEventListener("click", (e) => {
+      if (e.target === mod || e.target.closest(".receipt-modal-close")) closeReceiptModal();
+    });
+  }
+  mod.classList.add("is-open");
+  const head = mod.querySelector(".receipt-modal-head");
+  const body = mod.querySelector(".receipt-modal-body");
+  const actions = mod.querySelector(".receipt-modal-actions");
+  head.textContent = title;
+  actions.innerHTML = `<a class="btn btn-line" href="${esc(url)}" target="_blank" rel="noopener">Open full size</a>
+    <a class="btn btn-line" href="${esc(url)}" download="${fname}">Download ${kind === "pdf" ? "PDF" : "file"}</a>`;
+  if (kind === "image") {
+    body.innerHTML = `<img class="proof-preview" src="${esc(url)}" alt="${esc(title)}" />`;
+    return;
+  }
+  body.innerHTML = `<p class="empty">Opening the receipt…</p>`;
+  fetch(url, { credentials: "same-origin" })
+    .then((r) => { if (!r.ok) throw new Error("bad"); return r.blob(); })
+    .then((blob) => {
+      const objectUrl = URL.createObjectURL(blob);
+      body.innerHTML = `<iframe class="proof-frame receipt-modal-frame" src="${objectUrl}" title="${esc(title)}"></iframe>`;
+    })
+    .catch(() => {
+      body.innerHTML = `<p class="empty">This file could not be opened here. Use the download link below.</p>`;
+    });
+}
+
 function receiptViewer(url, label, name) {
   if (!url) return `<p class="empty">No receipt attached.</p>`;
   const kind = fileTypeOf(url);
@@ -996,13 +1105,12 @@ function receiptViewer(url, label, name) {
   const fname = esc(name || String(url).split("/").pop() || "receipt");
   // A page with dozens of orders cannot hold a PDF viewer for every one of
   // them - it makes the tab fall over, on a phone worst of all. Images are
-  // cheap and render at once; PDFs open in place when you ask for them.
-  const body = kind === "pdf"
-    ? `<button type="button" class="btn btn-line" data-pdf-open="${safe}">Show the PDF here</button>
-       <div class="proof-pdf-slot"></div>`
-    : kind === "image"
-      ? `<img class="proof-preview" src="${safe}" alt="${title}" loading="lazy" />`
-      : `<p class="admin-note">This file cannot be shown here. Download it to open it.</p>`;
+  // cheap and render at once; other files open in the modal when asked.
+  const body = kind === "image"
+    ? `<img class="proof-preview" src="${safe}" alt="${title}" loading="lazy" />`
+    : kind === "pdf"
+      ? `<button type="button" class="btn btn-line" data-receipt-open="${safe}" data-receipt-label="${title}" data-receipt-name="${fname}">View the PDF here</button>`
+      : `<button type="button" class="btn btn-line" data-receipt-open="${safe}" data-receipt-label="${title}" data-receipt-name="${fname}">View this file</button>`;
   return `
     <p class="proof-label">${title} — the original file, opened right here</p>
     <div class="proof-frame-wrap">${body}</div>
@@ -1014,14 +1122,18 @@ function receiptViewer(url, label, name) {
 
 function orderActionsHTML(o) {
   const s = o.status || "pending";
+  const del = `<button type="button" class="btn btn-line btn-danger" data-del-order="${esc(o.id)}">Delete</button>`;
   if (s === "pending") {
     return `<button class="btn" data-confirm="${esc(o.id)}">Confirm payment</button>
-      <button class="btn btn-line" data-decline="${esc(o.id)}">Decline</button>`;
+      <button class="btn btn-line" data-decline="${esc(o.id)}">Decline</button>
+      ${del}`;
   }
   if (s === "confirmed") {
-    return `<button class="btn btn-line" data-reopen="${esc(o.id)}">Back to pending</button>`;
+    return `<button class="btn btn-line" data-reopen="${esc(o.id)}">Back to pending</button>
+      ${del}`;
   }
-  return `<button class="btn btn-line" data-reopen="${esc(o.id)}">Reopen (back to pending)</button>`;
+  return `<button class="btn btn-line" data-reopen="${esc(o.id)}">Reopen (back to pending)</button>
+    ${del}`;
 }
 
 function orderCardHTML(o) {
@@ -1106,7 +1218,7 @@ async function fillProofs() {
       <td>${p.file_url
         ? (fileTypeOf(p.file_url) === "image"
             ? `<a href="${esc(p.file_url)}" target="_blank" rel="noopener"><img class="proof-thumb" src="${esc(p.file_url)}" alt="Receipt" loading="lazy" /></a>`
-            : `<a class="btn btn-line" href="${esc(p.file_url)}" target="_blank" rel="noopener">View ${esc((p.file_name || "").split(".").pop().toUpperCase())}</a>`)
+            : `<button type="button" class="btn btn-line" data-receipt-open="${esc(p.file_url)}" data-receipt-label="Receipt for ${esc(p.order_id || "")}" data-receipt-name="${esc(p.file_name || "receipt")}">View ${esc((p.file_name || "").split(".").pop().toUpperCase())}</button>`)
           + `<br /><a class="btn btn-line" href="${esc(p.file_url)}" download="${esc(p.file_name || "receipt")}">Download</a>
              <small>${Math.max(1, Math.round((p.file_size || 0) / 1024))} KB</small>`
         : "—"}</td>
@@ -1191,6 +1303,23 @@ function bindOrderButtons() {
       fillOrders();
     };
   });
+  box.querySelectorAll("[data-del-order]").forEach((b) => {
+    b.onclick = async () => {
+      const id = b.dataset.delOrder;
+      if (!confirm("Delete order " + id + " permanently? Its payment receipt is removed too. This cannot be undone.")) return;
+      b.disabled = true;
+      const res = await JA.deleteOrder(id);
+      if (!res || res.ok === false) {
+        JA.toast((res && res.error) || "Could not delete the order.");
+        b.disabled = false;
+        return;
+      }
+      JA.toast("Deleted " + id + ".");
+      serverOrders = serverOrders.filter((o) => o.id !== id);
+      renderOrderPage();
+      fillProofs();
+    };
+  });
 }
 
 function accountPanel() {
@@ -1206,17 +1335,20 @@ function accountPanel() {
       </form>
       <p class="admin-note">At least 10 characters, with an upper case letter, a lower case letter and a number. It applies to every admin account, so the one password is what any of you type on the sign-in screen. If you ever forget it, use <em>Forgot password? Reset it via WhatsApp</em> on the sign-in screen — a 6-digit code is sent to the owner's WhatsApp. You can also change it right here at any time; it saves straight to the database with no email needed.</p>
     </div>
-    <div class="admin-card" style="margin-top:22px">
-      <h3 class="admin-h">Connection &amp; sync</h3>
-      <p class="admin-note" id="sync-note">Checking for unsaved changes…</p>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn btn-line" id="retry-sync">Retry now</button>
-        <button class="btn btn-line" id="reload-cat">Reload catalogue</button>
-        <button class="btn" id="sync-github">Sync to GitHub</button>
+    <details class="adx-advanced" style="margin-top:22px">
+      <summary class="admin-h">Advanced settings</summary>
+      <div class="admin-card">
+        <h3 class="admin-h">Connection &amp; sync</h3>
+        <p class="admin-note" id="sync-note">Checking for unsaved changes…</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-line" id="retry-sync">Retry now</button>
+          <button class="btn btn-line" id="reload-cat">Reload catalogue</button>
+          <button class="btn" id="sync-github">Sync to GitHub</button>
+        </div>
+        <div id="sync-status" class="admin-note" style="margin-top:12px"></div>
+        <p class="admin-note" style="margin-top:12px">Saved changes go straight to the store. If your Wi-Fi drops, they wait in this device and push themselves up when the connection returns. The <strong>Sync to GitHub</strong> button also saves the latest product data into the repository so it never disappears on a redeploy.</p>
       </div>
-      <div id="sync-status" class="admin-note" style="margin-top:12px"></div>
-      <p class="admin-note" style="margin-top:12px">Saved changes go straight to the store. If your Wi-Fi drops, they wait in this device and push themselves up when the connection returns. The <strong>Sync to GitHub</strong> button also saves the latest product data into the repository so it never disappears on a redeploy.</p>
-    </div>`;
+    </details>`;
 }
 
 function bindAccount() {
@@ -1686,6 +1818,15 @@ function paintDesk(tab = "analytics") {
 
   $("#prod-search")?.addEventListener("input", applyProductFilter);
   $("#prod-cat")?.addEventListener("change", applyProductFilter);
+  if (dashCat) {
+    const sel = document.getElementById("prod-cat");
+    if (sel) sel.value = dashCat;
+    applyProductFilter();
+  }
+  $("#back-all-products")?.addEventListener("click", () => {
+    dashCat = "";
+    paintDesk("products");
+  });
 
   $("#set-form")?.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -1711,8 +1852,8 @@ function categoryManager() {
     const n = JA.products().filter((p) => p.category === c.id).length;
     return `<article class="wix-cat-card" data-cat-i="${i}" data-cat-id="${JA.escape(c.id)}">
       <div class="wix-cat-pic">
-        <img src="${JA.asset(c.image)}" alt="" />
-        <label class="wix-cat-up">Change photo<input type="file" accept="image/*" capture="environment" data-cat-img="${i}" hidden /></label>
+        ${_catAssetHTML(c.image)}
+        <label class="wix-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf" data-cat-img="${i}" hidden /></label>
       </div>
       <div class="wix-cat-fields">
         <input name="cat-id-${i}" type="hidden" value="${JA.escape(c.id)}" />
@@ -1744,6 +1885,15 @@ function categoryManager() {
   </div>`;
 }
 
+function _catAssetHTML(image) {
+  const u = String(image || "");
+  if (/\.(pdf|doc|docx)(\?.*)?$/i.test(u.split("?")[0])) {
+    const label = /\.docx?$/i.test(u) ? "DOC" : "PDF";
+    return `<a class="media-doc-chip cat-doc-chip" href="${JA.asset(u)}" target="_blank" rel="noopener">${label}<span>View / Download</span></a>`;
+  }
+  return `<img src="${JA.asset(u)}" alt="" />`;
+}
+
 function collectCats() {
   const out = [];
   document.querySelectorAll("[data-cat-i]").forEach((row) => {
@@ -1751,12 +1901,14 @@ function collectCats() {
     const id = (row.querySelector(`[name="cat-id-${i}"]`)?.value || "").trim();
     const name = (row.querySelector(`[name="cat-name-${i}"]`)?.value || "").trim();
     if (!id || !name) return;
-    const img = row.querySelector(".wix-cat-pic img")?.getAttribute("src") || "";
+    const asset = row.querySelector(".wix-cat-pic img")?.getAttribute("src")
+      || row.querySelector(".wix-cat-pic a.media-doc-chip")?.getAttribute("href")
+      || "";
     out.push({
       id,
       name,
       nameFr: (row.querySelector(`[name="cat-fr-${i}"]`)?.value || "").trim(),
-      image: img,
+      image: asset,
       hidden: !row.querySelector(`[name="cat-on-${i}"]`)?.checked,
     });
   });
@@ -1773,17 +1925,48 @@ function bindCategories() {
   list.addEventListener("change", async (e) => {
     const input = e.target.closest("[data-cat-img]");
     if (!input || !input.files || !input.files[0]) return;
+    const f = input.files[0];
+    const isDoc = /\.(pdf|doc|docx)$/i.test(f.name || "") || /pdf|word|msword|document/.test(f.type || "");
+    if (isDoc && f.size > 8 * 1024 * 1024) {
+      JA.toast("That asset is " + (f.size / 1048576).toFixed(1) + " MB. The limit is 8 MB.");
+      input.value = "";
+      return;
+    }
+    const card = input.closest("[data-cat-i]");
+    const pic = card?.querySelector(".wix-cat-pic");
     try {
-      const data = await fileToData(input.files[0]);
-      const card = input.closest("[data-cat-i]");
-      const img = card?.querySelector(".wix-cat-pic img");
-      if (img) img.src = data;
+      if (window.JA_NET) {
+        const res = await window.JA_NET.api("api/admin/uploads/category", {
+          method: "POST", blob: f, field: "file",
+          filename: f.name || "category.jpg", queue: true, label: "Category asset",
+        });
+        if (res && res.url) {
+          input.dataset.catUrl = res.url;
+          if (pic) pic.innerHTML = _catAssetHTML(res.url);
+          persist("Asset saved.");
+          return;
+        }
+      }
+      // static hosting fallback: keep the old data-URL path for images
+      const data = await fileToData(f);
+      if (pic) pic.innerHTML = `<img src="${data}" alt="" />`;
       persist("Photo saved.");
     } catch (err) {
-      JA.toast("Could not read that photo. Try another from your gallery.");
+      JA.toast((err && err.message) || "Could not read that asset. Try another from your gallery.");
+    } finally {
+      input.value = "";
     }
   });
   list.addEventListener("click", (e) => {
+    const card = e.target.closest("[data-cat-id]");
+    if (card && !e.target.closest("input,label,button,a,select")) {
+      // Tap a category card to open that category's products, fully editable.
+      dashCat = card.getAttribute("data-cat-id");
+      editingId = null;
+      paintDesk("products");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
     const del = e.target.closest("[data-cat-del]");
     if (!del) return;
     const id = del.getAttribute("data-cat-del");
@@ -1823,13 +2006,13 @@ function settingsForm() {
   return `
   <div class="admin-card adx-hero-card">
     <h3 class="admin-h">Homepage hero video</h3>
-    <p class="admin-note">Upload an MP4 or WebM (up to 40 MB) and it plays silently on a loop at the top of the homepage — like a Wix video hero. No video? The homepage keeps its current static hero. You can change or remove it any time, no code needed.</p>
-    <div id="hero-video-now"><p class="empty">Checking the current video…</p></div>
+    <p class="admin-note">Upload a video (MP4/WebM/MOV, up to 40 MB) and it plays silently on a loop at the top of the homepage — like a Wix video hero. You can also attach a <strong>PDF or document</strong> (up to 8 MB): the homepage keeps its static hero and shows a labelled "View / Download" link instead. A photo sets the hero poster. You can change or remove it any time, no code needed.</p>
+    <div id="hero-video-now"><p class="empty">Checking the current hero…</p></div>
     <div class="adx-hero-actions">
-      <label class="btn adx-upload-btn">Upload video
-        <input type="file" id="hero-video-file" accept="video/mp4,video/webm,.mp4,.webm" hidden />
+      <label class="btn adx-upload-btn">Upload video / document
+        <input type="file" id="hero-video-file" accept="image/*,video/*,.pdf,.doc,.docx,application/pdf" hidden />
       </label>
-      <button type="button" class="btn btn-line" id="hero-video-remove" hidden>Remove video</button>
+      <button type="button" class="btn btn-line" id="hero-video-remove" hidden>Remove hero asset</button>
     </div>
     <p class="admin-note" id="hero-video-msg"></p>
   </div>
@@ -1852,16 +2035,28 @@ async function saveSiteConfig(patch) {
     : Promise.resolve(null);
 }
 
-function paintHeroVideoNow(url) {
+function paintHeroVideoNow(site) {
   const box = $("#hero-video-now");
   const rm = $("#hero-video-remove");
   if (!box) return;
-  if (url) {
-    box.innerHTML = `<video class="adx-hero-preview" src="${JA.escape(url)}" muted loop playsinline controls preload="metadata"></video>
+  site = site || {};
+  const video = site.heroVideo || "";
+  const doc = site.heroDoc || "";
+  const poster = site.heroPoster || "";
+  if (video) {
+    box.innerHTML = `<video class="adx-hero-preview" src="${JA.escape(video)}" ${poster ? `poster="${JA.escape(JA.asset(poster))}"` : ""} muted loop playsinline controls preload="metadata"></video>
       <p class="admin-note">This video is live on the homepage right now.</p>`;
     if (rm) rm.hidden = false;
+  } else if (doc) {
+    box.innerHTML = `<a class="media-doc-chip adx-hero-doc" href="${JA.escape(JA.asset(doc))}" target="_blank" rel="noopener">${/\.docx?$/i.test(doc) ? "DOC" : "PDF"}<span>View / Download the hero document</span></a>
+      <p class="admin-note">This document is linked from the homepage hero (the static hero stays).</p>`;
+    if (rm) rm.hidden = false;
+  } else if (poster) {
+    box.innerHTML = `<img class="adx-hero-preview" src="${JA.escape(JA.asset(poster))}" alt="Hero poster" />
+      <p class="admin-note">This photo is the homepage hero poster.</p>`;
+    if (rm) rm.hidden = false;
   } else {
-    box.innerHTML = `<p class="empty">No video uploaded — the homepage shows its static hero.</p>`;
+    box.innerHTML = `<p class="empty">No hero asset uploaded — the homepage shows its default static hero.</p>`;
     if (rm) rm.hidden = true;
   }
 }
@@ -1872,40 +2067,54 @@ function bindHeroVideo() {
   if (!file) return;
   fetch("api/site", { cache: "no-store" })
     .then((r) => r.json())
-    .then((d) => paintHeroVideoNow((d && d.site && d.site.heroVideo) || ""))
-    .catch(() => paintHeroVideoNow(""));
+    .then((d) => paintHeroVideoNow((d && d.site) || {}))
+    .catch(() => paintHeroVideoNow({}));
   file.addEventListener("change", async () => {
     const f = file.files && file.files[0];
     if (!f) return;
-    if (!window.JA_NET) { JA.toast("Video upload needs the live server."); return; }
-    if (msg) msg.textContent = "Uploading " + (f.name || "video") + " (" + Math.round(f.size / 1048576) + " MB)… keep this tab open.";
-    const res = await window.JA_NET.api("api/admin/uploads/video", {
+    if (!window.JA_NET) { JA.toast("Hero upload needs the live server."); return; }
+    const isVideo = /^video\//.test(f.type || "") || _VIDEO_EXT.test(String(f.name || ""));
+    const isDoc = /\.(pdf|doc|docx)$/i.test(f.name || "");
+    const cap = isVideo ? 40 * 1024 * 1024 : 8 * 1024 * 1024;
+    if (f.size > cap) {
+      if (msg) msg.textContent = "That file is " + (f.size / 1048576).toFixed(1) + " MB. The limit is " + (cap / (1024 * 1024)) + " MB.";
+      JA.toast("That file is too big — " + (cap / (1024 * 1024)) + " MB max.");
+      file.value = "";
+      return;
+    }
+    if (msg) msg.textContent = "Uploading " + (f.name || "asset") + " (" + (f.size / 1048576).toFixed(1) + " MB)… keep this tab open.";
+    const res = await window.JA_NET.api("api/admin/uploads/hero", {
       method: "POST", blob: f, field: "file", filename: f.name || "hero.mp4", timeout: 180000,
     });
     file.value = "";
     if (!res || !res.url) {
       if (msg) msg.textContent = (res && res.error) || "The upload failed. Check your connection and try again.";
-      JA.toast((res && res.error) || "Could not upload the video.");
+      JA.toast((res && res.error) || "Could not upload the hero asset.");
       return;
     }
-    const saved = await saveSiteConfig({ heroVideo: res.url });
+    const patch = res.kind === "video" ? { heroVideo: res.url, heroDoc: "", heroPoster: "" }
+      : res.kind === "document" ? { heroVideo: "", heroDoc: res.url, heroPoster: "" }
+      : { heroVideo: "", heroPoster: res.url, heroDoc: "" };
+    const saved = await saveSiteConfig(patch);
     if (saved && saved.ok !== false) {
-      if (msg) msg.textContent = "Done — the homepage hero now plays your video.";
-      JA.toast("Hero video is live on the homepage.");
-      paintHeroVideoNow(res.url);
+      if (msg) msg.textContent = res.kind === "video" ? "Done — the homepage hero now plays your video."
+        : res.kind === "document" ? "Done — the homepage hero links to your document."
+        : "Done — the homepage hero now uses your photo.";
+      JA.toast("Hero asset is on the homepage.");
+      paintHeroVideoNow(patch);
     } else {
       if (msg) msg.textContent = (saved && saved.error) || "Uploaded, but saving the setting failed. Try again.";
     }
   });
   $("#hero-video-remove")?.addEventListener("click", async () => {
-    if (!confirm("Remove the hero video? The homepage goes back to its static hero.")) return;
-    const saved = await saveSiteConfig({ heroVideo: "" });
+    if (!confirm("Remove the hero asset? The homepage goes back to its default hero.")) return;
+    const saved = await saveSiteConfig({ heroVideo: "", heroDoc: "", heroPoster: "" });
     if (saved && saved.ok !== false) {
-      JA.toast("Video removed — static hero is back.");
-      paintHeroVideoNow("");
+      JA.toast("Hero asset removed — default hero is back.");
+      paintHeroVideoNow({});
       if (msg) msg.textContent = "";
     } else {
-      JA.toast((saved && saved.error) || "Could not remove the video.");
+      JA.toast((saved && saved.error) || "Could not remove the hero asset.");
     }
   });
 }

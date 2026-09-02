@@ -485,7 +485,7 @@ def payment_proof():
 
     f = request.files.get("file") or request.files.get("receipt")
     if not f:
-        return jsonify(ok=False, error="Choose your receipt file (JPG, PNG or PDF)."), 400
+        return jsonify(ok=False, error="Choose your receipt file (JPG, PNG, PDF, DOC or DOCX)."), 400
     data = f.read(storage.MAX_RECEIPT_BYTES + 1)
     ok, msg, ext = storage.validate_upload(data, f.filename or "", allow_pdf=True,
                                            max_bytes=storage.MAX_RECEIPT_BYTES)
@@ -928,6 +928,22 @@ def admin_order_update(oid):
     audit(authmod.current_admin(), f"order.{status}", oid, _ip())
     return jsonify(ok=True, id=oid, status=status)
 
+
+@api.delete("/admin/orders/<oid>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_order_delete(oid):
+    """Delete an order (with its uploaded payment receipt). Used only from the
+    admin portal's explicit Delete button; it never runs on a status change."""
+    oid = sec.clean(oid, 24).upper()
+    row = one("SELECT id FROM orders WHERE id=?", (oid,))
+    if not row:
+        return jsonify(ok=False, error="Order not found."), 404
+    execute("DELETE FROM payment_proofs WHERE order_id=?", (oid,))
+    execute("DELETE FROM orders WHERE id=?", (oid,))
+    audit(authmod.current_admin(), "order.delete", oid, _ip())
+    return jsonify(ok=True, id=oid)
+
 # -------------------------------------------------------- admin: products
 @api.post("/admin/products")
 @authmod.require_admin
@@ -1041,11 +1057,87 @@ def admin_upload_video():
     audit(authmod.current_admin(), "site.hero_video_upload", url, _ip())
     return jsonify(ok=True, url=url)
 
+
+@api.post("/admin/uploads/category")
+@authmod.require_admin
+@sec.require_csrf
+def admin_upload_category():
+    """Category cover / asset upload (image, video or document). Stored as a
+    real file under /uploads/categories/, never as a data URL. Documents are
+    served as attachments, never rendered inline in the site's origin."""
+    limited = sec.guard("admin-upload", limit=40, window=600)
+    if limited: return limited
+    f = request.files.get("file") or request.files.get("image")
+    if not f:
+        return jsonify(ok=False, error="No file received."), 400
+    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    ok, msg, url = storage.save_asset(data, "categories", f.filename or "")
+    if not ok:
+        return jsonify(ok=False, error=msg), 400
+    ext = storage._ext_from_bytes(data[:32])
+    audit(authmod.current_admin(), "site.category_asset_upload", url, _ip())
+    return jsonify(ok=True, url=url, kind=storage.kind_for(ext))
+
+
+@api.post("/admin/uploads/product")
+@authmod.require_admin
+@sec.require_csrf
+def admin_upload_product():
+    """Product media upload: an image OR a video. The format is decided by the
+    file's own bytes (never the name), so the same slot accepts a photo from
+    the gallery or a video from the gallery/files. Stored under
+    /uploads/products/ with the URL kept in the product's media list."""
+    limited = sec.guard("admin-upload", limit=60, window=600)
+    if limited: return limited
+    f = request.files.get("file") or request.files.get("image")
+    if not f:
+        return jsonify(ok=False, error="No file received."), 400
+    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    ext = storage._ext_from_bytes(data[:32])
+    kind = storage.kind_for(ext)
+    if kind == "video":
+        ok, msg, _vext = storage.validate_video(data, f.filename or "")
+        if not ok:
+            return jsonify(ok=False, error=msg), 400
+        ok, msg, url = storage.save_video(data, "products", f.filename or "")
+    elif kind == "image":
+        ok, msg, _ext = storage.validate_image(data, f.filename or "")
+        if not ok:
+            return jsonify(ok=False, error=msg), 400
+        ok, msg, url = storage.save_image(data, "products", f.filename or "")
+    else:
+        return jsonify(ok=False, error="Only JPG, PNG, WebP, GIF, AVIF, MP4, WebM or MOV files can be uploaded here."), 400
+    if not ok:
+        return jsonify(ok=False, error=msg), 500
+    audit(authmod.current_admin(), "site.product_media_upload", url, _ip())
+    return jsonify(ok=True, url=url, kind=kind)
+
+
+@api.post("/admin/uploads/hero")
+@authmod.require_admin
+@sec.require_csrf
+def admin_upload_hero():
+    """Homepage hero upload: a video OR a document (or an image poster). Like
+    every upload it is stored as a real file under /uploads/. Documents are
+    served as attachments and never rendered inline in the site's origin."""
+    limited = sec.guard("admin-upload", limit=20, window=600)
+    if limited: return limited
+    f = request.files.get("file") or request.files.get("video")
+    if not f:
+        return jsonify(ok=False, error="No file received."), 400
+    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    ok, msg, url = storage.save_asset(data, "videos", f.filename or "")
+    if not ok:
+        return jsonify(ok=False, error=msg), 400
+    ext = storage._ext_from_bytes(data[:32])
+    audit(authmod.current_admin(), "site.hero_asset_upload", url, _ip())
+    return jsonify(ok=True, url=url, kind=storage.kind_for(ext))
+
 # ----------------------------------------------------------- site settings
 # Small owner-editable settings that every visitor needs (currently the
 # homepage hero video). Kept in a JSON file next to the catalogue so it
 # survives a redeploy on a persistent disk.
-SITE_KEYS = ("heroVideo", "heroPoster")
+SITE_KEYS = ("heroVideo", "heroPoster", "heroDoc")
 
 def _site_path():
     return os.environ.get("SITE_CONFIG_PATH") or os.path.join(

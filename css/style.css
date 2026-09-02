@@ -2604,7 +2604,9 @@ body.mini-open { overflow: hidden; }
   scroll-snap-align: start;
 }
 .cat-slide .home-cat img { max-height: 90px; border-radius: 14px; }
-body { padding-bottom: 72px; }
+body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+/* Category card titles: break between words, never letter-by-letter. */
+.cat-tile h3, .home-cat span, .menu-cats a, .wix-cat-card { word-break: normal; overflow-wrap: break-word; }
 .dock {
   position: fixed;
   left: 0; right: 0; bottom: 0;
@@ -4141,7 +4143,7 @@ body[data-page="home"] .dock,
   bottom: 0 !important;
   z-index: 90 !important;
 }
-body[data-page="home"] { padding-bottom: 78px !important; }
+body[data-page="home"] { padding-bottom: calc(78px + env(safe-area-inset-bottom)) !important; }
 body[data-page="admin"] .dock { display: none !important; }
 body[data-page="home"] .hero-slim,
 body[data-page="home"] .lux-reel,
@@ -5012,13 +5014,17 @@ body[data-page="admin"] .conv-bar { display: none !important; }
  * Footer redesign — smooth layered waves, full-width action buttons
  * (lavender Contact Us, green WhatsApp channel, black TikTok pill).
  * ---------------------------------------------------------------- */
-.footer.wix-footer { padding-bottom: 0 !important; overflow: hidden !important; }
+.footer.wix-footer { padding-bottom: 0 !important; overflow: visible !important; }
+#site-footer { position: relative; z-index: 3 !important; }
+body[data-page="home"] #site-footer { position: relative; z-index: 3 !important; }
 .foot-wavez {
   display: block;
   width: 100%;
   line-height: 0;
   margin-top: 30px;
   pointer-events: none;
+  position: relative;
+  z-index: 4;
 }
 .foot-wavez svg {
   display: block;
@@ -5449,3 +5455,81 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 #mk-set-form label { display: block; font-size: 13px; }
 #mk-set-form input, #mk-set-form textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line, #ddd); margin-top: 4px; }
 .rev-gate-note { font-size: 13px; color: var(--taupe); margin: 2px 0 8px; }
+
+/* ------------------------------------------------------------------
+ * Media documents on products/categories/hero — never a broken box.
+ * A PDF/DOC cannot render in an <img> or <video>, so we show a labelled
+ * chip with a View / Download link instead.
+ * ---------------------------------------------------------------- */
+.media-doc-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 72px;
+  min-height: 54px;
+  padding: 8px 12px;
+  border: 1px dashed var(--taupe);
+  border-radius: 10px;
+  background: #fbf7f2;
+  color: var(--espresso);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: center;
+  text-decoration: none;
+}
+.media-doc-chip span { font-size: 10px; font-weight: 400; color: var(--taupe); letter-spacing: 0; }
+.media-doc-chip:hover { border-color: var(--gold-deep); color: var(--gold-deep); }
+.wix-tile .media-doc-chip, .card .media-doc-chip, .pdp-thumb .media-doc-chip,
+.pdp-img .media-doc-chip { width: 100%; height: 100%; min-height: 100%; border: 0; border-radius: 8px; }
+.wix-cat-pic .cat-doc-chip { min-width: 88px; min-height: 88px; }
+
+/* Video tiles in the admin media strip + storefront gallery/cards. */
+.wix-tile video, .pdp-img video, .pdp-thumb video, .card-media video {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit; background: #f3eee8;
+}
+.wix-tile.wix-tile-video, .pdp-gallery { min-width: 0; }
+/* Home card slideshow: videos slide in exactly like photos (opacity). */
+.card-media[data-card-slides] video[data-slide] {
+  position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important;
+  object-fit: cover !important; padding: 0 !important; opacity: 0 !important; transition: opacity 0.35s ease; z-index: 0;
+}
+.card-media[data-card-slides] video[data-slide].is-show { opacity: 1 !important; }
+
+/* Homepage hero document slot (static hero is kept, doc is linked). */
+.home-hero-doc { margin-top: 14px; text-align: center; }
+.home-hero-doc .btn { margin: 0 auto; }
+
+/* ------------------------------------------------------------------
+ * Admin: receipt modal (opens in-app instead of force-downloading)
+ * ---------------------------------------------------------------- */
+.btn-danger { border-color: #c0392b !important; color: #c0392b !important; }
+.btn-danger:hover { background: #fdeeec !important; }
+.receipt-modal {
+  position: fixed; inset: 0; z-index: 4000 !important;
+  background: rgba(20,16,12,0.62);
+  display: none; align-items: center; justify-content: center; padding: 16px;
+}
+.receipt-modal.is-open { display: flex; }
+.receipt-modal-card {
+  position: relative; background: #fff; border-radius: 14px; max-width: 760px;
+  width: 100%; max-height: 88vh; display: flex; flex-direction: column;
+  padding: 14px; box-shadow: 0 24px 60px rgba(0,0,0,0.35);
+}
+.receipt-modal-close {
+  position: absolute; top: 8px; right: 10px; border: 0; background: none;
+  font-size: 24px; line-height: 1; color: var(--espresso); cursor: pointer;
+}
+.receipt-modal-head { font-size: 16px; font-weight: 600; padding-right: 28px; margin-bottom: 10px; }
+.receipt-modal-body { flex: 1; min-height: 200px; overflow: auto; background: #faf7f3; border-radius: 8px; }
+.receipt-modal-body img { display: block; max-width: 100%; margin: 8px auto; }
+.receipt-modal-frame { width: 100%; min-height: 60vh; border: 0; background: #fff; }
+.receipt-modal-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+
+/* Admin advanced settings */
+.adx-advanced > summary { cursor: pointer; list-style: none; }
+.adx-advanced > summary::-webkit-details-marker { display: none; }
+.adx-advanced > summary::after { content: " ▸"; color: var(--taupe); }
+.adx-advanced[open] > summary::after { content: " ▾"; }

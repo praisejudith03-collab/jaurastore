@@ -594,3 +594,149 @@ def replace_all(products, actor=None):
 
 def _name_or(p):
     return (p or {}).get("name", "") or ""
+
+
+# ------------------------------------------------------------- category merge
+# One-shot boot migration (marker `category_merge_v2`) that folds the old
+# `nails` and `packaging` categories into `beauty` and `gift-set`, renames
+# `gift-set` to "Gift Sets & Packaging", locks `beauty`'s display name to
+# "Beauty", and re-points any product still carrying a merged / legacy category
+# (including the old `skincare` id) onto the surviving category. It edits the
+# live category table in place and preserves every other owner rename and the
+# French translations.
+
+MERGE_MARKER = "category_merge_v2"
+
+# legacy category id -> surviving category id
+_CATEGORY_FOLD = {
+    "nails": "beauty",
+    "packaging": "gift-set",
+    "skincare": "beauty",
+}
+
+# category id -> display name forced by the merge
+_CATEGORY_RENAME = {
+    "beauty": "Beauty",
+    "gift-set": "Gift Sets & Packaging",
+}
+
+
+def _categories_path():
+    import os as _os
+    return _os.environ.get(
+        "CATEGORIES_PATH",
+        _os.path.join(ROOT, "data", "categories.json"))
+
+
+def _read_categories_file():
+    path = _categories_path()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None, path
+    if isinstance(data, dict) and isinstance(data.get("categories"), list):
+        return data, path
+    if isinstance(data, list):
+        return {"categories": data, "updatedAt": "", "updatedBy": ""}, path
+    return None, path
+
+
+def _write_categories_file(data, path):
+    import os as _os
+    tmp = path + ".tmp"
+    _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    _os.replace(tmp, path)
+
+
+def merge_categories(actor=None):
+    """Apply the category merge once (idempotent, marker `category_merge_v2`).
+
+    Returns True when the merge ran on this boot, False when it had already
+    been applied (or the marker could not be read, in which case it still runs
+    so the migration can never be skipped by an unreadable marker).
+    """
+    from db import one, execute
+    try:
+        marker = one("SELECT value FROM growth_settings WHERE key=?", (MERGE_MARKER,))
+        if marker:
+            return False
+    except Exception:
+        pass  # an unreadable marker must never skip the migration
+
+    table, path = _read_categories_file()
+    changed = False
+    if table is not None:
+        cats = table.get("categories") or []
+        out = []
+        for c in cats:
+            cid = str(c.get("id") or "").strip()
+            if cid in ("nails", "packaging"):     # folded into an existing row
+                changed = True
+                continue
+            if cid in _CATEGORY_RENAME and (c.get("name") or "") != _CATEGORY_RENAME[cid]:
+                c["name"] = _CATEGORY_RENAME[cid]
+                changed = True
+            out.append(c)
+        table["categories"] = out
+        table["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        table["updatedBy"] = actor or "category_merge_v2"
+        if changed:
+            _write_categories_file(table, path)
+
+    _fold_product_categories(actor)
+
+    try:
+        execute("INSERT OR REPLACE INTO growth_settings (key, value) VALUES (?, ?)",
+                (MERGE_MARKER, datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"))
+    except Exception:
+        pass
+    return True
+
+
+def _fold_product_categories(actor=None):
+    """Re-point products carrying a merged / legacy category onto the
+    surviving category. Admin overrides are edited in place; any seed product
+    that still points at a folded category gets an override entry so the live
+    merged catalogue is consistent (the seed file itself is never rewritten)."""
+    path = _norm_filename(CATALOG_FILE)
+    with _catalog_lock(path):
+        data, _path = _load_overrides()
+        products = [dict(p) for p in (data.get("products") or [])]
+        by_id = {p.get("id"): p for p in products}
+        changed = False
+
+        for p in products:
+            cid = str(p.get("category") or "").strip().lower()
+            new = _CATEGORY_FOLD.get(cid)
+            if new and str(p.get("category") or "").strip() != new:
+                p["category"] = new
+                changed = True
+
+        # Fold seed-only products by adding (or fixing) an override entry.
+        for s in _seed_products():
+            sid = str(s.get("id") or "")
+            if not sid:
+                continue
+            cid = str(s.get("category") or "").strip().lower()
+            new = _CATEGORY_FOLD.get(cid)
+            if not new:
+                continue
+            existing = by_id.get(sid)
+            if existing is None:
+                rec = dict(s)
+                rec["category"] = new
+                products.append(rec)
+                by_id[sid] = rec
+                changed = True
+            elif str(existing.get("category") or "").strip() != new:
+                existing["category"] = new
+                changed = True
+
+        if changed:
+            data["products"] = products
+            data["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            data["updatedBy"] = actor or "category_merge_v2"
+            _write_overrides(data, path)

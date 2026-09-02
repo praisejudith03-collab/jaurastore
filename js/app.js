@@ -45,13 +45,20 @@ function t(key, vars) {
   return s;
 }
 
+function catCover(c) {
+  const img = (c && c.image) || "";
+  // A document can never render in an <img>, so fall back to the cover art.
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg";
+}
+
 function renderCategories() {
   const box = document.querySelector("[data-cat-list]");
   if (!box) return;
   box.innerHTML = JA.categories().map((c) => {
     const n = JA.products().filter((p) => p.category === c.id).length;
     return `<a class="cat-tile" href="shop.html?cat=${c.id}">
-      <img src="${JA.asset(c.image)}" alt="" />
+      <img src="${catCover(c)}" alt="" />
       <small>${t("cats.shop")}</small>
       <h3>${JA.escape(JA.categoryName(c.id))}</h3>
       <span>${t(n === 1 ? "cats.piece" : "cats.pieces", { n })}</span>
@@ -89,7 +96,18 @@ function mountHeroVideo() {
   if (!vid || !hero) return;
   const KEY = "jaura.site";
   const copy = document.getElementById("hero-video-copy");
-  const apply = (url) => {
+  const docSlot = document.getElementById("hero-doc-slot");
+  const apply = (site) => {
+    site = site || {};
+    const url = (site.heroVideo || "").toString();
+    const doc = (site.heroDoc || "").toString();
+    const poster = (site.heroPoster || "").toString();
+    if (docSlot) {
+      docSlot.hidden = !doc;
+      docSlot.querySelector?.("a")?.setAttribute("href", JA.asset ? JA.asset(doc) : doc);
+      docSlot.querySelector?.("a")?.setAttribute("download", doc.split("/").pop() || "hero-document");
+    }
+    if (poster) vid.setAttribute("poster", JA.asset ? JA.asset(poster) : poster);
     if (url) {
       if (vid.getAttribute("src") !== url) vid.src = url;
       vid.muted = true;
@@ -117,13 +135,13 @@ function mountHeroVideo() {
   };
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
-  if (cached && cached.heroVideo) apply(cached.heroVideo);
+  if (cached) apply(cached);
   fetch("api/site", { cache: "no-store" })
     .then((r) => (r.ok ? r.json() : null))
     .then((d) => {
       const site = (d && d.site) || {};
       try { localStorage.setItem(KEY, JSON.stringify(site)); } catch (e) {}
-      apply(site.heroVideo || "");
+      apply(site);
     })
     .catch(() => {});   // offline / static hosting: keep whatever is showing
 }
@@ -151,9 +169,8 @@ function renderHome() {
   const cats = document.querySelector("[data-home-cats]");
   if (cats) {
     cats.innerHTML = JA.categories().map((c) => {
-      const img = c.image ? JA.asset(c.image) : "images/brand/logo.jpg";
       return `<a class="home-cat" href="shop.html?cat=${c.id}">
-        <img src="${img}" alt="" />
+        <img src="${catCover(c)}" alt="" />
         <span>${JA.escape(JA.categoryName(c.id))}</span>
       </a>`;
     }).join("");
@@ -557,14 +574,17 @@ function paintProduct(root, p) {
   const stockN = Number(p.stock) || 0;
   const rev = (JA.reviews && JA.reviews(p.id)) || [];
   const revStats = (JA.reviewStats && JA.reviewStats(p.id)) || { n: 0, avg: 0 };
+  const mainHTML = (idx) => JA.mediaHTML(gallery[idx], {
+    alt: p.name, ph: p.placeholderImage, attrs: { "data-main-img": "" },
+  });
   root.innerHTML = `
     <div class="pdp-gallery">
-      <div class="pdp-img">
+      <div class="pdp-img" data-media-slot>
         ${gallery.length > 1 ? `<button type="button" class="pdp-nav pdp-prev" data-gal="-1" aria-label="Previous">‹</button>` : ""}
-        <img src="${JA.asset(gallery[0])}" alt="${JA.escape(p.name)}" data-main-img onerror="fallbackImg(event)" />
+        ${mainHTML(0)}
         ${gallery.length > 1 ? `<button type="button" class="pdp-nav pdp-next" data-gal="1" aria-label="Next">›</button>` : ""}
       </div>
-      ${gallery.length > 1 ? `<div class="pdp-thumbs">${gallery.map((src, i) => `<button type="button" class="pdp-thumb${i === 0 ? " is-on" : ""}" data-src="${JA.escape(JA.asset(src))}" data-thumb="${i}"><img src="${JA.asset(src)}" alt="" onerror="fallbackImg(event)" /></button>`).join("")}</div>` : ""}
+      ${gallery.length > 1 ? `<div class="pdp-thumbs">${gallery.map((src, i) => `<button type="button" class="pdp-thumb${i === 0 ? " is-on" : ""}" data-src="${JA.escape(JA.asset(src))}" data-thumb="${i}">${JA.mediaHTML(src, { alt: p.name, ph: p.placeholderImage })}</button>`).join("")}</div>` : ""}
     </div>
     <div>
       <div class="kicker">${JA.categoryName(p.category)}</div>
@@ -618,11 +638,13 @@ function paintProduct(root, p) {
     </div>`;
 
   const showSlide = (i) => {
-    const main = root.querySelector("[data-main-img]");
+    const slot = root.querySelector("[data-media-slot]");
     const thumbs = [...root.querySelectorAll("[data-thumb]")];
-    if (!gallery.length) return;
+    if (!gallery.length || !slot) return;
     const n = ((i % gallery.length) + gallery.length) % gallery.length;
-    if (main) main.src = JA.asset(gallery[n]);
+    // swap the whole media element so a video/document thumb replaces the
+    // image instead of trying to load a video into an <img>.
+    slot.innerHTML = mainHTML(n);
     thumbs.forEach((th, ti) => th.classList.toggle("is-on", ti === n));
     root.dataset.slide = String(n);
   };
@@ -1103,7 +1125,8 @@ function renderCheckout() {
   let proofJob = null;            // the compression still running, if any
   let proofFailed = false;
   let proofFile = null;           // a PDF (or any non-image) travels as-is
-  const isPdf = (f) => /pdf/i.test(f?.type || "") || /\.pdf$/i.test(f?.name || "");
+  const isPdf = (f) => /pdf/i.test(f?.type || "")
+    || /\.(pdf|doc|docx)$/i.test(f?.name || "") || /word|msword|document|pdf/i.test(f?.type || "");
 
   shot?.addEventListener("change", () => {
     const file = shot.files?.[0];
