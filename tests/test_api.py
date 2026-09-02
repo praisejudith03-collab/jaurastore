@@ -1565,3 +1565,39 @@ def test_category_merge_is_idempotent(tmp_path, client, monkeypatch):
     assert next(p for p in ovd["products"] if p["id"] == "p1")["category"] == "beauty"
     # a second run no-ops (the marker is set)
     assert catmod.merge_categories() is False
+
+
+def test_merged_catalogue_never_serves_a_folded_out_category(monkeypatch):
+    """The live catalogue must never leak a merged / legacy category id.
+
+    The one-shot migration writes fold overrides to the local file, but when
+    Supabase is the source of truth those overrides are ignored (only the
+    `deleted` list is read), so a seed/supabase row still carrying `skincare`,
+    `nails` or `packaging` used to surface to shoppers. `merged()` now folds
+    the category at read time for every backend.
+    """
+    import catalog as catmod
+    seed = catmod._seed_products()
+    assert any(str(p.get("category")) == "skincare" for p in seed)
+
+    # Supabase is the source of truth; a skincare product row comes back live.
+    sb = [dict(p) for p in seed if str(p.get("category")) == "skincare"]
+    sb[0]["category"] = "nails"                       # legacy id leak
+    monkeypatch.setattr(catmod, "_supabase_products", lambda: sb)
+    monkeypatch.setattr(catmod, "overrides", lambda: {"products": [], "deleted": []})
+
+    merged = catmod.merged(include_hidden=True)
+    assert all(str(p.get("category")) not in ("skincare", "nails", "packaging")
+               for p in merged)
+    # The legacy rows themselves were re-pointed onto the survivor.
+    assert {p["id"] for p in merged} >= {p["id"] for p in sb}
+    for p in merged:
+        if p["id"] in {r["id"] for r in sb}:
+            assert p["category"] == "beauty", p["id"]
+
+    # Same guarantee on the local (no-Supabase) path.
+    monkeypatch.setattr(catmod, "_supabase_products", lambda: None)
+    monkeypatch.setattr(catmod, "overrides", lambda: {"products": [], "deleted": []})
+    merged = catmod.merged(include_hidden=True)
+    assert all(str(p.get("category")) not in ("skincare", "nails", "packaging")
+               for p in merged)

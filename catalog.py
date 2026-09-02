@@ -424,6 +424,18 @@ def _int_or_none(v):
 
 
 # ------------------------------------------------------------------- merged
+def _folded_category(cid):
+    """Map a (possibly legacy / merged) category id onto its survivor.
+
+    Read-time normalisation that mirrors ``_CATEGORY_FOLD`` so that no product
+    ever leaks a category that no longer exists — regardless of whether the row
+    came from Supabase, the seed, or the local override file. Unknown or already
+    surviving ids are returned unchanged (preserving owner renames).
+    """
+    cid = str(cid or "").strip()
+    return _CATEGORY_FOLD.get(cid.lower(), cid)
+
+
 def _dedupe_products(primary, secondary):
     """Merge two product lists, keeping every distinct product exactly once.
 
@@ -492,7 +504,20 @@ def merged(include_hidden=False):
 
     if not include_hidden:
         products = [p for p in products if p.get("online") is not False]
+
+    # Read-time category fold: never serve a merged / legacy category id
+    # (nails, packaging, skincare) even when the source row still carries one.
+    # This mirrors _fold_product_categories() but works for every backend
+    # (Supabase rows and seed products pass through merged() unchanged).
+    products = [_fold_p(p) for p in products]
     return resolve_images(products)
+
+
+def _fold_p(product):
+    """Return a copy of ``product`` with any merged/legacy category remapped."""
+    p = dict(product or {})
+    p["category"] = _folded_category(p.get("category"))
+    return p
 
 
 def meta():
