@@ -6,9 +6,10 @@ Two backends:
   a 6-digit reset code in ``otp_codes`` (both created by ``db.init_db``). This
   is what the test suite and a fresh checkout exercise.
 * **Supabase.** When ``SUPABASE_URL`` + ``SUPABASE_SERVICE_ROLE_KEY`` are set,
-  admin login is verified against Supabase Auth (GoTrue) and the admin is
-  mirrored in the local ``admins`` table so the rest of the app (audit, session
-  cookie, per-device password change) keeps working unchanged.
+  the admin password is *mirrored* into Supabase Auth (GoTrue) so other tools
+  can use it, but the local ``admins`` hash stays the single source of truth
+  for login. A password change therefore takes effect immediately: the old
+  password stops working even if the Supabase mirror failed.
 """
 import html, re, secrets, time, datetime
 import sqlite3
@@ -71,18 +72,23 @@ def _hash_for(email):
 
 
 def verify_login(email, pw):
-    """Check an email + password. Local DB hash, or Supabase Auth when enabled."""
+    """Check an email + password against the LOCAL admins hash - the only truth.
+
+    The local ``admins`` row is authoritative even when Supabase Auth is
+    configured. ``set_password`` always writes the new hash locally and only
+    *best effort* mirrors it to Supabase, so trusting Supabase here meant a
+    failed mirror left the OLD password working forever. Never OR in a stale
+    remote password: if the local hash says no, the answer is no.
+    """
     email = (email or "").strip().lower()
     if not is_known_admin(email) or not pw:
         return False
-    if Config.SUPABASE_ENABLED:
-        from supabase_store import supabase_verify_login
-        if supabase_verify_login(email, pw):
-            _ensure_local_admin(email)
-            return True
-        return False
     h = _hash_for(email)
     if not h:
+        # Supabase-only admin that has never been mirrored locally: create the
+        # local row (with an unusable hash) so a password set/reset can land.
+        if Config.SUPABASE_ENABLED:
+            _ensure_local_admin(email)
         return False
     return check_password_hash(h, str(pw))
 
@@ -118,6 +124,7 @@ def set_password(email, pw, shared=True):
             supabase_set_shared_password(str(pw))
         except Exception:
             pass
+    _mark_password_set()
     return True
 
 
@@ -135,6 +142,31 @@ def set_shared_password(pw):
 # permanently, so a later password change is never overwritten by a reboot.
 BOOTSTRAP_MARKER = "admin_bootstrap_applied"
 
+# Marker row proving a password has been chosen on this database at all (by
+# the bootstrap, the OTP reset or the admin portal). Its presence also
+# disables the bootstrap: the owner's own password is never clobbered, even
+# if the `admin_bootstrap_applied` row went missing.
+PASSWORD_SET_MARKER = "admin_password_set"
+
+
+def _mark_password_set():
+    """Remember that an admin password has been set on this database."""
+    try:
+        execute("INSERT INTO growth_settings (key, value) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (PASSWORD_SET_MARKER, _now()))
+    except sqlite3.Error:
+        pass
+
+
+def password_already_set():
+    """True when this database already has an admin-chosen password."""
+    try:
+        return one("SELECT key FROM growth_settings WHERE key=?",
+                   (PASSWORD_SET_MARKER,)) is not None
+    except sqlite3.Error:
+        return False
+
 
 def apply_bootstrap_password(pw):
     """Force the shared admin password once, to recover access with no email.
@@ -142,9 +174,9 @@ def apply_bootstrap_password(pw):
     Returns True when the password was applied, False when it was not. It fires
     at most once per database: the first successful application stamps an
     `admin_bootstrap_applied` marker in ``growth_settings``, and every later
-    boot (and every later call) is a no-op. That way the owner can sign in,
-    change the password from the admin portal, and reboot freely without the
-    public default being restored over the top of their own choice.
+    boot (and every later call) is a no-op. A password chosen by the owner
+    (which stamps `admin_password_set`) also disables it, so a reboot can never
+    restore the public default over the top of their own choice.
 
     Callers are expected to skip this entirely when FLASK_ENV == "testing" so
     the test suite's passwords are never touched.
@@ -155,6 +187,8 @@ def apply_bootstrap_password(pw):
     init_db()
     if one("SELECT key FROM growth_settings WHERE key=?", (BOOTSTRAP_MARKER,)):
         return False                      # already recovered - leave it alone
+    if password_already_set():
+        return False                      # the owner picked their own password
     if not set_shared_password(pw):
         # Weak/invalid password: do NOT stamp the marker, so a corrected
         # ADMIN_BOOTSTRAP_PASSWORD can still recover the account later.
