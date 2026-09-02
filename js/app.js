@@ -89,6 +89,54 @@ function startCatSlide() {
    If the owner uploaded a video it autoplays silently on a loop behind the
    hero text; with no video the static hero stays exactly as it is. The last
    known URL is cached so the video starts instantly on repeat visits. */
+/* Autoplay that actually plays.
+   Mobile browsers only allow autoplay when the video is muted AND inline, and
+   they still refuse when the tab is hidden or the decoder was not ready. So:
+   force muted+inline on the element itself, try play() on every readiness
+   event, retry when the tab becomes visible or the hero scrolls into view,
+   and fall back to the first user gesture of any kind. */
+function startAutoplay(vid) {
+  if (!vid || vid.dataset.autoplayBound === "1") {
+    if (vid) vid.play().catch(() => {});
+    return;
+  }
+  vid.dataset.autoplayBound = "1";
+  vid.muted = true;
+  vid.defaultMuted = true;
+  vid.volume = 0;
+  vid.loop = true;
+  vid.autoplay = true;
+  vid.setAttribute("muted", "");
+  vid.setAttribute("autoplay", "");
+  vid.setAttribute("loop", "");
+  vid.setAttribute("playsinline", "");
+  vid.setAttribute("webkit-playsinline", "");
+  const play = () => {
+    if (!vid.isConnected || vid.hidden) return;
+    const p = vid.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  };
+  ["loadedmetadata", "loadeddata", "canplay", "canplaythrough", "stalled", "suspend"]
+    .forEach((ev) => vid.addEventListener(ev, play));
+  vid.addEventListener("pause", () => { setTimeout(play, 120); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) play(); });
+  ["touchstart", "pointerdown", "click", "keydown", "scroll"].forEach((ev) => {
+    document.addEventListener(ev, play, { once: true, passive: true });
+  });
+  if (typeof IntersectionObserver === "function") {
+    try {
+      new IntersectionObserver((entries) => {
+        entries.forEach((en) => { if (en.isIntersecting) play(); });
+      }, { threshold: 0.05 }).observe(vid);
+    } catch (e) {}
+  }
+  // Some Androids need the source (re)primed before the first frame decodes.
+  try { vid.load(); } catch (e) {}
+  play();
+  setTimeout(play, 300);
+  setTimeout(play, 1200);
+}
+
 function mountHeroVideo() {
   const vid = document.getElementById("hero-video");
   const scrim = document.getElementById("hero-scrim");
@@ -121,10 +169,7 @@ function mountHeroVideo() {
       if (scrim) scrim.hidden = false;
       if (copy) copy.hidden = false;
       hero.classList.add("has-video");
-      const play = () => vid.play().catch(() => {});
-      play();
-      vid.addEventListener("canplay", play, { once: true });
-      document.addEventListener("touchstart", play, { once: true });
+      startAutoplay(vid);
     } else {
       vid.hidden = true;
       vid.removeAttribute("src");

@@ -5079,8 +5079,20 @@ body[data-page="home"] #site-footer { position: relative; z-index: 3 !important;
   padding: 12px 18px !important;
 }
 
-/* reCAPTCHA v3 — keep the badge clear of the dock and WhatsApp bubble */
+/* reCAPTCHA — keep any badge clear of the dock and WhatsApp bubble */
 .grecaptcha-badge { bottom: 120px !important; z-index: 60 !important; }
+/* reCAPTCHA v2 "I'm not a robot" checkbox, shown above Place order.
+   The widget is a fixed-width iframe: let it shrink on small phones. */
+.ck-recaptcha {
+  margin: 14px 0 4px;
+  min-height: 78px;
+  display: flex;
+  justify-content: center;
+}
+.ck-recaptcha[hidden] { display: none; }
+@media (max-width: 360px) {
+  .ck-recaptcha { transform: scale(0.86); transform-origin: center top; }
+}
 .ck-recaptcha-note {
   font-size: 11.5px;
   color: var(--taupe);
@@ -5389,10 +5401,15 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
    inset from the section edges so it never collides with surrounding layout,
    with a crisp (small-radius) border and a soft shadow for definition. */
 .home-hero-static.has-video {
-  min-height: clamp(462px, 77vh, 836px);
+  /* Bigger stage: the reel is the first thing a shopper sees, so it fills
+     almost the whole screen height (still leaving the header visible). */
+  min-height: clamp(560px, 92vh, 1040px);
   display: grid; align-items: center;
   padding: 0;
   background: #111;
+}
+@media (max-width: 800px) {
+  .home-hero-static.has-video { min-height: clamp(480px, 84vh, 860px); }
 }
 .home-hero-static.has-video .wrap { display: none; }
 .home-hero-static.has-video .home-hero-video {
