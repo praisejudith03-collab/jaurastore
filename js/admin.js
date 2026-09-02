@@ -51,7 +51,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
           <input type="password" name="password" required autocomplete="current-password" placeholder="Your admin password" />
           <button class="btn adx-login-btn" id="login-btn" data-no-i18n>Sign in</button>
         </form>
-        <button type="button" class="wix-link-btn" id="forgot-btn" style="margin-top:16px">Forgot password? Reset it via WhatsApp</button>
+        <button type="button" class="wix-link-btn" id="forgot-btn" style="margin-top:16px">Forgot password? Reset it by email</button>
         <div id="otp-slot"></div>
       </div>
     </div>`;
@@ -84,7 +84,7 @@ function paintOtpRequest(msg) {
   slot.innerHTML = `
     <div class="otp-box">
       <h3>Reset your password</h3>
-      <p class="admin-note">Enter the admin email so we know which account, then we send a 6-digit code to the owner's WhatsApp. Enter it below with a new password.</p>
+      <p class="admin-note">Enter the admin email so we know which account, then we send a 6-digit code to that email. Enter it below with a new password.</p>
       ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
       <form id="otp-req" class="field">
         <label>Admin email</label>
@@ -261,7 +261,15 @@ function bindMedia() {
     box.classList.remove("is-drop");
   }));
   box.addEventListener("drop", (e) => {
-    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])].filter((f) => /^(image|video)\//.test(f.type));
+    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])].filter((f) => {
+      const t = String(f.type || "");
+      const n = String(f.name || "");
+      if (/^(image|video)\//.test(t)) return true;
+      if (_VIDEO_EXT.test(n) || /\.(jpe?g|png|webp|gif|avif|heic)$/i.test(n)) return true;
+      // Some phones/cameras hand over a file with an empty MIME type.
+      // Keep it so magic-bytes on /api/admin/uploads/product can classify it.
+      return !t;
+    });
     if (!files.length) return;
     if (!window.__editImages) window.__editImages = [];
     for (const file of files) {
@@ -281,7 +289,13 @@ function bindMedia() {
   });
 
   async function uploadProductImage(file, box) {
-    const isVideo = /^video\//.test(file.type || "") || _VIDEO_EXT.test(String(file.name || ""));
+    const t = String(file.type || "");
+    const n = String(file.name || "");
+    const isVideo = /^video\//.test(t) || _VIDEO_EXT.test(n);
+    const looksImage = /^image\//.test(t) || /\.(jpe?g|png|webp|gif|avif|heic)$/i.test(n);
+    // Empty/unknown MIME goes to /product so the server can sniff magic bytes
+    // (the image-only route rejects video).
+    const endpoint = (isVideo || !looksImage) ? "api/admin/uploads/product" : "api/admin/uploads/image";
     // Say the limit up front, not after a failed upload.
     const maxVideo = 40 * 1024 * 1024, maxPhoto = 6 * 1024 * 1024;
     if (isVideo && file.size > maxVideo) {
@@ -300,12 +314,13 @@ function bindMedia() {
     const preview = URL.createObjectURL(file);
     const idx = window.__editImages.push({ pending: true, preview, video: isVideo }) - 1;
     box.innerHTML = mediaStripHTML(window.__editImages);
-    const res = await window.JA_NET.api(isVideo ? "api/admin/uploads/product" : "api/admin/uploads/image", {
+    const res = await window.JA_NET.api(endpoint, {
       method: "POST",
       blob: file,
       field: "file",
       filename: file.name || (isVideo ? "video.mp4" : "photo.jpg"),
       queue: true,
+      timeout: 300000,
       label: isVideo ? "Video" : "Photo",
     });
     if (res && res.url) {
@@ -596,7 +611,7 @@ async function handleProductSubmit(e, existing) {
   // product. Give the outbox a fair chance to drain, then carry on.
   if (rawImages.some((s) => typeof s === "object") && window.JA_NET) {
     JA.toast("Finishing the photo upload…");
-    const deadline = Date.now() + 20000;
+    const deadline = Date.now() + 300000;
     while (rawImages.some((s) => typeof s === "object") && Date.now() < deadline) {
       await window.JA_NET.flush().catch(() => {});
       await new Promise((r) => setTimeout(r, 700));
@@ -1336,7 +1351,7 @@ function accountPanel() {
         <div class="field"><label>Repeat new shared password</label><input type="password" name="again" required autocomplete="new-password" /></div>
         <div class="field full"><button class="btn" id="pw-btn">Change shared password</button></div>
       </form>
-      <p class="admin-note">At least 10 characters, with an upper case letter, a lower case letter and a number. It applies to every admin account, so the one password is what any of you type on the sign-in screen. If you ever forget it, use <em>Forgot password? Reset it via WhatsApp</em> on the sign-in screen — a 6-digit code is sent to the owner's WhatsApp. You can also change it right here at any time; it saves straight to the database with no email needed.</p>
+      <p class="admin-note">At least 10 characters, with an upper case letter, a lower case letter and a number. It applies to every admin account, so the one password is what any of you type on the sign-in screen. If you ever forget it, use <em>Forgot password? Reset it by email</em> on the sign-in screen — a 6-digit code is sent to that email. You can also change it right here at any time; it saves straight to the database with no email needed.</p>
     </div>
     <details class="adx-advanced" style="margin-top:22px">
       <summary class="admin-h">Advanced settings</summary>
@@ -1467,7 +1482,7 @@ function marketingPanel() {
     </div>
     <div class="admin-card" id="mk-backup-card">
       <h3 class="admin-h">Backups</h3>
-      <p class="admin-note">Products and orders are backed up to GitHub automatically every night at midnight. You can also run a backup right now.</p>
+      <p class="admin-note">Product data is backed up to GitHub automatically every night at midnight. Customer orders stay on the server (they are never committed to the public repository). You can also run a backup right now.</p>
       <button type="button" class="btn" id="mk-backup-now">Back up now</button>
       <p class="admin-note" id="mk-backup-out" hidden></p>
     </div>`;
@@ -1660,7 +1675,7 @@ async function fillMarketing() {
       const out = $("#mk-backup-out");
       try {
         const res = await api("api/admin/backup", { method: "POST", json: {} });
-        if (out) { out.hidden = false; out.textContent = res.ok ? "Backup completed and pushed to GitHub." : (res.error || res.note || "Backup finished with warnings."); }
+        if (out) { out.hidden = false; out.textContent = res.ok ? "Backup completed. Product data was pushed to GitHub; customer orders stay on the server." : (res.error || res.note || "Backup finished with warnings."); }
       } catch (err) {
         if (out) { out.hidden = false; out.textContent = err.message || "Backup failed."; }
       }
@@ -1941,7 +1956,7 @@ function bindCategories() {
       if (window.JA_NET) {
         const res = await window.JA_NET.api("api/admin/uploads/category", {
           method: "POST", blob: f, field: "file",
-          filename: f.name || "category.jpg", queue: true, label: "Category asset",
+          filename: f.name || "category.jpg", queue: true, timeout: 300000, label: "Category asset",
         });
         if (res && res.url) {
           input.dataset.catUrl = res.url;

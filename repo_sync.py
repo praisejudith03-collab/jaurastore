@@ -47,7 +47,6 @@ REPO_DATA_FILES = (
     "data/seed.json",
     "data/wix_products.json",
     "data/catalog.json",
-    "data/backups/orders-backup.json",   # written by backup.py before each sync
 )
 
 # ---- git-safe serialisation -------------------------------------------------
@@ -224,13 +223,48 @@ def _git_repo_tracked(rel):
     return os.path.exists(os.path.join(ROOT, rel))
 
 
+def _github_contents_sha(api, repo, rel, branch, headers):
+    """Look up the current blob SHA for a Contents API path.
+
+    Distinguishes:
+      (sha, remote_bytes, None)  — file exists (sha may still be "")
+      ("", None, None)           — 404, the file is new
+      (None, None, error)        — GET failed; caller must NOT PUT without sha
+    """
+    import urllib.request, urllib.error, urllib.parse
+    url = (f"{api}/repos/{repo}/contents/{urllib.parse.quote(rel)}"
+           f"?ref={urllib.parse.quote(branch)}")
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            cur = json.loads(r.read().decode("utf-8", "replace"))
+        sha = cur.get("sha") or ""
+        remote = None
+        raw = cur.get("content")
+        if raw:
+            try:
+                remote = base64.b64decode("".join(str(raw).split()))
+            except Exception:
+                remote = None
+        return sha, remote, None
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return "", None, None
+        return None, None, f"GET sha {rel}: HTTP {exc.code}"
+    except Exception as exc:
+        return None, None, f"GET sha {rel}: {exc}"
+
+
 def _push_via_api(repo, token, branch, message, report):
     """Push the repo data files to GitHub via the Contents API.
 
     This is the reliable path on hosts (Render / a serverless web service)
     where the runtime directory is not a git worktree, so `git push` has no
     checkout to act on. We fetch each file's current blob SHA, then PUT the
-    new bytes with a single commit message. Returns (ok, report).
+    new bytes. A PUT without sha is only allowed when GET returned 404
+    (the file is new). A failed SHA lookup is never treated as "file is
+    new" — that would 409/422 and previously got skipped as success.
+    Returns (ok, report).
     """
     try:
         import urllib.request, urllib.error, urllib.parse
@@ -244,39 +278,29 @@ def _push_via_api(repo, token, branch, message, report):
         "Accept": "application/vnd.github+json",
         "User-Agent": "jaurastore-sync",
     }
-    # Determine base sha / tree sha for the branch tip.
-    try:
-        req = urllib.request.Request(
-            f"{api}/repos/{repo}/git/ref/heads/{urllib.parse.quote(branch)}",
-            headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as r:
-            ref = json.loads(r.read().decode("utf-8", "replace"))
-        base_sha = (ref.get("object") or {}).get("sha") or ""
-    except Exception as exc:
-        # Branch may not exist yet; try the default branch ref for a base.
-        base_sha = ""
-        report.setdefault("apiNote", f"ref lookup: {exc}")
 
     changed = []
+    errors = []
     for rel in REPO_DATA_FILES:
         path = os.path.join(REPO_ROOT, rel)
         if not os.path.exists(path):
             continue
         content = open(path, "rb").read()
-        # Attempt to resolve the current blob sha (so we can update, not create).
-        sha = ""
-        if base_sha:
-            try:
-                req = urllib.request.Request(
-                    f"{api}/repos/{repo}/contents/{rel}?ref={urllib.parse.quote(branch)}",
-                    headers=headers)
-                with urllib.request.urlopen(req, timeout=20) as r:
-                    cur = json.loads(r.read().decode("utf-8", "replace"))
-                sha = cur.get("sha") or ""
-            except Exception:
-                sha = ""
-        payload = {"message": message, "content": base64.b64encode(content).decode(),
-                   "branch": branch}
+        sha, remote, err = _github_contents_sha(api, repo, rel, branch, headers)
+        if err:
+            sha, remote, err = _github_contents_sha(api, repo, rel, branch, headers)
+        if err:
+            errors.append(err)
+            report.setdefault("skipped", []).append(rel + " (no sha)")
+            continue
+        if remote is not None and remote == content:
+            report.setdefault("skipped", []).append(rel)
+            continue
+        payload = {
+            "message": message,
+            "content": base64.b64encode(content).decode(),
+            "branch": branch,
+        }
         if sha:
             payload["sha"] = sha
         try:
@@ -289,8 +313,26 @@ def _push_via_api(repo, token, branch, message, report):
             changed.append(rel)
         except urllib.error.HTTPError as exc:
             if exc.code in (409, 422):
-                # Content already identical / branch conflict: not a failure.
-                report.setdefault("skipped", []).append(rel)
+                sha2, remote2, err2 = _github_contents_sha(
+                    api, repo, rel, branch, headers)
+                if remote2 is not None and remote2 == content:
+                    report.setdefault("skipped", []).append(rel)
+                    continue
+                if (not sha) and sha2:
+                    payload["sha"] = sha2
+                    try:
+                        req = urllib.request.Request(
+                            f"{api}/repos/{repo}/contents/{urllib.parse.quote(rel)}",
+                            data=json.dumps(payload).encode("utf-8"), method="PUT",
+                            headers={**headers, "Content-Type": "application/json"})
+                        with urllib.request.urlopen(req, timeout=30) as r:
+                            r.read()
+                        changed.append(rel)
+                        continue
+                    except Exception as exc2:
+                        errors.append(f"API push {rel}: {exc2} (could not recover sha)")
+                        continue
+                errors.append(f"API push {rel}: {exc} (could not recover sha)")
                 continue
             return False, {"error": f"API push {rel}: {exc}", "pushed": False, **report}
         except Exception as exc:
@@ -301,8 +343,13 @@ def _push_via_api(repo, token, branch, message, report):
     report["repo"] = repo
     report["api"] = True
     report["files"] = changed
+    if errors:
+        report["errors"] = errors
     if not changed:
-        report["note"] = "No repository files changed via API."
+        report["note"] = ("SHA lookup failed: " + "; ".join(errors)
+                          if errors else "No repository files changed via API.")
+        if errors:
+            return False, {"error": "; ".join(errors), "pushed": False, **report}
     return True, report
 
 

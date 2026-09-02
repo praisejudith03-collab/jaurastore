@@ -204,7 +204,8 @@ window.JA_NET = (function () {
       var rcp = job.recaptcha ? recaptcha(job.recaptcha) : Promise.resolve("");
       return rcp.then(function (rct) {
       var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
-      var timer = ctl ? setTimeout(function () { ctl.abort(); }, job.timeout || 25000) : null;
+      var abortMs = job.timeout || (job.bodyKind === "blob" ? 300000 : 25000);
+      var timer = ctl ? setTimeout(function () { ctl.abort(); }, abortMs) : null;
       var hdrs = headersFor(job, tok);
       if (rct) hdrs["X-Recaptcha-Token"] = rct;
       return fetch(job.url, {
@@ -313,7 +314,7 @@ window.JA_NET = (function () {
       filename: opts.filename || "",
       extra: opts.extra || null,
       label: opts.label || "",
-      timeout: opts.timeout || 25000,
+      timeout: opts.timeout || (opts.blob ? 300000 : 25000),
       keepalive: !!opts.keepalive,
       onDone: opts.onDone || null,
     };

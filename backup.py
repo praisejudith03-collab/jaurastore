@@ -1,8 +1,9 @@
-"""Daily backup of products and orders to GitHub.
+"""Daily backup of products (to GitHub) and a local orders snapshot.
 
-`run()` writes data/backups/orders-backup.json (every order, full payload)
-and then reuses repo_sync to commit + push it together with the product
-data files. The scheduler calls it once a day at midnight; the admin panel
+`run()` writes data/backups/orders-backup.json on the server (every order,
+full payload) so a restore is possible from disk. That file is never
+committed to the public repository. Product data is then pushed via
+repo_sync. The scheduler calls it once a day at midnight; the admin panel
 has a "Back up now" button that calls it on demand.
 """
 import datetime, json, os
@@ -46,18 +47,19 @@ def dump_orders(path=None):
 
 
 def run(push=True, actor="scheduler"):
-    """Full backup: orders snapshot + product data, committed and pushed.
-    Returns (ok, report). Never raises."""
+    """Local orders snapshot + product data committed and pushed to GitHub.
+    Customer orders stay on the server. Returns (ok, report). Never raises."""
     report = {}
     try:
         report["orders"] = dump_orders()
+        report["ordersOnServerOnly"] = True
     except Exception as exc:
         return False, {"error": f"order dump failed: {exc}"}
     try:
         import repo_sync
         ok, sync_report = repo_sync.regenerate(
             commit=True, push=push,
-            message=f"Daily backup {datetime.date.today().isoformat()}: products + orders")
+            message=f"Daily backup {datetime.date.today().isoformat()}: products")
         report.update(sync_report)
     except Exception as exc:
         return False, {"error": f"repo sync failed: {exc}", **report}

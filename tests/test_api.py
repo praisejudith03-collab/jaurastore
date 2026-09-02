@@ -1685,3 +1685,37 @@ def test_benin_minimum_order_cfa_and_ngn_limits(client):
     assert r2.status_code == 400
     assert "11,400 naira" in r2.get_json().get("error", "")
 
+
+def test_net_js_blob_uploads_wait_five_minutes_and_persist_timeout():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "js", "net.js"),
+               encoding="utf-8").read()
+    assert "opts.blob ? 300000 : 25000" in src
+    assert "job.bodyKind === \"blob\" ? 300000 : 25000" in src
+    assert "timeout: job.timeout || (job.bodyKind === \"blob\" ? 300000 : 25000)" in src
+
+
+def test_admin_login_copy_is_reset_by_email():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "js", "admin.js"),
+               encoding="utf-8").read()
+    assert "Reset it by email" in src
+    assert "send a 6-digit code to that email" in src
+    assert "Reset it via WhatsApp" not in src
+    assert "timeout: 300000" in src
+    assert "api/admin/uploads/product" in src
+
+
+def test_github_sync_refuses_put_without_sha_and_skips_orders_backup():
+    import repo_sync
+    assert "data/backups/orders-backup.json" not in repo_sync.REPO_DATA_FILES
+    src = open(os.path.join(os.path.dirname(__file__), "..", "repo_sync.py"),
+               encoding="utf-8").read()
+    assert "GET sha" in src
+    assert "could not recover sha" in src
+    assert "(no sha)" in src
+    gi = open(os.path.join(os.path.dirname(__file__), "..", ".gitignore"),
+              encoding="utf-8").read()
+    assert "orders-backup.json" in gi
+    admin = open(os.path.join(os.path.dirname(__file__), "..", "js", "admin.js"),
+                 encoding="utf-8").read()
+    assert "Customer orders stay on the server" in admin
+

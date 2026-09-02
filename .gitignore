@@ -24,3 +24,4 @@ data/uploads/
 .git-repo-sync.lock
 node_modules/
 data/site.json
+data/backups/orders-backup.json
