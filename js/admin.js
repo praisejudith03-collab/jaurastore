@@ -1208,22 +1208,22 @@ async function fillProofs() {
     return;
   }
   const shown = rows.slice(0, proofsShown);
-  box.innerHTML = `<div class="table-wrap"><table>
+  box.innerHTML = `<div class="table-wrap"><table class="proofs-table">
     <thead><tr><th>Sent</th><th>Order</th><th>Customer</th><th>Contact</th><th>Method</th><th>Receipt</th><th>Emailed</th></tr></thead>
     <tbody>${shown.map((p) => `<tr>
-      <td>${esc((p.at || "").replace("T", " ").slice(0, 16))}</td>
-      <td>${esc(p.order_id || "")}</td>
-      <td>${esc(p.name || "")}<br /><small>${esc(p.items || "")}</small></td>
-      <td>${esc(p.phone || "")}<br /><small>${esc(p.email || "")}</small></td>
-      <td>${esc(p.method || "")}</td>
-      <td>${p.file_url
+      <td data-label="Sent"><span class="cell-nowrap">${esc((p.at || "").replace("T", " ").slice(0, 16))}</span></td>
+      <td data-label="Order"><span class="cell-nowrap">${esc(p.order_id || "")}</span></td>
+      <td data-label="Customer">${esc(p.name || "")}<br /><small>${esc(p.items || "")}</small></td>
+      <td data-label="Contact"><span class="cell-nowrap">${esc(p.phone || "")}</span><br /><small>${esc(p.email || "")}</small></td>
+      <td data-label="Method">${esc(p.method || "")}</td>
+      <td data-label="Receipt">${p.file_url
         ? (fileTypeOf(p.file_url) === "image"
             ? `<a href="${esc(p.file_url)}" target="_blank" rel="noopener"><img class="proof-thumb" src="${esc(p.file_url)}" alt="Receipt" loading="lazy" /></a>`
             : `<button type="button" class="btn btn-line" data-receipt-open="${esc(p.file_url)}" data-receipt-label="Receipt for ${esc(p.order_id || "")}" data-receipt-name="${esc(p.file_name || "receipt")}">View ${esc((p.file_name || "").split(".").pop().toUpperCase())}</button>`)
           + `<br /><a class="btn btn-line" href="${esc(p.file_url)}" download="${esc(p.file_name || "receipt")}">Download</a>
              <small>${Math.max(1, Math.round((p.file_size || 0) / 1024))} KB</small>`
         : "—"}</td>
-      <td>${p.emailed ? "yes" : `<span style="color:#c0392b" title="${esc(p.email_info || "")}">no</span>`}</td>
+      <td data-label="Emailed">${p.emailed ? "yes" : `<span style="color:#c0392b" title="${esc(p.email_info || "")}">no</span>`}</td>
     </tr>`).join("")}</tbody></table></div>
     <p class="admin-note">The original file is attached to the email we send you, and kept here so you can open it any time.</p>`
     + (rows.length > proofsShown
