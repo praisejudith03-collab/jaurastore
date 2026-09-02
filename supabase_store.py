@@ -311,6 +311,26 @@ def create_receipt(receipt):
         print(f"[supabase] receipt upsert failed: {exc}")
 
 
+def delete_receipt(receipt_id=None, order_id=None, file_url=""):
+    """Remove a mirrored payment receipt from Supabase. Best effort."""
+    c = client()
+    if c is None:
+        return
+    try:
+        q = c.table("receipts").delete()
+        if receipt_id is not None:
+            q = q.eq("id", receipt_id)
+        elif file_url:
+            q = q.eq("file_url", file_url)
+        elif order_id:
+            q = q.eq("order_id", order_id)
+        else:
+            return
+        q.execute()
+    except Exception as exc:
+        print(f"[supabase] receipt delete failed: {exc}")
+
+
 # ------------------------------------------------------------------ helpers
 def _now():
     import datetime

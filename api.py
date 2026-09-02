@@ -849,6 +849,36 @@ def admin_payment_proofs():
     return jsonify(ok=True, count=len(rows), proofs=[dict(r) for r in rows])
 
 
+@api.delete("/admin/payment-proofs/<int:pid>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_payment_proof_delete(pid):
+    """Delete one payment receipt: the uploaded file AND the row.
+
+    Used by the Delete button on Orders -> Receipts. The file is removed too,
+    so a deleted receipt can no longer be downloaded from its old URL.
+    """
+    row = one("SELECT id, order_id, file_url, file_name FROM payment_proofs WHERE id=?", (pid,))
+    if not row:
+        return jsonify(ok=False, error="That receipt is no longer there."), 404
+    file_url = row["file_url"] or ""
+    removed = False
+    try:
+        removed = storage.delete_upload(file_url)
+    except Exception:
+        removed = False
+    execute("DELETE FROM payment_proofs WHERE id=?", (pid,))
+    if Config.SUPABASE_ENABLED:
+        try:
+            from supabase_store import delete_receipt as _sb_delete_receipt
+            _sb_delete_receipt(receipt_id=pid, order_id=row["order_id"], file_url=file_url)
+        except Exception:
+            pass
+    audit(authmod.current_admin(), "payment_proof.delete",
+          f"{pid} {row['order_id'] or ''} file_removed={removed}", _ip())
+    return jsonify(ok=True, id=pid, fileRemoved=removed)
+
+
 @api.get("/orders/<oid>/confirm")
 def order_confirm_by_email(oid):
     """Confirm or decline from the link in the email - one tap, no sign in.

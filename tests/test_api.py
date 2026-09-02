@@ -1336,8 +1336,9 @@ def test_shop_pagination_is_real(client):
 
 # ================================================== admin access recovery
 def _clear_bootstrap():
-    """Reset the one-shot recovery marker + code slots between tests."""
+    """Reset the one-shot recovery markers + code slots between tests."""
     execute("DELETE FROM growth_settings WHERE key=?", (authmod.BOOTSTRAP_MARKER,))
+    execute("DELETE FROM growth_settings WHERE key=?", (authmod.PASSWORD_SET_MARKER,))
     execute("DELETE FROM otp_codes")
 
 
@@ -1827,3 +1828,139 @@ def test_categories_persist_in_growth_settings_and_restore_before_merge(tmp_path
     assert sb.save_categories(cats) is False
     assert sb.load_categories() is None
 
+
+# ============================================ admin password: the old one dies
+
+def test_changing_the_password_kills_the_old_one_even_with_supabase(client, monkeypatch):
+    """The LOCAL admins hash is the only source of truth for login.
+
+    Regression: with SUPABASE_ENABLED the login used to be verified against
+    Supabase Auth alone. set_password writes the local hash and only *best
+    effort* mirrors it to Supabase, so a failed mirror left the OLD Supabase
+    password working forever. It must not.
+    """
+    import auth as authmod
+    import supabase_store
+    from config import Config
+
+    old_pw, new_pw = "OldLeaked2026x", "BrandNew2026x"
+    assert authmod.set_shared_password(old_pw) is True
+
+    # Supabase is "on", its password update silently fails, and its login
+    # endpoint still happily accepts the OLD password.
+    monkeypatch.setattr(Config, "SUPABASE_ENABLED", True)
+    monkeypatch.setattr(supabase_store, "supabase_set_shared_password",
+                        lambda pw: False)
+    monkeypatch.setattr(supabase_store, "supabase_verify_login",
+                        lambda email, pw: pw == old_pw)
+
+    assert authmod.set_shared_password(new_pw) is True
+    assert authmod.verify_login(EMAIL, new_pw) is True
+    assert authmod.verify_login(EMAIL, old_pw) is False   # <- the whole point
+
+    # ... and through the HTTP login route too
+    assert client.post("/api/admin/login",
+                       json={"email": EMAIL, "password": old_pw}).status_code != 200
+    assert client.post("/api/admin/login",
+                       json={"email": EMAIL, "password": new_pw}).status_code == 200
+
+    authmod.set_shared_password(PW)   # restore for the rest of the suite
+
+
+def test_bootstrap_never_clobbers_a_password_the_owner_already_set(client):
+    """admin_password_set alone must disable the bootstrap.
+
+    Even when the `admin_bootstrap_applied` marker is missing (older DB, wiped
+    row), a password chosen by the owner is never overwritten on boot.
+    """
+    import auth as authmod
+    _clear_bootstrap()
+    owner_pw = "OwnerPicked2026x"
+    assert authmod.set_shared_password(owner_pw) is True
+    assert one("SELECT key FROM growth_settings WHERE key=?",
+               (authmod.PASSWORD_SET_MARKER,)) is not None
+    # marker for the bootstrap itself is absent ...
+    execute("DELETE FROM growth_settings WHERE key=?", (authmod.BOOTSTRAP_MARKER,))
+    # ... and the bootstrap still refuses to touch the owner's password
+    assert authmod.apply_bootstrap_password("Recovery#Pass2026") is False
+    assert authmod.verify_login(EMAIL, owner_pw) is True
+    assert authmod.verify_login(EMAIL, "Recovery#Pass2026") is False
+    authmod.set_shared_password(PW)
+    _clear_bootstrap()
+
+
+# ==================================================== receipts: admin delete
+
+def test_admin_can_delete_an_uploaded_receipt(client):
+    import storage
+    r = post_proof(client, PDF, "receipt.pdf", orderId="JA-DELPRF1")
+    assert r.status_code == 200, r.data
+    row = dict(one("SELECT id, file_url FROM payment_proofs ORDER BY id DESC LIMIT 1"))
+    pid, url = row["id"], row["file_url"]
+    key = storage._key_from_url(url)
+    assert key and storage.resolve_local(key), "the receipt file should be on disk"
+
+    # not for the public
+    assert client.delete(f"/api/admin/payment-proofs/{pid}").status_code in (401, 403)
+
+    tok = login(client)
+    d = client.delete(f"/api/admin/payment-proofs/{pid}", headers={"X-CSRF-Token": tok})
+    assert d.status_code == 200, d.data
+    assert d.get_json()["ok"] is True
+
+    # the row is gone ...
+    assert one("SELECT id FROM payment_proofs WHERE id=?", (pid,)) is None
+    # ... and so is the uploaded file
+    assert storage.resolve_local(key) is None
+    # deleting it twice is a clean 404, never a 500
+    assert client.delete(f"/api/admin/payment-proofs/{pid}",
+                         headers={"X-CSRF-Token": tok}).status_code == 404
+
+
+def test_admin_receipts_table_has_a_delete_control():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "js", "admin.js"),
+               encoding="utf-8").read()
+    assert "data-del-proof" in src
+    assert "Delete this payment receipt" in src
+    assert "api/admin/payment-proofs/" in src
+
+
+# ======================================= product photos upload fast (admin.js)
+
+def test_product_photos_are_compressed_and_time_out_quickly():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "js", "admin.js"),
+               encoding="utf-8").read()
+    # photos are shrunk in the browser before they are sent
+    assert "function fileToBlob" in src
+    assert "fileToBlob(file, 1400, 0.82)" in src
+    # 45 s for a (small) photo; videos keep the long window
+    assert "timeout: isVideo ? 300000 : 45000" in src
+    # Save waits ~8 s at most, and never pumps the outbox for minutes
+    assert "Date.now() + 8000" in src
+    body = src.split("async function handleProductSubmit", 1)[1].split("\nasync function ", 1)[0]
+    assert "JA_NET.flush()" not in body
+    # media strip paints are coalesced
+    assert "function paintMedia" in src
+
+
+# ================================================= homepage hero video autoplay
+
+def test_hero_video_autoplays_and_fills_a_bigger_stage():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    html = open(os.path.join(root, "index.html"), encoding="utf-8").read()
+    # the element itself carries every attribute a phone needs to autoplay
+    for attr in ("id=\"hero-video\"", "muted", "loop", "playsinline", "autoplay"):
+        assert attr in html
+
+    app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
+    assert "function startAutoplay" in app_js
+    assert "vid.defaultMuted = true" in app_js
+    assert "visibilitychange" in app_js
+    assert "IntersectionObserver" in app_js
+    # a paused video restarts itself instead of sitting on a frozen frame
+    assert 'vid.addEventListener("pause"' in app_js
+
+    css = open(os.path.join(root, "css", "style.css"), encoding="utf-8").read()
+    # the hero stage is bigger than the old clamp(462px, 77vh, 836px)
+    assert "min-height: clamp(560px, 92vh, 1040px);" in css
+    assert "min-height: clamp(462px, 77vh, 836px);" not in css

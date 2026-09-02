@@ -47,21 +47,31 @@ class Config:
     # tick. Defaults to on when SITE_ORIGIN is set; "0" disables it.
     KEEP_ALIVE = os.environ.get("KEEP_ALIVE", "1" if SITE_ORIGIN and SITE_ORIGIN != "http://localhost:8080" else "0")
 
-    # -------------------------------------------------- Google reCAPTCHA v3
-    # Register the domain at https://www.google.com/recaptcha/admin (v3),
-    # then set both keys. The site key is public (sent to the browser via
-    # /api/config); the secret key stays server-side. When the keys are not
-    # configured the checks are skipped entirely, so local dev and the test
-    # suite keep working without any Google account.
+    # ------------------------------------- Google reCAPTCHA v2 (checkbox)
+    # The shop uses the reCAPTCHA v2 "I'm not a robot" CHECKBOX. Register the
+    # site at https://www.google.com/recaptcha/admin as
+    #   label:   Jaura Store checkout v2
+    #   type:    reCAPTCHA v2 -> "I'm not a robot" Checkbox
+    #   domains: jaurastore.com.ng AND www.jaurastore.com.ng
+    # then set both keys below (Render -> Environment). The site key is public
+    # (sent to the browser via /api/config); the secret key stays server-side.
+    #
+    # A v3 key with the v2 widget is exactly what makes the box say
+    # "Invalid key type" - the keys must come from a v2 Checkbox site.
+    #
+    # When the keys are not configured the widget never renders and the checks
+    # are skipped entirely, so local dev, static hosting and the test suite
+    # keep working without any Google account.
     RECAPTCHA_SITE_KEY = os.environ.get("RECAPTCHA_SITE_KEY", "")
     RECAPTCHA_SECRET_KEY = os.environ.get("RECAPTCHA_SECRET_KEY", "")
-    # v3 returns a score 0.0 (bot) .. 1.0 (human); requests scoring below
-    # this are rejected. Google's suggested default is 0.5 — 0.3 is a bit
-    # kinder to shoppers on shared mobile networks.
+    # v2 checkbox responses carry no score (only success true/false), so this
+    # threshold is inert for v2 and kept only so a v3 key still behaves
+    # sensibly if one is ever configured by mistake.
     RECAPTCHA_MIN_SCORE = float(os.environ.get("RECAPTCHA_MIN_SCORE", "0.3") or 0.3)
-    # When "1", requests WITHOUT a token are rejected too. Left off by
-    # default so queued offline orders (whose token expired while the phone
-    # had no signal) still arrive; failed verifications are always rejected.
+    # When "1", requests WITHOUT a token are rejected too. LEAVE THIS OFF:
+    # queued offline orders (whose token expired while the phone had no
+    # signal) must still arrive, and checkout is never blocked behind the
+    # checkbox. Failed verifications are always rejected.
     RECAPTCHA_REQUIRED = os.environ.get("RECAPTCHA_REQUIRED", "") == "1"
 
     # ------------------------------------------------------------ Supabase

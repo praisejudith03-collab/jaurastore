@@ -338,3 +338,72 @@ def public_url(value: str) -> str:
     if raw.startswith(("http://", "https://", "/")):
         return raw
     return "/uploads/" + raw.lstrip("/")
+
+
+def _key_from_url(value: str) -> str:
+    """The storage key for a URL we produced, or "" when it is not ours.
+
+    Accepts both shapes we hand out: "/uploads/<key>" from the local backend
+    and "<S3_PUBLIC_BASE>/<key>" from the S3 backend.
+    """
+    raw = clean(value, 500)
+    if not raw:
+        return ""
+    if raw.startswith("/uploads/"):
+        return raw[len("/uploads/"):].lstrip("/")
+    for base in (Config.S3_PUBLIC_BASE, Config.S3_ENDPOINT):
+        base = (base or "").rstrip("/")
+        if base and raw.startswith(base + "/"):
+            key = raw[len(base) + 1:]
+            if Config.S3_BUCKET and key.startswith(Config.S3_BUCKET + "/"):
+                key = key[len(Config.S3_BUCKET) + 1:]
+            return key.lstrip("/")
+    if "/uploads/" in raw:
+        return raw.split("/uploads/", 1)[1].lstrip("/")
+    return ""
+
+
+def _delete_s3(key: str) -> bool:
+    if not (Config.S3_BUCKET and Config.S3_ACCESS_KEY and Config.S3_SECRET_KEY):
+        return False
+    try:
+        import boto3
+        from botocore.config import Config as BotoConfig
+    except ImportError:
+        return False
+    try:
+        kwargs = dict(
+            region_name=Config.S3_REGION or "auto",
+            aws_access_key_id=Config.S3_ACCESS_KEY,
+            aws_secret_access_key=Config.S3_SECRET_KEY,
+            config=BotoConfig(signature_version="s3v4"),
+        )
+        if Config.S3_ENDPOINT:
+            kwargs["endpoint_url"] = Config.S3_ENDPOINT
+        boto3.client("s3", **kwargs).delete_object(Bucket=Config.S3_BUCKET, Key=key)
+        return True
+    except Exception:  # pragma: no cover - network/credentials
+        return False
+
+
+def delete_upload(value: str) -> bool:
+    """Remove a file we stored earlier. True when something was deleted.
+
+    Used when an admin deletes a payment receipt: the row AND the uploaded
+    file have to go, so a deleted receipt is not still downloadable from its
+    URL. Never raises - a missing file is simply "nothing to delete".
+    """
+    key = _key_from_url(value)
+    if not key or ".." in key:
+        return False
+    removed = False
+    if Config.UPLOAD_MODE == "s3":
+        removed = _delete_s3(key)
+    full = resolve_local(key)
+    if full:
+        try:
+            os.remove(full)
+            removed = True
+        except OSError:
+            pass
+    return removed
