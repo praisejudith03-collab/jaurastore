@@ -135,6 +135,6 @@ class Config:
     # change the password from the admin portal immediately, and set
     # ADMIN_BOOTSTRAP_PASSWORD in the host dashboard if you ever need a second
     # recovery. The marker makes it one-shot per database.
-    BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "") or "Jaura#Admin2026"
+    BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "") or "Jaura@Admin#2026x"
 
     LOW_STOCK_THRESHOLD = 5

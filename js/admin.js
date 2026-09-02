@@ -1027,7 +1027,8 @@ let serverOrders = [];
 
 function orderStatusLabel(s) {
   return s === "confirmed" ? "Confirmed"
-    : s === "declined" ? "Declined" : "Pending";
+    : s === "declined" ? "Declined"
+    : s === "past" ? "Past" : "Pending";
 }
 
 document.addEventListener("click", (e) => {
@@ -1180,7 +1181,7 @@ let orderFilter = "all";
 function ordersPanel() {
   return `
     <div class="adx-order-filters" id="order-filters">
-      ${["all", "pending", "confirmed", "declined"].map((s) =>
+      ${["all", "pending", "past", "confirmed", "declined"].map((s) =>
         `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}
       <a class="wix-link-btn" href="api/admin/orders.csv" style="margin-left:auto">Download CSV</a>
     </div>
@@ -1240,6 +1241,8 @@ function renderOrderPage() {
   if (!box) return;
   const list = orderFilter === "all"
     ? serverOrders
+    : orderFilter === "past"
+    ? serverOrders.filter((o) => (o.status || "pending") !== "pending")
     : serverOrders.filter((o) => (o.status || "pending") === orderFilter);
   if (!list.length) {
     box.innerHTML = `<p class="empty">${orderFilter === "all"

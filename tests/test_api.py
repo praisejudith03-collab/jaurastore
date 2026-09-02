@@ -1601,3 +1601,87 @@ def test_merged_catalogue_never_serves_a_folded_out_category(monkeypatch):
     merged = catmod.merged(include_hidden=True)
     assert all(str(p.get("category")) not in ("skincare", "nails", "packaging")
                for p in merged)
+
+
+def test_confirmation_receipt_email_includes_referral_code(client, monkeypatch):
+    """When an order qualifies for a referral code, the confirmation email
+    includes the code so the customer can immediately share it with friends."""
+    import email as emailmod
+    from email import policy as epolicy
+    from mail_sink import MailSink
+    import config, security
+
+    # Place a qualifying order (9000 CFA is ~20,454 NGN, > 20000 NGN threshold)
+    oid = _make_order(client, "JA-REFTEST1", email="refcust@example.com")
+    with MailSink() as sink:
+        monkeypatch.setattr(config.Config, "MAIL_MODE", "smtp")
+        monkeypatch.setattr(config.Config, "SMTP_HOST", sink.host)
+        monkeypatch.setattr(config.Config, "SMTP_PORT", sink.port)
+        monkeypatch.setattr(config.Config, "SMTP_USER", "")
+        monkeypatch.setattr(config.Config, "SMTP_PASS", "")
+        r = client.get(f"/api/orders/{oid}/confirm?action=confirm"
+                       f"&token={security.order_token(oid, 'confirm')}")
+    assert r.get_json().get("customerEmailed") is True
+    assert len(sink.messages) == 1
+    msg = emailmod.message_from_bytes(sink.messages[0]["data"], policy=epolicy.default)
+    body = msg.get_body(preferencelist=("plain",)).get_content()
+    assert "referral code" in body.lower()
+    assert "JA-" in body
+
+
+def test_admin_orders_filter_by_status(client):
+    """Admin orders endpoint correctly filters by status."""
+    oid1 = _make_order(client, "JA-PEND01", email="pend1@example.com")
+    oid2 = _make_order(client, "JA-CONF01", email="conf1@example.com")
+
+    tok = login(client)
+    client.patch(f"/api/admin/orders/{oid2}", json={"status": "confirmed"},
+                 headers={"X-CSRF-Token": tok})
+
+    res_all = client.get("/api/admin/orders")
+    assert res_all.status_code == 200
+    orders_all = res_all.get_json()["orders"]
+    assert any(o["id"] == oid1 for o in orders_all)
+    assert any(o["id"] == oid2 for o in orders_all)
+
+    res_conf = client.get("/api/admin/orders?status=confirmed")
+    assert res_conf.status_code == 200
+    orders_conf = res_conf.get_json()["orders"]
+    assert all(o["status"] == "confirmed" for o in orders_conf)
+    assert any(o["id"] == oid2 for o in orders_conf)
+
+
+def test_benin_and_togo_payment_methods_supported(client):
+    """Payment methods list includes MTN MoMo Benin and Moov Togo."""
+    r = client.get("/api/payment-methods")
+    assert r.status_code == 200
+    methods = r.get_json().get("methods", [])
+    assert any("MTN MoMo Benin" in m for m in methods)
+    assert any("Moov Money Togo" in m for m in methods)
+
+
+def test_benin_minimum_order_cfa_and_ngn_limits(client):
+    """Benin deliveries enforce 5,000 CFA and 11,400 NGN minimums."""
+    tok = client.get("/api/csrf").get_json()["token"]
+    order_cfa_low = {
+        "id": "JA-BJMIN-1",
+        "customer": {"name": "Benin User", "email": "bj@test.com", "zone": "Cotonou"},
+        "items": [{"id": "p1", "name": "Item", "qty": 1, "price": 4000}],
+        "currency": "CFA",
+        "total": 4000,
+    }
+    r1 = client.post("/api/orders", json=order_cfa_low, headers={"X-CSRF-Token": tok})
+    assert r1.status_code == 400
+    assert "5,000 F CFA" in r1.get_json().get("error", "")
+
+    order_ngn_low = {
+        "id": "JA-BJMIN-2",
+        "customer": {"name": "Benin User", "email": "bj@test.com", "zone": "Porto-Novo"},
+        "items": [{"id": "p1", "name": "Item", "qty": 1, "price": 10000}],
+        "currency": "NGN",
+        "total": 10000,
+    }
+    r2 = client.post("/api/orders", json=order_ngn_low, headers={"X-CSRF-Token": tok})
+    assert r2.status_code == 400
+    assert "11,400 naira" in r2.get_json().get("error", "")
+

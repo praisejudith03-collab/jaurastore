@@ -453,6 +453,10 @@ def create_order():
             growth.record_code_use(promo["code"], email, oid)
         referral_code = growth.maybe_issue_referral(
             email, customer.get("name") or "", total, currency)
+        if referral_code:
+            order["referralCode"] = referral_code
+            execute("UPDATE orders SET payload=? WHERE id=?",
+                    (json.dumps(order, ensure_ascii=False), oid))
         growth.complete_abandoned(sec.clean(d.get("cartToken"), 64), email)
     except Exception:
         pass
