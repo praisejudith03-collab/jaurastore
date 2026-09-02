@@ -1691,7 +1691,8 @@ def test_net_js_blob_uploads_wait_five_minutes_and_persist_timeout():
                encoding="utf-8").read()
     assert "opts.blob ? 300000 : 25000" in src
     assert "job.bodyKind === \"blob\" ? 300000 : 25000" in src
-    assert "timeout: job.timeout || (job.bodyKind === \"blob\" ? 300000 : 25000)" in src
+    assert "timeout: opts.timeout || (opts.blob ? 300000 : 25000)" in src
+    assert "job.timeout || (job.bodyKind === \"blob\" ? 300000 : 25000)" in src
 
 
 def test_admin_login_copy_is_reset_by_email():
