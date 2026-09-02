@@ -128,54 +128,101 @@ window.JA_NET = (function () {
     return inflight;
   }
 
-  // -------------------------------------------------- Google reCAPTCHA v3
+  // ------------------------------------------- Google reCAPTCHA v2 checkbox
   // The site key comes from api/config (set RECAPTCHA_SITE_KEY on the
-  // server). When it is not configured nothing loads and every call
-  // resolves to "" - the shop works exactly as before.
+  // server) and MUST be a reCAPTCHA v2 "I'm not a robot" key - a v3 key here
+  // is what makes the widget say "Invalid key type". When no key is
+  // configured nothing loads, no widget is rendered and every call resolves
+  // to "" - the shop works exactly as before.
+  var recaptchaWidgets = [];
   function siteKey() {
     if (recaptchaKey) return Promise.resolve(recaptchaKey);
     return csrf().then(function () { return recaptchaKey; }).catch(function () { return ""; });
   }
-  function loadRecaptcha(key) {
+  function loadRecaptcha() {
     if (recaptchaLoad) return recaptchaLoad;
     recaptchaLoad = new Promise(function (resolve) {
-      if (window.grecaptcha && window.grecaptcha.execute) return resolve(true);
+      if (window.grecaptcha && window.grecaptcha.render) return resolve(true);
       var s = document.createElement("script");
-      s.src = "https://www.google.com/recaptcha/api.js?render=" + encodeURIComponent(key);
+      s.src = "https://www.google.com/recaptcha/api.js?render=explicit";
       s.async = true;
+      s.defer = true;
       s.onload = function () { resolve(!!window.grecaptcha); };
       s.onerror = function () { resolve(false); };
       document.head.appendChild(s);
-      setTimeout(function () { resolve(!!window.grecaptcha); }, 8000);
+      setTimeout(function () { resolve(!!window.grecaptcha); }, 10000);
     });
     return recaptchaLoad;
   }
+  // Draw the checkbox into every [data-recaptcha-widget] box on the page.
+  function renderWidgets(key) {
+    var boxes = document.querySelectorAll("[data-recaptcha-widget]");
+    if (!boxes.length) return Promise.resolve(false);
+    return loadRecaptcha().then(function (ok) {
+      if (!ok || !window.grecaptcha || !window.grecaptcha.render) return false;
+      return new Promise(function (resolve) {
+        var draw = function () {
+          Array.prototype.forEach.call(boxes, function (el) {
+            if (el.getAttribute("data-recaptcha-id")) return;
+            try {
+              var id = window.grecaptcha.render(el, { sitekey: key, theme: "light" });
+              el.setAttribute("data-recaptcha-id", String(id));
+              el.hidden = false;
+              recaptchaWidgets.push(id);
+            } catch (e) {}
+          });
+          resolve(recaptchaWidgets.length > 0);
+        };
+        try { window.grecaptcha.ready(draw); } catch (e) { draw(); }
+      });
+    });
+  }
+  function widgetIds() {
+    var out = [];
+    document.querySelectorAll("[data-recaptcha-id]").forEach(function (el) {
+      var v = el.getAttribute("data-recaptcha-id");
+      if (v !== null && v !== "") out.push(Number(v));
+    });
+    return out;
+  }
+  // The ticked checkbox's response token. Never blocks a sale: when the
+  // shopper has not ticked (or the widget never loaded) this is "" and the
+  // server decides (RECAPTCHA_REQUIRED is off by default).
   function recaptcha(action) {
     return siteKey().then(function (key) {
       if (!key) return "";
-      return loadRecaptcha(key).then(function (ok) {
-        if (!ok || !window.grecaptcha || !window.grecaptcha.execute) return "";
-        return new Promise(function (resolve) {
-          var done = false;
-          var finish = function (t) { if (!done) { done = true; resolve(t || ""); } };
-          setTimeout(function () { finish(""); }, 6000);
+      return renderWidgets(key).then(function () {
+        var ids = widgetIds();
+        for (var i = 0; i < ids.length; i++) {
           try {
-            window.grecaptcha.ready(function () {
-              try {
-                window.grecaptcha.execute(key, { action: action || "submit" })
-                  .then(finish, function () { finish(""); });
-              } catch (e) { finish(""); }
-            });
-          } catch (e) { finish(""); }
-        });
+            var tok = window.grecaptcha.getResponse(ids[i]);
+            if (tok) return tok;
+          } catch (e) {}
+        }
+        return "";
       });
     }).catch(function () { return ""; });
   }
-  // Show the reCAPTCHA notice on pages that carry one, badge stays tidy.
-  siteKey().then(function (key) {
-    if (!key) return;
-    document.querySelectorAll("[data-recaptcha-note]").forEach(function (el) { el.hidden = false; });
-  });
+  // A v2 token is single-use: clear the tick once it has been spent so the
+  // next order gets a fresh one.
+  function resetRecaptcha() {
+    widgetIds().forEach(function (id) {
+      try { window.grecaptcha.reset(id); } catch (e) {}
+    });
+  }
+  // Show the reCAPTCHA notice + checkbox on pages that carry one.
+  function mountRecaptcha() {
+    return siteKey().then(function (key) {
+      if (!key) return false;
+      document.querySelectorAll("[data-recaptcha-note]").forEach(function (el) { el.hidden = false; });
+      return renderWidgets(key);
+    }).catch(function () { return false; });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", function () { mountRecaptcha(); });
+  } else {
+    mountRecaptcha();
+  }
 
   // ------------------------------------------------------------- outbox
   function newId() { return "j" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -208,6 +255,7 @@ window.JA_NET = (function () {
       var timer = ctl ? setTimeout(function () { ctl.abort(); }, abortMs) : null;
       var hdrs = headersFor(job, tok);
       if (rct) hdrs["X-Recaptcha-Token"] = rct;
+      if (rct) { try { resetRecaptcha(); } catch (e) {} }
       return fetch(job.url, {
         method: job.method,
         headers: hdrs,
@@ -379,6 +427,7 @@ window.JA_NET = (function () {
 
   return {
     api: api, csrf: csrf, flush: flush, boot: boot, recaptcha: recaptcha,
+    mountRecaptcha: mountRecaptcha, resetRecaptcha: resetRecaptcha,
     pending: pending, onStatus: onStatus, isOnline: isOnline,
     _jobs: function () { return jobs.slice(); },
   };
