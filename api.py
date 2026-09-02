@@ -66,6 +66,11 @@ def _save_categories(categories, actor=None):
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
     _os.replace(tmp, CATEGORIES_FILE)
+    try:
+        from supabase_store import save_categories
+        save_categories(categories)
+    except Exception:
+        pass
     return payload
 
 def _utcnow():
@@ -151,13 +156,6 @@ def categories_admin_set():
             "hidden": bool(c.get("hidden")),
         })
     payload = _save_categories(clean, authmod.current_admin())
-    # Best-effort Supabase mirror (never blocks the save).
-    if Config.SUPABASE_ENABLED:
-        try:
-            from supabase_store import replace_categories
-            replace_categories(clean)
-        except Exception:
-            pass
     audit(authmod.current_admin(), "categories.update", f"saved={len(clean)}", _ip())
     return jsonify(ok=True, count=len(clean), **payload)
 
@@ -1162,7 +1160,10 @@ def _load_site():
             d = json.load(fh) or {}
     except (OSError, ValueError):
         d = {}
-    return {k: sec.safe_url(str(d.get(k) or "")) for k in SITE_KEYS}
+    out = {k: sec.safe_url(str(d.get(k) or "")) for k in SITE_KEYS}
+    for k, default in SITE_TEXT_DEFAULTS.items():
+        out[k] = _clean_iso_date(d.get(k), default)
+    return out
 
 @api.get("/site")
 def site_config():

@@ -33,6 +33,18 @@ def create_app():
     try:
         migrate()                      # add columns added after the first release
         analytics_mod.prune()          # drop raw analytics past the retention window
+        # Restore the category table from Supabase (growth_settings) so a
+        # redeploy that wiped the disk still has the owner's list. Must run
+        # before the one-shot category merge.
+        try:
+            from supabase_store import load_categories
+            remote = load_categories()
+            if remote:
+                import api as _api_mod
+                _api_mod._save_categories(remote, actor="supabase-restore")
+                app.logger.info("category table restored from growth_settings")
+        except Exception as exc:
+            app.logger.warning("category restore skipped: %s", exc)
         # One-shot category merge (folds the old `nails` / `packaging`
         # categories, renames `gift-set`, and re-points legacy products). Run
         # on the deployed environments only so the local repo's category table

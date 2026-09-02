@@ -1767,3 +1767,62 @@ def test_hero_video_is_full_bleed_letterboxed():
     assert "8,800 F CFA" in open(os.path.join(os.path.dirname(__file__), "..", "js", "i18n.js"),
                                  encoding="utf-8").read()
 
+
+def test_categories_persist_in_growth_settings_and_restore_before_merge(tmp_path, monkeypatch):
+    """Admin category writes go to growth_settings; boot restores them
+    before the one-shot category merge. There is no replace_categories."""
+    import supabase_store as sb
+    import inspect
+    import app as appmod
+    assert sb.CATEGORIES_KEY == "categories_json"
+    assert "replace_categories" not in open(
+        os.path.join(os.path.dirname(__file__), "..", "api.py"), encoding="utf-8").read()
+    assert not hasattr(sb, "replace_categories")
+    src = inspect.getsource(appmod.create_app)
+    assert "load_categories" in src
+    assert src.index("load_categories") < src.index("merge_categories")
+
+    class _FakeGrowth:
+        def __init__(self):
+            self.store = {}
+        def table(self, name):
+            assert name == "growth_settings"
+            return self
+        def upsert(self, rows):
+            for r in rows:
+                self.store[r["key"]] = r["value"]
+            return self
+        def select(self, *_a, **_k):
+            return self
+        def eq(self, _col, val):
+            self._eq = val
+            return self
+        def limit(self, _n):
+            return self
+        def execute(self):
+            val = self.store.get(getattr(self, "_eq", None))
+            data = [{"value": val}] if val is not None else []
+            return type("Res", (), {"data": data})()
+
+    fake = _FakeGrowth()
+    monkeypatch.setattr(sb, "client", lambda: fake)
+    cats = [{"id": "bags", "name": "Bags", "nameFr": "", "image": "x", "hidden": False}]
+    assert sb.save_categories(cats) is True
+    assert json.loads(fake.store[sb.CATEGORIES_KEY])[0]["id"] == "bags"
+    assert sb.load_categories()[0]["name"] == "Bags"
+
+    # a wiped disk is refilled from growth_settings
+    cat_file = tmp_path / "categories.json"
+    monkeypatch.setattr("api.CATEGORIES_FILE", str(cat_file))
+    import api as apimod
+    remote = sb.load_categories()
+    apimod._save_categories(remote, actor="supabase-restore")
+    on_disk = json.loads(cat_file.read_text())
+    assert on_disk["categories"][0]["id"] == "bags"
+    assert on_disk["updatedBy"] == "supabase-restore"
+
+    # unconfigured hosts stay a no-op
+    monkeypatch.setattr(sb, "client", lambda: None)
+    assert sb.save_categories(cats) is False
+    assert sb.load_categories() is None
+
