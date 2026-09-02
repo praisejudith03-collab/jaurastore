@@ -1142,6 +1142,15 @@ def admin_upload_hero():
 # homepage hero video). Kept in a JSON file next to the catalogue so it
 # survives a redeploy on a persistent disk.
 SITE_KEYS = ("heroVideo", "heroPoster", "heroDoc")
+SITE_TEXT_DEFAULTS = {"bannerFrom": "2026-09-15", "bannerTo": "2026-09-25"}
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _clean_iso_date(v, fallback=None):
+    s = str(v or "").strip()[:10]
+    if _ISO_DATE.match(s):
+        return s
+    return fallback
 
 def _site_path():
     return os.environ.get("SITE_CONFIG_PATH") or os.path.join(
@@ -1169,6 +1178,11 @@ def admin_site_update():
     for k in SITE_KEYS:
         if k in d:
             cur[k] = sec.safe_url(str(d.get(k) or ""))
+    for k in SITE_TEXT_DEFAULTS:
+        if k in d:
+            cleaned = _clean_iso_date(d.get(k), None)
+            if cleaned:
+                cur[k] = cleaned
     path = _site_path()
     parent = os.path.dirname(path)
     if parent:

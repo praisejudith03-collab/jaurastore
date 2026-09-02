@@ -1858,6 +1858,9 @@ function paintDesk(tab = "analytics") {
       bankCfa: fd.get("bankCfa"),
       bankNgn: fd.get("bankNgn"),
     });
+    const from = String(fd.get("bannerFrom") || "").trim();
+    const to = String(fd.get("bannerTo") || "").trim();
+    saveSiteConfig({ bannerFrom: from, bannerTo: to }).catch(() => {});
     JA.toast("Settings saved.");
     JA.mountChrome();
   });
@@ -2037,6 +2040,10 @@ function settingsForm() {
   <form id="set-form" class="form-grid admin-card" style="margin-top:22px">
     <h3 class="admin-h full">Contact &amp; payment details</h3>
     <p class="admin-note full">Naira is the only price you enter on products. The website converts F CFA at <strong>1 ₦ = 0.44 F CFA</strong>.</p>
+    <h3 class="admin-h full">Benin delivery window</h3>
+    <p class="admin-note full">These dates appear on the moving banner under the header. Shoppers in Benin are told they will receive their order between these two days.</p>
+    <div class="field"><label>Delivery window starts</label><input type="date" name="bannerFrom" id="banner-from" value="2026-09-15" /></div>
+    <div class="field"><label>Delivery window ends</label><input type="date" name="bannerTo" id="banner-to" value="2026-09-25" /></div>
     <div class="field"><label>WhatsApp (digits only)</label><input name="whatsapp" value="${s.whatsapp}" /></div>
     <div class="field"><label>Phone Benin</label><input name="phoneBj" value="${s.phoneBj}" /></div>
     <div class="field"><label>Phone Nigeria</label><input name="phoneNg" value="${s.phoneNg}" /></div>
@@ -2085,7 +2092,14 @@ function bindHeroVideo() {
   if (!file) return;
   fetch("api/site", { cache: "no-store" })
     .then((r) => r.json())
-    .then((d) => paintHeroVideoNow((d && d.site) || {}))
+    .then((d) => {
+      const site = (d && d.site) || {};
+      paintHeroVideoNow(site);
+      const from = $("#banner-from");
+      const to = $("#banner-to");
+      if (from && site.bannerFrom) from.value = site.bannerFrom;
+      if (to && site.bannerTo) to.value = site.bannerTo;
+    })
     .catch(() => paintHeroVideoNow({}));
   file.addEventListener("change", async () => {
     const f = file.files && file.files[0];

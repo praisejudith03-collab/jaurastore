@@ -63,10 +63,11 @@ const JA = (() => {
     "footer.visit": "Visit & deliver",
     "promo.welcome": "Welcome to JauraStore",
     "promo.reduced": "Prices have been reduced",
-    "promo.referral": "Order above ₦20,000 (or the CFA equivalent) and get your personal referral code — share it and your friends enjoy a discount at checkout.",
+    "promo.referral": "Order above ₦20,000 (about 8,800 F CFA) and get your personal referral code — share it and your friends enjoy a discount at checkout.",
     "promo.shop": "Shop now",
     "promo.kicker": "Everything you love, all in one store",
-    "conv.banner": "Benin 🇧🇯 customers: place your order now and get it between 15 September and 25 September",
+    "conv.banner": "Benin 🇧🇯 customers: place your order now and get it between {from} and {to}",
+    "ck.bjMin": "Benin deliveries: minimum order 5,000 F CFA (about 11,400 naira).",
   };
 
   const tx = (key, vars) => {
@@ -1295,6 +1296,47 @@ const JA = (() => {
   }
 
 
+  let _bannerDates = { from: "2026-09-15", to: "2026-09-25" };
+  function currentLang() {
+    try { return (window.I18N && I18N.lang()) || "en"; } catch (e) { return "en"; }
+  }
+  function formatBannerDay(iso, lang) {
+    const s = String(iso || "").trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return s || iso;
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    if (Number.isNaN(d.getTime())) return s;
+    try {
+      return d.toLocaleDateString(lang === "fr" ? "fr-FR" : "en-GB", { day: "numeric", month: "long" });
+    } catch (_) {
+      return s;
+    }
+  }
+  function convBannerHTML() {
+    const lang = currentLang();
+    const from = formatBannerDay(_bannerDates.from, lang);
+    const to = formatBannerDay(_bannerDates.to, lang);
+    const line = tx("conv.banner", { from, to });
+    const min = tx("ck.bjMin");
+    const span = `<span>${line} · <strong>${min}</strong></span>`;
+    return span + span + span + span;
+  }
+  function paintConvBanner() {
+    const track = document.querySelector(".conv-track");
+    if (track) track.innerHTML = convBannerHTML();
+  }
+  function loadBannerDates() {
+    return fetch("api/site", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const site = (d && d.site) || {};
+        if (site.bannerFrom) _bannerDates.from = site.bannerFrom;
+        if (site.bannerTo) _bannerDates.to = site.bannerTo;
+        paintConvBanner();
+      })
+      .catch(() => {});
+  }
+
   function goldFly() {
     return `<svg class="gold-bf" viewBox="0 0 64 48" aria-hidden="true">
       <path fill="#c4a574" d="M32 24C26 6 8 4 6 16c-2 10 14 14 26 10 6-18 24-20 26-8 2 10-14 14-26 10z"/>
@@ -1349,10 +1391,7 @@ const JA = (() => {
     </header>
     <div class="conv-bar" role="status">
       <div class="conv-track">
-        <span>${tx("conv.banner")}</span>
-        <span>${tx("conv.banner")}</span>
-        <span>${tx("conv.banner")}</span>
-        <span>${tx("conv.banner")}</span>
+        ${convBannerHTML()}
       </div>
     </div>
     <nav class="mobile-nav wix-menu" data-mobile>
@@ -1685,6 +1724,7 @@ const JA = (() => {
     const bot = document.getElementById("site-footer");
     if (top) top.innerHTML = headerHTML();
     if (bot) bot.innerHTML = footerHTML();
+    try { loadBannerDates(); } catch (e) {}
     try {
       const dock = bot && bot.querySelector(".dock");
       if (dock) document.body.appendChild(dock);

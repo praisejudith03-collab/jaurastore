@@ -1719,3 +1719,51 @@ def test_github_sync_refuses_put_without_sha_and_skips_orders_backup():
                  encoding="utf-8").read()
     assert "Customer orders stay on the server" in admin
 
+
+def test_banner_dates_public_read_and_admin_write(client):
+    if os.path.exists("/tmp/jaura_test_site.json"):
+        os.remove("/tmp/jaura_test_site.json")
+    r = client.get("/api/site")
+    assert r.status_code == 200
+    site = r.get_json()["site"]
+    assert site["bannerFrom"] == "2026-09-15"
+    assert site["bannerTo"] == "2026-09-25"
+    tok = login(client)
+    r = client.post("/api/admin/site", headers={"X-CSRF-Token": tok}, json={
+        "bannerFrom": "2026-10-01",
+        "bannerTo": "2026-10-12",
+        "heroVideo": "javascript:alert(1)",
+    })
+    assert r.status_code == 200
+    site = r.get_json()["site"]
+    assert site["bannerFrom"] == "2026-10-01"
+    assert site["bannerTo"] == "2026-10-12"
+    assert site["heroVideo"] == ""
+    # garbage dates keep the previous valid values (not run through safe_url)
+    r = client.post("/api/admin/site", headers={"X-CSRF-Token": tok}, json={
+        "bannerFrom": "not-a-date",
+        "bannerTo": "<script>x</script>",
+    })
+    site = r.get_json()["site"]
+    assert site["bannerFrom"] == "2026-10-01"
+    assert site["bannerTo"] == "2026-10-12"
+
+
+def test_hero_video_is_full_bleed_letterboxed():
+    css = open(os.path.join(os.path.dirname(__file__), "..", "css", "style.css"),
+               encoding="utf-8").read()
+    idx = css.find(".home-hero-static.has-video .home-hero-video")
+    assert idx != -1
+    chunk = css[idx:idx + 420]
+    assert "object-fit: contain" in chunk or "object-fit:contain" in chunk
+    assert "inset: 0" in chunk or "inset:0" in chunk
+    html = open(os.path.join(os.path.dirname(__file__), "..", "index.html"),
+                encoding="utf-8").read()
+    assert 'id="hero-video"' in html
+    assert "autoplay" in html
+    store = open(os.path.join(os.path.dirname(__file__), "..", "js", "store.js"),
+                 encoding="utf-8").read()
+    assert "ck.bjMin" in store
+    assert "8,800 F CFA" in open(os.path.join(os.path.dirname(__file__), "..", "js", "i18n.js"),
+                                 encoding="utf-8").read()
+
