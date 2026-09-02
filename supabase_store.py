@@ -367,3 +367,54 @@ def mirror_growth_settings(settings_dict):
         c.table("growth_settings").upsert(rows).execute()
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] growth settings upsert failed: {exc}")
+
+
+# The category table lives in data/categories.json on disk. A Render redeploy
+# wipes that file, so we also keep a JSON copy in growth_settings (no new
+# schema). CATEGORIES_KEY / save_categories / load_categories are the only
+# names the rest of the app should use — there is no replace_categories.
+CATEGORIES_KEY = "categories_json"
+
+
+def save_categories(categories):
+    """Persist the category table as one growth_settings row. Never raises."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        payload = json.dumps(categories, ensure_ascii=False)
+        c.table("growth_settings").upsert(
+            [{"key": CATEGORIES_KEY, "value": payload}]
+        ).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] categories save failed: {exc}")
+        return False
+
+
+def load_categories():
+    """Return the category list stored under CATEGORIES_KEY, or None."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("growth_settings")
+               .select("value")
+               .eq("key", CATEGORIES_KEY)
+               .limit(1)
+               .execute())
+        rows = _res_data(res)
+        if not rows:
+            return None
+        raw = (rows[0] or {}).get("value")
+        if raw is None or raw == "":
+            return None
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(data, dict) and isinstance(data.get("categories"), list):
+            data = data["categories"]
+        if isinstance(data, list) and data:
+            return data
+        return None
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] categories load failed: {exc}")
+        return None

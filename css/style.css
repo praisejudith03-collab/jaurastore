@@ -2436,6 +2436,14 @@ body.menu-open { overflow: hidden; }
 }
 .bank-sub { font-size: 13px; color: #666; text-align: center; margin-top: 8px; }
 .ck-pay-intro { font-size: 14px; color: #6b6b6b; line-height: 1.55; margin: 0 0 14px; }
+.ck-pay-country-note {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #5a3d6b;
+  background: #f7eef8;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+}
 .ck-ship-wa {
   font-size: 13px;
   color: #5a3d6b;
@@ -4558,6 +4566,13 @@ body[data-page="admin"] .wa-float { display: none !important; }
   text-transform: uppercase;
   color: #f4ead8;
 }
+.conv-track strong {
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #fff;
+  text-transform: none;
+}
+.conv-track { animation-duration: 42s; }
 @keyframes convMove {
   from { transform: translateX(0); }
   to { transform: translateX(-50%); }
@@ -5374,23 +5389,25 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
    inset from the section edges so it never collides with surrounding layout,
    with a crisp (small-radius) border and a soft shadow for definition. */
 .home-hero-static.has-video {
-  min-height: clamp(420px, 70vh, 760px);
+  min-height: clamp(462px, 77vh, 836px);
   display: grid; align-items: center;
-  padding: clamp(14px, 3.5vw, 36px);
+  padding: 0;
+  background: #111;
 }
 .home-hero-static.has-video .wrap { display: none; }
 .home-hero-static.has-video .home-hero-video {
   position: absolute;
-  inset: clamp(14px, 3.5vw, 36px);
-  width: auto; height: auto;
-  border-radius: 6px;                 /* sharper, defined corners */
-  border: 1px solid rgba(253, 250, 245, .5);
-  outline: 1px solid rgba(43, 32, 24, .4);
-  box-shadow: 0 16px 48px rgba(24, 14, 8, .38), 0 4px 14px rgba(24, 14, 8, .3);
+  inset: 0;
+  width: 100%; height: 100%;
+  object-fit: contain;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  border-radius: 0;
 }
 .home-hero-static.has-video .home-hero-scrim {
-  inset: clamp(14px, 3.5vw, 36px);
-  border-radius: 6px;
+  inset: 0;
+  border-radius: 0;
 }
 .home-hero-video-copy {
   position: relative; z-index: 2;

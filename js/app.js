@@ -975,6 +975,11 @@ function paintCheckoutTotals(form) {
   form.querySelectorAll(".pay-card").forEach((card) => {
     card.classList.toggle("is-on", card.querySelector("input")?.checked);
   });
+  const countryNote = document.querySelector("[data-ck-country-note]");
+  if (countryNote) {
+    const country = String(form.querySelector("[name=country]")?.value || "").toLowerCase();
+    countryNote.hidden = !(country.includes("benin") || country.includes("togo"));
+  }
 }
 
 function renderCheckout() {

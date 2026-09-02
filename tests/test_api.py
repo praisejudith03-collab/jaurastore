@@ -1685,3 +1685,145 @@ def test_benin_minimum_order_cfa_and_ngn_limits(client):
     assert r2.status_code == 400
     assert "11,400 naira" in r2.get_json().get("error", "")
 
+
+def test_net_js_blob_uploads_wait_five_minutes_and_persist_timeout():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "js", "net.js"),
+               encoding="utf-8").read()
+    assert "opts.blob ? 300000 : 25000" in src
+    assert "job.bodyKind === \"blob\" ? 300000 : 25000" in src
+    assert "timeout: opts.timeout || (opts.blob ? 300000 : 25000)" in src
+    assert "job.timeout || (job.bodyKind === \"blob\" ? 300000 : 25000)" in src
+
+
+def test_admin_login_copy_is_reset_by_email():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "js", "admin.js"),
+               encoding="utf-8").read()
+    assert "Reset it by email" in src
+    assert "send a 6-digit code to that email" in src
+    assert "Reset it via WhatsApp" not in src
+    assert "timeout: 300000" in src
+    assert "api/admin/uploads/product" in src
+
+
+def test_github_sync_refuses_put_without_sha_and_skips_orders_backup():
+    import repo_sync
+    assert "data/backups/orders-backup.json" not in repo_sync.REPO_DATA_FILES
+    src = open(os.path.join(os.path.dirname(__file__), "..", "repo_sync.py"),
+               encoding="utf-8").read()
+    assert "GET sha" in src
+    assert "could not recover sha" in src
+    assert "(no sha)" in src
+    gi = open(os.path.join(os.path.dirname(__file__), "..", ".gitignore"),
+              encoding="utf-8").read()
+    assert "orders-backup.json" in gi
+    admin = open(os.path.join(os.path.dirname(__file__), "..", "js", "admin.js"),
+                 encoding="utf-8").read()
+    assert "Customer orders stay on the server" in admin
+
+
+def test_banner_dates_public_read_and_admin_write(client):
+    if os.path.exists("/tmp/jaura_test_site.json"):
+        os.remove("/tmp/jaura_test_site.json")
+    r = client.get("/api/site")
+    assert r.status_code == 200
+    site = r.get_json()["site"]
+    assert site["bannerFrom"] == "2026-09-15"
+    assert site["bannerTo"] == "2026-09-25"
+    tok = login(client)
+    r = client.post("/api/admin/site", headers={"X-CSRF-Token": tok}, json={
+        "bannerFrom": "2026-10-01",
+        "bannerTo": "2026-10-12",
+        "heroVideo": "javascript:alert(1)",
+    })
+    assert r.status_code == 200
+    site = r.get_json()["site"]
+    assert site["bannerFrom"] == "2026-10-01"
+    assert site["bannerTo"] == "2026-10-12"
+    assert site["heroVideo"] == ""
+    # garbage dates keep the previous valid values (not run through safe_url)
+    r = client.post("/api/admin/site", headers={"X-CSRF-Token": tok}, json={
+        "bannerFrom": "not-a-date",
+        "bannerTo": "<script>x</script>",
+    })
+    site = r.get_json()["site"]
+    assert site["bannerFrom"] == "2026-10-01"
+    assert site["bannerTo"] == "2026-10-12"
+
+
+def test_hero_video_is_full_bleed_letterboxed():
+    css = open(os.path.join(os.path.dirname(__file__), "..", "css", "style.css"),
+               encoding="utf-8").read()
+    idx = css.find(".home-hero-static.has-video .home-hero-video")
+    assert idx != -1
+    chunk = css[idx:idx + 420]
+    assert "object-fit: contain" in chunk or "object-fit:contain" in chunk
+    assert "inset: 0" in chunk or "inset:0" in chunk
+    html = open(os.path.join(os.path.dirname(__file__), "..", "index.html"),
+                encoding="utf-8").read()
+    assert 'id="hero-video"' in html
+    assert "autoplay" in html
+    store = open(os.path.join(os.path.dirname(__file__), "..", "js", "store.js"),
+                 encoding="utf-8").read()
+    assert "ck.bjMin" in store
+    assert "8,800 F CFA" in open(os.path.join(os.path.dirname(__file__), "..", "js", "i18n.js"),
+                                 encoding="utf-8").read()
+
+
+def test_categories_persist_in_growth_settings_and_restore_before_merge(tmp_path, monkeypatch):
+    """Admin category writes go to growth_settings; boot restores them
+    before the one-shot category merge. There is no replace_categories."""
+    import supabase_store as sb
+    import inspect
+    import app as appmod
+    assert sb.CATEGORIES_KEY == "categories_json"
+    assert "replace_categories" not in open(
+        os.path.join(os.path.dirname(__file__), "..", "api.py"), encoding="utf-8").read()
+    assert not hasattr(sb, "replace_categories")
+    src = inspect.getsource(appmod.create_app)
+    assert "load_categories" in src
+    assert src.index("load_categories") < src.index("merge_categories")
+
+    class _FakeGrowth:
+        def __init__(self):
+            self.store = {}
+        def table(self, name):
+            assert name == "growth_settings"
+            return self
+        def upsert(self, rows):
+            for r in rows:
+                self.store[r["key"]] = r["value"]
+            return self
+        def select(self, *_a, **_k):
+            return self
+        def eq(self, _col, val):
+            self._eq = val
+            return self
+        def limit(self, _n):
+            return self
+        def execute(self):
+            val = self.store.get(getattr(self, "_eq", None))
+            data = [{"value": val}] if val is not None else []
+            return type("Res", (), {"data": data})()
+
+    fake = _FakeGrowth()
+    monkeypatch.setattr(sb, "client", lambda: fake)
+    cats = [{"id": "bags", "name": "Bags", "nameFr": "", "image": "x", "hidden": False}]
+    assert sb.save_categories(cats) is True
+    assert json.loads(fake.store[sb.CATEGORIES_KEY])[0]["id"] == "bags"
+    assert sb.load_categories()[0]["name"] == "Bags"
+
+    # a wiped disk is refilled from growth_settings
+    cat_file = tmp_path / "categories.json"
+    monkeypatch.setattr("api.CATEGORIES_FILE", str(cat_file))
+    import api as apimod
+    remote = sb.load_categories()
+    apimod._save_categories(remote, actor="supabase-restore")
+    on_disk = json.loads(cat_file.read_text())
+    assert on_disk["categories"][0]["id"] == "bags"
+    assert on_disk["updatedBy"] == "supabase-restore"
+
+    # unconfigured hosts stay a no-op
+    monkeypatch.setattr(sb, "client", lambda: None)
+    assert sb.save_categories(cats) is False
+    assert sb.load_categories() is None
+
