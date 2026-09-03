@@ -472,6 +472,38 @@ document.addEventListener("DOMContentLoaded", function () { JA_NET.boot(); });
    localhost) so development over plain http is never half-cached. */
 if ("serviceWorker" in navigator && window.isSecureContext) {
   window.addEventListener("load", function () {
-    navigator.serviceWorker.register("sw.js").catch(function () { /* optional */ });
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(function (reg) {
+      if (!reg) return;
+
+      /* Auto cache-bust: when a new worker turns up, reload ONCE so the
+         visitor gets the new files without pressing Ctrl/Cmd + Shift + R.
+         The reload is rate-limited (at most one per minute) so a broken
+         deploy can never trap a phone in a refresh loop. */
+      reg.addEventListener("updatefound", function () {
+        var worker = reg.installing;
+        if (!worker) return;
+        worker.addEventListener("statechange", function () {
+          if (worker.state !== "installed") return;
+          if (!navigator.serviceWorker.controller) return;   // first visit
+          var now = Date.now();
+          try {
+            var last = Number(sessionStorage.getItem("jaura-sw-reload-at") || 0);
+            if (last && now - last < 60000) return;
+            sessionStorage.setItem("jaura-sw-reload-at", String(now));
+          } catch (e) { /* private mode: still reload, just unguarded below */ }
+          window.location.reload();
+        });
+      });
+
+      /* Look for a newer worker when the tab comes back, and every half
+         hour. With updateViaCache:"none" this always asks the network, so a
+         shipped change reaches an open tab on its own. */
+      if (reg.update) {
+        document.addEventListener("visibilitychange", function () {
+          if (!document.hidden) reg.update().catch(function () {});
+        });
+        setInterval(function () { reg.update().catch(function () {}); }, 30 * 60 * 1000);
+      }
+    }).catch(function () { /* optional */ });
   });
 }
