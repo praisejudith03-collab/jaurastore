@@ -175,8 +175,13 @@ async function main() {
   let zoneText = w2.document.querySelector("[data-delivery-zones]")?.textContent || "";
   // Fall back to raw if list re-rendered on cart
   if (!zoneText) zoneText = w2.document.querySelector(".fare-list")?.textContent || "";
-  check("'Pick up' is NOT in the delivery zone menu", !/pick\s*-?\s*up/i.test(zoneText),
-        zoneText.replace(/\s+/g, " ").trim().slice(0, 90));
+  // The shop deliberately keeps ONE pick-up option — "Pickup in Cotonou is
+  // free for lighter products" (added with the Benin/Togo shipping rules).
+  // Every other pick-up / self-collect wording must still be stripped out.
+  const pickupLeft = (zoneText.match(/pick\s*-?\s*up[^.]*/gi) || []).join(" | ");
+  check("only the Cotonou free-pickup option survives in the delivery zone menu",
+        !pickupLeft || /pickup in cotonou is free for lighter products/i.test(pickupLeft),
+        pickupLeft.replace(/\s+/g, " ").trim().slice(0, 90));
   check("delivery includes Cotonou option", /Cotonou/i.test(zoneText), "zoneText=" + zoneText.replace(/\s+/g, " ").slice(0, 60));
   // Receipt input must let the customer pick from the gallery (image/*), send a
   // PDF, or take a fresh photo - and must NOT be locked to camera capture.

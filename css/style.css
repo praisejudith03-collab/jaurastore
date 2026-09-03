@@ -5881,3 +5881,172 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
   display: block;
   margin: 8px 0;
 }
+
+/* ============================================================= */
+/* PHONE FIT v118 — 2026-09-03                                   */
+/* Phone-only rules (<= 640px, with a <= 360px tier for small    */
+/* handsets). One gutter, one corner radius, nothing wider than  */
+/* the screen: no sideways scroll, every corner lines up.        */
+/* ============================================================= */
+
+/* 0. a phone page must never scroll sideways */
+@media (max-width: 640px) {
+  html, body {
+    overflow-x: hidden !important;
+    overflow-x: clip !important;
+    max-width: 100% !important;
+  }
+  img, video, svg, iframe, table, form,
+  input, select, textarea, button { max-width: 100% !important; }
+  .table-wrap, .mk-coupons-card, .mk-referrals-card, .mk-abandoned-card {
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* 1. one gutter everywhere: every page wrapper is exactly 100% - 20px */
+@media (max-width: 640px) {
+  .wrap, .wrap-wide {
+    width: calc(100% - 20px) !important;
+    max-width: calc(100% - 20px) !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+}
+
+/* 2. promo + shop banner: full width, 14px corners, inside the gutter */
+@media (max-width: 640px) {
+  .home-promo-wrap,
+  .home-promo,
+  .home-promo img,
+  .home-promo video,
+  .home-promo__scrim,
+  .home-promo__copy,
+  .home-promo-video-copy,
+  .shop-banner,
+  .shop-banner img {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-radius: 14px !important;
+  }
+  .home-promo-wrap {
+    margin-top: 16px !important;
+    margin-bottom: 18px !important;
+  }
+  .home-promo,
+  .home-promo__copy,
+  .home-promo-video-copy {
+    min-height: clamp(150px, 44vw, 240px) !important;
+  }
+  .home-promo__copy strong,
+  .home-promo-video-copy strong {
+    font-size: clamp(17px, 5.2vw, 26px) !important;
+    max-width: 100% !important;
+  }
+  .shop-banner img { height: 132px !important; }
+}
+
+/* 3. product grid on a phone: 2 columns, 10px row / 8px column gap */
+@media (max-width: 640px) {
+  .product-grid,
+  .wix-shop .product-grid,
+  [data-shop-grid],
+  .just-in-grid,
+  body[data-page="home"] .just-in-grid,
+  [data-new] {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px 8px !important;
+  }
+  .card-media,
+  .wix-shop .card-media,
+  body[data-page="home"] .just-in-grid .card-media {
+    border-radius: 14px !important;
+  }
+}
+
+/* 4. reCAPTCHA: a full-width card, widget centred and scaled to fit */
+@media (max-width: 640px) {
+  .ck-recaptcha {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding: 12px 8px !important;
+    transform: none !important;
+    overflow: hidden !important;
+    border-radius: 14px !important;
+  }
+  .ck-recaptcha .g-recaptcha {
+    width: 304px !important;      /* reCAPTCHA v2's natural width */
+    max-width: 304px !important;
+    min-width: 0 !important;      /* beats the inline min-width on the div */
+    margin: 0 auto !important;
+    transform: scale(0.88) !important;
+    transform-origin: center center !important;
+  }
+  .ck-recaptcha-note { text-align: center !important; }
+}
+@media (max-width: 360px) {
+  .ck-recaptcha .g-recaptcha { transform: scale(0.82) !important; }
+}
+
+/* 5. search overlay: the input sits just under the header on a phone */
+@media (max-width: 640px) {
+  .search-overlay,
+  .search-overlay.open {
+    padding: 96px 12px 24px !important;
+    padding-top: 96px !important;
+    align-items: flex-start !important;
+    z-index: 999999 !important;
+  }
+  .search-overlay .search-box,
+  .search-overlay.open .search-box,
+  .search-box {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 16px 14px 12px !important;
+    border-radius: 14px !important;
+  }
+}
+
+/* 6. dock + WhatsApp bubble: inside the screen, never over the content */
+@media (max-width: 640px) {
+  .dock {
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px)) !important;
+    border-radius: 14px 14px 0 0 !important;
+  }
+  .dock a, .dock button { font-size: 9.5px !important; gap: 1px !important; }
+  .dock svg { width: 21px !important; height: 21px !important; }
+  body { padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important; }
+  .wa-float,
+  body[data-page="home"] .wa-float {
+    right: 10px !important;
+    left: auto !important;
+    width: 50px !important;
+    height: 50px !important;
+    bottom: calc(80px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+  .wa-float svg { width: 26px !important; height: 26px !important; }
+  .grecaptcha-badge { bottom: 132px !important; }
+}
+
+/* 7. corners line up: one radius for every framed block on a phone */
+@media (max-width: 640px) {
+  .card-media,
+  .wix-shop .card-media,
+  .home-promo,
+  .shop-banner,
+  .ck-recaptcha,
+  .proof-frame,
+  .cat-tile,
+  .wix-cat-card {
+    border-radius: 14px !important;
+  }
+}
