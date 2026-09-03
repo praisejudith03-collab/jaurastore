@@ -315,23 +315,42 @@ def create_order():
     currency = sec.clean(d.get("currency"), 3).upper() or "NGN"
     total = sec.clean_int(d.get("total"), 0, 0, 10**12)
 
-    # delivery: location only, never a pickup option
+    # delivery: location only, pickup only allowed as "Pickup in Cotonou is free for lighter products"
     zone = sec.clean(customer_raw.get("zone") or d.get("zone"), 80)
-    if re.search(r"(?i)\bpick[\s-]?up\b|collect\s+in\s+store|self[\s-]?collect", zone):
+    zone_lower = zone.lower()
+    # Allow the specific free pickup option, block other pickup attempts
+    is_allowed_pickup = bool(re.search(r"(?i)pickup in cotonou.*free.*lighter|free.*lighter.*cotonou", zone)) or zone_lower == "pickup in cotonou" or "pickup in cotonou is free for lighter products" in zone_lower
+    if not is_allowed_pickup and re.search(r"(?i)\bpick[\s-]?up\b|collect\s+in\s+store|self[\s-]?collect", zone):
         return jsonify(ok=False, error="Choose a delivery location."), 400
 
-    # Benin deliveries carry a minimum order (or its naira equivalent).
-    if re.search(r"(?i)\bbenin\b|cotonou|calavi|porto", zone):
+    # Benin & Togo deliveries carry a minimum order (or its naira equivalent).
+    # Enforce for Benin, Togo, Cotonou, Calavi, Porto-Novo, Lomé
+    if re.search(r"(?i)\bbenin\b|\btogo\b|cotonou|calavi|porto|lom[ée]|lome", zone):
         min_cfa = 5000
         min_ngn = 11400
         if currency == "CFA" and total < min_cfa:
             return jsonify(ok=False, error=(
-                "Benin deliveries: minimum order 5,000 F CFA (about 11,400 naira). "
+                "Benin & Togo deliveries: minimum order 5,000 F CFA (about 11,400 naira). "
                 "Please add a few more items to meet the minimum.")), 400
         if currency == "NGN" and total < min_ngn:
             return jsonify(ok=False, error=(
-                "Benin deliveries: minimum order 11,400 naira (about 5,000 F CFA). "
+                "Benin & Togo deliveries: minimum order 11,400 naira (about 5,000 F CFA). "
                 "Please add a few more items to meet the minimum.")), 400
+    # Also check country field for Benin/Togo even if zone is generic
+    country_raw = sec.clean(customer_raw.get("country") or d.get("country") or "", 80)
+    if re.search(r"(?i)\bbenin\b|\btogo\b", country_raw):
+        # if zone didn't already trigger, still enforce
+        if not re.search(r"(?i)\bbenin\b|\btogo\b|cotonou|calavi|porto|lom[ée]|lome", zone):
+            min_cfa = 5000
+            min_ngn = 11400
+            if currency == "CFA" and total < min_cfa:
+                return jsonify(ok=False, error=(
+                    "Benin & Togo deliveries: minimum order 5,000 F CFA (about 11,400 naira). "
+                    "Please add a few more items to meet the minimum.")), 400
+            if currency == "NGN" and total < min_ngn:
+                return jsonify(ok=False, error=(
+                    "Benin & Togo deliveries: minimum order 11,400 naira (about 5,000 F CFA). "
+                    "Please add a few more items to meet the minimum.")), 400
 
     oid = sec.clean(d.get("id"), 24).upper()
     if not ORDER_ID.match(oid or ""):
@@ -1155,11 +1174,11 @@ def admin_upload_hero():
 # Small owner-editable settings that every visitor needs (currently the
 # homepage hero video). Kept in a JSON file next to the catalogue so it
 # survives a redeploy on a persistent disk.
-SITE_KEYS = ("heroVideo", "heroPoster", "heroDoc")
+SITE_KEYS = ("heroVideo", "heroPoster", "heroDoc", "logoUrl", "shopBannerUrl")
 SITE_TEXT_DEFAULTS = {"bannerFrom": "2026-09-15", "bannerTo": "2026-09-25"}
 # Owner-written plain-text lines (the moving banner). Stored stripped of all
 # markup; empty means the storefront shows its built-in default.
-SITE_TEXT_KEYS = ("convBanner", "convBold")
+SITE_TEXT_KEYS = ("convBanner", "convBold", "shippingNote")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -1183,7 +1202,9 @@ def _load_site():
     for k, default in SITE_TEXT_DEFAULTS.items():
         out[k] = _clean_iso_date(d.get(k), default)
     for k in SITE_TEXT_KEYS:
-        out[k] = sec.clean(d.get(k) or "", 300)
+        # shippingNote needs more space
+        limit = 800 if k == "shippingNote" else 300
+        out[k] = sec.clean(d.get(k) or "", limit)
     return out
 
 @api.get("/site")
@@ -1207,7 +1228,8 @@ def admin_site_update():
                 cur[k] = cleaned
     for k in SITE_TEXT_KEYS:
         if k in d:
-            cur[k] = sec.clean(d.get(k), 300)
+            limit = 800 if k == "shippingNote" else 300
+            cur[k] = sec.clean(d.get(k), limit)
     path = _site_path()
     parent = os.path.dirname(path)
     if parent:

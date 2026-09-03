@@ -141,10 +141,9 @@ function mountHeroVideo() {
   const vid = document.getElementById("hero-video");
   const scrim = document.getElementById("hero-scrim");
   const promo = document.querySelector(".home-promo");
-  if (!vid || !promo) return;
+  const staticImg = document.getElementById("hero-static-img");
+  if (!promo) return;
   const KEY = "jaura.site";
-  // With no owner upload the homepage plays the committed brand reel; the
-  // moment the owner uploads a hero video/poster theirs wins instead.
   const DEFAULT_HERO = "images/brand/lux-reel.mp4";
   const DEFAULT_POSTER = "images/brand/lux-reel.jpg";
   const copy = document.getElementById("hero-video-copy");
@@ -159,8 +158,11 @@ function mountHeroVideo() {
       docSlot.querySelector?.("a")?.setAttribute("href", JA.asset ? JA.asset(doc) : doc);
       docSlot.querySelector?.("a")?.setAttribute("download", doc.split("/").pop() || "hero-document");
     }
-    if (poster) vid.setAttribute("poster", JA.asset ? JA.asset(poster) : poster);
-    if (url) {
+    if (poster && vid) vid.setAttribute("poster", JA.asset ? JA.asset(poster) : poster);
+    // single Explore button — always visible via copy
+    if (copy) copy.hidden = false;
+    if (scrim) scrim.hidden = false;
+    if (url && vid) {
       if (vid.getAttribute("src") !== url) vid.src = url;
       vid.muted = true;
       vid.preload = "auto";
@@ -170,17 +172,15 @@ function mountHeroVideo() {
       vid.setAttribute("disablepictureinpicture", "");
       try { vid.disablePictureInPicture = true; } catch (e) {}
       vid.hidden = false;
-      if (scrim) scrim.hidden = false;
-      if (copy) copy.hidden = false;
+      if (staticImg) staticImg.hidden = true;
       promo.classList.add("has-video");
       startAutoplay(vid);
     } else {
-      vid.hidden = true;
-      vid.removeAttribute("src");
-      if (scrim) scrim.hidden = true;
-      if (copy) copy.hidden = true;
+      if (vid) { vid.hidden = true; vid.removeAttribute("src"); }
+      if (staticImg) staticImg.hidden = false;
       promo.classList.remove("has-video");
     }
+    // Ensure promo respects max-width 680px compact via CSS
   };
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
@@ -435,6 +435,39 @@ function renderShop() {
     shopFilter.color = "";
     shopFilter.size = "";
   }
+  // --- Shop banner auto-switches to selected category's custom image ---
+  try {
+    const bannerImg = document.querySelector(".shop-banner img, [data-shop-banner]");
+    if (bannerImg) {
+      if (cat !== "all") {
+        const cats = (typeof JA.categories === "function" ? JA.categories() : []);
+        const found = cats.find((c) => c.id === cat);
+        const img = found && found.image ? (JA.asset ? JA.asset(found.image) : found.image) : "";
+        if (img && JA.mediaKind && JA.mediaKind(img) === "image") {
+          // Only switch if valid image
+          if (bannerImg.getAttribute("src") !== img) {
+            bannerImg.style.opacity = "0.2";
+            bannerImg.src = img;
+            bannerImg.onload = () => { bannerImg.style.opacity = "1"; };
+            setTimeout(() => { bannerImg.style.opacity = "1"; }, 300);
+          }
+        }
+      } else {
+        // Reset to site custom banner or default
+        const site = (JA.getSiteConfig && JA.getSiteConfig()) || {};
+        const fallback = site.shopBannerUrl || "";
+        if (fallback && bannerImg.src !== fallback) {
+          bannerImg.src = fallback;
+        } else if (!fallback) {
+          // keep default static if no custom
+          const curSrc = bannerImg.getAttribute("src") || "";
+          if (curSrc.includes("categories/") || curSrc.startsWith("/uploads/")) {
+            bannerImg.src = "images/brand/wordmark-bg.jpg";
+          }
+        }
+      }
+    }
+  } catch (e) {}
   const live = document.querySelector("[data-shop-q]");
   const q = (live?.value || param("q") || "").trim();
   const sort = document.querySelector("[data-sort]")?.value || "newest";
@@ -1089,17 +1122,104 @@ function renderCheckout() {
 
   if (form.dataset.bound) return;
   form.dataset.bound = "1";
-  // Delivery only: a "Pick up" choice is never offered, in any language.
+  // Delivery only: allow "Pickup in Cotonou is free for lighter products" but block other pickup options
   document.querySelectorAll("[data-delivery-zones] .fare-opt, .fare-list .fare-opt").forEach((opt) => {
     const input = opt.querySelector("input");
     const text = (opt.textContent || "") + " " + (input && input.value ? input.value : "");
-    if (/pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
+    const isAllowedPickup = /pickup in cotonou.*free.*lighter|free.*lighter.*cotonou/i.test(text);
+    if (!isAllowedPickup && /pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
   });
   document.querySelectorAll("select[data-delivery-zones] option").forEach((opt) => {
     const text = (opt.textContent || "") + " " + (opt.value || "");
-    if (/pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
+    const isAllowedPickup = /pickup in cotonou.*free.*lighter|free.*lighter.*cotonou/i.test(text) || text.toLowerCase().includes("pickup in cotonou is free for lighter products");
+    if (!isAllowedPickup && /pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
   });
+  // Ensure pickup free option exists — inject if missing (for dynamic selects)
+  try {
+    const zoneSelect = form.querySelector("[name=zone], select[data-delivery-zones]");
+    if (zoneSelect && zoneSelect.tagName === "SELECT") {
+      const hasPickup = [...zoneSelect.options].some((o) => /pickup in cotonou.*free.*lighter/i.test(o.value) || /pickup in cotonou is free/i.test(o.textContent));
+      if (!hasPickup) {
+        const opt = document.createElement("option");
+        opt.value = "Pickup in Cotonou is free for lighter products";
+        opt.textContent = "Pickup in Cotonou is free for lighter products";
+        zoneSelect.appendChild(opt);
+      }
+    }
+  } catch (e) {}
   try { JA.track("checkout_start", { page: "checkout" }); } catch (e) {}
+
+  // ---- Shipping note dynamic from Admin Settings ----
+  try {
+    const site = (JA.getSiteConfig && JA.getSiteConfig()) || {};
+    const s = JA.settings();
+    const shipNote = site.shippingNote || s.shippingNote || "";
+    let noteEl = document.querySelector("[data-shipping-note]");
+    if (!noteEl) {
+      // Create dynamic note element after totals or before proof
+      const anchor = form.querySelector("[data-ck-lines]")?.closest("table") || form.querySelector("[data-bank-cfa]") || form;
+      noteEl = document.createElement("div");
+      noteEl.className = "ck-ship-note-dynamic";
+      noteEl.setAttribute("data-shipping-note", "");
+      if (anchor && anchor.parentElement) {
+        anchor.parentElement.insertBefore(noteEl, anchor.nextSibling);
+      } else {
+        form.prepend(noteEl);
+      }
+    }
+    if (shipNote) {
+      noteEl.textContent = shipNote;
+      noteEl.hidden = false;
+    } else {
+      noteEl.hidden = true;
+    }
+    // Listen for site updates
+    document.addEventListener("ja:site", (ev) => {
+      const sd = ev.detail || {};
+      if (sd.shippingNote) {
+        const el = document.querySelector("[data-shipping-note]");
+        if (el) { el.textContent = sd.shippingNote; el.hidden = false; }
+      }
+    });
+  } catch (e) {}
+
+  // ---- Benin & Togo currency prompt ----
+  const promptCurrencyForBeninTogo = (val) => {
+    const v = String(val || "").toLowerCase();
+    if (/benin|togo|cotonou|calavi|porto|lom[ée]|lome/i.test(v)) {
+      // Prompt once per session for this zone
+      if (form.dataset.currencyPrompted === v) return;
+      form.dataset.currencyPrompted = v;
+      const curNow = JA.currency();
+      // Show prompt: OK = F CFA, Cancel = NGN, but we use confirm
+      const msg = v.includes("benin") || v.includes("cotonou") || v.includes("calavi") || v.includes("porto")
+        ? "Benin delivery detected. Choose your currency:\nOK = F CFA (XOF)\nCancel = Naira (₦)\n\nCurrent: " + curNow
+        : "Togo delivery detected. Choose your currency:\nOK = F CFA (XOF)\nCancel = Naira (₦)\n\nCurrent: " + curNow;
+      // Delay to not block UI instantly
+      setTimeout(() => {
+        const wantsCFA = confirm(msg);
+        const targetCur = wantsCFA ? "CFA" : "NGN";
+        if (targetCur !== JA.currency()) {
+          JA.setCurrency(targetCur);
+          const radio = form.querySelector(`[name=currency][value="${targetCur}"]`);
+          if (radio) radio.checked = true;
+          paintCheckoutTotals(form);
+          JA.toast(targetCur === "CFA" ? "Switched to F CFA" : "Switched to Naira");
+        }
+      }, 200);
+    }
+  };
+  // Bind to zone and country selects/inputs
+  const zoneField = form.querySelector("[name=zone]");
+  const countryField = form.querySelector("[name=country]");
+  if (zoneField) {
+    zoneField.addEventListener("change", (e) => promptCurrencyForBeninTogo(e.target.value));
+    zoneField.addEventListener("blur", (e) => promptCurrencyForBeninTogo(e.target.value));
+  }
+  if (countryField) {
+    countryField.addEventListener("change", (e) => promptCurrencyForBeninTogo(e.target.value));
+    countryField.addEventListener("blur", (e) => promptCurrencyForBeninTogo(e.target.value));
+  }
 
   form.addEventListener("change", (e) => {
     if (e.target.name === "currency") {
@@ -1245,18 +1365,43 @@ function renderCheckout() {
     const cur = data.currency || JA.currency();
     const liveItems = JA.cartDetailed();
     if (!liveItems.length) return;
-    // Benin deliveries: 5,000 F CFA or its 11,400 naira equivalent. Guard
+    // Benin & Togo deliveries: 5,000 F CFA or its 11,400 naira equivalent. Guard
     // before any proof handling / queueing so an under-minimum order is
     // never saved locally or sent to the server.
-    const beninZone = /benin|cotonou|calavi|porto/i.test(String(data.zone || ""));
+    const zoneStr = String(data.zone || "");
+    const countryStr = String(data.country || "");
+    const isBeninTogo = /benin|togo|cotonou|calavi|porto|lom[ée]|lome/i.test(zoneStr) || /benin|togo/i.test(countryStr);
     const totalNow = JA.cartTotal(cur);
-    if (beninZone && cur === "CFA" && totalNow < 5000) {
-      JA.toast(t("ck.minOrderCfa"));
+    if (isBeninTogo && cur === "CFA" && totalNow < 5000) {
+      JA.toast(t("ck.minOrderCfa") || "Benin & Togo: minimum order 5,000 F CFA (about 11,400 naira). Please add more items.");
+      // Also show inline warning
+      try {
+        let warn = document.querySelector("[data-ck-min-warn]");
+        if (!warn) {
+          warn = document.createElement("div");
+          warn.setAttribute("data-ck-min-warn", "");
+          warn.style.cssText = "margin:10px 0;padding:10px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;color:#664d03;font-size:13px;";
+          form.insertBefore(warn, form.querySelector(".ck-place")?.parentElement || form.firstChild);
+        }
+        warn.textContent = t("ck.minOrderCfa") || "Benin & Togo: minimum order 5,000 F CFA (about 11,400 naira). Please add more items.";
+        warn.hidden = false;
+      } catch (e) {}
       shot?.focus?.();
       return;
     }
-    if (beninZone && cur === "NGN" && totalNow < 11400) {
-      JA.toast(t("ck.minOrderNgn"));
+    if (isBeninTogo && cur === "NGN" && totalNow < 11400) {
+      JA.toast(t("ck.minOrderNgn") || "Benin & Togo: minimum order 11,400 naira (about 5,000 F CFA). Please add more items.");
+      try {
+        let warn = document.querySelector("[data-ck-min-warn]");
+        if (!warn) {
+          warn = document.createElement("div");
+          warn.setAttribute("data-ck-min-warn", "");
+          warn.style.cssText = "margin:10px 0;padding:10px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;color:#664d03;font-size:13px;";
+          form.insertBefore(warn, form.querySelector(".ck-place")?.parentElement || form.firstChild);
+        }
+        warn.textContent = t("ck.minOrderNgn") || "Benin & Togo: minimum order 11,400 naira (about 5,000 F CFA). Please add more items.";
+        warn.hidden = false;
+      } catch (e) {}
       shot?.focus?.();
       return;
     }
