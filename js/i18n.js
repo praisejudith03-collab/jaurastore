@@ -207,7 +207,7 @@ window.I18N = (() => {
     "ck.shipNigeria": "Nigeria: 3–7 working days, according to location.",
     "ck.shipBenin": "Benin 🇧🇯: goods come in batches to keep fare cheaper. Delivery is on the dates on the banner, unless you pay for express delivery.",
     "ck.bjMin": "Benin deliveries: minimum order 5,000 F CFA (about 11,400 naira).",
-    "ck.payCountryNote": "Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below.",
+    "ck.payCountryNote": "Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below. Minimum order is 5,000 CFA (₦11,300).",
     "ck.minOrderCfa": "Benin deliveries: minimum order 5,000 F CFA. Please add a few more items to meet the minimum.",
     "ck.minOrderNgn": "Benin deliveries: minimum order 11,400 naira. Please add a few more items to meet the minimum.",
     "ck.zoneBenin": "Benin — Cotonou, Calavi, Porto-Novo",

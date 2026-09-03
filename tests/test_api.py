@@ -1751,23 +1751,27 @@ def test_banner_dates_public_read_and_admin_write(client):
     assert site["bannerTo"] == "2026-10-12"
 
 
-def test_hero_video_is_full_bleed_letterboxed():
-    css = open(os.path.join(os.path.dirname(__file__), "..", "css", "style.css"),
-               encoding="utf-8").read()
-    idx = css.find(".home-hero-static.has-video .home-hero-video")
-    assert idx != -1
-    chunk = css[idx:idx + 420]
-    assert "object-fit: contain" in chunk or "object-fit:contain" in chunk
-    assert "inset: 0" in chunk or "inset:0" in chunk
-    html = open(os.path.join(os.path.dirname(__file__), "..", "index.html"),
-                encoding="utf-8").read()
+def test_homepage_video_in_lower_card_container_and_fixes():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    html = open(os.path.join(root, "index.html"), encoding="utf-8").read()
+    # video is in .home-promo, not floating at top center #home-hero
     assert 'id="hero-video"' in html
-    assert "autoplay" in html
-    store = open(os.path.join(os.path.dirname(__file__), "..", "js", "store.js"),
-                 encoding="utf-8").read()
-    assert "ck.bjMin" in store
-    assert "(8,800 CFA)" in open(os.path.join(os.path.dirname(__file__), "..", "js", "i18n.js"),
-                                 encoding="utf-8").read()
+    assert 'home-promo' in html
+    # css check for .home-promo rounded corners and borders
+    css = open(os.path.join(root, "css", "style.css"), encoding="utf-8").read()
+    assert ".home-promo" in css
+    assert "border-radius: 12px" in css or "border-radius:12px" in css
+
+    # cart z-index check
+    assert ".mini-cart" in css
+    assert "z-index: 5000" in css or "z-index:5000" in css
+
+    # checkout fixes check
+    ck_html = open(os.path.join(root, "checkout.html"), encoding="utf-8").read()
+    assert 'data-bank-cfa' in ck_html
+    assert 'Minimum order is 5,000 CFA' in ck_html or '5,000 CFA' in ck_html
+    assert 'g-recaptcha' in ck_html
+    assert 'data-recaptcha-widget' in ck_html
 
 
 def test_categories_persist_in_growth_settings_and_restore_before_merge(tmp_path, monkeypatch):

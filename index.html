@@ -30,12 +30,6 @@
   <div id="site-header"></div>
 
   <section class="home-hero-static" id="home-hero">
-    <video id="hero-video" class="home-hero-video" muted loop playsinline autoplay preload="auto" disablepictureinpicture hidden></video>
-    <span class="home-hero-scrim" id="hero-scrim" hidden></span>
-    <div class="home-hero-video-copy" id="hero-video-copy" hidden>
-      <h1 class="serif-title" data-i18n="home.standard">The new standard of modern luxury</h1>
-      <a class="btn btn-purple" href="shop.html" data-i18n="home.explore">Explore</a>
-    </div>
     <div class="home-hero-doc" id="hero-doc-slot" hidden>
       <a class="btn btn-line" href="#" target="_blank" rel="noopener">View hero document</a>
     </div>
@@ -49,14 +43,22 @@
   </section>
 
   <section class="wrap home-promo-wrap">
-    <a class="home-promo" href="shop.html?cat=gadgets" aria-label="Explore gadgets">
-      <img src="images/products/smartwatch-with-game-pad.jpg" alt="" onerror="fallbackImg(event)" />
-      <span class="home-promo__scrim"></span>
-      <span class="home-promo__copy">
+    <div class="home-promo">
+      <video id="hero-video" class="home-promo-video" muted loop playsinline autoplay preload="auto" disablepictureinpicture hidden></video>
+      <span class="home-hero-scrim" id="hero-scrim" hidden></span>
+      <div class="home-hero-video-copy" id="hero-video-copy" hidden>
         <strong data-i18n="home.standard">The new standard of modern luxury</strong>
-        <span class="btn btn-dark-pill" data-i18n="home.explore">Explore</span>
-      </span>
-    </a>
+        <a class="btn btn-dark-pill" href="shop.html" data-i18n="home.explore">Explore</a>
+      </div>
+      <a class="home-promo-static-link" href="shop.html?cat=gadgets" aria-label="Explore gadgets" style="display:block;position:absolute;inset:0;z-index:1;">
+        <img src="images/products/smartwatch-with-game-pad.jpg" alt="" onerror="fallbackImg(event)" />
+        <span class="home-promo__scrim"></span>
+        <span class="home-promo__copy">
+          <strong data-i18n="home.standard">The new standard of modern luxury</strong>
+          <span class="btn btn-dark-pill" data-i18n="home.explore">Explore</span>
+        </span>
+      </a>
+    </div>
   </section>
 
   <section class="section-tight">

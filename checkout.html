@@ -108,7 +108,6 @@
         <div class="ck-pay">
           <h3 data-i18n="ck.advance">Advance bank payment</h3>
           <p class="ck-pay-intro" data-i18n="ck.payIntro">Pay into the account below. Use your Order ID as the transfer remark, then send a screenshot of your payment to us on WhatsApp. A confirmation message will be sent to your email. JauraStore will confirm your payment.</p>
-          <p class="ck-pay-country-note" data-ck-country-note hidden data-i18n="ck.payCountryNote">Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below.</p>
           <label class="pay-card">
             <input type="radio" name="currency" value="NGN" checked />
             <div>
@@ -132,6 +131,7 @@
           </div>
           <div class="bank-sheet" data-bank-cfa hidden>
             <h4 data-i18n="ck.ourBank">Our bank details</h4>
+            <p class="ck-pay-country-note" data-i18n="ck.payCountryNote">Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below. Minimum order is 5,000 CFA (₦11,300).</p>
             <p class="bank-name-line" data-cfa-name>OKORAFOR GIFT</p>
             <div class="bank-row"><span>MoMo Benin</span><strong data-cfa-acc>01 52 01 99 30</strong></div>
             <div class="bank-row"><span>Moov Togo</span><strong>+229 01 68 95 31 10</strong></div>
@@ -151,7 +151,9 @@
         </div>
 
         <p class="ck-legal" data-i18n="ck.legal">Your personal data is used to process your order. Upload your payment receipt here. JauraStore will confirm your payment, and a confirmation message will be sent to your email. Transport fare is discussed on WhatsApp.</p>
-        <div class="ck-recaptcha" data-recaptcha-widget hidden></div>
+        <div class="ck-recaptcha">
+          <div class="g-recaptcha" data-recaptcha-widget></div>
+        </div>
         <button class="btn ck-place" type="submit" data-i18n="ck.place">Place order</button>
         <p class="ck-recaptcha-note" data-recaptcha-note data-i18n-html="ck.recaptcha" hidden>This site is protected by reCAPTCHA and the Google <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Privacy Policy</a> and <a href="https://policies.google.com/terms" target="_blank" rel="noopener">Terms of Service</a> apply.</p>
       </aside>
