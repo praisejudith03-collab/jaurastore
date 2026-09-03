@@ -123,6 +123,9 @@ const JA = (() => {
     bankNgnBank: "UBA",
     bankNgnAccount: "23474678931",
     bankNgn: "Naira — UBA\nName: OKORAFOR PRAISE\nBank: UBA\nAccount number: 23474678931\nPut your order ID in the transfer remark.",
+    shippingNote: "",
+    logoUrl: "",
+    shopBannerUrl: "",
   };
 
   let seed = [];
@@ -1342,16 +1345,109 @@ const JA = (() => {
     _bannerText = { conv: String(conv || "").trim(), bold: String(bold || "").trim() };
     paintConvBanner();
   }
+
+  // Apply logo and shop banner from site config
+  function applySiteBranding(site) {
+    try {
+      if (site.logoUrl) {
+        // Persist in settings for offline
+        const cur = settings();
+        if (cur.logoUrl !== site.logoUrl) {
+          saveSettings({ logoUrl: site.logoUrl });
+        }
+        // Update all logo images sitewide
+        document.querySelectorAll('.logo img, .foot-logo img, [data-site-logo]').forEach((img) => {
+          if (img.src !== site.logoUrl && !img.src.includes('logo-flyer')) {
+            // Keep footer flyer as is, only header logo
+            if (img.closest('.logo') && !img.closest('.foot-logo')) {
+              img.src = site.logoUrl;
+            }
+          }
+          // Allow override via data attribute if admin set custom
+          if (img.hasAttribute('data-site-logo')) {
+            img.src = site.logoUrl;
+          }
+        });
+        // Also replace header logo if present
+        const headerLogo = document.querySelector('header .logo img');
+        if (headerLogo && site.logoUrl) {
+          headerLogo.src = site.logoUrl;
+        }
+      }
+      if (site.shopBannerUrl) {
+        const cur = settings();
+        if (cur.shopBannerUrl !== site.shopBannerUrl) {
+          saveSettings({ shopBannerUrl: site.shopBannerUrl });
+        }
+        // If on shop page, update banner image
+        const shopBannerImg = document.querySelector('.shop-banner img, [data-shop-banner]');
+        if (shopBannerImg) {
+          // Only if no category-specific banner is active
+          const urlParams = new URLSearchParams(location.search);
+          const catParam = urlParams.get('cat');
+          if (!catParam || catParam === 'all') {
+            shopBannerImg.src = site.shopBannerUrl;
+          }
+        }
+      }
+      if (site.shippingNote) {
+        const cur = settings();
+        if (cur.shippingNote !== site.shippingNote) {
+          saveSettings({ shippingNote: site.shippingNote });
+        }
+        // Render at checkout if present
+        const noteEl = document.querySelector('[data-shipping-note], .ck-ship-note-dynamic');
+        if (noteEl) {
+          noteEl.textContent = site.shippingNote;
+          noteEl.hidden = false;
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Keep site config for other modules
+  let _siteConfig = {};
+  function getSiteConfig() { return _siteConfig; }
+
   function loadBannerDates() {
     return fetch("api/site", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         const site = (d && d.site) || {};
+        _siteConfig = site;
         if (site.bannerFrom) _bannerDates.from = site.bannerFrom;
         if (site.bannerTo) _bannerDates.to = site.bannerTo;
+        if (site.convBanner) _bannerText.conv = site.convBanner;
+        if (site.convBold) _bannerText.bold = site.convBold;
+        // Persist shippingNote, logo, banner
+        if (site.shippingNote) {
+          saveSettings({ shippingNote: site.shippingNote });
+        }
+        if (site.logoUrl) {
+          saveSettings({ logoUrl: site.logoUrl });
+        }
+        if (site.shopBannerUrl) {
+          saveSettings({ shopBannerUrl: site.shopBannerUrl });
+        }
         paintConvBanner();
+        applySiteBranding(site);
+        // Fire event for other pages
+        try { document.dispatchEvent(new CustomEvent('ja:site', { detail: site })); } catch (e) {}
       })
-      .catch(() => {});
+      .catch(() => {
+        // Offline fallback: use local settings
+        try {
+          const s = settings();
+          if (s.shippingNote) {
+            const noteEl = document.querySelector('[data-shipping-note], .ck-ship-note-dynamic');
+            if (noteEl) { noteEl.textContent = s.shippingNote; noteEl.hidden = false; }
+          }
+          if (s.logoUrl) {
+            const headerLogo = document.querySelector('header .logo img');
+            if (headerLogo) headerLogo.src = s.logoUrl;
+          }
+        } catch (e) {}
+      });
   }
 
   function goldFly() {
@@ -1983,6 +2079,6 @@ const JA = (() => {
     customer, setCustomer, logoutCustomer, ordersForEmail, getProof, dataUrlToBlob,
     cardHTML, asset, escape, mountChrome, track, getStats, setSeo, absUrl, SITE,
     galleryOf, startCardPlay, reviews, addReview, removeReview, setReviews, reviewStats, starsHTML,
-    mediaHTML, mediaKind,
+    mediaHTML, mediaKind, getSiteConfig, applySiteBranding,
   };
 })();

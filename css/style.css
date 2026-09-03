@@ -5118,26 +5118,55 @@ body[data-page="home"] #site-footer { position: relative; z-index: 3 !important;
 }
 
 /* reCAPTCHA — keep any badge clear of the dock and WhatsApp bubble */
-.grecaptcha-badge { bottom: 120px !important; z-index: 60 !important; }
+.grecaptcha-badge { bottom: 120px !important; z-index: 60 !important; visibility: visible !important; opacity: 1 !important; }
 /* reCAPTCHA v2 "I'm not a robot" checkbox, shown above Place order.
+   MUST be visible: white card with border, centered, above Place order button.
    The widget is a fixed-width iframe: let it shrink on small phones. */
 .ck-recaptcha {
-  margin: 14px 0 4px;
-  min-height: 78px;
-  display: flex;
-  justify-content: center;
+  margin: 16px 0 8px !important;
+  min-height: 78px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: #fff !important;
+  border: 1px solid #e6ddd2 !important;
+  border-radius: 12px !important;
+  padding: 14px !important;
+  visibility: visible !important;
+  opacity: 1 !important;
 }
-.ck-recaptcha[hidden] { display: none; }
+.ck-recaptcha[hidden] { display: none !important; }
+.ck-recaptcha .g-recaptcha {
+  min-width: 304px;
+  min-height: 78px;
+  display: block !important;
+  visibility: visible !important;
+}
+.ck-recaptcha .g-recaptcha iframe {
+  display: block !important;
+}
 @media (max-width: 360px) {
   .ck-recaptcha { transform: scale(0.86); transform-origin: center top; }
 }
 .ck-recaptcha-note {
-  font-size: 11.5px;
-  color: var(--taupe);
-  margin-top: 10px;
-  line-height: 1.5;
+  font-size: 11.5px !important;
+  color: var(--taupe) !important;
+  margin-top: 10px !important;
+  line-height: 1.5 !important;
+  display: block !important;
+  visibility: visible !important;
 }
+.ck-recaptcha-note[hidden] { display: block !important; }
 .ck-recaptcha-note a { text-decoration: underline; color: inherit; }
+.ck-recaptcha-fallback {
+  font-size: 13px;
+  color: #7a7066;
+  text-align: center;
+  line-height: 1.4;
+  padding: 8px;
+}
+.ck-recaptcha-fallback[hidden] { display: none !important; }
 
 /* Checkout zone dropdown — a proper styled select, like Country */
 select.ck-zone-select {
@@ -5703,3 +5732,152 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 .mk-coupons-card,
 .mk-referrals-card,
 .mk-abandoned-card { overflow-x: auto; }
+
+/* ============================================================= */
+/* PERMANENT FIXES — 2026-09-03                                  */
+/* ============================================================= */
+
+/* 1. Search overlay — must sit above header/banner, input never covered */
+.search-overlay {
+  z-index: 999999 !important;
+  padding-top: 220px !important;
+}
+.search-overlay.open {
+  z-index: 999999 !important;
+  padding-top: 220px !important;
+  padding: 220px 16px 24px !important;
+  align-items: flex-start !important;
+}
+.search-overlay .search-box {
+  position: relative;
+  z-index: 1000000 !important;
+  margin-top: 0 !important;
+}
+
+/* 2. Homepage promo/video compact — max-width 680px, reduced size */
+.home-promo-wrap {
+  max-width: 680px !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  margin-top: clamp(16px, 3vw, 32px) !important;
+  margin-bottom: clamp(18px, 4vw, 40px) !important;
+}
+.home-promo {
+  max-width: 680px !important;
+  margin: 0 auto !important;
+  min-height: clamp(140px, 28vw, 280px) !important;
+  border-radius: 12px !important;
+}
+.home-promo__copy,
+.home-promo-video-copy {
+  min-height: clamp(140px, 28vw, 280px) !important;
+  padding: clamp(14px, 3vw, 24px) !important;
+  gap: 10px !important;
+}
+.home-promo__copy strong,
+.home-promo-video-copy strong {
+  font-size: clamp(18px, 3.2vw, 28px) !important;
+  line-height: 1.1 !important;
+  max-width: 520px !important;
+}
+.home-promo.has-video .home-promo-static-link {
+  display: none !important;
+}
+.home-promo.has-video #hero-static-img {
+  display: none !important;
+}
+.home-promo:not(.has-video) #hero-video {
+  display: none !important;
+}
+/* single Explore — always visible regardless of video */
+.home-promo .home-promo__copy,
+.home-promo .home-promo-video-copy {
+  display: flex !important;
+}
+/* single Explore — reduce size */
+.home-promo .btn-dark-pill,
+.home-promo .btn-purple,
+.home-promo .lux-explore,
+.home-promo__copy .btn,
+.home-promo-video-copy .btn {
+  padding: 8px 18px !important;
+  font-size: 10px !important;
+  letter-spacing: 0.12em !important;
+  min-height: 32px !important;
+  line-height: 1 !important;
+}
+.add-mini {
+  padding: 6px 10px !important;
+  font-size: 9px !important;
+  min-height: 28px !important;
+  letter-spacing: 0.10em !important;
+  margin-top: 8px !important;
+}
+
+/* Shop banner dynamic — keep height controlled when switching images */
+.shop-banner {
+  max-width: 680px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.shop-banner img {
+  transition: opacity 0.25s ease;
+}
+
+/* Admin pagination */
+.adx-pager {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  align-items: center;
+  margin: 18px 0 8px;
+  flex-wrap: wrap;
+}
+.adx-pager button {
+  min-width: 36px;
+  height: 36px;
+  border: 1px solid #e6ddd2;
+  background: #fff;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.adx-pager button.is-on {
+  background: #2c2622;
+  color: #fff;
+  border-color: #2c2622;
+}
+.adx-pager button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.adx-pager .gap {
+  min-width: 20px;
+  text-align: center;
+  color: #9a9086;
+}
+
+/* Checkout shipping note */
+.ck-ship-note-dynamic {
+  margin: 10px 0 6px;
+  padding: 10px 12px;
+  background: #f7f2ec;
+  border: 1px dashed #c4b09a;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #5a524a;
+  line-height: 1.45;
+}
+.ck-ship-note-dynamic[hidden] { display: none !important; }
+
+/* Logo / banner upload preview */
+.adx-logo-preview {
+  width: 120px;
+  height: 120px;
+  object-fit: contain;
+  border: 1px solid #e6ddd2;
+  border-radius: 12px;
+  background: #fff;
+  display: block;
+  margin: 8px 0;
+}

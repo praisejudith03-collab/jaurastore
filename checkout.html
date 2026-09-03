@@ -22,7 +22,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=116" />
+  <link rel="stylesheet" href="css/style.css?v=117" />
 </head>
 <body data-page="checkout">
   <div id="site-header"></div>
@@ -70,8 +70,11 @@
               <option value="Other Benin" data-i18n="ck.fare.bjOther">Other places in Benin (confirm on WhatsApp)</option>
               <option value="Lomé" data-i18n="ck.fare.lome">Lomé (2,500 – 3,500 CFA)</option>
               <option value="Other Togo" data-i18n="ck.fare.tgOther">Other places in Togo (confirm on WhatsApp)</option>
+              <option value="Pickup in Cotonou is free for lighter products">Pickup in Cotonou is free for lighter products</option>
             </select>
-            <p class="ck-bj-min" data-i18n="ck.bjMin">Benin deliveries: minimum order 5,000 F CFA (about 11,400 naira).</p>
+            <p class="ck-bj-min" data-i18n="ck.bjMin">Benin deliveries: minimum order 5,000 F CFA (about 11,400 naira). Togo: same minimum. Pickup in Cotonou is free for lighter products.</p>
+            <div class="ck-ship-note-dynamic" data-shipping-note hidden style="margin-top:10px;padding:10px 12px;background:#f8f5f2;border:1px dashed #c4a574;border-radius:8px;font-size:13px;line-height:1.5;"></div>
+            <div data-ck-min-warn hidden style="margin-top:10px;padding:10px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;color:#664d03;font-size:13px;"></div>
           </div>
           <div class="field full ck-ship-notices">
             <p data-i18n="ck.shipNigeria">Nigeria: 3–7 working days, according to location.</p>
@@ -151,21 +154,22 @@
         </div>
 
         <p class="ck-legal" data-i18n="ck.legal">Your personal data is used to process your order. Upload your payment receipt here. JauraStore will confirm your payment, and a confirmation message will be sent to your email. Transport fare is discussed on WhatsApp.</p>
-        <div class="ck-recaptcha">
-          <div class="g-recaptcha" data-recaptcha-widget></div>
+        <div class="ck-recaptcha" id="ck-recaptcha-box" style="margin:16px 0 8px;min-height:78px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#fff;border:1px solid #e6ddd2;border-radius:12px;padding:14px;">
+          <div class="g-recaptcha" data-recaptcha-widget style="min-width:304px;min-height:78px;"></div>
+          <div class="ck-recaptcha-fallback" data-recaptcha-fallback style="font-size:13px;color:#7a7066;text-align:center;padding:8px;line-height:1.4;">Security check loading… If this stays empty, reCAPTCHA is not configured on the server yet — your order will still be protected by email verification.</div>
         </div>
         <button class="btn ck-place" type="submit" data-i18n="ck.place">Place order</button>
-        <p class="ck-recaptcha-note" data-recaptcha-note data-i18n-html="ck.recaptcha" hidden>This site is protected by reCAPTCHA and the Google <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Privacy Policy</a> and <a href="https://policies.google.com/terms" target="_blank" rel="noopener">Terms of Service</a> apply.</p>
+        <p class="ck-recaptcha-note" data-recaptcha-note data-i18n-html="ck.recaptcha" style="font-size:11.5px;color:#8a7d70;margin-top:10px;line-height:1.5;">This site is protected by reCAPTCHA and the Google <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Privacy Policy</a> and <a href="https://policies.google.com/terms" target="_blank" rel="noopener">Terms of Service</a> apply.</p>
       </aside>
     </form>
   </div>
 
   <div id="site-footer"></div>
-  <script src="js/products-data.js?v=116"></script>
-  <script src="js/i18n-phrases.js?v=116"></script>
-  <script src="js/i18n.js?v=116"></script>
-  <script src="js/net.js?v=116"></script>
-  <script src="js/store.js?v=116"></script>
-  <script src="js/app.js?v=116"></script>
+  <script src="js/products-data.js?v=117"></script>
+  <script src="js/i18n-phrases.js?v=117"></script>
+  <script src="js/i18n.js?v=117"></script>
+  <script src="js/net.js?v=117"></script>
+  <script src="js/store.js?v=117"></script>
+  <script src="js/app.js?v=117"></script>
 </body>
 </html>

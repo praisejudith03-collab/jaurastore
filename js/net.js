@@ -111,7 +111,7 @@ window.JA_NET = (function () {
   function csrf(force) {
     if (token && !force && Date.now() - tokenAt < 20 * 60 * 1000) return Promise.resolve(token);
     if (inflight && !force) return inflight;
-  inflight = fetch("https://jaurastore.com.ng/api/config", { credentials: "include" })
+  inflight = fetch("api/config", { credentials: "same-origin", cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         token = (d && d.csrf) || "";
@@ -159,19 +159,35 @@ window.JA_NET = (function () {
     var boxes = document.querySelectorAll("[data-recaptcha-widget]");
     if (!boxes.length) return Promise.resolve(false);
     return loadRecaptcha().then(function (ok) {
-      if (!ok || !window.grecaptcha || !window.grecaptcha.render) return false;
+      if (!ok || !window.grecaptcha || !window.grecaptcha.render) {
+        // show fallback hint so shopper sees where the box lives
+        document.querySelectorAll("[data-recaptcha-fallback]").forEach(function (fb) { fb.hidden = false; });
+        return false;
+      }
       return new Promise(function (resolve) {
         var draw = function () {
+          var rendered = 0;
           Array.prototype.forEach.call(boxes, function (el) {
-            if (el.getAttribute("data-recaptcha-id")) return;
+            if (el.getAttribute("data-recaptcha-id")) { rendered++; return; }
             try {
               var id = window.grecaptcha.render(el, { sitekey: key, theme: "light" });
               el.setAttribute("data-recaptcha-id", String(id));
               el.hidden = false;
+              el.style.display = "block";
               recaptchaWidgets.push(id);
+              rendered++;
             } catch (e) {}
           });
-          resolve(recaptchaWidgets.length > 0);
+          // hide the loading fallback, show the real checkbox
+          if (rendered > 0) {
+            document.querySelectorAll("[data-recaptcha-fallback]").forEach(function (fb) { fb.hidden = true; });
+            document.querySelectorAll(".ck-recaptcha").forEach(function (box) {
+              box.style.display = "flex";
+              box.style.visibility = "visible";
+              box.style.opacity = "1";
+            });
+          }
+          resolve(rendered > 0);
         };
         try { window.grecaptcha.ready(draw); } catch (e) { draw(); }
       });
@@ -212,11 +228,24 @@ window.JA_NET = (function () {
   }
   // Show the reCAPTCHA notice + checkbox on pages that carry one.
   function mountRecaptcha() {
+    var boxes = document.querySelectorAll(".ck-recaptcha");
+    boxes.forEach(function (b) {
+      b.style.display = "flex";
+      b.style.visibility = "visible";
+      b.style.opacity = "1";
+    });
     return siteKey().then(function (key) {
-      if (!key) return false;
-      document.querySelectorAll("[data-recaptcha-note]").forEach(function (el) { el.hidden = false; });
+      var notes = document.querySelectorAll("[data-recaptcha-note]");
+      notes.forEach(function (el) { el.hidden = false; el.style.display = "block"; });
+      if (!key) {
+        document.querySelectorAll("[data-recaptcha-fallback]").forEach(function (fb) { fb.hidden = false; });
+        return false;
+      }
       return renderWidgets(key);
-    }).catch(function () { return false; });
+    }).catch(function () {
+      document.querySelectorAll("[data-recaptcha-fallback]").forEach(function (fb) { fb.hidden = false; });
+      return false;
+    });
   }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () { mountRecaptcha(); });
