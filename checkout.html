@@ -154,11 +154,12 @@
         </div>
 
         <p class="ck-legal" data-i18n="ck.legal">Your personal data is used to process your order. Upload your payment receipt here. JauraStore will confirm your payment, and a confirmation message will be sent to your email. Transport fare is discussed on WhatsApp.</p>
-        <div class="ck-recaptcha">
-          <div class="g-recaptcha" data-recaptcha-widget></div>
+        <div class="ck-recaptcha" id="ck-recaptcha-box" style="margin:16px 0 8px;min-height:78px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#fff;border:1px solid #e6ddd2;border-radius:12px;padding:14px;">
+          <div class="g-recaptcha" data-recaptcha-widget style="min-width:304px;min-height:78px;"></div>
+          <div class="ck-recaptcha-fallback" data-recaptcha-fallback style="font-size:13px;color:#7a7066;text-align:center;padding:8px;line-height:1.4;">Security check loading… If this stays empty, reCAPTCHA is not configured on the server yet — your order will still be protected by email verification.</div>
         </div>
         <button class="btn ck-place" type="submit" data-i18n="ck.place">Place order</button>
-        <p class="ck-recaptcha-note" data-recaptcha-note data-i18n-html="ck.recaptcha" hidden>This site is protected by reCAPTCHA and the Google <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Privacy Policy</a> and <a href="https://policies.google.com/terms" target="_blank" rel="noopener">Terms of Service</a> apply.</p>
+        <p class="ck-recaptcha-note" data-recaptcha-note data-i18n-html="ck.recaptcha" style="font-size:11.5px;color:#8a7d70;margin-top:10px;line-height:1.5;">This site is protected by reCAPTCHA and the Google <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Privacy Policy</a> and <a href="https://policies.google.com/terms" target="_blank" rel="noopener">Terms of Service</a> apply.</p>
       </aside>
     </form>
   </div>
