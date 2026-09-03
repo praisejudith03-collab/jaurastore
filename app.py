@@ -45,6 +45,21 @@ def create_app():
                 app.logger.info("category table restored from growth_settings")
         except Exception as exc:
             app.logger.warning("category restore skipped: %s", exc)
+        # Restore orders and receipts from Supabase so a redeploy that wiped the
+        # disk still has them. Never blocks boot on failure.
+        try:
+            from supabase_store import load_orders, load_receipts
+            from db import upsert_orders, upsert_receipts
+            orders_data = load_orders()
+            if orders_data:
+                saved_o = upsert_orders(orders_data)
+                app.logger.info("restored %d orders from Supabase", saved_o)
+            receipts_data = load_receipts()
+            if receipts_data:
+                saved_r = upsert_receipts(receipts_data)
+                app.logger.info("restored %d receipts from Supabase", saved_r)
+        except Exception as exc:
+            app.logger.warning("orders/receipts restore skipped: %s", exc)
         # One-shot category merge (folds the old `nails` / `packaging`
         # categories, renames `gift-set`, and re-points legacy products). Run
         # on the deployed environments only so the local repo's category table
