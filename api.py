@@ -1171,6 +1171,9 @@ def admin_upload_hero():
 # survives a redeploy on a persistent disk.
 SITE_KEYS = ("heroVideo", "heroPoster", "heroDoc")
 SITE_TEXT_DEFAULTS = {"bannerFrom": "2026-09-15", "bannerTo": "2026-09-25"}
+# Owner-written plain-text lines (the moving banner). Stored stripped of all
+# markup; empty means the storefront shows its built-in default.
+SITE_TEXT_KEYS = ("convBanner", "convBold")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -1193,6 +1196,8 @@ def _load_site():
     out = {k: sec.safe_url(str(d.get(k) or "")) for k in SITE_KEYS}
     for k, default in SITE_TEXT_DEFAULTS.items():
         out[k] = _clean_iso_date(d.get(k), default)
+    for k in SITE_TEXT_KEYS:
+        out[k] = sec.clean(d.get(k) or "", 300)
     return out
 
 @api.get("/site")
@@ -1214,6 +1219,9 @@ def admin_site_update():
             cleaned = _clean_iso_date(d.get(k), None)
             if cleaned:
                 cur[k] = cleaned
+    for k in SITE_TEXT_KEYS:
+        if k in d:
+            cur[k] = sec.clean(d.get(k), 300)
     path = _site_path()
     parent = os.path.dirname(path)
     if parent:

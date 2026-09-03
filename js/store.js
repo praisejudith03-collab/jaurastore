@@ -63,7 +63,7 @@ const JA = (() => {
     "footer.visit": "Visit & deliver",
     "promo.welcome": "Welcome to JauraStore",
     "promo.reduced": "Prices have been reduced",
-    "promo.referral": "Order above ₦20,000 (about 8,800 F CFA) and get your personal referral code — share it and your friends enjoy a discount at checkout.",
+    "promo.referral": "Order above ₦20,000 (8,800 CFA) and get your personal referral code — share it and your friends enjoy a discount at checkout.",
     "promo.shop": "Shop now",
     "promo.kicker": "Everything you love, all in one store",
     "conv.banner": "Benin 🇧🇯 customers: place your order now and get it between {from} and {to}",
@@ -375,7 +375,9 @@ const JA = (() => {
     return all.filter((c) => !c.hidden);
   }
   async function loadServerCategories() {
-    if ((document.body.dataset.page || "") !== "admin") return categories();
+    // Every page loads the owner's server-side category table (photos
+    // included), not just the admin portal — the public storefront is where
+    // shoppers see them.
     try {
       const r = await fetch("api/categories", { credentials: "same-origin", cache: "no-store" });
       const d = await r.json();
@@ -1297,6 +1299,9 @@ const JA = (() => {
 
 
   let _bannerDates = { from: "2026-09-15", to: "2026-09-25" };
+  // Owner-written banner (Admin → Settings). Empty = the default
+  // delivery-window line built from _bannerDates.
+  let _bannerText = { conv: "", bold: "" };
   function currentLang() {
     try { return (window.I18N && I18N.lang()) || "en"; } catch (e) { return "en"; }
   }
@@ -1313,6 +1318,12 @@ const JA = (() => {
     }
   }
   function convBannerHTML() {
+    if (_bannerText.conv) {
+      const line = escape(_bannerText.conv);
+      const tail = _bannerText.bold ? ` · <strong>${escape(_bannerText.bold)}</strong>` : "";
+      const span = `<span>${line}${tail}</span>`;
+      return span + span + span + span;
+    }
     const lang = currentLang();
     const from = formatBannerDay(_bannerDates.from, lang);
     const to = formatBannerDay(_bannerDates.to, lang);
@@ -1324,6 +1335,12 @@ const JA = (() => {
   function paintConvBanner() {
     const track = document.querySelector(".conv-track");
     if (track) track.innerHTML = convBannerHTML();
+  }
+  // Admin → Settings saves a custom moving-banner line; call this with the
+  // values from api/site. Empty text restores the default delivery banner.
+  function setBanner(conv, bold) {
+    _bannerText = { conv: String(conv || "").trim(), bold: String(bold || "").trim() };
+    paintConvBanner();
   }
   function loadBannerDates() {
     return fetch("api/site", { cache: "no-store" })
@@ -1954,7 +1971,7 @@ const JA = (() => {
   ready = loadSeed();
 
   return {
-    ready, CATEGORIES: DEFAULT_CATS, categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings,
+    ready, CATEGORIES: DEFAULT_CATS, categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner,
     products, product, searchProducts, categoryName, displayName,
     currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, BULK_QTY,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,

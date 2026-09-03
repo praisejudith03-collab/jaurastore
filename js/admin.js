@@ -306,7 +306,7 @@ function refreshOptionChips() {
     if (chips) chips.innerHTML = vals.map((v) => `<em>${JA.escape(v)}</em>`).join("");
   });
   const count = document.getElementById("opt-count");
-  if (count) count.textContent = `${document.querySelectorAll("[data-opt-row]").length}/6`;
+  if (count) count.textContent = `${document.querySelectorAll("[data-opt-row]").length}/20`;
   const existing = editingId && editingId !== "new" ? (JA.product(editingId) || {}) : {};
   const status = document.getElementById("stock-status")?.value;
   const qty = Number(document.getElementById("stock-qty")?.value);
@@ -322,7 +322,7 @@ function addOptionRow(title, values) {
   if (!box) return;
   box.querySelector("[data-opt-empty]")?.remove();
   const n = box.querySelectorAll("[data-opt-row]").length;
-  if (n >= 6) { JA.toast("Maximum 6 options."); return; }
+  if (n >= 20) { JA.toast("Maximum 20 options."); return; }
   const wrap = document.createElement("div");
   wrap.innerHTML = optionRowHTML({ title: title || "", values: values ? String(values).split(",").map((s) => s.trim()).filter(Boolean) : [] }, n);
   box.appendChild(wrap.firstElementChild);
@@ -640,7 +640,7 @@ function productForm(p = {}) {
       <input type="checkbox" name="online" ${p.online === false ? "" : "checked"} />
     </label>
     <div class="field"><label>Category</label><select name="category">${cats}</select></div>
-    <h3>Product options <small id="opt-count">${opts.length}/6</small></h3>
+    <h3>Product options <small id="opt-count">${opts.length}/20</small></h3>
     <div id="opt-box">${optionBlockHTML(opts)}</div>
     <div class="wix-opt-presets">
       <button type="button" data-preset="Colour">+ Colour</button>
@@ -1901,7 +1901,7 @@ function paintDesk(tab = "analytics") {
   if (tab === "orders") { fillOrders(); fillProofs(); }
   if (tab === "marketing") fillMarketing();
   if (tab === "account") bindAccount();
-  if (tab === "settings") bindHeroVideo();
+  if (tab === "settings") { bindHeroVideo(); bindBanner(); }
 
   const form = $("#prod-form");
   const existing = editingId && editingId !== "new" ? JA.product(editingId) : null;
@@ -2141,6 +2141,13 @@ function settingsForm() {
     </div>
     <p class="admin-note" id="hero-video-msg"></p>
   </div>
+  <form id="banner-form" class="form-grid admin-card" style="margin-top:22px">
+    <h3 class="admin-h full">Moving banner text</h3>
+    <p class="admin-note full">The moving line under the header on every page. Write your own message here — it replaces the default delivery-window banner for every visitor. The <strong>bold highlight</strong> shows in gold at the end of the line. Empty text brings the default banner back.</p>
+    <div class="field full"><label>Banner text</label><input name="convBanner" id="conv-banner" maxlength="300" placeholder="e.g. Back-to-school sale: 10% off every bag" /></div>
+    <div class="field full"><label>Bold highlight (optional)</label><input name="convBold" id="conv-bold" maxlength="300" placeholder="e.g. ends Sunday" /></div>
+    <div class="field full"><button class="btn">Save banner</button></div>
+  </form>
   <form id="set-form" class="form-grid admin-card" style="margin-top:22px">
     <h3 class="admin-h full">Contact &amp; payment details</h3>
     <p class="admin-note full">Naira is the only price you enter on products. The website converts F CFA at <strong>1 ₦ = 0.44 F CFA</strong>.</p>
@@ -2162,6 +2169,34 @@ async function saveSiteConfig(patch) {
   return window.JA_NET
     ? window.JA_NET.api("api/admin/site", { method: "POST", json: patch })
     : Promise.resolve(null);
+}
+
+function bindBanner() {
+  const form = $("#banner-form");
+  if (!form) return;
+  fetch("api/site", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      const site = (d && d.site) || {};
+      const conv = $("#conv-banner");
+      const bold = $("#conv-bold");
+      if (conv) conv.value = site.convBanner || "";
+      if (bold) bold.value = site.convBold || "";
+    })
+    .catch(() => {});
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const conv = String(fd.get("convBanner") || "").trim();
+    const bold = String(fd.get("convBold") || "").trim();
+    const saved = await saveSiteConfig({ convBanner: conv, convBold: bold });
+    if (saved && saved.ok !== false) {
+      JA.toast(conv ? "Banner saved — it moves under the header on every page now." : "Banner cleared — the default delivery banner is back.");
+      try { if (JA.setBanner) JA.setBanner(conv, bold); } catch (err) {}
+    } else {
+      JA.toast((saved && saved.error) || "Could not save the banner. Check your connection and try again.");
+    }
+  });
 }
 
 function paintHeroVideoNow(site) {

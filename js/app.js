@@ -143,13 +143,17 @@ function mountHeroVideo() {
   const hero = document.getElementById("home-hero");
   if (!vid || !hero) return;
   const KEY = "jaura.site";
+  // With no owner upload the homepage plays the committed brand reel; the
+  // moment the owner uploads a hero video/poster theirs wins instead.
+  const DEFAULT_HERO = "images/brand/lux-reel.mp4";
+  const DEFAULT_POSTER = "images/brand/lux-reel.jpg";
   const copy = document.getElementById("hero-video-copy");
   const docSlot = document.getElementById("hero-doc-slot");
   const apply = (site) => {
     site = site || {};
-    const url = (site.heroVideo || "").toString();
+    const url = (site.heroVideo || "").toString() || DEFAULT_HERO;
     const doc = (site.heroDoc || "").toString();
-    const poster = (site.heroPoster || "").toString();
+    const poster = (site.heroPoster || "").toString() || (url === DEFAULT_HERO ? DEFAULT_POSTER : "");
     if (docSlot) {
       docSlot.hidden = !doc;
       docSlot.querySelector?.("a")?.setAttribute("href", JA.asset ? JA.asset(doc) : doc);
@@ -1507,6 +1511,17 @@ function watchReveal() {
 async function boot() {
   try { await (JA && JA.ready); } catch (e) {}
   try { JA.mountChrome(); } catch (e) { console.error(e); }
+  // The owner's category table lives on the server — every page (not just
+  // admin) renders it, so pull it in before the first draw.
+  try { await JA.loadServerCategories(); } catch (e) {}
+  // Custom moving-banner text (owner-editable in Admin → Settings): paint it
+  // over the default delivery-window line on every page.
+  try {
+    const r = await fetch("api/site", { cache: "no-store" });
+    const d = r.ok ? await r.json() : null;
+    const site = (d && d.site) || {};
+    if (JA.setBanner) JA.setBanner(site.convBanner || "", site.convBold || "");
+  } catch (e) {}
   document.querySelectorAll(".lux-reel video").forEach((v) => {
     v.muted = true;
     v.setAttribute("playsinline", "");
