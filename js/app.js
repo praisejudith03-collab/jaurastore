@@ -140,8 +140,8 @@ function startAutoplay(vid) {
 function mountHeroVideo() {
   const vid = document.getElementById("hero-video");
   const scrim = document.getElementById("hero-scrim");
-  const hero = document.getElementById("home-hero");
-  if (!vid || !hero) return;
+  const promo = document.querySelector(".home-promo");
+  if (!vid || !promo) return;
   const KEY = "jaura.site";
   // With no owner upload the homepage plays the committed brand reel; the
   // moment the owner uploads a hero video/poster theirs wins instead.
@@ -172,14 +172,14 @@ function mountHeroVideo() {
       vid.hidden = false;
       if (scrim) scrim.hidden = false;
       if (copy) copy.hidden = false;
-      hero.classList.add("has-video");
+      promo.classList.add("has-video");
       startAutoplay(vid);
     } else {
       vid.hidden = true;
       vid.removeAttribute("src");
       if (scrim) scrim.hidden = true;
       if (copy) copy.hidden = true;
-      hero.classList.remove("has-video");
+      promo.classList.remove("has-video");
     }
   };
   let cached = null;
@@ -268,6 +268,20 @@ function productSizes(p) {
     if (/size|length/.test(t) && !/colou?r/.test(t)) (o.values || []).forEach((v) => out.push(String(v)));
   });
   return [...new Set(out)];
+}
+function translateOptionTitle(title) {
+  const s = String(title || "").trim();
+  if (window.I18N && I18N.lang() === "fr") {
+    const lower = s.toLowerCase();
+    if (/colou?r/.test(lower)) return "Couleur";
+    if (/shoe\s*size/.test(lower)) return "Pointure";
+    if (/size/.test(lower)) return "Taille";
+    if (/length/.test(lower)) return "Longueur";
+    if (/scents?/.test(lower)) return "Parfum";
+    if (/type/.test(lower)) return "Type";
+    if (/number/.test(lower)) return "Nombre";
+  }
+  return s;
 }
 function applyShopFilters(list) {
   return list.filter((p) => {
@@ -610,7 +624,7 @@ function paintProduct(root, p) {
       </button>`;
     }).join("");
     return `<div class="pdp-opt" data-opt-wrap="${oi}">
-      <div class="kicker">${JA.escape(opt.title)} *</div>
+      <div class="kicker">${JA.escape(translateOptionTitle(opt.title))} *</div>
       <div class="swatches">${btns}</div>
     </div>`;
   }).join("");
@@ -1025,10 +1039,7 @@ function paintCheckoutTotals(form) {
     card.classList.toggle("is-on", card.querySelector("input")?.checked);
   });
   const countryNote = document.querySelector("[data-ck-country-note]");
-  if (countryNote) {
-    const country = String(form.querySelector("[name=country]")?.value || "").toLowerCase();
-    countryNote.hidden = !(country.includes("benin") || country.includes("togo"));
-  }
+  if (countryNote) countryNote.hidden = false;
 }
 
 function renderCheckout() {

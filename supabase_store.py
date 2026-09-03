@@ -438,3 +438,39 @@ def load_categories():
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] categories load failed: {exc}")
         return None
+
+
+def load_orders(limit=500):
+    """Return the order list stored in Supabase orders table, or []. Never raises."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = (c.table("orders")
+               .select("*")
+               .order("updated_at", desc=True)
+               .limit(limit)
+               .execute())
+        data = _res_data(res)
+        return data or []
+    except Exception as exc:
+        print(f"[supabase] load_orders failed: {exc}")
+        return []
+
+
+def load_receipts(limit=500):
+    """Return the receipt list stored in Supabase receipts table, or []. Never raises."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = (c.table("receipts")
+               .select("*")
+               .order("created_at", desc=True)
+               .limit(limit)
+               .execute())
+        data = _res_data(res)
+        return data or []
+    except Exception as exc:
+        print(f"[supabase] load_receipts failed: {exc}")
+        return []

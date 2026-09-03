@@ -2461,7 +2461,7 @@ body.mini-open { overflow: hidden; }
   position: fixed;
   inset: 0;
   background: rgba(26, 20, 16, 0.45);
-  z-index: 210;
+  z-index: 4999 !important;
 }
 .mini-mask.open { display: block; }
 .mini-cart {
@@ -2471,7 +2471,7 @@ body.mini-open { overflow: hidden; }
   bottom: 0;
   width: min(400px, 100%);
   background: #fff;
-  z-index: 220;
+  z-index: 5000 !important;
   transform: translateX(100%);
   transition: transform 0.28s ease;
   display: flex;
@@ -4940,10 +4940,48 @@ body[data-page="admin"] .conv-bar { display: none !important; }
 .home-promo {
   position: relative;
   display: block;
-  border-radius: 18px;
+  border-radius: 12px;
+  border: 1px solid var(--line, #e2d9ce);
   overflow: hidden;
   min-height: clamp(160px, 42vw, 420px);
   background: #1c1613;
+}
+.home-promo video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 12px;
+  z-index: 2;
+}
+.home-promo video[hidden] {
+  display: none !important;
+}
+.home-promo.has-video .home-promo-static-link img {
+  display: none !important;
+}
+.home-promo-video-copy[hidden] {
+  display: none !important;
+}
+.home-promo-video-copy {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 18px;
+  padding: clamp(20px, 5vw, 48px);
+  color: #fff;
+  text-align: center;
+}
+.home-promo-video-copy strong {
+  font-family: var(--serif);
+  font-size: clamp(26px, 5vw, 48px);
+  line-height: 1.08;
+  max-width: 760px;
 }
 .home-promo img {
   position: absolute;

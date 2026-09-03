@@ -315,3 +315,94 @@ def audit(actor, action, detail="", ip=""):
         "INSERT INTO audit_log (actor, action, detail, ip) VALUES (?,?,?,?)",
         (actor, action, str(detail)[:500], ip),
     )
+
+
+def upsert_orders(orders):
+    """Upsert restored orders into SQLite. Idempotent by primary key (id)."""
+    if not orders:
+        return 0
+    count = 0
+    for o in orders:
+        try:
+            execute(
+                "INSERT INTO orders (id, payload, email, customer_name, phone, country, city, zone, "
+                "address, note, payment, proof_url, items_count, total, currency, source, status, at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "payload=excluded.payload, email=excluded.email, customer_name=excluded.customer_name, "
+                "phone=excluded.phone, country=excluded.country, city=excluded.city, zone=excluded.zone, "
+                "address=excluded.address, note=excluded.note, payment=excluded.payment, "
+                "proof_url=excluded.proof_url, items_count=excluded.items_count, total=excluded.total, "
+                "currency=excluded.currency, source=excluded.source, status=excluded.status, "
+                "at=excluded.at, updated_at=excluded.updated_at",
+                (
+                    o.get("id"),
+                    o.get("payload"),
+                    o.get("email"),
+                    o.get("customer_name"),
+                    o.get("phone"),
+                    o.get("country"),
+                    o.get("city"),
+                    o.get("zone"),
+                    o.get("address"),
+                    o.get("note"),
+                    o.get("payment"),
+                    o.get("proof_url"),
+                    o.get("items_count", 0),
+                    o.get("total"),
+                    o.get("currency"),
+                    o.get("source", "web"),
+                    o.get("status", "pending"),
+                    o.get("at"),
+                    o.get("updated_at"),
+                )
+            )
+            count += 1
+        except Exception as exc:
+            print(f"[db] upsert_order failed for {o.get('id')}: {exc}")
+    return count
+
+
+def upsert_receipts(receipts):
+    """Upsert restored receipts into payment_proofs. Idempotent — never duplicates."""
+    if not receipts:
+        return 0
+    count = 0
+    for r in receipts:
+        try:
+            order_id = r.get("order_id") or r.get("id")
+            file_url = r.get("file_url") or ""
+            existing = one("SELECT id FROM payment_proofs WHERE order_id=? AND file_url=?", (order_id, file_url))
+            if not existing and order_id:
+                existing = one("SELECT id FROM payment_proofs WHERE order_id=?", (order_id,))
+            mime = r.get("mime") or r.get("file_type") or ""
+            at = r.get("at") or r.get("created_at") or ""
+            emailed = 1 if r.get("emailed") else 0
+            if existing:
+                execute(
+                    "UPDATE payment_proofs SET name=?, phone=?, email=?, method=?, items=?, quantity=?, "
+                    "amount=?, note=?, file_url=?, file_name=?, file_size=?, mime=?, emailed=?, email_info=?, at=? "
+                    "WHERE id=?",
+                    (
+                        r.get("name"), r.get("phone"), r.get("email"), r.get("method"),
+                        r.get("items"), r.get("quantity"), r.get("amount"), r.get("note"),
+                        file_url, r.get("file_name"), r.get("file_size"), mime,
+                        emailed, r.get("email_info"), at, existing["id"]
+                    )
+                )
+            else:
+                execute(
+                    "INSERT INTO payment_proofs (order_id, name, phone, email, method, items, quantity, "
+                    "amount, note, file_url, file_name, file_size, mime, emailed, email_info, at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        order_id, r.get("name"), r.get("phone"), r.get("email"), r.get("method"),
+                        r.get("items"), r.get("quantity"), r.get("amount"), r.get("note"),
+                        file_url, r.get("file_name"), r.get("file_size"), mime,
+                        emailed, r.get("email_info"), at
+                    )
+                )
+            count += 1
+        except Exception as exc:
+            print(f"[db] upsert_receipt failed: {exc}")
+    return count

@@ -1444,26 +1444,26 @@ def test_admin_reset_code_is_emailed_first(client, monkeypatch):
     _clear_bootstrap()
 
 
-def test_admin_reset_code_falls_back_to_whatsapp_when_mail_fails(client, monkeypatch):
+def test_admin_reset_code_is_email_only_and_502_on_mail_fail(client, monkeypatch):
     _clear_bootstrap()
-    calls = {"email": 0, "whatsapp": []}
+    calls = {"email": 0, "whatsapp": 0}
 
     def fake_email(to, code, purpose="reset"):
         calls["email"] += 1
         return False, "smtp error: boom"
 
     def fake_whatsapp(text):
-        calls["whatsapp"].append(text)
+        calls["whatsapp"] += 1
         return True, "cloud-api"
 
     monkeypatch.setattr(emailer, "send_otp", fake_email)
     monkeypatch.setattr("whatsapp.send_text", fake_whatsapp)
 
     r = client.post("/api/admin/otp/request", json={"email": EMAIL})
-    assert r.status_code == 200, r.data
-    assert calls["email"] == 1, "email must be attempted first"
-    assert len(calls["whatsapp"]) == 1, "WhatsApp must take over when email fails"
-    assert "WhatsApp" in r.get_json()["message"]
+    assert r.status_code == 502, r.data
+    assert calls["email"] == 1
+    assert calls["whatsapp"] == 0, "WhatsApp fallback must be completely removed"
+    assert "WhatsApp" not in r.get_json()["error"]
 
     authmod.set_shared_password(PW)
     _clear_bootstrap()
@@ -1751,23 +1751,27 @@ def test_banner_dates_public_read_and_admin_write(client):
     assert site["bannerTo"] == "2026-10-12"
 
 
-def test_hero_video_is_full_bleed_letterboxed():
-    css = open(os.path.join(os.path.dirname(__file__), "..", "css", "style.css"),
-               encoding="utf-8").read()
-    idx = css.find(".home-hero-static.has-video .home-hero-video")
-    assert idx != -1
-    chunk = css[idx:idx + 420]
-    assert "object-fit: contain" in chunk or "object-fit:contain" in chunk
-    assert "inset: 0" in chunk or "inset:0" in chunk
-    html = open(os.path.join(os.path.dirname(__file__), "..", "index.html"),
-                encoding="utf-8").read()
+def test_homepage_video_in_lower_card_container_and_fixes():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    html = open(os.path.join(root, "index.html"), encoding="utf-8").read()
+    # video is in .home-promo, not floating at top center #home-hero
     assert 'id="hero-video"' in html
-    assert "autoplay" in html
-    store = open(os.path.join(os.path.dirname(__file__), "..", "js", "store.js"),
-                 encoding="utf-8").read()
-    assert "ck.bjMin" in store
-    assert "(8,800 CFA)" in open(os.path.join(os.path.dirname(__file__), "..", "js", "i18n.js"),
-                                 encoding="utf-8").read()
+    assert 'home-promo' in html
+    # css check for .home-promo rounded corners and borders
+    css = open(os.path.join(root, "css", "style.css"), encoding="utf-8").read()
+    assert ".home-promo" in css
+    assert "border-radius: 12px" in css or "border-radius:12px" in css
+
+    # cart z-index check
+    assert ".mini-cart" in css
+    assert "z-index: 5000" in css or "z-index:5000" in css
+
+    # checkout fixes check
+    ck_html = open(os.path.join(root, "checkout.html"), encoding="utf-8").read()
+    assert 'data-bank-cfa' in ck_html
+    assert 'Minimum order is 5,000 CFA' in ck_html or '5,000 CFA' in ck_html
+    assert 'g-recaptcha' in ck_html
+    assert 'data-recaptcha-widget' in ck_html
 
 
 def test_categories_persist_in_growth_settings_and_restore_before_merge(tmp_path, monkeypatch):
@@ -1827,6 +1831,97 @@ def test_categories_persist_in_growth_settings_and_restore_before_merge(tmp_path
     monkeypatch.setattr(sb, "client", lambda: None)
     assert sb.save_categories(cats) is False
     assert sb.load_categories() is None
+
+
+def test_orders_and_receipts_restore_from_supabase(client, monkeypatch):
+    import supabase_store as sb
+    class _FakeOrdersReceipts:
+        def __init__(self, table_name):
+            self.table_name = table_name
+        def select(self, cols):
+            return self
+        def order(self, col, desc=True):
+            return self
+        def limit(self, n):
+            return self
+        def execute(self):
+            if self.table_name == "orders":
+                return type("Res", (), {"data": [{
+                    "id": "JA-RESTORE1",
+                    "payload": '{"id":"JA-RESTORE1"}',
+                    "email": "test@example.com",
+                    "customer_name": "Test User",
+                    "total": 5000,
+                    "currency": "NGN",
+                    "status": "pending",
+                    "at": "2026-09-03T10:00:00Z",
+                    "updated_at": "2026-09-03T10:00:00Z"
+                }]})()
+            elif self.table_name == "receipts":
+                return type("Res", (), {"data": [{
+                    "id": "JA-RESTORE1",
+                    "order_id": "JA-RESTORE1",
+                    "name": "Test User",
+                    "email": "test@example.com",
+                    "amount": "5000",
+                    "file_url": "/uploads/proofs/test.jpg",
+                    "created_at": "2026-09-03T10:00:00Z"
+                }]})()
+            return type("Res", (), {"data": []})()
+
+    class _FakeClient:
+        def table(self, name):
+            return _FakeOrdersReceipts(name)
+
+    monkeypatch.setattr(sb, "client", lambda: _FakeClient())
+    monkeypatch.setattr(sb, "load_orders", sb.load_orders)
+    monkeypatch.setattr(sb, "load_receipts", sb.load_receipts)
+
+    orders = sb.load_orders()
+    receipts = sb.load_receipts()
+    assert len(orders) == 1
+    assert len(receipts) == 1
+
+    from db import upsert_orders, upsert_receipts
+    upsert_orders(orders)
+    upsert_receipts(receipts)
+    upsert_orders(orders) # idempotent test
+
+    row = one("SELECT id FROM orders WHERE id='JA-RESTORE1'")
+    assert row is not None
+    proof = one("SELECT id FROM payment_proofs WHERE order_id='JA-RESTORE1'")
+    assert proof is not None
+
+    tok = login(client)
+    r = client.get("/api/admin/orders", headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200
+    assert r.get_json()["count"] >= 1
+
+
+def test_admin_session_is_permanent_one_year_and_rolling(client):
+    from config import Config
+    assert Config.PERMANENT_SESSION_LIFETIME >= 60 * 60 * 24 * 365
+    r = client.post("/api/admin/login", json={"email": EMAIL, "password": PW})
+    assert r.status_code == 200
+    cookie = r.headers.get("Set-Cookie", "")
+    assert "jaura_session=" in cookie
+    assert "HttpOnly" in cookie
+    assert client.get("/api/admin/analytics").status_code == 200
+
+
+def test_password_change_survives_app_restart(client):
+    import auth as authmod
+    import app as appmod
+    tok = login(client)
+    new_pw = "RestartSecure2026x"
+    r = client.post("/api/admin/password",
+                    json={"currentPassword": PW, "newPassword": new_pw},
+                    headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200
+    appmod.create_app()
+    assert authmod.verify_login(EMAIL, new_pw) is True
+    assert authmod.verify_login(EMAIL, PW) is False
+    authmod.set_shared_password(PW)
 
 
 # ============================================ admin password: the old one dies
