@@ -4,7 +4,7 @@ These cover the things that must never silently break: CSRF, no user
 enumeration, brute-force lockout, HTML stripping, order retention and the
 analytics counts the dashboard shows.
 """
-import io, json, os, shutil, sys
+import io, json, os, re, shutil, sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DB_PATH", "/tmp/jaura_test.db")
@@ -1766,7 +1766,7 @@ def test_hero_video_is_full_bleed_letterboxed():
     store = open(os.path.join(os.path.dirname(__file__), "..", "js", "store.js"),
                  encoding="utf-8").read()
     assert "ck.bjMin" in store
-    assert "8,800 F CFA" in open(os.path.join(os.path.dirname(__file__), "..", "js", "i18n.js"),
+    assert "(8,800 CFA)" in open(os.path.join(os.path.dirname(__file__), "..", "js", "i18n.js"),
                                  encoding="utf-8").read()
 
 
@@ -1964,3 +1964,145 @@ def test_hero_video_autoplays_and_fills_a_bigger_stage():
     # the hero stage is bigger than the old clamp(462px, 77vh, 836px)
     assert "min-height: clamp(560px, 92vh, 1040px);" in css
     assert "min-height: clamp(462px, 77vh, 836px);" not in css
+
+
+# ============================================ homepage hero: the brand reel
+
+def test_homepage_falls_back_to_the_committed_brand_reel(client):
+    """With no owner upload the homepage hero plays the committed reel."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
+    assert 'DEFAULT_HERO = "images/brand/lux-reel.mp4"' in app_js.replace("  ", " ")
+    assert 'DEFAULT_POSTER = "images/brand/lux-reel.jpg"' in app_js.replace("  ", " ")
+    assert "site.heroVideo || DEFAULT_HERO" in app_js.replace('"").toString() || ', "|| ") \
+        or ("heroVideo" in app_js and "|| DEFAULT_HERO" in app_js)
+
+    r = client.get("/images/brand/lux-reel.mp4")
+    assert r.status_code == 200
+    assert r.headers.get("Content-Type", "").startswith("video/mp4")
+    p = client.get("/images/brand/lux-reel.jpg")
+    assert p.status_code == 200
+    assert p.headers.get("Content-Type", "").startswith("image/jpeg")
+    # phones scrubbing the video need byte ranges
+    rng = client.get("/images/brand/lux-reel.mp4", headers={"Range": "bytes=0-1023"})
+    assert rng.status_code == 206
+    assert len(rng.data) == 1024
+
+
+# ================================= service worker: one version, precached
+
+def test_service_worker_precaches_the_current_asset_version():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sw = open(os.path.join(root, "sw.js"), encoding="utf-8").read()
+    m = re.search(r'const VERSION = "jaura-v(\d+)";', sw)
+    assert m, "sw.js VERSION constant"
+    ver = m.group(1)
+    core = sw.split("const CORE = [", 1)[1].split("];", 1)[0]
+    urls = re.findall(r'"(\./[^"]+)"', core)
+    stamped = re.findall(r"\?v=(\d+)", core)
+    assert urls, "the CORE precache list must not be empty"
+    # every versioned CORE URL carries exactly the current version
+    assert stamped and all(v == ver for v in stamped)
+    for name in os.listdir(root):
+        if name.endswith(".html"):
+            html = open(os.path.join(root, name), encoding="utf-8").read()
+            versions = set(re.findall(r"\?v=(\d+)", html))
+            assert versions <= {ver}, f"{name} still references {versions - {ver}}"
+
+
+# ============================= welcome popup: the CFA equivalent in brackets
+
+def _referral_lines(path):
+    return [ln for ln in open(path, encoding="utf-8").read().splitlines()
+            if '"promo.referral"' in ln]
+
+
+def test_welcome_popup_quotes_the_cfa_equivalent_without_the_f():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    i18n = open(os.path.join(root, "js", "i18n.js"), encoding="utf-8").read()
+    store = open(os.path.join(root, "js", "store.js"), encoding="utf-8").read()
+    en = "Order above ₦20,000 (8,800 CFA)"
+    assert en in i18n
+    assert en in store                       # the offline fallback agrees
+    assert "(8 800 CFA)" in i18n             # the French line
+    for path in (os.path.join(root, "js", "i18n.js"), os.path.join(root, "js", "store.js")):
+        lines = _referral_lines(path)
+        assert lines, f"promo.referral missing from {path}"
+        for ln in lines:
+            assert "F CFA" not in ln, ln
+            assert "about" not in ln, ln
+            assert "environ" not in ln, ln
+
+
+# ================= categories: admin-saved photos show on the storefront
+
+def test_category_image_round_trips_to_the_logged_out_storefront(app, tmp_path, monkeypatch):
+    import api as apimod
+    monkeypatch.setattr(apimod, "CATEGORIES_FILE", str(tmp_path / "categories.json"))
+    with app.test_client() as admin_client:
+        init_db()
+        authmod.ensure_seed_admins()
+        authmod.set_password(EMAIL, PW)
+        execute("DELETE FROM rate_limits")
+        tok = login(admin_client)
+        cats = [
+            {"id": "beauty", "name": "Beauty & skincare", "nameFr": "",
+             "image": "/uploads/categories/beauty.jpg", "hidden": False},
+            {"id": "bags", "name": "Bags", "nameFr": "", "image": "", "hidden": False},
+        ]
+        r = admin_client.put("/api/admin/categories", json={"categories": cats},
+                             headers={"X-CSRF-Token": tok})
+        assert r.status_code == 200, r.data
+    with app.test_client() as anon:
+        g = anon.get("/api/categories")
+        assert g.status_code == 200
+        out = {c["id"]: c for c in g.get_json()["categories"]}
+        assert out["beauty"]["image"] == "/uploads/categories/beauty.jpg"
+        assert out["bags"]["image"] == ""
+
+
+def test_storefront_loads_the_server_category_table():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    store = open(os.path.join(root, "js", "store.js"), encoding="utf-8").read()
+    # the admin-only early return on loadServerCategories is gone
+    assert '!== "admin") return categories()' not in store
+    app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
+    assert "loadServerCategories" in app_js
+    # a saved image is never clobbered by the locale/merge normalisers
+    assert 'image: c.image || def.image || ""' in store
+
+
+# ================================= moving banner: owner text, HTML-stripped
+
+def test_banner_text_round_trip_strips_html_and_needs_an_admin(client):
+    # nobody writes the banner without a session (even with a CSRF token)
+    assert client.post("/api/admin/site", json={"convBanner": "sale"},
+                       headers={"X-CSRF-Token": csrf(client)}).status_code in (401, 403)
+    tok = login(client)
+    r = client.post("/api/admin/site", json={
+        "convBanner": "Back-to-school sale <b>10% off</b> <script>alert(1)</script>",
+        "convBold": "<em>ends Sunday</em>",
+    }, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    site = r.get_json()["site"]
+    assert site["convBanner"] == "Back-to-school sale 10% off alert(1)"
+    assert site["convBold"] == "ends Sunday"
+    assert "<" not in site["convBanner"] and "<" not in site["convBold"]
+    # the public read serves the same cleaned text
+    pub = client.get("/api/site").get_json()["site"]
+    assert pub["convBanner"] == site["convBanner"]
+    assert pub["convBold"] == "ends Sunday"
+    # clearing restores the default banner
+    r = client.post("/api/admin/site", json={"convBanner": "", "convBold": ""},
+                    headers={"X-CSRF-Token": tok})
+    assert r.get_json()["site"]["convBanner"] == ""
+
+
+def test_moving_banner_editor_is_wired_in_admin_and_storefront():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    admin = open(os.path.join(root, "js", "admin.js"), encoding="utf-8").read()
+    store = open(os.path.join(root, "js", "store.js"), encoding="utf-8").read()
+    app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
+    assert "bindBanner" in admin and "banner-form" in admin and "convBanner" in admin
+    assert "function setBanner" in store and "setBanner," in store
+    assert "JA.setBanner" in app_js
