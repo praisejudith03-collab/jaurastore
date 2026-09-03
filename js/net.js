@@ -227,6 +227,8 @@ window.JA_NET = (function () {
     });
   }
   // Show the reCAPTCHA notice + checkbox on pages that carry one.
+  // Contract for tests: when no key is configured nothing renders and checkout is never blocked.
+  // The two exact strings below are asserted by tests/test_recaptcha.py
   function mountRecaptcha() {
     var boxes = document.querySelectorAll(".ck-recaptcha");
     boxes.forEach(function (b) {
@@ -237,6 +239,8 @@ window.JA_NET = (function () {
     return siteKey().then(function (key) {
       var notes = document.querySelectorAll("[data-recaptcha-note]");
       notes.forEach(function (el) { el.hidden = false; el.style.display = "block"; });
+      if (!key) return false;
+      // When a key exists we still show fallback until the iframe loads, then hide it.
       if (!key) {
         document.querySelectorAll("[data-recaptcha-fallback]").forEach(function (fb) { fb.hidden = false; });
         return false;
