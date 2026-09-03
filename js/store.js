@@ -1798,7 +1798,7 @@ const JA = (() => {
         try { sessionStorage.setItem("jaura_lang", next); } catch (err) {}
         try { document.cookie = "jaura_lang=" + next + ";path=/;max-age=31536000;SameSite=Lax"; } catch (err) {}
         if (window.I18N) window.I18N.setLang(next);
-        location.reload();
+        toast(next === "fr" ? tx("toast.langFr") : tx("toast.langEn"));
       });
     });
     const overlay = document.querySelector("[data-search]");

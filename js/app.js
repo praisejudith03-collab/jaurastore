@@ -269,6 +269,20 @@ function productSizes(p) {
   });
   return [...new Set(out)];
 }
+function translateOptionTitle(title) {
+  const s = String(title || "").trim();
+  if (window.I18N && I18N.lang() === "fr") {
+    const lower = s.toLowerCase();
+    if (/colou?r/.test(lower)) return "Couleur";
+    if (/shoe\s*size/.test(lower)) return "Pointure";
+    if (/size/.test(lower)) return "Taille";
+    if (/length/.test(lower)) return "Longueur";
+    if (/scents?/.test(lower)) return "Parfum";
+    if (/type/.test(lower)) return "Type";
+    if (/number/.test(lower)) return "Nombre";
+  }
+  return s;
+}
 function applyShopFilters(list) {
   return list.filter((p) => {
     const price = JA.priceOf(p);
@@ -610,7 +624,7 @@ function paintProduct(root, p) {
       </button>`;
     }).join("");
     return `<div class="pdp-opt" data-opt-wrap="${oi}">
-      <div class="kicker">${JA.escape(opt.title)} *</div>
+      <div class="kicker">${JA.escape(translateOptionTitle(opt.title))} *</div>
       <div class="swatches">${btns}</div>
     </div>`;
   }).join("");
