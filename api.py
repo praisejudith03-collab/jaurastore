@@ -1389,6 +1389,17 @@ def reviews_create():
             "VALUES (?,?,?,?,?,?,?) ON CONFLICT(product_id, email) DO UPDATE SET "
             "name=excluded.name, stars=excluded.stars, note=excluded.note, at=excluded.at",
             (pid, bought["id"], email, name or "Customer", stars, note, _utcnow()))
+    # product_reviews is SQLite-only (wiped with the Render disk), so keep a
+    # JSON copy in Supabase growth_settings - the boot restore in app.py
+    # writes it back. Best effort: a Supabase hiccup never blocks the review.
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import save_product_reviews
+            rows = query("SELECT product_id, order_id, email, name, stars, note, at "
+                         "FROM product_reviews")
+            save_product_reviews([dict(r) for r in rows])
+        except Exception:
+            pass
     audit("customer", "review.posted", f"{pid} {stars}★ by {email}", _ip())
     return reviews_list(pid)
 

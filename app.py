@@ -150,6 +150,33 @@ def create_app():
                 app.logger.info("restored %d variant stock rows from Supabase", saved_s)
         except Exception as exc:
             app.logger.warning("variant stock restore skipped: %s", exc)
+        # Restore the growth module from Supabase: the referral settings the
+        # owner configured (thresholds, percentages, toggles, email template),
+        # issued referral codes, coupons and product reviews. SQLite is only
+        # the working copy - without this, a redeploy resets the settings to
+        # defaults and the codes/coupons/reviews disappear from the store.
+        try:
+            from supabase_store import (load_growth_settings, load_coupons,
+                                        load_referral_codes, load_product_reviews)
+            from db import (restore_growth_settings, upsert_coupons,
+                            upsert_referral_codes, upsert_product_reviews)
+            gs = load_growth_settings()
+            if gs:
+                app.logger.info("restored %d growth settings from Supabase",
+                                restore_growth_settings(gs))
+            coupons = load_coupons()
+            if coupons:
+                app.logger.info("restored %d coupons from Supabase", upsert_coupons(coupons))
+            codes = load_referral_codes()
+            if codes:
+                app.logger.info("restored %d referral codes from Supabase",
+                                upsert_referral_codes(codes))
+            reviews = load_product_reviews()
+            if reviews:
+                app.logger.info("restored %d product reviews from Supabase",
+                                upsert_product_reviews(reviews))
+        except Exception as exc:
+            app.logger.warning("growth restore skipped: %s", exc)
         # One-shot category merge (folds the old `nails` / `packaging`
         # categories, renames `gift-set`, and re-points legacy products). Run
         # on the deployed environments only so the local repo's category table

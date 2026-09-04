@@ -431,3 +431,92 @@ def upsert_variant_stock(rows):
         except Exception as exc:
             print(f"[db] upsert_variant_stock failed: {exc}")
     return count
+
+
+def restore_growth_settings(mapping):
+    """Upsert growth_settings rows restored from Supabase.
+
+    Upsert only: local-only keys (the bootstrap marker, the category-merge
+    marker, the categories JSON) are never deleted, so a restore can only
+    add or refresh values, never erase state Supabase does not hold."""
+    if not mapping:
+        return 0
+    count = 0
+    for k, v in mapping.items():
+        try:
+            execute("INSERT INTO growth_settings (key, value) VALUES (?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (str(k), str(v)))
+            count += 1
+        except Exception as exc:
+            print(f"[db] restore_growth_setting failed: {exc}")
+    return count
+
+
+def upsert_coupons(rows):
+    """Upsert restored coupons into SQLite. Idempotent by code."""
+    if not rows:
+        return 0
+    count = 0
+    for r in rows:
+        try:
+            execute(
+                "INSERT INTO coupons (code, percent, kind, email, note, active, max_uses, uses, expires_at, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET "
+                "percent=excluded.percent, kind=excluded.kind, email=excluded.email, note=excluded.note, "
+                "active=excluded.active, max_uses=excluded.max_uses, uses=excluded.uses, "
+                "expires_at=excluded.expires_at, created_at=excluded.created_at",
+                (r.get("code"), r.get("percent") or 0, r.get("kind") or "manual",
+                 r.get("email"), r.get("note"), 1 if r.get("active") else 0,
+                 r.get("max_uses"), r.get("uses") or 0,
+                 r.get("expires_at"), r.get("created_at"))
+            )
+            count += 1
+        except Exception as exc:
+            print(f"[db] upsert_coupon failed: {exc}")
+    return count
+
+
+def upsert_referral_codes(rows):
+    """Upsert restored referral codes into SQLite. Idempotent by code."""
+    if not rows:
+        return 0
+    count = 0
+    for r in rows:
+        try:
+            execute(
+                "INSERT INTO referral_codes (code, email, name, uses, reward_issued, reward_coupon, created_at) "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET "
+                "email=excluded.email, name=excluded.name, uses=excluded.uses, "
+                "reward_issued=excluded.reward_issued, reward_coupon=excluded.reward_coupon, "
+                "created_at=excluded.created_at",
+                (r.get("code"), r.get("email"), r.get("name"), r.get("uses") or 0,
+                 1 if r.get("reward_issued") else 0, r.get("reward_coupon"),
+                 r.get("created_at"))
+            )
+            count += 1
+        except Exception as exc:
+            print(f"[db] upsert_referral_code failed: {exc}")
+    return count
+
+
+def upsert_product_reviews(rows):
+    """Upsert restored product reviews into SQLite. Idempotent by
+    (product_id, email) - the same conflict rule reviews_create uses."""
+    if not rows:
+        return 0
+    count = 0
+    for r in rows:
+        try:
+            execute(
+                "INSERT INTO product_reviews (product_id, order_id, email, name, stars, note, at) "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(product_id, email) DO UPDATE SET "
+                "order_id=excluded.order_id, name=excluded.name, stars=excluded.stars, "
+                "note=excluded.note, at=excluded.at",
+                (r.get("product_id"), r.get("order_id"), r.get("email"),
+                 r.get("name"), r.get("stars") or 5, r.get("note"), r.get("at"))
+            )
+            count += 1
+        except Exception as exc:
+            print(f"[db] upsert_product_review failed: {exc}")
+    return count
