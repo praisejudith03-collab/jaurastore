@@ -47,38 +47,40 @@ class Config:
     # tick. Defaults to on when SITE_ORIGIN is set; "0" disables it.
     KEEP_ALIVE = os.environ.get("KEEP_ALIVE", "1" if SITE_ORIGIN and SITE_ORIGIN != "http://localhost:8080" else "0")
 
-    # ------------------------------------- Google reCAPTCHA v2 (checkbox)
-    # The shop uses the reCAPTCHA v2 "I'm not a robot" CHECKBOX. Register the
-    # site at https://www.google.com/recaptcha/admin as
+    # ------------------------------------- Google reCAPTCHA v2 (INVISIBLE)
+    # The shop uses reCAPTCHA v2 rendered INVISIBLY (size: "invisible"): there
+    # is no "I'm not a robot" box on the page, the widget mints a token when
+    # the shopper submits. Register the site at
+    # https://www.google.com/recaptcha/admin as
     #   label:   Jaura Store checkout v2
-    #   type:    reCAPTCHA v2 -> "I'm not a robot" Checkbox
+    #   type:    reCAPTCHA v2 -> "Invisible reCAPTCHA badge"
     #   domains: jaurastore.com.ng AND www.jaurastore.com.ng
     # then set both keys below (Render -> Environment). The site key is public
     # (sent to the browser via /api/config); the secret key stays server-side.
     #
-    # A v3 key with the v2 widget is exactly what makes the box say
-    # "Invalid key type" - the keys must come from a v2 Checkbox site.
+    # A v3 key behind the v2 widget is exactly what makes Google answer
+    # "Invalid key type" - the keys must come from a v2 Invisible site.
     #
     # When the keys are not configured the widget never renders and the checks
     # are skipped entirely, so local dev, static hosting and the test suite
     # keep working without any Google account.
-    # The shop's own reCAPTCHA v2 Checkbox site key. A site key is public —
+    # The shop's own reCAPTCHA v2 Invisible site key. A site key is public —
     # /api/config hands it to the browser and it lands in the rendered page
-    # anyway — so keeping it here is safe, and it means the "I'm not a robot"
-    # box still renders on a host where the environment variable was never
-    # filled in. A value set in the environment (Render dashboard) wins.
+    # anyway — so keeping it here is safe, and it means the invisible widget
+    # still renders on a host where the environment variable was never filled
+    # in. A value set in the environment (Render dashboard) wins.
     RECAPTCHA_SITE_KEY = os.environ.get(
         "RECAPTCHA_SITE_KEY",
         "6LciyqUtAAAAALVwLeDPSeXedLAE6ziEU8knio5h")
     RECAPTCHA_SECRET_KEY = os.environ.get("RECAPTCHA_SECRET_KEY", "")
-    # v2 checkbox responses carry no score (only success true/false), so this
+    # v2 invisible responses carry no score (only success true/false), so this
     # threshold is inert for v2 and kept only so a v3 key still behaves
     # sensibly if one is ever configured by mistake.
     RECAPTCHA_MIN_SCORE = float(os.environ.get("RECAPTCHA_MIN_SCORE", "0.3") or 0.3)
     # When "1", requests WITHOUT a token are rejected too. LEAVE THIS OFF:
     # queued offline orders (whose token expired while the phone had no
     # signal) must still arrive, and checkout is never blocked behind the
-    # checkbox. Failed verifications are always rejected.
+    # widget. Failed verifications are always rejected.
     RECAPTCHA_REQUIRED = os.environ.get("RECAPTCHA_REQUIRED", "") == "1"
 
     # ------------------------------------------------------------ Supabase
@@ -143,15 +145,17 @@ class Config:
 
     # ------------------------------------------------- admin access recovery
     # Last-resort way back into the admin portal when the password is lost and
-    # no reset code can be received. On the FIRST boot after this ships, the
-    # shared admin password is forced to this value exactly once (see
-    # auth.apply_bootstrap_password, which stamps an `admin_bootstrap_applied`
-    # marker so it never fires again).
+    # no reset code can be received. There is deliberately NO default here:
+    # a default lives in the repository, and this repository is public, so it
+    # would be a published password. Leave the variable UNSET and recovery goes
+    # through the emailed reset code, or seed_admin.py.
     #
-    # SECURITY: this default is public (it lives in the repo), so sign in,
-    # change the password from the admin portal immediately, and set
-    # ADMIN_BOOTSTRAP_PASSWORD in the host dashboard if you ever need a second
-    # recovery. The marker makes it one-shot per database.
-    BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "") or "Jaura@Admin#2026x"
+    # To recover: set ADMIN_BOOTSTRAP_PASSWORD in the host dashboard (Render:
+    # both services expose it with sync: false), reboot once, sign in, change
+    # the password from Admin -> My account, then clear the variable again.
+    # auth.apply_bootstrap_password() is inert while this is empty - no marker
+    # is stamped and nothing is forced - and it fires at most once per database
+    # when it is set.
+    BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "")
 
     LOW_STOCK_THRESHOLD = 5

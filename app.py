@@ -1,5 +1,5 @@
 """J Aura Store - Flask app: serves the storefront plus a JSON API."""
-import os, html, datetime
+import os, re, html, datetime
 from urllib.parse import quote
 from flask import (Flask, send_from_directory, jsonify, request, redirect,
                    Response, abort, make_response as _make_response)
@@ -15,6 +15,44 @@ from api import api
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 LEGACY_PREFIX = "/JauraStore"   # keeps old project-site links working
+
+# ------------------------------------------------ what the catch-all may serve
+# The storefront is flat files at the repo root - but so is everything else:
+# the Python sources, the SQLite database, the CI config, and (until this was
+# fixed) a stray copy of git's own internals. Serving "any file that exists"
+# published the lot: /config.py answered 200 in production, and with it the
+# public admin bootstrap password. Only the asset types the shop actually
+# ships are served now; everything else falls through to the 404 page.
+ALLOWED_STATIC_EXT = frozenset({
+    ".html", ".htm", ".css", ".js", ".mjs", ".json", ".xml", ".ico",
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".avif",
+    ".mp4", ".webm", ".mov", ".woff", ".woff2", ".ttf", ".otf", ".map",
+})
+# Allowed by name: `.txt` is not an allowed extension, so requirements.txt,
+# Procfile-adjacent text and the rest stay private while this stays public.
+ALLOWED_STATIC_NAMES = frozenset({"robots.txt"})
+# Whole trees that are never public whatever they contain.
+BLOCKED_STATIC_DIRS = frozenset({
+    "data", "tests", "node_modules", "__pycache__", "venv", ".venv",
+})
+
+
+def servable(rel):
+    """True when a repo-root-relative path may be handed to a browser."""
+    parts = [p for p in re.split(r"[/\\]+", str(rel or "").replace(os.sep, "/"))
+             if p and p not in (".", "..")]
+    if not parts:
+        return False
+    for p in parts:                       # dotfiles and dot-dirs: .env, .github
+        if p.startswith("."):
+            return False
+    for p in parts[:-1]:                  # trees that are private whatever is in them
+        if p.lower() in BLOCKED_STATIC_DIRS:
+            return False
+    name = parts[-1]
+    if name in ALLOWED_STATIC_NAMES:
+        return True
+    return os.path.splitext(name)[1].lower() in ALLOWED_STATIC_EXT
 
 # The fixed pages of the storefront (never change unless a page ships).
 SITEMAP_STATIC_PAGES = (
@@ -194,16 +232,17 @@ def create_app():
 
     # One-shot access recovery: when the admin password is lost and no reset
     # code can be received, the shared admin password is forced once on boot to
-    # ADMIN_BOOTSTRAP_PASSWORD (or Config.BOOTSTRAP_ADMIN_PASSWORD when the
-    # variable is absent). auth.apply_bootstrap_password stamps an
-    # `admin_bootstrap_applied` marker so this can never fire twice - sign in,
-    # change the password from the admin portal, and reboot as often as needed.
+    # ADMIN_BOOTSTRAP_PASSWORD. There is no default for it - a default would be
+    # a password published in the repository - so while it is unset
+    # auth.apply_bootstrap_password() is inert and nothing is forced. Set it in
+    # the host dashboard, reboot once, sign in, change the password from the
+    # admin portal, then clear the variable again. It stamps an
+    # `admin_bootstrap_applied` marker so it can never fire twice.
     # Skipped under FLASK_ENV=testing so test passwords are never overwritten.
     if Config.ENV != "testing":
         try:
             if authmod.apply_bootstrap_password(
-                    os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "")
-                    or Config.BOOTSTRAP_ADMIN_PASSWORD):
+                    os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "")):
                 app.logger.warning(
                     "admin bootstrap password applied once - sign in and change "
                     "it from the admin portal now")
@@ -236,17 +275,26 @@ def create_app():
         return None
 
     def static_for(path):
-        """Serve a file from the repo root, refusing anything outside it."""
+        """Serve a file from the repo root, refusing anything outside it - or
+        anything that is not a storefront asset (see servable())."""
         full = os.path.normpath(os.path.join(ROOT, path.lstrip("/")))
         if not full.startswith(ROOT):
             return None
+        # Traversal first (`css/../config.py` collapses to `config.py`), then
+        # the allowlist, so a blocked file is blocked however it is spelled.
+        if not servable(os.path.relpath(full, ROOT)):
+            return None
         if os.path.isdir(full):
             full = os.path.join(full, "index.html")
+            if not servable(os.path.relpath(full, ROOT)):
+                return None
         if not os.path.isfile(full):
             rel = _flat_fallback(path)
-            if rel is None:
+            if rel is None or not servable(rel):
                 return None
             full = os.path.normpath(os.path.join(ROOT, rel))
+        if not os.path.isfile(full):
+            return None
         return send_from_directory(os.path.dirname(full), os.path.basename(full))
 
     @app.after_request

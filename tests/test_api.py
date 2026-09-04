@@ -24,7 +24,8 @@ import emailer  # noqa: E402
 import auth as authmod  # noqa: E402
 from db import execute, init_db, one, query  # noqa: E402
 
-PW = "JauraStore2026x"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _pw import PW  # noqa: E402  - one strong password per run; ADMIN_PW pins it
 EMAIL = "jaurastore@gmail.com"
 
 
@@ -1384,11 +1385,22 @@ def test_bootstrap_rejects_a_weak_password_without_burning_the_marker(client):
     _clear_bootstrap()
 
 
-def test_bootstrap_config_default_is_always_usable():
+def test_bootstrap_default_is_unset_so_nothing_is_ever_forced(client):
+    """There is deliberately no built-in recovery password.
+
+    A default lives in the repository, and this repository is public - that is
+    exactly how the old default got published. Unset, apply_bootstrap_password()
+    must be inert: no marker stamped, no password forced, nothing to log in
+    with. Recovery goes through the emailed reset code or seed_admin.py.
+    """
     import config
-    default = config.Config.BOOTSTRAP_ADMIN_PASSWORD
-    assert default, "BOOTSTRAP_ADMIN_PASSWORD must never be empty"
-    assert authmod.password_strong(default)[0], "the shipped default must pass password_strong()"
+    _clear_bootstrap()
+    assert config.Config.BOOTSTRAP_ADMIN_PASSWORD == ""
+    assert authmod.apply_bootstrap_password(config.Config.BOOTSTRAP_ADMIN_PASSWORD) is False
+    assert one("SELECT key FROM growth_settings WHERE key=?",
+               (authmod.BOOTSTRAP_MARKER,)) is None
+    assert authmod.verify_login(EMAIL, "") is False
+    _clear_bootstrap()
 
 
 def test_create_app_never_applies_the_bootstrap_under_testing(client, monkeypatch):

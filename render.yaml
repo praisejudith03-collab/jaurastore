@@ -37,8 +37,9 @@ services:
       # each tick when KEEP_ALIVE is on (default: on when SITE_ORIGIN is set).
       - key: KEEP_ALIVE
         value: "1"
-      # Google reCAPTCHA v2 CHECKBOX ("I'm not a robot").
-      # Site label: Jaura Store checkout v2 — type: reCAPTCHA v2 Checkbox,
+      # Google reCAPTCHA v2 INVISIBLE badge. There is no "I'm not a robot" box:
+      # the widget renders with size:"invisible" and mints a token on submit.
+      # Site label: Jaura Store checkout v2 — type: reCAPTCHA v2 Invisible,
       # domains: jaurastore.com.ng AND www.jaurastore.com.ng.
       # https://www.google.com/recaptcha/admin — set both keys in the Render
       # dashboard; sync:false keeps the secret out of git. A v3 key here makes
@@ -46,6 +47,12 @@ services:
       - key: RECAPTCHA_SITE_KEY
         sync: false
       - key: RECAPTCHA_SECRET_KEY
+        sync: false
+      # Emergency admin recovery ONLY — leave it empty. While it is empty,
+      # auth.apply_bootstrap_password() is inert, so nothing is ever forced.
+      # To use it: set a value, reboot once, sign in, change the password from
+      # Admin -> My account, then clear the variable again.
+      - key: ADMIN_BOOTSTRAP_PASSWORD
         sync: false
       # Supabase (source of truth for products, carts, orders, admin auth).
       # The service role key is server-side only: sync:false keeps it out of git.
@@ -125,8 +132,9 @@ services:
       # each tick when KEEP_ALIVE is on (default: on when SITE_ORIGIN is set).
       - key: KEEP_ALIVE
         value: "1"
-      # Google reCAPTCHA v2 CHECKBOX ("I'm not a robot").
-      # Site label: Jaura Store checkout v2 — type: reCAPTCHA v2 Checkbox,
+      # Google reCAPTCHA v2 INVISIBLE badge. There is no "I'm not a robot" box:
+      # the widget renders with size:"invisible" and mints a token on submit.
+      # Site label: Jaura Store checkout v2 — type: reCAPTCHA v2 Invisible,
       # domains: jaurastore.com.ng AND www.jaurastore.com.ng.
       # https://www.google.com/recaptcha/admin — set both keys in the Render
       # dashboard; sync:false keeps the secret out of git. A v3 key here makes
@@ -134,6 +142,12 @@ services:
       - key: RECAPTCHA_SITE_KEY
         sync: false
       - key: RECAPTCHA_SECRET_KEY
+        sync: false
+      # Emergency admin recovery ONLY — leave it empty. While it is empty,
+      # auth.apply_bootstrap_password() is inert, so nothing is ever forced.
+      # To use it: set a value, reboot once, sign in, change the password from
+      # Admin -> My account, then clear the variable again.
+      - key: ADMIN_BOOTSTRAP_PASSWORD
         sync: false
       # Supabase (source of truth for products, carts, orders, admin auth).
       # The service role key is server-side only: sync:false keeps it out of git.

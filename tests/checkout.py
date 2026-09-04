@@ -21,7 +21,11 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BASE = os.environ.get("BASE", "http://127.0.0.1:8080")
-PW = os.environ.get("ADMIN_PW", "JauraStore2026x")
+# This harness signs in to the real shop, so the admin password is never
+# written in this file - pass it in:  ADMIN_PW='...' python3 tests/checkout.py
+PW = os.environ.get("ADMIN_PW", "")
+if not PW:
+    sys.exit("ADMIN_PW is not set. Run this as:  ADMIN_PW='<admin password>' python3 tests/checkout.py")
 FIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 
 results = []

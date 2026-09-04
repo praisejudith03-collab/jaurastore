@@ -2,6 +2,17 @@
 .env
 *.local
 
+# Stray copies of git's own internals. They were committed once (and then
+# served over HTTP by the catch-all route), and they make git arguments
+# ambiguous — `git rm -- index` needs the `--` because `index` is a file here.
+# Anchored to the repo root so a real file named e.g. js/index.html is safe.
+/HEAD
+/index
+/main
+/description
+/exclude
+/*.sample
+
 # Python
 __pycache__/
 *.py[cod]

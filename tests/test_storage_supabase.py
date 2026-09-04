@@ -38,7 +38,8 @@ import app as appmod  # noqa: E402
 import auth as authmod  # noqa: E402
 from db import execute, init_db, one, query  # noqa: E402
 
-PW = "JauraStore2026x"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _pw import PW  # noqa: E402  - one strong password per run; ADMIN_PW pins it
 EMAIL = "jaurastore@gmail.com"
 FAKE_ORIGIN = "https://fake.supabase.co"
 
