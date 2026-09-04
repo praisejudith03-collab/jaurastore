@@ -139,6 +139,17 @@ def create_app():
                 app.logger.info("restored %d receipts from Supabase", saved_r)
         except Exception as exc:
             app.logger.warning("orders/receipts restore skipped: %s", exc)
+        # Restore per-variant stock levels: the Stock panel is SQLite-only, so
+        # without this a redeploy that wipes the disk resets every quantity.
+        try:
+            from supabase_store import load_variant_stock
+            from db import upsert_variant_stock
+            stock_data = load_variant_stock()
+            if stock_data:
+                saved_s = upsert_variant_stock(stock_data)
+                app.logger.info("restored %d variant stock rows from Supabase", saved_s)
+        except Exception as exc:
+            app.logger.warning("variant stock restore skipped: %s", exc)
         # One-shot category merge (folds the old `nails` / `packaging`
         # categories, renames `gift-set`, and re-points legacy products). Run
         # on the deployed environments only so the local repo's category table

@@ -750,6 +750,17 @@ def admin_stock_set():
             "qty=excluded.qty, low_threshold=excluded.low_threshold, "
             "variant_label=COALESCE(excluded.variant_label, variant_stock.variant_label), updated_at=excluded.updated_at",
             (pid, variant, label, qty, thr, datetime.datetime.utcnow().isoformat(timespec="seconds")))
+    # variant_stock is SQLite-only (wiped with the Render disk), so mirror the
+    # whole table into Supabase growth_settings - the boot restore in app.py
+    # writes it back. Best effort: a Supabase hiccup never blocks the change.
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import save_variant_stock
+            rows = query("SELECT product_id, variant_key, variant_label, qty, low_threshold, "
+                         "updated_at FROM variant_stock")
+            save_variant_stock([dict(r) for r in rows])
+        except Exception:
+            pass
     audit(authmod.current_admin(), "stock.set", f"{pid}/{variant} = {qty}", _ip())
     return jsonify(ok=True)
 

@@ -406,3 +406,28 @@ def upsert_receipts(receipts):
         except Exception as exc:
             print(f"[db] upsert_receipt failed: {exc}")
     return count
+
+
+def upsert_variant_stock(rows):
+    """Upsert restored variant-stock rows into SQLite. Idempotent by
+    (product_id, variant_key) - the same conflict rule the Stock panel uses."""
+    if not rows:
+        return 0
+    count = 0
+    for r in rows:
+        try:
+            execute(
+                "INSERT INTO variant_stock (product_id, variant_key, variant_label, qty, low_threshold, updated_at) "
+                "VALUES (?,?,?,?,?,?) ON CONFLICT(product_id, variant_key) DO UPDATE SET "
+                "qty=excluded.qty, low_threshold=excluded.low_threshold, "
+                "variant_label=COALESCE(excluded.variant_label, variant_stock.variant_label), "
+                "updated_at=excluded.updated_at",
+                (r.get("product_id"), r.get("variant_key") or "__default__",
+                 r.get("variant_label"), r.get("qty") or 0,
+                 r.get("low_threshold") if r.get("low_threshold") is not None else 5,
+                 r.get("updated_at"))
+            )
+            count += 1
+        except Exception as exc:
+            print(f"[db] upsert_variant_stock failed: {exc}")
+    return count

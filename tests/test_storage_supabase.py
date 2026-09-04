@@ -36,7 +36,7 @@ if os.path.exists(os.environ["DB_PATH"]):
 
 import app as appmod  # noqa: E402
 import auth as authmod  # noqa: E402
-from db import execute, init_db, one  # noqa: E402
+from db import execute, init_db, one, query  # noqa: E402
 
 PW = "JauraStore2026x"
 EMAIL = "jaurastore@gmail.com"
@@ -84,13 +84,56 @@ class FakeStorage:
         return FakeBucket(self._owner, name)
 
 
+class FakeTable:
+    """In-memory stand-in for one PostgREST table (upsert / select / eq)."""
+
+    def __init__(self, owner, name):
+        self._owner = owner
+        self._name = name
+        self._filter = None
+
+    def upsert(self, rows):
+        store = self._owner.tables.setdefault(self._name, [])
+        for r in rows:
+            if self._name == "growth_settings":      # key/value store
+                store[:] = [x for x in store if x.get("key") != r.get("key")]
+            else:
+                store[:] = [x for x in store if x.get("id") != r.get("id")]
+            store.append(dict(r))
+        return self
+
+    def select(self, *a):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def limit(self, n=None):
+        return self
+
+    def eq(self, key, val):
+        self._filter = (key, val)
+        return self
+
+    def execute(self):
+        rows = list(self._owner.tables.get(self._name, []))
+        if self._filter:
+            k, v = self._filter
+            rows = [r for r in rows if r.get(k) == v]
+        return {"data": rows}
+
+
 class FakeSupabaseClient:
     def __init__(self):
         self.objects = {}        # bucket -> {path: (bytes, content-type)}
         self.signed = []         # (bucket, path, expires_in) for every sign
         self.token_seq = 0
         self.fail_uploads = False
+        self.tables = {}         # table name -> [row dicts]
         self.storage = FakeStorage(self)
+
+    def table(self, name):
+        return FakeTable(self, name)
 
 
 @pytest.fixture()
@@ -394,3 +437,74 @@ def test_admin_receipts_view_serves_fresh_signed_urls(client, fake):
     assert served != url                        # refreshed, not the stored one
     assert served.split("/uploads/", 1)[1].split("?", 1)[0] == stored_path
     assert f"/storage/v1/object/sign/uploads/proofs/" in served
+
+
+# ------------------------------------------- variant stock survives a deploy
+# The Stock panel writes to the SQLite-only variant_stock table, which a
+# Render redeploy wipes. These tests cover the mirror (write) and the boot
+# restore (read) that keep stock levels in Supabase.
+def _growth_value(fake, key):
+    for row in fake.tables.get("growth_settings", []):
+        if row.get("key") == key:
+            return row.get("value")
+    return None
+
+
+def test_variant_stock_mirror_roundtrip(fake):
+    rows = [{"product_id": "wix-001", "variant_key": "Red", "variant_label": "Red",
+             "qty": 3, "low_threshold": 2, "updated_at": "2026-09-04T00:00:00"}]
+    assert supabase_store.save_variant_stock(rows) is True
+    assert supabase_store.load_variant_stock() == rows
+
+
+def test_variant_stock_mirror_noop_without_supabase(monkeypatch, tmp_path):
+    monkeypatch.setattr(Config, "SUPABASE_URL", "")
+    monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "")
+    monkeypatch.setattr(supabase_store, "client", lambda: None)
+    assert supabase_store.save_variant_stock([{"a": 1}]) is False
+    assert supabase_store.load_variant_stock() is None
+
+
+def test_admin_stock_set_mirrors_to_supabase(client, fake):
+    """Changing a stock level in the Stock panel must land in Supabase,
+    because the SQLite row alone would be wiped on the next deploy."""
+    login(client)
+    execute("DELETE FROM variant_stock")
+    tok = client.get("/api/config").get_json()["csrf"]
+    r = client.put("/api/admin/stock",
+                   json={"productId": "wix-001", "variant": "Red", "label": "Red",
+                         "qty": 3, "lowThreshold": 2},
+                   headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    raw = _growth_value(fake, supabase_store.VARIANT_STOCK_KEY)
+    assert raw is not None, "the stock table was not mirrored to growth_settings"
+    mirrored = json.loads(raw)
+    assert any(m["product_id"] == "wix-001" and m["variant_key"] == "Red"
+               and m["qty"] == 3 for m in mirrored)
+
+
+def test_boot_restores_variant_stock_from_supabase(monkeypatch, tmp_path):
+    """A fresh boot on a wiped disk pulls the stock levels back from
+    Supabase before the first request is served."""
+    fake = FakeSupabaseClient()
+    fake.tables["growth_settings"] = [{
+        "key": supabase_store.VARIANT_STOCK_KEY,
+        "value": json.dumps([
+            {"product_id": "wix-001", "variant_key": "Red", "variant_label": "Red",
+             "qty": 3, "low_threshold": 2, "updated_at": "2026-09-04T00:00:00"},
+            {"product_id": "wix-002", "variant_key": "__default__", "variant_label": None,
+             "qty": 11, "low_threshold": 5, "updated_at": "2026-09-04T00:00:00"},
+        ]),
+    }]
+    monkeypatch.setattr(Config, "UPLOAD_MODE", "supabase")
+    monkeypatch.setattr(Config, "SUPABASE_URL", FAKE_ORIGIN)
+    monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
+    monkeypatch.setattr(supabase_store, "client", lambda: fake)
+
+    execute("DELETE FROM variant_stock")        # simulate the wiped disk
+    appmod.create_app()                         # runs the boot restore
+
+    rows = { (r["product_id"], r["variant_key"]): r["qty"]
+             for r in query("SELECT * FROM variant_stock") }
+    assert rows == {("wix-001", "Red"): 3, ("wix-002", "__default__"): 11}
+    execute("DELETE FROM variant_stock")        # leave the shared test DB clean

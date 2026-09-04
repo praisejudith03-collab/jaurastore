@@ -591,3 +591,54 @@ def load_receipts(limit=500):
     except Exception as exc:
         print(f"[supabase] load_receipts failed: {exc}")
         return []
+
+
+# The variant_stock table (per-variant stock levels from the admin's Stock
+# panel) exists only in the SQLite database on the Render disk, which a
+# redeploy wipes. Like the category table, we keep a JSON copy in
+# growth_settings (no new schema): admin_stock_set mirrors the whole table
+# after every change, and the boot restore in app.py writes it back before
+# the first request is served.
+VARIANT_STOCK_KEY = "variant_stock_json"
+
+
+def save_variant_stock(rows):
+    """Persist the whole variant_stock table as one growth_settings row. Never raises."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        payload = json.dumps(list(rows or []), ensure_ascii=False)
+        c.table("growth_settings").upsert(
+            [{"key": VARIANT_STOCK_KEY, "value": payload}]
+        ).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] variant stock save failed: {exc}")
+        return False
+
+
+def load_variant_stock():
+    """Return the variant_stock rows stored under VARIANT_STOCK_KEY, or None."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("growth_settings")
+               .select("value")
+               .eq("key", VARIANT_STOCK_KEY)
+               .limit(1)
+               .execute())
+        rows = _res_data(res)
+        if not rows:
+            return None
+        raw = (rows[0] or {}).get("value")
+        if raw is None or raw == "":
+            return None
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(data, list) and data:
+            return data
+        return None
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] variant stock load failed: {exc}")
+        return None
