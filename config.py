@@ -62,7 +62,14 @@ class Config:
     # When the keys are not configured the widget never renders and the checks
     # are skipped entirely, so local dev, static hosting and the test suite
     # keep working without any Google account.
-    RECAPTCHA_SITE_KEY = os.environ.get("RECAPTCHA_SITE_KEY", "")
+    # The shop's own reCAPTCHA v2 Checkbox site key. A site key is public —
+    # /api/config hands it to the browser and it lands in the rendered page
+    # anyway — so keeping it here is safe, and it means the "I'm not a robot"
+    # box still renders on a host where the environment variable was never
+    # filled in. A value set in the environment (Render dashboard) wins.
+    RECAPTCHA_SITE_KEY = os.environ.get(
+        "RECAPTCHA_SITE_KEY",
+        "6LciyqUtAAAAALVwLeDPSeXedLAE6ziEU8knio5h")
     RECAPTCHA_SECRET_KEY = os.environ.get("RECAPTCHA_SECRET_KEY", "")
     # v2 checkbox responses carry no score (only success true/false), so this
     # threshold is inert for v2 and kept only so a v3 key still behaves

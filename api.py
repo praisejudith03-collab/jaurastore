@@ -963,7 +963,30 @@ def admin_order_update(oid):
     execute("UPDATE orders SET status=?, payload=?, updated_at=? WHERE id=?",
             (status, json.dumps(payload, ensure_ascii=False), _utcnow(), oid))
     audit(authmod.current_admin(), f"order.{status}", oid, _ip())
-    return jsonify(ok=True, id=oid, status=status)
+
+    # tell the customer: confirming or declining from the portal must send the
+    # same email the one-tap link in the admin's inbox sends
+    emailed = False
+    customer = (payload.get("customer") or {})
+    if status in ("confirmed", "declined") and str(customer.get("email") or "").strip():
+        try:
+            if status == "confirmed":
+                emailed = bool(emailer.send_receipt(payload)[0])
+            else:
+                emailed = bool(emailer.send_order_declined(payload)[0])
+        except Exception:
+            emailed = False
+
+    # mirror the new status so the Supabase copy (used by the boot restore)
+    # cannot put a stale pending order back
+    if Config.SUPABASE_ENABLED:
+        try:
+            from supabase_store import update_order as _sb_update_order
+            _sb_update_order(oid, status=status, payload=payload)
+        except Exception:
+            pass
+
+    return jsonify(ok=True, id=oid, status=status, customerEmailed=emailed)
 
 
 @api.delete("/admin/orders/<oid>")
@@ -976,10 +999,36 @@ def admin_order_delete(oid):
     row = one("SELECT id FROM orders WHERE id=?", (oid,))
     if not row:
         return jsonify(ok=False, error="Order not found."), 404
+
+    # take the receipts out first — their files go too, so a deleted receipt
+    # can no longer be downloaded from its old URL (and cannot be restored
+    # from Supabase at the next boot, which is how they used to come back)
+    proofs = query("SELECT id, file_url FROM payment_proofs WHERE order_id=?", (oid,)) or []
+    files_removed = 0
+    for p in proofs:
+        url = (p["file_url"] or "") if "file_url" in p.keys() else ""
+        if not url:
+            continue
+        try:
+            if storage.delete_upload(url):
+                files_removed += 1
+        except Exception:
+            pass
     execute("DELETE FROM payment_proofs WHERE order_id=?", (oid,))
     execute("DELETE FROM orders WHERE id=?", (oid,))
-    audit(authmod.current_admin(), "order.delete", oid, _ip())
-    return jsonify(ok=True, id=oid)
+
+    # the mirrored copy must go as well, or the boot-time restore from
+    # Supabase quietly brings the order (and its receipts) straight back
+    if Config.SUPABASE_ENABLED:
+        try:
+            from supabase_store import delete_order as _sb_delete_order
+            _sb_delete_order(oid)
+        except Exception:
+            pass
+
+    audit(authmod.current_admin(), "order.delete",
+          f"{oid} receipts={len(proofs)} files_removed={files_removed}", _ip())
+    return jsonify(ok=True, id=oid, filesRemoved=files_removed)
 
 # -------------------------------------------------------- admin: products
 @api.post("/admin/products")

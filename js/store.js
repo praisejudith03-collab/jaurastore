@@ -1373,6 +1373,22 @@ const JA = (() => {
         if (headerLogo && site.logoUrl) {
           headerLogo.src = site.logoUrl;
         }
+      } else {
+        // No custom logo at all (or Admin -> Branding -> Remove custom logo
+        // just cleared it): drop the stored override and put the brand file
+        // back everywhere, so the shop can never show a blank box or a
+        // stale upload. The footer keeps its own flyer mark.
+        const LOGO = "images/brand/logo.jpg?v=121";
+        const FLYER = "images/brand/logo-flyer.jpg?v=121";
+        const cur = settings();
+        if (cur.logoUrl) saveSettings({ logoUrl: "" });
+        document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
+          if (img.closest(".foot-logo")) {
+            if (!String(img.src || "").includes("logo-flyer")) img.src = FLYER;
+            return;
+          }
+          if (!String(img.src || "").includes("images/brand/logo.jpg")) img.src = LOGO;
+        });
       }
       if (site.shopBannerUrl) {
         const cur = settings();
@@ -1478,7 +1494,7 @@ const JA = (() => {
           <a href="contact.html">${tx("nav.contact")}</a>
         </nav>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=121" alt="Jaura" />
         </a>
         <div class="nav-right">
           <div class="lang-switch" role="group" aria-label="${tx("lang.group")}">
@@ -1614,7 +1630,7 @@ const JA = (() => {
     return `<footer class="footer wix-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=121" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -1698,7 +1714,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=121" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -1720,7 +1736,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=121";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -1732,7 +1748,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Jaura Store — fashion, beauty, household and lifestyle. Pay in Naira or F CFA. Lagos and Cotonou.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=121");
     document.title = title;
     [
       ["name", "description", description],
@@ -1769,7 +1785,7 @@ const JA = (() => {
       const ic = document.createElement("link");
       ic.rel = "icon";
       ic.type = "image/png";
-      ic.href = "images/brand/favicon.png";
+      ic.href = "images/brand/favicon.png?v=121";
       document.head.appendChild(ic);
     }
     let ld = document.getElementById("jaura-jsonld");
@@ -1779,6 +1795,24 @@ const JA = (() => {
       ld.id = "jaura-jsonld";
       document.head.appendChild(ld);
     }
+    // The catalogue Google is told about: one entry per live category, so
+    // the sitelinks and the knowledge panel can show what the shop sells.
+    let cats = [];
+    try { cats = (typeof categories === "function" ? categories() : []) || []; } catch (e) { cats = []; }
+    if (!cats.length) cats = DEFAULT_CATS;
+    const offerCatalog = {
+      "@type": "OfferCatalog",
+      name: "Jaura Store catalogue",
+      itemListElement: cats.map((c) => ({
+        "@type": "Offer",
+        itemOffered: {
+          "@type": "ProductCollection",
+          name: (c && (c.name || c.id)) || "",
+          url: SITE + "/shop.html?cat=" + encodeURIComponent((c && c.id) || ""),
+          image: (c && c.image) ? absUrl(c.image) : image,
+        },
+      })),
+    };
     ld.textContent = JSON.stringify(opts.jsonLd || {
       "@context": "https://schema.org",
       "@graph": [
@@ -1787,7 +1821,7 @@ const JA = (() => {
           "@id": SITE + "/#store",
           name: "Jaura Store",
           url: SITE,
-          logo: absUrl("images/brand/logo.jpg"),
+          logo: absUrl("images/brand/logo.jpg?v=121"),
           image,
           email: "jaurastore@gmail.com",
           telephone: "+22968953110",
@@ -1799,7 +1833,8 @@ const JA = (() => {
           address: [
             { "@type": "PostalAddress", addressLocality: "Cotonou", addressCountry: "BJ" },
             { "@type": "PostalAddress", addressLocality: "Lagos", addressCountry: "NG" }
-          ]
+          ],
+          hasOfferCatalog: offerCatalog
         },
         {
           "@type": "WebSite",
@@ -1807,7 +1842,17 @@ const JA = (() => {
           url: SITE,
           name: "Jaura Store",
           publisher: { "@id": SITE + "/#store" },
-          inLanguage: ["en", "fr"]
+          inLanguage: ["en", "fr"],
+          // sitelinks search box: Google shows a search field under the
+          // result and sends the query straight to the shop page
+          potentialAction: {
+            "@type": "SearchAction",
+            target: {
+              "@type": "EntryPoint",
+              urlTemplate: SITE + "/shop.html?q={search_term_string}"
+            },
+            "query-input": "required name=search_term_string"
+          }
         }
       ]
     });

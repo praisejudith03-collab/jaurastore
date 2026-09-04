@@ -1,5 +1,6 @@
 """Mail delivery: resend | smtp | none(kept on disk + console)."""
 import smtplib, ssl, datetime
+from urllib.parse import quote
 from email.message import EmailMessage
 from config import Config
 
@@ -137,27 +138,92 @@ def send_order_notice(order, data=None, filename="", mime="application/octet-str
     return send(Config.ADMIN_EMAILS[0], subject, body)
 
 
+WHATSAPP_NUMBER = "22968953110"
+
+
+def _whatsapp_text(order):
+    """The one message a customer sends to ask for their transport fare.
+
+    Fixed wording: the shop asked for these exact sentences, and the order
+    ID plus the delivery location are filled in so the answer can be looked
+    up without a single extra question.
+    """
+    c = order.get("customer") or {}
+    where = ", ".join([str(x).strip() for x in (
+        c.get("city") or "", c.get("zone") or "", c.get("address") or "") if str(x).strip()])
+    return ("Hello Jaura Store, I have paid for order "
+            f"{order.get('id') or ''}. I would like to know my specific "
+            f"transport fare. My delivery location: {where}. I understand that "
+            "transportation fare ranges depending on location and the weight "
+            "of the products. Thank you.")
+
+
 def send_receipt(order):
-    """Customer receipt, sent when an admin confirms the payment."""
+    """Customer receipt, sent when an admin confirms the payment.
+
+    Carries everything the customer needs to recognise the order and to ask
+    for their transport fare without another round of emails: order id, date,
+    status, amount and method, the full delivery details, the item list with
+    quantities, colours and prices, and the fixed WhatsApp message.
+    """
     c = order.get("customer") or {}
     to = (c.get("email") or "").strip()
     if not to:
         return False, "no customer email"
     items = order.get("items") or []
+    currency = order.get("currency") or ""
+    oid = order.get("id") or ""
+
+    def money(value):
+        try:
+            return f"{float(value):,.0f}"
+        except (TypeError, ValueError):
+            return str(value or "").strip()
+
+    total = order.get("total")
     lines = [
         "Thank you for patronising Jaura Store.",
         "",
-        f"Your payment for order {order.get('id')} has been confirmed.",
+        "ORDER DETAILS",
+        f"Order ID: {oid}",
+        f"Date: {order.get('at') or ''}",
+        "Status: Confirmed",
+        f"Total paid: {money(total)} {currency}".rstrip(),
+        f"Payment method: {order.get('payment') or ''}",
         "",
+        "CUSTOMER DETAILS",
         f"Name: {c.get('name') or ''}",
-        f"Deliver to: {c.get('address') or ''}, {c.get('city') or ''} {c.get('zone') or ''}",
-        f"Total paid: {order.get('total')} {order.get('currency')}",
+        f"Phone: {c.get('phone') or ''}",
+        f"Email: {c.get('email') or ''}",
+        f"Country: {c.get('country') or ''}",
+        f"City / Zone: {c.get('city') or ''}{(' / ' + c['zone']) if c.get('zone') else ''}",
+        f"Address: {c.get('address') or ''}",
+        f"Note: {c.get('note') or ''}",
         "",
         "ITEMS",
     ]
-    lines += [f"  - {i.get('qty')}x {i.get('name')}"
-              + (f" ({i.get('color')})" if i.get("color") else "")
-              for i in items]
+    for i in items or []:
+        row = f"  - {i.get('qty')}x {i.get('name')}"
+        if i.get("color"):
+            row += f" ({i.get('color')})"
+        price = i.get("price") or i.get("priceCfa") or i.get("priceNgn") or ""
+        if price not in ("", None):
+            row += f" — {money(price)} {currency}".rstrip()
+        lines.append(row)
+    lines += [
+        "",
+        f"Total: {money(total)} {currency}".rstrip(),
+        "",
+        "DELIVERY & TRANSPORT FARE",
+        "Transportation fare ranges depending on your location and the weight "
+        "of the products. Send us the message below on WhatsApp with your "
+        "order ID and we will tell you your specific fare before we dispatch.",
+        "",
+        _whatsapp_text(order),
+        "",
+        f"https://wa.me/{WHATSAPP_NUMBER}?text={quote(_whatsapp_text(order))}",
+        f"Order ID: {oid}",
+    ]
     ref_code = order.get("referralCode") or ""
     if not ref_code and to:
         try:
@@ -173,9 +239,8 @@ def send_receipt(order):
             f"Your referral code: {ref_code}",
             "Share it with friends — they get 5% off, and you earn a 10% discount after 2 friends order!",
         ]
-    lines += ["", "We will confirm your transport fare on WhatsApp using this order ID.",
-              "", "With thanks,", "Jaura Store", Config.MAIL_FROM]
-    return send(to, f"Jaura Store · payment confirmed · {order.get('id')}", "\n".join(lines))
+    lines += ["", "With thanks,", "Jaura Store", Config.MAIL_FROM]
+    return send(to, f"Jaura Store · payment confirmed · {oid}", "\n".join(lines))
 
 
 def send_order_declined(order):

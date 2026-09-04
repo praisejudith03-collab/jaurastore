@@ -111,7 +111,10 @@ window.JA_NET = (function () {
   function csrf(force) {
     if (token && !force && Date.now() - tokenAt < 20 * 60 * 1000) return Promise.resolve(token);
     if (inflight && !force) return inflight;
-  inflight = fetch("api/config", { credentials: "same-origin", cache: "no-store" })
+  // absolute path: a relative "api/config" resolves against the current
+  // directory, so any page served from a sub-path lost the CSRF token and
+  // with it the reCAPTCHA site key — the checkbox stayed empty.
+  inflight = fetch("/api/config", { credentials: "same-origin", cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         token = (d && d.csrf) || "";
