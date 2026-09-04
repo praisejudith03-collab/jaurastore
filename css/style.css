@@ -719,7 +719,8 @@ th { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: 
 td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
 .form-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0,1fr): so a wide child like the long zone <select> can never stretch a track past the viewport */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
 }
 .field { display: flex; flex-direction: column; gap: 6px; }
@@ -4936,14 +4937,14 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   letter-spacing: -0.01em;
 }
 .home-hero-static__cta { margin-top: clamp(22px, 4vw, 38px); }
-.home-promo-wrap { margin-top: clamp(22px, 5vw, 54px); margin-bottom: clamp(30px, 6vw, 64px); }
+.home-promo-wrap { margin-top: clamp(22px, 5vw, 54px); margin-bottom: clamp(30px, 6vw, 64px); width: min(1240px, calc(100% - 40px)); margin-left: auto; margin-right: auto; }
 .home-promo {
   position: relative;
   display: block;
-  border-radius: 12px;
+  border-radius: 6px;
   border: 1px solid var(--line, #e2d9ce);
   overflow: hidden;
-  min-height: clamp(160px, 42vw, 420px);
+  min-height: clamp(320px, 42vw, 680px);
   background: #1c1613;
 }
 .home-promo video {
@@ -4952,7 +4953,7 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: 12px;
+  border-radius: 6px;
   z-index: 2;
 }
 .home-promo video[hidden] {
@@ -5279,7 +5280,7 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   margin-bottom: 18px;
 }
-.adx-head h1 { font-family: var(--serif); font-size: clamp(26px, 4vw, 34px); color: #2c2622; }
+.adx-head h1 { font-family: var(--serif); font-size: clamp(20px, 4vw, 28px) !important; word-break: normal !important; overflow-wrap: normal !important; white-space: normal !important; color: #2c2622; }
 .adx-head-actions { display: none; gap: 8px; }
 .adx-head-actions .btn { padding: 9px 14px; font-size: 13px; }
 
@@ -5756,21 +5757,21 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 
 /* 2. Homepage promo/video compact — max-width 680px, reduced size */
 .home-promo-wrap {
-  max-width: 680px !important;
+  max-width: min(1240px, calc(100% - 40px)) !important;
   margin-left: auto !important;
   margin-right: auto !important;
   margin-top: clamp(16px, 3vw, 32px) !important;
   margin-bottom: clamp(18px, 4vw, 40px) !important;
 }
 .home-promo {
-  max-width: 680px !important;
+  max-width: min(1240px, calc(100% - 40px)) !important;
   margin: 0 auto !important;
-  min-height: clamp(140px, 28vw, 280px) !important;
-  border-radius: 12px !important;
+  min-height: clamp(320px, 42vw, 680px) !important;
+  border-radius: 6px !important;
 }
 .home-promo__copy,
 .home-promo-video-copy {
-  min-height: clamp(140px, 28vw, 280px) !important;
+  min-height: clamp(320px, 42vw, 680px) !important;
   padding: clamp(14px, 3vw, 24px) !important;
   gap: 10px !important;
 }
@@ -6048,5 +6049,66 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
   .cat-tile,
   .wix-cat-card {
     border-radius: 14px !important;
+  }
+}
+
+/* =============================================================
+   MOBILE FIT v123 — 2026-09-04
+   Fixes the "tight / clipped / can't see the edges" look on phones.
+   Root cause: grid tracks declared as 1fr are really minmax(auto,1fr) —
+   one child with a big intrinsic size (the long "Choose a delivery zone"
+   options) stretched the track past the viewport, and the
+   overflow-x: clip on html/body then cut off the right edge of the page.
+   ============================================================= */
+/* 1. nothing may push the page wider than the screen */
+@media (max-width: 640px) {
+  .form-grid, .ck-grid, .cart-layout, .check-layout, .shop-layout,
+  .pdp, .contact-grid, .footer-grid, .stats, .pay-form, .woo-meta,
+  .cat-grid, .lux-grid, .zones {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .header-inner { grid-template-columns: auto minmax(0, 1fr) auto !important; }
+  .form-grid > *, .ck-grid > *, .pay-form > *, .cart-layout > *,
+  .check-layout > *, .contact-grid > *, .footer-grid > *, .stats > *,
+  .woo-meta > *, .cat-grid > *, .lux-grid > *, .zones > *,
+  .ck-main, .ck-side, .field { min-width: 0 !important; }
+  select { min-width: 0 !important; max-width: 100% !important; }
+}
+/* 2. more breathing room: 14px gutters instead of 10px */
+@media (max-width: 640px) {
+  .wrap, .wrap-wide {
+    width: calc(100% - 28px) !important;
+    max-width: calc(100% - 28px) !important;
+  }
+}
+/* 3. a visible dropdown arrow on every storefront select (drawn in CSS) */
+.field select, .shop-tools select, .pay-form select, .rev-form select,
+select.ck-zone-select {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1l6 6 6-6' fill='none' stroke='%238a7d70' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 14px center !important;
+  background-size: 14px 9px !important;
+  padding-right: 40px !important;
+}
+/* 4. invisible reCAPTCHA anchor: hidden from the shopper */
+.ck-recaptcha-anchor {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* 5. hero video on phones: bigger, corners 6px */
+@media (max-width: 640px) {
+  .home-promo, .home-promo img, .home-promo video {
+    border-radius: 6px !important;
+  }
+  .home-promo, .home-promo__copy, .home-promo-video-copy {
+    min-height: clamp(230px, 62vw, 420px) !important;
   }
 }
