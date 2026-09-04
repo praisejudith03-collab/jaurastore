@@ -1,23 +1,38 @@
 """Where uploads live: payment proofs, admin-uploaded product photos, product
 videos, category assets and the homepage hero.
 
-Two back ends, chosen with UPLOAD_MODE in .env:
+Three back ends, chosen with UPLOAD_MODE in .env:
 
   local (default) - written under data/uploads/ and served by the Flask app at
                     /uploads/...  Works with zero configuration. On a host with
                     an ephemeral filesystem (Render free tier) attach a
-                    persistent disk at data/ or switch to s3.
+                    persistent disk at data/ or switch to s3 / supabase.
 
   s3             - any S3-compatible bucket (Cloudflare R2, AWS S3, MinIO).
                     Set S3_BUCKET / S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY
                     / S3_PUBLIC_BASE. No code change is needed to switch.
+
+  supabase       - the project's Supabase Storage bucket (default name:
+                    uploads, override with SUPABASE_BUCKET). Needs
+                    SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY, the same pair
+                    the rest of the app uses. Public objects come back as
+                    …/storage/v1/object/public/<bucket>/<key>. Payment proofs
+                    and receipts (the `proofs` folder) come back as SIGNED
+                    URLs instead, so they stay admin-only and are never
+                    publicly guessable - see signed_url_for(), which refreshes
+                    a signed URL when an admin opens the receipts view.
+                    /uploads/... keeps serving files written to the local
+                    disk (old files, and the fallback below).
+
+When the configured Supabase bucket (or S3 bucket) is unreachable the write
+falls back to the local disk, so a customer's proof of payment is never lost.
 
 Every file is re-identified from its own bytes (magic number), never from the
 filename a browser sends. That means a renamed .exe can never be stored and
 later served as an image or a document, and an .html/.svg (which would execute
 script in the site's origin) is refused outright.
 """
-import os, io, hashlib, secrets, datetime
+import os, io, hashlib, secrets, datetime, time
 from config import Config
 from security import clean
 
@@ -26,6 +41,22 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 MAX_BYTES = 6 * 1024 * 1024              # 6 MB: product photos
 MAX_RECEIPT_BYTES = 8 * 1024 * 1024      # 8 MB: payment receipts / PDFs / docs
 MAX_VIDEO_BYTES = 40 * 1024 * 1024       # 40 MB: product + homepage hero video
+
+# Folders whose contents are PRIVATE (customer payment evidence: receipts and
+# payment proofs). In Supabase mode, objects stored under these folders are
+# handed out as SIGNED URLs - short-lived links only the server can mint - so
+# a receipt is admin-only and never publicly guessable. Everything else
+# (products, categories, videos, misc = hero/banner/logo) is a public URL.
+SENSITIVE_FOLDERS = ("proofs",)
+
+# Supabase Storage caps signed-URL expiry at 7 days. Use the maximum: the URL
+# handed out at upload time is what the database stores, and signed_url_for()
+# refreshes it while an admin has the receipts view open.
+SIGNED_URL_TTL_SECONDS = 7 * 24 * 60 * 60
+# How long a refreshed signed URL is reused from cache before a new one is
+# requested (keeps the admin's receipts table from minting a URL per row per
+# page load).
+SIGNED_URL_REFRESH_SECONDS = 60 * 60
 
 IMAGE_EXT = ("jpg", "jpeg", "png", "webp", "gif", "avif", "heic")
 DOC_EXT = ("pdf", "doc", "docx")
@@ -216,13 +247,30 @@ def validate_video(data: bytes, filename: str = ""):
     return True, "ok", ext
 
 
+def _folder_name(folder: str) -> str:
+    """The safe first path segment for a folder (same rules as _object_name)."""
+    return "".join(c for c in (folder or "misc").lower() if c.isalnum() or c in "-_")[:24] or "misc"
+
+
+def _is_sensitive(folder: str) -> bool:
+    """True when the folder holds private material (payment proofs/receipts)."""
+    return _folder_name(folder) in SENSITIVE_FOLDERS
+
+
 def _save(data: bytes, folder: str, ext: str, s3_content_type: str = "") -> tuple:
-    """Shared write path (S3 or local), returns (ok, message, url)."""
+    """Shared write path (Supabase, S3 or local), returns (ok, message, url)."""
     digest = hashlib.sha256(data).hexdigest()
     key = _object_name(folder, ext, digest)
+    content_type = s3_content_type or mime_for(ext)
+
+    if Config.UPLOAD_MODE == "supabase":
+        ok2, _msg2, url = _save_supabase(data, key, ext, content_type, folder)
+        if ok2:
+            return True, "stored", url
+        # never silently lose a customer's proof of payment: fall back to disk
 
     if Config.UPLOAD_MODE == "s3":
-        ok2, _msg2, url = _save_s3(data, key, ext, s3_content_type or mime_for(ext))
+        ok2, _msg2, url = _save_s3(data, key, ext, content_type)
         if ok2:
             return True, "stored", url
         # never silently lose a customer's proof of payment: fall back to disk
@@ -269,8 +317,7 @@ def save_video(data: bytes, folder: str = "videos", filename: str = ""):
 
 def _object_name(folder: str, ext: str, digest: str) -> str:
     now = datetime.datetime.utcnow()
-    safe_folder = "".join(c for c in (folder or "misc").lower() if c.isalnum() or c in "-_")[:24] or "misc"
-    return f"{safe_folder}/{now:%Y/%m}/{digest[:16]}-{secrets.token_hex(4)}.{ext}"
+    return f"{_folder_name(folder)}/{now:%Y/%m}/{digest[:16]}-{secrets.token_hex(4)}.{ext}"
 
 
 def _local_path(key: str) -> str:
@@ -316,6 +363,121 @@ def _save_s3(data: bytes, key: str, ext: str, content_type: str = ""):
         return False, f"s3 upload failed ({exc.__class__.__name__})", ""
 
 
+def supabase_public_url(key: str) -> str:
+    """The public URL for an object in the Supabase uploads bucket.
+
+    <SUPABASE_URL>/storage/v1/object/public/<bucket>/<key> - the shape the
+    browser loads for product / category / banner / logo images.
+    """
+    base = (Config.SUPABASE_URL or "").rstrip("/")
+    if not base:
+        return ""
+    import supabase_store
+    return f"{base}/storage/v1/object/public/{supabase_store._bucket()}/{key}"
+
+
+def _save_supabase(data: bytes, key: str, ext: str, content_type: str,
+                   folder: str = "") -> tuple:
+    """Upload to Supabase Storage. Requires SUPABASE_URL + the service-role
+    key (the same pair the rest of the app authenticates with).
+
+    Public folders (products, categories, videos, misc) return a public URL
+    so the image loads in the browser with zero server round-trips. Sensitive
+    folders (proofs = payment receipts / proofs) return a SIGNED URL instead:
+    the object is still in the public bucket, but the only link anyone ever
+    sees is a short-lived one the server minted, so a receipt is admin-only
+    and never publicly guessable.
+    """
+    if not (Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY):
+        return False, "supabase not configured", ""
+    try:
+        import supabase_store
+    except ImportError:
+        return False, "supabase store unavailable", ""
+    c = supabase_store.client()
+    if c is None:
+        return False, "supabase client unavailable", ""
+    bucket = supabase_store._bucket()
+    try:
+        c.storage.from_(bucket).upload(
+            key, data, {"content-type": content_type or "application/octet-stream"})
+    except Exception as exc:
+        return False, f"supabase upload failed ({exc.__class__.__name__})", ""
+    if _is_sensitive(folder):
+        try:
+            res = c.storage.from_(bucket).create_signed_url(key, SIGNED_URL_TTL_SECONDS)
+        except Exception:
+            return False, "could not sign the receipt url", ""
+        url = res.get("signedUrl") if isinstance(res, dict) else getattr(res, "signedUrl", "")
+        if not url:
+            return False, "could not sign the receipt url", ""
+        return True, "stored", url
+    return True, "stored", supabase_public_url(key)
+
+
+# path -> (signed url, epoch when the cache entry expires)
+_signed_url_cache = {}
+
+
+def _signed_cache_get(path: str) -> str:
+    item = _signed_url_cache.get(path)
+    if item and item[1] > time.time():
+        return item[0]
+    return ""
+
+
+def _signed_cache_put(path: str, url: str) -> None:
+    if len(_signed_url_cache) > 1024:
+        _signed_url_cache.clear()
+    _signed_url_cache[path] = (url, time.time() + SIGNED_URL_REFRESH_SECONDS)
+
+
+def signed_url_for(value: str) -> str:
+    """A fresh signed URL for a proof / receipt stored in Supabase Storage.
+
+    Signed URLs expire (Supabase caps them at 7 days), and the URL saved in
+    the database at upload time is exactly such a URL. When an admin opens
+    the receipts view we refresh those URLs here so a receipt stays viewable
+    for as long as the file exists - not just for 7 days after upload.
+
+    Only touches URLs we produced: a Supabase storage URL whose path starts
+    with a sensitive folder (proofs/). Product photos, category assets,
+    local /uploads/ links and foreign URLs are returned unchanged. Never
+    raises - a Supabase hiccup must never break the receipts list.
+    """
+    raw = (value or "").strip()
+    if not raw or "/storage/v1/object/" not in raw:
+        return value or ""
+    try:
+        import supabase_store
+        if not (Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY):
+            return value
+        # only URLs from our own project - never mint a link for a foreign
+        # host that happens to look like a Supabase storage URL
+        if not raw.startswith(Config.SUPABASE_URL.rstrip("/") + "/storage/"):
+            return value
+        bucket = supabase_store._bucket()
+        path = supabase_store._storage_path_from_url(raw, bucket)
+        if not path:
+            return value
+        if path.lstrip("/").split("/", 1)[0].lower() not in SENSITIVE_FOLDERS:
+            return value                      # public asset; nothing to sign
+        cached = _signed_cache_get(path)
+        if cached:
+            return cached
+        c = supabase_store.client()
+        if c is None:
+            return value
+        res = c.storage.from_(bucket).create_signed_url(path, SIGNED_URL_TTL_SECONDS)
+        url = res.get("signedUrl") if isinstance(res, dict) else getattr(res, "signedUrl", "")
+        if not url:
+            return value
+        _signed_cache_put(path, url)
+        return url
+    except Exception:
+        return value
+
+
 def local_root() -> str:
     base = Config.UPLOAD_DIR if os.path.isabs(Config.UPLOAD_DIR) else os.path.join(ROOT, Config.UPLOAD_DIR)
     return os.path.abspath(base)
@@ -343,14 +505,21 @@ def public_url(value: str) -> str:
 def _key_from_url(value: str) -> str:
     """The storage key for a URL we produced, or "" when it is not ours.
 
-    Accepts both shapes we hand out: "/uploads/<key>" from the local backend
-    and "<S3_PUBLIC_BASE>/<key>" from the S3 backend.
+    Accepts the shapes we hand out: "/uploads/<key>" from the local backend,
+    "<S3_PUBLIC_BASE>/<key>" from the S3 backend, and Supabase public /
+    signed URLs ("<…>/storage/v1/object/<public|sign>/<bucket>/<key>").
     """
     raw = clean(value, 500)
     if not raw:
         return ""
     if raw.startswith("/uploads/"):
         return raw[len("/uploads/"):].lstrip("/")
+    if "/storage/v1/object/" in raw:
+        # …/object/public/<bucket>/<key>  or  …/object/sign/<bucket>/<key>?token=…
+        parts = raw.split("/storage/v1/object/", 1)[1].split("/", 2)
+        if len(parts) == 3:
+            return parts[2].split("?", 1)[0].lstrip("/")
+        return ""
     for base in (Config.S3_PUBLIC_BASE, Config.S3_ENDPOINT):
         base = (base or "").rstrip("/")
         if base and raw.startswith(base + "/"):
@@ -397,6 +566,14 @@ def delete_upload(value: str) -> bool:
     if not key or ".." in key:
         return False
     removed = False
+    if Config.UPLOAD_MODE == "supabase" or "/storage/v1/object/" in (value or ""):
+        # the object lives in the Supabase bucket (or the URL says it does -
+        # the mode can be switched back after uploads already went there)
+        try:
+            import supabase_store
+            removed = bool(supabase_store._delete_storage_object_from_url(value))
+        except Exception:
+            removed = False
     if Config.UPLOAD_MODE == "s3":
         removed = _delete_s3(key)
     full = resolve_local(key)

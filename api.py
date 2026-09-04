@@ -750,6 +750,17 @@ def admin_stock_set():
             "qty=excluded.qty, low_threshold=excluded.low_threshold, "
             "variant_label=COALESCE(excluded.variant_label, variant_stock.variant_label), updated_at=excluded.updated_at",
             (pid, variant, label, qty, thr, datetime.datetime.utcnow().isoformat(timespec="seconds")))
+    # variant_stock is SQLite-only (wiped with the Render disk), so mirror the
+    # whole table into Supabase growth_settings - the boot restore in app.py
+    # writes it back. Best effort: a Supabase hiccup never blocks the change.
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import save_variant_stock
+            rows = query("SELECT product_id, variant_key, variant_label, qty, low_threshold, "
+                         "updated_at FROM variant_stock")
+            save_variant_stock([dict(r) for r in rows])
+        except Exception:
+            pass
     audit(authmod.current_admin(), "stock.set", f"{pid}/{variant} = {qty}", _ip())
     return jsonify(ok=True)
 
@@ -846,12 +857,24 @@ def admin_orders_csv():
 @api.get("/admin/payment-proofs")
 @authmod.require_admin
 def admin_payment_proofs():
-    """Every receipt a customer has sent from the payment form."""
+    """Every receipt a customer has sent from the payment form.
+
+    Proof URLs saved in Supabase mode are signed URLs, and signed URLs
+    expire after 7 days - storage.signed_url_for() refreshes each one here
+    (best effort, public / local URLs pass through untouched) so a receipt
+    stays viewable for as long as the file exists.
+    """
     limit = sec.clean_int(request.args.get("limit"), 200, 1, 1000)
     rows = query("SELECT id, order_id, name, phone, email, method, items, quantity, amount, "
                  "note, file_url, file_name, file_size, mime, emailed, email_info, at "
                  "FROM payment_proofs ORDER BY at DESC LIMIT ?", (limit,))
-    return jsonify(ok=True, count=len(rows), proofs=[dict(r) for r in rows])
+    proofs = []
+    for r in rows:
+        d = dict(r)
+        if d.get("file_url"):
+            d["file_url"] = storage.signed_url_for(d["file_url"])
+        proofs.append(d)
+    return jsonify(ok=True, count=len(proofs), proofs=proofs)
 
 
 @api.delete("/admin/payment-proofs/<int:pid>")
@@ -1366,6 +1389,17 @@ def reviews_create():
             "VALUES (?,?,?,?,?,?,?) ON CONFLICT(product_id, email) DO UPDATE SET "
             "name=excluded.name, stars=excluded.stars, note=excluded.note, at=excluded.at",
             (pid, bought["id"], email, name or "Customer", stars, note, _utcnow()))
+    # product_reviews is SQLite-only (wiped with the Render disk), so keep a
+    # JSON copy in Supabase growth_settings - the boot restore in app.py
+    # writes it back. Best effort: a Supabase hiccup never blocks the review.
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import save_product_reviews
+            rows = query("SELECT product_id, order_id, email, name, stars, note, at "
+                         "FROM product_reviews")
+            save_product_reviews([dict(r) for r in rows])
+        except Exception:
+            pass
     audit("customer", "review.posted", f"{pid} {stars}★ by {email}", _ip())
     return reviews_list(pid)
 

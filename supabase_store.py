@@ -337,18 +337,18 @@ def _bucket():
     return os.environ.get("SUPABASE_BUCKET", "uploads").strip() or "uploads"
 
 
-def _delete_storage_object_from_url(url, bucket=None):
-    """Remove an uploaded file from Supabase Storage, best effort.
+def _storage_path_from_url(url, bucket=None):
+    """The bucket-relative object path inside one of our URLs, or ''.
 
     Accepts every URL shape the app can hold: a public object URL
-    (…/storage/v1/object/public/<bucket>/<path>), a signed URL, or a bare
-    object path such as "/uploads/receipts/abc.jpg". A foreign URL (someone
-    else's host) is left alone. Never raises: a deleted order must never be
-    blocked by an unreachable bucket, because the SQLite row is going anyway.
+    (…/storage/v1/object/public/<bucket>/<path>), a signed URL
+    (…/storage/v1/object/sign/<bucket>/<path>?token=…), or a bare path such
+    as "/uploads/receipts/abc.jpg". A foreign URL (someone else's host)
+    yields '' - it is left alone.
     """
     url = (url or "").strip()
     if not url:
-        return False
+        return ""
     bucket = bucket or _bucket()
     path = ""
     public = "/object/public/%s/" % bucket
@@ -362,7 +362,7 @@ def _delete_storage_object_from_url(url, bucket=None):
         parts = tail.split("/", 1)
         path = parts[1] if len(parts) == 2 else ""
     elif url.startswith("http"):
-        return False                      # not ours; nothing to delete
+        return ""                         # not ours; nothing to do
     else:
         path = url.lstrip("/")
         if path.startswith("uploads/"):
@@ -370,14 +370,29 @@ def _delete_storage_object_from_url(url, bucket=None):
     path = path.split("?", 1)[0].split("#", 1)[0]
     if urllib and urllib.parse:
         path = urllib.parse.unquote(path)
+    return path
+
+
+def _delete_storage_object_from_url(url, bucket=None):
+    """Remove an uploaded file from Supabase Storage, best effort.
+
+    Accepts every URL shape the app can hold (see _storage_path_from_url).
+    A foreign URL (someone else's host) is left alone. Never raises: a
+    deleted order must never be blocked by an unreachable bucket, because
+    the SQLite row is going anyway.
+    """
+    path = _storage_path_from_url(url, bucket)
     if not path:
         return False
+    bucket = bucket or _bucket()
     c = client()
     if c is None:
         return False
     try:
-        c.storage.from_(bucket).remove([path])
-        return True
+        # remove() returns the objects that were actually removed; an empty
+        # list (object already gone) is "nothing to delete", not a success
+        res = c.storage.from_(bucket).remove([path])
+        return bool(res) if isinstance(res, (list, tuple)) else True
     except Exception as exc:
         print(f"[supabase] storage delete failed: {exc}")
         return False
@@ -576,3 +591,152 @@ def load_receipts(limit=500):
     except Exception as exc:
         print(f"[supabase] load_receipts failed: {exc}")
         return []
+
+
+# The variant_stock table (per-variant stock levels from the admin's Stock
+# panel) exists only in the SQLite database on the Render disk, which a
+# redeploy wipes. Like the category table, we keep a JSON copy in
+# growth_settings (no new schema): admin_stock_set mirrors the whole table
+# after every change, and the boot restore in app.py writes it back before
+# the first request is served.
+VARIANT_STOCK_KEY = "variant_stock_json"
+
+
+def save_variant_stock(rows):
+    """Persist the whole variant_stock table as one growth_settings row. Never raises."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        payload = json.dumps(list(rows or []), ensure_ascii=False)
+        c.table("growth_settings").upsert(
+            [{"key": VARIANT_STOCK_KEY, "value": payload}]
+        ).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] variant stock save failed: {exc}")
+        return False
+
+
+def load_variant_stock():
+    """Return the variant_stock rows stored under VARIANT_STOCK_KEY, or None."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("growth_settings")
+               .select("value")
+               .eq("key", VARIANT_STOCK_KEY)
+               .limit(1)
+               .execute())
+        rows = _res_data(res)
+        if not rows:
+            return None
+        raw = (rows[0] or {}).get("value")
+        if raw is None or raw == "":
+            return None
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(data, list) and data:
+            return data
+        return None
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] variant stock load failed: {exc}")
+        return None
+
+
+# ------------------------------------------------------------------ growth
+# The growth module (referral codes, coupons, the owner-configured referral
+# settings and product reviews) keeps its working copy in SQLite on the
+# Render disk. Every write is already mirrored into Supabase (see the
+# mirror_* functions); these loaders are the other half - the boot restore
+# in app.py writes the mirrored rows back so a redeploy that wipes the disk
+# does not reset the referral settings the owner configured, and does not
+# lose issued referral codes, coupons or customer reviews.
+def load_growth_settings():
+    """Return the growth_settings key/value map from Supabase, or None."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = c.table("growth_settings").select("key, value").execute()
+        rows = _res_data(res)
+        out = {str(r.get("key")): str(r.get("value") or "")
+               for r in rows if r.get("key")}
+        return out or None
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] growth settings load failed: {exc}")
+        return None
+
+
+def load_coupons():
+    """Return the coupon rows from the Supabase coupons table, or []. Never raises."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = c.table("coupons").select("*").limit(1000).execute()
+        return _res_data(res) or []
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] load_coupons failed: {exc}")
+        return []
+
+
+def load_referral_codes():
+    """Return the referral code rows from Supabase, or []. Never raises."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = c.table("referral_codes").select("*").limit(5000).execute()
+        return _res_data(res) or []
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] load_referral_codes failed: {exc}")
+        return []
+
+
+# Product reviews have no dedicated Supabase table (the committed schema was
+# applied to the live project without one), so - like the category table and
+# the variant stock - they ride in growth_settings as one JSON row.
+PRODUCT_REVIEWS_KEY = "product_reviews_json"
+
+
+def save_product_reviews(rows):
+    """Persist the whole product_reviews table as one growth_settings row. Never raises."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        payload = json.dumps(list(rows or []), ensure_ascii=False)
+        c.table("growth_settings").upsert(
+            [{"key": PRODUCT_REVIEWS_KEY, "value": payload}]
+        ).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] product reviews save failed: {exc}")
+        return False
+
+
+def load_product_reviews():
+    """Return the product reviews stored under PRODUCT_REVIEWS_KEY, or None."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("growth_settings")
+               .select("value")
+               .eq("key", PRODUCT_REVIEWS_KEY)
+               .limit(1)
+               .execute())
+        rows = _res_data(res)
+        if not rows:
+            return None
+        raw = (rows[0] or {}).get("value")
+        if raw is None or raw == "":
+            return None
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(data, list) and data:
+            return data
+        return None
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] product reviews load failed: {exc}")
+        return None
