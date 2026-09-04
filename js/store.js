@@ -1779,6 +1779,24 @@ const JA = (() => {
       ld.id = "jaura-jsonld";
       document.head.appendChild(ld);
     }
+    // The catalogue Google is told about: one entry per live category, so
+    // the sitelinks and the knowledge panel can show what the shop sells.
+    let cats = [];
+    try { cats = (typeof categories === "function" ? categories() : []) || []; } catch (e) { cats = []; }
+    if (!cats.length) cats = DEFAULT_CATS;
+    const offerCatalog = {
+      "@type": "OfferCatalog",
+      name: "Jaura Store catalogue",
+      itemListElement: cats.map((c) => ({
+        "@type": "Offer",
+        itemOffered: {
+          "@type": "ProductCollection",
+          name: (c && (c.name || c.id)) || "",
+          url: SITE + "/shop.html?cat=" + encodeURIComponent((c && c.id) || ""),
+          image: (c && c.image) ? absUrl(c.image) : image,
+        },
+      })),
+    };
     ld.textContent = JSON.stringify(opts.jsonLd || {
       "@context": "https://schema.org",
       "@graph": [
@@ -1799,7 +1817,8 @@ const JA = (() => {
           address: [
             { "@type": "PostalAddress", addressLocality: "Cotonou", addressCountry: "BJ" },
             { "@type": "PostalAddress", addressLocality: "Lagos", addressCountry: "NG" }
-          ]
+          ],
+          hasOfferCatalog: offerCatalog
         },
         {
           "@type": "WebSite",
@@ -1807,7 +1826,17 @@ const JA = (() => {
           url: SITE,
           name: "Jaura Store",
           publisher: { "@id": SITE + "/#store" },
-          inLanguage: ["en", "fr"]
+          inLanguage: ["en", "fr"],
+          // sitelinks search box: Google shows a search field under the
+          // result and sends the query straight to the shop page
+          potentialAction: {
+            "@type": "SearchAction",
+            target: {
+              "@type": "EntryPoint",
+              urlTemplate: SITE + "/shop.html?q={search_term_string}"
+            },
+            "query-input": "required name=search_term_string"
+          }
         }
       ]
     });

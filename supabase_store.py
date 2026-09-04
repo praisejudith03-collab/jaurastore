@@ -331,6 +331,108 @@ def delete_receipt(receipt_id=None, order_id=None, file_url=""):
         print(f"[supabase] receipt delete failed: {exc}")
 
 
+# ------------------------------------------------------------------ orders
+def _bucket():
+    """Storage bucket the uploaded files live in (see .env.example)."""
+    return os.environ.get("SUPABASE_BUCKET", "uploads").strip() or "uploads"
+
+
+def _delete_storage_object_from_url(url, bucket=None):
+    """Remove an uploaded file from Supabase Storage, best effort.
+
+    Accepts every URL shape the app can hold: a public object URL
+    (…/storage/v1/object/public/<bucket>/<path>), a signed URL, or a bare
+    object path such as "/uploads/receipts/abc.jpg". A foreign URL (someone
+    else's host) is left alone. Never raises: a deleted order must never be
+    blocked by an unreachable bucket, because the SQLite row is going anyway.
+    """
+    url = (url or "").strip()
+    if not url:
+        return False
+    bucket = bucket or _bucket()
+    path = ""
+    public = "/object/public/%s/" % bucket
+    signed = "/object/sign/%s/" % bucket
+    if public in url:
+        path = url.split(public, 1)[1]
+    elif signed in url:
+        path = url.split(signed, 1)[1]
+    elif "/object/" in url:
+        tail = url.split("/object/", 1)[1]
+        parts = tail.split("/", 1)
+        path = parts[1] if len(parts) == 2 else ""
+    elif url.startswith("http"):
+        return False                      # not ours; nothing to delete
+    else:
+        path = url.lstrip("/")
+        if path.startswith("uploads/"):
+            path = path[len("uploads/"):]
+    path = path.split("?", 1)[0].split("#", 1)[0]
+    if urllib and urllib.parse:
+        path = urllib.parse.unquote(path)
+    if not path:
+        return False
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.storage.from_(bucket).remove([path])
+        return True
+    except Exception as exc:
+        print(f"[supabase] storage delete failed: {exc}")
+        return False
+
+
+def delete_order(order_id):
+    """Delete an order for good — receipts, uploaded files and the order row.
+
+    This is what stops a deleted order from coming back: the admin portal
+    deletes from SQLite, and the next boot restores everything Supabase still
+    holds, so without deleting the mirrored rows the order (and its receipt)
+    resurrected itself a few minutes later.
+    """
+    c = client()
+    if c is None:
+        return False
+    order_id = str(order_id or "").strip().upper()
+    if not order_id:
+        return False
+
+    urls = []
+    try:
+        res = (c.table("receipts").select("id, file_url, proof_url")
+               .eq("order_id", order_id).execute())
+        for row in _res_data(res):
+            for key in ("file_url", "proof_url"):
+                u = str((row or {}).get(key) or "").strip()
+                if u:
+                    urls.append(u)
+    except Exception as exc:
+        print(f"[supabase] receipt lookup failed: {exc}")
+    try:
+        res = c.table("orders").select("proof_url").eq("id", order_id).execute()
+        for row in _res_data(res):
+            u = str((row or {}).get("proof_url") or "").strip()
+            if u:
+                urls.append(u)
+    except Exception as exc:
+        print(f"[supabase] order lookup failed: {exc}")
+
+    for u in urls:
+        _delete_storage_object_from_url(u)
+
+    try:
+        c.table("receipts").delete().eq("order_id", order_id).execute()
+    except Exception as exc:
+        print(f"[supabase] receipts delete failed: {exc}")
+    try:
+        c.table("orders").delete().eq("id", order_id).execute()
+    except Exception as exc:
+        print(f"[supabase] order delete failed: {exc}")
+        return False
+    return True
+
+
 # ------------------------------------------------------------------ helpers
 def _now():
     import datetime
