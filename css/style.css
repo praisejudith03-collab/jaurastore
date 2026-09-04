@@ -5120,36 +5120,6 @@ body[data-page="home"] #site-footer { position: relative; z-index: 3 !important;
 
 /* reCAPTCHA — keep any badge clear of the dock and WhatsApp bubble */
 .grecaptcha-badge { bottom: 120px !important; z-index: 60 !important; visibility: visible !important; opacity: 1 !important; }
-/* reCAPTCHA v2 "I'm not a robot" checkbox, shown above Place order.
-   MUST be visible: white card with border, centered, above Place order button.
-   The widget is a fixed-width iframe: let it shrink on small phones. */
-.ck-recaptcha {
-  margin: 16px 0 8px !important;
-  min-height: 78px !important;
-  display: flex !important;
-  flex-direction: column !important;
-  align-items: center !important;
-  justify-content: center !important;
-  background: #fff !important;
-  border: 1px solid #e6ddd2 !important;
-  border-radius: 12px !important;
-  padding: 14px !important;
-  visibility: visible !important;
-  opacity: 1 !important;
-}
-.ck-recaptcha[hidden] { display: none !important; }
-.ck-recaptcha .g-recaptcha {
-  min-width: 304px;
-  min-height: 78px;
-  display: block !important;
-  visibility: visible !important;
-}
-.ck-recaptcha .g-recaptcha iframe {
-  display: block !important;
-}
-@media (max-width: 360px) {
-  .ck-recaptcha { transform: scale(0.86); transform-origin: center top; }
-}
 .ck-recaptcha-note {
   font-size: 11.5px !important;
   color: var(--taupe) !important;
@@ -5160,14 +5130,6 @@ body[data-page="home"] #site-footer { position: relative; z-index: 3 !important;
 }
 .ck-recaptcha-note[hidden] { display: block !important; }
 .ck-recaptcha-note a { text-decoration: underline; color: inherit; }
-.ck-recaptcha-fallback {
-  font-size: 13px;
-  color: #7a7066;
-  text-align: center;
-  line-height: 1.4;
-  padding: 8px;
-}
-.ck-recaptcha-fallback[hidden] { display: none !important; }
 
 /* Checkout zone dropdown — a proper styled select, like Country */
 select.ck-zone-select {
@@ -5967,30 +5929,9 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
   }
 }
 
-/* 4. reCAPTCHA: a full-width card, widget centred and scaled to fit */
+/* reCAPTCHA note: centred under the invisible badge on a phone */
 @media (max-width: 640px) {
-  .ck-recaptcha {
-    width: 100% !important;
-    max-width: 100% !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-    padding: 12px 8px !important;
-    transform: none !important;
-    overflow: hidden !important;
-    border-radius: 14px !important;
-  }
-  .ck-recaptcha .g-recaptcha {
-    width: 304px !important;      /* reCAPTCHA v2's natural width */
-    max-width: 304px !important;
-    min-width: 0 !important;      /* beats the inline min-width on the div */
-    margin: 0 auto !important;
-    transform: scale(0.88) !important;
-    transform-origin: center center !important;
-  }
   .ck-recaptcha-note { text-align: center !important; }
-}
-@media (max-width: 360px) {
-  .ck-recaptcha .g-recaptcha { transform: scale(0.82) !important; }
 }
 
 /* 5. search overlay: the input sits just under the header on a phone */
@@ -6044,7 +5985,6 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
   .wix-shop .card-media,
   .home-promo,
   .shop-banner,
-  .ck-recaptcha,
   .proof-frame,
   .cat-tile,
   .wix-cat-card {

@@ -91,18 +91,23 @@ WhatsApp), the shop can force the shared admin password once on boot:
 
 | Setting | Value | Effect |
 | --- | --- | --- |
-| `ADMIN_BOOTSTRAP_PASSWORD` | any strong password | applied to every admin email on the **first** boot after this ships |
-| *(not set)* | — | falls back to `Config.BOOTSTRAP_ADMIN_PASSWORD`, whose default lives in `config.py` |
+| `ADMIN_BOOTSTRAP_PASSWORD` | any strong password | applied to every admin email on the **first** boot after it is set |
+| *(not set)* | — | **nothing happens** — `apply_bootstrap_password()` is inert, no password is forced |
 
+There is deliberately **no default** for this variable: a default lives in the
+repository, and this repository is public. Recovery normally goes through the
+emailed reset code, or `python3 seed_admin.py`.
+
+To use it: set `ADMIN_BOOTSTRAP_PASSWORD` in the host dashboard (Render exposes
+it on both services with `sync: false`), reboot once, sign in, change the
+password from **Admin → My account**, then **clear the variable again**.
 `auth.apply_bootstrap_password()` stamps an `admin_bootstrap_applied` marker in
 `growth_settings` the moment it succeeds, so it **never fires twice** — a later
 password change from the admin portal survives every reboot. The step is
 skipped entirely when `FLASK_ENV=testing`.
 
-> **Security:** the built-in default is public (it is in the repository). Sign
-> in, change the password from **Admin → My account** immediately, and set
-> `ADMIN_BOOTSTRAP_PASSWORD` in the host dashboard before relying on a second
-> recovery. The event is written to the audit log as
+> **Security:** never leave a recovery password set once you are back in, and
+> never commit one. The event is written to the audit log as
 > `admin.bootstrap_password_applied`.
 
 ## Payment receipts

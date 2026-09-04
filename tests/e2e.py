@@ -13,6 +13,15 @@ os.makedirs(SHOTS, exist_ok=True)
 results = []
 
 
+def admin_pw():
+    """The harness signs in to the real shop: the password comes from the
+    environment, never from this file.  ADMIN_PW='...' python3 tests/e2e.py"""
+    pw = os.environ.get("ADMIN_PW", "")
+    if not pw:
+        sys.exit("ADMIN_PW is not set. Run this as:  ADMIN_PW='<admin password>' python3 tests/e2e.py")
+    return pw
+
+
 def check(name, ok, detail=""):
     results.append((name, bool(ok), detail))
     print(("PASS  " if ok else "FAIL  ") + name + (("  ->  " + str(detail)) if detail else ""))
@@ -48,7 +57,7 @@ def admin_cookie():
     opener = u.build_opener(u.HTTPCookieProcessor(jar))
     req = u.Request(BASE + "/api/admin/login",
                     data=json.dumps({"email": "jaurastore@gmail.com",
-                                     "password": os.environ.get("ADMIN_PW", "JauraStore2026x")}).encode(),
+                                     "password": admin_pw()}).encode(),
                     headers={"Content-Type": "application/json"}, method="POST")
     with opener.open(req, timeout=20) as r:
         csrf = json.loads(r.read().decode()).get("csrf", "")
@@ -317,7 +326,7 @@ def main():
         page.goto(BASE + "/admin.html", wait_until="networkidle")
         check("admin shows the email + password form", page.locator("#login-form input[name=email]").count() == 1)
         page.fill("input[name=email]", "jaurastore@gmail.com")
-        page.fill("input[name=password]", os.environ.get("ADMIN_PW", "JauraStore2026x"))
+        page.fill("input[name=password]", admin_pw())
         page.click("#login-btn")
         page.wait_for_selector("#panel-analytics .stats b", timeout=20000)
         page.wait_for_timeout(2500)

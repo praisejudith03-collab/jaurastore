@@ -113,7 +113,7 @@ window.JA_NET = (function () {
     if (inflight && !force) return inflight;
   // absolute path: a relative "api/config" resolves against the current
   // directory, so any page served from a sub-path lost the CSRF token and
-  // with it the reCAPTCHA site key — the checkbox stayed empty.
+  // with it the reCAPTCHA site key — the widget stayed empty.
   inflight = fetch("/api/config", { credentials: "same-origin", cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -133,9 +133,9 @@ window.JA_NET = (function () {
 
   // ------------------------------------------- Google reCAPTCHA v2 (invisible)
   // The site key comes from api/config (set RECAPTCHA_SITE_KEY on the
-  // server) and MUST be a reCAPTCHA v2 "I'm not a robot" key - a v3 key here
-  // is what makes the widget say "Invalid key type". The widget is rendered
-  // INVISIBLE (size: "invisible") into a hidden anchor, so there is no box
+  // server) and MUST be a reCAPTCHA v2 INVISIBLE key - a v3 key here is what
+  // makes the widget say "Invalid key type". The widget is rendered INVISIBLE
+  // (size: "invisible") into a hidden anchor, so there is no box
   // on the page and the shopper never sees it; grecaptcha.execute() mints the
   // token on submit. When no key is configured nothing loads, no widget is
   // rendered and every call resolves to "" - the shop works exactly as before.
@@ -208,16 +208,31 @@ window.JA_NET = (function () {
           var finish = function (tok) {
             if (!settled) { settled = true; resolve(tok || ""); }
           };
+          // Invisible v2: execute() returns a PROMISE that resolves with the
+          // token. It used to be called with a callback argument, which is not
+          // part of the v2 API and never fires - so the only thing that ever
+          // collected a token was the single 300 ms probe below. Minting is a
+          // round trip to Google (0.5-2 s on a phone), so most real orders went
+          // out with no X-Recaptcha-Token and the gate did nothing.
           try {
-            // Invisible v2: execute mints a fresh token; the callback delivers it.
-            window.grecaptcha.execute(id, function (tok) { finish(tok); });
+            var run = window.grecaptcha.execute(id);
+            if (run && typeof run.then === "function") {
+              run.then(function (tok) { finish(tok || ""); }, function () {});
+            }
           } catch (e) {}
-          // Fallback for builds without the execute callback: poll the widget.
-          setTimeout(function () {
+          // Belt and braces: also poll getResponse() at 300 ms, then 4 x 400 ms
+          // (~1.9 s cap) for builds whose execute() gives nothing back. A dead
+          // Google still cannot hold an order hostage: an empty token is never
+          // fatal (RECAPTCHA_REQUIRED is off and verify_recaptcha("") passes).
+          var probes = 0;
+          var poll = function () {
             var tok = "";
             try { tok = window.grecaptcha.getResponse(id) || ""; } catch (e) {}
-            finish(tok);
-          }, 300);
+            if (tok) return finish(tok);
+            if (probes < 5) { probes += 1; setTimeout(poll, probes === 1 ? 300 : 400); }
+            else finish("");
+          };
+          setTimeout(poll, 300);
         });
       });
     }).catch(function () { return ""; });

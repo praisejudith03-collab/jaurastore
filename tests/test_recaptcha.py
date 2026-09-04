@@ -92,11 +92,13 @@ def test_public_config_exposes_site_key(monkeypatch, client=None):
         assert d["ok"] and d["recaptchaSiteKey"] == "site-key-123"
 
 
-# ------------------------------------------ v2 "I'm not a robot" CHECKBOX
-# The shop must render the v2 checkbox widget, not the invisible v3 badge.
-# A v3 key behind a v2 widget is what makes Google answer "Invalid key type",
-# so the front end has to load the explicit-render script and read the
-# checkbox response - never grecaptcha.execute().
+# ------------------------------------------ v2 INVISIBLE (no visible box)
+# The shop renders the v2 widget INVISIBLY (size: "invisible"), not as the
+# "I'm not a robot" checkbox and not as an invisible v3 badge. A v3 key behind
+# a v2 widget is what makes Google answer "Invalid key type", so the front end
+# has to load the explicit-render script and read the widget response:
+# grecaptcha.execute() returns a promise that carries the token, and the
+# getResponse() probe is the fallback (see tests/_recaptcha_token_sim.mjs).
 import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

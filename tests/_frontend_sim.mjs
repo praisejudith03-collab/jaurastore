@@ -27,7 +27,13 @@ try {
 }
 
 const BASE = process.env.BASE || "http://127.0.0.1:8080";
-const ADMIN_PW = process.env.ADMIN_PW || "Jaura@Admin#2026x";
+// The harness signs in to the real shop, so the admin password is never
+// written in this file - pass it in:  ADMIN_PW='...' node tests/_frontend_sim.mjs
+const ADMIN_PW = process.env.ADMIN_PW || "";
+if (!ADMIN_PW) {
+  console.error("ADMIN_PW is not set. Run this as:  ADMIN_PW='<admin password>' node tests/_frontend_sim.mjs");
+  process.exit(3);
+}
 const results = [];
 const errors = [];
 

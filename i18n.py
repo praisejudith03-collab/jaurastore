@@ -19,8 +19,10 @@ sys.path.insert(0, os.path.dirname(HERE))
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 BASE = os.environ.get("JAURA_BASE", "http://127.0.0.1:8080/")
-ADMIN_EMAIL = "jaurastore@gmail.com"
-ADMIN_PASS = "JauraStore2026x"
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "")
+ADMIN_PASS = os.environ.get("ADMIN_PW", "")
+if not ADMIN_PASS:
+    sys.exit("ADMIN_PW is not set. Run this as:  ADMIN_PW='<admin password>' python3 i18n.py")
 
 PAGES = ["index.html", "shop.html", "categories.html", "cart.html", "checkout.html",
          "contact.html", "delivery.html", "faq.html", "wishlist.html",

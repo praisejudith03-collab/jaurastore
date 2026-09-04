@@ -29,7 +29,8 @@ import storage  # noqa: E402
 from db import execute, init_db  # noqa: E402
 
 NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
-PW = "JauraStore2026x"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _pw import PW  # noqa: E402  - one strong password per run; ADMIN_PW pins it
 EMAIL = "jaurastore@gmail.com"
 
 
