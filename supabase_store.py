@@ -337,18 +337,18 @@ def _bucket():
     return os.environ.get("SUPABASE_BUCKET", "uploads").strip() or "uploads"
 
 
-def _delete_storage_object_from_url(url, bucket=None):
-    """Remove an uploaded file from Supabase Storage, best effort.
+def _storage_path_from_url(url, bucket=None):
+    """The bucket-relative object path inside one of our URLs, or ''.
 
     Accepts every URL shape the app can hold: a public object URL
-    (…/storage/v1/object/public/<bucket>/<path>), a signed URL, or a bare
-    object path such as "/uploads/receipts/abc.jpg". A foreign URL (someone
-    else's host) is left alone. Never raises: a deleted order must never be
-    blocked by an unreachable bucket, because the SQLite row is going anyway.
+    (…/storage/v1/object/public/<bucket>/<path>), a signed URL
+    (…/storage/v1/object/sign/<bucket>/<path>?token=…), or a bare path such
+    as "/uploads/receipts/abc.jpg". A foreign URL (someone else's host)
+    yields '' - it is left alone.
     """
     url = (url or "").strip()
     if not url:
-        return False
+        return ""
     bucket = bucket or _bucket()
     path = ""
     public = "/object/public/%s/" % bucket
@@ -362,7 +362,7 @@ def _delete_storage_object_from_url(url, bucket=None):
         parts = tail.split("/", 1)
         path = parts[1] if len(parts) == 2 else ""
     elif url.startswith("http"):
-        return False                      # not ours; nothing to delete
+        return ""                         # not ours; nothing to do
     else:
         path = url.lstrip("/")
         if path.startswith("uploads/"):
@@ -370,14 +370,29 @@ def _delete_storage_object_from_url(url, bucket=None):
     path = path.split("?", 1)[0].split("#", 1)[0]
     if urllib and urllib.parse:
         path = urllib.parse.unquote(path)
+    return path
+
+
+def _delete_storage_object_from_url(url, bucket=None):
+    """Remove an uploaded file from Supabase Storage, best effort.
+
+    Accepts every URL shape the app can hold (see _storage_path_from_url).
+    A foreign URL (someone else's host) is left alone. Never raises: a
+    deleted order must never be blocked by an unreachable bucket, because
+    the SQLite row is going anyway.
+    """
+    path = _storage_path_from_url(url, bucket)
     if not path:
         return False
+    bucket = bucket or _bucket()
     c = client()
     if c is None:
         return False
     try:
-        c.storage.from_(bucket).remove([path])
-        return True
+        # remove() returns the objects that were actually removed; an empty
+        # list (object already gone) is "nothing to delete", not a success
+        res = c.storage.from_(bucket).remove([path])
+        return bool(res) if isinstance(res, (list, tuple)) else True
     except Exception as exc:
         print(f"[supabase] storage delete failed: {exc}")
         return False

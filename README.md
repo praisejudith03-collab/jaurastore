@@ -41,6 +41,25 @@ JSON API, so the storefront and existing flows are unchanged. When the env vars
 are absent the app falls back to the local persistence, so a fresh checkout and
 the test suite run with no credentials.
 
+#### Uploads (Supabase Storage)
+
+On Render's free tier the disk is wiped on every deploy, so uploaded images
+must live in Supabase Storage. Set `UPLOAD_MODE=supabase` (`.env` or the
+dashboard) together with the Supabase pair above. The bucket defaults to
+`uploads` (must be a **public** bucket; override with `SUPABASE_BUCKET`):
+
+* product photos, category assets, hero video/banner/logo → public URL
+  (`…/storage/v1/object/public/uploads/<key>`)
+* payment receipts and proofs → **signed URL** (admin-only, never publicly
+  guessable); the admin receipts view refreshes them on the fly, and the
+  upload still works even after the 7-day Supabase signed-URL cap
+* if the bucket is unreachable the upload falls back to the local disk, so a
+  payment receipt is never lost — `/uploads/…` keeps serving those files
+
+`/sitemap.xml` is generated on every request from the live category table and
+product catalogue (the old committed `sitemap.xml` was deleted — a snapshot
+went stale and kept listing categories the owner had deleted).
+
 Production: `gunicorn "app:create_app()" --workers 2 --timeout 90` (see
 `Procfile` and `render.yaml`).
 

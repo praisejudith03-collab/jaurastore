@@ -846,12 +846,24 @@ def admin_orders_csv():
 @api.get("/admin/payment-proofs")
 @authmod.require_admin
 def admin_payment_proofs():
-    """Every receipt a customer has sent from the payment form."""
+    """Every receipt a customer has sent from the payment form.
+
+    Proof URLs saved in Supabase mode are signed URLs, and signed URLs
+    expire after 7 days - storage.signed_url_for() refreshes each one here
+    (best effort, public / local URLs pass through untouched) so a receipt
+    stays viewable for as long as the file exists.
+    """
     limit = sec.clean_int(request.args.get("limit"), 200, 1, 1000)
     rows = query("SELECT id, order_id, name, phone, email, method, items, quantity, amount, "
                  "note, file_url, file_name, file_size, mime, emailed, email_info, at "
                  "FROM payment_proofs ORDER BY at DESC LIMIT ?", (limit,))
-    return jsonify(ok=True, count=len(rows), proofs=[dict(r) for r in rows])
+    proofs = []
+    for r in rows:
+        d = dict(r)
+        if d.get("file_url"):
+            d["file_url"] = storage.signed_url_for(d["file_url"])
+        proofs.append(d)
+    return jsonify(ok=True, count=len(proofs), proofs=proofs)
 
 
 @api.delete("/admin/payment-proofs/<int:pid>")

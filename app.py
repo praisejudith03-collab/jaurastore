@@ -1,5 +1,6 @@
 """J Aura Store - Flask app: serves the storefront plus a JSON API."""
-import os
+import os, html, datetime
+from urllib.parse import quote
 from flask import (Flask, send_from_directory, jsonify, request, redirect,
                    Response, abort, make_response as _make_response)
 from config import Config
@@ -8,10 +9,88 @@ import security as sec
 import auth as authmod
 import storage
 import analytics as analytics_mod
+import catalog as catalog_mod
+import api as api_mod
 from api import api
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 LEGACY_PREFIX = "/JauraStore"   # keeps old project-site links working
+
+# The fixed pages of the storefront (never change unless a page ships).
+SITEMAP_STATIC_PAGES = (
+    ("/", "1.0", "daily"),
+    ("/shop.html", "0.9", "daily"),
+    ("/categories.html", "0.8", "weekly"),
+    ("/about.html", "0.6", "monthly"),
+    ("/faq.html", "0.5", "monthly"),
+    ("/delivery.html", "0.6", "monthly"),
+    ("/contact.html", "0.6", "monthly"),
+    ("/checkout.html", "0.5", "monthly"),
+    ("/terms.html", "0.4", "monthly"),
+    ("/privacy.html", "0.4", "monthly"),
+    ("/returns.html", "0.4", "monthly"),
+    ("/shipping.html", "0.4", "monthly"),
+)
+
+
+def _sitemap_entry(loc: str, lastmod: str, changefreq: str, priority: str) -> str:
+    return ("  <url>\n"
+            f"    <loc>{loc}</loc>\n"
+            f"    <lastmod>{lastmod}</lastmod>\n"
+            f"    <changefreq>{changefreq}</changefreq>\n"
+            f"    <priority>{priority}</priority>\n"
+            "  </url>")
+
+
+def build_sitemap() -> str:
+    """The live sitemap, rebuilt on every request from what the store serves.
+
+    One URL per fixed page, one per LIVE non-hidden category
+    (shop.html?cat=<id>) and one per LIVE product (product.html?id=<id>).
+
+    The categories come from the same table the storefront reads -
+    api_mod._categories_data(), which on boot is restored from Supabase
+    (growth_settings) before any request is served - and the products from
+    catalog_mod.merged(), the live catalogue with deletions and hidden rows
+    already removed. A category or product that the owner deleted therefore
+    can never appear here: there is no committed sitemap.xml snapshot to go
+    stale and list pages that no longer exist (the old static file kept four
+    deleted categories, which is exactly what Search Console flagged).
+    """
+    origin = (Config.SITE_ORIGIN or "").rstrip("/")
+    today = datetime.date.today().isoformat()
+
+    def url_for(path: str) -> str:
+        return html.escape(origin + path, quote=False)
+
+    urls = [_sitemap_entry(url_for(path), today, freq, pri)
+            for path, pri, freq in SITEMAP_STATIC_PAGES]
+
+    try:
+        categories = api_mod._categories_data().get("categories") or []
+    except Exception:
+        categories = []
+    for c in categories:
+        cid = str((c or {}).get("id") or "").strip()
+        if not cid or (c or {}).get("hidden"):
+            continue                     # hidden from the store -> not indexed
+        urls.append(_sitemap_entry(
+            url_for("/shop.html?cat=" + quote(cid, safe="")), today, "weekly", "0.7"))
+
+    try:
+        products = catalog_mod.merged()
+    except Exception:
+        products = []
+    for p in products:
+        pid = str((p or {}).get("id") or "").strip()
+        if not pid:
+            continue
+        urls.append(_sitemap_entry(
+            url_for("/product.html?id=" + quote(pid, safe="")), today, "weekly", "0.6"))
+
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            + "\n".join(urls) + "\n</urlset>\n")
 
 
 def create_app():
@@ -170,6 +249,19 @@ def create_app():
         ext = os.path.splitext(full)[1].lstrip(".").lower()
         if ext and not storage.is_inline_renderable(ext):
             resp.headers["Content-Disposition"] = "attachment"
+        return resp
+
+    @app.route("/sitemap.xml")
+    def sitemap():
+        """The dynamic sitemap: rebuilt on every request from the live
+        category table and product catalogue (see build_sitemap). Replaces
+        the old committed sitemap.xml, which went stale and kept listing
+        categories the owner had deleted."""
+        resp = Response(build_sitemap(), mimetype="application/xml; charset=utf-8")
+        # short cache: search engines re-crawl daily, and a 5-minute-old
+        # sitemap is indistinguishable from a live one while keeping the
+        # dyno from rebuilding it on every hit
+        resp.headers["Cache-Control"] = "public, max-age=300"
         return resp
 
     @app.route("/")

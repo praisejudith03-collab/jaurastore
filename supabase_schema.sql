@@ -10,8 +10,8 @@
 -- also live in Supabase and can never be lost with the dyno.
 --
 -- Required environment variables (both Render services):
---   SUPABASE_URL           https://<project>.supabase.co
---   SUPABASE_SERVICE_KEY   the service-role key (server-side only)
+--   SUPABASE_URL                 https://<project>.supabase.co
+--   SUPABASE_SERVICE_ROLE_KEY    the service-role key (server-side only)
 -- =====================================================================
 
 -- ------------------------------------------------------------ products
