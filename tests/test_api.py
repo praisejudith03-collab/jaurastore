@@ -4,7 +4,7 @@ These cover the things that must never silently break: CSRF, no user
 enumeration, brute-force lockout, HTML stripping, order retention and the
 analytics counts the dashboard shows.
 """
-import io, json, os, re, shutil, sys
+import io, json, os, re, shutil, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DB_PATH", "/tmp/jaura_test.db")
@@ -2086,6 +2086,46 @@ def test_homepage_falls_back_to_the_committed_brand_reel(client):
 
 # ================================= service worker: one version, precached
 
+def _image_size(path):
+    """Width/height straight from the file header - no Pillow needed, so the
+    brand-asset check runs on a bare `pip install -r requirements.txt`."""
+    with open(path, "rb") as fh:
+        head = fh.read(24)
+        if head[:8] == b"\x89PNG\r\n\x1a\n":
+            return struct.unpack(">II", head[16:24])
+        if head[:2] == b"\xff\xd8":                       # JPEG: walk the markers
+            fh.seek(2)
+            while True:
+                b = fh.read(1)
+                while b and b != b"\xff":
+                    b = fh.read(1)
+                marker = fh.read(1)
+                while marker == b"\xff":
+                    marker = fh.read(1)
+                if not marker:
+                    return None
+                if marker[0] in range(0xC0, 0xCF) and marker[0] not in (0xC4, 0xC8, 0xCC):
+                    fh.read(3)
+                    h, w = struct.unpack(">HH", fh.read(4))
+                    return (w, h)
+                seg = struct.unpack(">H", fh.read(2))[0]
+                fh.seek(seg - 2, 1)
+    return None
+
+
+def _png_has_alpha(path):
+    with open(path, "rb") as fh:
+        head = fh.read(26)
+    if head[:8] != b"\x89PNG\r\n\x1a\n":
+        return False
+    colour_type = head[25]
+    if colour_type in (4, 6):                             # grey+alpha / RGBA
+        return True
+    if colour_type == 3:                                  # palette: alpha via tRNS
+        return b"tRNS" in open(path, "rb").read()
+    return False
+
+
 def test_service_worker_precaches_the_current_asset_version():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sw = open(os.path.join(root, "sw.js"), encoding="utf-8").read()
@@ -2103,6 +2143,50 @@ def test_service_worker_precaches_the_current_asset_version():
             html = open(os.path.join(root, name), encoding="utf-8").read()
             versions = set(re.findall(r"\?v=(\d+)", html))
             assert versions <= {ver}, f"{name} still references {versions - {ver}}"
+    # the brand files the shop and Google both point at are really shipped,
+    # at the sizes the social cards and the home-screen icon expect
+    expected = {
+        os.path.join("images", "brand", "logo.jpg"): (1536, 1536),
+        os.path.join("images", "brand", "logo-flyer.jpg"): (1536, 1536),
+        os.path.join("images", "brand", "favicon.png"): (512, 512),
+        os.path.join("images", "brand", "apple-touch.png"): (512, 512),
+        os.path.join("images", "brand", "og-cover.jpg"): (1200, 630),
+        "logo.png": (1024, 1024),
+    }
+    for rel, size in expected.items():
+        path = os.path.join(root, rel)
+        assert os.path.exists(path), f"missing brand file {rel}"
+        assert os.path.getsize(path) < 200 * 1024, f"{rel} is over 200KB"
+        assert _image_size(path) == size, f"{rel} is {_image_size(path)}, expected {size}"
+    # iOS draws no transparency, so the home-screen icon must be opaque
+    assert not _png_has_alpha(os.path.join(root, "images", "brand", "apple-touch.png")), \
+        "apple-touch.png must be opaque"
+    store = open(os.path.join(root, "js", "store.js"), encoding="utf-8").read()
+    # the rich Google result: every schema.org node the shop advertises
+    for node in ('"Organization", "OnlineStore"', '"@type": "WebSite"',
+                 '"@type": "BreadcrumbList"', '"@type": "ItemList"',
+                 '"@type": "OfferCatalog"', "FAQPage", "ContactPage", "AboutPage",
+                 "SearchAction"):
+        assert node in store, f"JSON-LD node missing: {node}"
+    assert len(FAQ_LD_ROWS(store)) == 7, "the FAQ rich result needs all 7 questions"
+    # social-card metadata: dimensions, logo, theme colour
+    for meta in ("og:image:width", "og:image:height", "og:logo", "theme-color"):
+        assert meta in store, f"meta missing: {meta}"
+    # the JSON-LD logo follows the owner's uploaded logo, with the shipped
+    # brand file as the fallback when Admin -> Branding has none
+    assert "logo: absUrl(logoPath())" in store
+    assert 'return custom || "images/brand/logo.jpg' in store
+    # the hero reel is never left frozen
+    app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
+    reel = app_js.split('.lux-reel video', 1)[1][:2600]
+    for hook in ('addEventListener("pause"', 'addEventListener("stalled"',
+                 'addEventListener("ended"', "setInterval", "visibilitychange"):
+        assert hook in reel, f"hero reel watchdog missing: {hook}"
+
+
+def FAQ_LD_ROWS(store_js):
+    block = store_js.split("const FAQ_LD = [", 1)[1].split("\n  ];", 1)[0]
+    return [ln for ln in block.splitlines() if ln.strip().startswith("[\"")]
 
 
 # ============================= welcome popup: the CFA equivalent in brackets

@@ -1418,10 +1418,13 @@ const JA = (() => {
           noteEl.hidden = false;
         }
       }
+      // The logo may have changed (owner upload, or the override was
+      // cleared): rewrite og:logo and the Organization node in the JSON-LD
+      // so what Google reads matches what the shop actually displays.
+      try { pageSeo(); } catch (e) {}
     } catch (e) {}
   }
 
-  // Keep site config for other modules
   let _siteConfig = {};
   function getSiteConfig() { return _siteConfig; }
 
@@ -1741,6 +1744,39 @@ const JA = (() => {
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
   }
+  // The logo Google and the social cards should use: the owner's uploaded
+  // logo when Admin → Branding has one, otherwise the shipped brand file.
+  // Falling back keeps og:logo and the JSON-LD valid even if the custom
+  // upload is later removed from Storage.
+  function logoPath() {
+    let custom = "";
+    try { custom = (settings() || {}).logoUrl || ""; } catch (e) { custom = ""; }
+    return custom || "images/brand/logo.jpg?v=121";
+  }
+  // FAQ answers Google can show as rich results. Kept in step with faq.html.
+  const FAQ_LD = [
+    ["How do I order?", "01 Select your items. 02 Review your bag. 03 Complete checkout. 04 Send payment in F CFA or Naira. 05 Send your payment screenshot to us on WhatsApp. 06 Jaura Store will confirm your payment and a confirmation message will be sent to your email."],
+    ["Can I pay in CFA and Naira?", "Yes. Tap F CFA or Naira in the menu and prices switch at once. At checkout choose Direct bank transfer — F CFA or Direct bank transfer — Naira."],
+    ["What is the exchange rate?", "Naira is the main price. F CFA is converted each day from the live Naira rate, then rounded."],
+    ["Where do you deliver?", "Benin (Cotonou, Calavi, Porto-Novo — 6 to 14 business days), Lagos Mainland, Lagos Island, Lome and neighbouring West African states. Shipment rates are confirmed at checkout by city."],
+    ["How do I send payment?", "Transfer using the details shown for your chosen currency, then send a screenshot of your payment to us on WhatsApp. You do not need to upload a receipt on the site. A confirmation message will be sent to your email."],
+    ["How do I track my order?", "Message us on WhatsApp with your order ID (for example JA-M8K2Q1) and we will tell you if it is waiting, confirmed, or declined."],
+    ["How can I reach you?", "WhatsApp +229 01 68 95 31 01, phone +229 01 68 95 31 01 or +234 916 167 0236, email jaurastore@gmail.com. Lagos, Nigeria and Cotonou, Benin."],
+  ];
+  // Crumb trail per page so the result shows "jaurastore.com.ng › Shop"
+  // instead of a bare URL.
+  const CRUMB_LABELS = {
+    shop: "Shop", categories: "Categories", product: "Product", about: "Vision",
+    faq: "FAQ", delivery: "Delivery", contact: "Contact", checkout: "Checkout",
+    cart: "Bag", wishlist: "Wishlist", returns: "Returns", shipping: "Shipping",
+    terms: "Terms", privacy: "Privacy",
+  };
+  function breadcrumbLd(page, url, title) {
+    const items = [{ "@type": "ListItem", position: 1, name: "Home", item: SITE + "/" }];
+    const label = CRUMB_LABELS[page];
+    if (label) items.push({ "@type": "ListItem", position: 2, name: page === "product" ? (title || label) : label, item: url });
+    return { "@type": "BreadcrumbList", "@id": url + "#crumbs", itemListElement: items };
+  }
   function setSeo(opts = {}) {
     const page = (document.body && document.body.dataset.page) || "home";
     const noindex = /^(admin|account|order|pay)$/.test(page);
@@ -1765,6 +1801,15 @@ const JA = (() => {
       ["name", "twitter:title", title],
       ["name", "twitter:description", description],
       ["name", "twitter:image", image],
+      // Explicit dimensions let Facebook / WhatsApp / X draw the big card
+      // straight away instead of waiting to fetch and measure the file.
+      ["property", "og:image:width", "1200"],
+      ["property", "og:image:height", "630"],
+      ["property", "og:image:alt", "Jaura Store — everything you love, all in one store"],
+      ["property", "og:logo", absUrl(logoPath())],
+      ["name", "author", "Jaura Store"],
+      ["name", "publisher", "Jaura Store"],
+      ["name", "theme-color", "#0f0e0c"],
     ].forEach(([attr, key, val]) => {
       let el = document.head.querySelector(`meta[${attr}="${key}"]`);
       if (!el) {
@@ -1815,13 +1860,21 @@ const JA = (() => {
     };
     ld.textContent = JSON.stringify(opts.jsonLd || {
       "@context": "https://schema.org",
-      "@graph": [
+      "@graph": graph()
+    });
+
+    // Extra nodes describing THIS page: crumb trail, the page's own type
+    // (FAQPage / ContactPage / AboutPage / CollectionPage) and, on the
+    // listing pages, an ItemList of the categories on show. These are what
+    // give the Google result its sitelinks and the FAQ drop-downs.
+    function graph() {
+      const g = [
         {
           "@type": ["Organization", "OnlineStore"],
           "@id": SITE + "/#store",
           name: "Jaura Store",
           url: SITE,
-          logo: absUrl("images/brand/logo.jpg?v=121"),
+          logo: absUrl(logoPath()),
           image,
           email: "jaurastore@gmail.com",
           telephone: "+22968953110",
@@ -1854,8 +1907,56 @@ const JA = (() => {
             "query-input": "required name=search_term_string"
           }
         }
-      ]
-    });
+      ];
+
+      // Crumb trail on every page except the bare home page.
+      if (page !== "home") g.push(breadcrumbLd(page, url, title));
+
+      // The page's own schema.org type.
+      const PAGE_TYPE = { faq: "FAQPage", contact: "ContactPage", about: "AboutPage", shop: "CollectionPage", categories: "CollectionPage" };
+      const ptype = PAGE_TYPE[page];
+      if (ptype) {
+        const node = {
+          "@type": ptype,
+          "@id": url + "#page",
+          url,
+          name: title,
+          description,
+          isPartOf: { "@id": SITE + "/#website" },
+          about: { "@id": SITE + "/#store" },
+          primaryImageOfPage: image,
+        };
+        if (page !== "home") node.breadcrumb = { "@id": url + "#crumbs" };
+        if (ptype === "FAQPage") {
+          node.mainEntity = FAQ_LD.map(([q, a]) => ({
+            "@type": "Question",
+            name: q,
+            acceptedAnswer: { "@type": "Answer", text: a },
+          }));
+        }
+        g.push(node);
+      }
+
+      // Listing pages carry an ItemList of the live categories, which is what
+      // lets Google build the "Clothes · Shoes · Bags …" sitelink row.
+      if (page === "shop" || page === "categories" || page === "home") {
+        g.push({
+          "@type": "ItemList",
+          "@id": url + "#categories",
+          name: "Jaura Store categories",
+          numberOfItems: cats.length,
+          itemListOrder: "https://schema.org/ItemListOrderAscending",
+          itemListElement: cats.map((c, i) => ({
+            "@type": "ListItem",
+            position: i + 1,
+            name: (c && (c.name || c.id)) || "",
+            url: SITE + "/shop.html?cat=" + encodeURIComponent((c && c.id) || ""),
+            image: (c && c.image) ? absUrl(c.image) : image,
+          })),
+        });
+      }
+      return g;
+    }
   }
   function pageSeo() {
     const page = (document.body && document.body.dataset.page) || "home";

@@ -1687,6 +1687,39 @@ async function boot() {
     v.addEventListener("canplay", play, { once: true });
     document.addEventListener("touchstart", play, { once: true });
     document.addEventListener("click", play, { once: true });
+    // Watchdog: the reel must never sit frozen. Phones pause background
+    // video on tab switch, low-power mode or a stalled network, and the
+    // one-shot listeners above have already fired by then. This restarts it
+    // whenever it is paused, ended, or playing without the clock advancing.
+    v.addEventListener("pause", () => { if (!v.ended) play(); });
+    v.addEventListener("stalled", play);
+    v.addEventListener("suspend", play);
+    v.addEventListener("ended", () => { try { v.currentTime = 0; } catch (e) {} play(); });
+    let lastTime = -1;
+    let stuck = 0;
+    setInterval(() => {
+      if (document.hidden) return;
+      const r = v.getBoundingClientRect();
+      const onScreen = r.bottom > 0 && r.top < (window.innerHeight || 0);
+      if (!onScreen) return;
+      if (v.paused || v.ended) { play(); return; }
+      // Playing but the clock is not moving: decoder wedged, nudge it.
+      if (v.currentTime === lastTime) {
+        stuck += 1;
+        if (stuck >= 2) {
+          stuck = 0;
+          try { v.currentTime = v.currentTime + 0.01; } catch (e) {}
+          try { v.load(); } catch (e) {}
+          play();
+        }
+      } else {
+        stuck = 0;
+      }
+      lastTime = v.currentTime;
+    }, 2000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) play(); });
+    window.addEventListener("pageshow", play);
+    window.addEventListener("focus", play);
   });
   const page = document.body.dataset.page;
   if (page === "home") mountHeroVideo();
