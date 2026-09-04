@@ -106,20 +106,28 @@ def _read(*parts):
     return open(os.path.join(ROOT, *parts), encoding="utf-8").read()
 
 
-def test_net_js_uses_the_v2_checkbox_widget():
+def test_net_js_uses_the_invisible_v2_widget():
+    """No visible box: the widget renders size:invisible and a token is
+    minted with grecaptcha.execute() on submit."""
     src = _read("js", "net.js")
     assert "api.js?render=explicit" in src        # v2 explicit render
     assert "grecaptcha.render(" in src
     assert "sitekey: key" in src
-    assert "grecaptcha.getResponse(" in src
-    assert "grecaptcha.execute(" not in src       # v3 only - must be gone
+    assert 'size: "invisible"' in src             # invisible widget, no box
+    assert "grecaptcha.execute(" in src           # mints the token on submit
+    assert "grecaptcha.getResponse(" in src       # polling fallback
     assert "api.js?render=\" + encodeURIComponent(key)" not in src
 
 
-def test_checkout_page_carries_the_checkbox_slot():
+def test_checkout_page_carries_the_invisible_recaptcha_anchor():
+    """The visible checkbox box is gone; only a hidden render anchor and
+    the legal note remain."""
     html = _read("checkout.html")
     assert "data-recaptcha-widget" in html
     assert "data-recaptcha-note" in html
+    assert "ck-recaptcha-anchor" in html
+    assert "id=\"ck-recaptcha-box\"" not in html     # visible box removed
+    assert "data-recaptcha-fallback" not in html     # loading hint removed
 
 
 def test_widget_is_a_no_op_until_the_keys_exist(monkeypatch):

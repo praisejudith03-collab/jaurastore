@@ -131,12 +131,14 @@ window.JA_NET = (function () {
     return inflight;
   }
 
-  // ------------------------------------------- Google reCAPTCHA v2 checkbox
+  // ------------------------------------------- Google reCAPTCHA v2 (invisible)
   // The site key comes from api/config (set RECAPTCHA_SITE_KEY on the
   // server) and MUST be a reCAPTCHA v2 "I'm not a robot" key - a v3 key here
-  // is what makes the widget say "Invalid key type". When no key is
-  // configured nothing loads, no widget is rendered and every call resolves
-  // to "" - the shop works exactly as before.
+  // is what makes the widget say "Invalid key type". The widget is rendered
+  // INVISIBLE (size: "invisible") into a hidden anchor, so there is no box
+  // on the page and the shopper never sees it; grecaptcha.execute() mints the
+  // token on submit. When no key is configured nothing loads, no widget is
+  // rendered and every call resolves to "" - the shop works exactly as before.
   var recaptchaWidgets = [];
   function siteKey() {
     if (recaptchaKey) return Promise.resolve(recaptchaKey);
@@ -157,39 +159,26 @@ window.JA_NET = (function () {
     });
     return recaptchaLoad;
   }
-  // Draw the checkbox into every [data-recaptcha-widget] box on the page.
+  // Render the invisible widget into every [data-recaptcha-widget] anchor.
+  // No visible box: the anchor is hidden in CSS (.ck-recaptcha-anchor), the
+  // shopper never sees reCAPTCHA, but the widget can still mint a token.
   function renderWidgets(key) {
     var boxes = document.querySelectorAll("[data-recaptcha-widget]");
     if (!boxes.length) return Promise.resolve(false);
     return loadRecaptcha().then(function (ok) {
-      if (!ok || !window.grecaptcha || !window.grecaptcha.render) {
-        // show fallback hint so shopper sees where the box lives
-        document.querySelectorAll("[data-recaptcha-fallback]").forEach(function (fb) { fb.hidden = false; });
-        return false;
-      }
+      if (!ok || !window.grecaptcha || !window.grecaptcha.render) return false;
       return new Promise(function (resolve) {
         var draw = function () {
           var rendered = 0;
           Array.prototype.forEach.call(boxes, function (el) {
             if (el.getAttribute("data-recaptcha-id")) { rendered++; return; }
             try {
-              var id = window.grecaptcha.render(el, { sitekey: key, theme: "light" });
+              var id = window.grecaptcha.render(el, { sitekey: key, size: "invisible" });
               el.setAttribute("data-recaptcha-id", String(id));
-              el.hidden = false;
-              el.style.display = "block";
               recaptchaWidgets.push(id);
               rendered++;
             } catch (e) {}
           });
-          // hide the loading fallback, show the real checkbox
-          if (rendered > 0) {
-            document.querySelectorAll("[data-recaptcha-fallback]").forEach(function (fb) { fb.hidden = true; });
-            document.querySelectorAll(".ck-recaptcha").forEach(function (box) {
-              box.style.display = "flex";
-              box.style.visibility = "visible";
-              box.style.opacity = "1";
-            });
-          }
           resolve(rendered > 0);
         };
         try { window.grecaptcha.ready(draw); } catch (e) { draw(); }
@@ -204,21 +193,32 @@ window.JA_NET = (function () {
     });
     return out;
   }
-  // The ticked checkbox's response token. Never blocks a sale: when the
-  // shopper has not ticked (or the widget never loaded) this is "" and the
-  // server decides (RECAPTCHA_REQUIRED is off by default).
+  // The invisible widget's response token. Never blocks a sale: when no key
+  // is configured (or the widget never loaded) this is "" and the server
+  // decides (RECAPTCHA_REQUIRED is off by default).
   function recaptcha(action) {
     return siteKey().then(function (key) {
       if (!key) return "";
       return renderWidgets(key).then(function () {
         var ids = widgetIds();
-        for (var i = 0; i < ids.length; i++) {
+        if (!ids.length) return "";
+        var id = ids[0];
+        return new Promise(function (resolve) {
+          var settled = false;
+          var finish = function (tok) {
+            if (!settled) { settled = true; resolve(tok || ""); }
+          };
           try {
-            var tok = window.grecaptcha.getResponse(ids[i]);
-            if (tok) return tok;
+            // Invisible v2: execute mints a fresh token; the callback delivers it.
+            window.grecaptcha.execute(id, function (tok) { finish(tok); });
           } catch (e) {}
-        }
-        return "";
+          // Fallback for builds without the execute callback: poll the widget.
+          setTimeout(function () {
+            var tok = "";
+            try { tok = window.grecaptcha.getResponse(id) || ""; } catch (e) {}
+            finish(tok);
+          }, 300);
+        });
       });
     }).catch(function () { return ""; });
   }
@@ -229,28 +229,17 @@ window.JA_NET = (function () {
       try { window.grecaptcha.reset(id); } catch (e) {}
     });
   }
-  // Show the reCAPTCHA notice + checkbox on pages that carry one.
+  // Show the reCAPTCHA legal note and arm the invisible widget on pages
+  // that carry one.
   // Contract for tests: when no key is configured nothing renders and checkout is never blocked.
   // The two exact strings below are asserted by tests/test_recaptcha.py
   function mountRecaptcha() {
-    var boxes = document.querySelectorAll(".ck-recaptcha");
-    boxes.forEach(function (b) {
-      b.style.display = "flex";
-      b.style.visibility = "visible";
-      b.style.opacity = "1";
-    });
     return siteKey().then(function (key) {
       var notes = document.querySelectorAll("[data-recaptcha-note]");
       notes.forEach(function (el) { el.hidden = false; el.style.display = "block"; });
       if (!key) return false;
-      // When a key exists we still show fallback until the iframe loads, then hide it.
-      if (!key) {
-        document.querySelectorAll("[data-recaptcha-fallback]").forEach(function (fb) { fb.hidden = false; });
-        return false;
-      }
       return renderWidgets(key);
     }).catch(function () {
-      document.querySelectorAll("[data-recaptcha-fallback]").forEach(function (fb) { fb.hidden = false; });
       return false;
     });
   }
