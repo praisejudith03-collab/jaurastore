@@ -546,6 +546,56 @@ def _mutate(actor, fn):
     return data, path
 
 
+def apply_stock_delta(pid, qty_delta, option_key=None, actor=None):
+    """Add ``qty_delta`` to a product's stock (negative decrements). Clamps at 0.
+
+    When ``option_key`` matches an ``optionStock`` entry (exact or folded), that
+    choice is adjusted by the same amount. Persists through :func:`upsert` so
+    the live catalogue and Supabase both see the new quantity.
+    """
+    pid = str(pid or "")
+    try:
+        qty_delta = int(qty_delta)
+    except (TypeError, ValueError):
+        return None
+    if not pid or qty_delta == 0:
+        return None
+    found = None
+    for p in merged(include_hidden=True):
+        if str(p.get("id")) == pid:
+            found = p
+            break
+    if found is None:
+        return None
+    rec = dict(found)
+    try:
+        stock = int(rec.get("stock") or 0)
+    except (TypeError, ValueError):
+        stock = 0
+    rec["stock"] = max(0, stock + qty_delta)
+    os_map = rec.get("optionStock")
+    if option_key and isinstance(os_map, dict) and os_map:
+        os_map = dict(os_map)
+        key = str(option_key)
+        matched = key if key in os_map else None
+        if matched is None:
+            want = "".join(c.lower() for c in key if c.isalnum())
+            for k in os_map:
+                fk = "".join(c.lower() for c in str(k) if c.isalnum())
+                if fk and fk == want:
+                    matched = k
+                    break
+        if matched is not None:
+            try:
+                cur = int(os_map[matched] or 0)
+            except (TypeError, ValueError):
+                cur = 0
+            os_map[matched] = max(0, cur + qty_delta)
+            rec["optionStock"] = os_map
+    upsert(rec, actor=actor or "stock")
+    return rec
+
+
 def upsert(product, actor=None):
     """Save (create or edit) one product. Returns (product, action)."""
     clean = normalize(product)

@@ -384,6 +384,102 @@ def _stock_message(problems):
     return " ".join(bits)
 
 
+def _option_stock_key(product, variant):
+    """The optionStock map key that matches a cart variant, or None."""
+    if not isinstance(product, dict):
+        return None
+    os_map = product.get("optionStock")
+    if not isinstance(os_map, dict) or not os_map:
+        return None
+    vals = _variant_values(variant)
+    if not vals:
+        return None
+    folded = {}
+    for k in os_map:
+        fk = _fold(k)
+        if fk:
+            folded[fk] = k
+    for val in vals:
+        fk = _fold(val)
+        if fk and fk in folded:
+            return folded[fk]
+    return None
+
+
+def _order_stock_moves(payload):
+    """[{id, option, qty}, ...] for every cart line on an order."""
+    items = (payload or {}).get("items") or []
+    try:
+        products = {str(p.get("id")): p for p in catalog_mod.merged(include_hidden=True)}
+    except Exception:
+        products = {}
+    moves = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        pid = str(it.get("id") or "")
+        if not pid:
+            continue
+        try:
+            qty = int(it.get("qty") or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            continue
+        product = products.get(pid)
+        option = _option_stock_key(product, it.get("color") or it.get("variant") or "") if product else None
+        moves.append({"id": pid, "option": option, "qty": qty})
+    return moves
+
+
+def _apply_stock_moves(moves, sign, actor=None):
+    """sign -1 decrements, +1 restores. Never raises."""
+    applied = []
+    for m in moves or []:
+        if not isinstance(m, dict):
+            continue
+        pid = m.get("id")
+        try:
+            qty = int(m.get("qty") or 0) * int(sign)
+        except (TypeError, ValueError):
+            qty = 0
+        if not pid or not qty:
+            continue
+        try:
+            catalog_mod.apply_stock_delta(pid, qty, option_key=m.get("option"), actor=actor)
+        except Exception:
+            continue
+        applied.append(m)
+    return applied
+
+
+def _sync_order_stock(payload, old_status, new_status, actor=None):
+    """Decrement catalog stock when an order becomes confirmed; restore when it leaves.
+
+    Mutates ``payload`` in place: ``stockApplied`` holds the exact deltas so a
+    second confirm (email already=True, admin re-save) never double-decrements,
+    and a decline / reopen / delete restores the same quantities.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    old_c = (old_status or "pending") == "confirmed"
+    new_c = (new_status or "pending") == "confirmed"
+    if old_c == new_c:
+        return payload
+    if new_c:
+        if payload.get("stockApplied"):
+            return payload
+        moves = _order_stock_moves(payload)
+        _apply_stock_moves(moves, -1, actor=actor)
+        payload["stockApplied"] = moves
+    else:
+        moves = payload.get("stockApplied") or _order_stock_moves(payload)
+        if moves:
+            _apply_stock_moves(moves, +1, actor=actor)
+        payload["stockApplied"] = None
+    return payload
+
+
 @api.post("/orders")
 @sec.require_csrf
 def create_order():
@@ -1084,7 +1180,8 @@ def order_confirm_by_email(oid):
 
     status = "confirmed" if action == "confirm" else "declined"
     # the column is the truth; the payload is only a copy for the customer view
-    if (row["status"] or payload.get("status") or "pending") == status:
+    old_status = row["status"] or payload.get("status") or "pending"
+    if old_status == status:
         payload["status"] = status
         execute("UPDATE orders SET payload=? WHERE id=?",
                 (json.dumps(payload, ensure_ascii=False), oid))
@@ -1093,6 +1190,7 @@ def order_confirm_by_email(oid):
     payload["status"] = status
     payload["updatedAt"] = _utcnow()
     payload["updatedBy"] = "email link"
+    _sync_order_stock(payload, old_status, status, actor="email link")
     execute("UPDATE orders SET status=?, payload=?, updated_at=? WHERE id=?",
             (status, json.dumps(payload, ensure_ascii=False), _utcnow(), oid))
     audit("email-link", f"order.{status}", oid, _ip())
@@ -1120,16 +1218,19 @@ def admin_order_update(oid):
     status = sec.clean(d.get("status"), 20)
     if status not in STATUSES:
         return jsonify(ok=False, error="status must be pending, confirmed or declined"), 400
-    row = one("SELECT id, payload FROM orders WHERE id=?", (oid,))
+    row = one("SELECT id, payload, status FROM orders WHERE id=?", (oid,))
     if not row:
         return jsonify(ok=False, error="Order not found."), 404
     try:
         payload = json.loads(row["payload"] or "{}")
     except ValueError:
         payload = {}
+    old_status = row["status"] or payload.get("status") or "pending"
     payload["status"] = status
     payload["updatedAt"] = _utcnow()
     payload["updatedBy"] = authmod.current_admin()
+    if old_status != status:
+        _sync_order_stock(payload, old_status, status, actor=authmod.current_admin())
     execute("UPDATE orders SET status=?, payload=?, updated_at=? WHERE id=?",
             (status, json.dumps(payload, ensure_ascii=False), _utcnow(), oid))
     audit(authmod.current_admin(), f"order.{status}", oid, _ip())
@@ -1166,9 +1267,17 @@ def admin_order_delete(oid):
     """Delete an order (with its uploaded payment receipt). Used only from the
     admin portal's explicit Delete button; it never runs on a status change."""
     oid = sec.clean(oid, 24).upper()
-    row = one("SELECT id FROM orders WHERE id=?", (oid,))
+    row = one("SELECT id, status, payload FROM orders WHERE id=?", (oid,))
     if not row:
         return jsonify(ok=False, error="Order not found."), 404
+    try:
+        payload = json.loads(row["payload"] or "{}")
+    except ValueError:
+        payload = {}
+    old_status = row["status"] or payload.get("status") or "pending"
+    if old_status == "confirmed":
+        _sync_order_stock(payload, "confirmed", "pending",
+                         actor=authmod.current_admin())
 
     # take the receipts out first — their files go too, so a deleted receipt
     # can no longer be downloaded from its old URL (and cannot be restored
