@@ -159,3 +159,7 @@ class Config:
     BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "")
 
     LOW_STOCK_THRESHOLD = 5
+
+    # Hard stock cap: when on, checkout refuses quantities above stock with
+    # HTTP 409. ENFORCE_STOCK=0 switches the check off instantly (no redeploy).
+    ENFORCE_STOCK = os.environ.get("ENFORCE_STOCK", "1") != "0"

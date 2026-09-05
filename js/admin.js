@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=124" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=126" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -730,6 +730,7 @@ let prodCatSel = "";
 let orderPage = 1;
 const ORDER_PAGE = 15;
 let dashRange = 30;
+let salesRange = "30";
 let dashTimer = null;
 let dashCat = "";
 
@@ -1221,11 +1222,72 @@ async function fillMarketing() {
     };
   }
 }
-const TAB_TITLES = { analytics: "Dashboard", products: "Products", orders: "Orders", marketing: "Marketing", categories: "Categories", settings: "Settings", account: "Account", };
+function salesPanel() {
+  const opts = [["7", "7 days"], ["30", "30 days"], ["90", "90 days"], ["all", "All"]];
+  return `
+    <div class="an-top">
+      <h3 class="admin-h" style="margin:0">Confirmed sales</h3>
+      <div class="an-range">
+        ${opts.map(([v, label]) => `<button type="button" class="an-rng${String(salesRange) === v ? " is-on" : ""}" data-sales-range="${v}">${label}</button>`).join("")}
+        <a class="an-rng" id="sales-csv" href="api/admin/sales.csv?days=${encodeURIComponent(salesRange)}">Export CSV</a>
+      </div>
+    </div>
+    <p class="admin-note">Only confirmed orders count as sales. Pending orders are listed separately below.</p>
+    <div class="stats" id="sales-kpis"><div class="stat"><span class="kicker">Loading</span><b>…</b></div></div>
+    <p class="admin-note" id="sales-pending">Loading…</p>
+    <h3 class="admin-h">Top products</h3><div id="sales-top" class="empty">Loading…</div>`;
+}
+async function fillSales() {
+  const box = $("#sales-kpis");
+  if (!box) return;
+  let d = null;
+  try {
+    const res = await fetch("api/admin/sales?days=" + encodeURIComponent(salesRange), { credentials: "same-origin", cache: "no-store" });
+    if (res.ok) d = await res.json();
+  } catch (e) { d = null; }
+  if (!d || d.ok === false) {
+    box.innerHTML = `<p class="empty">Could not load sales.</p>`;
+    return;
+  }
+  const rev = (d.revenueByCurrency || []).map((r) => JA.money(r.value, r.currency)).join(" · ") || "—";
+  const avg = (d.averageByCurrency || []).length > 1
+    ? (d.averageByCurrency || []).map((r) => JA.money(r.average, r.currency)).join(" · ")
+    : ((d.averageByCurrency || [])[0] ? JA.money((d.averageByCurrency || [])[0].average, (d.averageByCurrency || [])[0].currency) : (d.averageOrderValue ? JA.money(d.averageOrderValue, ((d.revenueByCurrency || [])[0] || {}).currency || "NGN") : "—"));
+  const rangeLab = String(salesRange) === "all" ? "all time" : `last ${salesRange} days`;
+  box.innerHTML = [
+    ["Confirmed revenue", rev, rangeLab],
+    ["Orders", d.orders || 0, "confirmed"],
+    ["Average order value", avg, "confirmed"],
+    ["Units", d.units || 0, "items sold"],
+  ].map(([k, v, s]) => `<div class="stat"><span class="kicker">${esc(k)}</span><b>${esc(String(v))}</b>${s ? `<i>${esc(s)}</i>` : ""}</div>`).join("");
+  const pend = $("#sales-pending");
+  if (pend) {
+    const n = d.pendingCount != null ? d.pendingCount : (d.pendingOrders || 0);
+    pend.textContent = `${n} order${Number(n) === 1 ? "" : "s"} awaiting confirmation — not counted in sales.`;
+  }
+  const top = $("#sales-top");
+  if (top) {
+    const rows = d.topProducts || [];
+    top.innerHTML = rows.length
+      ? tableHTML(["Product", "Units", "Orders"], rows.map((p) => `<tr><td>${esc(p.name || p.id)}</td><td>${p.units || 0}</td><td>${p.orders || 0}</td></tr>`).join(""))
+      : `<p class="empty">No confirmed sales in this period yet.</p>`;
+  }
+  document.querySelectorAll("[data-sales-range]").forEach((b) => {
+    b.onclick = () => {
+      salesRange = b.dataset.salesRange;
+      document.querySelectorAll("[data-sales-range]").forEach((x) => x.classList.toggle("is-on", x === b));
+      const link = $("#sales-csv");
+      if (link) link.href = "api/admin/sales.csv?days=" + encodeURIComponent(salesRange);
+      fillSales();
+    };
+  });
+}
+const TAB_TITLES = { analytics: "Dashboard", products: "Products", orders: "Orders", sales: "Sales", marketing: "Marketing", categories: "Categories", settings: "Settings", account: "Account", };
 const ADX_ICONS = {
   analytics: `<svg viewBox="0 0 24 24"><path d="M4 19V9h3v10H4zm6.5 0V5h3v14h-3zm6.5 0v-7h3v7h-3z"/></svg>`,
   products: `<svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v9l-8 4-8-4V8zm8 4l8-4M12 12v9M12 12L4 8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   orders: `<svg viewBox="0 0 24 24"><path d="M5 4h14v16l-2.3-1.5L14.4 20l-2.4-1.5L9.6 20l-2.3-1.5L5 20V4zm3 5h8M8 12.5h8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
+  sales: `<svg viewBox="0 0 24 24"><path d="M4 20V10m5.5 10V4m5.5 16v-8m5 8V7" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   marketing: `<svg viewBox="0 0 24 24"><path d="M3 11l12-5v12L3 13v-2zm12-1.5L20 6v12l-5-3.5M7 14v5h3v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   categories: `<svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   settings: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1m0-12.8l-2.1 2.1M7.7 16.3l-2.1 2.1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
@@ -1237,8 +1299,8 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=124" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
-        <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("marketing")}${navBtn("categories")}${navBtn("settings")}${navBtn("account")}</nav>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=126" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
       <main class="adx-main">
@@ -1246,6 +1308,7 @@ function paintDesk(tab = "analytics") {
         <section class="panel ${tab === "analytics" ? "is-on" : ""}" id="panel-analytics">${tab === "analytics" ? analyticsPanel() : ""}</section>
         <section class="panel ${tab === "products" ? "is-on" : ""}" id="panel-products">${tab !== "products" ? "" : editingId === "new" ? `<div id="form-slot">${productForm()}</div>` : (editingId ? `<div id="form-slot">${productForm(JA.product(editingId) || {})}</div>` : productsTable())}</section>
         <section class="panel ${tab === "orders" ? "is-on" : ""}" id="panel-orders">${tab === "orders" ? ordersPanel() : ""}</section>
+        <section class="panel ${tab === "sales" ? "is-on" : ""}" id="panel-sales">${tab === "sales" ? salesPanel() : ""}</section>
         <section class="panel ${tab === "marketing" ? "is-on" : ""}" id="panel-marketing">${tab === "marketing" ? marketingPanel() : ""}</section>
         <section class="panel ${tab === "categories" ? "is-on" : ""}" id="panel-categories">${tab === "categories" ? categoryManager() : ""}</section>
         <section class="panel ${tab === "settings" ? "is-on" : ""}" id="panel-settings">${tab === "settings" ? settingsForm() : ""}</section>
@@ -1256,6 +1319,9 @@ function paintDesk(tab = "analytics") {
       <button type="button" data-tab="analytics" class="${tab === "analytics" ? "is-on" : ""}">${ADX_ICONS.analytics}<span>Dashboard</span></button>
       <button type="button" data-tab="products" class="${tab === "products" ? "is-on" : ""}">${ADX_ICONS.products}<span>Products</span></button>
       <button type="button" data-tab="orders" class="${tab === "orders" ? "is-on" : ""}">${ADX_ICONS.orders}<span>Orders</span>${pending ? `<em class="adx-badge">${pending}</em>` : ""}</button>
+      <button type="button" data-tab="sales" class="${tab === "sales" ? "is-on" : ""}">${ADX_ICONS.sales}<span>Sales</span></button>
+      <button type="button" data-tab="marketing" class="${tab === "marketing" ? "is-on" : ""}">${ADX_ICONS.marketing}<span>Marketing</span></button>
+      <button type="button" data-tab="categories" class="${tab === "categories" ? "is-on" : ""}">${ADX_ICONS.categories}<span>Categories</span></button>
       <button type="button" data-tab="settings" class="${tab === "settings" ? "is-on" : ""}">${ADX_ICONS.settings}<span>Settings</span></button>
       <button type="button" data-tab="account" class="${tab === "account" ? "is-on" : ""}">${ADX_ICONS.account}<span>Account</span></button>
     </nav>`;
@@ -1265,6 +1331,7 @@ function paintDesk(tab = "analytics") {
   document.querySelectorAll("[data-tab]").forEach((b) => { b.onclick = () => paintDesk(b.dataset.tab); });
   if (tab === "analytics") { fillAnalytics(); startDashTimer(); }
   if (tab === "orders") { fillOrders(); fillProofs(); }
+  if (tab === "sales") fillSales();
   if (tab === "marketing") fillMarketing();
   if (tab === "account") bindAccount();
   if (tab === "settings") { bindHeroVideo(); bindBanner(); bindSiteBranding(); bindShippingNote(); }
@@ -1415,7 +1482,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=124", hidden: false }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=126", hidden: false }]);
     JA.saveCategories(next);
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
     paintDesk("categories");

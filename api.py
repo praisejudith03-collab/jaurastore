@@ -263,6 +263,127 @@ def upload_proof():
     return jsonify(ok=True, url=url)
 
 
+def _fold(value):
+    """Case/punctuation-insensitive key for matching variant option values."""
+    return "".join(c.lower() for c in str(value or "") if c.isalnum())
+
+
+def _variant_values(variant):
+    """Option values from a cart variant string like "Color: Red · Size: M"."""
+    v = str(variant or "")
+    if not v or v == "__default__":
+        return []
+    out = []
+    for part in re.split(r"[·;|]", v):
+        p = str(part or "").strip()
+        if not p:
+            continue
+        if ":" in p:
+            _title, val = p.split(":", 1)
+            val = val.strip()
+            if val:
+                out.append(val)
+        else:
+            out.append(p)
+    return out
+
+
+def _stock_available(product, variant="__default__"):
+    """Integer stock for one product+variant, falling back to product["stock"]."""
+    if not isinstance(product, dict):
+        return 0
+    try:
+        base = int(product.get("stock") or 0)
+    except (TypeError, ValueError):
+        base = 0
+    base = max(0, base)
+    os_map = product.get("optionStock")
+    if not isinstance(os_map, dict) or not os_map:
+        return base
+    vals = _variant_values(variant)
+    if not vals:
+        return base
+    folded = {}
+    for k, qty in os_map.items():
+        fk = _fold(k)
+        if not fk:
+            continue
+        try:
+            folded[fk] = max(0, int(qty or 0))
+        except (TypeError, ValueError):
+            folded[fk] = 0
+    for val in vals:
+        fk = _fold(val)
+        if fk and fk in folded:
+            return folded[fk]
+    return base
+
+
+def _stock_problems(items):
+    """Sum requested quantities per product+variant and compare with stock.
+
+    Returns a list of {id, name, variant, available, requested} (with left /
+    asked aliases) for every line that asks for more than is left. Unknown
+    product ids are skipped so legacy / custom items never block checkout.
+    """
+    try:
+        products = {p.get("id"): p for p in catalog_mod.merged(include_hidden=True)}
+    except Exception:
+        return []
+    groups = {}
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        pid = str(it.get("id") or "")
+        if not pid:
+            continue
+        variant = str(it.get("color") or it.get("variant") or "__default__")
+        if not variant:
+            variant = "__default__"
+        try:
+            qty = int(it.get("qty") or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            continue
+        key = (pid, variant)
+        if key not in groups:
+            groups[key] = {"id": pid, "variant": variant, "requested": 0,
+                           "name": str(it.get("name") or "")}
+        groups[key]["requested"] += qty
+        if not groups[key]["name"]:
+            groups[key]["name"] = str(it.get("name") or "")
+    problems = []
+    for (pid, variant), g in groups.items():
+        product = products.get(pid)
+        if product is None:
+            continue
+        avail = _stock_available(product, variant)
+        if g["requested"] > avail:
+            name = product.get("name") or g["name"] or pid
+            problems.append({
+                "id": pid,
+                "name": name,
+                "variant": "" if variant == "__default__" else variant,
+                "available": avail,
+                "requested": g["requested"],
+                "left": avail,
+                "asked": g["requested"],
+            })
+    return problems
+
+
+def _stock_message(problems):
+    """One human sentence naming the product, the stock left and the ask."""
+    if not problems:
+        return ""
+    bits = []
+    for p in problems:
+        bits.append(f'Only {p.get("available", 0)} left of "{p.get("name", "")}"'
+                    f' — you asked for {p.get("requested", 0)}.')
+    return " ".join(bits)
+
+
 @api.post("/orders")
 @sec.require_csrf
 def create_order():
@@ -359,6 +480,12 @@ def create_order():
     existing = one("SELECT id, status, at FROM orders WHERE id=?", (oid,))
     if existing:
         return jsonify(ok=True, id=oid, duplicate=True, status=existing["status"])
+
+    if Config.ENFORCE_STOCK:
+        problems = _stock_problems(clean_items)
+        if problems:
+            return jsonify(ok=False, error=_stock_message(problems),
+                           code="out_of_stock", items=problems), 409
 
     # ---- referral / promo code (validated on the server, never trusted) ----
     import growth
@@ -802,6 +929,26 @@ def admin_live():
                    visitors=analytics_mod.live_now(),
                    activity=analytics_mod.recent_activity())
 
+# ------------------------------------------------------------ admin: sales
+@api.get("/admin/sales")
+@authmod.require_admin
+def admin_sales():
+    """Confirmed-only sales totals; pending orders are counted separately."""
+    raw = (request.args.get("days") or "30").strip().lower()
+    days = "all" if raw == "all" else sec.clean_int(raw, 30, 1, 3650)
+    return jsonify(analytics_mod.sales_report(days))
+
+@api.get("/admin/sales.csv")
+@authmod.require_admin
+def admin_sales_csv():
+    raw = (request.args.get("days") or "30").strip().lower()
+    days = "all" if raw == "all" else sec.clean_int(raw, 30, 1, 3650)
+    body = analytics_mod.sales_csv(days)
+    resp = make_response("\ufeff" + body)
+    resp.headers["Content-Type"] = "text/csv; charset=utf-8"
+    resp.headers["Content-Disposition"] = "attachment; filename=jaura-sales.csv"
+    return resp
+
 # ---------------------------------------------------------- admin: orders
 def _order_row(r):
     try:
@@ -849,7 +996,7 @@ def admin_orders_csv():
         w.writerow([r["id"], r["at"], r["status"], r["customer_name"], r["phone"], r["email"],
                     r["country"], r["city"], r["zone"], r["address"], r["note"], r["payment"],
                     r["total"], r["currency"], r["items_count"], r["proof_url"]])
-    resp = make_response(buf.getvalue())
+    resp = make_response("\ufeff" + buf.getvalue())
     resp.headers["Content-Type"] = "text/csv; charset=utf-8"
     resp.headers["Content-Disposition"] = "attachment; filename=jaura-orders.csv"
     return resp

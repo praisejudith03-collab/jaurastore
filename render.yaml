@@ -68,6 +68,10 @@ services:
         value: /var/data/jaura.db
       - key: UPLOAD_DIR
         value: /var/data/uploads
+      # Durable uploads live in Supabase storage. Left unset the app falls
+      # back to the service filesystem, which Render wipes on every deploy.
+      - key: UPLOAD_MODE
+        value: supabase
       # admin products - MUST sit on the disk or they vanish on every deploy
       - key: CATALOG_PATH
         value: /var/data/catalog.json
@@ -161,6 +165,10 @@ services:
         value: /var/data/jaura.db
       - key: UPLOAD_DIR
         value: /var/data/uploads
+      # Durable uploads live in Supabase storage. Left unset the app falls
+      # back to the service filesystem, which Render wipes on every deploy.
+      - key: UPLOAD_MODE
+        value: supabase
       # admin products - MUST sit on the disk or they vanish on every deploy
       - key: CATALOG_PATH
         value: /var/data/catalog.json
