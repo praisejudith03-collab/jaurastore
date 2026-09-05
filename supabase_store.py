@@ -12,7 +12,7 @@ Needed environment variables (see .env.example):
   SUPABASE_SERVICE_ROLE_KEY      (server only, never in the browser)
   SUPABASE_ANON_KEY              (reserved; not required for these calls)
 """
-import os, json
+import os, json, re
 from config import Config
 try:
     import urllib.parse
@@ -174,6 +174,56 @@ def products_table_rows():
         return None
 
 
+# The products table was hand-built and is NARROWER than the row the app
+# writes, so a full-row upsert used to be rejected outright: PostgREST answers
+# PGRST204 "Could not find the 'compareCfa' column of 'products' in the schema
+# cache" and EVERY product save died on it (the message only names the first
+# missing column - more lurk behind it). Reads kept working, so the shop looked
+# healthy while saves landed server-local-only and were wiped by the next
+# deploy, invisible to the other phone.
+#
+# The helper below writes the row the table can actually accept: try the full
+# row, and on that exact "missing column" error drop the named column and
+# retry - bounded, one drop per column. The five columns a product cannot be
+# sold without are never dropped: if the table rejects one of those, the write
+# fails loudly so the caller reports mirrored=False instead of quietly
+# losing the product.
+_CRITICAL_PRODUCT_COLUMNS = frozenset(
+    {"id", "name", "priceCfa", "priceNgn", "stock"})
+_MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
+
+
+def _upsert_products_resilient(rows):
+    pending = [dict(r) for r in (rows or []) if r]
+    if not pending:
+        return False
+    c = client()
+    if c is None:
+        return False
+    dropped = []
+    for _ in range(len(pending[0]) + 1):
+        try:
+            c.table("products").upsert(pending).execute()
+            if dropped:
+                print("[supabase] products upsert: stored without columns "
+                      f"{sorted(set(dropped))} (table lacks them)")
+            return True
+        except Exception as exc:
+            match = _MISSING_COLUMN_RE.search(str(exc))
+            col = match.group(1) if match else ""
+            if not col or col in _CRITICAL_PRODUCT_COLUMNS:
+                print(f"[supabase] products upsert failed: {exc}")
+                return False
+            if all(col not in r for r in pending):
+                print(f"[supabase] products upsert failed: {exc}")
+                return False
+            dropped.append(col)
+            for r in pending:
+                r.pop(col, None)
+    print("[supabase] products upsert failed: too many missing columns")
+    return False
+
+
 def upsert_products(products):
     """Mirror admin product writes into Supabase. Never blocks a sale.
 
@@ -185,9 +235,8 @@ def upsert_products(products):
         return True
     if not enabled():
         return True
-    c = client()
-    if c is None:
-        return False
+    if client() is None:
+        return False           # configured but unreachable: the caller must know
     rows = []
     for p in products:
         if not p:
@@ -199,12 +248,7 @@ def upsert_products(products):
         rows.append(r)
     if not rows:
         return True
-    try:
-        c.table("products").upsert(rows).execute()
-        return True
-    except Exception as exc:
-        print(f"[supabase] products upsert failed: {exc}")
-        return False
+    return _upsert_products_resilient(rows)
 
 
 def delete_products(ids):
@@ -219,7 +263,13 @@ def delete_products(ids):
 
 
 def replace_all_products(products):
-    """Replace the admin product set in Supabase (bulk import)."""
+    """Replace the admin product set in Supabase (bulk import).
+
+    The bulk write goes through the same resilient path as a single save, so a
+    narrower products table no longer wipes the whole catalogue mirror: the
+    tombstone pass still runs, and the import lands with whatever columns the
+    table actually has.
+    """
     c = client()
     if c is None:
         return
@@ -231,10 +281,11 @@ def replace_all_products(products):
         rows.append(r)
     try:
         c.table("products").update({"source": "replaced"}).eq("source", "admin").execute()
-        if rows:
-            c.table("products").upsert(rows).execute()
     except Exception as exc:
         print(f"[supabase] products replace failed: {exc}")
+        return
+    if rows:
+        _upsert_products_resilient(rows)
 
 
 # ------------------------------------------------------------------ auth
