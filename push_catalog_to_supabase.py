@@ -20,7 +20,11 @@ reported, so a partial run is visible and safe to re-run.
 """
 import os, sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:                     # piped via stdin: python3 -
+    _HERE = os.getcwd()
+sys.path.insert(0, _HERE)
 
 from config import Config              # noqa: E402
 
