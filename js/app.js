@@ -1463,7 +1463,7 @@ function renderCheckout() {
         } catch (e) {}
       }
     }
-    // Benin & Togo deliveries: 5,000 F CFA or its 11,400 naira equivalent. Guard
+    // Benin & Togo deliveries: 5,000 F CFA or its 12,000 naira equivalent. Guard
     // before any proof handling / queueing so an under-minimum order is
     // never saved locally or sent to the server.
     const zoneStr = String(data.zone || "");
@@ -1471,7 +1471,7 @@ function renderCheckout() {
     const isBeninTogo = /benin|togo|cotonou|calavi|porto|lom[ée]|lome/i.test(zoneStr) || /benin|togo/i.test(countryStr);
     const totalNow = JA.cartTotal(cur);
     if (isBeninTogo && cur === "CFA" && totalNow < 5000) {
-      JA.toast(t("ck.minOrderCfa") || "Benin & Togo: minimum order 5,000 F CFA (about 11,400 naira). Please add more items.");
+      JA.toast(t("ck.minOrderCfa") || "Benin & Togo: minimum order 5,000 F CFA (about 12,000 naira). Please add more items.");
       // Also show inline warning
       try {
         let warn = document.querySelector("[data-ck-min-warn]");
@@ -1481,14 +1481,14 @@ function renderCheckout() {
           warn.style.cssText = "margin:10px 0;padding:10px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;color:#664d03;font-size:13px;";
           form.insertBefore(warn, form.querySelector(".ck-place")?.parentElement || form.firstChild);
         }
-        warn.textContent = t("ck.minOrderCfa") || "Benin & Togo: minimum order 5,000 F CFA (about 11,400 naira). Please add more items.";
+        warn.textContent = t("ck.minOrderCfa") || "Benin & Togo: minimum order 5,000 F CFA (about 12,000 naira). Please add more items.";
         warn.hidden = false;
       } catch (e) {}
       shot?.focus?.();
       return;
     }
-    if (isBeninTogo && cur === "NGN" && totalNow < 11400) {
-      JA.toast(t("ck.minOrderNgn") || "Benin & Togo: minimum order 11,400 naira (about 5,000 F CFA). Please add more items.");
+    if (isBeninTogo && cur === "NGN" && totalNow < 12000) {
+      JA.toast(t("ck.minOrderNgn") || "Benin & Togo: minimum order 12,000 naira (about 5,000 F CFA). Please add more items.");
       try {
         let warn = document.querySelector("[data-ck-min-warn]");
         if (!warn) {
@@ -1497,7 +1497,7 @@ function renderCheckout() {
           warn.style.cssText = "margin:10px 0;padding:10px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;color:#664d03;font-size:13px;";
           form.insertBefore(warn, form.querySelector(".ck-place")?.parentElement || form.firstChild);
         }
-        warn.textContent = t("ck.minOrderNgn") || "Benin & Togo: minimum order 11,400 naira (about 5,000 F CFA). Please add more items.";
+        warn.textContent = t("ck.minOrderNgn") || "Benin & Togo: minimum order 12,000 naira (about 5,000 F CFA). Please add more items.";
         warn.hidden = false;
       } catch (e) {}
       shot?.focus?.();

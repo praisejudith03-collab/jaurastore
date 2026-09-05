@@ -710,6 +710,8 @@ async function handleProductSubmit(e, existing) {
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = existing ? "Save" : "Add a Product"; }
   if (res && res.ok === false && res.error) {
     JA.toast("Saved on this device — it will sync when you are back online.");
+  } else if (res && (res.mirrored === false || (res.data && res.data.mirrored === false))) {
+    JA.toast("Saved on the server only — not yet on the cloud copy. Tap Retry now.");
   } else {
     JA.toast((res && res.queued) ? "Saved — uploading…" : (status === "out" ? "Live now · Out of stock." : "Live on the store now · " + images.length + " photo(s)."));
   }
@@ -1139,7 +1141,14 @@ function bindAccount() {
   const note = $("#sync-note");
   const paintSync = () => { if (!note) return; const n = JA.syncPending ? JA.syncPending() : 0; note.textContent = n ? `${n} change(s) are waiting for a connection.` : "Everything you saved is live on the store."; };
   paintSync(); if (window.JA_NET) window.JA_NET.onStatus(paintSync);
-  $("#retry-sync")?.addEventListener("click", () => { if (window.JA_NET) { window.JA_NET.flush(); JA.toast("Retrying…"); paintSync(); } });
+  // Retry Now: flush the outbox AND re-POST stranded KEYS.custom
+  // (jaura_custom_products) so a save that never left this phone still ships.
+  $("#retry-sync")?.addEventListener("click", async () => {
+    JA.toast("Retrying…");
+    if (window.JA_NET) window.JA_NET.flush();
+    if (JA.retryStrandedProducts) await JA.retryStrandedProducts();
+    paintSync();
+  });
   $("#reload-cat")?.addEventListener("click", async () => { if (JA.reloadCatalog) { JA.toast("Reloading…"); await JA.reloadCatalog(); paintDesk("products"); } });
   const statusBox = $("#sync-status");
   async function refreshSyncStatus() {
@@ -1148,7 +1157,11 @@ function bindAccount() {
       const res = await fetch("api/admin/sync/status", { credentials: "same-origin", cache: "no-store" });
       if (!res.ok) { statusBox.textContent = "Could not read the sync status."; return; }
       const d = await res.json();
-      const bits = []; bits.push("Supabase: " + (d.supabase ? "connected" : "not configured (local files)")); bits.push(d.gitToken ? "GitHub push: on" : "GitHub push: off"); if (d.gitRepo) bits.push("repo: " + d.gitRepo); if (d.gitBranch) bits.push("branch: " + d.gitBranch);
+      const health = d.supabaseHealth || "";
+      const label = health === "ok" ? "OK"
+        : health === "unreachable" ? "UNREACHABLE"
+        : "not configured";
+      const bits = []; bits.push("Supabase: " + label); bits.push(d.gitToken ? "GitHub push: on" : "GitHub push: off"); if (d.gitRepo) bits.push("repo: " + d.gitRepo); if (d.gitBranch) bits.push("branch: " + d.gitBranch);
       statusBox.innerHTML = bits.map((b) => JA.escape(b)).join(" &middot; ") + "<br><small>" + (d.onWrite ? "Admin changes are committed to the repo automatically." : "Automatic repo commit is off — use the Sync button.") + "</small>";
     } catch (e) { statusBox.textContent = "Sync status unavailable."; }
   }

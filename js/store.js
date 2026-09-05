@@ -67,7 +67,7 @@ const JA = (() => {
     "promo.shop": "Shop now",
     "promo.kicker": "Everything you love, all in one store",
     "conv.banner": "Benin 🇧🇯 customers: place your order now and get it between {from} and {to}",
-    "ck.bjMin": "Benin deliveries: minimum order 5,000 F CFA (about 11,400 naira).",
+    "ck.bjMin": "Benin deliveries: minimum order 5,000 F CFA (about 12,000 naira).",
   };
 
   const tx = (key, vars) => {
@@ -719,7 +719,12 @@ const JA = (() => {
       queue: true,
       label: "Product",
       onDone: (data) => { if (data && data.product) applyServerProduct(data.product); },
-    }).then((d) => ({ ok: true, queued: !!(d && d.queued), data: d }))
+    }).then((d) => {
+      if (d && d.mirrored === false) {
+        toast("Saved on the server only — not yet on the cloud copy. Tap Retry now.");
+      }
+      return { ok: true, queued: !!(d && d.queued), data: d, mirrored: d && d.mirrored };
+    })
       .catch((err) => {
         if (err && err.status === 401) { toast("Session expired — sign in again."); return { ok: false, error: err.message }; }
         toast(err && err.error ? err.error : "Saved on this device; it will sync when you are back online.");
@@ -1231,7 +1236,19 @@ const JA = (() => {
       method: "DELETE", label: "Delete " + id, queue: false,
     }).catch((e) => ({ ok: false, error: e.message }));
   }
-  function syncPending() { return window.JA_NET ? window.JA_NET.pending() : 0; }
+  function strandedCustom() {
+    const custom = read(KEYS.custom, []);
+    return Array.isArray(custom) ? custom.filter((p) => p && p.id) : [];
+  }
+  function retryStrandedProducts() {
+    const list = strandedCustom();
+    if (!list.length || !window.JA_NET) return Promise.resolve(0);
+    return Promise.all(list.map((p) => upsertProduct(p))).then(() => list.length);
+  }
+  function syncPending() {
+    const queued = window.JA_NET ? window.JA_NET.pending() : 0;
+    return queued + strandedCustom().length;
+  }
   async function reloadCatalog() {
     seed = [];
     catalogMeta = { server: false };
@@ -2354,7 +2371,7 @@ const JA = (() => {
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,
     wish, isWished, toggleWish, wishDetailed, openMini, closeMini,
-    toast, upsertProduct, removeProduct, importProducts, applyServerProduct, syncPending, reloadCatalog,
+    toast, upsertProduct, removeProduct, importProducts, applyServerProduct, syncPending, retryStrandedProducts, reloadCatalog,
     orders, saveOrder, getOrder, updateOrder, nextOrderId, sendReceipt,
     isAdmin, loginAdmin, logoutAdmin, adminSession, changePassword, requestOtp, verifyOtp, resetPassword,
     adminAnalytics, adminOrders, setOrderStatus, deleteOrder, flushEvents,

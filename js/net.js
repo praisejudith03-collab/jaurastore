@@ -328,7 +328,14 @@ window.JA_NET = (function () {
   }
 
   function enqueue(job) {
-    if (jobs.length >= MAX_QUEUE) return Promise.resolve({ queued: true, full: true });
+    if (jobs.length >= MAX_QUEUE) {
+      var evictAt = -1;
+      for (var i = 0; i < jobs.length; i++) {
+        if (jobs[i].dead) { evictAt = i; break; }
+      }
+      if (evictAt < 0) evictAt = 0;
+      drop(jobs[evictAt]);
+    }
     var rec = {
       id: job.id || newId(),
       url: job.url, method: job.method, bodyKind: job.bodyKind || "none",
@@ -353,16 +360,21 @@ window.JA_NET = (function () {
     emit();
   }
 
-  function flush() {
+  function flush(force) {
     if (flushing) return Promise.resolve(jobs.length);
     if (!navigator.onLine && typeof navigator !== "undefined" && navigator.onLine === false) return Promise.resolve(jobs.length);
     flushing = true;
     var now = Date.now();
-    var ready = jobs.filter(function (j) { return !j.nextAt || j.nextAt <= now; });
+    var ready = jobs.filter(function (j) {
+      if (force) return true;
+      if (j.dead) return false;
+      return !j.nextAt || j.nextAt <= now;
+    });
     var chain = Promise.resolve();
     ready.forEach(function (rec) {
       chain = chain.then(function () {
         if (navigator.onLine === false) return null;
+        if (force) rec.dead = false;
         return send(rec).then(function (data) {
           drop(rec);
           if (rec.label && window.JA && JA.toast) JA.toast(rec.label + " saved.");
@@ -370,14 +382,12 @@ window.JA_NET = (function () {
           return data;
         }, function (err) {
           rec.tries = (rec.tries || 0) + 1;
-          if (!err.retryable || rec.tries >= MAX_ATTEMPTS) {
-            if (!err.retryable) { drop(rec); return null; }
-            rec.dead = true;
-            if (window.JA && JA.toast) JA.toast(rec.label + " could not be saved. Check your connection.");
-            return idbPut(rec);
-          }
           rec.nextAt = Date.now() + Math.min(300000, Math.pow(2, rec.tries) * 5000);
-          return idbPut(rec);
+          if (!err.retryable || rec.tries >= MAX_ATTEMPTS) {
+            rec.dead = true;
+            if (window.JA && JA.toast) JA.toast((rec.label || "Change") + " could not be saved. Check your connection.");
+          }
+          return idbPut(rec).then(function () { lsPut(rec); });
         });
       });
     });
@@ -430,9 +440,9 @@ window.JA_NET = (function () {
       var seen = {};
       merged.forEach(function (j) { seen[j.id] = 1; });
       lsAll().forEach(function (j) { if (!seen[j.id]) merged.push(j); });
-      jobs = merged.filter(function (j) { return !j.dead; });
+      jobs = merged;
       emit();
-      if (jobs.length) setTimeout(flush, 1500);
+      if (jobs.length) setTimeout(function () { flush(false); }, 1500);
       return jobs.length;
     });
   }
@@ -450,7 +460,7 @@ window.JA_NET = (function () {
       el.type = "button";
       el.className = "sync-pill";
       document.body.appendChild(el);
-      el.addEventListener("click", function () { JA.toast("Sending…"); flush(); });
+      el.addEventListener("click", function () { JA.toast("Sending…"); flush(true); });
     }
     var offline = navigator.onLine === false;
     el.className = "sync-pill" + (offline ? " is-offline" : "");
