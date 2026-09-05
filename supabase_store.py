@@ -149,7 +149,8 @@ def products_table_rows():
 
     Duplicates are impossible on the way out: rows are keyed by id (a table
     without a primary key could theoretically return the same row twice), and
-    the same piece appearing under two ids is reconciled by slug/sku in
+    the same piece appearing under two ids (a re-created product) is
+    reconciled by id, or by a slug/sku clash confirmed by the same name, in
     catalog.merged().
     """
     c = client()
