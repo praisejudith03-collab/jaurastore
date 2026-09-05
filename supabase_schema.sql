@@ -15,30 +15,54 @@
 -- =====================================================================
 
 -- ------------------------------------------------------------ products
+-- These are the 24 keys the app actually writes (catalog.normalize() +
+-- supabase_store.upsert_products). camelCase keys MUST be quoted: Postgres
+-- folds unquoted identifiers to lowercase, so an unquoted priceCfa would
+-- create a pricecfa column and every write would still fail with PGRST204.
 create table if not exists products (
-  id          text primary key,
-  sku         text,
-  slug        text,
-  name        text not null,
-  name_fr     text,
-  category    text,
-  price_cfa   numeric,
-  compare_cfa numeric,
-  price_ngn   numeric,
-  compare_ngn numeric,
-  image       text,
-  images      jsonb,
-  description text,
-  stock       integer default 0,
-  badge       text,
-  featured    boolean default false,
-  online      boolean default true,
-  colors      jsonb,
-  options     jsonb,
-  option_stock jsonb,
-  source      text default 'admin',
-  updated_at  timestamptz default now()
+  id               text primary key,
+  sku              text,
+  slug             text,
+  name             text not null,
+  "nameFr"         text,
+  category         text,
+  "priceCfa"       numeric,
+  "compareCfa"     numeric,
+  "priceNgn"       numeric,
+  "compareNgn"     numeric,
+  image            text,
+  images           jsonb,
+  description      text,
+  stock            integer default 0,
+  badge            text,
+  featured         boolean default false,
+  online           boolean default true,
+  colors           jsonb,
+  options          jsonb,
+  "optionStock"    jsonb,
+  "placeholderImage" text,
+  "usesPlaceholder"  boolean default false,
+  source           text default 'admin',
+  updated_at       timestamptz default now()
 );
+
+-- Repair an EXISTING products table hand-built narrower than the row the app
+-- writes. Only adds columns; never drops or rewrites data. Run it if the
+-- Render log says "[supabase] products upsert: stored without columns [...]".
+alter table products add column if not exists "nameFr"           text;
+alter table products add column if not exists "compareCfa"       numeric;
+alter table products add column if not exists "compareNgn"       numeric;
+alter table products add column if not exists images             jsonb;
+alter table products add column if not exists "optionStock"      jsonb;
+alter table products add column if not exists "placeholderImage" text;
+alter table products add column if not exists "usesPlaceholder"  boolean default false;
+alter table products add column if not exists badge              text;
+alter table products add column if not exists featured           boolean default false;
+alter table products add column if not exists online             boolean default true;
+alter table products add column if not exists colors             jsonb;
+alter table products add column if not exists options            jsonb;
+alter table products add column if not exists source             text default 'admin';
+alter table products add column if not exists updated_at         timestamptz default now();
 
 -- -------------------------------------------------------------- orders
 create table if not exists orders (

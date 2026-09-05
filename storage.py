@@ -266,7 +266,10 @@ def _save(data: bytes, folder: str, ext: str, s3_content_type: str = "") -> tupl
     if Config.UPLOAD_MODE == "supabase":
         ok2, _msg2, url = _save_supabase(data, key, ext, content_type, folder)
         if ok2:
-            return True, "stored", url
+            # a sensitive folder keeps its short-lived signed URL; a public
+            # asset is announced as /uploads/<key> so the product row never
+            # points a shopper's browser at another host
+            return True, "stored", (url if _is_sensitive(folder) else "/uploads/" + key)
         # never silently lose a customer's proof of payment: fall back to disk
 
     if Config.UPLOAD_MODE == "s3":
@@ -530,6 +533,48 @@ def _key_from_url(value: str) -> str:
     if "/uploads/" in raw:
         return raw.split("/uploads/", 1)[1].lstrip("/")
     return ""
+
+
+def own_upload_path(value: str) -> str:
+    """The same-origin /uploads/<key> for a URL that points at OUR storage.
+
+    Product rows may only carry same-origin image links (see
+    catalog.resolve_image and the external-host test), but the Supabase back
+    end handed out absolute bucket URLs at upload time - and those were then
+    blanked to the branded placeholder, so a photo uploaded from a phone never
+    appeared on the shop. Rewriting our own bucket URL to /uploads/<key> at
+    read time heals every stored row with no migration: this app's /uploads/
+    route knows how to reach the object. A URL from any other host returns ""
+    and stays stripped.
+    """
+    raw = clean(value, 500)
+    if not raw:
+        return ""
+    if raw.startswith("/uploads/"):
+        return raw
+    key = _key_from_url(raw)
+    if not key:
+        return ""
+    if "/storage/v1/object/" in raw:
+        base = (Config.SUPABASE_URL or "").rstrip("/")
+        if not base or not raw.startswith(base + "/"):
+            return ""             # somebody else's Supabase project
+    return "/uploads/" + key
+
+
+def public_redirect_for(key: str) -> str:
+    """A public bucket URL for an /uploads/<key> this server cannot serve.
+
+    Only for non-sensitive folders: a payment proof must never be reachable
+    through a public object link, so it stays a 404 unless the file is on disk.
+    """
+    if Config.UPLOAD_MODE != "supabase":
+        return ""
+    if not (Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY):
+        return ""
+    if _folder_name((key or "").split("/", 1)[0]) in SENSITIVE_FOLDERS:
+        return ""
+    return supabase_public_url(key)
 
 
 def _delete_s3(key: str) -> bool:
