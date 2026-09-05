@@ -2,11 +2,17 @@
 checkout attempts and conversion. Everything is counted here, never in the
 browser, so the numbers survive a cleared cache, a new device or a new browser.
 """
-import datetime, json, secrets
+import csv
+import datetime
+import io
+import json
+import secrets
 from flask import request, make_response, jsonify
 from config import Config
 from db import execute, one, query
 import security as sec
+
+CONFIRMED = "confirmed"
 
 VID_COOKIE = "jaura_vid"
 VID_MAX_AGE = 60 * 60 * 24 * 365          # one year
@@ -284,6 +290,164 @@ def report(days=30):
         "live": live_now(),
         "activity": recent_activity(),
     }
+
+
+def _sales_cutoffs(days=30):
+    """Parse the sales range. "all"/0/None means every order ever."""
+    if days is None or (isinstance(days, str) and days.strip().lower() == "all"):
+        return None, None, "all", True
+    try:
+        n = int(days)
+    except (TypeError, ValueError):
+        n = 30
+    if n <= 0:
+        return None, None, "all", True
+    n = max(1, min(n, 3650))
+    return _days_ago(n - 1), _iso(_now() - datetime.timedelta(days=n - 1)), n, False
+
+
+def sales_report(days=30):
+    """Confirmed-only sales totals. Pending orders never touch revenue/units.
+
+    Returns confirmed revenue by currency, order count, units sold, average
+    order value, top products, and the pending count reported separately as
+    orders still awaiting confirmation.
+    """
+    since_day, since_iso, days_out, is_all = _sales_cutoffs(days)
+    if is_all:
+        where = "status=?"
+        params: tuple = (CONFIRMED,)
+        pend_where = "status=?"
+        pend_params: tuple = ("pending",)
+    else:
+        where = "status=? AND at >= ?"
+        params = (CONFIRMED, since_iso)
+        pend_where = "status=? AND at >= ?"
+        pend_params = ("pending", since_iso)
+
+    o = dict(one(
+        f"SELECT COUNT(*) n, COALESCE(SUM(total),0) value, "
+        f"COALESCE(SUM(items_count),0) units FROM orders WHERE {where}",
+        params) or {})
+    order_count = o.get("n", 0) or 0
+    revenue = o.get("value", 0) or 0
+    units = o.get("units", 0) or 0
+    by_cur = [dict(r) for r in query(
+        f"SELECT currency, COUNT(*) orders, COALESCE(SUM(total),0) value "
+        f"FROM orders WHERE {where} GROUP BY currency", params)]
+    avg_by_cur = [
+        {"currency": r.get("currency"),
+         "orders": r.get("orders", 0) or 0,
+         "average": round((r.get("value", 0) or 0) / (r.get("orders", 0) or 1), 2)
+         if (r.get("orders", 0) or 0) else 0}
+        for r in by_cur
+    ]
+    pend = dict(one(
+        f"SELECT COUNT(*) n FROM orders WHERE {pend_where}", pend_params) or {})
+    pending_count = pend.get("n", 0) or 0
+
+    # Top products from confirmed-order payloads only.
+    agg: dict = {}
+    rows = query(f"SELECT id, payload FROM orders WHERE {where}", params) or []
+    for r in rows:
+        oid = r["id"] if "id" in r.keys() else ""
+        try:
+            payload = json.loads(r["payload"] or "{}")
+        except ValueError:
+            continue
+        items = payload.get("items") or []
+        seen_in_order = set()
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            pid = str(it.get("id") or it.get("name") or "")
+            if not pid:
+                continue
+            try:
+                qty = int(it.get("qty") or 0)
+            except (TypeError, ValueError):
+                qty = 0
+            try:
+                price = int(it.get("price") or 0)
+            except (TypeError, ValueError):
+                price = 0
+            if qty <= 0:
+                continue
+            row = agg.setdefault(pid, {
+                "id": pid,
+                "name": str(it.get("name") or pid),
+                "units": 0,
+                "revenue": 0,
+                "orders": 0,
+            })
+            if not row["name"]:
+                row["name"] = str(it.get("name") or pid)
+            row["units"] += qty
+            row["revenue"] += qty * price
+            if pid not in seen_in_order:
+                seen_in_order.add(pid)
+                row["orders"] += 1
+    top = sorted(agg.values(), key=lambda d: (-d["units"], -d["revenue"]))[:10]
+
+    return {
+        "ok": True,
+        "days": days_out,
+        "from": since_day or "",
+        "to": _day(),
+        "orders": order_count,
+        "units": units,
+        "revenue": revenue,
+        "revenueByCurrency": by_cur,
+        "averageOrderValue": round(revenue / order_count, 2) if order_count else 0,
+        "averageByCurrency": avg_by_cur,
+        "topProducts": top,
+        "pendingCount": pending_count,
+        "pendingOrders": pending_count,
+    }
+
+
+def sales_csv(days=30):
+    """One row per confirmed order. No BOM here — the HTTP layer adds it."""
+    _since_day, since_iso, _days_out, is_all = _sales_cutoffs(days)
+    if is_all:
+        rows = query(
+            "SELECT id, at, customer_name, email, phone, city, zone, payment, "
+            "total, currency, items_count, payload FROM orders "
+            "WHERE status=? ORDER BY at DESC", (CONFIRMED,)) or []
+    else:
+        rows = query(
+            "SELECT id, at, customer_name, email, phone, city, zone, payment, "
+            "total, currency, items_count, payload FROM orders "
+            "WHERE status=? AND at >= ? ORDER BY at DESC",
+            (CONFIRMED, since_iso)) or []
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Order", "Date (UTC)", "Customer", "Email", "Phone", "City",
+                "Zone", "Items", "Units", "Total", "Currency", "Payment"])
+    for r in rows:
+        try:
+            payload = json.loads(r["payload"] or "{}")
+        except ValueError:
+            payload = {}
+        items = payload.get("items") or []
+        bits = []
+        units = 0
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            try:
+                qty = int(it.get("qty") or 0)
+            except (TypeError, ValueError):
+                qty = 0
+            units += max(0, qty)
+            name = str(it.get("name") or it.get("id") or "")
+            color = str(it.get("color") or "")
+            bits.append(f"{qty}x {name}" + (f" ({color})" if color else ""))
+        w.writerow([r["id"], r["at"], r["customer_name"], r["email"], r["phone"],
+                    r["city"], r["zone"], " · ".join(bits),
+                    units or r["items_count"], r["total"], r["currency"],
+                    r["payment"]])
+    return buf.getvalue()
 
 
 def prune(retention_days=None):

@@ -7,6 +7,12 @@
   Strict-Transport-Security: max-age=31536000; includeSubDomains
   Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; media-src 'self'; connect-src 'self' https://formsubmit.co https://open.er-api.com https://cdn.jsdelivr.net https://www.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; script-src 'self' https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/; frame-src 'self' https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
 
+/images/*
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
 /admin.html
   X-Robots-Tag: noindex, nofollow
 

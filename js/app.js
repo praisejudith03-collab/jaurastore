@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=124";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=124";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=126";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=126";
 }
 
 function renderCategories() {
@@ -58,7 +58,7 @@ function renderCategories() {
   box.innerHTML = JA.categories().map((c) => {
     const n = JA.products().filter((p) => p.category === c.id).length;
     return `<a class="cat-tile" href="shop.html?cat=${c.id}">
-      <img src="${catCover(c)}" alt="" />
+      ${JA.mediaHTML(catCover(c), { alt: JA.categoryName(c.id) })}
       <small>${t("cats.shop")}</small>
       <h3>${JA.escape(JA.categoryName(c.id))}</h3>
       <span>${t(n === 1 ? "cats.piece" : "cats.pieces", { n })}</span>
@@ -219,7 +219,7 @@ function renderHome() {
   if (cats) {
     cats.innerHTML = JA.categories().map((c) => {
       return `<a class="home-cat" href="shop.html?cat=${c.id}">
-        <img src="${catCover(c)}" alt="" />
+        ${JA.mediaHTML(catCover(c), { alt: JA.categoryName(c.id) })}
         <span>${JA.escape(JA.categoryName(c.id))}</span>
       </a>`;
     }).join("");
@@ -671,7 +671,7 @@ function paintProduct(root, p) {
   const rev = (JA.reviews && JA.reviews(p.id)) || [];
   const revStats = (JA.reviewStats && JA.reviewStats(p.id)) || { n: 0, avg: 0 };
   const mainHTML = (idx) => JA.mediaHTML(gallery[idx], {
-    alt: p.name, ph: p.placeholderImage, attrs: { "data-main-img": "" },
+    full: true, eager: idx === 0, alt: p.name, ph: p.placeholderImage, attrs: { "data-main-img": "" },
   });
   root.innerHTML = `
     <div class="pdp-gallery">
@@ -687,6 +687,7 @@ function paintProduct(root, p) {
       <h1>${JA.escape(JA.displayName(p))}</h1>
       ${JA.priceHTML(p)}
       ${stockN > 0 ? "" : `<p class="pdp-stock">${t("pdp.oos")}</p>`}
+      <p class="stock-line" data-stock-line></p>
       ${(() => {
         const unit = JA.priceOf(p);
         const ten = Math.round(unit * 0.9) * 10;
@@ -755,21 +756,88 @@ function paintProduct(root, p) {
     });
   });
   const chosen = {};
+  const qty = root.querySelector("[data-qty]");
+  const stockLine = root.querySelector("[data-stock-line]");
+  const buyBtn = root.querySelector("[data-buy]");
+  const variantFull = () => opts.map((opt, i) => opt.title.replace(/\s+/g, " ").trim() + ": " + chosen[i]).join(" · ");
+  const variantPartial = () => opts.map((opt, i) => (chosen[i] ? opt.title.replace(/\s+/g, " ").trim() + ": " + chosen[i] : null)).filter(Boolean).join(" · ");
+  const updateStockUI = () => {
+    if (!stockLine || !JA.stockFor) return;
+    let variant = "";
+    let avail = 0;
+    let inCart = 0;
+    try {
+      if (!opts.length) {
+        variant = "";
+        avail = JA.stockFor(p, "");
+        inCart = JA.cartQtyFor(p.id, "");
+      } else {
+        const allChosen = opts.every((opt, i) => !!chosen[i]);
+        if (allChosen) {
+          variant = variantFull();
+          avail = JA.stockFor(p, variant);
+          inCart = JA.cartQtyFor(p.id, variant);
+        } else {
+          variant = variantPartial();
+          avail = JA.stockFor(p, variant);
+          inCart = JA.cartQtyFor(p.id);
+        }
+      }
+    } catch (e) {
+      avail = Number(p.stock) || 0;
+      inCart = 0;
+    }
+    const left = Math.max(0, avail - inCart);
+    if (avail <= 0) {
+      stockLine.textContent = t("pdp.oos");
+      stockLine.classList.add("is-low");
+    } else if (left <= 0) {
+      stockLine.textContent = `Only ${avail} left of "${JA.displayName(p)}" — already in your bag.`;
+      stockLine.classList.add("is-low");
+    } else if (left <= 5) {
+      stockLine.textContent = `Only ${left} left in stock`;
+      stockLine.classList.add("is-low");
+    } else {
+      stockLine.textContent = `${left} available`;
+      stockLine.classList.remove("is-low");
+    }
+    if (qty) {
+      const cur = parseInt(qty.value, 10) || 1;
+      const max = Math.max(1, left);
+      qty.value = Math.min(Math.max(1, cur), max);
+      qty.max = String(Math.max(1, left));
+      root.querySelectorAll("[data-q]").forEach((b) => {
+        if (b.dataset.q === "-") b.disabled = (parseInt(qty.value, 10) || 1) <= 1;
+        else b.disabled = (parseInt(qty.value, 10) || 1) >= left || left <= 0;
+      });
+    }
+    if (buyBtn && avail <= 0) {
+      buyBtn.disabled = true;
+      buyBtn.textContent = t("pdp.oos");
+    } else if (buyBtn && Number(p.stock) > 0) {
+      buyBtn.disabled = left <= 0;
+      if (left > 0 && buyBtn.textContent === t("pdp.oos")) buyBtn.textContent = t("pdp.add");
+    }
+  };
   root.querySelectorAll("[data-opt]").forEach((b) => {
     b.addEventListener("click", () => {
       const oi = b.dataset.opt;
       root.querySelectorAll(`[data-opt="${oi}"]`).forEach((x) => x.classList.remove("is-on"));
       b.classList.add("is-on");
       chosen[oi] = b.dataset.val;
+      updateStockUI();
     });
   });
-  const qty = root.querySelector("[data-qty]");
   root.querySelectorAll("[data-q]").forEach((b) => {
     b.addEventListener("click", () => {
       const n = parseInt(qty.value, 10) || 1;
       qty.value = Math.max(1, n + (b.dataset.q === "+" ? 1 : -1));
+      updateStockUI();
     });
   });
+  qty?.addEventListener("input", updateStockUI);
+  qty?.addEventListener("change", updateStockUI);
+  updateStockUI();
   root.querySelector("[data-buy]")?.addEventListener("click", () => {
     for (let i = 0; i < opts.length; i += 1) {
       if (!chosen[i]) {
@@ -777,8 +845,9 @@ function paintProduct(root, p) {
         return;
       }
     }
-    const variant = opts.map((opt, i) => opt.title.replace(/\s+/g, " ").trim() + ": " + chosen[i]).join(" · ");
+    const variant = variantFull();
     JA.addToCart(p.id, parseInt(qty.value, 10) || 1, variant);
+    setTimeout(updateStockUI, 50);
   });
   const frame = root.querySelector(".pdp-img");
   if (frame && gallery.length > 1) {
@@ -880,7 +949,11 @@ function renderCart() {
   } else {
     rows.innerHTML = `<table class="cart-table">
       <thead><tr><th></th><th>${t("ck.product")}</th><th>Price</th><th>${t("pdp.qty")}</th><th>${t("ck.subtotal")}</th></tr></thead>
-      <tbody>${items.map((i) => `
+      <tbody>${items.map((i) => {
+        const avail = JA.stockFor ? JA.stockFor(i.product, i.color || "") : 999;
+        const atMax = Number(i.qty) >= avail;
+        const atMin = Number(i.qty) <= 1;
+        return `
       <tr class="cart-row-tr">
         <td><a href="product.html?id=${i.id}"><img src="${JA.asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a></td>
         <td>
@@ -890,15 +963,15 @@ function renderCart() {
         <td>${i.bulk ? `<s>${JA.money(i.unit, i.cur)}</s> ${JA.money(i.payUnit, i.cur)}` : JA.priceHTML(i.product)}${i.bulk ? `<div class="bulk-tag">${t("cart.bulk")}</div>` : ""}</td>
         <td>
           <div class="qty">
-            <button type="button" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-n="${i.qty - 1}">−</button>
+            <button type="button" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-n="${i.qty - 1}"${atMin ? " disabled" : ""}>−</button>
             <input value="${i.qty}" readonly />
-            <button type="button" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-n="${i.qty + 1}">+</button>
+            <button type="button" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-n="${i.qty + 1}"${atMax ? " disabled" : ""}>+</button>
           </div>
         </td>
         <td><strong>${JA.money(i.line, i.cur)}</strong>
           <button class="icon-btn" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-n="0" aria-label="Remove">✕</button>
         </td>
-      </tr>`).join("")}</tbody>
+      </tr>`; }).join("")}</tbody>
     </table>`;
   }
   rows.querySelectorAll("[data-set]").forEach((b) => {
@@ -1365,6 +1438,31 @@ function renderCheckout() {
     const cur = data.currency || JA.currency();
     const liveItems = JA.cartDetailed();
     if (!liveItems.length) return;
+    if (JA.stockProblems) {
+      const probs = JA.stockProblems();
+      if (probs.length) {
+        const msg = JA.stockProblemLine(probs);
+        JA.toast(msg);
+        try {
+          let warn = document.querySelector("[data-ck-stock-warn]");
+          if (!warn) {
+            warn = document.createElement("div");
+            warn.setAttribute("data-ck-stock-warn", "");
+            warn.className = "stock-warn";
+            form.insertBefore(warn, form.querySelector(".ck-place")?.parentElement || form.firstChild);
+          }
+          warn.textContent = msg;
+          warn.hidden = false;
+        } catch (e) {}
+        if (btn) { btn.disabled = false; btn.textContent = t("ck.place"); }
+        return;
+      } else {
+        try {
+          const warn = document.querySelector("[data-ck-stock-warn]");
+          if (warn) warn.hidden = true;
+        } catch (e) {}
+      }
+    }
     // Benin & Togo deliveries: 5,000 F CFA or its 11,400 naira equivalent. Guard
     // before any proof handling / queueing so an under-minimum order is
     // never saved locally or sent to the server.

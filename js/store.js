@@ -505,8 +505,95 @@ const JA = (() => {
   }
   const BULK_QTY = 10;
   const BULK_OFF = 0.10;
-  function cartQtyFor(id) {
-    return cart().filter((i) => i.id === id).reduce((n, i) => n + (Number(i.qty) || 0), 0);
+  function stockFold(s) {
+    return String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+  function stockVariantValues(variant) {
+    const v = String(variant || "");
+    if (!v || v === "__default__") return [];
+    const out = [];
+    v.split(/[·;|]/).forEach((part) => {
+      const p = String(part || "").trim();
+      if (!p) return;
+      const ci = p.indexOf(":");
+      const val = (ci >= 0 ? p.slice(ci + 1) : p).trim();
+      if (val) out.push(val);
+    });
+    return out;
+  }
+  function stockFor(idOrProduct, variant) {
+    const p = typeof idOrProduct === "string" ? product(idOrProduct) : idOrProduct;
+    if (!p) return 0;
+    const base = Math.max(0, Math.round(Number(p.stock) || 0));
+    const os = p.optionStock;
+    if (!os || typeof os !== "object" || !Object.keys(os).length) return base;
+    const vals = stockVariantValues(variant);
+    if (!vals.length) return base;
+    const folded = {};
+    Object.keys(os).forEach((k) => {
+      const fk = stockFold(k);
+      if (fk) folded[fk] = Math.max(0, Math.round(Number(os[k]) || 0));
+    });
+    for (let i = 0; i < vals.length; i += 1) {
+      const fk = stockFold(vals[i]);
+      if (fk && Object.prototype.hasOwnProperty.call(folded, fk)) return folded[fk];
+    }
+    return base;
+  }
+  function cartQtyFor(id, variant) {
+    const items = cart().filter((i) => i.id === id);
+    if (variant === undefined) {
+      return items.reduce((n, i) => n + (Number(i.qty) || 0), 0);
+    }
+    const want = variant === "__default__" ? "" : String(variant || "");
+    return items
+      .filter((i) => String(i.color || "") === want)
+      .reduce((n, i) => n + (Number(i.qty) || 0), 0);
+  }
+  function stockLeft(idOrProduct, variant) {
+    const p = typeof idOrProduct === "string" ? product(idOrProduct) : idOrProduct;
+    if (!p) return 0;
+    const v = variant === undefined ? "" : variant;
+    const avail = stockFor(p, v);
+    const inCart = cartQtyFor(p.id, v);
+    return Math.max(0, avail - inCart);
+  }
+  function stockProblems() {
+    const groups = {};
+    cart().forEach((i) => {
+      const key = String(i.id) + "\u0000" + String(i.color || "");
+      if (!groups[key]) {
+        groups[key] = { id: i.id, variant: String(i.color || ""), requested: 0 };
+      }
+      groups[key].requested += Number(i.qty) || 0;
+    });
+    const out = [];
+    Object.keys(groups).forEach((key) => {
+      const g = groups[key];
+      const p = product(g.id);
+      if (!p) return;
+      const avail = stockFor(p, g.variant);
+      if (g.requested > avail) {
+        out.push({
+          id: g.id,
+          name: displayName(p) || p.name || g.id,
+          variant: g.variant,
+          available: avail,
+          requested: g.requested,
+          left: avail,
+          asked: g.requested,
+        });
+      }
+    });
+    return out;
+  }
+  function stockProblemLine(problems) {
+    let list = problems;
+    if (list && !Array.isArray(list)) list = [list];
+    if (!list) list = stockProblems();
+    if (!list.length) return "";
+    const p = list[0];
+    return `Only ${p.available} left of "${p.name}" — you asked for ${p.requested}.`;
   }
   function bulkUnit(p, qty, cur) {
     const unit = priceOf(p, cur);
@@ -515,25 +602,53 @@ const JA = (() => {
   }
   function addToCart(id, qty = 1, color = "") {
     const p = product(id);
-    if (!p || p.stock <= 0) {
+    const want = Math.max(1, Math.round(Number(qty) || 1));
+    if (!p) {
       toast(tx("toast.unavailable"));
       return;
     }
+    const avail = stockFor(p, color);
+    if (avail <= 0) {
+      toast(tx("toast.unavailable"));
+      return;
+    }
+    const already = cartQtyFor(id, color);
+    const room = Math.max(0, avail - already);
+    if (room <= 0) {
+      toast(stockProblemLine([{ name: displayName(p) || p.name, available: avail, requested: already + want }]));
+      return;
+    }
+    const add = Math.min(want, room);
     const items = cart();
-    const found = items.find((i) => i.id === id && i.color === color);
-    if (found) found.qty += qty;
-    else items.push({ id, qty, color });
+    const found = items.find((i) => i.id === id && String(i.color || "") === String(color || ""));
+    if (found) found.qty = Math.min(avail, (Number(found.qty) || 0) + add);
+    else items.push({ id, qty: add, color: String(color || "") });
     saveCart(items);
-    track("cart", { id, name: p.name, qty });
+    if (add < want) {
+      toast(stockProblemLine([{ name: displayName(p) || p.name, available: avail, requested: already + want }]));
+    }
+    track("cart", { id, name: p.name, qty: add });
     const totalQty = cartQtyFor(id);
     if (totalQty >= BULK_QTY) toast(tx("cart.bulkOn"));
     openMini();
   }
   function setQty(id, color, qty) {
-    let items = cart();
-    if (qty <= 0) items = items.filter((i) => !(i.id === id && i.color === color));
-    else items = items.map((i) => (i.id === id && i.color === color ? { ...i, qty } : i));
-    saveCart(items);
+    const want = Math.round(Number(qty) || 0);
+    if (want <= 0) {
+      saveCart(cart().filter((i) => !(i.id === id && String(i.color || "") === String(color || ""))));
+      return;
+    }
+    const p = product(id);
+    const avail = p ? stockFor(p, color) : want;
+    const capped = Math.min(want, Math.max(0, avail));
+    if (p && want > avail) {
+      toast(stockProblemLine([{ name: displayName(p) || p.name, available: avail, requested: want }]));
+    }
+    if (capped <= 0) {
+      saveCart(cart().filter((i) => !(i.id === id && String(i.color || "") === String(color || ""))));
+      return;
+    }
+    saveCart(cart().map((i) => (i.id === id && String(i.color || "") === String(color || "") ? { ...i, qty: capped } : i)));
   }
   function clearCart() { saveCart([]); }
   function cartCount() { return cart().reduce((n, i) => n + i.qty, 0); }
@@ -1165,6 +1280,18 @@ const JA = (() => {
   // Render one gallery entry the way it can actually be shown: an <img> for a
   // photo, a <video> for a video, and a labelled chip for a document (which
   // must never render as a broken image or an inline-executing page).
+  function thumbFor(src) {
+    const s = String(src || "");
+    if (!s) return "";
+    if (/^(data:|blob:|https?:\/\/)/i.test(s)) return "";
+    const q = s.indexOf("?");
+    const base = q >= 0 ? s.slice(0, q) : s;
+    const query = q >= 0 ? s.slice(q) : "";
+    if (/\.\d+w\.webp$/i.test(base)) return "";
+    const m = base.match(/^(.*)\.(jpe?g|png|webp)$/i);
+    if (!m) return "";
+    return m[1] + ".400w.webp" + query;
+  }
   function mediaHTML(src, opts) {
     opts = opts || {};
     const kind = mediaKind(src);
@@ -1180,7 +1307,12 @@ const JA = (() => {
     }
     const ph = opts.ph || "images/products/_placeholder.jpg";
     const onErr = typeof window.fallbackImg === "function" ? ' onerror="fallbackImg(event)"' : "";
-    return `<img src="${escape(assetSrc)}" alt="${escape(opts.alt || "")}"${cls} data-ph="${ph}"${onErr}${attrs} />`;
+    const lazy = opts.eager ? "" : ' loading="lazy"';
+    const img = `<img src="${escape(assetSrc)}" alt="${escape(opts.alt || "")}"${cls} data-ph="${ph}"${onErr}${lazy}${attrs} />`;
+    if (opts.full) return img;
+    const thumb = thumbFor(assetSrc);
+    if (!thumb) return img;
+    return `<picture><source srcset="${escape(thumb)}" type="image/webp" />${img}</picture>`;
   }
   window.mediaKind = mediaKind;
   window.mediaHTML = mediaHTML;
@@ -1378,8 +1510,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=124";
-        const FLYER = "images/brand/logo-flyer.jpg?v=124";
+        const LOGO = "images/brand/logo.jpg?v=126";
+        const FLYER = "images/brand/logo-flyer.jpg?v=126";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -1497,7 +1629,7 @@ const JA = (() => {
           <a href="contact.html">${tx("nav.contact")}</a>
         </nav>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=124" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=126" alt="Jaura" />
         </a>
         <div class="nav-right">
           <div class="lang-switch" role="group" aria-label="${tx("lang.group")}">
@@ -1608,14 +1740,17 @@ const JA = (() => {
     }
     body.innerHTML = items.map((i) => {
       const nm = displayName(i.product) + (i.color ? " — " + i.color : "");
+      const avail = stockFor(i.product, i.color || "");
+      const atMax = Number(i.qty) >= avail;
+      const atMin = Number(i.qty) <= 1;
       return `<div class="mini-row">
         <a href="product.html?id=${encodeURIComponent(i.id)}"><img src="${asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a>
         <div class="mini-info">
           <p>${escape(nm)}</p>
           <div class="mini-qty">
-            <button type="button" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-n="${i.qty - 1}">−</button>
+            <button type="button" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-n="${i.qty - 1}"${atMin ? " disabled" : ""}>−</button>
             <span>${i.qty}</span>
-            <button type="button" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-n="${i.qty + 1}">+</button>
+            <button type="button" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-n="${i.qty + 1}"${atMax ? " disabled" : ""}>+</button>
           </div>
           <p class="mini-price">${i.qty} × ${money(i.payUnit, i.cur)}${i.bulk ? ` <em class="bulk-tag">${tx("cart.bulk")}</em>` : ""}</p>
         </div>
@@ -1633,7 +1768,7 @@ const JA = (() => {
     return `<footer class="footer wix-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=124" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=126" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -1717,7 +1852,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=124" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=126" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -1739,7 +1874,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=124";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=126";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -1751,7 +1886,7 @@ const JA = (() => {
   function logoPath() {
     let custom = "";
     try { custom = (settings() || {}).logoUrl || ""; } catch (e) { custom = ""; }
-    return custom || "images/brand/logo.jpg?v=124";
+    return custom || "images/brand/logo.jpg?v=126";
   }
   // FAQ answers Google can show as rich results. Kept in step with faq.html.
   const FAQ_LD = [
@@ -1784,7 +1919,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Jaura Store — fashion, beauty, household and lifestyle. Pay in Naira or F CFA. Lagos and Cotonou.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=124");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=126");
     document.title = title;
     [
       ["name", "description", description],
@@ -1830,7 +1965,7 @@ const JA = (() => {
       const ic = document.createElement("link");
       ic.rel = "icon";
       ic.type = "image/png";
-      ic.href = "images/brand/favicon.png?v=124";
+      ic.href = "images/brand/favicon.png?v=126";
       document.head.appendChild(ic);
     }
     let ld = document.getElementById("jaura-jsonld");
@@ -2217,6 +2352,7 @@ const JA = (() => {
     products, product, searchProducts, categoryName, displayName,
     currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, BULK_QTY,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
+    cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,
     wish, isWished, toggleWish, wishDetailed, openMini, closeMini,
     toast, upsertProduct, removeProduct, importProducts, applyServerProduct, syncPending, reloadCatalog,
     orders, saveOrder, getOrder, updateOrder, nextOrderId, sendReceipt,
