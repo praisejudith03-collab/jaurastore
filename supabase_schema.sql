@@ -48,10 +48,20 @@ create table if not exists products (
 
 -- Repair an EXISTING products table hand-built narrower than the row the app
 -- writes. Only adds columns; never drops or rewrites data. Run it if the
--- Render log says "[supabase] products upsert: stored without columns [...]".
+-- Render log says "[supabase] products upsert: stored without columns [...]"
+-- or "products upsert failed". It covers every column in
+-- supabase_store._CRITICAL_PRODUCT_COLUMNS (a product cannot be sold without
+-- them) - "priceCfa" and "priceNgn" were missing from this block while the
+-- create-table above already had them, which is what left the production
+-- table unable to hold the two price columns the app writes on every save.
+-- ("id" is the primary key and cannot be added to an existing table.)
+alter table products add column if not exists name               text;
 alter table products add column if not exists "nameFr"           text;
+alter table products add column if not exists "priceCfa"         numeric;
 alter table products add column if not exists "compareCfa"       numeric;
+alter table products add column if not exists "priceNgn"         numeric;
 alter table products add column if not exists "compareNgn"       numeric;
+alter table products add column if not exists stock              integer default 0;
 alter table products add column if not exists images             jsonb;
 alter table products add column if not exists "optionStock"      jsonb;
 alter table products add column if not exists "placeholderImage" text;
@@ -63,6 +73,12 @@ alter table products add column if not exists colors             jsonb;
 alter table products add column if not exists options            jsonb;
 alter table products add column if not exists source             text default 'admin';
 alter table products add column if not exists updated_at         timestamptz default now();
+
+-- Dead leftovers from the original hand-built table: price_cfa, price_ngn,
+-- name_fr, compare_cfa, compare_ngn, option_stock. The app reads and writes
+-- the camelCase columns only, so these are never used. NEVER drop them and
+-- never rename them - they are harmless legacy junk, but live rows still
+-- exist in the production table.
 
 -- -------------------------------------------------------------- orders
 create table if not exists orders (

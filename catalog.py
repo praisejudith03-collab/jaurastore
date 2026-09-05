@@ -489,15 +489,19 @@ def _folded_category(cid):
 def _dedupe_products(primary, secondary):
     """Merge two product lists, keeping every distinct product exactly once.
 
-    ``primary`` (Supabase - the live source of truth) wins: when the same
-    piece appears in both lists it is matched by id, then slug, then sku, and
-    the primary version is kept. Products only present in ``secondary`` (the
-    shipped seed) are appended, so nothing is lost when one side has not
-    synced yet - but the same product never renders twice.
+    ``primary`` (Supabase - the live source of truth) wins. Two rows are the
+    SAME product when their ids match, or when they share a slug (or sku)
+    AND the same name - that is how a re-created product (saved again with a
+    fresh id but the same name and slug) keeps rendering exactly once.
 
-    This is what removes the duplicates shoppers saw: a Supabase row whose id
-    differs from the seed row of the same product (a re-created or re-imported
-    item) used to be unioned in as a second copy of that product.
+    A slug or sku clash alone NEVER hides another row. The old
+    id-then-slug-then-sku match made ~30 seed products invisible whenever a
+    mirrored Supabase row of a DIFFERENT product happened to share the slug
+    or sku (the admin catalogue count dropped from 258 to 228). Reconciling
+    Supabase rows against the seed and against the local overrides is
+    therefore id-only in practice; only a name-confirmed slug/sku clash
+    still collapses, which is what keeps the seed's own internal collapse
+    (a re-created piece renders once) intact.
     """
     def _key(v):
         return str(v or "").strip().lower()
@@ -509,15 +513,20 @@ def _dedupe_products(primary, secondary):
         pid = str((p or {}).get("id") or "").strip()
         if not pid:
             return False
+        name = _key(p.get("name"))
         slug = _key(p.get("slug"))
         sku = _key(p.get("sku"))
-        if pid in by_id or (slug and slug in by_slug) or (sku and sku in by_sku):
+        if pid in by_id:
+            return False
+        # a slug/sku clash only collapses when the names agree too - a
+        # different product must never be hidden by a shared slug or sku
+        if (slug and (slug, name) in by_slug) or (sku and (sku, name) in by_sku):
             return False
         by_id[pid] = p
         if slug:
-            by_slug[slug] = p
+            by_slug[(slug, name)] = p
         if sku:
-            by_sku[sku] = p
+            by_sku[(sku, name)] = p
         out.append(p)
         return True
 
@@ -560,16 +569,18 @@ def merged(include_hidden=False):
         # products Supabase does not have. Local overrides (a phone save that
         # has not reached Supabase yet, e.g. stretch-marks oil) are unioned
         # last so they stay visible on every device. _dedupe_products keeps
-        # one copy of each product (matched by id, then slug, then sku).
+        # one copy of each product: matched by id, or by a slug/sku clash
+        # confirmed by the SAME name (a re-created piece). A slug or sku
+        # clash with a different product never hides it.
         ov = overrides()
         deleted = set(ov.get("deleted") or [])
         ov_products = ov.get("products") or []
         products = _dedupe_products(_fill_missing_fields(sb, ov_products),
                                     _seed_products())
-        # local rows are unioned by id only: a Supabase row of the same id has
-        # just been enriched from them, and two DIFFERENT pieces must never hide
-        # each other because they share a name. Slug/sku matching stays on the
-        # seed reconciliation above, which is what it was written for.
+        # local rows are unioned the same way: by id, or by a name-confirmed
+        # slug/sku clash (a re-creation). A Supabase row of the same id has
+        # just been enriched from them; two DIFFERENT pieces must never hide
+        # each other because they share a slug or sku.
         products = _dedupe_products(products, ov_products)
         products = [p for p in products if str(p.get("id")) not in deleted]
     else:
