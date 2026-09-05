@@ -649,18 +649,37 @@ def test_supabase_query_survives_a_server_side_row_cap(monkeypatch):
 
 
 def test_merged_catalogue_has_no_duplicates_when_supabase_ids_differ(monkeypatch):
-    """The bug shoppers saw: the same product in Supabase under a fresh id
-    was unioned next to its seed copy and rendered twice. merged() must keep
-    one copy of each product (matched by id, then slug, then sku), keeping
-    the live Supabase version."""
+    """Re-creations merge; different products never hide each other.
+
+    The identity rule merged() applies when the Supabase table and the
+    shipped seed disagree on ids:
+
+    (a) a Supabase row with the SAME id as a seed row merges with that seed
+        row, and the live Supabase copy wins;
+    (b) a different-id row that shares a slug/sku AND the same name is a
+        re-creation of the seed product - it renders exactly once, live
+        copy wins;
+    (c) a different-id row that shares a slug/sku but carries a DIFFERENT
+        name is a different product - both stay visible and the catalogue
+        count is preserved (the old slug/sku-only match hid ~30 seed
+        products here, dropping the admin count from 258 to 228).
+    """
     import catalog as catalog_mod
     seed = catalog_mod._seed_products()
     sb = []
-    for i, p in enumerate(seed):
-        row = dict(p)
-        row["id"] = f"sb-{i:03d}"               # same product, different id
-        row["name"] = p["name"] + " (live)"     # prove the Supabase copy wins
-        sb.append(row)
+    # (a) same id as the seed row; renamed to prove the Supabase copy wins
+    a = dict(seed[0])
+    a["name"] = seed[0]["name"] + " (live)"
+    sb.append(a)
+    # (b) a re-creation: fresh id, same name + slug + sku
+    b = dict(seed[1])
+    b["id"] = "sb-recreated"
+    sb.append(b)
+    # (c) a different product that happens to share the slug AND the sku
+    c = dict(seed[2])
+    c["id"] = "sb-other-piece"
+    c["name"] = "A Different Piece Entirely"
+    sb.append(c)
     sb.append({"id": "sb-new", "sku": "JAUNEW", "slug": "only-in-supabase",
                "name": "Only in Supabase", "category": "bags", "priceNgn": 1000})
     monkeypatch.setattr(catalog_mod, "_supabase_products", lambda: sb)
@@ -668,16 +687,40 @@ def test_merged_catalogue_has_no_duplicates_when_supabase_ids_differ(monkeypatch
                         lambda: {"products": [], "deleted": []})
 
     merged = catalog_mod.merged()
+    ids = [p["id"] for p in merged]
 
-    slugs = [p["slug"] for p in merged]
-    assert len(merged) == len(seed) + 1, \
-        f"expected {len(seed) + 1} unique products, got {len(merged)}"
-    assert len(slugs) == len(set(slugs)), "a product appears twice in the catalogue"
-    assert all("(live)" in p["name"] for p in merged
-               if p["id"].startswith("sb-") and p["id"] != "sb-new"), \
+    # nothing ever renders twice: ids are unique, and no (slug, name) pair
+    # appears twice either - that pair is what identifies a re-creation
+    assert len(ids) == len(set(ids)), "a product id appears twice"
+    seen = set()
+    for p in merged:
+        key = (p.get("slug"), p.get("name"))
+        assert key not in seen, f"a product appears twice in the catalogue: {key}"
+        seen.add(key)
+
+    # (a) same id: one row, and it is the live Supabase copy
+    same = [p for p in merged if p["id"] == seed[0]["id"]]
+    assert len(same) == 1, f"same-id rows must merge into one, got {len(same)}"
+    assert same[0]["name"].endswith(" (live)"), \
         "the stale seed copy won over the live Supabase row"
-    assert not any(p["id"].startswith("wix-") for p in merged), \
-        "seed duplicates of Supabase products were not replaced"
+
+    # (b) re-creation: rendered exactly once, live copy wins
+    rec = [p for p in merged if p.get("slug") == seed[1]["slug"]
+           and p.get("name") == seed[1]["name"]]
+    assert len(rec) == 1, \
+        f"a re-created product must render exactly once, rendered {len(rec)}"
+    assert rec[0]["id"] == "sb-recreated"
+
+    # (c) slug/sku clash with a different product: both stay visible
+    assert seed[2]["id"] in ids, \
+        "a slug/sku clash with a DIFFERENT Supabase product hid a seed product"
+    assert "sb-other-piece" in ids, "the different Supabase product must stay visible"
+
+    # count preserved: seed + 2 (the different product and the
+    # Supabase-only row); the re-creation adds no second copy
+    assert len(merged) == len(seed) + 2, \
+        f"expected {len(seed) + 2} products, got {len(merged)}"
+    assert "sb-new" in ids
 
 
 def test_merged_catalogue_applies_deleted_ids_with_supabase(monkeypatch):
