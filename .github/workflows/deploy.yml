@@ -1,0 +1,16 @@
+name: Deploy
+
+# Render auto-deploys from main. This workflow is intentionally simple and
+# non-blocking: it only notes the deploy and never fails the pipeline.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  note:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Render auto-deploy note
+        run: echo "Render auto-deploys jaurastore from main — no action needed."
