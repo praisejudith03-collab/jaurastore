@@ -107,6 +107,33 @@ def resolve_image(product):
     """
     p = dict(product or {})
     img = p.get("image") or ""
+    try:
+        import storage as _storage
+        own = _storage.own_upload_path(img)
+    except Exception:
+        own = ""
+    if own:
+        # a same-origin upload path is not a third-party host: this app
+        # serves it at /uploads/, so the real photo is kept
+        p["image"] = own
+        p["placeholderImage"] = PLACEHOLDER_IMG
+        p["usesPlaceholder"] = False
+        gal = []
+        for g in (p.get("images") or []):
+            g = str(g or "")
+            if not g:
+                continue
+            if g.startswith(("http://", "https://", "data:", "blob:")):
+                # URL-shaped entries: only OUR bucket becomes a same-origin
+                # link; a foreign host (and data:/blob:) is dropped.
+                own = _storage.own_upload_path(g)
+                if own:
+                    gal.append(own)
+            else:
+                # a committed repo path (or /uploads/ link) rides along untouched
+                gal.append(g)
+        p["images"] = gal
+        return p
     # Strip any third-party / Wix URL that may still be present in the data.
     if img.startswith(("http://", "https://", "data:", "blob:")):
         img = ""
@@ -365,6 +392,29 @@ def _slugify(name):
     return "-".join(slug.split())
 
 
+_SLUG_TRIES = 40
+
+
+def _free_slug(slug, pid, taken):
+    """Keep a slug unique across the live catalogue.
+
+    The slug is a product's URL identity (js/store.js resolves a product by
+    id OR slug) and catalogue dedupe matches on it, so two different pieces
+    that happen to share a name used to make the second invisible on the shop
+    while both saved fine. A collision becomes -2, -3, ... instead. `taken`
+    is the set of other products' slugs, lowercased; empty slugs and an
+    exhausted suffix run fall back to the id, which is unique.
+    """
+    slug = str(slug or "").strip().lower()
+    if not slug or slug not in taken:
+        return slug
+    for n in range(2, 2 + _SLUG_TRIES):
+        cand = f"{slug}-{n}"
+        if cand not in taken:
+            return cand
+    return str(pid or slug)
+
+
 def normalize(product):
     """Clean an incoming product into a safe, complete shape."""
     import security as sec
@@ -478,6 +528,26 @@ def _dedupe_products(primary, secondary):
     return out
 
 
+def _fill_missing_fields(rows, local_rows):
+    """Give a Supabase row back what its table could not store.
+
+    supabase_store's resilient upsert drops any column the products table
+    lacks, so the mirrored copy of a piece can be narrower than this
+    server's own override row. Only keys the Supabase row does not HAVE are
+    filled: a column present as null/"" was emptied on purpose, a column
+    absent is one the table cannot hold. Supabase stays the source of truth
+    for every column it has.
+    """
+    by_id = {str((r or {}).get("id") or ""): r for r in (local_rows or []) if r}
+    out = []
+    for r in rows or []:
+        src = by_id.get(str((r or {}).get("id") or ""))
+        if src:
+            r = {**r, **{k: v for k, v in src.items() if k not in r}}
+        out.append(r)
+    return out
+
+
 def merged(include_hidden=False):
     """Seed products + every admin edit, minus what was deleted.
 
@@ -493,8 +563,14 @@ def merged(include_hidden=False):
         # one copy of each product (matched by id, then slug, then sku).
         ov = overrides()
         deleted = set(ov.get("deleted") or [])
-        products = _dedupe_products(sb, _seed_products())
-        products = _dedupe_products(products, ov.get("products") or [])
+        ov_products = ov.get("products") or []
+        products = _dedupe_products(_fill_missing_fields(sb, ov_products),
+                                    _seed_products())
+        # local rows are unioned by id only: a Supabase row of the same id has
+        # just been enriched from them, and two DIFFERENT pieces must never hide
+        # each other because they share a name. Slug/sku matching stays on the
+        # seed reconciliation above, which is what it was written for.
+        products = _dedupe_products(products, ov_products)
         products = [p for p in products if str(p.get("id")) not in deleted]
     else:
         data, _p = _load_overrides()
@@ -644,6 +720,16 @@ def upsert(product, actor=None):
     if clean is None:
         return None, "rejected", True
 
+    live = []
+    try:
+        live = merged(include_hidden=True)
+    except Exception:
+        live = []                     # never block a save on a Supabase read
+    taken = {str(p.get("slug") or "").strip().lower() for p in live
+             if p and str(p.get("id") or "") != clean["id"] and p.get("slug")}
+    wanted = str(clean.get("slug") or "")
+    clean["slug"] = _free_slug(wanted, clean["id"], taken)
+
     path = _norm_filename(CATALOG_FILE)
     with _catalog_lock(path):
         data, path = _load_overrides()
@@ -697,11 +783,27 @@ def replace_all(products, actor=None):
     Returns (kept, rejected). Invalid rows are rejected, never silently dropped.
     """
     kept, rejected = [], []
+    live = []
+    try:
+        live = merged(include_hidden=True)
+    except Exception:
+        live = []                     # never block a bulk import on a Supabase read
+    # Uniquify inside the batch too: a CSV carrying two rows with the same name
+    # would otherwise land two products sharing one slug, and _dedupe_products
+    # would serve only the first. Rows whose id is in this batch are the same
+    # pieces being rewritten, so they are not "taken" - re-importing the same
+    # CSV must not churn every product's slug (it is the URL identity).
+    incoming = {str((p or {}).get("id") or "") for p in products or [] if p}
+    taken = {str(p.get("slug") or "").strip().lower() for p in live
+             if p and str(p.get("id") or "") not in incoming and p.get("slug")}
     for i, p in enumerate(products, start=2):
         clean = normalize(p)
         if clean is None:
             rejected.append({"row": i, "name": _name_or(p), "errors": ["missing name"]})
             continue
+        clean["slug"] = _free_slug(str(clean.get("slug") or ""), clean["id"], taken)
+        if clean["slug"]:
+            taken.add(clean["slug"])
         kept.append(clean)
 
     def _apply(data, _path):

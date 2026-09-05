@@ -193,7 +193,10 @@ def _pdf() -> bytes:
 def test_product_photo_goes_to_bucket_with_public_url(fake):
     ok, msg, url = storage.save_image(_png(), "products", "photo.png")
     assert ok, msg
-    assert url.startswith(f"{FAKE_ORIGIN}/storage/v1/object/public/uploads/products/")
+    # url shape changed by owner instruction (same-origin uploads link)
+    assert url.startswith("/uploads/products/")
+    assert storage.supabase_public_url(url[len("/uploads/"):]).startswith(
+        f"{FAKE_ORIGIN}/storage/v1/object/public/uploads/products/")
     path = url.split("/uploads/", 1)[1]
     data, content_type = fake.objects["uploads"][path]
     assert data == _png()
@@ -205,20 +208,29 @@ def test_product_photo_goes_to_bucket_with_public_url(fake):
 def test_category_asset_is_public(fake):
     ok, msg, url = storage.save_asset(_png(), "categories", "cover.png")
     assert ok, msg
-    assert f"/storage/v1/object/public/uploads/categories/" in url
+    # url shape changed by owner instruction (same-origin uploads link)
+    assert url.startswith("/uploads/categories/")
+    assert "/storage/v1/object/public/uploads/categories/" in \
+        storage.supabase_public_url(url[len("/uploads/"):])
 
 
 def test_hero_video_is_public(fake):
     mp4 = b"\x00\x00\x00\x10ftypisom" + b"\x00" * 24
     ok, msg, url = storage.save_video(mp4, "videos", "hero.mp4")
     assert ok, msg
-    assert f"/storage/v1/object/public/uploads/videos/" in url
+    # url shape changed by owner instruction (same-origin uploads link)
+    assert url.startswith("/uploads/videos/")
+    assert "/storage/v1/object/public/uploads/videos/" in \
+        storage.supabase_public_url(url[len("/uploads/"):])
 
 
 def test_misc_asset_is_public(fake):
     ok, msg, url = storage.save_image(_png(), "misc", "logo.png")
     assert ok, msg
-    assert f"/storage/v1/object/public/uploads/misc/" in url
+    # url shape changed by owner instruction (same-origin uploads link)
+    assert url.startswith("/uploads/misc/")
+    assert "/storage/v1/object/public/uploads/misc/" in \
+        storage.supabase_public_url(url[len("/uploads/"):])
 
 
 # ------------------------------------------------------- uploads: sensitive
@@ -247,7 +259,10 @@ def test_sensitive_is_by_folder_not_by_extension(fake):
     ok1, _, url_public = storage.save_image(_png(), "products", "a.png")
     ok2, _, url_signed = storage.save_image(_png(), "proofs", "b.png")
     assert ok1 and ok2
-    assert "/object/public/" in url_public and "/object/sign/" not in url_public
+    # url shape changed by owner instruction (same-origin uploads link)
+    assert url_public.startswith("/uploads/products/")
+    pub = storage.supabase_public_url(url_public[len("/uploads/"):])
+    assert "/object/public/" in pub and "/object/sign/" not in pub
     assert "/object/sign/" in url_signed and "/object/public/" not in url_signed
 
 

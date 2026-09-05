@@ -22,7 +22,9 @@ in-memory fake that enforces a column allowlist, exactly like a table with a
 subset of the columns.
 """
 import os
+import re
 import sys
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DB_PATH", "/tmp/jaura_test.db")
@@ -38,7 +40,8 @@ import app as appmod  # noqa: E402
 import auth as authmod  # noqa: E402
 import catalog as catalog_mod  # noqa: E402
 import supabase_store  # noqa: E402
-from db import execute, init_db  # noqa: E402
+from config import Config  # noqa: E402
+from db import execute, init_db, one  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _pw import PW  # noqa: E402
@@ -110,6 +113,13 @@ def iso_catalog():
 
 
 # ------------------------------------------------------------------ fakes
+def _as_list(rows):
+    """PostgREST accepts a single object as well as an array; normalise both."""
+    if not rows:
+        return []
+    return rows if isinstance(rows, list) else [rows]
+
+
 class _FakeTable:
     """In-memory stand-in for one PostgREST table (upsert / select / update).
 
@@ -128,9 +138,11 @@ class _FakeTable:
 
     def upsert(self, rows):
         store = self._o.tables.setdefault(self._name, [])
-        for r in rows or []:
-            store[:] = [x for x in store if x.get("id") != (r or {}).get("id")]
-            store.append(dict(r or {}))
+        for r in _as_list(rows):
+            r = dict(r or {})
+            match = "key" if self._name == "growth_settings" else "id"
+            store[:] = [x for x in store if x.get(match) != r.get(match)]
+            store.append(r)
         return self
 
     def select(self, *a, **k):
@@ -212,7 +224,7 @@ class _StrictTable(_FakeTable):
     """
 
     def upsert(self, rows):
-        for r in rows or []:
+        for r in _as_list(rows):
             for key in (r or {}):
                 if key not in self._o.allowed:
                     raise Exception(
@@ -309,3 +321,264 @@ def test_save_goes_live_on_narrow_table(client, iso_catalog, monkeypatch):
     assert r.get_json()["mirrored"] is True
     ids = {str(p.get("id")) for p in catalog_mod.merged(include_hidden=True)}
     assert "jau-narrow-2" in ids
+
+
+# ------------------------------------------------- each kind in its own table
+def _order_body(oid="JA-VIS01"):
+    """A shopper's completed checkout, as js/store.js posts it."""
+    return {"id": oid, "currency": "CFA", "total": 15000,
+            "customer": {"name": "Ama", "email": "ama@example.com",
+                         "phone": "+229 90 00 00 00", "city": "Cotonou",
+                         "zone": "Cotonou", "address": "Rue 12"},
+            "items": [{"id": "wix-001", "name": "Bag", "qty": 1,
+                       "price": 15000}]}
+
+
+def _fresh_order(*oids):
+    """Drop these order ids from the shared SQLite file first.
+
+    The suite shares /tmp/jaura_test.db across runs, and a checkout whose id
+    is already stored short-circuits as a duplicate - which would skip the
+    mirror this test is about and read as a false failure.
+    """
+    for oid in oids:
+        execute("DELETE FROM orders WHERE id=?", (oid,))
+
+
+def test_each_kind_of_data_lands_in_its_own_table(client, iso_catalog, monkeypatch):
+    """Products -> products, an order -> orders, categories -> growth_settings."""
+    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
+    monkeypatch.setattr(supabase_store, "client", lambda: fake)
+    monkeypatch.setattr(Config, "SUPABASE_ENABLED", True)   # mirrors on
+    # the category table lives in the repo; point the PUT at /tmp so the
+    # suite never rewrites a shipped data file
+    import api as api_mod
+    cats_file = "/tmp/jaura_test_categories.json"
+    for f in (cats_file, cats_file + ".bak"):
+        if os.path.isfile(f):
+            os.remove(f)
+    monkeypatch.setattr(api_mod, "CATEGORIES_FILE", cats_file)
+    _fresh_order("JA-VIS01")
+
+    tok = login(client)
+    r = client.post("/api/admin/products", json={"product": _row(
+        "jau-tbl-products", category="skincare")}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    assert r.get_json()["mirrored"] is True
+
+    client.put("/api/admin/categories", json={"categories": [
+        {"id": "beauty", "name": "Beauty"},
+        {"id": "gift-set", "name": "Gift Sets & Packaging"}]},
+        headers={"X-CSRF-Token": tok})
+    csrf = client.get("/api/csrf").get_json()["token"]
+    o = client.post("/api/orders", json=_order_body(),
+                    headers={"X-CSRF-Token": csrf})
+    assert o.status_code == 200, o.data
+
+    stored = [x for x in fake.tables["products"]
+              if x.get("id") == "jau-tbl-products"][0]
+    served = {str(p["id"]): p for p in catalog_mod.merged(include_hidden=True)}
+    assert served["jau-tbl-products"]["category"] == "beauty"
+    assert stored["name"] and stored["priceNgn"] and stored["source"] == "admin"
+
+    orders = fake.tables.get("orders", [])
+    assert [x["id"] for x in orders] == ["JA-VIS01"], "the sale never reached orders"
+    assert orders[0]["customer_name"] == "Ama" and orders[0]["total"] == 15000
+    assert orders[0]["status"] == "pending"
+    assert json.loads(orders[0]["payload"])["items"][0]["id"] == "wix-001"
+
+    settings = {x.get("key"): x.get("value")
+                for x in fake.tables.get("growth_settings", [])}
+    assert "categories_json" in settings, "the category table was not mirrored"
+    assert {c["id"] for c in json.loads(settings["categories_json"])} == {
+        "beauty", "gift-set"}
+    assert not [x for x in fake.tables["products"] if x.get("id") == "JA-VIS01"]
+
+
+def test_a_broken_mirror_never_loses_a_sale(client, iso_catalog, monkeypatch):
+    """client() blowing up must not turn a paid order into a 500."""
+    def _angry_client():
+        raise RuntimeError("supabase is not answering")
+
+    monkeypatch.setattr(supabase_store, "client", _angry_client)
+    monkeypatch.setattr(Config, "SUPABASE_ENABLED", True)
+    _fresh_order("JA-VIS02")
+
+    csrf = client.get("/api/csrf").get_json()["token"]
+    r = client.post("/api/orders", json=_order_body("JA-VIS02"),
+                    headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200, r.data[:200]
+    assert r.get_json()["ok"] is True
+    assert one("SELECT id FROM orders WHERE id='JA-VIS02'")["id"] == "JA-VIS02"
+
+
+def test_create_order_accepts_the_row_alone(monkeypatch):
+    """The mirror is called with the order row and nothing else."""
+    fake = _FakeSupabase()
+    monkeypatch.setattr(supabase_store, "client", lambda: fake)
+    assert supabase_store.create_order({"id": "JA-SIG1", "total": 1}) is None
+    assert fake.tables["orders"][0]["id"] == "JA-SIG1"
+    # no payload key on the row: the mirror stores the whole order
+    assert json.loads(fake.tables["orders"][0]["payload"]) == {
+        "id": "JA-SIG1", "total": 1}
+    assert supabase_store.create_order({"id": "JA-SIG2"}, None) is None
+
+
+def test_products_ddl_covers_every_column_the_app_writes():
+    """supabase_schema.sql must list every key the products upsert sends."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sql = open(os.path.join(root, "supabase_schema.sql"), encoding="utf-8").read()
+    m = re.search(r"create table if not exists products \((.*?)\n\);", sql, re.S)
+    assert m, "no products table in supabase_schema.sql"
+    cols = set()
+    for line in m.group(1).splitlines():
+        line = line.strip().rstrip(",")
+        if not line or line.lower().startswith(
+                ("primary", "foreign", "unique", "constraint", "--")):
+            continue
+        cols.add(line.split()[0].strip('"'))
+    written = catalog_mod.resolve_image(catalog_mod.normalize(
+        {"id": "jau-ddl", "name": "Ddl", "priceNgn": 1000}))
+    written.setdefault("source", "admin")
+    written.setdefault("updated_at", supabase_store._now())
+    missing = sorted(set(written) - cols)
+    assert not missing, f"products DDL is missing column(s): {missing}"
+
+
+def test_no_supabase_store_call_site_is_out_of_date():
+    """Every supabase_store call in the app must match the function's signature.
+
+    The checkout mirror was a TypeError for exactly this reason: the route
+    and the helper disagreed, and the path only runs when Supabase is
+    configured - which the suite never is.
+    """
+    import ast
+    import inspect
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    bad = []
+    for fname in ("api.py", "catalog.py", "db.py", "app.py", "scheduler.py",
+                  "repo_sync.py", "storage.py", "analytics.py", "growth.py",
+                  "emailer.py", "auth.py", "migrate_supabase.py",
+                  "backfill_supabase_orders.py"):
+        path = os.path.join(root, fname)
+        if not os.path.isfile(path):
+            continue
+        tree = ast.parse(open(path, encoding="utf-8").read(), filename=fname)
+        names, module_alias = {}, set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "supabase_store":
+                for al in node.names:
+                    names[al.asname or al.name] = al.name
+            elif isinstance(node, ast.Import):
+                for al in node.names:
+                    if al.name == "supabase_store":
+                        module_alias.add(al.asname or al.name)
+        if not names and not module_alias:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            if isinstance(f, ast.Name):
+                local, attr = f.id, None
+            elif (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
+                    and f.value.id in module_alias):
+                local, attr = f.attr, f.attr
+            else:
+                continue
+            target_name = attr if attr is not None else names.get(local)
+            if target_name is None:
+                continue
+            fn = getattr(supabase_store, target_name, None)
+            if not callable(fn):
+                continue
+            try:
+                sig = inspect.signature(fn)
+            except (TypeError, ValueError):
+                continue
+            params = list(sig.parameters.values())
+            if any(p.kind == p.VAR_POSITIONAL for p in params):
+                continue
+            positional = [p for p in params
+                          if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+            required = [p.name for p in positional if p.default is p.empty]
+            given = len(node.args) + len([k for k in node.keywords if k.arg is None])
+            kwnames = {k.arg for k in node.keywords if k.arg}
+            missing = [n for n in required[given:] if n not in kwnames]
+            extra_kw = set()
+            if not any(p.kind == p.VAR_KEYWORD for p in params):
+                extra_kw = kwnames - {p.name for p in params}
+            if missing or extra_kw:
+                bad.append(f"{fname}:{node.lineno} {target_name}() "
+                           f"missing={missing or '-'} "
+                           f"unknown_kw={sorted(extra_kw) or '-'} [sig {sig}]")
+    assert not bad, "out-of-date supabase_store call site(s):\n  " + "\n  ".join(bad)
+
+
+# ------------------------------------------------------------ TASK 3: catalog
+def test_narrow_row_shadows_no_fields(client, iso_catalog, monkeypatch):
+    """A dropped column must not hide what this server still holds."""
+    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
+    monkeypatch.setattr(supabase_store, "client", lambda: fake)
+    tok = login(client)
+    r = client.post("/api/admin/products", json={"product": _row(
+        "jau-fill", images=["images/brand/logo.jpg", "images/products/shoes.jpg"],
+        optionStock={"Small": 2, "Large": 3})}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    stored = [x for x in fake.tables["products"] if x.get("id") == "jau-fill"][0]
+    assert "images" not in stored and "optionStock" not in stored   # table lacks them
+    p = {str(x["id"]): x for x in catalog_mod.merged(include_hidden=True)}["jau-fill"]
+    assert len(p.get("images") or []) == 2, "the gallery was shadowed"
+    assert (p.get("optionStock") or {}).get("Large") == 3, "variant stock was shadowed"
+
+
+def test_same_named_products_from_two_phones_both_show(client, iso_catalog, monkeypatch):
+    """Two different pieces called the same thing are not one product."""
+    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
+    monkeypatch.setattr(supabase_store, "client", lambda: fake)
+    tok = login(client)
+    # explicit slugs: the _row helper defaults slug to the id, and the whole
+    # point here is two products asking for the SAME slug
+    a = client.post("/api/admin/products", json={"product": _row(
+        "jau-name-a", name="Facial Soap", slug="facial-soap", sku="JAU-A",
+        priceNgn=2000)}, headers={"X-CSRF-Token": tok})
+    b = client.post("/api/admin/products", json={"product": _row(
+        "jau-name-b", name="Facial Soap", slug="facial-soap", sku="JAU-B",
+        priceNgn=9000)}, headers={"X-CSRF-Token": tok})
+    assert a.status_code == b.status_code == 200
+    assert a.get_json()["mirrored"] and b.get_json()["mirrored"]
+    served = [p for p in catalog_mod.merged(include_hidden=True)
+              if str(p.get("name", "")) == "Facial Soap"]
+    assert {p["id"] for p in served} == {"jau-name-a", "jau-name-b"}
+    slugs = {p["slug"] for p in served}
+    assert len(slugs) == 2, "both kept the same slug and one will hide"
+    assert "facial-soap-2" in slugs
+    assert b.get_json()["product"]["slug"] == "facial-soap-2"
+    # a re-save of an existing product must not keep appending suffixes
+    again = client.post("/api/admin/products", json={"product": _row(
+        "jau-name-b", name="Facial Soap", slug="facial-soap-2", sku="JAU-B",
+        priceNgn=9500)}, headers={"X-CSRF-Token": tok})
+    assert again.get_json()["product"]["slug"] == "facial-soap-2"
+    assert again.get_json()["mirrored"] is True
+
+
+def test_reimporting_the_same_batch_does_not_rename_slugs(client, iso_catalog,
+                                                          monkeypatch):
+    """PUTting the same CSV twice must not churn every slug to -2, -3, ..."""
+    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
+    monkeypatch.setattr(supabase_store, "client", lambda: fake)
+    tok = login(client)
+    batch = [{"id": "jau-shea-a", "name": "Shea Butter", "slug": "shea-butter",
+              "sku": "SHEA-A", "priceNgn": 3000},
+             {"id": "jau-shea-b", "name": "Shea Butter", "slug": "shea-butter-2",
+              "sku": "SHEA-B", "priceNgn": 4000}]
+    r1 = client.put("/api/admin/products", json={"products": batch},
+                    headers={"X-CSRF-Token": tok})
+    assert r1.status_code == 200, r1.data
+    r2 = client.put("/api/admin/products", json={"products": batch},
+                    headers={"X-CSRF-Token": tok})
+    assert r2.status_code == 200, r2.data
+    slugs = {p["id"]: p["slug"] for p in catalog_mod.merged(include_hidden=True)
+             if p["id"] in ("jau-shea-a", "jau-shea-b")}
+    assert slugs == {"jau-shea-a": "shea-butter",
+                     "jau-shea-b": "shea-butter-2"}, slugs

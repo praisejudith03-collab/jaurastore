@@ -324,6 +324,12 @@ def create_app():
             abort(404)
         full = storage.resolve_local(key)
         if not full:
+            # UPLOAD_MODE=supabase keeps the object in the bucket, not on this
+            # server's disk: redirect rather than 404 so the stored
+            # /uploads/<key> link still renders.
+            redirect_to = storage.public_redirect_for(key)
+            if redirect_to:
+                return redirect(redirect_to, code=302)
             abort(404)
         resp = _make_response(send_from_directory(os.path.dirname(full), os.path.basename(full)))
         resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"

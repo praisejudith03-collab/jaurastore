@@ -344,7 +344,14 @@ def supabase_set_shared_password(password):
 
 
 # ------------------------------------------------------------------ orders
-def create_order(order, engine):
+# `engine` is a legacy argument (the SQLite handle the caller used to pass
+# for a read-back that no longer happens). It MUST stay optional: api.py's
+# checkout calls this with the order row alone, and a required-but-unpassed
+# parameter raised TypeError inside the route - after the order was already
+# written to SQLite - so every live checkout answered 500, the confirmation
+# e-mail and the purchase event were skipped, and the order never reached
+# the orders table.
+def create_order(order, engine=None):
     """Persist a completed checkout into Supabase.
 
     The SQLite row is still written (the shop's local copy and the source the
