@@ -710,6 +710,8 @@ async function handleProductSubmit(e, existing) {
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = existing ? "Save" : "Add a Product"; }
   if (res && res.ok === false && res.error) {
     JA.toast("Saved on this device — it will sync when you are back online.");
+  } else if (res && (res.mirrored === false || (res.data && res.data.mirrored === false))) {
+    JA.toast("Saved on the server only — not yet on the cloud copy. Tap Retry now.");
   } else {
     JA.toast((res && res.queued) ? "Saved — uploading…" : (status === "out" ? "Live now · Out of stock." : "Live on the store now · " + images.length + " photo(s)."));
   }

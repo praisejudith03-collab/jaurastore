@@ -116,7 +116,7 @@ def resolve_image(product):
     if _is_local(img) and _file_exists(img):
         p["image"] = img
         p["placeholderImage"] = PLACEHOLDER_IMG
-        p.pop("usesPlaceholder", None)
+        p["usesPlaceholder"] = False
         return p
     # A matching committed photo (same slug / alt-<slug>) also wins. This is
     # the auto-wire that makes the owner's collected root photos appear on
@@ -125,7 +125,7 @@ def resolve_image(product):
         if _file_exists(candidate):
             p["image"] = candidate
             p["placeholderImage"] = PLACEHOLDER_IMG
-            p.pop("usesPlaceholder", None)
+            p["usesPlaceholder"] = False
             return p
     # No usable local file: show the committed branded placeholder.
     p["image"] = PLACEHOLDER_IMG
@@ -487,11 +487,14 @@ def merged(include_hidden=False):
     sb = _supabase_products()
     if sb is not None:
         # Supabase rows are the live catalogue; the seed only supplies
-        # products Supabase does not have. _dedupe_products keeps one copy of
-        # each product (matched by id, then slug, then sku), so a row saved
-        # under a different id never shows up next to its own duplicate.
-        deleted = set(overrides().get("deleted") or [])
+        # products Supabase does not have. Local overrides (a phone save that
+        # has not reached Supabase yet, e.g. stretch-marks oil) are unioned
+        # last so they stay visible on every device. _dedupe_products keeps
+        # one copy of each product (matched by id, then slug, then sku).
+        ov = overrides()
+        deleted = set(ov.get("deleted") or [])
         products = _dedupe_products(sb, _seed_products())
+        products = _dedupe_products(products, ov.get("products") or [])
         products = [p for p in products if str(p.get("id")) not in deleted]
     else:
         data, _p = _load_overrides()
@@ -596,11 +599,50 @@ def apply_stock_delta(pid, qty_delta, option_key=None, actor=None):
     return rec
 
 
+def local_only_products():
+    """Admin overrides that are not yet in the live Supabase table."""
+    sb = _supabase_products()
+    if sb is None:
+        return []
+
+    def _key(v):
+        return str(v or "").strip().lower()
+
+    seen_ids = {str(p.get("id") or "") for p in sb}
+    seen_slugs = {_key(p.get("slug")) for p in sb if p.get("slug")}
+    seen_skus = {_key(p.get("sku")) for p in sb if p.get("sku")}
+    out = []
+    for p in (overrides().get("products") or []):
+        pid = str(p.get("id") or "")
+        if not pid or pid in seen_ids:
+            continue
+        slug = _key(p.get("slug"))
+        sku = _key(p.get("sku"))
+        if slug and slug in seen_slugs:
+            continue
+        if sku and sku in seen_skus:
+            continue
+        out.append(p)
+    return out
+
+
+def remirror_strays(actor=None):
+    """Push local-only products to Supabase. Returns how many were sent."""
+    from supabase_store import upsert_products, enabled
+    if not enabled():
+        return 0
+    strays = local_only_products()
+    if not strays:
+        return 0
+    ok = upsert_products(strays)
+    return len(strays) if ok else 0
+
+
 def upsert(product, actor=None):
-    """Save (create or edit) one product. Returns (product, action)."""
+    """Save (create or edit) one product. Returns (product, action, mirrored)."""
     clean = normalize(product)
     if clean is None:
-        return None, "rejected"
+        return None, "rejected", True
 
     path = _norm_filename(CATALOG_FILE)
     with _catalog_lock(path):
@@ -615,10 +657,19 @@ def upsert(product, actor=None):
         data["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
         data["updatedBy"] = actor or ""
         _write_overrides(data, path)
-    from supabase_store import upsert_products
-    upsert_products([clean])
+    mirrored = True
+    try:
+        from supabase_store import upsert_products, enabled
+        ok = upsert_products([clean])
+        mirrored = bool(ok) if enabled() else True
+    except Exception:
+        try:
+            from supabase_store import enabled
+            mirrored = not enabled()
+        except Exception:
+            mirrored = True
     _sync_repo_async()
-    return clean, action
+    return clean, action, mirrored
 
 
 def remove(pid, actor=None):

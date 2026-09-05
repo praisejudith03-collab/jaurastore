@@ -154,10 +154,19 @@ def products_table_rows():
 
 
 def upsert_products(products):
-    """Mirror admin product writes into Supabase. Never blocks a sale."""
+    """Mirror admin product writes into Supabase. Never blocks a sale.
+
+    Returns True when the write succeeded or when Supabase is not configured
+    (nothing to mirror). Returns False when Supabase is enabled but the
+    client is missing or the write failed — callers must surface that.
+    """
+    if not products:
+        return True
+    if not enabled():
+        return True
     c = client()
-    if c is None or not products:
-        return []
+    if c is None:
+        return False
     rows = []
     for p in products:
         if not p:
@@ -167,11 +176,14 @@ def upsert_products(products):
         r.setdefault("source", "admin")
         r.setdefault("updated_at", _now())
         rows.append(r)
+    if not rows:
+        return True
     try:
         c.table("products").upsert(rows).execute()
+        return True
     except Exception as exc:
         print(f"[supabase] products upsert failed: {exc}")
-    return rows
+        return False
 
 
 def delete_products(ids):

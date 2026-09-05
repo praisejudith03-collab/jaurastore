@@ -719,7 +719,12 @@ const JA = (() => {
       queue: true,
       label: "Product",
       onDone: (data) => { if (data && data.product) applyServerProduct(data.product); },
-    }).then((d) => ({ ok: true, queued: !!(d && d.queued), data: d }))
+    }).then((d) => {
+      if (d && d.mirrored === false) {
+        toast("Saved on the server only — not yet on the cloud copy. Tap Retry now.");
+      }
+      return { ok: true, queued: !!(d && d.queued), data: d, mirrored: d && d.mirrored };
+    })
       .catch((err) => {
         if (err && err.status === 401) { toast("Session expired — sign in again."); return { ok: false, error: err.message }; }
         toast(err && err.error ? err.error : "Saved on this device; it will sync when you are back online.");

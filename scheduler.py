@@ -60,6 +60,13 @@ def _tick(logger=None):
             if logger: logger.info("daily backup ok=%s %s", ok, report)
     except Exception as exc:                      # pragma: no cover
         if logger: logger.warning("daily backup skipped: %s", exc)
+    try:
+        import catalog as catalog_mod
+        n = catalog_mod.remirror_strays()
+        if logger and n:
+            logger.info("remirrored %d local-only product(s) to Supabase", n)
+    except Exception as exc:                      # pragma: no cover
+        if logger: logger.warning("stray remirror skipped: %s", exc)
 
 
 def _loop(logger=None):

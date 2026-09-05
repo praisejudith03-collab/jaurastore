@@ -1316,10 +1316,13 @@ def admin_order_delete(oid):
 def admin_product_upsert():
     """Save one product. Live for the next visitor immediately."""
     d = request.get_json(silent=True) or {}
-    product, action = catalog_mod.upsert(d.get("product") or d, authmod.current_admin())
+    result = catalog_mod.upsert(d.get("product") or d, authmod.current_admin())
+    product, action = result[0], result[1]
+    mirrored = result[2] if len(result) > 2 else True
     if not product:
         return jsonify(ok=False, error="A product needs at least a name."), 400
-    return jsonify(ok=True, product=product, action=action, meta=catalog_mod.meta())
+    return jsonify(ok=True, product=product, action=action, mirrored=mirrored,
+                   meta=catalog_mod.meta())
 
 @api.delete("/admin/products/<pid>")
 @authmod.require_admin
