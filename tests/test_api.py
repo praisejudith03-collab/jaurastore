@@ -198,14 +198,14 @@ def test_benin_minimum_is_enforced_on_orders(client):
 
 
 def test_benin_minimum_in_naira_is_enforced(client):
-    r = _post_min_order(client, "JA-BJ2", "NGN", 11399, "Calavi")
+    r = _post_min_order(client, "JA-BJ2", "NGN", 11999, "Calavi")
     assert r.status_code == 400, r.data
-    assert "11,400" in r.get_json()["error"]
+    assert "12,000" in r.get_json()["error"]
 
 
 def test_benin_minimum_exact_cfa_and_ngn_are_accepted(client):
     a = _post_min_order(client, "JA-BJ3", "CFA", 5000, "Cotonou")
-    b = _post_min_order(client, "JA-BJ4", "NGN", 11400, "Porto-Novo")
+    b = _post_min_order(client, "JA-BJ4", "NGN", 12000, "Porto-Novo")
     assert a.status_code == 200, a.data
     assert b.status_code == 200, b.data
 
@@ -1674,7 +1674,7 @@ def test_benin_and_togo_payment_methods_supported(client):
 
 
 def test_benin_minimum_order_cfa_and_ngn_limits(client):
-    """Benin deliveries enforce 5,000 CFA and 11,400 NGN minimums."""
+    """Benin deliveries enforce 5,000 CFA and 12,000 NGN minimums."""
     tok = client.get("/api/csrf").get_json()["token"]
     order_cfa_low = {
         "id": "JA-BJMIN-1",
@@ -1696,7 +1696,7 @@ def test_benin_minimum_order_cfa_and_ngn_limits(client):
     }
     r2 = client.post("/api/orders", json=order_ngn_low, headers={"X-CSRF-Token": tok})
     assert r2.status_code == 400
-    assert "11,400 naira" in r2.get_json().get("error", "")
+    assert "12,000 naira" in r2.get_json().get("error", "")
 
 
 def test_net_js_blob_uploads_wait_five_minutes_and_persist_timeout():

@@ -544,14 +544,14 @@ def create_order():
     # Enforce for Benin, Togo, Cotonou, Calavi, Porto-Novo, Lomé
     if re.search(r"(?i)\bbenin\b|\btogo\b|cotonou|calavi|porto|lom[ée]|lome", zone):
         min_cfa = 5000
-        min_ngn = 11400
+        min_ngn = 12000
         if currency == "CFA" and total < min_cfa:
             return jsonify(ok=False, error=(
-                "Benin & Togo deliveries: minimum order 5,000 F CFA (about 11,400 naira). "
+                "Benin & Togo deliveries: minimum order 5,000 F CFA (about 12,000 naira). "
                 "Please add a few more items to meet the minimum.")), 400
         if currency == "NGN" and total < min_ngn:
             return jsonify(ok=False, error=(
-                "Benin & Togo deliveries: minimum order 11,400 naira (about 5,000 F CFA). "
+                "Benin & Togo deliveries: minimum order 12,000 naira (about 5,000 F CFA). "
                 "Please add a few more items to meet the minimum.")), 400
     # Also check country field for Benin/Togo even if zone is generic
     country_raw = sec.clean(customer_raw.get("country") or d.get("country") or "", 80)
@@ -559,14 +559,14 @@ def create_order():
         # if zone didn't already trigger, still enforce
         if not re.search(r"(?i)\bbenin\b|\btogo\b|cotonou|calavi|porto|lom[ée]|lome", zone):
             min_cfa = 5000
-            min_ngn = 11400
+            min_ngn = 12000
             if currency == "CFA" and total < min_cfa:
                 return jsonify(ok=False, error=(
-                    "Benin & Togo deliveries: minimum order 5,000 F CFA (about 11,400 naira). "
+                    "Benin & Togo deliveries: minimum order 5,000 F CFA (about 12,000 naira). "
                     "Please add a few more items to meet the minimum.")), 400
             if currency == "NGN" and total < min_ngn:
                 return jsonify(ok=False, error=(
-                    "Benin & Togo deliveries: minimum order 11,400 naira (about 5,000 F CFA). "
+                    "Benin & Togo deliveries: minimum order 12,000 naira (about 5,000 F CFA). "
                     "Please add a few more items to meet the minimum.")), 400
 
     oid = sec.clean(d.get("id"), 24).upper()

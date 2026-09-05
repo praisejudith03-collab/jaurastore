@@ -1141,7 +1141,14 @@ function bindAccount() {
   const note = $("#sync-note");
   const paintSync = () => { if (!note) return; const n = JA.syncPending ? JA.syncPending() : 0; note.textContent = n ? `${n} change(s) are waiting for a connection.` : "Everything you saved is live on the store."; };
   paintSync(); if (window.JA_NET) window.JA_NET.onStatus(paintSync);
-  $("#retry-sync")?.addEventListener("click", () => { if (window.JA_NET) { window.JA_NET.flush(); JA.toast("Retrying…"); paintSync(); } });
+  // Retry Now: flush the outbox AND re-POST stranded KEYS.custom
+  // (jaura_custom_products) so a save that never left this phone still ships.
+  $("#retry-sync")?.addEventListener("click", async () => {
+    JA.toast("Retrying…");
+    if (window.JA_NET) window.JA_NET.flush();
+    if (JA.retryStrandedProducts) await JA.retryStrandedProducts();
+    paintSync();
+  });
   $("#reload-cat")?.addEventListener("click", async () => { if (JA.reloadCatalog) { JA.toast("Reloading…"); await JA.reloadCatalog(); paintDesk("products"); } });
   const statusBox = $("#sync-status");
   async function refreshSyncStatus() {
