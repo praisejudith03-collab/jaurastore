@@ -28,6 +28,27 @@ def enabled():
     return bool(Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY)
 
 
+def ping():
+    """Reachability of the products table.
+
+    Returns one of:
+      - ``ok``             configured and a cheap read succeeded
+      - ``unreachable``    configured but the client/read failed
+      - ``not_configured`` no URL / service-role key
+    """
+    if not enabled():
+        return "not_configured"
+    try:
+        c = client()
+        if c is None:
+            return "unreachable"
+        c.table("products").select("id").limit(1).execute()
+        return "ok"
+    except Exception as exc:
+        print(f"[supabase] ping failed: {exc}")
+        return "unreachable"
+
+
 def client():
     """Return a cached supabase client, or None when not configured.
 

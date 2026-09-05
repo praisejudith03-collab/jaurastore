@@ -1150,7 +1150,11 @@ function bindAccount() {
       const res = await fetch("api/admin/sync/status", { credentials: "same-origin", cache: "no-store" });
       if (!res.ok) { statusBox.textContent = "Could not read the sync status."; return; }
       const d = await res.json();
-      const bits = []; bits.push("Supabase: " + (d.supabase ? "connected" : "not configured (local files)")); bits.push(d.gitToken ? "GitHub push: on" : "GitHub push: off"); if (d.gitRepo) bits.push("repo: " + d.gitRepo); if (d.gitBranch) bits.push("branch: " + d.gitBranch);
+      const health = d.supabaseHealth || "";
+      const label = health === "ok" ? "OK"
+        : health === "unreachable" ? "UNREACHABLE"
+        : "not configured";
+      const bits = []; bits.push("Supabase: " + label); bits.push(d.gitToken ? "GitHub push: on" : "GitHub push: off"); if (d.gitRepo) bits.push("repo: " + d.gitRepo); if (d.gitBranch) bits.push("branch: " + d.gitBranch);
       statusBox.innerHTML = bits.map((b) => JA.escape(b)).join(" &middot; ") + "<br><small>" + (d.onWrite ? "Admin changes are committed to the repo automatically." : "Automatic repo commit is off — use the Sync button.") + "</small>";
     } catch (e) { statusBox.textContent = "Sync status unavailable."; }
   }

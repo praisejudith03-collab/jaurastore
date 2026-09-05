@@ -1349,6 +1349,11 @@ def admin_products_replace():
 def admin_sync_status():
     """Report whether Supabase and the GitHub repo sync are configured."""
     sb = Config.SUPABASE_ENABLED
+    try:
+        from supabase_store import ping as _sb_ping
+        health = _sb_ping()
+    except Exception:
+        health = "unreachable" if sb else "not_configured"
     ght = bool(Config.GITHUB_TOKEN)
     repo = Config.GITHUB_REPOSITORY or ""
     # try to resolve the repo from git remote when not set explicitly
@@ -1358,7 +1363,7 @@ def admin_sync_status():
             repo = repo_sync._resolve_repo()
         except Exception:
             repo = ""
-    return jsonify(ok=True, supabase=sb, gitToken=ght,
+    return jsonify(ok=True, supabase=sb, supabaseHealth=health, gitToken=ght,
                    gitRepo=repo, gitBranch=Config.GITHUB_BRANCH,
                    onWrite=bool(Config.REPO_SYNC_ON_WRITE))
 
