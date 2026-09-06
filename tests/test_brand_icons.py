@@ -5,9 +5,10 @@ apple-touch.png were the full brand board. tools/brand_icons.py re-derives
 them from images/brand/logo.jpg (centred cart + "Jaura" wordmark, no
 tagline, no category icons) and refreshes the og-cover on brand cream.
 
-The regenerated files ship with the shared cache token bumped from v=126 to
-v=127, and every HTML reference to a brand image must carry that token -
-otherwise phones and Google keep serving the stale illegible icon.
+The regenerated files shipped with the shared cache token bumped from v=126
+to v=127 (the photo-display fix has since moved it to v=128), and every HTML
+reference to a brand image must carry that token - otherwise phones and Google
+keep serving the stale illegible icon.
 
 Run with:  python3 -m pytest tests/test_brand_icons.py -q
 """
@@ -17,8 +18,10 @@ import struct
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# The shared cache token after the brand-icon regeneration (was 126).
-SHARED_TOKEN = "127"
+# The shared cache token. Bumped for the brand-icon regeneration (126 -> 127)
+# and again for the photo-display fix, which changed sw.js and the storefront
+# scripts (127 -> 128).
+SHARED_TOKEN = "128"
 
 
 def _image_size(path):

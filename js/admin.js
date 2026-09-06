@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=127" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=128" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -237,7 +237,7 @@ function mediaStripHTML(imgs) {
   const plus = (imgs || []).length < 20 ? `<label class="wix-tile wix-plus">+<input type="file" id="more-media" accept="image/*,video/*" multiple hidden /></label>` : "";
   return `<div class="wix-media-row">${tiles}${plus}</div>
     <p class="admin-note">Drag & drop, or tap + to pick several at once. Photos up to 6 MB, videos up to 40 MB. Your photos & videos stay as they are — up to 20 items.</p>
-    <button type="button" class="wix-view-media" id="view-media">View All Media (${(imgs || []).length}/20) ›</button>`;
+    <button type="button" class="wix-view-media" id="view-media">Photos: ${(imgs || []).length} of 20 — tap + to add, × to remove</button>`;
 }
 function editorOptions(p) {
   if (p && p.options && p.options.length) return p.options;
@@ -392,6 +392,19 @@ function bindMedia() {
       paintMedia(box); return;
     }
     if (e.target.closest("#view-media")) {
+      // It used to answer with a toast and nothing else, so the owner could
+      // not see which tiles the count referred to. Scroll them into view and
+      // flash the row for a moment instead.
+      const row = box.querySelector(".wix-media-row");
+      if (row) {
+        if (typeof row.scrollIntoView === "function") {
+          row.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+        row.classList.remove("is-flash");
+        void row.offsetWidth;                      // restart the animation
+        row.classList.add("is-flash");
+        setTimeout(() => row.classList.remove("is-flash"), 1400);
+      }
       JA.toast((window.__editImages || []).length + " photo(s). Tap × to delete, + to add more (up to 20).");
     }
   });
@@ -1312,7 +1325,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=127" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=128" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -1495,7 +1508,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=127", hidden: false }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=128", hidden: false }]);
     JA.saveCategories(next);
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
     paintDesk("categories");

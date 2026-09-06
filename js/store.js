@@ -1275,10 +1275,36 @@ const JA = (() => {
     el.setAttribute("data-fb", "1");
     // Use the product-specific placeholder path when known.
     const ph = el.getAttribute("data-ph") || "images/products/_placeholder.jpg";
+    clearMediaSources(el);
     el.src = ph;
     el.classList.add("is-placeholder");
   }
   window.fallbackImg = fallbackImg;
+
+  // A <picture> keeps choosing its <source> no matter what the inner <img>
+  // src says, so swapping in the placeholder would change nothing on screen:
+  // drop the sibling <source>s first, and unwrap the <picture> when the DOM
+  // lets us, so the branded card really appears.
+  function clearMediaSources(el) {
+    const parent = el && el.parentNode;
+    if (!parent) return;
+    let sources = [];
+    if (typeof parent.querySelectorAll === "function") {
+      sources = Array.prototype.slice.call(parent.querySelectorAll("source") || []);
+    } else if (Array.isArray(parent.children)) {
+      sources = parent.children.filter((c) => c && String(c.tagName || "").toLowerCase() === "source");
+    }
+    sources.forEach((s) => {
+      if (typeof s.setAttribute === "function") s.setAttribute("srcset", "");
+      if (typeof s.remove === "function") { s.remove(); return; }
+      if (s.parentNode && typeof s.parentNode.removeChild === "function") s.parentNode.removeChild(s);
+    });
+    if (String(parent.tagName || "").toLowerCase() !== "picture") return;
+    const grand = parent.parentNode;
+    if (grand && typeof grand.replaceChild === "function") {
+      try { grand.replaceChild(el, parent); } catch (e) { /* leave the picture in place */ }
+    }
+  }
 
   // HTML for one product image with a working src + placeholder fallback.
   function imgTag(p, cls, extra) {
@@ -1297,10 +1323,18 @@ const JA = (() => {
   // Render one gallery entry the way it can actually be shown: an <img> for a
   // photo, a <video> for a video, and a labelled chip for a document (which
   // must never render as a broken image or an inline-executing page).
+  // The <picture> "small webp" companion only exists for committed repo
+  // assets, where the file really is shipped as x.jpg + x.400w.webp. Anything
+  // that is not a repo path - an uploaded photo served from /uploads/<key>,
+  // an absolute CDN URL, a data: or blob: URL - has no such companion, and a
+  // <picture> does NOT fall back to its inner <img> once the chosen <source>
+  // fails: fabricating one here turned a perfectly good photo into a
+  // permanent broken icon. Those sources render as a plain <img> instead.
   function thumbFor(src) {
     const s = String(src || "");
     if (!s) return "";
     if (/^(data:|blob:|https?:\/\/)/i.test(s)) return "";
+    if (s.indexOf("/uploads/") === 0) return "";      // Supabase bucket: no companion
     const q = s.indexOf("?");
     const base = q >= 0 ? s.slice(0, q) : s;
     const query = q >= 0 ? s.slice(q) : "";
@@ -1527,8 +1561,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=127";
-        const FLYER = "images/brand/logo-flyer.jpg?v=127";
+        const LOGO = "images/brand/logo.jpg?v=128";
+        const FLYER = "images/brand/logo-flyer.jpg?v=128";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -1646,7 +1680,7 @@ const JA = (() => {
           <a href="contact.html">${tx("nav.contact")}</a>
         </nav>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=127" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=128" alt="Jaura" />
         </a>
         <div class="nav-right">
           <div class="lang-switch" role="group" aria-label="${tx("lang.group")}">
@@ -1785,7 +1819,7 @@ const JA = (() => {
     return `<footer class="footer wix-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=127" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=128" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -1869,7 +1903,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=127" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=128" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -1891,7 +1925,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=127";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=128";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -1903,7 +1937,7 @@ const JA = (() => {
   function logoPath() {
     let custom = "";
     try { custom = (settings() || {}).logoUrl || ""; } catch (e) { custom = ""; }
-    return custom || "images/brand/logo.jpg?v=127";
+    return custom || "images/brand/logo.jpg?v=128";
   }
   // FAQ answers Google can show as rich results. Kept in step with faq.html.
   const FAQ_LD = [
@@ -1936,7 +1970,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Jaura Store — fashion, beauty, household and lifestyle. Pay in Naira or F CFA. Lagos and Cotonou.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=127");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=128");
     document.title = title;
     [
       ["name", "description", description],
@@ -1982,7 +2016,7 @@ const JA = (() => {
       const ic = document.createElement("link");
       ic.rel = "icon";
       ic.type = "image/png";
-      ic.href = "images/brand/favicon.png?v=127";
+      ic.href = "images/brand/favicon.png?v=128";
       document.head.appendChild(ic);
     }
     let ld = document.getElementById("jaura-jsonld");

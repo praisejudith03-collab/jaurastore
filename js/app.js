@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=127";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=127";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=128";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=128";
 }
 
 function renderCategories() {
@@ -598,8 +598,26 @@ function renderProduct() {
   try {
     paintProduct(root, p);
   } catch (e) {
-    console.error(e);
-    root.innerHTML = `<div class="pdp-gallery"><div class="pdp-img"><img src="${JA.asset(p.image)}" alt="" /></div></div>
+    // The gallery must survive: if painting the full page throws, show every
+    // photo the product has (thumbs + arrows included) rather than one bare
+    // <img>, and say out loud which product failed and why.
+    console.error("paintProduct failed for " + (p.id || "?") + ":", e);
+    const gallery = (JA.galleryOf ? JA.galleryOf(p) : (p.images || [])).filter(Boolean).slice(0, 20);
+    const ph = p.placeholderImage || "images/products/_placeholder.jpg";
+    const main = gallery.length
+      ? JA.mediaHTML(gallery[0], { full: true, eager: true, alt: p.name, ph })
+      : "";
+    const thumbs = gallery.length > 1
+      ? `<div class="pdp-thumbs">${gallery.map((src, i) => `<button type="button" class="pdp-thumb${i === 0 ? " is-on" : ""}" data-src="${JA.escape(JA.asset(src))}" data-thumb="${i}">${JA.mediaHTML(src, { alt: p.name, ph })}</button>`).join("")}</div>`
+      : "";
+    root.innerHTML = `<div class="pdp-gallery">
+        <div class="pdp-img" data-media-slot>
+          ${gallery.length > 1 ? `<button type="button" class="pdp-nav pdp-prev" data-gal="-1" aria-label="Previous">‹</button>` : ""}
+          ${main}
+          ${gallery.length > 1 ? `<button type="button" class="pdp-nav pdp-next" data-gal="1" aria-label="Next">›</button>` : ""}
+        </div>
+        ${thumbs}
+      </div>
       <div>
         <h1>${JA.escape(p.name || "")}</h1>
         ${JA.priceHTML(p)}
