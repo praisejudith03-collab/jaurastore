@@ -279,6 +279,32 @@ def _save(data: bytes, folder: str, ext: str, s3_content_type: str = "") -> tupl
     return False, "Upload storage is not configured.", ""
 
 
+def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf: bool = False,
+               max_bytes: int = MAX_BYTES):
+    """Validate and upload an image/receipt through Supabase Storage."""
+    ok, msg, ext = validate_upload(data, filename, allow_pdf=allow_pdf,
+                                   max_bytes=max_bytes, kind="media")
+    if not ok:
+        return False, msg, ""
+    return _save(data, folder, ext)
+
+
+def save_asset(data: bytes, folder: str = "misc", filename: str = "", max_bytes: int = MAX_BYTES):
+    """Validate and upload a general site asset through Supabase Storage."""
+    ok, msg, ext = validate_asset(data, filename, max_bytes=max_bytes)
+    if not ok:
+        return False, msg, ""
+    return _save(data, folder, ext)
+
+
+def save_video(data: bytes, folder: str = "videos", filename: str = ""):
+    """Validate and upload a video through Supabase Storage."""
+    ok, msg, ext = validate_video(data, filename)
+    if not ok:
+        return False, msg, ""
+    return _save(data, folder, ext)
+
+
 def _object_name(folder: str, ext: str, digest: str) -> str:
     now = datetime.datetime.utcnow()
     return f"{_folder_name(folder)}/{now:%Y/%m}/{digest[:16]}-{secrets.token_hex(4)}.{ext}"
