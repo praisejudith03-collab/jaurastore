@@ -9,6 +9,10 @@ DEFAULT_SETTINGS = {
     "referral_commission_percentage": 0,
     "hero_banner_title": "", "hero_banner_subtitle": "",
     "contact_email": "", "contact_phone": "", "site_logo_url": "",
+    # legacy front-end keys, persisted in the same id=1 row
+    "hero_video_url": "", "hero_poster_url": "", "hero_doc_url": "",
+    "shop_banner_url": "", "shipping_note": "", "banner_from": "",
+    "banner_to": "", "conv_banner": "", "conv_bold": "",
 }
 
 def get_site_settings():

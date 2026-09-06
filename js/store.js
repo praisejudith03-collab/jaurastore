@@ -107,6 +107,10 @@ const JA = (() => {
     { id: "decor", name: "Decor", image: "images/categories/household.jpg" },
   ];
 
+  // Static fallbacks only. The live values come from GET /api/site (whose
+  // source of truth is the Supabase site_settings row) - this is never a
+  // runtime source of truth, and the legacy bankCfa/bankNgn free-text flow
+  // has been removed (bank_name/account_number/account_name drive checkout).
   const DEFAULT_SETTINGS = {
     storeName: "J Aura Store",
     rate: 0.44,
@@ -115,14 +119,14 @@ const JA = (() => {
     phoneNg: "+234 916 167 0236",
     email: "jaurastore@gmail.com",
     tiktok: "https://www.tiktok.com/@j_aura_store",
-    bankCfaName: "OKORAFOR GIFT",
-    bankCfaBank: "MTN MoMo Benin",
-    bankCfaAccount: "01 52 01 99 30",
-    bankCfa: "CFA (Benin) — MTN MoMo\nName: OKORAFOR GIFT\nMoMo: 01 52 01 99 30\nTogo Moov: +229 01 68 95 31 10 — OKORAFOR GOODNESS\nPut your order ID in the transfer remark.",
-    bankNgnName: "OKORAFOR PRAISE",
-    bankNgnBank: "UBA",
-    bankNgnAccount: "23474678931",
-    bankNgn: "Naira — UBA\nName: OKORAFOR PRAISE\nBank: UBA\nAccount number: 23474678931\nPut your order ID in the transfer remark.",
+    bank_name: "UBA",
+    account_number: "23474678931",
+    account_name: "OKORAFOR PRAISE",
+    contact_email: "jaurastore@gmail.com",
+    contact_phone: "+229 01 68 95 31 01",
+    hero_banner_title: "",
+    hero_banner_subtitle: "",
+    site_logo_url: "",
     shippingNote: "",
     logoUrl: "",
     shopBannerUrl: "",
@@ -156,21 +160,12 @@ const JA = (() => {
     return [user, domain].join(String.fromCharCode(64));
   };
 
+  // The live site settings (loaded from GET /api/site, Supabase-backed) are
+  // the source of truth; any localStorage copy is only an offline cache for
+  // painting, never something a second device or a redeploy can depend on.
   const settings = () => {
-    const s = { ...DEFAULT_SETTINGS, ...read(KEYS.settings, {}) };
+    const s = { ...DEFAULT_SETTINGS, ...read(KEYS.settings, {}), ..._siteConfig };
     s.rate = NGN_TO_CFA;
-    if (/set your bank|set in Admin|Phone \/ transfer/i.test(s.bankNgn || "") || !/23474678931|UBA/i.test(s.bankNgn || "")) {
-      s.bankNgn = DEFAULT_SETTINGS.bankNgn;
-      s.bankNgnName = DEFAULT_SETTINGS.bankNgnName;
-      s.bankNgnBank = DEFAULT_SETTINGS.bankNgnBank;
-      s.bankNgnAccount = DEFAULT_SETTINGS.bankNgnAccount;
-    }
-    if (/set your bank|set in Admin|MTN MoMo Benin: \+229/i.test(s.bankCfa || "") || !/52019930|OKORAFOR GIFT/i.test(s.bankCfa || "")) {
-      s.bankCfa = DEFAULT_SETTINGS.bankCfa;
-      s.bankCfaName = DEFAULT_SETTINGS.bankCfaName;
-      s.bankCfaBank = DEFAULT_SETTINGS.bankCfaBank;
-      s.bankCfaAccount = DEFAULT_SETTINGS.bankCfaAccount;
-    }
     return s;
   };
   const saveSettings = (s) => write(KEYS.settings, { ...settings(), ...s });
@@ -403,22 +398,41 @@ const JA = (() => {
     }));
     write(KEYS.cats, cleaned);
     // In the admin portal also persist to the server so every device and the
-    // live storefront see the same category table.
+    // live storefront see the same category table. The server (Supabase in
+    // production) is the source of truth: this returns the confirmed result
+    // so the portal never claims a category is live when PostgreSQL said no.
     if ((document.body.dataset.page || "") === "admin") {
-      (async () => {
+      return (async () => {
         try {
-          await fetch("api/admin/categories", {
+          const tok = await (window.JA_NET && window.JA_NET.csrf
+            ? window.JA_NET.csrf() : Promise.resolve(""));
+          const res = await fetch("api/admin/categories", {
             method: "PUT",
             headers: {
               "Content-Type": "application/json",
-              "X-CSRF-Token": await (window.JA_NET && window.JA_NET.csrf ? window.JA_NET.csrf() : Promise.resolve("")),
+              "X-CSRF-Token": tok,
             },
             credentials: "same-origin",
             body: JSON.stringify({ categories: cleaned }),
           });
-        } catch (e) { /* admin still has the local copy */ }
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok || d.ok === false) {
+            return { ok: false, error: d.error || "Could not save categories. No changes were made." };
+          }
+          // render the server-confirmed rows (complete Storage URLs included)
+          if (Array.isArray(d.categories) && d.categories.length) {
+            write(KEYS.cats, d.categories.map((c) => ({
+              id: c.id, name: c.name, nameFr: c.nameFr || "",
+              image: c.image || c.image_url || "", hidden: !!c.hidden,
+            })));
+          }
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: "Could not reach the server. Categories are not live yet." };
+        }
       })();
     }
+    return Promise.resolve({ ok: true });
   }
   function moveCategoryProducts(fromId, toId) {
     if (!fromId || !toId || fromId === toId) return 0;
@@ -432,11 +446,12 @@ const JA = (() => {
     return n;
   }
   function deleteCategory(id, moveTo) {
-    if (!id) return 0;
+    if (!id) return Promise.resolve({ ok: false, error: "No category to delete." });
     const dest = (moveTo && moveTo !== id) ? moveTo : (id === "beauty" ? "household" : "beauty");
     const moved = moveCategoryProducts(id, dest);
-    saveCategories(categories().filter((c) => c.id !== id && c.id !== "skincare"));
-    return moved;
+    // product re-homes are queued to the server; the category table itself is
+    // confirmed by saveCategories() so the portal knows if it went through
+    return saveCategories(categories().filter((c) => c.id !== id && c.id !== "skincare"));
   }
   function categoryName(id) {
     const c = categories().find((x) => x.id === id) || DEFAULT_CATS.find((x) => x.id === id);
@@ -720,15 +735,25 @@ const JA = (() => {
       label: "Product",
       onDone: (data) => { if (data && data.product) applyServerProduct(data.product); },
     }).then((d) => {
+      // A queued job is NOT a saved product: the server never confirmed it.
+      if (d && d.queued) {
+        toast("Server unreachable — the change is queued and will retry. It is not live yet.");
+        return { ok: false, queued: true, error: "Could not reach the server. The change is queued and will retry." };
+      }
+      if (d && d.ok === false) {
+        toast((d && d.error) || "Could not save the product. No changes are live.");
+        return { ok: false, error: d.error || "Could not save the product." };
+      }
       if (d && d.mirrored === false) {
         toast("Saved on the server only — not yet on the cloud copy. Tap Retry now.");
       }
-      return { ok: true, queued: !!(d && d.queued), data: d, mirrored: d && d.mirrored };
+      return { ok: true, data: d, mirrored: d && d.mirrored };
     })
       .catch((err) => {
         if (err && err.status === 401) { toast("Session expired — sign in again."); return { ok: false, error: err.message }; }
-        toast(err && err.error ? err.error : "Saved on this device; it will sync when you are back online.");
-        return { ok: false, error: err && err.message };
+        const msg = err && err.error ? err.error : "Could not save the product. No changes are live.";
+        toast(msg);
+        return { ok: false, error: msg };
       });
   }
   function removeProduct(id) {
@@ -744,7 +769,15 @@ const JA = (() => {
     if (!window.JA_NET) return Promise.resolve({ ok: false });
     return window.JA_NET.api("api/admin/products/" + encodeURIComponent(id), {
       method: "DELETE", queue: true, label: "Delete",
-    }).catch(() => ({ ok: false }));
+    }).then((d) => {
+      if (d && d.queued) {
+        return { ok: false, queued: true, error: "Could not reach the server. The deletion is queued and will retry." };
+      }
+      if (d && d.ok === false) {
+        return { ok: false, error: d.error || "Could not delete the product." };
+      }
+      return { ok: true };
+    }).catch((err) => ({ ok: false, error: (err && err.error) || "Could not delete the product." }));
   }
   function importProducts(list) {
     list.forEach(upsertProduct);
@@ -1616,21 +1649,27 @@ const JA = (() => {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         const site = (d && d.site) || {};
+        // Server row (Supabase site_settings) is the truth; the copy used by
+        // settings() and the checkout keeps ALL canonical fields live.
         _siteConfig = site;
         if (site.bannerFrom) _bannerDates.from = site.bannerFrom;
         if (site.bannerTo) _bannerDates.to = site.bannerTo;
         if (site.convBanner) _bannerText.conv = site.convBanner;
         if (site.convBold) _bannerText.bold = site.convBold;
-        // Persist shippingNote, logo, banner
-        if (site.shippingNote) {
-          saveSettings({ shippingNote: site.shippingNote });
-        }
-        if (site.logoUrl) {
-          saveSettings({ logoUrl: site.logoUrl });
-        }
-        if (site.shopBannerUrl) {
-          saveSettings({ shopBannerUrl: site.shopBannerUrl });
-        }
+        // Mirror the branding keys for the offline paint pass only.
+        try {
+          if (site.shippingNote) saveSettings({ shippingNote: site.shippingNote });
+          if (site.logoUrl) saveSettings({ logoUrl: site.logoUrl });
+          if (site.shopBannerUrl) saveSettings({ shopBannerUrl: site.shopBannerUrl });
+          if (site.site_logo_url) saveSettings({ site_logo_url: site.site_logo_url, logoUrl: site.site_logo_url });
+          if (site.contact_email) saveSettings({ contact_email: site.contact_email, email: site.contact_email });
+          if (site.contact_phone) saveSettings({ contact_phone: site.contact_phone });
+          if (site.bank_name) saveSettings({ bank_name: site.bank_name });
+          if (site.account_number) saveSettings({ account_number: site.account_number });
+          if (site.account_name) saveSettings({ account_name: site.account_name });
+          if (site.hero_banner_title) saveSettings({ hero_banner_title: site.hero_banner_title });
+          if (site.hero_banner_subtitle) saveSettings({ hero_banner_subtitle: site.hero_banner_subtitle });
+        } catch (e) { /* offline cache only - never blocks the live values */ }
         paintConvBanner();
         applySiteBranding(site);
         // Fire event for other pages

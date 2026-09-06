@@ -211,7 +211,8 @@ class _BoomSupabase:
 # historically lacked compareCfa - that mismatch is what killed every save.
 MIGRATE_COLUMNS = {"id", "sku", "slug", "name", "nameFr", "category",
                    "priceCfa", "compareCfa", "priceNgn", "compareNgn",
-                   "image", "placeholderImage", "description", "stock",
+                   "image", "image_url", "placeholderImage", "description",
+                   "stock", "stock_quantity",
                    "badge", "featured", "online", "colors", "options",
                    "source", "updated_at"}
 
@@ -383,9 +384,13 @@ def test_each_kind_of_data_lands_in_its_own_table(client, iso_catalog, monkeypat
 
     orders = fake.tables.get("orders", [])
     assert [x["id"] for x in orders] == ["JA-VIS01"], "the sale never reached orders"
-    assert orders[0]["customer_name"] == "Ama" and orders[0]["total"] == 15000
+    # the stored total is the SERVER total (wix-001 = 7,500 CFA), not the
+    # 15,000 the browser sent - browser prices are never trusted
+    assert orders[0]["customer_name"] == "Ama" and orders[0]["total"] == 7500
     assert orders[0]["status"] == "pending"
-    assert json.loads(orders[0]["payload"])["items"][0]["id"] == "wix-001"
+    payload_items = json.loads(orders[0]["payload"])["items"]
+    assert payload_items[0]["id"] == "wix-001"
+    assert payload_items[0]["price"] == 7500
 
     settings = {x.get("key"): x.get("value")
                 for x in fake.tables.get("growth_settings", [])}

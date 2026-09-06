@@ -74,7 +74,10 @@ def _order_payload(order_id, pid, name, qty, price, total):
     }
 
 
-def test_over_order_rejected_with_counts(client):
+def test_over_order_rejected_without_leaking_stock_counts(client):
+    """An over-stock cart is refused with code out_of_stock, but the customer
+   -facing message must never expose the numerical inventory (only In/Out of
+    Stock), so the exact available count stays secret."""
     pid = "wix-001"
     name = _seed_name(pid)
     payload = _order_payload("JA-OVER1", pid, name, 25, 1000, 25000)
@@ -85,7 +88,7 @@ def test_over_order_rejected_with_counts(client):
     assert body.get("code") == "out_of_stock"
     err = body.get("error", "")
     assert name in err
-    assert "24" in err and "25" in err
+    assert "24" not in err and "25" not in err   # stock quantities stay private
     assert body.get("items")
 
 
@@ -100,6 +103,8 @@ def test_stock_bypass_when_enforce_off(client, monkeypatch):
 
 
 def test_sales_confirmed_only_and_csv(client):
+    """Sales only count CONFIRMED orders - and they count the SERVER total
+    (wix-001 = 10,000 NGN each), never the browser-sent price."""
     execute("DELETE FROM orders")
     pid = "wix-001"
     name = _seed_name(pid)
@@ -121,8 +126,8 @@ def test_sales_confirmed_only_and_csv(client):
     assert report["pendingCount"] == 1
     by_cur = {row["currency"]: row["value"]
               for row in report["revenueByCurrency"]}
-    assert by_cur.get("NGN") == 8000
-    assert report["revenue"] == 8000
+    assert by_cur.get("NGN") == 20000
+    assert report["revenue"] == 20000
 
     from analytics import sales_csv
 

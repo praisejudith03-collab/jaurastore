@@ -243,12 +243,22 @@ def record_code_use(code, buyer_email, order_id):
     # referrer a one-time coupon — capped at 10%, no higher tiers ever.
     if uses == s["milestone"] and not r["reward_issued"]:
         # The payout rate is live site configuration, not a process-local
-        # setting. Read it at completion so an admin change applies immediately.
+        # setting. In production it is read ONLY from
+        # site_settings.referral_commission_percentage so an admin change
+        # applies immediately; if Supabase is unreachable the reward is
+        # skipped (never a stale local value).
         try:
             from supabase_settings import get_site_settings
-            pct = max(0, min(float(get_site_settings().get("referral_commission_percentage") or 0), 100))
+            pct = max(0, min(float(
+                get_site_settings().get("referral_commission_percentage") or 0), 100))
         except Exception:
-            pct = min(int(s["referrerPercent"]), 10)
+            if Config.ENV == "testing":
+                pct = min(int(s["referrerPercent"]), 10)   # test-only fallback
+            else:
+                audit("system", "referral.reward_skipped",
+                      f"{code} site_settings unavailable", "")
+                _mirror_referral(code)
+                return report
         reward = _mint_code("THANKS")
         execute("INSERT INTO coupons (code, percent, kind, email, note, active, max_uses) "
                 "VALUES (?,?,?,?,?,1,1)",

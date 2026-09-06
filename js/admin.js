@@ -721,12 +721,17 @@ async function handleProductSubmit(e, existing) {
   });
   if (window.__editReviews && JA.setReviews) JA.setReviews(id, window.__editReviews);
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = existing ? "Save" : "Add a Product"; }
-  if (res && res.ok === false && res.error) {
-    JA.toast("Saved on this device — it will sync when you are back online.");
-  } else if (res && (res.mirrored === false || (res.data && res.data.mirrored === false))) {
+  // Only a server-confirmed save leaves this editor. A queued retry or a
+  // Supabase failure keeps the form open with the error, so the admin never
+  // believes a product is live when PostgreSQL rejected it.
+  if (res && res.ok === false) {
+    JA.toast((res && res.error) || "Could not save the product. No changes are live.");
+    return;
+  }
+  if (res && res.mirrored === false) {
     JA.toast("Saved on the server only — not yet on the cloud copy. Tap Retry now.");
   } else {
-    JA.toast((res && res.queued) ? "Saved — uploading…" : (status === "out" ? "Live now · Out of stock." : "Live on the store now · " + images.length + " photo(s)."));
+    JA.toast(status === "out" ? "Live now · Out of stock." : "Live on the store now · " + images.length + " photo(s).");
   }
   editingId = null;
   // KEEP same category after save — don't reset to all products
@@ -829,7 +834,12 @@ function bindProdGridEvents() {
     b.onclick = async (e) => {
       e.stopPropagation();
       if (confirm("Delete this product from the website? Customers will not see it.")) {
-        await JA.removeProduct(b.dataset.del);
+        const res = await JA.removeProduct(b.dataset.del);
+        if (!res || res.ok === false) {
+          JA.toast((res && res.error) || "Could not delete the product. No changes were made.");
+          renderProdGrid(); bindProdGridEvents();   // the server list is still the truth
+          return;
+        }
         JA.toast("Deleted from the website.");
         editingId = null;
         renderProdGrid(); bindProdGridEvents();
@@ -1117,10 +1127,20 @@ function bindOrderButtons() {
     };
   });
   box.querySelectorAll("[data-decline]").forEach((b) => {
-    b.onclick = async () => { await JA.setOrderStatus(b.dataset.decline, "declined"); JA.toast("Declined · " + b.dataset.decline); fillOrders(); };
+    b.onclick = async () => {
+      b.disabled = true;
+      const res = await JA.setOrderStatus(b.dataset.decline, "declined");
+      if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not update the order."); b.disabled = false; return; }
+      JA.toast("Declined · " + b.dataset.decline); fillOrders();
+    };
   });
   box.querySelectorAll("[data-reopen]").forEach((b) => {
-    b.onclick = async () => { await JA.setOrderStatus(b.dataset.reopen, "pending"); fillOrders(); };
+    b.onclick = async () => {
+      b.disabled = true;
+      const res = await JA.setOrderStatus(b.dataset.reopen, "pending");
+      if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not update the order."); b.disabled = false; return; }
+      JA.toast("Reopened · " + b.dataset.reopen); fillOrders();
+    };
   });
   box.querySelectorAll("[data-del-order]").forEach((b) => {
     b.onclick = async () => {
@@ -1367,6 +1387,20 @@ function paintDesk(tab = "analytics") {
   if (form) {
     form.addEventListener("submit", (e) => handleProductSubmit(e, existing));
     form.dataset.submitBound = "1";
+    // "Delete this product" inside the editor: clear the Tombstone FIRST so
+    // a failed delete is never reported as done.
+    $(".wix-del-prod", form)?.addEventListener("click", async () => {
+      const pid = String(editingId || "");
+      if (!pid || pid === "new" || !confirm("Delete this product from the website? Customers will not see it.")) return;
+      const res = await JA.removeProduct(pid);
+      if (!res || res.ok === false) {
+        JA.toast((res && res.error) || "Could not delete the product. No changes were made.");
+        return;
+      }
+      JA.toast("Deleted from the website.");
+      editingId = null;
+      paintDesk("products");
+    });
   }
   $("#cancel-edit")?.addEventListener("click", () => { editingId = null; paintDesk("products"); });
   $("#add-product")?.addEventListener("click", () => { editingId = "new"; paintDesk("products"); });
@@ -1387,28 +1421,69 @@ function paintDesk(tab = "analytics") {
   $("#set-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    JA.saveSettings({
-      rate: 0.44,
-      whatsapp: fd.get("whatsapp"),
-      phoneBj: fd.get("phoneBj"),
-      phoneNg: fd.get("phoneNg"),
-      email: fd.get("email"),
-      bankCfa: fd.get("bankCfa"),
-      bankNgn: fd.get("bankNgn"),
-      shippingNote: fd.get("shippingNote") || "",
-    });
-    const from = String(fd.get("bannerFrom") || "").trim();
-    const to = String(fd.get("bannerTo") || "").trim();
-    const shipNote = String(fd.get("shippingNote") || "").trim();
-    const payload = { bannerFrom: from, bannerTo: to, shippingNote: shipNote };
-    // include logo/banner if already uploaded
+    const btn = $("#set-form-save");
+    const errBox = $("#set-form-error");
+    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    if (errBox) { errBox.hidden = true; errBox.textContent = ""; }
+    // EXACT canonical fields; the server validates referral 0-100 and writes
+    // the whole row into Supabase site_settings (id=1) atomically.
+    const payload = {
+      bank_name: String(fd.get("bank_name") || "").trim(),
+      account_number: String(fd.get("account_number") || "").trim(),
+      account_name: String(fd.get("account_name") || "").trim(),
+      referral_commission_percentage: String(fd.get("referral_commission_percentage") || "0").trim(),
+      hero_banner_title: String(fd.get("hero_banner_title") || "").trim(),
+      hero_banner_subtitle: String(fd.get("hero_banner_subtitle") || "").trim(),
+      contact_email: String(fd.get("contact_email") || "").trim(),
+      contact_phone: String(fd.get("contact_phone") || "").trim(),
+      site_logo_url: String(fd.get("site_logo_url") || "").trim(),
+      bannerFrom: String(fd.get("bannerFrom") || "").trim(),
+      bannerTo: String(fd.get("bannerTo") || "").trim(),
+      shippingNote: String(fd.get("shippingNote") || "").trim(),
+    };
+    // include logo/banner if already uploaded (legacy aliases still map to
+    // the same Supabase columns)
     const logoUrl = e.target.dataset.logoUrl || "";
     const shopBannerUrl = e.target.dataset.shopBannerUrl || "";
     if (logoUrl) payload.logoUrl = logoUrl;
     if (shopBannerUrl) payload.shopBannerUrl = shopBannerUrl;
-    try { await saveSiteConfig(payload); } catch (err) {}
+    let saved = null;
+    try { saved = await saveSiteConfig(payload); } catch (err) { saved = null; }
+    if (btn) { btn.disabled = false; btn.textContent = "Save settings"; }
+    if (!saved || saved.ok === false) {
+      const msg = (saved && saved.error) || "Could not save the settings. No changes were made.";
+      if (errBox) { errBox.textContent = msg; errBox.hidden = false; }
+      JA.toast(msg);
+      return;
+    }
+    // server-confirmed: repaint the form from the saved row
+    const site = (saved && saved.site) || {};
+    if (site) { try { fillSiteForm(site); } catch (err) {} }
     JA.toast("Settings saved — live on the site now.");
     JA.mountChrome();
+  });
+}
+
+// Paint the exact site_settings fields back into the settings form.
+function fillSiteForm(site) {
+  if (!site) return;
+  const set = {
+    bank_name: site.bank_name, account_number: site.account_number,
+    account_name: site.account_name,
+    referral_commission_percentage: site.referral_commission_percentage,
+    hero_banner_title: site.hero_banner_title,
+    hero_banner_subtitle: site.hero_banner_subtitle,
+    contact_email: site.contact_email, contact_phone: site.contact_phone,
+    site_logo_url: site.site_logo_url,
+    shippingNote: site.shipping_note != null ? site.shipping_note : site.shippingNote,
+    bannerFrom: site.banner_from != null ? site.banner_from : site.bannerFrom,
+    bannerTo: site.banner_to != null ? site.banner_to : site.bannerTo,
+  };
+  const form = $("#set-form");
+  if (!form) return;
+  Object.keys(set).forEach((name) => {
+    const el = form.elements && form.elements[name];
+    if (el && set[name] !== undefined && set[name] !== null) el.value = String(set[name]);
   });
 }
 
@@ -1455,7 +1530,10 @@ function collectCats() {
     const id = (row.querySelector(`[name="cat-id-${i}"]`)?.value || "").trim();
     const name = (row.querySelector(`[name="cat-name-${i}"]`)?.value || "").trim();
     if (!id || !name) return;
-    const asset = row.querySelector(".wix-cat-pic img")?.getAttribute("src") || row.querySelector(".wix-cat-pic a.media-doc-chip")?.getAttribute("href") || "";
+    // The uploaded Storage URL (dataset.catUrl) wins: it is the complete
+    // HTTPS URL the server must store; the DOM img is only the preview.
+    const uploadUrl = row.querySelector("[data-cat-img]")?.dataset.catUrl || "";
+    const asset = uploadUrl || row.querySelector(".wix-cat-pic img")?.getAttribute("src") || row.querySelector(".wix-cat-pic a.media-doc-chip")?.getAttribute("href") || "";
     out.push({ id, name, nameFr: (row.querySelector(`[name="cat-fr-${i}"]`)?.value || "").trim(), image: asset, hidden: !row.querySelector(`[name="cat-on-${i}"]`)?.checked, });
   });
   return out;
@@ -1463,11 +1541,15 @@ function collectCats() {
 function bindCategories() {
   const list = document.getElementById("cat-list");
   if (!list) return;
-  const persist = (msg) => {
+  const persist = async (msg) => {
     const cats = collectCats();
-    JA.saveCategories(cats);
+    const res = await JA.saveCategories(cats);
+    if (!res || res.ok === false) {
+      JA.toast((res && res.error) || "Could not save categories. No changes are live.");
+      return false;
+    }
     JA.toast(msg || "Categories saved. They show on the shop now.");
-    // Also trigger reload for product dropdowns if open
+    return true;
   };
   list.addEventListener("change", async (e) => {
     const input = e.target.closest("[data-cat-img]");
@@ -1478,16 +1560,33 @@ function bindCategories() {
     const card = input.closest("[data-cat-i]"); const pic = card?.querySelector(".wix-cat-pic");
     try {
       if (window.JA_NET) {
-        const res = await window.JA_NET.api("api/admin/uploads/category", { method: "POST", blob: f, field: "file", filename: f.name || "category.jpg", queue: true, timeout: 300000, label: "Category asset", });
-        if (res && res.url) { input.dataset.catUrl = res.url; if (pic) { const upLabel = pic.querySelector(".wix-cat-up"); pic.innerHTML = _catAssetHTML(res.url); if (upLabel) pic.appendChild(upLabel); else pic.innerHTML += `<label class="wix-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf" data-cat-img="${card.getAttribute("data-cat-i")}" hidden /></label>`; } persist("Asset saved — banner will use this image on shop page."); return; }
+        const res = await window.JA_NET.api("api/admin/uploads/category", { method: "POST", blob: f, field: "file", filename: f.name || "category.jpg", timeout: 300000, label: "Category asset", });
+        if (res && res.url) {
+          // complete HTTPS Storage URL: repaint the preview, then persist
+          // the real URL into categories.image_url through the server
+          input.dataset.catUrl = res.url;
+          if (pic) {
+            const upLabel = pic.querySelector(".wix-cat-up");
+            pic.innerHTML = _catAssetHTML(res.url);
+            if (upLabel) pic.appendChild(upLabel);
+            else pic.innerHTML += `<label class="wix-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf" data-cat-img="${card.getAttribute("data-cat-i")}" hidden /></label>`;
+          }
+          await persist("Asset saved — banner will use this image on shop page.");
+          return;
+        }
+        // never claim success when the upload was only queued or failed:
+        // the old asset stays, the admin can retry
+        JA.toast((res && res.error) || "Could not upload that asset. No changes are live.");
+        return;
       }
+      // no live server (test/dev static hosting): keep the local preview
       const data = await fileToData(f);
       if (pic) { const upLabel = pic.querySelector(".wix-cat-up"); pic.innerHTML = `<img src="${data}" alt="" />`; if (upLabel) pic.appendChild(upLabel); }
       persist("Photo saved.");
     } catch (err) { JA.toast((err && err.message) || "Could not read that asset."); }
     finally { input.value = ""; }
   });
-  list.addEventListener("click", (e) => {
+  list.addEventListener("click", async (e) => {
     const viewBtn = e.target.closest("[data-view-cat]");
     if (viewBtn) { dashCat = viewBtn.getAttribute("data-view-cat"); prodCatSel = dashCat; prodPage = 1; editingId = null; paintDesk("products"); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
     const card = e.target.closest("[data-cat-id]");
@@ -1498,26 +1597,37 @@ function bindCategories() {
     if (!del) return;
     const id = del.getAttribute("data-cat-del");
     const n = JA.products().filter((p) => p.category === id).length;
-    if (n) { if (!confirm("Move " + n + " product(s) into Beauty & skincare and delete this category?")) return; if (JA.deleteCategory) JA.deleteCategory(id, "beauty"); }
-    else { if (!confirm("Delete this category?")) return; if (JA.deleteCategory) JA.deleteCategory(id, "beauty"); }
+    const ask = n ? ("Move " + n + " product(s) into Beauty & skincare and delete this category?")
+                  : "Delete this category?";
+    if (!confirm(ask)) return;
+    if (JA.deleteCategory) {
+      const res = await JA.deleteCategory(id, "beauty");
+      if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not delete the category. No changes are live."); return; }
+    }
     JA.toast("Category deleted."); paintDesk("categories");
   });
-  document.getElementById("add-cat")?.addEventListener("click", () => {
+  document.getElementById("add-cat")?.addEventListener("click", async () => {
     const name = (document.getElementById("new-cat-name")?.value || "").trim();
     const nameFr = (document.getElementById("new-cat-fr")?.value || "").trim();
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
     const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=128", hidden: false }]);
-    JA.saveCategories(next);
+    const res = await JA.saveCategories(next);
+    if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
     paintDesk("categories");
   });
-  document.getElementById("save-cats")?.addEventListener("click", () => { persist(); paintDesk("categories"); });
+  document.getElementById("save-cats")?.addEventListener("click", async () => {
+    const ok = await persist();
+    if (ok) paintDesk("categories");
+  });
 }
 
 function settingsForm() {
-  const s = JA.settings();
+  // server row first (if already fetched), localStorage only as an offline
+  // paint convenience - the live Supabase row is the source of truth
+  const s = { ...JA.settings(), ...(JA.getSiteConfig ? (JA.getSiteConfig() || {}) : {}) };
   return `
   <div class="admin-card adx-hero-card">
     <h3 class="admin-h">Homepage hero video</h3>
@@ -1543,20 +1653,23 @@ function settingsForm() {
     <div class="field full"><button class="btn">Save banner</button></div>
   </form>
   <form id="set-form" class="form-grid admin-card" style="margin-top:22px">
-    <h3 class="admin-h full">Contact &amp; payment details</h3>
-    <p class="admin-note full">Naira is the only price you enter on products. The website converts F CFA at <strong>1 ₦ = 0.44 F CFA</strong>.</p>
+    <h3 class="admin-h full">Site settings — live from Supabase</h3>
+    <p class="admin-note full">These fields are stored in the Supabase <code>site_settings</code> row (id=1) and shown on the site immediately after saving.</p>
+    <div class="field"><label>Bank name</label><input name="bank_name" maxlength="120" value="${JA.escape(s.bank_name || "")}" /></div>
+    <div class="field"><label>Account number</label><input name="account_number" maxlength="60" value="${JA.escape(s.account_number || "")}" /></div>
+    <div class="field"><label>Account name</label><input name="account_name" maxlength="120" value="${JA.escape(s.account_name || "")}" /></div>
+    <div class="field"><label>Referral commission % (0–100)</label><input name="referral_commission_percentage" id="referral-pct" type="number" min="0" max="100" step="0.01" value="${Number(s.referral_commission_percentage ?? 0)}" /><p class="admin-note">The % an order's referral code pays out. Saved straight into site_settings.</p></div>
+    <div class="field full"><label>Hero banner title</label><input name="hero_banner_title" maxlength="200" value="${JA.escape(s.hero_banner_title || "")}" /></div>
+    <div class="field full"><label>Hero banner subtitle</label><input name="hero_banner_subtitle" maxlength="300" value="${JA.escape(s.hero_banner_subtitle || "")}" /></div>
+    <div class="field"><label>Contact email</label><input name="contact_email" type="email" maxlength="200" value="${JA.escape(s.contact_email || "")}" /></div>
+    <div class="field"><label>Contact phone</label><input name="contact_phone" maxlength="80" value="${JA.escape(s.contact_phone || "")}" /></div>
+    <div class="field full"><label>Site logo URL</label><input name="site_logo_url" maxlength="500" value="${JA.escape(s.site_logo_url || "")}" placeholder="https://… or /uploads/…" /></div>
     <h3 class="admin-h full">Benin delivery window</h3>
     <p class="admin-note full">These dates appear on the moving banner under the header. Shoppers in Benin are told they will receive their order between these two days.</p>
     <div class="field"><label>Delivery window starts</label><input type="date" name="bannerFrom" id="banner-from" value="2026-09-15" /></div>
     <div class="field"><label>Delivery window ends</label><input type="date" name="bannerTo" id="banner-to" value="2026-09-25" /></div>
-    <div class="field"><label>WhatsApp (digits only)</label><input name="whatsapp" value="${s.whatsapp}" /></div>
-    <div class="field"><label>Phone Benin</label><input name="phoneBj" value="${s.phoneBj}" /></div>
-    <div class="field"><label>Phone Nigeria</label><input name="phoneNg" value="${s.phoneNg}" /></div>
-    <div class="field"><label>Email</label><input name="email" value="${s.email}" /></div>
     <div class="field full"><label>Delivery fee / shipping note (shown at checkout)</label><textarea name="shippingNote" id="shipping-note" rows="3" maxlength="800" placeholder="e.g. Delivery fee: Lagos ₦2000-₦5000, Cotonou 1000-3000 CFA. Pickup in Cotonou is free for lighter products.">${JA.escape(s.shippingNote || "")}</textarea><p class="admin-note">This note appears dynamically at checkout under the order totals. Leave empty to hide.</p></div>
-    <div class="field full"><label>Pay-in-CFA instructions</label><textarea name="bankCfa" rows="4">${JA.escape(s.bankCfa)}</textarea></div>
-    <div class="field full"><label>Pay-in-Naira instructions</label><textarea name="bankNgn" rows="4">${JA.escape(s.bankNgn)}</textarea></div>
-    <div class="field full"><button class="btn">Save settings</button></div>
+    <div class="field full"><p class="admin-err" id="set-form-error" hidden></p><button class="btn" id="set-form-save">Save settings</button></div>
   </form>`;
 }
 async function saveSiteConfig(patch) {
@@ -1587,7 +1700,10 @@ function paintHeroVideoNow(site) {
 function bindHeroVideo() {
   const file = $("#hero-video-file"); const msg = $("#hero-video-msg"); if (!file) return;
   fetch("api/site", { cache: "no-store" }).then((r) => r.json()).then((d) => {
-    const site = (d && d.site) || {}; paintHeroVideoNow(site);
+    const site = (d && d.site) || {};
+    // server (Supabase) values are the source of truth for every field
+    paintHeroVideoNow(site);
+    try { fillSiteForm(site); } catch (e) {}
     const from = $("#banner-from"); const to = $("#banner-to"); if (from && site.bannerFrom) from.value = site.bannerFrom; if (to && site.bannerTo) to.value = site.bannerTo;
     const ship = $("#shipping-note"); if (ship && site.shippingNote) ship.value = site.shippingNote;
     // also fill logo/banner preview
@@ -1619,11 +1735,15 @@ function paintBrandingNow(site) {
   const logoBox = $("#logo-now"); const logoRm = $("#logo-remove");
   const bannerBox = $("#shop-banner-now"); const bannerRm = $("#shop-banner-remove");
   const form = $("#set-form");
+  // canonical site_settings column wins; the legacy alias is only a fallback
+  const logoUrl = site.site_logo_url || site.logoUrl || "";
+  const shopBannerUrl = site.shop_banner_url || site.shopBannerUrl || "";
   if (logoBox) {
-    if (site.logoUrl) {
-      logoBox.innerHTML = `<img class="adx-logo-preview" src="${JA.escape(JA.asset(site.logoUrl))}" alt="Logo" /><p class="admin-note">Live logo now.</p>`;
+    if (logoUrl) {
+      logoBox.innerHTML = `<img class="adx-logo-preview" src="${JA.escape(JA.asset(logoUrl))}" alt="Logo" /><p class="admin-note">Live logo now.</p>`;
       if (logoRm) logoRm.hidden = false;
-      if (form) form.dataset.logoUrl = site.logoUrl;
+      if (form) form.dataset.logoUrl = logoUrl;
+      if (form && form.elements && form.elements.site_logo_url) form.elements.site_logo_url.value = logoUrl;
     } else {
       logoBox.innerHTML = `<p class="empty">No custom logo — default logo.jpg shows. Upload to change sitewide.</p>`;
       if (logoRm) logoRm.hidden = true;
@@ -1631,10 +1751,10 @@ function paintBrandingNow(site) {
     }
   }
   if (bannerBox) {
-    if (site.shopBannerUrl) {
-      bannerBox.innerHTML = `<img class="adx-logo-preview" style="width:200px" src="${JA.escape(JA.asset(site.shopBannerUrl))}" alt="Shop banner" /><p class="admin-note">Live shop banner now.</p>`;
+    if (shopBannerUrl) {
+      bannerBox.innerHTML = `<img class="adx-logo-preview" style="width:200px" src="${JA.escape(JA.asset(shopBannerUrl))}" alt="Shop banner" /><p class="admin-note">Live shop banner now.</p>`;
       if (bannerRm) bannerRm.hidden = false;
-      if (form) form.dataset.shopBannerUrl = site.shopBannerUrl;
+      if (form) form.dataset.shopBannerUrl = shopBannerUrl;
     } else {
       bannerBox.innerHTML = `<p class="empty">No custom shop banner — wordmark-bg.jpg shows. Upload to change sitewide.</p>`;
       if (bannerRm) bannerRm.hidden = true;
@@ -1660,8 +1780,11 @@ function bindSiteBranding() {
             JA.toast("Logo saved — live sitewide now.");
             if (msg) msg.textContent = "Logo live now.";
             if (form) form.dataset.logoUrl = res.url;
-            paintBrandingNow({ ...(saved.site || {}), logoUrl: res.url });
-            JA.saveSettings({ logoUrl: res.url });
+            // repaint from the server-confirmed row (canonical site_logo_url)
+            paintBrandingNow(saved.site || { logoUrl: res.url });
+          } else {
+            const m = (saved && saved.error) || "Uploaded, but the logo could not be saved. No changes were made.";
+            if (msg) msg.textContent = m; JA.toast(m);
           }
         } else JA.toast((res && res.error) || "Logo upload failed.");
       } catch (e) { JA.toast("Logo upload failed."); }
@@ -1682,8 +1805,11 @@ function bindSiteBranding() {
             JA.toast("Shop banner saved — live sitewide now.");
             if (msg) msg.textContent = "Shop banner live now.";
             if (form) form.dataset.shopBannerUrl = res.url;
-            paintBrandingNow({ ...(saved.site || {}), shopBannerUrl: res.url });
-            JA.saveSettings({ shopBannerUrl: res.url });
+            // repaint from the server-confirmed row (canonical shop_banner_url)
+            paintBrandingNow(saved.site || { shopBannerUrl: res.url });
+          } else {
+            const m = (saved && saved.error) || "Uploaded, but the banner could not be saved. No changes were made.";
+            if (msg) msg.textContent = m; JA.toast(m);
           }
         } else JA.toast((res && res.error) || "Banner upload failed.");
       } catch (e) { JA.toast("Banner upload failed."); }
@@ -1693,12 +1819,14 @@ function bindSiteBranding() {
   $("#logo-remove")?.addEventListener("click", async () => {
     if (!confirm("Remove custom logo? Default returns.")) return;
     const saved = await saveSiteConfig({ logoUrl: "" });
-    if (saved && saved.ok !== false) { JA.toast("Logo removed."); paintBrandingNow(saved.site || {}); if (form) form.dataset.logoUrl = ""; JA.saveSettings({ logoUrl: "" }); }
+    if (saved && saved.ok !== false) { JA.toast("Logo removed."); paintBrandingNow(saved.site || {}); if (form) form.dataset.logoUrl = ""; if (form && form.elements && form.elements.site_logo_url) form.elements.site_logo_url.value = ""; }
+    else JA.toast((saved && saved.error) || "Could not remove the logo. No changes were made.");
   });
   $("#shop-banner-remove")?.addEventListener("click", async () => {
     if (!confirm("Remove custom shop banner? Default returns.")) return;
     const saved = await saveSiteConfig({ shopBannerUrl: "" });
-    if (saved && saved.ok !== false) { JA.toast("Shop banner removed."); paintBrandingNow(saved.site || {}); if (form) form.dataset.shopBannerUrl = ""; JA.saveSettings({ shopBannerUrl: "" }); }
+    if (saved && saved.ok !== false) { JA.toast("Shop banner removed."); paintBrandingNow(saved.site || {}); if (form) form.dataset.shopBannerUrl = ""; }
+    else JA.toast((saved && saved.error) || "Could not remove the banner. No changes were made.");
   });
 }
 function bindShippingNote() {

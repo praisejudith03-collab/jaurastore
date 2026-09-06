@@ -42,7 +42,25 @@ DEFAULT_CATEGORIES = [
 
 
 def _categories_data():
-    """Read categories from disk, falling back to the defaults."""
+    """Read categories from Supabase (production), disk (test/dev) or defaults.
+
+    In production there is NO silent local fallback: when the Supabase
+    ``categories`` table is unreachable this raises, and the route answers a
+    clear 503 instead of serving stale/empty data.
+    """
+    if Config.ENV != "testing":
+        try:
+            from supabase_store import enabled as _sb_enabled
+            from supabase_store import load_categories_table
+            if _sb_enabled():
+                rows = load_categories_table()
+                if rows is None:
+                    raise RuntimeError("Supabase categories unavailable")
+                return {"categories": rows, "updatedAt": "", "updatedBy": ""}
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            print(f"[supabase] categories read failed: {exc}")
     try:
         with open(CATEGORIES_FILE, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -61,6 +79,23 @@ def _save_categories(categories, actor=None):
         "updatedAt": _utcnow(),
         "updatedBy": actor or "",
     }
+    if Config.ENV != "testing":
+        try:
+            from supabase_store import enabled as _sb_enabled
+            if _sb_enabled():
+                from supabase_store import save_categories_table
+                if not save_categories_table(categories):
+                    raise RuntimeError("Supabase categories write failed")
+                from supabase_store import save_categories   # legacy JSON mirror
+                try:
+                    save_categories(categories)
+                except Exception:
+                    pass
+                return payload
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            print(f"[supabase] categories write failed: {exc}")
     tmp = CATEGORIES_FILE + ".tmp"
     _os.makedirs(_os.path.dirname(CATEGORIES_FILE) or ".", exist_ok=True)
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -95,19 +130,40 @@ def products():
     static_folder=None (everything is served from the project root), so that
     call raised 500 on every request. The file is read directly instead.
     """
-    body = jsonify(ok=True, products=catalog_mod.base_products())
+    body = jsonify(ok=True, products=[_public_product(p)
+                                      for p in catalog_mod.base_products()])
     body.headers["Cache-Control"] = "public, max-age=300"
     return body
 
 # ============================================================ public: catalog
+# Customers never see numerical stock: the public catalogue carries only an
+# In Stock / Out of Stock flag (the admin portal, with a session, still gets
+# the numbers it needs to manage the shop).
+_FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock",
+                         "variantStock", "inventory")
+
+
+def _public_product(p):
+    out = {k: v for k, v in dict(p or {}).items() if k not in _FORBIDDEN_PUBLIC_KEYS}
+    try:
+        qty = int(p.get("stock") if p.get("stock") is not None else p.get("stock_quantity") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    out["stock_status"] = "in" if qty > 0 else "out"
+    return out
+
+
 @api.get("/catalog")
 def catalog():
     """Seed products + every admin edit, merged. This is the live catalogue."""
     admin = bool(authmod.current_admin())
     include_hidden = admin and request.args.get("all") == "1"
+    products = catalog_mod.merged(include_hidden=include_hidden)
+    if not admin:
+        products = [_public_product(p) for p in products]
     body = json.dumps({
         "ok": True,
-        "products": catalog_mod.merged(include_hidden=include_hidden),
+        "products": products,
         "meta": catalog_mod.meta(),
     }, ensure_ascii=False, separators=(",", ":"))
     etag = 'W/"' + hashlib.sha256(
@@ -126,7 +182,11 @@ def catalog():
 @api.get("/categories")
 def categories_public():
     """The category list used by the shop, filters and admin manager."""
-    return jsonify(ok=True, categories=_categories_data().get("categories") or [])
+    try:
+        return jsonify(ok=True, categories=_categories_data().get("categories") or [])
+    except Exception as exc:
+        print(f"[supabase] categories serve failed: {exc}")
+        return jsonify(ok=False, error="Categories are temporarily unavailable. Please refresh in a moment."), 503
 
 
 @api.put("/admin/categories")
@@ -152,10 +212,15 @@ def categories_admin_set():
             "id": cid,
             "name": name,
             "nameFr": sec.clean(c.get("nameFr"), 120),
-            "image": sec.safe_url(c.get("image") or ""),
+            "image": sec.safe_url(c.get("image_url") or c.get("image") or ""),
+            "image_url": sec.safe_url(c.get("image_url") or c.get("image") or ""),
             "hidden": bool(c.get("hidden")),
         })
-    payload = _save_categories(clean, authmod.current_admin())
+    try:
+        payload = _save_categories(clean, authmod.current_admin())
+    except Exception as exc:
+        print(f"[supabase] categories save failed: {exc}")
+        return jsonify(ok=False, error="Could not save categories to Supabase. No changes were made."), 503
     audit(authmod.current_admin(), "categories.update", f"saved={len(clean)}", _ip())
     return jsonify(ok=True, count=len(clean), **payload)
 
@@ -459,11 +524,25 @@ def _sync_order_stock(payload, old_status, new_status, actor=None):
     Mutates ``payload`` in place: ``stockApplied`` holds the exact deltas so a
     second confirm (email already=True, admin re-save) never double-decrements,
     and a decline / reopen / delete restores the same quantities.
+
+    In production the stock was already reserved atomically at checkout, so a
+    confirm only marks the reservation (it never decrements again), while a
+    decline or reopen releases it back.
     """
     if not isinstance(payload, dict):
         return payload
     old_c = (old_status or "pending") == "confirmed"
     new_c = (new_status or "pending") == "confirmed"
+    if catalog_mod._prod_source():
+        if new_c and not old_c:
+            payload["stockApplied"] = _order_stock_moves(payload)
+        elif (old_c and not new_c) or \
+                ((old_status or "pending") == "pending" and new_status == "declined"):
+            moves = payload.get("stockApplied") or _order_stock_moves(payload)
+            if moves:
+                _apply_stock_moves(moves, +1, actor=actor)
+            payload["stockApplied"] = None
+        return payload
     if old_c == new_c:
         return payload
     if new_c:
@@ -480,13 +559,140 @@ def _sync_order_stock(payload, old_status, new_status, actor=None):
     return payload
 
 
+def _price_int(value):
+    """Non-negative integer price from a product row, else 0."""
+    try:
+        return max(0, int(float(value or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _server_unit_price(product, currency):
+    """The authoritative unit price for one product in the order currency.
+
+    Loaded from the live catalogue (Supabase in production): the browser's
+    price is never trusted. CFA is derived from NGN at the house rate when
+    the product has no explicit priceCfa.
+    """
+    cfa = _price_int(product.get("priceCfa") if product.get("priceCfa") is not None
+                     else product.get("price_cfa"))
+    ngn = _price_int(product.get("priceNgn") if product.get("priceNgn") is not None
+                     else product.get("price_ngn"))
+    if currency == "CFA":
+        if cfa:
+            return cfa
+        return max(0, round((ngn or 0) * catalog_mod.NGN_TO_CFA))
+    if ngn:
+        return ngn
+    return max(0, round((cfa or 0) / catalog_mod.NGN_TO_CFA))
+
+
+def _checkout_items(clean_items, currency):
+    """Server-authoritative item validation + pricing.
+
+    Loads every product from the live catalogue (Supabase in production),
+    aggregates duplicate lines, validates online/qty/stock and returns
+    (items, subtotal, error_response). The error response is 400 for an
+    unknown product, 409 with code ``out_of_stock`` for an unavailable line
+    - and never contains a numerical stock count (only In/Out of Stock).
+    """
+    try:
+        live = catalog_mod.merged(include_hidden=True)
+    except Exception:
+        live = []
+    products_map = {str((p or {}).get("id") or ""): p for p in live if p}
+
+    aggregated = {}
+    for it in clean_items:
+        key = (str(it.get("id") or ""), str(it.get("color") or ""))
+        g = aggregated.setdefault(key, {
+            "id": str(it.get("id") or ""),
+            "variant": str(it.get("color") or ""),
+            "qty": 0,
+            "name": str(it.get("name") or ""),
+        })
+        g["qty"] += int(it.get("qty") or 0)
+
+    items = []
+    subtotal = 0
+    for g in aggregated.values():
+        pid = g["id"]
+        prod = products_map.get(pid)
+        if prod is None:
+            return [], 0, (jsonify(ok=False, error=(
+                f'"{g["name"] or pid}" is no longer available. '
+                "Please remove it from your cart and try again."),
+                code="unknown_product",
+                items=[{"id": pid, "name": g["name"] or pid}]), 400)
+        if prod.get("online") is False:
+            return [], 0, (jsonify(ok=False, error=(
+                f'"{prod.get("name") or g["name"]}" is out of stock. '
+                "Please remove it and try again."),
+                code="out_of_stock",
+                items=[{"id": pid, "name": prod.get("name") or g["name"],
+                        "variant": g["variant"]}]), 409)
+        avail = _stock_available(prod, g["variant"])
+        if Config.ENFORCE_STOCK and g["qty"] > avail:
+            return [], 0, (jsonify(ok=False, error=(
+                f'"{prod.get("name") or g["name"]}" is out of stock. '
+                "Please remove it or choose fewer items."),
+                code="out_of_stock",
+                items=[{"id": pid, "name": prod.get("name") or g["name"],
+                        "variant": g["variant"]}]), 409)
+        unit = _server_unit_price(prod, currency)
+        line_price = unit * g["qty"]
+        subtotal += line_price
+        items.append({
+            "id": pid,
+            "name": prod.get("name") or g["name"],
+            "qty": g["qty"],
+            "price": line_price,
+            "color": g["variant"],
+        })
+    return items, subtotal, None
+
+
+def _release_stock_lines(lines):
+    """Best-effort release of reserved stock after a failed checkout."""
+    try:
+        from supabase_store import release_product_stock
+        for pid, qty in (lines or []):
+            try:
+                release_product_stock(pid, qty)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _benin_togo_min(zone, country, currency, total):
+    """The 5,000 CFA / 12,000 NGN minimum for Benin & Togo deliveries."""
+    if not re.search(r"(?i)\bbenin\b|\btogo\b|cotonou|calavi|porto|lom[ée]|lome", zone) and \
+       not re.search(r"(?i)\bbenin\b|\btogo\b", country or ""):
+        return None
+    if currency == "CFA" and total < 5000:
+        return ("Benin & Togo deliveries: minimum order 5,000 F CFA "
+                "(about 12,000 naira). Please add a few more items to meet "
+                "the minimum.")
+    if currency == "NGN" and total < 12000:
+        return ("Benin & Togo deliveries: minimum order 12,000 naira "
+                "(about 5,000 F CFA). Please add a few more items to meet "
+                "the minimum.")
+    return None
+
+
 @api.post("/orders")
 @sec.require_csrf
 def create_order():
     """Store a completed checkout - the whole form plus the payment proof.
     Accepts JSON or multipart/form-data (field `order` = JSON, field `proof`
     = image). Re-posting the same order id returns the stored order instead of
-    creating a duplicate, so a queued offline retry is always safe."""
+    creating a duplicate, so a queued offline retry is always safe.
+
+    The browser's prices and total are never trusted: every line is loaded
+    from the live catalogue (Supabase in production), prices are recomputed,
+    duplicate lines are aggregated, stock is validated (and atomically
+    reserved in production) and the totals stored are the server's."""
     # 30/hour: plenty for a real shopper, and mobile networks share one IP
     limited = sec.guard("order", limit=30, window=3600)
     if limited: return limited
@@ -540,34 +746,13 @@ def create_order():
     if not is_allowed_pickup and re.search(r"(?i)\bpick[\s-]?up\b|collect\s+in\s+store|self[\s-]?collect", zone):
         return jsonify(ok=False, error="Choose a delivery location."), 400
 
-    # Benin & Togo deliveries carry a minimum order (or its naira equivalent).
-    # Enforce for Benin, Togo, Cotonou, Calavi, Porto-Novo, Lomé
-    if re.search(r"(?i)\bbenin\b|\btogo\b|cotonou|calavi|porto|lom[ée]|lome", zone):
-        min_cfa = 5000
-        min_ngn = 12000
-        if currency == "CFA" and total < min_cfa:
-            return jsonify(ok=False, error=(
-                "Benin & Togo deliveries: minimum order 5,000 F CFA (about 12,000 naira). "
-                "Please add a few more items to meet the minimum.")), 400
-        if currency == "NGN" and total < min_ngn:
-            return jsonify(ok=False, error=(
-                "Benin & Togo deliveries: minimum order 12,000 naira (about 5,000 F CFA). "
-                "Please add a few more items to meet the minimum.")), 400
-    # Also check country field for Benin/Togo even if zone is generic
-    country_raw = sec.clean(customer_raw.get("country") or d.get("country") or "", 80)
-    if re.search(r"(?i)\bbenin\b|\btogo\b", country_raw):
-        # if zone didn't already trigger, still enforce
-        if not re.search(r"(?i)\bbenin\b|\btogo\b|cotonou|calavi|porto|lom[ée]|lome", zone):
-            min_cfa = 5000
-            min_ngn = 12000
-            if currency == "CFA" and total < min_cfa:
-                return jsonify(ok=False, error=(
-                    "Benin & Togo deliveries: minimum order 5,000 F CFA (about 12,000 naira). "
-                    "Please add a few more items to meet the minimum.")), 400
-            if currency == "NGN" and total < min_ngn:
-                return jsonify(ok=False, error=(
-                    "Benin & Togo deliveries: minimum order 12,000 naira (about 5,000 F CFA). "
-                    "Please add a few more items to meet the minimum.")), 400
+    # ---- server-authoritative lines: prices from the live catalogue ----
+    # (Supabase in production; the browser's price/total is never trusted)
+    clean_items, subtotal, err = _checkout_items(clean_items, currency)
+    if err:
+        return err
+    total = subtotal
+    discount = 0
 
     oid = sec.clean(d.get("id"), 24).upper()
     if not ORDER_ID.match(oid or ""):
@@ -576,12 +761,6 @@ def create_order():
     existing = one("SELECT id, status, at FROM orders WHERE id=?", (oid,))
     if existing:
         return jsonify(ok=True, id=oid, duplicate=True, status=existing["status"])
-
-    if Config.ENFORCE_STOCK:
-        problems = _stock_problems(clean_items)
-        if problems:
-            return jsonify(ok=False, error=_stock_message(problems),
-                           code="out_of_stock", items=problems), 409
 
     # ---- referral / promo code (validated on the server, never trusted) ----
     import growth
@@ -592,6 +771,16 @@ def create_order():
         chk = growth.check_code(promo_raw)
         if chk.get("ok"):
             promo = {"code": chk["code"], "percent": chk["percent"], "kind": chk["kind"]}
+    if promo:
+        discount = round(subtotal * int(promo["percent"]) / 100)
+        total = max(0, subtotal - discount)
+
+    # Benin & Togo: the minimum is enforced against the SERVER total, never
+    # the number the browser sent.
+    country_raw = sec.clean(customer_raw.get("country") or d.get("country") or "", 80)
+    min_error = _benin_togo_min(zone, country_raw, currency, total)
+    if min_error:
+        return jsonify(ok=False, error=min_error), 400
 
     proof_url = ""
     data = b""
@@ -622,6 +811,8 @@ def create_order():
         "status": "pending",
         "customer": customer,
         "items": clean_items,
+        "subtotal": subtotal,
+        "discount": discount,
         "total": total,
         "currency": currency,
         "payment": sec.clean(d.get("payment"), 60) or currency,
@@ -630,38 +821,99 @@ def create_order():
     }
     if promo:
         order["promo"] = promo
-    execute(
-        "INSERT INTO orders (id, payload, email, customer_name, phone, country, city, zone, "
-        "address, note, payment, proof_url, items_count, total, currency, source, status, at, updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (oid, json.dumps(order, ensure_ascii=False), email,
-         sec.clean(customer.get("name") or (customer.get("firstName") + " " + customer.get("lastName")).strip(), 200),
-         customer.get("phone", ""), customer.get("country", ""), customer.get("city", ""),
-         zone, customer.get("address", ""), customer.get("note", ""),
-         order["payment"], proof_url, len(clean_items), total, currency,
-         order["source"], "pending", order["at"], now),
-    )
 
-    # mirror into Supabase when enabled (never blocks the sale on failure)
-    from supabase_store import create_order as _sb_create_order
-    if Config.SUPABASE_ENABLED:
+    sb_row = {
+        "id": oid, "email": email,
+        "customer_name": sec.clean(customer.get("name") or "", 200),
+        "phone": customer.get("phone", ""), "country": customer.get("country", ""),
+        "city": customer.get("city", ""), "zone": zone,
+        "address": customer.get("address", ""), "note": customer.get("note", ""),
+        "payment": order["payment"], "proof_url": proof_url,
+        "items_count": len(clean_items), "total": total, "currency": currency,
+        "source": order["source"], "status": "pending",
+        "payload": order, "at": order["at"], "updated_at": now,
+    }
+
+    prod_source = bool(catalog_mod._prod_source())
+    reserved = []
+
+    if prod_source and Config.ENFORCE_STOCK:
+        # Reserve every line atomically BEFORE the order is written, so two
+        # concurrent checkouts can never sell the same last unit.
         try:
-            _sb_create_order({
-                "id": oid, "email": email,
-                "customer_name": sec.clean(customer.get("name") or "", 200),
-                "phone": customer.get("phone", ""), "country": customer.get("country", ""),
-                "city": customer.get("city", ""), "zone": zone,
-                "address": customer.get("address", ""), "note": customer.get("note", ""),
-                "payment": order["payment"], "proof_url": proof_url,
-                "items_count": len(clean_items), "total": total, "currency": currency,
-                "source": order["source"], "status": "pending",
-                "payload": order, "at": order["at"], "updated_at": now,
-            })
+            from supabase_store import reserve_product_stock
+            for it in clean_items:
+                res = reserve_product_stock(it["id"], int(it["qty"]))
+                if res is None:
+                    _release_stock_lines(reserved)
+                    return jsonify(ok=False, error=(
+                        f'"{it["name"]}" is out of stock. Please remove it '
+                        "or choose fewer items."),
+                        code="out_of_stock",
+                        items=[{"id": it["id"], "name": it["name"],
+                                "variant": it.get("color") or ""}]), 409
+                if res is False:
+                    _release_stock_lines(reserved)
+                    return jsonify(ok=False, error=(
+                        "We could not confirm your stock right now. "
+                        "Please try again in a moment.")), 503
+                reserved.append((it["id"], int(it["qty"])))
         except Exception as exc:
-            # the SQLite row is the sale's record: a mirror hiccup (or a
-            # missing column on the orders table) must never 500 a checkout,
-            # skip the confirmation e-mail or lose the purchase event below.
-            print(f"[supabase] order mirror skipped: {exc}")
+            print(f"[supabase] order reserve failed: {exc}")
+            _release_stock_lines(reserved)
+            return jsonify(ok=False, error=(
+                "We could not confirm your stock right now. "
+                "Please try again in a moment.")), 503
+
+    if prod_source:
+        # Supabase PostgreSQL is the record of the sale. A failed write is a
+        # clear 503 (stock already released) - never a silent local fallback.
+        try:
+            from supabase_store import create_order_strict
+            saved = bool(create_order_strict(sb_row))
+        except Exception as exc:
+            print(f"[supabase] order write failed: {exc}")
+            saved = False
+        if not saved:
+            _release_stock_lines(reserved)
+            return jsonify(ok=False, error=(
+                "Your order could not be saved right now. Please try again "
+                "in a moment — nothing was charged.")), 503
+        # SQLite stays only a cache for the admin portal / fast reads.
+        try:
+            execute(
+                "INSERT INTO orders (id, payload, email, customer_name, phone, country, city, zone, "
+                "address, note, payment, proof_url, items_count, total, currency, source, status, at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (oid, json.dumps(order, ensure_ascii=False), email,
+                 sec.clean(customer.get("name") or (customer.get("firstName") + " " + customer.get("lastName")).strip(), 200),
+                 customer.get("phone", ""), customer.get("country", ""), customer.get("city", ""),
+                 zone, customer.get("address", ""), customer.get("note", ""),
+                 order["payment"], proof_url, len(clean_items), total, currency,
+                 order["source"], "pending", order["at"], now),
+            )
+        except Exception as exc:
+            print(f"[sqlite] order cache write skipped: {exc}")
+    else:
+        execute(
+            "INSERT INTO orders (id, payload, email, customer_name, phone, country, city, zone, "
+            "address, note, payment, proof_url, items_count, total, currency, source, status, at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (oid, json.dumps(order, ensure_ascii=False), email,
+             sec.clean(customer.get("name") or (customer.get("firstName") + " " + customer.get("lastName")).strip(), 200),
+             customer.get("phone", ""), customer.get("country", ""), customer.get("city", ""),
+             zone, customer.get("address", ""), customer.get("note", ""),
+             order["payment"], proof_url, len(clean_items), total, currency,
+             order["source"], "pending", order["at"], now),
+        )
+        # mirror into Supabase when enabled (best effort in test/dev;
+        # production never reaches this branch)
+        from supabase_store import create_order as _sb_create_order
+        if Config.SUPABASE_ENABLED:
+            try:
+                _sb_create_order(sb_row)
+            except Exception as exc:
+                print(f"[supabase] order mirror skipped: {exc}")
 
     # conversion tracking: a finished checkout is the purchase event
     vid, _is_new = analytics_mod.visitor_id()
@@ -709,7 +961,9 @@ def create_order():
 
     resp = make_response(jsonify(ok=True, id=oid, status="pending", proofUrl=proof_url,
                                  referralCode=referral_code,
-                                 promo=promo or None))
+                                 promo=promo or None,
+                                 subtotal=subtotal, discount=discount, total=total,
+                                 items=clean_items))
     return analytics_mod.stamp_cookie(resp, vid)
 
 
@@ -787,30 +1041,61 @@ def payment_proof():
     except Exception as exc:                      # never lose the receipt
         delivered, info = False, f"mail error: {exc}"
 
-    execute(
-        "INSERT INTO payment_proofs (order_id, name, phone, email, method, items, quantity, "
-        "amount, note, file_url, file_name, file_size, mime, emailed, email_info) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (order_id, name, phone, email, method, details["items"], details["quantity"],
-         details["amount"], details["note"], url, attach_name, len(data), mime,
-         1 if delivered else 0, str(info)[:300]),
-    )
-    # mirror into Supabase when enabled (receipts live in the `receipts` table)
-    from supabase_store import create_receipt as _sb_create_receipt
-    if Config.SUPABASE_ENABLED:
+    proof_row = {
+        "id": order_id, "order_id": order_id, "name": name, "phone": phone,
+        "email": email, "method": method, "items": details["items"],
+        "quantity": details["quantity"], "amount": details["amount"],
+        "note": details["note"], "file_url": url, "file_name": attach_name,
+        "file_size": len(data), "file_type": mime,
+        "emailed": bool(delivered), "email_info": str(info)[:300],
+    }
+
+    prod_source = bool(catalog_mod._prod_source())
+    if prod_source:
+        # The file is already in the private bucket; the RECORD must land in
+        # Supabase first. A failure removes the orphan object and returns a
+        # clear error instead of pretending the receipt was saved.
         try:
-            _sb_create_receipt({
-                "id": order_id, "order_id": order_id, "name": name, "phone": phone,
-                "email": email, "method": method, "items": details["items"],
-                "quantity": details["quantity"], "amount": details["amount"],
-                "note": details["note"], "file_url": url, "file_name": attach_name,
-                "file_size": len(data), "file_type": mime,
-                "emailed": bool(delivered), "email_info": str(info)[:300],
-            })
+            from supabase_store import create_receipt_strict
+            saved = bool(create_receipt_strict(proof_row))
         except Exception as exc:
-            # the file is uploaded and the mail is sent: never fail the
-            # shopper's proof submission over a mirror hiccup
-            print(f"[supabase] receipt mirror skipped: {exc}")
+            print(f"[supabase] receipt write failed: {exc}")
+            saved = False
+        if not saved:
+            try:
+                storage.delete_upload(url)
+            except Exception:
+                pass
+            return jsonify(ok=False, error=(
+                "Your receipt could not be saved right now. Please try again "
+                "in a moment.")), 503
+        try:
+            execute(
+                "INSERT INTO payment_proofs (order_id, name, phone, email, method, items, quantity, "
+                "amount, note, file_url, file_name, file_size, mime, emailed, email_info) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (order_id, name, phone, email, method, details["items"], details["quantity"],
+                 details["amount"], details["note"], url, attach_name, len(data), mime,
+                 1 if delivered else 0, str(info)[:300]),
+            )
+        except Exception as exc:
+            print(f"[sqlite] receipt cache write skipped: {exc}")
+    else:
+        execute(
+            "INSERT INTO payment_proofs (order_id, name, phone, email, method, items, quantity, "
+            "amount, note, file_url, file_name, file_size, mime, emailed, email_info) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (order_id, name, phone, email, method, details["items"], details["quantity"],
+             details["amount"], details["note"], url, attach_name, len(data), mime,
+             1 if delivered else 0, str(info)[:300]),
+        )
+        # mirror into Supabase when enabled (best effort outside production)
+        from supabase_store import create_receipt as _sb_create_receipt
+        if Config.SUPABASE_ENABLED:
+            try:
+                _sb_create_receipt(proof_row)
+            except Exception as exc:
+                print(f"[supabase] receipt mirror skipped: {exc}")
     audit("customer", "payment_proof", f"{order_id} {attach_name} emailed={delivered}", _ip())
 
     return jsonify(ok=True, emailed=delivered, info=info, url=url,
@@ -1149,8 +1434,27 @@ def admin_payment_proof_delete(pid):
         removed = storage.delete_upload(file_url)
     except Exception:
         removed = False
+    prod_source = bool(catalog_mod._prod_source())
+    if prod_source:
+        # storage object AND the Supabase row must both go; a failure is
+        # reported and the local row is kept so the admin can retry.
+        if file_url and not removed:
+            return jsonify(ok=False, error=(
+                "The receipt file could not be removed from Storage. "
+                "No changes were made.")), 503
+        try:
+            from supabase_store import delete_receipt_strict
+            deleted = bool(delete_receipt_strict(receipt_id=pid,
+                                                 order_id=row["order_id"],
+                                                 file_url=file_url))
+        except Exception:
+            deleted = False
+        if not deleted:
+            return jsonify(ok=False, error=(
+                "The receipt could not be removed from Supabase. "
+                "No changes were made.")), 503
     execute("DELETE FROM payment_proofs WHERE id=?", (pid,))
-    if Config.SUPABASE_ENABLED:
+    if Config.SUPABASE_ENABLED and not prod_source:
         try:
             from supabase_store import delete_receipt as _sb_delete_receipt
             _sb_delete_receipt(receipt_id=pid, order_id=row["order_id"], file_url=file_url)
@@ -1289,6 +1593,10 @@ def admin_order_delete(oid):
     if old_status == "confirmed":
         _sync_order_stock(payload, "confirmed", "pending",
                          actor=authmod.current_admin())
+    elif catalog_mod._prod_source():
+        # stock was reserved at checkout; deleting a pending order frees it
+        _sync_order_stock(payload, "pending", "declined",
+                          actor=authmod.current_admin())
 
     # take the receipts out first — their files go too, so a deleted receipt
     # can no longer be downloaded from its old URL (and cannot be restored
@@ -1304,12 +1612,26 @@ def admin_order_delete(oid):
                 files_removed += 1
         except Exception:
             pass
+    prod_source = bool(catalog_mod._prod_source())
+    if prod_source:
+        # Supabase row + storage objects must go FIRST, or the boot restore
+        # would resurrect the deleted order (and its receipts).
+        try:
+            from supabase_store import delete_order as _sb_delete_order
+            deleted = bool(_sb_delete_order(oid))
+        except Exception as exc:
+            print(f"[supabase] order delete failed: {exc}")
+            deleted = False
+        if not deleted:
+            return jsonify(ok=False, error=(
+                "The order could not be deleted from Supabase. "
+                "No changes were made.")), 503
     execute("DELETE FROM payment_proofs WHERE order_id=?", (oid,))
     execute("DELETE FROM orders WHERE id=?", (oid,))
 
-    # the mirrored copy must go as well, or the boot-time restore from
-    # Supabase quietly brings the order (and its receipts) straight back
-    if Config.SUPABASE_ENABLED:
+    if Config.SUPABASE_ENABLED and not prod_source:
+        # the mirrored copy must go as well, or the boot-time restore from
+        # Supabase quietly brings the order (and its receipts) straight back
         try:
             from supabase_store import delete_order as _sb_delete_order
             _sb_delete_order(oid)
@@ -1331,6 +1653,9 @@ def admin_product_upsert():
     product, action = result[0], result[1]
     mirrored = result[2] if len(result) > 2 else True
     if not product:
+        if action == "error" or (mirrored is False and catalog_mod._prod_source()):
+            return jsonify(ok=False, error=(
+                "The product could not be saved to Supabase. No changes were made.")), 503
         return jsonify(ok=False, error="A product needs at least a name."), 400
     return jsonify(ok=True, product=product, action=action, mirrored=mirrored,
                    meta=catalog_mod.meta())
@@ -1339,7 +1664,20 @@ def admin_product_upsert():
 @authmod.require_admin
 @sec.require_csrf
 def admin_product_delete(pid):
-    catalog_mod.remove(pid, authmod.current_admin())
+    """Soft-delete one product. In production the tombstone MUST land in
+    Supabase first: a failed portal call never reports success, so the admin
+    can retry instead of believing a product is gone while it still sells."""
+    pid = sec.clean(pid, 64)
+    if catalog_mod._prod_source():
+        from supabase_store import delete_products_strict
+        if not delete_products_strict([pid]):
+            return jsonify(ok=False, error=(
+                "The product could not be deleted from Supabase. "
+                "No changes were made.")), 503
+        catalog_mod._sync_repo_async()
+    else:
+        catalog_mod.remove(pid, authmod.current_admin())
+    audit(authmod.current_admin(), "product.delete", pid, _ip())
     return jsonify(ok=True, id=pid, meta=catalog_mod.meta())
 
 @api.put("/admin/products")
@@ -1539,28 +1877,90 @@ def _load_site():
 @api.get("/site")
 def site_config():
     try:
-        return jsonify(ok=True, site=_load_site())
+        return jsonify(ok=True, site=_site_payload(_load_site()))
     except Exception:
         return jsonify(ok=False, error="Site settings are temporarily unavailable."), 503
+
+# Legacy front-end keys mapped onto site_settings columns (kept so the
+# branding / hero / banner controls still persist in production).
+SITE_LEGACY_MAP = {
+    "logoUrl": "site_logo_url",
+    "heroVideo": "hero_video_url",
+    "heroPoster": "hero_poster_url",
+    "heroDoc": "hero_doc_url",
+    "shopBannerUrl": "shop_banner_url",
+    "shippingNote": "shipping_note",
+    "bannerFrom": "banner_from",
+    "bannerTo": "banner_to",
+    "convBanner": "conv_banner",
+    "convBold": "conv_bold",
+}
+
+# Reverse mapping used when serving /api/site back to the browser: the row is
+# canonical (site_logo_url, hero_video_url, ...) but the pages also read the
+# legacy aliases (logoUrl, heroVideo, ...), so a production response carries
+# both shapes of every value.
+SITE_LEGACY_ALIASES = {col: key for key, col in SITE_LEGACY_MAP.items()}
+
+
+def _site_payload(site):
+    """Canonical site_settings row + the legacy front-end aliases."""
+    out = dict(site or {})
+    for col, alias in SITE_LEGACY_ALIASES.items():
+        if col in out and alias not in out:
+            out[alias] = out[col]
+    return out
+_SITE_URL_KEYS = frozenset(SITE_KEYS) | {
+    "site_logo_url", "hero_video_url", "hero_poster_url", "hero_doc_url",
+    "shop_banner_url", "logoUrl", "heroVideo", "heroPoster", "heroDoc",
+    "shopBannerUrl",
+}
+_SITE_TEXT_KEYS = frozenset({"conv_banner", "conv_bold", "convBanner", "convBold",
+                             "shipping_note", "shippingNote"})
+
 
 @api.post("/admin/site")
 @authmod.require_admin
 @sec.require_csrf
 def admin_site_update():
     d = request.get_json(silent=True) or {}
-    values = {k: d[k] for k in SITE_KEYS if k in d}
+    values = {}
     for k in SITE_KEYS:
-        if k not in values: continue
+        if k in d:
+            values[k] = d[k]
+    for legacy, column in SITE_LEGACY_MAP.items():
+        if legacy in d:
+            values.setdefault(column, d[legacy])
+    for k in list(values):
         if k == "referral_commission_percentage":
             try: values[k] = max(0, min(100, float(values[k])))
             except (TypeError, ValueError): return jsonify(ok=False, error="Invalid referral percentage."), 400
-        elif k.endswith("_url") or k == "site_logo_url":
+        elif k in _SITE_URL_KEYS:
             values[k] = sec.safe_url(str(values[k] or ""))
-        else: values[k] = sec.clean(values[k], 500)
+        elif k in _SITE_TEXT_KEYS:
+            values[k] = re.sub(r"<[^>]+>", "", str(values[k] or ""))
+        elif k in ("banner_from", "banner_to"):
+            v = str(values[k] or "")
+            if v and not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+                # an invalid date keeps the previously saved value; it must
+                # not leak into the write below through the legacy mapping
+                values.pop(k, None)
+                continue
+            values[k] = v
+        else:
+            values[k] = sec.clean(values[k], 500)
+    # Supabase column names only.
+    values = {k: v for k, v in values.items()
+              if k in ("site_logo_url", "hero_video_url", "hero_poster_url",
+                       "hero_doc_url", "shop_banner_url", "shipping_note",
+                       "banner_from", "banner_to", "conv_banner", "conv_bold")
+              or k in SITE_KEYS}
     if Config.ENV == "testing":
         path = os.environ.get("SITE_CONFIG_PATH", "")
         current = _load_site()
-        legacy = ("heroVideo", "heroPoster", "heroDoc", "logoUrl", "shopBannerUrl", "bannerFrom", "bannerTo", "convBanner", "convBold", "shippingNote")
+        legacy = ("heroVideo", "heroPoster", "heroDoc", "logoUrl", "shopBannerUrl",
+                  "bannerFrom", "bannerTo", "convBanner", "convBold", "shippingNote")
+        colmap = {v: k for k, v in SITE_LEGACY_MAP.items()}
         for k in legacy:
             if k in d:
                 value = str(d.get(k) or "")
@@ -1569,19 +1969,20 @@ def admin_site_update():
                 if k in ("bannerFrom", "bannerTo") and not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
                     continue
                 if k in ("convBanner", "convBold", "shippingNote"):
-                    import re as _re
-                    value = _re.sub(r"<[^>]+>", "", value)
+                    value = re.sub(r"<[^>]+>", "", value)
                 current[k] = value
-        current.update(values)
+        for k, v in values.items():
+            current[colmap.get(k, k)] = v
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(current, fh)
         return jsonify(ok=True, site=current)
     try:
         site = __import__("supabase_settings", fromlist=["update_site_settings"]).update_site_settings(values)
-    except Exception:
-        return jsonify(ok=False, error="Could not update Supabase site settings."), 503
+    except Exception as exc:
+        print(f"[supabase] site settings update failed: {exc}")
+        return jsonify(ok=False, error="Could not update Supabase site settings. No changes were made."), 503
     audit(authmod.current_admin(), "site.update", json.dumps(values)[:200], _ip())
-    return jsonify(ok=True, site=site)
+    return jsonify(ok=True, site=_site_payload(site))
 
 # ==================================================== public: promo & referral
 @api.post("/promo/check")
@@ -1678,7 +2079,15 @@ def reviews_create():
 @authmod.require_admin
 def admin_growth_settings():
     import growth
-    return jsonify(ok=True, settings=growth.settings())
+    s = growth.settings()
+    if Config.ENV != "testing":
+        try:
+            from supabase_settings import get_site_settings
+            s["referralCommissionPercentage"] = float(
+                get_site_settings().get("referral_commission_percentage") or 0)
+        except Exception:
+            s["referralCommissionPercentage"] = float(s.get("referrerPercent") or 0)
+    return jsonify(ok=True, settings=s)
 
 @api.post("/admin/growth/settings")
 @authmod.require_admin
@@ -1687,10 +2096,27 @@ def admin_growth_settings_save():
     import growth
     d = request.get_json(silent=True) or {}
     saved = growth.save_settings(d, authmod.current_admin())
-    # Keep the only payout control in the persistent site_settings row.
-    if Config.ENV != "testing" and ("referrerPercent" in d or "referral_commission_percentage" in d):
-        from supabase_settings import update_site_settings
-        update_site_settings({"referral_commission_percentage": d.get("referral_commission_percentage", d.get("referrerPercent"))})
+    # The payout control lives in the persistent site_settings row
+    # (referral_commission_percentage, 0-100, validated server-side).
+    if "referral_commission_percentage" in d or \
+            (Config.ENV != "testing" and "referrerPercent" in d):
+        try:
+            raw = d.get("referral_commission_percentage",
+                        d.get("referrerPercent"))
+            pct = max(0.0, min(100.0, float(raw)))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="Referral commission must be a number between 0 and 100."), 400
+        if Config.ENV != "testing":
+            try:
+                from supabase_settings import update_site_settings
+                site = update_site_settings({"referral_commission_percentage": pct})
+            except Exception as exc:
+                print(f"[supabase] referral commission save failed: {exc}")
+                return jsonify(ok=False, error=(
+                    "Could not save the referral commission to Supabase. "
+                    "No changes were made.")), 503
+            saved["referralCommissionPercentage"] = float(
+                site.get("referral_commission_percentage") or pct)
     return jsonify(ok=True, settings=saved)
 
 @api.get("/admin/referrals")

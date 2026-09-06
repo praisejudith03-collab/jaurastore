@@ -12,20 +12,25 @@ Three back ends, chosen with UPLOAD_MODE in .env:
                     Set S3_BUCKET / S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY
                     / S3_PUBLIC_BASE. No code change is needed to switch.
 
-  supabase       - the project's Supabase Storage bucket (default name:
-                    uploads, override with SUPABASE_BUCKET). Needs
+  supabase       - the project's Supabase Storage buckets. Needs
                     SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY, the same pair
-                    the rest of the app uses. Public objects come back as
+                    the rest of the app uses. Public objects go to the public
+                    `uploads` bucket (override with SUPABASE_BUCKET) and come
+                    back as complete HTTPS URLs:
                     …/storage/v1/object/public/<bucket>/<key>. Payment proofs
-                    and receipts (the `proofs` folder) come back as SIGNED
-                    URLs instead, so they stay admin-only and are never
-                    publicly guessable - see signed_url_for(), which refreshes
-                    a signed URL when an admin opens the receipts view.
-                    /uploads/... keeps serving files written to the local
-                    disk (old files, and the fallback below).
+                    and receipts (the `proofs` folder) go to the PRIVATE
+                    `receipts` bucket (override with SUPABASE_PRIVATE_BUCKET)
+                    and come back ONLY as short-lived SIGNED URLs, so they
+                    stay admin-only and are never publicly guessable - see
+                    signed_url_for(), which refreshes a signed URL when an
+                    admin opens the receipts view.
+                    /uploads/... keeps serving legacy files that were written
+                    to the local disk before the move to Supabase.
 
-When the configured Supabase bucket (or S3 bucket) is unreachable the write
-falls back to the local disk, so a customer's proof of payment is never lost.
+PRODUCTION NEVER FALLS BACK TO LOCAL DISK. In production (FLASK_ENV !=
+testing) a failed Supabase Storage write returns a clear error and the
+caller reports it; the local disk is only ever used under FLASK_ENV=testing
+as a test/development compatibility path.
 
 Every file is re-identified from its own bytes (magic number), never from the
 filename a browser sends. That means a renamed .exe can never be stored and
@@ -266,16 +271,8 @@ def _save(data: bytes, folder: str, ext: str, s3_content_type: str = "") -> tupl
     if Config.UPLOAD_MODE == "supabase":
         ok2, _msg2, url = _save_supabase(data, key, ext, content_type, folder)
         if ok2:
-            if Config.ENV == "testing":
-                if _is_sensitive(folder):
-                    try:
-                        import supabase_store
-                        signed = supabase_store.client().storage.from_(supabase_store._bucket()).create_signed_url(key, SIGNED_URL_TTL_SECONDS)
-                        url = signed.get("signedUrl", url) if isinstance(signed, dict) else url
-                    except Exception:
-                        pass
-                else:
-                    url = "/uploads/" + key
+            if Config.ENV == "testing" and not _is_sensitive(folder):
+                url = "/uploads/" + key
             return True, "stored", url
         if Config.ENV != "testing":
             return False, "Supabase Storage upload failed.", ""
@@ -390,11 +387,11 @@ def _save_supabase(data: bytes, key: str, ext: str, content_type: str,
     key (the same pair the rest of the app authenticates with).
 
     Public folders (products, categories, videos, misc) return a public URL
-    so the image loads in the browser with zero server round-trips. Sensitive
-    folders (proofs = payment receipts / proofs) return a SIGNED URL instead:
-    the object is still in the public bucket, but the only link anyone ever
-    sees is a short-lived one the server minted, so a receipt is admin-only
-    and never publicly guessable.
+    so the image loads in the browser with zero server round-trips.
+    Sensitive folders (proofs = payment receipts / proofs) are uploaded to
+    the PRIVATE `receipts` bucket and only ever returned as a short-lived
+    SIGNED URL minted server-side - the object is never publicly reachable
+    and the URL is never given to a customer or the storefront.
     """
     if not (Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY):
         return False, "supabase not configured", ""
@@ -405,13 +402,26 @@ def _save_supabase(data: bytes, key: str, ext: str, content_type: str,
     c = supabase_store.client()
     if c is None:
         return False, "supabase client unavailable", ""
-    bucket = supabase_store._bucket()
+    sensitive = _is_sensitive(folder)
+    bucket = (supabase_store._private_bucket() if sensitive
+              else supabase_store._bucket())
     try:
         c.storage.from_(bucket).upload(
             key, data, {"content-type": content_type or "application/octet-stream"})
     except Exception as exc:
         return False, f"supabase upload failed ({exc.__class__.__name__})", ""
-    # All persisted URLs are stable, complete public HTTPS URLs.
+    if sensitive:
+        try:
+            res = c.storage.from_(bucket).create_signed_url(
+                key, SIGNED_URL_TTL_SECONDS)
+            signed = (res.get("signedUrl") if isinstance(res, dict)
+                      else getattr(res, "signedUrl", ""))
+            if signed:
+                return True, "stored", signed
+            return False, "supabase signed url unavailable", ""
+        except Exception as exc:
+            return False, f"supabase signed url failed ({exc.__class__.__name__})", ""
+    # Public assets: one stable, complete HTTPS URL.
     return True, "stored", supabase_public_url(key)
 
 
@@ -419,17 +429,35 @@ def _save_supabase(data: bytes, key: str, ext: str, content_type: str,
 _signed_url_cache = {}
 
 
-def _signed_cache_get(path: str) -> str:
-    item = _signed_url_cache.get(path)
+def _signed_cache_key(bucket: str, path: str) -> str:
+    return f"{bucket}|{path}"
+
+
+def _signed_cache_get(bucket: str, path: str) -> str:
+    item = _signed_url_cache.get(_signed_cache_key(bucket, path))
     if item and item[1] > time.time():
         return item[0]
     return ""
 
 
-def _signed_cache_put(path: str, url: str) -> None:
+def _signed_cache_put(bucket: str, path: str, url: str) -> None:
     if len(_signed_url_cache) > 1024:
         _signed_url_cache.clear()
-    _signed_url_cache[path] = (url, time.time() + SIGNED_URL_REFRESH_SECONDS)
+    _signed_url_cache[_signed_cache_key(bucket, path)] = (url, time.time() + SIGNED_URL_REFRESH_SECONDS)
+
+
+def _object_in_bucket(client, bucket: str, path: str) -> bool:
+    """True when the object actually exists in this bucket.
+
+    create_signed_url() happily mints a URL for a missing object, so before
+    refreshing a proof we check existence: signing a legacy object against a
+    bucket it is not stored in would silently produce a 404 receipt.
+    """
+    try:
+        client.storage.from_(bucket).info(path)
+        return True
+    except Exception:
+        return False
 
 
 def signed_url_for(value: str) -> str:
@@ -456,23 +484,42 @@ def signed_url_for(value: str) -> str:
         # host that happens to look like a Supabase storage URL
         if not raw.startswith(Config.SUPABASE_URL.rstrip("/") + "/storage/"):
             return value
-        bucket = supabase_store._bucket()
+        bucket = supabase_store._bucket_from_url(raw) or supabase_store._bucket()
         path = supabase_store._storage_path_from_url(raw, bucket)
         if not path:
             return value
         if path.lstrip("/").split("/", 1)[0].lower() not in SENSITIVE_FOLDERS:
             return value                      # public asset; nothing to sign
-        cached = _signed_cache_get(path)
+        original_bucket = bucket
+        if bucket != supabase_store._private_bucket():
+            bucket = supabase_store._private_bucket()
+        cached = _signed_cache_get(bucket, path)
         if cached:
             return cached
         c = supabase_store.client()
         if c is None:
             return value
+        # Legacy (pre-cutover) rows hold signed URLs in the PUBLIC uploads
+        # bucket (.../sign/uploads/proofs/...). The object physically lives
+        # there still, so minting against the private bucket would 404.
+        # If the private bucket does not have the object yet, sign the legacy
+        # copy from its real bucket - admins only ever see this URL, and the
+        # migration script copies the object into the private bucket.
+        if not _object_in_bucket(c, bucket, path):
+            if (original_bucket and original_bucket != bucket
+                    and _object_in_bucket(c, original_bucket, path)):
+                print(f"[storage] legacy receipt {path} not in private bucket; "
+                      f"signing from {original_bucket}")
+                bucket = original_bucket
+            else:
+                # the object is genuinely gone from every bucket it could be
+                # in: never invent a working URL for it
+                return value
         res = c.storage.from_(bucket).create_signed_url(path, SIGNED_URL_TTL_SECONDS)
         url = res.get("signedUrl") if isinstance(res, dict) else getattr(res, "signedUrl", "")
         if not url:
             return value
-        _signed_cache_put(path, url)
+        _signed_cache_put(bucket, path, url)
         return url
     except Exception:
         return value

@@ -153,7 +153,11 @@ def products_table_rows():
     reconciled by id, or by a slug/sku clash confirmed by the same name, in
     catalog.merged().
     """
-    c = client()
+    try:
+        c = client()
+    except Exception as exc:
+        print(f"[supabase] products read failed: {exc}")
+        return None
     if c is None:
         return None
     try:
@@ -164,7 +168,7 @@ def products_table_rows():
             if not pid or pid in seen_ids:
                 continue
             seen_ids.add(pid)
-            rows.append(r)
+            rows.append(_canonicalize_product(r, c))
         # Reconcile each row's image to a path the browser can display (a
         # committed repo file when present, else the branded placeholder).
         # No third-party / Wix photo is ever referenced.
@@ -173,6 +177,61 @@ def products_table_rows():
     except Exception as exc:
         print(f"[supabase] products read failed: {exc}")
         return None
+
+
+def product_by_id(pid):
+    """One live product row from Supabase, dict-shaped, or None.
+
+    Never raises: an unreachable Supabase returns None and the caller
+    decides how to surface that (checkout must not fall back to a stale
+    local price).
+    """
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("products").select("*")
+               .eq("id", str(pid or "").strip()).limit(1).execute())
+        rows = _res_data(res)
+        if not rows:
+            return None
+        row = _canonicalize_product(rows[0], c)
+        from catalog import resolve_image
+        return resolve_image(row)
+    except Exception as exc:
+        print(f"[supabase] product read failed for {pid!r}: {exc}")
+        return None
+
+
+# Canonical column names the acceptance spec requires (image_url,
+# stock_quantity) plus the legacy aliases the storefront/overrides still use
+# (image, stock). The row returned to callers always carries BOTH, so a
+# live Supabase row survives every consumer untouched.
+_PRODUCT_ALIASES = (
+    ("image_url", "image"),
+    ("stock_quantity", "stock"),
+)
+
+
+def _canonicalize_product(row, _c=None):
+    p = dict(row or {})
+    if p.get("image_url") is None and p.get("image") is not None:
+        p["image_url"] = p["image"]
+    if p.get("image") is None and p.get("image_url") is not None:
+        p["image"] = p["image_url"]
+    if p.get("stock_quantity") is None and p.get("stock") is not None:
+        p["stock_quantity"] = p["stock"]
+    if p.get("stock") is None and p.get("stock_quantity") is not None:
+        p["stock"] = p["stock_quantity"]
+    try:
+        p["stock"] = int(p.get("stock") or 0)
+    except (TypeError, ValueError):
+        p["stock"] = 0
+    try:
+        p["stock_quantity"] = int(p.get("stock_quantity") or 0)
+    except (TypeError, ValueError):
+        p["stock_quantity"] = 0
+    return p
 
 
 # The products table was hand-built and is NARROWER than the row the app
@@ -190,7 +249,8 @@ def products_table_rows():
 # fails loudly so the caller reports mirrored=False instead of quietly
 # losing the product.
 _CRITICAL_PRODUCT_COLUMNS = frozenset(
-    {"id", "name", "priceCfa", "priceNgn", "stock"})
+    {"id", "name", "priceCfa", "priceNgn", "stock",
+     "stock_quantity", "image_url"})
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
 
 
@@ -263,6 +323,24 @@ def delete_products(ids):
         print(f"[supabase] products delete failed: {exc}")
 
 
+def delete_products_strict(ids):
+    """Soft-remove admin products in Supabase; True only on success.
+
+    The admin Delete button needs to know whether the deletion actually
+    reached PostgreSQL - a best-effort mirror must never let the portal
+    report "deleted" while Supabase still serves the product.
+    """
+    c = client()
+    if c is None or not ids:
+        return False
+    try:
+        c.table("products").update({"source": "deleted"}).in_("id", list(ids)).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] products delete failed: {exc}")
+        return False
+
+
 def replace_all_products(products):
     """Replace the admin product set in Supabase (bulk import).
 
@@ -287,6 +365,123 @@ def replace_all_products(products):
         return
     if rows:
         _upsert_products_resilient(rows)
+
+
+def reserve_product_stock(product_id, qty):
+    """Atomically reserve ``qty`` of one product in PostgreSQL.
+
+    Uses the ``reserve_product_stock`` RPC (single guarded UPDATE), so two
+    concurrent checkouts can never oversell: only one of them gets True.
+    Returns the fresh row (dict) on success, False on failure/None on
+    unavailable (Supabase down, out of stock or offline).
+    """
+    c = client()
+    if c is None:
+        return False
+    try:
+        pid = str(product_id or "").strip()
+        qty = int(qty or 0)
+        if not pid or qty <= 0:
+            return False
+        res = c.rpc("reserve_product_stock", {"p_id": pid, "p_qty": qty}).execute()
+        ok = _res_data(res)
+        reserved = bool(ok and (ok[0] if isinstance(ok, list) else ok))
+        if not reserved:
+            return None          # out of stock / offline product
+        return product_by_id(pid)
+    except Exception as exc:
+        print(f"[supabase] reserve_product_stock failed: {exc}")
+        return False
+
+
+def release_product_stock(product_id, qty):
+    """Return reserved stock to a product. Best-effort; never raises."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        pid = str(product_id or "").strip()
+        qty = int(qty or 0)
+        if not pid or qty <= 0:
+            return False
+        res = c.rpc("release_product_stock", {"p_id": pid, "p_qty": qty}).execute()
+        ok = _res_data(res)
+        return bool(ok and (ok[0] if isinstance(ok, list) else ok))
+    except Exception as exc:
+        print(f"[supabase] release_product_stock failed: {exc}")
+        return False
+
+
+# ------------------------------------------------------------------ categories
+# The Supabase `categories` table is the production source of truth (id, name,
+# name_fr, image_url, hidden, updated_at). The legacy growth_settings JSON
+# mirror is kept only as a boot-time fallback for the test/dev local path.
+
+
+def save_categories_table(categories):
+    """Upsert the category table into Supabase (replacing the whole set).
+
+    Returns True on success. Removes ids that were deleted locally so a
+    removed category never comes back on the next boot.
+    """
+    c = client()
+    if c is None:
+        return False
+    rows = []
+    for cat in (categories or []):
+        if not isinstance(cat, dict):
+            continue
+        row = {
+            "id": str(cat.get("id") or "").strip(),
+            "name": str(cat.get("name") or "").strip(),
+            "name_fr": str(cat.get("nameFr") or cat.get("name_fr") or "").strip(),
+            "image_url": str(cat.get("image_url") or cat.get("image") or "").strip(),
+            "hidden": bool(cat.get("hidden")),
+            "updated_at": _now(),
+        }
+        if not row["id"] or not row["name"]:
+            continue
+        rows.append(row)
+    if not rows:
+        return False
+    try:
+        c.table("categories").upsert(rows).execute()
+        keep = [r["id"] for r in rows]
+        try:
+            c.table("categories").delete().not_.in_("id", keep).execute()
+        except Exception as exc:
+            print(f"[supabase] categories prune failed: {exc}")
+        return True
+    except Exception as exc:
+        print(f"[supabase] categories save failed: {exc}")
+        return False
+
+
+def load_categories_table():
+    """The category rows from the Supabase categories table, or None."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("categories").select("*")
+               .order("name").limit(500).execute())
+        rows = _res_data(res)
+        if not rows:
+            return []
+        out = []
+        for r in rows:
+            out.append({
+                "id": str(r.get("id") or "").strip(),
+                "name": str(r.get("name") or "").strip(),
+                "nameFr": str(r.get("name_fr") or r.get("nameFr") or "").strip(),
+                "image": str(r.get("image_url") or r.get("image") or "").strip(),
+                "image_url": str(r.get("image_url") or r.get("image") or "").strip(),
+                "hidden": bool(r.get("hidden")),
+            })
+        return out
+    except Exception as exc:
+        print(f"[supabase] categories load failed: {exc}")
+        return None
 
 
 # ------------------------------------------------------------------ auth
@@ -353,12 +548,7 @@ def supabase_set_shared_password(password):
 # e-mail and the purchase event were skipped, and the order never reached
 # the orders table.
 def create_order(order, engine=None):
-    """Persist a completed checkout into Supabase.
-
-    The SQLite row is still written (the shop's local copy and the source the
-    tests and admin portal use); this mirrors it into Supabase so orders also
-    live there. Never blocks the sale on a Supabase failure.
-    """
+    """Persist a completed checkout into Supabase (best-effort mirror)."""
     c = client()
     if c is None:
         return
@@ -369,6 +559,26 @@ def create_order(order, engine=None):
         c.table("orders").upsert(row).execute()
     except Exception as exc:
         print(f"[supabase] order upsert failed: {exc}")
+
+
+def create_order_strict(order):
+    """Persist a completed checkout into Supabase; True only on success.
+
+    This is the production write path: Supabase PostgreSQL is the record of
+    the sale and a failure is surfaced, never swallowed.
+    """
+    c = client()
+    if c is None:
+        return False
+    row = dict(order)
+    row["payload"] = json.dumps(order.get("payload", order), ensure_ascii=False)
+    row["updated_at"] = _now()
+    try:
+        c.table("orders").upsert(row).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] order upsert failed: {exc}")
+        return False
 
 
 def update_order(order_id, status=None, payload=None):
@@ -391,7 +601,7 @@ def update_order(order_id, status=None, payload=None):
 
 
 def create_receipt(receipt):
-    """Mirror a payment-proof submission into Supabase."""
+    """Mirror a payment-proof submission into Supabase (best effort)."""
     c = client()
     if c is None:
         return
@@ -401,6 +611,21 @@ def create_receipt(receipt):
         c.table("receipts").upsert(row).execute()
     except Exception as exc:
         print(f"[supabase] receipt upsert failed: {exc}")
+
+
+def create_receipt_strict(receipt):
+    """Persist a payment receipt row into Supabase; True only on success."""
+    c = client()
+    if c is None:
+        return False
+    row = dict(receipt)
+    row["created_at"] = _now()
+    try:
+        c.table("receipts").upsert(row).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] receipt upsert failed: {exc}")
+        return False
 
 
 def delete_receipt(receipt_id=None, order_id=None, file_url=""):
@@ -423,10 +648,55 @@ def delete_receipt(receipt_id=None, order_id=None, file_url=""):
         print(f"[supabase] receipt delete failed: {exc}")
 
 
+def delete_receipt_strict(receipt_id=None, order_id=None, file_url=""):
+    """Remove a mirrored payment receipt row from Supabase; True on success."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        q = c.table("receipts").delete()
+        if receipt_id is not None:
+            q = q.eq("id", receipt_id)
+        elif file_url:
+            q = q.eq("file_url", file_url)
+        elif order_id:
+            q = q.eq("order_id", order_id)
+        else:
+            return False
+        q.execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] receipt delete failed: {exc}")
+        return False
+
+
 # ------------------------------------------------------------------ orders
 def _bucket():
-    """Storage bucket the uploaded files live in (see .env.example)."""
+    """Public Storage bucket the uploaded files live in (see .env.example)."""
     return os.environ.get("SUPABASE_BUCKET", "uploads").strip() or "uploads"
+
+
+def _private_bucket():
+    """Private Storage bucket for payment receipts / proofs (never public)."""
+    return os.environ.get("SUPABASE_PRIVATE_BUCKET", "receipts").strip() or "receipts"
+
+
+_OBJECT_URL_RE = re.compile(
+    r"/storage/v1/object/(?:public|sign)/([^/]+)/(.+)$")
+
+
+def _bucket_from_url(url):
+    """The bucket named in one of our storage URLs, or '' when foreign.
+
+    Receipts live in the PRIVATE ``receipts`` bucket (signed URLs), public
+    assets in the ``uploads`` bucket - so every helper must know which one a
+    URL points at before it signs, removes or rewrites it.
+    """
+    m = _OBJECT_URL_RE.search((url or "").strip())
+    if not m:
+        return ""
+    name = m.group(1)
+    return name if name in (_bucket(), _private_bucket()) else ""
 
 
 def _storage_path_from_url(url, bucket=None):
@@ -436,23 +706,19 @@ def _storage_path_from_url(url, bucket=None):
     (…/storage/v1/object/public/<bucket>/<path>), a signed URL
     (…/storage/v1/object/sign/<bucket>/<path>?token=…), or a bare path such
     as "/uploads/receipts/abc.jpg". A foreign URL (someone else's host)
-    yields '' - it is left alone.
+    yields '' - it is left alone. Works for both the public `uploads`
+    bucket and the private `receipts` bucket.
     """
     url = (url or "").strip()
     if not url:
         return ""
-    bucket = bucket or _bucket()
-    path = ""
-    public = "/object/public/%s/" % bucket
-    signed = "/object/sign/%s/" % bucket
-    if public in url:
-        path = url.split(public, 1)[1]
-    elif signed in url:
-        path = url.split(signed, 1)[1]
-    elif "/object/" in url:
-        tail = url.split("/object/", 1)[1]
-        parts = tail.split("/", 1)
-        path = parts[1] if len(parts) == 2 else ""
+    m = _OBJECT_URL_RE.search(url)
+    if m:
+        path = m.group(2)
+        if not path:
+            return ""
+        if m.group(1) not in (_bucket(), _private_bucket()):
+            return ""                     # somebody else's bucket/host
     elif url.startswith("http"):
         return ""                         # not ours; nothing to do
     else:
@@ -476,7 +742,7 @@ def _delete_storage_object_from_url(url, bucket=None):
     path = _storage_path_from_url(url, bucket)
     if not path:
         return False
-    bucket = bucket or _bucket()
+    bucket = bucket or _bucket_from_url(url) or _bucket()
     c = client()
     if c is None:
         return False

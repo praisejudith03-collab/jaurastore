@@ -181,13 +181,15 @@ def test_pickup_is_not_a_delivery_option(client, zone):
     assert r.status_code == 400
 
 
-def _post_min_order(client, oid, currency, total, zone):
+def _post_min_order(client, oid, currency, total, zone, qty=1, pid="wix-008"):
+    """wix-008 is a 1,000 CFA / 2,400 NGN item - the server recomputes the
+    order total from the catalogue, so qty drives the tested minimum."""
     tok = csrf(client)
     return client.post("/api/orders", json={
         "id": oid, "currency": currency, "total": total,
         "customer": {"name": "Min Tester", "email": "min@example.com",
                      "phone": "+229 90 00 00 00", "city": "Cotonou", "zone": zone},
-        "items": [{"id": "wix-001", "name": "Min item", "qty": 1, "price": total}],
+        "items": [{"id": pid, "name": "Min item", "qty": qty, "price": total}],
     }, headers={"X-CSRF-Token": tok})
 
 
@@ -204,8 +206,8 @@ def test_benin_minimum_in_naira_is_enforced(client):
 
 
 def test_benin_minimum_exact_cfa_and_ngn_are_accepted(client):
-    a = _post_min_order(client, "JA-BJ3", "CFA", 5000, "Cotonou")
-    b = _post_min_order(client, "JA-BJ4", "NGN", 12000, "Porto-Novo")
+    a = _post_min_order(client, "JA-BJ3", "CFA", 5000, "Cotonou", qty=5)
+    b = _post_min_order(client, "JA-BJ4", "NGN", 12000, "Porto-Novo", qty=5)
     assert a.status_code == 200, a.data
     assert b.status_code == 200, b.data
 
@@ -759,7 +761,11 @@ def test_offline_outbox_survives_a_page_refresh(client):
 # ------------------------------------------- confirming from the email link
 
 def _make_order(client, oid="JA-EMAILCONF", email="customer@example.com"):
-    """Create an order the way the browser does, clearing the rate limit."""
+    """Create an order the way the browser does, clearing the rate limit.
+
+    wix-001 x 3 = 22,500 CFA (server total) - the order qualifies for a
+    referral code, which the confirmation email must include.
+    """
     from db import execute
     execute("DELETE FROM rate_limits WHERE action='order'")
     r = client.post("/api/orders", headers={"X-CSRF-Token": csrf(client)}, json={
@@ -767,7 +773,7 @@ def _make_order(client, oid="JA-EMAILCONF", email="customer@example.com"):
         "customer": {"name": "Confirm Tester", "phone": "+229 90 00 00 00",
                      "email": email, "city": "Cotonou", "zone": "Cotonou",
                      "address": "Rue 5"},
-        "items": [{"id": "wix-001", "name": "Bag", "qty": 1, "price": 9000}],
+        "items": [{"id": "wix-001", "name": "Bag", "qty": 3, "price": 9000}],
     })
     assert r.status_code == 200, r.data
     return oid
@@ -1078,14 +1084,15 @@ def test_option_stock_survives_product_save(client):
 # coupons, abandoned carts, verified reviews, backups, WhatsApp alerts)
 
 def _growth_order(client, oid, email, total=25000, currency="NGN",
-                  promo="", cart_token="", pid="wix-001"):
+                  promo="", cart_token="", pid="wix-005", qty=3):
+    """wix-005 = 8,550 NGN / 15,000 CFA, so qty 3 = 25,650 NGN (qualifies)."""
     execute("DELETE FROM rate_limits WHERE action='order'")
     body = {
         "id": oid, "currency": currency, "total": total,
         "customer": {"name": "Growth Tester", "phone": "+2348012345678",
                      "email": email, "city": "Lagos", "zone": "Lagos",
                      "address": "1 Test Street"},
-        "items": [{"id": pid, "name": "Bag", "qty": 1, "price": total}],
+        "items": [{"id": pid, "name": "Bag", "qty": qty, "price": total}],
     }
     if promo:
         body["promoCode"] = promo
@@ -1097,26 +1104,29 @@ def _growth_order(client, oid, email, total=25000, currency="NGN",
 
 
 def test_referral_code_minted_only_for_qualifying_orders(client):
-    # under the 20,000 NGN minimum: no code
-    d = _growth_order(client, "JA-GRLOW1", "low@example.com", total=15000)
+    # under the 20,000 NGN minimum (wix-005 qty 1 = 8,550 NGN): no code
+    d = _growth_order(client, "JA-GRLOW1", "low@example.com", total=15000, qty=1)
     assert d.get("referralCode") == ""
     # at/over the minimum: a JA- code arrives with the order response
-    d = _growth_order(client, "JA-GRHI01", "hi@example.com", total=25000)
+    d = _growth_order(client, "JA-GRHI01", "hi@example.com", total=25000, qty=3)
     code = d.get("referralCode")
     assert code and code.startswith("JA-")
     row = one("SELECT * FROM referral_codes WHERE code=?", (code,))
     assert row["email"] == "hi@example.com" and row["uses"] == 0
     # the same customer keeps the same code on their next big order
-    d2 = _growth_order(client, "JA-GRHI02", "hi@example.com", total=30000)
+    d2 = _growth_order(client, "JA-GRHI02", "hi@example.com", total=30000, qty=3)
     assert d2.get("referralCode") == code
 
 
 def test_referral_code_minted_for_cfa_equivalent(client):
-    # 10,000 F CFA ≈ 22,727 NGN at the storefront's 0.44 rate — qualifies
-    d = _growth_order(client, "JA-GRCFA1", "cfa@example.com", total=10000, currency="CFA")
+    # 15,000 F CFA (wix-005) ≈ 34,090 NGN at the storefront's 0.44 rate —
+    # qualifies (server total, not the browser-sent 10,000)
+    d = _growth_order(client, "JA-GRCFA1", "cfa@example.com", total=10000,
+                      currency="CFA", pid="wix-005", qty=1)
     assert d.get("referralCode", "").startswith("JA-")
-    # 5,000 F CFA ≈ 11,364 NGN — does not
-    d = _growth_order(client, "JA-GRCFA2", "cfa2@example.com", total=5000, currency="CFA")
+    # 1,000 F CFA (wix-008) ≈ 2,273 NGN — does not
+    d = _growth_order(client, "JA-GRCFA2", "cfa2@example.com", total=5000,
+                      currency="CFA", pid="wix-008", qty=5)
     assert d.get("referralCode") == ""
 
 
@@ -1316,7 +1326,7 @@ def test_cfa_rate_default_and_admin_adjustable(client):
                     json={"cfaRate": 2.0})
     assert r.get_json()["settings"]["cfaRate"] == 2.0
     d = _growth_order(client, "JA-RATE01", "rate1@example.com",
-                      total=10000, currency="CFA")
+                      total=10000, currency="CFA", pid="wix-005", qty=1)
     assert d.get("referralCode") == ""
 
     # back to the default rate the same order qualifies again
@@ -1325,7 +1335,7 @@ def test_cfa_rate_default_and_admin_adjustable(client):
     d = client.get("/api/admin/growth/settings").get_json()["settings"]
     assert d["cfaRate"] == 0.44
     d = _growth_order(client, "JA-RATE02", "rate2@example.com",
-                      total=10000, currency="CFA")
+                      total=10000, currency="CFA", pid="wix-005", qty=1)
     assert d.get("referralCode", "").startswith("JA-")
 
     # nonsense rates are rejected and fall back to the safe default
@@ -1717,12 +1727,16 @@ def test_benin_and_togo_payment_methods_supported(client):
 
 
 def test_benin_minimum_order_cfa_and_ngn_limits(client):
-    """Benin deliveries enforce 5,000 CFA and 12,000 NGN minimums."""
+    """Benin deliveries enforce 5,000 CFA and 12,000 NGN minimums.
+
+    wix-008 = 1,000 CFA / 2,400 NGN per unit server-side, so these carts are
+    below the minimum even though the browser claims otherwise.
+    """
     tok = client.get("/api/csrf").get_json()["token"]
     order_cfa_low = {
         "id": "JA-BJMIN-1",
         "customer": {"name": "Benin User", "email": "bj@test.com", "zone": "Cotonou"},
-        "items": [{"id": "p1", "name": "Item", "qty": 1, "price": 4000}],
+        "items": [{"id": "wix-008", "name": "Item", "qty": 1, "price": 4000}],
         "currency": "CFA",
         "total": 4000,
     }
@@ -1733,7 +1747,7 @@ def test_benin_minimum_order_cfa_and_ngn_limits(client):
     order_ngn_low = {
         "id": "JA-BJMIN-2",
         "customer": {"name": "Benin User", "email": "bj@test.com", "zone": "Porto-Novo"},
-        "items": [{"id": "p1", "name": "Item", "qty": 1, "price": 10000}],
+        "items": [{"id": "wix-008", "name": "Item", "qty": 1, "price": 10000}],
         "currency": "NGN",
         "total": 10000,
     }

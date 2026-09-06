@@ -1020,7 +1020,14 @@ function showOrderDone(order) {
   if (!root) return;
   const payName = order.currency === "NGN" ? t("ck.payNgn") : t("ck.payCfa");
   const locale = (window.I18N && I18N.lang() === "fr") ? "fr-FR" : "en-GB";
-  const note = order.currency === "NGN" ? JA.settings().bankNgn : JA.settings().bankCfa;
+  // Bank details: the live Supabase row (canonical bank_name/account_number/
+  // account_name). Legacy free-text bankCfa/bankNgn were removed.
+  const s = JA.settings();
+  const note = [
+    String(s.bank_name || "").trim() || "UBA",
+    String(s.account_number || "").trim() || "23474678931",
+    String(s.account_name || "").trim() || "OKORAFOR PRAISE",
+  ].join(" · ");
   root.innerHTML = `
     <ol class="ck-steps" style="margin-bottom:28px">
       <li><a href="cart.html">${t("cart.stepCart")}</a></li>
@@ -1144,7 +1151,13 @@ function paintCheckoutTotals(form) {
   if (discCell) discCell.textContent = disc
     ? "− " + JA.money(disc, cur) + " (" + ckPromo.percent + "%)" : "—";
   if (tot) tot.textContent = JA.money(subVal - disc, cur);
+  // Bank details come from GET /api/site -> Supabase site_settings
+  // (bank_name / account_number / account_name). The legacy bankCfa / bankNgn
+  // free-text settings were removed.
   const s = JA.settings();
+  const bankName = String(s.bank_name || "").trim() || "UBA";
+  const bankAcc = String(s.account_number || "").trim() || "23474678931";
+  const bankHolder = String(s.account_name || "").trim() || "OKORAFOR PRAISE";
   const ngnBox = document.querySelector("[data-bank-ngn]");
   const cfaBox = document.querySelector("[data-bank-cfa]");
   if (ngnBox) ngnBox.hidden = cur !== "NGN";
@@ -1152,13 +1165,9 @@ function paintCheckoutTotals(form) {
   const ngnName = document.querySelector("[data-ngn-name]");
   const ngnBank = document.querySelector("[data-ngn-bank]");
   const ngnAcc = document.querySelector("[data-ngn-acc]");
-  const cfaName = document.querySelector("[data-cfa-name]");
-  const cfaAcc = document.querySelector("[data-cfa-acc]");
-  if (ngnName) ngnName.textContent = s.bankNgnName || "OKORAFOR PRAISE";
-  if (ngnBank) ngnBank.textContent = s.bankNgnBank || "UBA";
-  if (ngnAcc) ngnAcc.textContent = s.bankNgnAccount || "23474678931";
-  if (cfaName) cfaName.textContent = s.bankCfaName || "OKORAFOR GIFT";
-  if (cfaAcc) cfaAcc.textContent = s.bankCfaAccount || "01 52 01 99 30";
+  if (ngnName) ngnName.textContent = bankHolder;
+  if (ngnBank) ngnBank.textContent = bankName;
+  if (ngnAcc) ngnAcc.textContent = bankAcc;
   form.querySelectorAll(".pay-card").forEach((card) => {
     card.classList.toggle("is-on", card.querySelector("input")?.checked);
   });

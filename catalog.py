@@ -369,7 +369,11 @@ def _write_overrides(data, path=None):
 
 # ------------------------------------------------------------------- cleaning
 def _derive_cfa(product):
-    """priceCfa is derived from priceNgn at the house rate when not explicit."""
+    """priceCfa is derived from priceNgn at the house rate when not explicit.
+
+    Prices can never be negative: a negative value is treated as "not set"
+    (and a negative NGN price therefore never ships to the storefront).
+    """
     ngn = product.get("priceNgn")
     cfa = product.get("priceCfa")
     try:
@@ -380,6 +384,10 @@ def _derive_cfa(product):
         cfa = int(float(cfa)) if cfa is not None else None
     except (TypeError, ValueError):
         cfa = None
+    if ngn is not None and ngn < 0:
+        ngn = 0
+    if cfa is not None and cfa < 0:
+        cfa = 0
     if ngn and ngn > 0 and (cfa is None or cfa <= 0):
         cfa = round(ngn * NGN_TO_CFA)
     return ngn, cfa
@@ -416,7 +424,13 @@ def _free_slug(slug, pid, taken):
 
 
 def normalize(product):
-    """Clean an incoming product into a safe, complete shape."""
+    """Clean an incoming product into a safe, complete shape.
+
+    Emits the canonical Supabase columns (image_url, stock_quantity,
+    updated_at) AND the legacy aliases (image, stock) so one row serves the
+    schema, the local test/dev path and the storefront. Prices are
+    non-negative; stock is a non-negative integer.
+    """
     import security as sec
     product = dict(product or {})
     name = sec.clean(product.get("name"), 200)
@@ -425,6 +439,13 @@ def normalize(product):
     raw_id = sec.clean(product.get("id"), 64)
     pid = raw_id or ("jau-" + secrets.token_hex(5))
     ngn, cfa = _derive_cfa(product)
+    compare_cfa = _int_or_none(product.get("compareCfa"))
+    compare_ngn = _int_or_none(product.get("compareNgn"))
+    compare_cfa = max(0, compare_cfa) if compare_cfa is not None else None
+    compare_ngn = max(0, compare_ngn) if compare_ngn is not None else None
+    image = sec.safe_url(product.get("image_url") or product.get("image") or "")
+    stock_qty = sec.clean_int(product.get("stock_quantity"),
+                              sec.clean_int(product.get("stock"), 24), 0, 10**7)
     out = {
         "id": pid,
         "sku": sec.valid_sku(product.get("sku") or ""),
@@ -433,19 +454,22 @@ def normalize(product):
         "nameFr": sec.clean(product.get("nameFr"), 200),
         "category": sec.clean(product.get("category"), 40),
         "priceCfa": cfa if cfa is not None else 0,
-        "compareCfa": _int_or_none(product.get("compareCfa")),
+        "compareCfa": compare_cfa,
         "priceNgn": ngn if ngn is not None else 0,
-        "compareNgn": _int_or_none(product.get("compareNgn")),
-        "image": sec.safe_url(product.get("image") or ""),
+        "compareNgn": compare_ngn,
+        "image": image,
+        "image_url": image,
         "images": [sec.safe_url(i) for i in (product.get("images") or []) if sec.safe_url(i)],
         "description": sec.clean(product.get("description"), 2000),
-        "stock": sec.clean_int(product.get("stock"), 24, 0, 10**7),
+        "stock": stock_qty,
+        "stock_quantity": stock_qty,
         "badge": sec.clean(product.get("badge"), 20),
         "featured": bool(product.get("featured", False)),
         "online": product.get("online", True) is not False,
         "colors": list(product.get("colors") or []),
         "options": list(product.get("options") or []),
         "optionStock": _clean_option_stock(product.get("optionStock")),
+        "updated_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
     return out
 
@@ -650,6 +674,13 @@ def apply_stock_delta(pid, qty_delta, option_key=None, actor=None):
         return None
     if not pid or qty_delta == 0:
         return None
+
+    if _prod_source():
+        from supabase_store import reserve_product_stock, release_product_stock
+        if qty_delta < 0:
+            return reserve_product_stock(pid, -qty_delta)
+        return release_product_stock(pid, qty_delta)
+
     found = None
     for p in merged(include_hidden=True):
         if str(p.get("id")) == pid:
@@ -659,10 +690,14 @@ def apply_stock_delta(pid, qty_delta, option_key=None, actor=None):
         return None
     rec = dict(found)
     try:
-        stock = int(rec.get("stock") or 0)
+        stock = int(rec.get("stock_quantity", rec.get("stock")) or 0)
     except (TypeError, ValueError):
         stock = 0
-    rec["stock"] = max(0, stock + qty_delta)
+    new_stock = max(0, stock + qty_delta)
+    # keep the canonical Supabase column AND the legacy alias in sync, or
+    # normalize() (which prefers stock_quantity) would silently revert it
+    rec["stock"] = new_stock
+    rec["stock_quantity"] = new_stock
     os_map = rec.get("optionStock")
     if option_key and isinstance(os_map, dict) and os_map:
         os_map = dict(os_map)
@@ -713,6 +748,27 @@ def local_only_products():
     return out
 
 
+def _prod_source():
+    """True when Supabase is the production source of truth (not testing)."""
+    try:
+        from supabase_store import enabled
+        return bool(enabled()) and Config.ENV != "testing"
+    except Exception:
+        return False
+
+
+def _read_back_product(pid):
+    """Re-query one product from Supabase and canonicalise it."""
+    try:
+        from supabase_store import product_by_id, _canonicalize_product
+        row = product_by_id(pid)
+        if row is None:
+            return None
+        return _canonicalize_product(row)
+    except Exception:
+        return None
+
+
 def remirror_strays(actor=None):
     """Push local-only products to Supabase. Returns how many were sent."""
     from supabase_store import upsert_products, enabled
@@ -726,7 +782,14 @@ def remirror_strays(actor=None):
 
 
 def upsert(product, actor=None):
-    """Save (create or edit) one product. Returns (product, action, mirrored)."""
+    """Save (create or edit) one product. Returns (product, action, mirrored).
+
+    In production (Supabase enabled, not testing) the write goes straight to
+    PostgreSQL: no local override file is touched, and a failed Supabase
+    write returns (None, "error", False) so the route can surface a clear
+    error instead of reporting success. The returned product is the row
+    re-queried from Supabase.
+    """
     clean = normalize(product)
     if clean is None:
         return None, "rejected", True
@@ -740,6 +803,24 @@ def upsert(product, actor=None):
              if p and str(p.get("id") or "") != clean["id"] and p.get("slug")}
     wanted = str(clean.get("slug") or "")
     clean["slug"] = _free_slug(wanted, clean["id"], taken)
+
+    action = "updated" if any(str((p or {}).get("id") or "") == clean["id"]
+                              for p in live) else "created"
+
+    if _prod_source():
+        try:
+            from supabase_store import upsert_products
+            ok = bool(upsert_products([clean]))
+        except Exception:
+            ok = False
+        if not ok:
+            return None, "error", False
+        row = _read_back_product(clean["id"])
+        if row is None:
+            return None, "error", False
+        clean = row
+        _sync_repo_async()
+        return clean, action, True
 
     path = _norm_filename(CATALOG_FILE)
     with _catalog_lock(path):
@@ -771,6 +852,12 @@ def upsert(product, actor=None):
 
 def remove(pid, actor=None):
     """Soft-delete one product: it is dropped from the live catalogue."""
+    if _prod_source():
+        from supabase_store import delete_products
+        delete_products([pid])
+        _sync_repo_async()
+        return None
+
     def _apply(data, _path):
         data["products"] = [p for p in (data.get("products") or []) if p.get("id") != pid]
         deleted = list(data.get("deleted") or [])
@@ -792,6 +879,8 @@ def replace_all(products, actor=None):
     """Replace the whole admin catalogue (bulk / CSV import).
 
     Returns (kept, rejected). Invalid rows are rejected, never silently dropped.
+    In production the replacement lands in Supabase only - the local override
+    file is never written.
     """
     kept, rejected = [], []
     live = []
@@ -816,6 +905,12 @@ def replace_all(products, actor=None):
         if clean["slug"]:
             taken.add(clean["slug"])
         kept.append(clean)
+
+    if _prod_source():
+        from supabase_store import replace_all_products
+        replace_all_products(kept)
+        _sync_repo_async()
+        return kept, rejected
 
     def _apply(data, _path):
         data["products"] = kept

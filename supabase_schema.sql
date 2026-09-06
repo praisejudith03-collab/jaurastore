@@ -4,10 +4,11 @@
 -- Run this once in the Supabase SQL editor (Dashboard → SQL → New query).
 -- Every statement is idempotent (IF NOT EXISTS), so re-running is safe.
 --
--- SQLite on the Render disk stays the working copy; the app mirrors every
--- write into these tables (see supabase_store.py) so products, orders,
--- receipts, referral codes, usage logs, coupons and the growth settings
--- also live in Supabase and can never be lost with the dyno.
+-- Supabase PostgreSQL is the production source of truth for products,
+-- orders, receipts, categories, site settings, referral commission
+-- settings and admin reset tokens. SQLite on the Render disk is only a
+-- boot-time cache the app restores FROM these tables; production writes
+-- go to PostgreSQL first and failures are surfaced, never swallowed.
 --
 -- Required environment variables (both Render services):
 --   SUPABASE_URL                 https://<project>.supabase.co
@@ -15,10 +16,14 @@
 -- =====================================================================
 
 -- ------------------------------------------------------------ products
--- These are the 24 keys the app actually writes (catalog.normalize() +
--- supabase_store.upsert_products). camelCase keys MUST be quoted: Postgres
--- folds unquoted identifiers to lowercase, so an unquoted priceCfa would
--- create a pricecfa column and every write would still fail with PGRST204.
+-- Canonical columns (source of truth): id, name, category, priceNgn,
+-- priceCfa, compareNgn, compareCfa, image_url, images, stock_quantity,
+-- description, featured, online, updated_at. The legacy camelCase
+-- columns below (image, stock, ...) are kept as compatibility aliases for
+-- the same-origin test/dev path and older rows; production writes both.
+-- camelCase keys MUST be quoted: Postgres folds unquoted identifiers to
+-- lowercase, so an unquoted priceCfa would create a pricecfa column and
+-- every write would still fail with PGRST204.
 create table if not exists products (
   id               text primary key,
   sku              text,
@@ -31,9 +36,11 @@ create table if not exists products (
   "priceNgn"       numeric,
   "compareNgn"     numeric,
   image            text,
+  image_url        text,
   images           jsonb,
   description      text,
   stock            integer default 0,
+  stock_quantity   integer not null default 0,
   badge            text,
   featured         boolean default false,
   online           boolean default true,
@@ -43,7 +50,12 @@ create table if not exists products (
   "placeholderImage" text,
   "usesPlaceholder"  boolean default false,
   source           text default 'admin',
-  updated_at       timestamptz default now()
+  updated_at       timestamptz default now(),
+  constraint products_price_positive check ("priceCfa" >= 0 and "priceNgn" >= 0
+    and "compareCfa" is null or "compareCfa" >= 0
+    and "compareNgn" is null or "compareNgn" >= 0),
+  constraint products_stock_nonnegative check (stock_quantity >= 0
+    and stock is null or stock >= 0)
 );
 
 -- Repair an EXISTING products table hand-built narrower than the row the app
@@ -185,9 +197,27 @@ create table if not exists site_settings (
   contact_email text not null default '',
   contact_phone text not null default '',
   site_logo_url text not null default '',
+  hero_video_url text not null default '',
+  hero_poster_url text not null default '',
+  hero_doc_url text not null default '',
+  shop_banner_url text not null default '',
+  shipping_note text not null default '',
+  banner_from text not null default '',
+  banner_to text not null default '',
+  conv_banner text not null default '',
+  conv_bold text not null default '',
   updated_at timestamptz not null default now()
 );
 insert into site_settings (id) values (1) on conflict (id) do nothing;
+alter table site_settings add column if not exists hero_video_url text not null default '';
+alter table site_settings add column if not exists hero_poster_url text not null default '';
+alter table site_settings add column if not exists hero_doc_url text not null default '';
+alter table site_settings add column if not exists shop_banner_url text not null default '';
+alter table site_settings add column if not exists shipping_note text not null default '';
+alter table site_settings add column if not exists banner_from text not null default '';
+alter table site_settings add column if not exists banner_to text not null default '';
+alter table site_settings add column if not exists conv_banner text not null default '';
+alter table site_settings add column if not exists conv_bold text not null default '';
 
 create table if not exists categories (
   id text primary key,
@@ -229,4 +259,54 @@ end $$;
 do $$ begin
   create policy "service role writes uploads" on storage.objects for all using (bucket_id = 'uploads') with check (bucket_id = 'uploads');
 exception when duplicate_object then null;
+end $$;
+
+-- Payment receipts/proofs live in a PRIVATE bucket: the only URL ever handed
+-- out is a short-lived signed URL minted server-side, so a receipt is never
+-- publicly guessable and never reaches a customer/storefront response.
+insert into storage.buckets (id, name, public)
+values ('receipts', 'receipts', false)
+on conflict (id) do update set public = false;
+do $$ begin
+  create policy "service role writes receipts" on storage.objects for all using (bucket_id = 'receipts') with check (bucket_id = 'receipts');
+exception when duplicate_object then null;
+end $$;
+
+-- ------------------------------------------------------------------ stock
+-- Atomic stock reservation/release used by checkout when Supabase is the
+-- source of truth. A single UPDATE with a guard on stock_quantity prevents
+-- two concurrent checkouts from overselling the same product; FOUND tells
+-- the caller whether the whole quantity could be reserved.
+create or replace function reserve_product_stock(p_id text, p_qty integer)
+returns boolean language plpgsql security definer as $$
+declare reserved boolean;
+begin
+  if p_qty is null or p_qty <= 0 then
+    return false;
+  end if;
+  update products
+     set stock_quantity = stock_quantity - p_qty,
+         stock = stock_quantity - p_qty,
+         updated_at = now()
+   where id = p_id
+     and online is not false
+     and stock_quantity >= p_qty
+   returning true into reserved;
+  return coalesce(reserved, false);
+end $$;
+
+create or replace function release_product_stock(p_id text, p_qty integer)
+returns boolean language plpgsql security definer as $$
+declare released boolean;
+begin
+  if p_qty is null or p_qty <= 0 then
+    return false;
+  end if;
+  update products
+     set stock_quantity = stock_quantity + p_qty,
+         stock = stock_quantity + p_qty,
+         updated_at = now()
+   where id = p_id
+   returning true into released;
+  return coalesce(released, false);
 end $$;
