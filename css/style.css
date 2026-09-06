@@ -4009,6 +4009,17 @@ body[data-page="admin"] label { color: #c5cad3; }
 .wix-edit { background: transparent; color: #e8eaed; }
 .wix-back { color: #9aa4b2; }
 .wix-media-row { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 8px; }
+/* "Photos: N of 20 - tap + to add, x to remove" flashes the row it is talking
+   about, so on a phone the owner can see which tiles the count means. */
+.wix-media-row.is-flash { animation: wixMediaFlash 1.4s ease-out 1; border-radius: 10px; }
+@keyframes wixMediaFlash {
+  0% { box-shadow: 0 0 0 2px rgba(108, 182, 255, .85); background: rgba(108, 182, 255, .16); }
+  60% { box-shadow: 0 0 0 8px rgba(108, 182, 255, 0); background: rgba(108, 182, 255, .07); }
+  100% { box-shadow: 0 0 0 0 rgba(108, 182, 255, 0); background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wix-media-row.is-flash { animation: none; background: rgba(108, 182, 255, .14); }
+}
 .wix-tile {
   position: relative; flex: 0 0 46%; max-width: 220px; aspect-ratio: 1;
   background: #0e1116; border: 1px solid #2a3140; border-radius: 8px; overflow: hidden;

@@ -2,7 +2,7 @@
    Pages are network-first so a visitor with a connection always sees the
    newest store; when the connection drops, the last copy is served instead of
    an error. Saving is handled separately by js/net.js (outbox + retry). */
-const VERSION = "jaura-v127";
+const VERSION = "jaura-v128";
 const CORE = [
   "./",
   "./index.html",
@@ -10,16 +10,16 @@ const CORE = [
   "./product.html",
   "./cart.html",
   "./checkout.html",
-  "./css/style.css?v=127",
-  "./js/products-data.js?v=127",
-  "./js/i18n.js?v=127",
-  "./js/net.js?v=127",
-  "./js/store.js?v=127",
-  "./js/app.js?v=127",
-  "./images/brand/logo.jpg?v=127",
-  "./images/brand/favicon.png?v=127",
-  "./images/brand/apple-touch.png?v=127",
-  "./images/brand/og-cover.jpg?v=127",
+  "./css/style.css?v=128",
+  "./js/products-data.js?v=128",
+  "./js/i18n.js?v=128",
+  "./js/net.js?v=128",
+  "./js/store.js?v=128",
+  "./js/app.js?v=128",
+  "./images/brand/logo.jpg?v=128",
+  "./images/brand/favicon.png?v=128",
+  "./images/brand/apple-touch.png?v=128",
+  "./images/brand/og-cover.jpg?v=128",
 ];
 const MAX_ASSETS = 140;
 
@@ -90,7 +90,24 @@ async function networkFirst(request, fallbackHTML) {
   }
 }
 
-self.addEventListener("fetch", (event) => {
+// A media subresource: anything the browser fetched as an image or a video,
+// plus the same-origin /uploads/<key> links that proxy the Supabase bucket
+// (the server 302s those to the public object URL, which is why a worker
+// response for them comes back opaque and unusable).
+function isMedia(request, url) {
+  if (request.destination === "image" || request.destination === "video") return true;
+  return String(url.pathname || "").indexOf("/uploads/") === 0;
+}
+
+// Only a good copy is worth serving: a cached error/opaque body would hide the
+// photo the network could still deliver.
+async function cachedMedia(request) {
+  const cache = await caches.open(VERSION);
+  const hit = await cache.match(request);
+  return hit && hit.ok ? hit : null;
+}
+
+self.addEventListener("fetch", async (event) => {
   const req = event.request;
   if (req.method !== "GET") return;                       // writes go through the outbox
   const url = new URL(req.url);
@@ -105,6 +122,16 @@ self.addEventListener("fetch", (event) => {
     if (url.pathname.indexOf("/api/catalog") === 0) {
       event.respondWith(networkFirst(req, false));
     }
+    return;
+  }
+  if (isMedia(req, url)) {
+    // Photos and videos are the shop: never stand between one and the network.
+    // A copy we already have is served; anything else falls through to the
+    // browser's own fetch, which retries by itself. Answering here with a
+    // synthetic 504 (or an opaque redirect body for /uploads) is what turned
+    // a photo that would have loaded into a permanent broken icon.
+    const hit = await cachedMedia(req);
+    if (hit) event.respondWith(hit);
     return;
   }
   event.respondWith(staleWhileRevalidate(req));
