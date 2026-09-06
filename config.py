@@ -107,7 +107,7 @@ class Config:
     SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
 
     # ---------------------------------------------------------- uploads
-    UPLOAD_MODE = os.environ.get("UPLOAD_MODE", "local").lower()
+    UPLOAD_MODE = os.environ.get("UPLOAD_MODE", "supabase").lower()
     UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "data/uploads")
     S3_BUCKET = os.environ.get("S3_BUCKET", "")
     S3_REGION = os.environ.get("S3_REGION", "auto")

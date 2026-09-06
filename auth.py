@@ -254,8 +254,11 @@ def _expiry():
 
 
 def otp_requested_recently(email):
-    """True if a code was sent within the cooldown window."""
+    """True if a code was sent recently; production state is Supabase."""
     email = (email or "").strip().lower()
+    if Config.SUPABASE_ENABLED:
+        from supabase_settings import reset_token_recent
+        return reset_token_recent(email, OTP_COOLDOWN)
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=OTP_COOLDOWN)
     row = one(
         "SELECT created_at FROM otp_codes WHERE email=? AND purpose='reset' "
@@ -271,8 +274,11 @@ def otp_requested_recently(email):
 
 
 def create_otp(email):
-    """Generate and store a reset code. Returns the plain code to email."""
+    """Generate a reset code; production stores only its hash in Supabase."""
     email = (email or "").strip().lower()
+    if Config.SUPABASE_ENABLED:
+        from supabase_settings import create_reset_token
+        return create_reset_token(email, OTP_TTL)
     code = f"{secrets.randbelow(1000000):06d}"
     execute(
         "INSERT INTO otp_codes (email, code_hash, purpose, expires_at) "
@@ -283,8 +289,11 @@ def create_otp(email):
 
 
 def verify_otp(email, code):
-    """Check a submitted code. Returns (ok, message)."""
+    """Check a submitted code against persistent Supabase state."""
     email = (email or "").strip().lower()
+    if Config.SUPABASE_ENABLED:
+        from supabase_settings import verify_reset_token
+        return verify_reset_token(email, code, OTP_MAX_ATTEMPTS)
     row = one(
         "SELECT id, code_hash, expires_at, attempts, consumed_at FROM otp_codes "
         "WHERE email=? AND purpose='reset' AND consumed_at IS NULL "

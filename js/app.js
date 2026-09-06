@@ -810,13 +810,13 @@ function paintProduct(root, p) {
       stockLine.textContent = t("pdp.oos");
       stockLine.classList.add("is-low");
     } else if (left <= 0) {
-      stockLine.textContent = `Only ${avail} left of "${JA.displayName(p)}" — already in your bag.`;
+      stockLine.textContent = "This item is unavailable in the requested quantity.";
       stockLine.classList.add("is-low");
     } else if (left <= 5) {
-      stockLine.textContent = `Only ${left} left in stock`;
+      stockLine.textContent = left > 0 ? "In Stock" : "Out of Stock";
       stockLine.classList.add("is-low");
     } else {
-      stockLine.textContent = `${left} available`;
+      stockLine.textContent = "In Stock";
       stockLine.classList.remove("is-low");
     }
     if (qty) {

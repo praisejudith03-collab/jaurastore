@@ -171,3 +171,62 @@ create table if not exists growth_settings (
   key   text primary key,
   value text
 );
+
+-- ===================================================== Jaura production tables
+-- These are the source of truth for runtime configuration and recovery.
+create table if not exists site_settings (
+  id bigint primary key check (id = 1),
+  bank_name text not null default '',
+  account_number text not null default '',
+  account_name text not null default '',
+  referral_commission_percentage numeric(5,2) not null default 0 check (referral_commission_percentage between 0 and 100),
+  hero_banner_title text not null default '',
+  hero_banner_subtitle text not null default '',
+  contact_email text not null default '',
+  contact_phone text not null default '',
+  site_logo_url text not null default '',
+  updated_at timestamptz not null default now()
+);
+insert into site_settings (id) values (1) on conflict (id) do nothing;
+
+create table if not exists categories (
+  id text primary key,
+  name text not null,
+  name_fr text not null default '',
+  image_url text not null default '',
+  hidden boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+
+alter table products add column if not exists image_url text;
+alter table products add column if not exists stock_quantity integer not null default 0;
+do $$ begin
+  alter table products add constraint products_stock_nonnegative check (stock_quantity >= 0) not valid;
+exception when duplicate_object then null;
+end $$;
+
+create table if not exists admin_reset_tokens (
+  id bigint generated always as identity primary key,
+  email text not null,
+  purpose text not null default 'reset',
+  token_hash text not null,
+  expires_at timestamptz not null,
+  attempts integer not null default 0 check (attempts >= 0),
+  consumed_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists admin_reset_tokens_lookup on admin_reset_tokens(email, purpose, created_at desc);
+
+-- Storage is provisioned once in Dashboard or with this statement. The service
+-- role is used only server-side; public objects are safe to render directly.
+insert into storage.buckets (id, name, public)
+values ('uploads', 'uploads', true)
+on conflict (id) do update set public = true;
+do $$ begin
+  create policy "public read uploads" on storage.objects for select using (bucket_id = 'uploads');
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  create policy "service role writes uploads" on storage.objects for all using (bucket_id = 'uploads') with check (bucket_id = 'uploads');
+exception when duplicate_object then null;
+end $$;

@@ -266,56 +266,17 @@ def _save(data: bytes, folder: str, ext: str, s3_content_type: str = "") -> tupl
     if Config.UPLOAD_MODE == "supabase":
         ok2, _msg2, url = _save_supabase(data, key, ext, content_type, folder)
         if ok2:
-            # a sensitive folder keeps its short-lived signed URL; a public
-            # asset is announced as /uploads/<key> so the product row never
-            # points a shopper's browser at another host
-            return True, "stored", (url if _is_sensitive(folder) else "/uploads/" + key)
-        # never silently lose a customer's proof of payment: fall back to disk
+            # Database columns contain the complete Supabase URL, never a local route.
+            return True, "stored", url
+        return False, "Supabase Storage upload failed.", ""
 
     if Config.UPLOAD_MODE == "s3":
         ok2, _msg2, url = _save_s3(data, key, ext, content_type)
         if ok2:
             return True, "stored", url
-        # never silently lose a customer's proof of payment: fall back to disk
+        return False, "S3 uploads are disabled; configure Supabase Storage.", ""
 
-    full = _local_path(key)
-    try:
-        os.makedirs(os.path.dirname(full), exist_ok=True)
-        tmp = full + ".part"
-        with open(tmp, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, full)
-    except OSError as exc:  # pragma: no cover - filesystem failure
-        return False, f"Could not save the upload ({exc.__class__.__name__}).", ""
-    return True, "stored", "/uploads/" + key
-
-
-def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf: bool = False,
-               max_bytes: int = MAX_BYTES):
-    """Stores an image (or, when allowed, a document) and returns
-    (ok, message, url)."""
-    ok, msg, ext = validate_upload(data, filename, allow_pdf=allow_pdf,
-                                   max_bytes=max_bytes, kind="media")
-    if not ok:
-        return False, msg, ""
-    return _save(data, folder, ext)
-
-
-def save_asset(data: bytes, folder: str = "misc", filename: str = "", max_bytes: int = MAX_BYTES):
-    """Stores a broad-allowlist asset (image / video / document) and returns
-    (ok, message, url)."""
-    ok, msg, ext = validate_asset(data, filename, max_bytes=max_bytes)
-    if not ok:
-        return False, msg, ""
-    return _save(data, folder, ext)
-
-
-def save_video(data: bytes, folder: str = "videos", filename: str = ""):
-    """Stores a video and returns (ok, message, url)."""
-    ok, msg, ext = validate_video(data, filename)
-    if not ok:
-        return False, msg, ""
-    return _save(data, folder, ext)
+    return False, "Upload storage is not configured.", ""
 
 
 def _object_name(folder: str, ext: str, digest: str) -> str:
@@ -406,15 +367,7 @@ def _save_supabase(data: bytes, key: str, ext: str, content_type: str,
             key, data, {"content-type": content_type or "application/octet-stream"})
     except Exception as exc:
         return False, f"supabase upload failed ({exc.__class__.__name__})", ""
-    if _is_sensitive(folder):
-        try:
-            res = c.storage.from_(bucket).create_signed_url(key, SIGNED_URL_TTL_SECONDS)
-        except Exception:
-            return False, "could not sign the receipt url", ""
-        url = res.get("signedUrl") if isinstance(res, dict) else getattr(res, "signedUrl", "")
-        if not url:
-            return False, "could not sign the receipt url", ""
-        return True, "stored", url
+    # All persisted URLs are stable, complete public HTTPS URLs.
     return True, "stored", supabase_public_url(key)
 
 

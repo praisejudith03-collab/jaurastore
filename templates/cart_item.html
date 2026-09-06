@@ -1,0 +1,6 @@
+<div class="cart-item">
+  <img src="{{ item.image_url }}" alt="{{ item.name|e }}">
+  <span>{{ item.name }}</span>
+  <input type="number" name="quantity" min="1" max="{{ item.stock_quantity }}" value="{{ item.quantity }}" required>
+  <span>{% if item.stock_quantity|int > 0 %}In Stock{% else %}Out of Stock{% endif %}</span>
+</div>

@@ -1,0 +1,4 @@
+{# Never expose the quantity as text. max is still enforced server-side. #}
+{% for item in cart %}
+  <input type="number" name="quantity_{{ item.id }}" min="1" max="{{ item.stock_quantity }}" value="{{ item.quantity }}" required>
+{% endfor %}
