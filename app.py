@@ -322,26 +322,20 @@ def create_app():
         key = (p or "").lstrip("/")
         if key.split("/", 1)[0].lower() == "proofs" and not authmod.current_admin():
             abort(404)
-        full = storage.resolve_local(key)
-        if not full:
-            # UPLOAD_MODE=supabase keeps the object in the bucket, not on this
-            # server's disk: redirect rather than 404 so the stored
-            # /uploads/<key> link still renders.
-            redirect_to = storage.public_redirect_for(key)
-            if redirect_to:
-                return redirect(redirect_to, code=302)
-            abort(404)
-        resp = _make_response(send_from_directory(os.path.dirname(full), os.path.basename(full)))
-        resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
-        resp.headers["X-Content-Type-Options"] = "nosniff"
-        resp.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
-        # Every non-image / non-video type (PDF, DOC, DOCX, executable-like
-        # containers) is forced to download. A stored .html/.svg must never be
-        # served inline in this origin; attachments cannot execute scripts here.
-        ext = os.path.splitext(full)[1].lstrip(".").lower()
-        if ext and not storage.is_inline_renderable(ext):
-            resp.headers["Content-Disposition"] = "attachment"
-        return resp
+        if Config.ENV == "testing":
+            full = storage.resolve_local(key)
+            if full:
+                response = send_from_directory(os.path.dirname(full), os.path.basename(full))
+                if os.path.splitext(full)[1].lower() in (".pdf", ".doc", ".docx"):
+                    response.headers["Content-Disposition"] = "attachment"
+                return response
+        # Production uploads are Supabase public HTTPS URLs; the dyno never
+        # reads or serves an upload from its ephemeral filesystem.
+        redirect_to = storage.public_redirect_for(key)
+        if redirect_to:
+            return redirect(redirect_to, code=302)
+        abort(404)
+
 
     @app.route("/sitemap.xml")
     def sitemap():

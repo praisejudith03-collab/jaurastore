@@ -1,0 +1,11 @@
+<article class="product-card">
+  <img src="{{ product.image_url }}" alt="{{ product.name|e }}" loading="lazy">
+  <h3>{{ product.name }}</h3>
+  <p class="stock-status">{% if product.stock_quantity|int > 0 %}In Stock{% else %}Out of Stock{% endif %}</p>
+  {% if product.stock_quantity|int > 0 %}
+  <form method="post" action="{{ url_for('api.add_to_cart') }}">
+    <input type="number" name="quantity" min="1" max="{{ product.stock_quantity }}" value="1" required>
+    <button type="submit">Add to cart</button>
+  </form>
+  {% endif %}
+</article>

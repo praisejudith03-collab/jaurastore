@@ -242,7 +242,13 @@ def record_code_use(code, buyer_email, order_id):
     # No reward at 1. At EXACTLY `milestone` successful purchases, mint the
     # referrer a one-time coupon — capped at 10%, no higher tiers ever.
     if uses == s["milestone"] and not r["reward_issued"]:
-        pct = min(int(s["referrerPercent"]), 10)
+        # The payout rate is live site configuration, not a process-local
+        # setting. Read it at completion so an admin change applies immediately.
+        try:
+            from supabase_settings import get_site_settings
+            pct = max(0, min(float(get_site_settings().get("referral_commission_percentage") or 0), 100))
+        except Exception:
+            pct = min(int(s["referrerPercent"]), 10)
         reward = _mint_code("THANKS")
         execute("INSERT INTO coupons (code, percent, kind, email, note, active, max_uses) "
                 "VALUES (?,?,?,?,?,1,1)",

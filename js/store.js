@@ -593,7 +593,7 @@ const JA = (() => {
     if (!list) list = stockProblems();
     if (!list.length) return "";
     const p = list[0];
-    return `Only ${p.available} left of "${p.name}" — you asked for ${p.requested}.`;
+    return "This item does not have enough stock for your requested quantity.";
   }
   function bulkUnit(p, qty, cur) {
     const unit = priceOf(p, cur);

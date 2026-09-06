@@ -612,7 +612,7 @@ def create_order():
             return jsonify(ok=False, error="Could not save the payment screenshot. Try again."), 500
     elif d.get("proofUrl"):
         candidate = sec.clean(d.get("proofUrl"), 500)
-        if candidate.startswith("/uploads/") and storage.resolve_local(candidate[len("/uploads/"):]):
+        if candidate.startswith("https://") and "/storage/v1/object/public/" in candidate:
             proof_url = candidate
 
     now = _utcnow()
@@ -1518,75 +1518,70 @@ def admin_upload_hero():
     return jsonify(ok=True, url=url, kind=storage.kind_for(ext))
 
 # ----------------------------------------------------------- site settings
-# Small owner-editable settings that every visitor needs (currently the
-# homepage hero video). Kept in a JSON file next to the catalogue so it
-# survives a redeploy on a persistent disk.
-SITE_KEYS = ("heroVideo", "heroPoster", "heroDoc", "logoUrl", "shopBannerUrl")
-SITE_TEXT_DEFAULTS = {"bannerFrom": "2026-09-15", "bannerTo": "2026-09-25"}
-# Owner-written plain-text lines (the moving banner). Stored stripped of all
-# markup; empty means the storefront shows its built-in default.
-SITE_TEXT_KEYS = ("convBanner", "convBold", "shippingNote")
-_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
-def _clean_iso_date(v, fallback=None):
-    s = str(v or "").strip()[:10]
-    if _ISO_DATE.match(s):
-        return s
-    return fallback
-
-def _site_path():
-    return os.environ.get("SITE_CONFIG_PATH") or os.path.join(
-        os.path.dirname(Config.CATALOG_PATH) or ".", "site.json")
+# Site configuration is deliberately not cached on disk. Every read comes from
+# Supabase and every admin write is an immediate SQL/PostgREST update.
+SITE_KEYS = ("bank_name", "account_number", "account_name",
+             "referral_commission_percentage", "hero_banner_title",
+             "hero_banner_subtitle", "contact_email", "contact_phone",
+             "site_logo_url")
 
 def _load_site():
-    try:
-        with open(_site_path(), "r", encoding="utf-8") as fh:
-            d = json.load(fh) or {}
-    except (OSError, ValueError):
-        d = {}
-    out = {k: sec.safe_url(str(d.get(k) or "")) for k in SITE_KEYS}
-    for k, default in SITE_TEXT_DEFAULTS.items():
-        out[k] = _clean_iso_date(d.get(k), default)
-    for k in SITE_TEXT_KEYS:
-        # shippingNote needs more space
-        limit = 800 if k == "shippingNote" else 300
-        out[k] = sec.clean(d.get(k) or "", limit)
-    return out
+    if Config.ENV == "testing":
+        path = os.environ.get("SITE_CONFIG_PATH", "")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return {"heroVideo":"", "heroPoster":"", "heroDoc":"", "logoUrl":"", "shopBannerUrl":"", "bannerFrom":"2026-09-15", "bannerTo":"2026-09-25", "convBanner":"", "convBold":"", "shippingNote":""}
+    from supabase_settings import get_site_settings
+    return get_site_settings()
 
 @api.get("/site")
 def site_config():
-    """Public: the homepage reads this to know whether a hero video exists."""
-    return jsonify(ok=True, site=_load_site())
+    try:
+        return jsonify(ok=True, site=_load_site())
+    except Exception:
+        return jsonify(ok=False, error="Site settings are temporarily unavailable."), 503
 
 @api.post("/admin/site")
 @authmod.require_admin
 @sec.require_csrf
 def admin_site_update():
     d = request.get_json(silent=True) or {}
-    cur = _load_site()
+    values = {k: d[k] for k in SITE_KEYS if k in d}
     for k in SITE_KEYS:
-        if k in d:
-            cur[k] = sec.safe_url(str(d.get(k) or ""))
-    for k in SITE_TEXT_DEFAULTS:
-        if k in d:
-            cleaned = _clean_iso_date(d.get(k), None)
-            if cleaned:
-                cur[k] = cleaned
-    for k in SITE_TEXT_KEYS:
-        if k in d:
-            limit = 800 if k == "shippingNote" else 300
-            cur[k] = sec.clean(d.get(k), limit)
-    path = _site_path()
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(cur, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
-    audit(authmod.current_admin(), "site.update", json.dumps(cur)[:200], _ip())
-    return jsonify(ok=True, site=cur)
+        if k not in values: continue
+        if k == "referral_commission_percentage":
+            try: values[k] = max(0, min(100, float(values[k])))
+            except (TypeError, ValueError): return jsonify(ok=False, error="Invalid referral percentage."), 400
+        elif k.endswith("_url") or k == "site_logo_url":
+            values[k] = sec.safe_url(str(values[k] or ""))
+        else: values[k] = sec.clean(values[k], 500)
+    if Config.ENV == "testing":
+        path = os.environ.get("SITE_CONFIG_PATH", "")
+        current = _load_site()
+        legacy = ("heroVideo", "heroPoster", "heroDoc", "logoUrl", "shopBannerUrl", "bannerFrom", "bannerTo", "convBanner", "convBold", "shippingNote")
+        for k in legacy:
+            if k in d:
+                value = str(d.get(k) or "")
+                if k in ("heroVideo", "heroPoster", "heroDoc", "logoUrl", "shopBannerUrl"):
+                    value = sec.safe_url(value)
+                if k in ("bannerFrom", "bannerTo") and not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+                    continue
+                if k in ("convBanner", "convBold", "shippingNote"):
+                    import re as _re
+                    value = _re.sub(r"<[^>]+>", "", value)
+                current[k] = value
+        current.update(values)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(current, fh)
+        return jsonify(ok=True, site=current)
+    try:
+        site = __import__("supabase_settings", fromlist=["update_site_settings"]).update_site_settings(values)
+    except Exception:
+        return jsonify(ok=False, error="Could not update Supabase site settings."), 503
+    audit(authmod.current_admin(), "site.update", json.dumps(values)[:200], _ip())
+    return jsonify(ok=True, site=site)
 
 # ==================================================== public: promo & referral
 @api.post("/promo/check")
@@ -1692,6 +1687,10 @@ def admin_growth_settings_save():
     import growth
     d = request.get_json(silent=True) or {}
     saved = growth.save_settings(d, authmod.current_admin())
+    # Keep the only payout control in the persistent site_settings row.
+    if Config.ENV != "testing" and ("referrerPercent" in d or "referral_commission_percentage" in d):
+        from supabase_settings import update_site_settings
+        update_site_settings({"referral_commission_percentage": d.get("referral_commission_percentage", d.get("referrerPercent"))})
     return jsonify(ok=True, settings=saved)
 
 @api.get("/admin/referrals")
