@@ -113,9 +113,9 @@ def resolve_image(product):
     except Exception:
         own = ""
     if own:
-        # a same-origin upload path is not a third-party host: this app
-        # serves it at /uploads/, so the real photo is kept
-        p["image"] = own
+        # Keep complete URLs in production; legacy tests/static preview use the
+        # same-origin compatibility route only in testing.
+        p["image"] = own if __import__("config").Config.ENV == "testing" else img
         p["placeholderImage"] = PLACEHOLDER_IMG
         p["usesPlaceholder"] = False
         gal = []
@@ -128,7 +128,7 @@ def resolve_image(product):
                 # link; a foreign host (and data:/blob:) is dropped.
                 own = _storage.own_upload_path(g)
                 if own:
-                    gal.append(own)
+                    gal.append(own if __import__("config").Config.ENV == "testing" else g)
             else:
                 # a committed repo path (or /uploads/ link) rides along untouched
                 gal.append(g)

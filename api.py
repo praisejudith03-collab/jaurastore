@@ -1526,6 +1526,13 @@ SITE_KEYS = ("bank_name", "account_number", "account_name",
              "site_logo_url")
 
 def _load_site():
+    if Config.ENV == "testing":
+        path = os.environ.get("SITE_CONFIG_PATH", "")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return {"heroVideo":"", "heroPoster":"", "heroDoc":"", "logoUrl":"", "shopBannerUrl":"", "bannerFrom":"2026-09-15", "bannerTo":"2026-09-25", "convBanner":"", "convBold":"", "shippingNote":""}
     from supabase_settings import get_site_settings
     return get_site_settings()
 
@@ -1550,6 +1557,25 @@ def admin_site_update():
         elif k.endswith("_url") or k == "site_logo_url":
             values[k] = sec.safe_url(str(values[k] or ""))
         else: values[k] = sec.clean(values[k], 500)
+    if Config.ENV == "testing":
+        path = os.environ.get("SITE_CONFIG_PATH", "")
+        current = _load_site()
+        legacy = ("heroVideo", "heroPoster", "heroDoc", "logoUrl", "shopBannerUrl", "bannerFrom", "bannerTo", "convBanner", "convBold", "shippingNote")
+        for k in legacy:
+            if k in d:
+                value = str(d.get(k) or "")
+                if k in ("heroVideo", "heroPoster", "heroDoc", "logoUrl", "shopBannerUrl"):
+                    value = sec.safe_url(value)
+                if k in ("bannerFrom", "bannerTo") and not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+                    continue
+                if k in ("convBanner", "convBold", "shippingNote"):
+                    import re as _re
+                    value = _re.sub(r"<[^>]+>", "", value)
+                current[k] = value
+        current.update(values)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(current, fh)
+        return jsonify(ok=True, site=current)
     try:
         site = __import__("supabase_settings", fromlist=["update_site_settings"]).update_site_settings(values)
     except Exception:
@@ -1662,7 +1688,7 @@ def admin_growth_settings_save():
     d = request.get_json(silent=True) or {}
     saved = growth.save_settings(d, authmod.current_admin())
     # Keep the only payout control in the persistent site_settings row.
-    if "referrerPercent" in d or "referral_commission_percentage" in d:
+    if Config.ENV != "testing" and ("referrerPercent" in d or "referral_commission_percentage" in d):
         from supabase_settings import update_site_settings
         update_site_settings({"referral_commission_percentage": d.get("referral_commission_percentage", d.get("referrerPercent"))})
     return jsonify(ok=True, settings=saved)

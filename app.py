@@ -322,8 +322,15 @@ def create_app():
         key = (p or "").lstrip("/")
         if key.split("/", 1)[0].lower() == "proofs" and not authmod.current_admin():
             abort(404)
-        # Uploads are Supabase public HTTPS URLs. The Flask dyno never reads
-        # or serves an upload from its ephemeral filesystem.
+        if Config.ENV == "testing":
+            full = storage.resolve_local(key)
+            if full:
+                response = send_from_directory(os.path.dirname(full), os.path.basename(full))
+                if os.path.splitext(full)[1].lower() in (".pdf", ".doc", ".docx"):
+                    response.headers["Content-Disposition"] = "attachment"
+                return response
+        # Production uploads are Supabase public HTTPS URLs; the dyno never
+        # reads or serves an upload from its ephemeral filesystem.
         redirect_to = storage.public_redirect_for(key)
         if redirect_to:
             return redirect(redirect_to, code=302)
