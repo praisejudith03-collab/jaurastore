@@ -196,12 +196,17 @@ CREATE TABLE IF NOT EXISTS product_reviews (
   order_id   TEXT,
   email      TEXT NOT NULL,
   name       TEXT,
-  stars      INTEGER NOT NULL DEFAULT 5,
-  note       TEXT,
-  at         TEXT NOT NULL DEFAULT (datetime('now')),
+  rating     INTEGER NOT NULL DEFAULT 5,
+  title      TEXT,
+  body       TEXT,
   -- Moderation flag. A hidden review is kept (it is a real customer's
   -- verified purchase) but not shown on the storefront.
   hidden     INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- Nullable with no default: SQLite refuses ADD COLUMN with a non-constant
+  -- default, and this column has to be ALTERable into an existing database.
+  -- Every write path sets it explicitly.
+  updated_at TEXT,
   UNIQUE(product_id, email)
 );
 CREATE INDEX IF NOT EXISTS idx_reviews_pid ON product_reviews(product_id);
@@ -361,11 +366,22 @@ ORDER_COLUMNS = {
 # them - they have to be ALTERed in.
 REVIEW_COLUMNS = {
     "hidden": "INTEGER NOT NULL DEFAULT 0",
+    "title": "TEXT",
+    "updated_at": "TEXT",
 }
+
+# The table was first shipped as stars / note / at and the agreed contract is
+# rating / body / created_at. RENAME COLUMN moves the data without touching a
+# row, so an existing database is upgraded, not rebuilt.
+REVIEW_RENAMES = (
+    ("stars", "rating"),
+    ("note", "body"),
+    ("at", "created_at"),
+)
 
 
 def migrate():
-    """Add any missing column to an existing database. Safe to run every boot."""
+    """Add or rename any missing column. Safe to run every boot."""
     added = 0
     have = {r["name"] for r in query("PRAGMA table_info(orders)")}
     for col, ddl in ORDER_COLUMNS.items():
@@ -373,8 +389,16 @@ def migrate():
             execute(f"ALTER TABLE orders ADD COLUMN {col} {ddl}")
             added += 1
     rh = {r["name"] for r in query("PRAGMA table_info(product_reviews)")}
+    if not rh:
+        return added
+    for old_col, new_col in REVIEW_RENAMES:
+        if old_col in rh and new_col not in rh:
+            execute(f"ALTER TABLE product_reviews RENAME COLUMN {old_col} TO {new_col}")
+            rh.discard(old_col)
+            rh.add(new_col)
+            added += 1
     for col, ddl in REVIEW_COLUMNS.items():
-        if rh and col not in rh:
+        if col not in rh:
             execute(f"ALTER TABLE product_reviews ADD COLUMN {col} {ddl}")
             added += 1
     return added
@@ -590,13 +614,23 @@ def upsert_product_reviews(rows):
     count = 0
     for r in rows:
         try:
+            # Accept the legacy stars/note/at keys too: the growth_settings
+            # blob written before the rename still uses them, and losing a
+            # restored review to a key name is not an acceptable failure.
+            rating = r.get("rating", r.get("stars")) or 5
+            body = r.get("body", r.get("note"))
+            created = r.get("created_at", r.get("at"))
             execute(
-                "INSERT INTO product_reviews (product_id, order_id, email, name, stars, note, at) "
-                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(product_id, email) DO UPDATE SET "
-                "order_id=excluded.order_id, name=excluded.name, stars=excluded.stars, "
-                "note=excluded.note, at=excluded.at",
+                "INSERT INTO product_reviews (product_id, order_id, email, name, rating, "
+                "title, body, hidden, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(product_id, email) DO UPDATE SET "
+                "order_id=excluded.order_id, name=excluded.name, rating=excluded.rating, "
+                "title=excluded.title, body=excluded.body, hidden=excluded.hidden, "
+                "created_at=excluded.created_at, updated_at=excluded.updated_at",
                 (r.get("product_id"), r.get("order_id"), r.get("email"),
-                 r.get("name"), r.get("stars") or 5, r.get("note"), r.get("at"))
+                 r.get("name"), rating, r.get("title"), body,
+                 1 if r.get("hidden") else 0, created,
+                 r.get("updated_at") or created)
             )
             count += 1
         except Exception as exc:

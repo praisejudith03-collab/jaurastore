@@ -110,6 +110,25 @@ jobs:
           echo "Review the dry-run report artifact first, then re-run with both set."
           exit 1
 
+      # Read-only. The migration writes products.image_url and Storage objects,
+      # so the schema must already be applied. This probes every required table
+      # for the exact columns the application uses and fails the run if one is
+      # missing - cheaper than a half-applied migration.
+      - name: Verify the Supabase schema is applied
+        run: |
+          python3 verify_schema.py --json schema-verification.json || {
+            echo "::error::The schema is not fully applied. Run supabase_schema.sql in the Supabase SQL editor first."
+            exit 1
+          }
+
+      - name: Publish the schema verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schema-verification
+          path: schema-verification.json
+          if-no-files-found: warn
+
       # A dry run always happens first, even when applying, so the artifact
       # for a real run still contains the pre-flight plan.
       - name: Dry-run plan (always, zero writes)
@@ -145,6 +164,18 @@ jobs:
                 f"insecure http {u['insecure_http']}, "
                 f"template {u['unresolved_template']})")
           print(f"legacy wix ids     : {len(p['legacy_id_references'])}")
+          ls = r.get("live_set") or {}
+          c = ls.get("counts") or {}
+          print("--- live-product policy ---")
+          print(f"source rows        : {ls.get('total_source_rows')}")
+          print(f"valid image/price  : {ls.get('rows_with_a_valid_image')} / {ls.get('rows_with_a_valid_price')}")
+          print(f"valid stock        : {ls.get('rows_with_valid_stock')}")
+          print(f"APPROVED LIVE      : {ls.get('approved_live_count')}")
+          print(f"operator offline   : {ls.get('operator_offline_ids')}")
+          print(f"placeholder only   : {c.get('placeholder_only')}")
+          print(f"fixtures excluded  : {c.get('test_fixtures_excluded')}")
+          print(f"needs review       : {c.get('needs_review')}")
+          print(f"applied by script  : {ls.get('applied_by_this_script')}")
           print(f"blockers           : {r['blockers'] or 'none'}")
           print(f"env blockers       : {r['environment_blockers'] or 'none'}")
           print(f"safe_to_apply      : {r['safe_to_apply']}")
@@ -169,7 +200,44 @@ jobs:
               print("blockers:", r.get("blockers"))
               print("environment blockers:", r.get("environment_blockers"))
               sys.exit(1)
-          print("safe_to_apply is true - proceeding.")
+
+          # The classification below was reviewed and approved. If a data change
+          # moves it, the run stops for a human instead of publishing whatever
+          # the catalogue happens to contain today.
+          ls = r.get("live_set") or {}
+          expected = {
+              "total_source_rows": 275,
+              "approved_live_count": 181,
+              "placeholder_only": 75,
+              "test_fixtures_excluded": 17,
+              "needs_review": 0,
+          }
+          counts = ls.get("counts") or {}
+          got = {
+              "total_source_rows": ls.get("total_source_rows"),
+              "approved_live_count": ls.get("approved_live_count"),
+              "placeholder_only": counts.get("placeholder_only"),
+              "test_fixtures_excluded": counts.get("test_fixtures_excluded"),
+              "needs_review": counts.get("needs_review"),
+          }
+          if got != expected:
+              print("::error::The live-product classification no longer matches "
+                    "the approved decision. Stop and re-review before applying.")
+              print("expected:", expected)
+              print("actual  :", got)
+              sys.exit(1)
+
+          offline = set(ls.get("operator_offline_ids") or [])
+          if not {"wix-001", "wix-012"} <= offline:
+              print("::error::wix-001 and wix-012 must be classified offline.")
+              print("operator_offline_ids:", sorted(offline))
+              sys.exit(1)
+          if set(ls.get("live_ids") or []) & {"wix-001", "wix-012"}:
+              print("::error::wix-001 or wix-012 is in the approved live set.")
+              sys.exit(1)
+          print("Classification matches the approved decision - proceeding.")
+          print(f"  approved live     : {got['approved_live_count']}")
+          print(f"  operator offline  : {sorted(offline)}")
           PY
 
       - name: Apply (uploads + image_url writes)
@@ -184,12 +252,104 @@ jobs:
             exit $code
           }
 
+      # The single artifact the reviewer signs off on: what was uploaded, what
+      # was written, what was verified, and the proof that nothing else changed.
+      - name: Build migration-result.json
+        if: always() && inputs.dry_run == 'false'
+        run: |
+          python3 - <<'PY'
+          import json, os
+          apply_rep = {}
+          if os.path.exists("apply-report.json"):
+              apply_rep = json.load(open("apply-report.json"))
+          dry_rep = {}
+          if os.path.exists("dry-run-report.json"):
+              dry_rep = json.load(open("dry-run-report.json"))
+          s = apply_rep.get("safety") or dry_rep.get("safety") or {}
+          ls = dry_rep.get("live_set") or {}
+          p = apply_rep.get("products") or dry_rep.get("products") or {}
+          # A real run puts the outcome under execution.products; a dry run has
+          # no execution block at all, so every field below degrades to None
+          # rather than pretending a number.
+          ex = (apply_rep.get("execution") or {}).get("products") or {}
+          result = {
+              "mode": "apply" if apply_rep else "dry-run only",
+              "generated_at": apply_rep.get("generated_at") or dry_rep.get("generated_at"),
+              "bucket": apply_rep.get("bucket") or dry_rep.get("bucket"),
+              "live_set": {
+                  "approved_live_count": ls.get("approved_live_count"),
+                  "operator_offline_ids": ls.get("operator_offline_ids"),
+                  "counts": ls.get("counts"),
+                  "applied_by_this_script": ls.get("applied_by_this_script"),
+              },
+              "plan": {
+                  "products_examined": p.get("products_examined"),
+                  "products_matched": p.get("products_matched"),
+                  "images_to_upload": p.get("images_to_upload"),
+                  "images_already_uploaded": p.get("images_already_uploaded"),
+                  "images_missing": p.get("images_missing"),
+                  "duplicate_row_count": p.get("duplicate_row_count"),
+                  "proposed_database_updates": p.get("proposed_database_updates"),
+              },
+              "execution": {
+                  "uploaded": ex.get("uploaded"),
+                  "reused": ex.get("reused"),
+                  "rows_updated": ex.get("rows_updated"),
+                  "verified": ex.get("verified"),
+                  "failed": ex.get("failed"),
+                  "not_verified": ex.get("not_verified"),
+              },
+              "safety": s,
+              "invariants": {
+                  "writable_columns": s.get("writable_columns"),
+                  "deletes_local_files": s.get("deletes_local_files"),
+                  "deletes_storage_objects": s.get("deletes_storage_objects"),
+                  "deletes_database_rows": s.get("deletes_database_rows"),
+                  "inserts_database_rows": s.get("inserts_database_rows"),
+                  "renames_product_ids": s.get("renames_product_ids"),
+                  "writes_price_or_stock_columns": s.get("writes_price_or_stock_columns"),
+                  "credentials_in_report": s.get("credentials_in_report"),
+              },
+              "blockers": apply_rep.get("blockers") or dry_rep.get("blockers"),
+              "environment_blockers": (apply_rep.get("environment_blockers")
+                                       or dry_rep.get("environment_blockers")),
+          }
+          with open("migration-result.json", "w", encoding="utf-8") as fh:
+              json.dump(result, fh, indent=2, ensure_ascii=False)
+          inv = result["invariants"]
+          bad = [k for k, v in inv.items()
+                 if k not in ("writable_columns", "credentials_in_report") and v]
+          if bad:
+              print("::error::A destructive invariant is true in the result:", bad)
+              raise SystemExit(1)
+          if inv.get("credentials_in_report"):
+              print("::error::credentials_in_report is true - refusing to publish.")
+              raise SystemExit(1)
+          # An upload that was not verified means a row may now point at an
+          # object that is not publicly readable. That is not a success.
+          ex = result["execution"]
+          if ex.get("uploaded") is not None and ex.get("not_verified"):
+              print(f"::warning::{len(ex['not_verified'])} uploaded object(s) "
+                    "could not be verified - check them before the visual pass.")
+          print("migration-result.json written. Destructive invariants all false.")
+          print(f"  uploaded={ex.get('uploaded')} reused={ex.get('reused')} "
+                f"rows_updated={ex.get('rows_updated')} verified={ex.get('verified')}")
+          PY
+
       - name: Publish the apply report
         if: always() && inputs.dry_run == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: apply-report
           path: apply-report.json
+          if-no-files-found: warn
+
+      - name: Publish migration-result.json
+        if: always() && inputs.dry_run == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-result
+          path: migration-result.json
           if-no-files-found: warn
 
       # Reminder only. Local images are NOT deleted by this job or by the
@@ -200,16 +360,56 @@ jobs:
           cat <<'SQL'
           Run these in the Supabase SQL editor after the job finishes.
 
-          -- 1. Rows still pointing somewhere other than the public bucket
-          select id, name, "image_url"
-          from products
-          where "online" = true
-            and ("image_url" is null
-                 or "image_url" !~ '^https://[^/]+\.supabase\.co/storage/v1/object/public/uploads/');
+          -- 1. Live catalogue health
+          select
+            count(*) as total_products,
+            count(*) filter (where online = true) as live_products,
+            count(*) filter (
+              where online = true
+                and image_url like 'https://%'
+            ) as live_products_with_https_images,
+            count(*) filter (
+              where online = true
+                and "priceNgn" is not null
+            ) as live_products_with_ngn_prices,
+            count(*) filter (
+              where online = true
+                and "priceCfa" is not null
+            ) as live_products_with_cfa_prices,
+            count(*) filter (
+              where online = true
+                and stock_quantity is not null
+            ) as live_products_with_stock
+          from public.products;
 
-          -- 2. Must return ZERO rows for live products
-          select id, name, "image_url"
-          from products
-          where "online" = true
-            and ("image_url" like 'http://%');
+          -- 2. MUST return ZERO rows for the intended live catalogue
+          select
+            id,
+            name,
+            image_url,
+            "priceNgn",
+            "priceCfa",
+            stock_quantity,
+            online
+          from public.products
+          where online = true
+          and (
+            image_url is null
+            or image_url not like 'https://%'
+            or "priceNgn" is null
+            or "priceCfa" is null
+            or stock_quantity is null
+          )
+          order by id;
+
+          -- 3. The two operator-offline products. Both MUST be online=false.
+          select
+            id,
+            online,
+            image_url,
+            "priceNgn",
+            "priceCfa",
+            stock_quantity
+          from public.products
+          where id in ('wix-001', 'wix-012');
           SQL

@@ -459,9 +459,10 @@ function reviewsAdminHTML(id) {
   if (!list.length) return `<p class="admin-note" id="rev-empty">No reviews yet.</p>`;
   return list.map((r) => `
     <article class="rev-note admin-rev">
-      <p>${JA.starsHTML ? JA.starsHTML(r.stars) : ""} <strong>${JA.escape(r.name || "")}</strong></p>
-      <p>${JA.escape(r.note || "")}</p>
-      <button type="button" class="au-opt-del" data-del-rev="${JA.escape(r.at || "")}">Remove</button>
+      <p>${JA.starsHTML ? JA.starsHTML(r.rating != null ? r.rating : r.stars) : ""} <strong>${JA.escape(r.name || "")}</strong></p>
+      ${r.title ? `<p class="rev-title"><strong>${JA.escape(r.title)}</strong></p>` : ""}
+      <p>${JA.escape(r.body != null ? r.body : (r.note || ""))}</p>
+      <button type="button" class="au-opt-del" data-del-rev="${JA.escape(r.created_at || r.at || "")}">Remove</button>
     </article>`).join("");
 }
 function bindReviewsAdmin(id) {
@@ -470,11 +471,11 @@ function bindReviewsAdmin(id) {
   document.getElementById("rev-add")?.addEventListener("click", () => {
     const name = (document.getElementById("rev-name")?.value || "").trim();
     const note = (document.getElementById("rev-note")?.value || "").trim();
-    const stars = Number(document.getElementById("rev-stars")?.value || 5);
+    const rating = Number(document.getElementById("rev-stars")?.value || 5);
     if (!note) { JA.toast("Type the customer note first."); return; }
     const pid = id && id !== "new" ? id : (document.querySelector("#prod-form [name=id]")?.value || "");
-    if (pid && JA.addReview) JA.addReview(pid, { name, note, stars });
-    else window.__editReviews = (window.__editReviews || []).concat([{ name: name || "Customer", note, stars, at: new Date().toISOString() }]);
+    if (pid && JA.addReview) JA.addReview(pid, { name, body: note, rating });
+    else window.__editReviews = (window.__editReviews || []).concat([{ name: name || "Customer", body: note, rating, created_at: new Date().toISOString() }]);
     if (document.getElementById("rev-name")) document.getElementById("rev-name").value = "";
     if (document.getElementById("rev-note")) document.getElementById("rev-note").value = "";
     paint(); JA.toast("Review added.");

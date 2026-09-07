@@ -10,39 +10,41 @@ below is either a code change with tests, or a dry-run report.
 ## Test tally (exact, as executed)
 
 ```
-.venv/bin/python -m pytest --collect-only -q   →  626 tests collected
-.venv/bin/python -m pytest tests/ -q -ra       →  626 passed
+.venv/bin/python -m pytest --collect-only -q   →  640 tests collected
+.venv/bin/python -m pytest tests/ -q -ra       →  640 passed
                                                   0 failed, 0 errors, 0 skipped
-                                                  in 60.88s / 62.15s (two runs)
+                                                  in 61.87s / 61.45s (two runs)
 ```
 
-> 564 → 606 → 626: +14 live-product-policy tests, +9 non-positive-price tests,
-> +19 schema inventory tests, then +18 coupon/review data-model tests and +3
-> review-persistence tests retargeted at the real table. See the addendum at
-> the bottom for what changed since the first version of this report.
+> 564 → 606 → 626 → 640: +14 live-product-policy tests, +9 non-positive-price
+> tests, +19 schema inventory tests, +18 coupon/review data-model tests, +3
+> review-persistence tests retargeted at the real table, then +10
+> schema-verification tests and +4 for the review column contract. See the
+> addendum at the bottom for what changed since the first version of this report.
 
 There are no skips and therefore no skip reasons. The suite was green on two
 consecutive full runs.
 
-Per-module, from `pytest --collect-only -q`, summing to exactly 626:
+Per-module, from `pytest --collect-only -q`, summing to exactly 640:
 
 | module | tests | | module | tests |
 |---|---|---|---|---|
-| test_api.py | 121 | | test_save_visibility.py | 13 |
-| test_static_exposure.py | 81 | | test_recaptcha.py | 12 |
+| test_api.py | 121 | | test_recaptcha.py | 12 |
+| test_static_exposure.py | 81 | | test_verify_schema.py | 10 |
 | test_migrate_images.py | 54 | | test_dedupe_scope.py | 10 |
 | test_admin_features.py | 45 | | test_admin_password_persistence.py | 10 |
 | test_delivery_zones.py | 33 | | test_wix_free.py | 9 |
 | test_storage_supabase.py | 29 | | test_push_catalog.py | 9 |
-| test_supabase_schema.py | 22 | | test_photo_fix.py | 9 |
+| test_supabase_schema.py | 25 | | test_photo_fix.py | 9 |
 | test_image_migration_workflow.py | 19 | | test_catalog_mirror.py | 9 |
-| test_coupon_uses_and_reviews.py | 18 | | test_growth_persistence.py | 8 |
+| test_coupon_uses_and_reviews.py | 19 | | test_growth_persistence.py | 8 |
 | test_admin_reset_tokens.py | 18 | | test_uploaded_photos.py | 7 |
 | test_payment_settings.py | 15 | | test_admin_route_gating.py | 7 |
 | test_site_settings_supabase.py | 14 | | test_sync_health.py | 5 |
 | test_legacy_id_alias.py | 14 | | test_stock_sales_perf.py | 5 |
 | test_stock_confirm.py | 13 | | test_brand_icons.py | 3 |
 | test_sitemap.py | 13 | | test_backfill_rows.py | 1 |
+| test_save_visibility.py | 13 | |  |  |
 
 ---
 
@@ -727,3 +729,197 @@ value appears anywhere in it.
 
 **The real migration has still not been run.** No credentials are present, and
 `dry_run=false` has not been executed.
+
+---
+
+# Pass 4 — the review column contract, the migration pre-flight, and a blocked secret
+
+## 1. `product_reviews` did not match the agreed column contract
+
+The spec is `product_id, email, name, rating, title, body, hidden, created_at,
+updated_at`. What I had shipped in pass 3 was `stars, note, at` with no
+`title` and no `updated_at` — five of the nine required names were wrong or
+absent. The schema test passed because it asserted the names I had chosen, not
+the names that were agreed.
+
+Now, in both `supabase_schema.sql` and `db.py`:
+
+```
+id · product_id · order_id · email · name · rating · title · body ·
+hidden · created_at · updated_at                    unique (product_id, email)
+rating: integer not null default 5 check (rating between 1 and 5)
+```
+
+`order_id` is kept as an addition to the spec — it is what ties a review to the
+verified purchase.
+
+**A column rename moves data, it does not drop it.** Both schemas carry a
+guarded upgrade path so an existing database is migrated rather than rebuilt:
+
+```sql
+do $$ begin
+  if exists (select 1 from information_schema.columns
+             where table_name = 'product_reviews' and column_name = 'stars') then
+    alter table product_reviews rename column stars to rating;
+  end if;
+  ... note → body, at → created_at
+end $$;
+```
+
+SQLite gets the same treatment in `db.py:migrate()` via `REVIEW_RENAMES`, which
+`app.py` already calls right after `init_db()`. Verified on a scratch database
+that the rename preserves the row, preserves the value, and leaves the
+`unique(product_id, email)` constraint intact. SQLite refuses
+`ADD COLUMN … DEFAULT (datetime('now'))`, so `updated_at` is nullable there and
+every write path sets it explicitly.
+
+**Legacy compatibility is kept on both edges.** Reading accepts
+`stars`/`note`/`at` and maps them onto the new names, so restoring the old
+`growth_settings` blob cannot lose a review. The API accepts `rating` or
+`stars`, `body` or `note`, and returns the new names *plus* the old ones as
+deprecated aliases, because a customer's cached `js/app.js` outlives a deploy.
+One subtlety: `d.get("rating", d.get("stars"))` does **not** fall back when
+`rating` is present but `null`, so the lookup is null-aware.
+
+**On the test that forbade this.** `test_repair_block_only_adds_columns` banned
+`drop|truncate|delete|rename` outright. Rather than weaken it, I narrowed it to
+the three verbs that are genuinely destructive and added
+`test_the_only_renames_are_the_guarded_review_column_moves`, which pins the
+exact three renames and asserts each is wrapped in an `information_schema`
+existence check. A fourth rename still fails the suite.
+
+## 2. `verify_schema.py` — the pre-flight the migration was missing
+
+The migration writes `products.image_url` and Storage objects, so the schema
+must be applied first. `verify_schema.py` probes all 13 tables via PostgREST,
+requesting exactly the columns the application uses — a missing table or column
+makes PostgREST error, which is the signal. It needs no `information_schema`
+access and no `psql` connection, only the two secrets the workflow already has,
+and it prints table names, column names and counts, never the key.
+
+`tests/test_verify_schema.py` (10 tests) drives `check_live()` against a fake
+PostgREST client, so the check is proven to fail rather than assumed to. The
+most important one reproduces this pass's own bug: a `product_reviews` table
+still holding `stars/note/at` **fails** the check.
+
+```
+python3 verify_schema.py --dry-run
+  required tables          : 13
+  OK  coupon_uses: unique (code, order_id)
+  OK  product_reviews: unique (product_id, email)
+  network probe            : skipped (--dry-run)
+  ok                       : True
+```
+
+Against real Supabase it exits 1 until the schema is applied; no credentials
+here, so the live probe has not been run.
+
+## 3. The workflow now gates on the approved classification
+
+`.github/workflows/image-migration.yml` grew a schema pre-flight, a live-set
+summary, an approved-classification gate, and a `migration-result.json`
+artifact. The gate re-checks the reviewed decision on every apply and stops for
+a human if the data has moved:
+
+```
+expected {total_source_rows: 275, approved_live_count: 181,
+          placeholder_only: 75, test_fixtures_excluded: 17, needs_review: 0}
+and {wix-001, wix-012} ⊆ operator_offline_ids
+and live_ids ∩ {wix-001, wix-012} = ∅
+```
+
+Every workflow step's embedded Python was executed locally against the real
+`migration-dry-run.json` rather than read:
+
+| trial | exit |
+|---|---|
+| approved decision (275/181/75/17/0) | 0 |
+| approved count drifts to 180 | 1 |
+| placeholder count drifts to 76 | 1 |
+| `needs_review` becomes 1 | 1 |
+| `wix-001` dropped from `operator_offline` | 1 |
+| `wix-012` leaks into the live set | 1 |
+
+`migration-result.json` was built from a synthetic apply report and contains
+`uploaded=182 reused=0 rows_updated=182 verified=182`, all seven destructive
+invariants `False`, `credentials_in_report: False`, and no secret material. Its
+field names were taken from the report's actual keys (`execution.products.{uploaded,
+reused, rows_updated, verified, failed, verified_urls, not_verified}`) — an
+earlier draft invented `images_uploaded` and `http_failures`, which do not
+exist and would have produced a report of confident `null`s.
+
+Requirements audit: **20/20** — `workflow_dispatch` only, no `push` trigger,
+`dry_run` a required choice of `true`/`false`, bucket pinned to `uploads`, no
+`SUPABASE_PRIVATE_BUCKET`, no `receipts`, `environment: image-migration`,
+`permissions: contents:read, actions:read`, key `::add-mask::`ed with only its
+length printed, three artifacts uploaded, apply needs `dry_run=false` **and**
+`confirm_apply=APPLY` **and** `safe_to_apply`, apply passes `--http-check`,
+`cancel-in-progress: false`. A leak scan finds no JWT-shaped token, no
+`sb_secret`, and only two `secrets.*` references.
+
+One false positive worth recording: my own check for the string `receipts`
+matched the comment `# never 'receipts'` on the `SUPABASE_BUCKET` line. Stripped
+of comments, neither `receipts` nor `SUPABASE_PRIVATE_BUCKET` appears.
+
+## 4. **Blocked:** the protected secrets cannot be added from here
+
+```
+$ gh secret list
+failed to get secrets: HTTP 403: Resource not accessible by integration
+```
+
+The Actions secret API is not reachable with this sandbox's token, so I can
+neither read nor set `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`. **The
+repository owner must add them** from GitHub → Settings → Secrets and variables
+→ Actions, and create the `image-migration` environment with at least one
+required reviewer under Settings → Environments. I am not asking for the key
+here and it must not be pasted into chat.
+
+Until that is done the migration cannot run, `safe_to_apply` stays `false`, and
+no claim of production migration is made.
+
+## Verification run this pass
+
+```
+pytest --collect-only -q                        → 640 collected
+pytest tests/ -q -ra  (pass 1)                  → 640 passed in 61.87s
+pytest tests/ -q -ra  (pass 2)                  → 640 passed in 61.45s
+git status --short                              → only the intended source edits
+git diff -- data/catalog.json                   → empty
+git diff -- data/categories.json                → empty
+git diff -- data/seed.json                      → empty
+git diff -- data/wix_products.json              → empty
+sha256 before vs after both passes              → identical, all four files
+py_compile migrate_images.py verify_schema.py   → OK
+migrate_images.py --help                        → OK
+migrate_images.py --dry-run                     → exit 0, zero uploads, zero writes
+node --check js/app.js js/admin.js              → OK
+```
+
+## Approved live-product decision (unchanged, re-verified)
+
+```
+approved_live_count        181
+operator_offline_ids       wix-001, wix-012
+placeholder_only            75
+test_fixtures_excluded      17
+needs_review                 0
+total_source_rows          275
+```
+
+`wix-001` and `wix-012` are not subtracted a second time: they were already
+outside the 181. Neither row is deleted, renamed, or repriced.
+
+## Still open — cannot be done from this sandbox
+
+1. Add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`; create the
+   `image-migration` environment with a required reviewer.
+2. Apply `supabase_schema.sql` in the Supabase SQL editor, then run
+   `python3 verify_schema.py` and confirm `ok: True`.
+3. Run the workflow with `dry_run=true` and review the `dry-run-report` and
+   `schema-verification` artifacts.
+4. Only then `dry_run=false` with `confirm_apply=APPLY`.
+5. Migrate the legacy review blob with `POST /api/admin/reviews/migrate`
+   (dry-run first) and verify row counts and samples before touching it. The
+   blob has not been deleted.
+6. Post-migration SQL, the admin/persistence checklist, and the visual pass.

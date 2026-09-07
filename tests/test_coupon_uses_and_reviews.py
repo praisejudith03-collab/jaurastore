@@ -241,21 +241,47 @@ def _buy(client, oid, email, pid):
              email, "confirmed", "2026-09-01T00:00:00", "2026-09-01T00:00:00"))
 
 
-def _review(client, pid, email, stars=4, note="Good.", name="Reviewer"):
+def _review(client, pid, email, rating=4, body="Good.", name="Reviewer",
+            title=None, **legacy):
+    payload = {"productId": pid, "email": email, "name": name,
+               "rating": rating, "body": body}
+    if title is not None:
+        payload["title"] = title
+    payload.update(legacy)          # lets a test post the legacy stars/note keys
     return client.post("/api/reviews", headers={"X-CSRF-Token": csrf(client)},
-                       json={"productId": pid, "email": email, "name": name,
-                             "stars": stars, "note": note})
+                       json=payload)
 
 
 def test_review_create_persists_and_reads_back(client):
     _buy(client, "JA-CU001", "rv1@example.com", "cutest-a")
-    r = _review(client, "cutest-a", "rv1@example.com", 5, "Excellent.")
+    r = _review(client, "cutest-a", "rv1@example.com", 5, "Excellent.",
+                title="Great buy")
     assert r.status_code == 200, r.data
     j = r.get_json()
     assert j["count"] == 1 and j["average"] == 5
-    row = one("SELECT product_id, email, stars, note FROM product_reviews "
-              "WHERE product_id='cutest-a'")
-    assert row["email"] == "rv1@example.com" and int(row["stars"]) == 5
+    row = one("SELECT product_id, email, rating, title, body, created_at, "
+              "updated_at FROM product_reviews WHERE product_id='cutest-a'")
+    assert row["email"] == "rv1@example.com"
+    assert int(row["rating"]) == 5
+    assert row["title"] == "Great buy"
+    assert row["body"] == "Excellent."
+    assert row["created_at"] and row["updated_at"], "both timestamps must be set"
+    # the public payload carries the new names, plus aliases for cached JS
+    rev = j["reviews"][0]
+    assert rev["rating"] == 5 and rev["body"] == "Excellent."
+    assert rev["stars"] == 5 and rev["note"] == "Excellent.", \
+        "the legacy aliases keep an old cached storefront bundle rendering"
+
+
+def test_the_legacy_stars_and_note_keys_are_still_accepted(client):
+    """A browser still running the previous js/app.js posts stars/note. It must
+    not get a 400 or silently store an empty review."""
+    _buy(client, "JA-CU001", "rv1@example.com", "cutest-a")
+    r = _review(client, "cutest-a", "rv1@example.com",
+                rating=None, body=None, stars=2, note="Old bundle.")
+    assert r.status_code == 200, r.data
+    row = one("SELECT rating, body FROM product_reviews WHERE product_id='cutest-a'")
+    assert int(row["rating"]) == 2 and row["body"] == "Old bundle."
 
 
 def test_review_list_is_filtered_by_product(client):
@@ -281,13 +307,13 @@ def test_review_update_targets_the_right_row(client):
 
     r = _review(client, "cutest-a", "rv1@example.com", 3, "Changed my mind.")
     assert r.status_code == 200
-    rows = query("SELECT email, stars, note FROM product_reviews "
-                 "WHERE product_id='cutest-a'")
+    rows = query("SELECT email, rating, body, created_at, updated_at "
+                 "FROM product_reviews WHERE product_id='cutest-a'")
     assert len(rows) == 2, "an update must not duplicate or drop a row"
     by_email = {x["email"]: dict(x) for x in rows}
-    assert int(by_email["rv1@example.com"]["stars"]) == 3
-    assert by_email["rv1@example.com"]["note"] == "Changed my mind."
-    assert int(by_email["rv2@example.com"]["stars"]) == 2, "the other review is untouched"
+    assert int(by_email["rv1@example.com"]["rating"]) == 3
+    assert by_email["rv1@example.com"]["body"] == "Changed my mind."
+    assert int(by_email["rv2@example.com"]["rating"]) == 2, "the other review is untouched"
 
 
 def test_review_delete_removes_exactly_one_row(client):

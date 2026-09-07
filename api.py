@@ -2125,13 +2125,13 @@ def admin_coupon_uses():
 def admin_reviews():
     """Every review, including hidden ones - moderation needs to see them."""
     pid = sec.clean(request.args.get("productId"), 64) or None
-    sql = ("SELECT product_id, order_id, email, name, stars, note, at, hidden "
-           "FROM product_reviews")
+    sql = ("SELECT product_id, order_id, email, name, rating, title, body, "
+           "hidden, created_at, updated_at FROM product_reviews")
     args = ()
     if pid:
         sql += " WHERE product_id=?"
         args = (pid,)
-    rows = query(sql + " ORDER BY at DESC LIMIT 500", args)
+    rows = query(sql + " ORDER BY created_at DESC LIMIT 500", args)
     return jsonify(ok=True, reviews=[dict(r) for r in rows])
 
 
@@ -2248,6 +2248,28 @@ def cart_recover(token):
     return jsonify(ok=True, **cart)
 
 # ================================================= public: verified reviews
+def _public_review(row):
+    """Shape one review row for the storefront.
+
+    `rating` / `title` / `body` / `created_at` are the contract. `stars` and
+    `note` are repeated as aliases so a browser still running the previous
+    js/app.js keeps rendering instead of showing blank reviews - the old bundle
+    stays in CDN and customer caches long after a deploy.
+    """
+    row = row or {}
+    rating = int(row.get("rating") or 5)
+    return {
+        "name": row.get("name"),
+        "rating": rating,
+        "title": row.get("title"),
+        "body": row.get("body"),
+        "created_at": row.get("created_at"),
+        "stars": rating,                      # deprecated alias
+        "note": row.get("body"),              # deprecated alias
+        "at": row.get("created_at"),          # deprecated alias
+    }
+
+
 @api.get("/reviews/<pid>")
 def reviews_list(pid):
     """Reviews for one product.
@@ -2265,36 +2287,50 @@ def reviews_list(pid):
             from supabase_store import load_product_reviews_table
             rows = load_product_reviews_table(pid)
             if rows is not None:
-                items = [{"name": r.get("name"), "stars": int(r.get("stars") or 5),
-                          "note": r.get("note"), "at": r.get("at")}
+                items = [_public_review(r)
                          for r in rows if not r.get("hidden")][:100]
                 source = "supabase:product_reviews"
         except Exception:
             items = None
     if items is None:
-        rows = query("SELECT name, stars, note, at FROM product_reviews "
+        rows = query("SELECT name, rating, title, body, created_at "
+                     "FROM product_reviews "
                      "WHERE product_id=? AND hidden=0 "
-                     "ORDER BY at DESC LIMIT 100", (pid,))
-        items = [dict(r) for r in rows]
+                     "ORDER BY created_at DESC LIMIT 100", (pid,))
+        items = [_public_review(dict(r)) for r in rows]
     n = len(items)
-    avg = round(sum(int(r.get("stars") or 0) for r in items) / n, 2) if n else 0
+    avg = round(sum(int(r.get("rating") or 0) for r in items) / n, 2) if n else 0
     return jsonify(ok=True, productId=pid, count=n, average=avg, reviews=items,
                    source=source)
 
 @api.post("/reviews")
 @sec.require_csrf
 def reviews_create():
-    """A customer review: stars + note, only for products they bought.
-    The buyer is verified against the orders table by email."""
+    """A customer review: rating + title + body, only for products they bought.
+    The buyer is verified against the orders table by email.
+
+    Accepts the legacy `stars` / `note` keys as well, so a cached copy of the
+    old storefront bundle can still post.
+    """
     limited = sec.guard("review", limit=10, window=3600)
     if limited: return limited
     d = request.get_json(silent=True) or {}
     pid = sec.clean(d.get("productId"), 64)
     email = sec.clean_email(d.get("email"))
     name = sec.clean(d.get("name"), 60)
-    stars = sec.clean_int(d.get("stars"), 5, 1, 5)
-    note = sec.clean(d.get("note"), 600)
-    if not pid or not note:
+    title = sec.clean(d.get("title"), 120)
+    # dict.get(key, fallback) only falls back when the key is ABSENT, so an
+    # explicit {"rating": null} would have won over a valid "stars". Treat null
+    # as absent: an old bundle sends stars/note, a new one sends rating/body.
+    def _first(*keys):
+        for k in keys:
+            if d.get(k) is not None:
+                return d.get(k)
+        return None
+
+    rating = sec.clean_int(_first("rating", "stars"), 5, 1, 5)
+    body = sec.clean(_first("body", "note"), 600)
+    if not pid or not body:
         return jsonify(ok=False, error="Add a short note about the product."), 400
     if not email:
         return jsonify(ok=False, error="Enter the email you used for your order."), 400
@@ -2305,10 +2341,14 @@ def reviews_create():
         return jsonify(ok=False, error="Reviews are for customers who bought this product. "
                                        "Use the same email as your order."), 403
 
-    execute("INSERT INTO product_reviews (product_id, order_id, email, name, stars, note, at) "
-            "VALUES (?,?,?,?,?,?,?) ON CONFLICT(product_id, email) DO UPDATE SET "
-            "name=excluded.name, stars=excluded.stars, note=excluded.note, at=excluded.at",
-            (pid, bought["id"], email, name or "Customer", stars, note, _utcnow()))
+    now = _utcnow()
+    execute("INSERT INTO product_reviews (product_id, order_id, email, name, rating, "
+            "title, body, hidden, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(product_id, email) DO UPDATE SET "
+            "name=excluded.name, rating=excluded.rating, title=excluded.title, "
+            "body=excluded.body, updated_at=excluded.updated_at",
+            (pid, bought["id"], email, name or "Customer", rating, title, body,
+             0, now, now))
     # Persist to the real product_reviews table, which is the source of truth.
     # The old growth_settings JSON blob is no longer written: re-serialising the
     # whole table on every review was last-write-wins, so two reviews arriving
@@ -2319,19 +2359,20 @@ def reviews_create():
             from supabase_store import save_product_reviews_table
             _saved, err = save_product_reviews_table([{
                 "product_id": pid, "order_id": bought["id"], "email": email,
-                "name": name or "Customer", "stars": stars, "note": note,
-                "at": _utcnow()}])
+                "name": name or "Customer", "rating": rating, "title": title,
+                "body": body, "created_at": now, "updated_at": now}])
             durable = not err
         except Exception:
             durable = False
-    audit("customer", "review.posted", f"{pid} {stars}★ by {email}", _ip())
+    audit("customer", "review.posted", f"{pid} {rating}★ by {email}", _ip())
     # The review is in SQLite either way, but if the durable write failed the
     # caller is told - a silent "thank you" over a lost review is worse than a
     # warning.
     if not durable:
-        return jsonify(ok=True, productId=pid, count=1, average=float(stars),
-                       reviews=[{"name": name or "Customer", "stars": stars,
-                                 "note": note, "at": _utcnow()}],
+        return jsonify(ok=True, productId=pid, count=1, average=float(rating),
+                       reviews=[_public_review({
+                           "name": name or "Customer", "rating": rating,
+                           "title": title, "body": body, "created_at": now})],
                        source="local", durable=False,
                        warning="Your review was saved but could not be stored "
                                "durably; it may need re-submitting."), 200

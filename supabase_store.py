@@ -1213,12 +1213,23 @@ def load_product_reviews():
 # here.
 # ---------------------------------------------------------------------------
 
-_REVIEW_COLUMNS = ("product_id", "order_id", "email", "name", "stars", "note", "at")
+_REVIEW_COLUMNS = ("product_id", "order_id", "email", "name", "rating", "title",
+                   "body", "hidden", "created_at", "updated_at")
+
+# The table was first drafted as stars / note / at. The legacy blob in
+# growth_settings still uses those keys, so reading accepts both - dropping a
+# restored review over a key name would be silent data loss.
+_LEGACY_REVIEW_KEYS = {"stars": "rating", "note": "body", "at": "created_at"}
 
 
 def _clean_review(row):
     """Normalise one review to the table's columns. Returns None if unusable."""
     row = row or {}
+    for old_key, new_key in _LEGACY_REVIEW_KEYS.items():
+        if row.get(new_key) is None and row.get(old_key) is not None:
+            row = dict(row)
+            row[new_key] = row[old_key]
+            break
     product_id = str(row.get("product_id") or "").strip()
     email = str(row.get("email") or "").strip().lower()
     if not product_id or not email:
@@ -1226,10 +1237,12 @@ def _clean_review(row):
         # cannot be stored or de-duplicated, so it is skipped, not guessed at.
         return None
     try:
-        stars = int(row.get("stars") or 5)
+        rating = int(row.get("rating") or 5)
     except (TypeError, ValueError):
-        stars = 5
-    stars = max(1, min(5, stars))          # matches the check constraint
+        rating = 5
+    rating = max(1, min(5, rating))        # matches the check constraint
+    created = str(row.get("created_at") or "") or None
+    updated = str(row.get("updated_at") or "") or created
     return {
         "product_id": product_id,
         "order_id": (str(row.get("order_id")).strip() or None
@@ -1237,10 +1250,14 @@ def _clean_review(row):
         "email": email,
         "name": (str(row.get("name")).strip() or None
                  if row.get("name") is not None else None),
-        "stars": stars,
-        "note": (str(row.get("note")).strip() or None
-                 if row.get("note") is not None else None),
-        "at": str(row.get("at") or "") or None,
+        "rating": rating,
+        "title": (str(row.get("title")).strip() or None
+                  if row.get("title") is not None else None),
+        "body": (str(row.get("body")).strip() or None
+                 if row.get("body") is not None else None),
+        "hidden": bool(row.get("hidden")),
+        "created_at": created,
+        "updated_at": updated,
     }
 
 
@@ -1257,8 +1274,10 @@ def save_product_reviews_table(rows):
     if not clean:
         return 0, None
     for row in clean:
-        if not row.get("at"):
-            row.pop("at", None)          # let the database default fill it
+        # Let the database defaults fill the timestamps when we have none.
+        for ts in ("created_at", "updated_at"):
+            if not row.get(ts):
+                row.pop(ts, None)
     try:
         c.table("product_reviews").upsert(
             clean, on_conflict="product_id,email").execute()
@@ -1278,7 +1297,7 @@ def load_product_reviews_table(product_id=None):
         q = c.table("product_reviews").select("*")
         if product_id:
             q = q.eq("product_id", product_id)
-        res = q.order("at", desc=True).execute()
+        res = q.order("created_at", desc=True).execute()
         return _res_data(res) or []
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] product_reviews read failed: {exc}")

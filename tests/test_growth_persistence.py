@@ -194,8 +194,12 @@ def test_product_reviews_survive_a_wiped_disk(sb):
     _wipe_growth_tables()
     appmod.create_app()
     row = one("SELECT * FROM product_reviews WHERE product_id='wix-001' AND email='buyer@x.com'")
-    assert row and row["stars"] == 5
-    assert row["note"] == "Lovely ankara, fits perfectly."
+    assert row and row["rating"] == 5, \
+        "a review restored from the legacy blob must land in the rating column"
+    # the blob predates the rename: stars/note/at must map onto
+    # rating/body/created_at, or restoring an old backup loses every review
+    assert row["body"] == "Lovely ankara, fits perfectly."
+    assert row["created_at"] == "2026-08-10T00:00:00"
     execute("DELETE FROM product_reviews")
 
 
@@ -233,7 +237,7 @@ def test_review_create_writes_to_the_product_reviews_table(client, sb):
     rows = sb.tables.get("product_reviews", [])
     assert rows, "the review was not written to the product_reviews table"
     assert any(m["product_id"] == "wix-001" and m["email"] == "rev@x.com"
-               and m["stars"] == 4 for m in rows)
+               and m["rating"] == 4 for m in rows)
     # the read path must come from the same table, not from SQLite
     got = client.get("/api/reviews/wix-001").get_json()
     assert got["source"] == "supabase:product_reviews"
@@ -273,15 +277,15 @@ def test_resubmitting_the_same_review_updates_instead_of_duplicating(client, sb)
             ("JA-REV4", json.dumps({"items": [{"id": "wix-003", "name": "C", "qty": 1}]}),
              "c@x.com", "confirmed", "2026-09-01T00:00:00", "2026-09-01T00:00:00"))
     tok = client.get("/api/config").get_json()["csrf"]
-    for stars in (2, 5):
+    for rating in (2, 5):
         r = client.post("/api/reviews",
                         json={"productId": "wix-003", "email": "c@x.com", "name": "C",
-                              "stars": stars, "note": "Changed my mind."},
+                              "rating": rating, "body": "Changed my mind."},
                         headers={"X-CSRF-Token": tok})
         assert r.status_code == 200, r.data
     rows = sb.tables.get("product_reviews", [])
     assert len(rows) == 1, f"the unique key did not hold: {rows}"
-    assert rows[0]["stars"] == 5
+    assert rows[0]["rating"] == 5
     execute("DELETE FROM product_reviews"); execute("DELETE FROM orders WHERE id='JA-REV4'")
 
 

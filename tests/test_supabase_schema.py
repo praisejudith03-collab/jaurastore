@@ -80,11 +80,34 @@ def _statements_only(sql):
 
 
 def test_repair_block_only_adds_columns():
-    """Rule: never drop/truncate/delete/rename - the SQL adds only."""
+    """Rule: never drop/truncate/delete - the SQL adds only.
+
+    `rename` is the one exception, and a narrow one: product_reviews shipped
+    first as stars/note/at and the agreed contract is rating/body/created_at.
+    A column rename rewrites no data and drops no row, so it upgrades an
+    existing database instead of rebuilding it. Every other rename stays
+    banned, and each allowed one is pinned below so a fourth cannot slip in.
+    """
     sql = _statements_only(_schema_text())
-    for bad in (r"\bdrop\b", r"\btruncate\b", r"\brename\b", r"\bdelete\b"):
+    for bad in (r"\bdrop\b", r"\btruncate\b", r"\bdelete\b"):
         m = re.search(bad, sql, re.IGNORECASE)
         assert not m, f"the schema file must never {bad.strip(chr(92))}: found {m.group(0)!r}"
+
+
+def test_the_only_renames_are_the_guarded_review_column_moves():
+    """Pins the carve-out above: exactly three renames, all on
+    product_reviews, all guarded by an information_schema existence check so
+    re-running the file cannot fail or double-apply."""
+    sql = _schema_text()
+    found = re.findall(r"rename column (\w+) to (\w+)", sql, re.IGNORECASE)
+    assert sorted(found) == sorted([("stars", "rating"), ("note", "body"),
+                                    ("at", "created_at")]), \
+        f"unexpected column renames in the schema: {found}"
+    for old_col, _new_col in found:
+        guard = re.search(
+            r"if exists\s*\(\s*select 1 from information_schema\.columns[^)]*"
+            r"column_name = '" + old_col + r"'\s*\)", sql, re.IGNORECASE | re.DOTALL)
+        assert guard, f"rename of {old_col!r} is not guarded by an existence check"
 
 
 def test_dead_snake_case_columns_are_documented_never_drop():
@@ -169,7 +192,34 @@ def test_product_reviews_enforces_one_per_customer_per_product():
     assert m, "product_reviews is not defined"
     body = m.group(1).lower()
     assert "unique (product_id, email)" in body.replace("  ", " ")
-    assert "check (stars between 1 and 5)" in body.replace("  ", " ")
+    assert "check (rating between 1 and 5)" in body.replace("  ", " ")
+
+
+def test_product_reviews_has_the_agreed_column_contract():
+    """The columns the migration and the API contract both depend on. Checked
+    against the CREATE block so a missing column fails here, in CI, rather
+    than as a 422 from PostgREST during the production dry-run."""
+    m = re.search(r"create table (?:if not exists )?product_reviews\s*\((.*?)\n\);",
+                  _schema_text(), re.IGNORECASE | re.DOTALL)
+    assert m, "product_reviews is not defined"
+    body = m.group(1)
+    for col in ("product_id", "email", "name", "rating", "title", "body",
+                "hidden", "created_at", "updated_at"):
+        assert re.search(r"^\s*" + col + r"\b", body, re.MULTILINE), \
+            f"product_reviews is missing the required column {col!r}"
+    # the superseded names must be gone from the definition, or the table
+    # carries two vocabularies and every reader has to guess
+    for gone in ("stars", "note"):
+        assert not re.search(r"^\s*" + gone + r"\b", body, re.MULTILINE), \
+            f"product_reviews still defines the superseded column {gone!r}"
+
+
+def test_coupon_uses_cannot_double_count_an_order():
+    """The constraint the coupon idempotency depends on."""
+    m = re.search(r"create table (?:if not exists )?coupon_uses\s*\((.*?)\n\);",
+                  _schema_text(), re.IGNORECASE | re.DOTALL)
+    assert m, "coupon_uses is not defined"
+    assert "unique (code, order_id)" in m.group(1).lower().replace("  ", " ")
 
 
 def test_delivery_zones_constrains_its_enums():

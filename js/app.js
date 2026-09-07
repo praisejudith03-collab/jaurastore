@@ -734,9 +734,10 @@ function paintProduct(root, p) {
         <p class="rev-avg">${revStats.n ? starsOf(revStats.avg) + " " + t(revStats.n === 1 ? "rev.count" : "rev.countMany", { n: revStats.n }) : t("rev.empty")}</p>
         <div class="rev-list">${rev.length ? rev.map((r) => `
           <article class="rev-note">
-            ${starsOf(r.stars)}
+            ${starsOf(r.rating != null ? r.rating : r.stars)}
             <strong>${JA.escape(r.name || "Customer")}</strong>
-            <p>${JA.escape(r.note || "")}</p>
+            ${r.title ? `<p class="rev-title"><strong>${JA.escape(r.title)}</strong></p>` : ""}
+            <p>${JA.escape(r.body != null ? r.body : (r.note || ""))}</p>
           </article>`).join("") : ""}</div>
         <form class="rev-form" data-rev-form>
           <h4>${t("rev.write")}</h4>
@@ -745,8 +746,9 @@ function paintProduct(root, p) {
           <label>${t("rev.email")}<input name="email" type="email" maxlength="120" required autocomplete="email" /></label>
           <p class="rev-pick-lab">${t("rev.stars")}</p>
           <div class="rev-pick" data-star-pick>${starsOf(5, true)}</div>
-          <input type="hidden" name="stars" value="5" />
-          <label>${t("rev.note")}<textarea name="note" rows="3" maxlength="600" required></textarea></label>
+          <input type="hidden" name="rating" value="5" />
+          <label>${t("rev.title") || "Title (optional)"}<input name="title" maxlength="120" autocomplete="off" /></label>
+          <label>${t("rev.note")}<textarea name="body" rows="3" maxlength="600" required></textarea></label>
           <button class="btn" type="submit">${t("rev.send")}</button>
         </form>
       </section>
@@ -878,7 +880,7 @@ function paintProduct(root, p) {
     }, { passive: true });
   }
   const pickBox = root.querySelector("[data-star-pick]");
-  const starInp = root.querySelector("[name=stars]");
+  const starInp = root.querySelector("[name=rating]");
   const paintPick = (n) => {
     if (!pickBox) return;
     pickBox.innerHTML = starsOf(n, true);
@@ -900,11 +902,13 @@ function paintProduct(root, p) {
   root.querySelector("[data-rev-form]")?.addEventListener("submit", (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const note = String(fd.get("note") || "").trim();
+    const bodyText = String(fd.get("body") || "").trim();
     const name = String(fd.get("name") || "").trim();
     const email = String(fd.get("email") || "").trim();
-    if (!note || !name || !email) { JA.toast(t("rev.need")); return; }
-    const body = { productId: p.id, name, email, note, stars: Number(fd.get("stars") || 5) };
+    const title = String(fd.get("title") || "").trim();
+    if (!bodyText || !name || !email) { JA.toast(t("rev.need")); return; }
+    const body = { productId: p.id, name, email, body: bodyText, title,
+                   rating: Number(fd.get("rating") || 5) };
     const btn = e.target.querySelector("button[type=submit]");
     if (btn) btn.disabled = true;
     const req = window.JA_NET
