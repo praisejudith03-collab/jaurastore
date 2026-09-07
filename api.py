@@ -1198,7 +1198,17 @@ def change_password():
         return jsonify(ok=False, error=msg), 400
     authmod.set_password(actor, newpw)
     audit(actor, "admin.password_changed", "", _ip())
-    return jsonify(ok=True, message="Password updated.")
+    # The old password is dead either way, but if the durable copy could not be
+    # written the new one will not survive a Render restart - say so rather
+    # than reporting an unqualified success.
+    durable_err = authmod.password_durable_error()
+    if durable_err:
+        return jsonify(ok=True, durable=False,
+                       message="Password updated, but it could not be saved to "
+                               "Supabase, so it will be lost on the next restart. "
+                               "Please check the Supabase connection and set it "
+                               "again."), 200
+    return jsonify(ok=True, durable=True, message="Password updated.")
 
 @api.post("/admin/otp/request")
 def otp_request():
@@ -1254,7 +1264,13 @@ def otp_reset():
     authmod.set_password(email, newpw)
     session.pop("reset_ticket", None); session.pop("reset_ok", None)
     audit(email, "admin.password_reset_via_otp", "", _ip())
-    return jsonify(ok=True, message="Password reset. You can sign in now.", csrf=sec.issue_csrf())
+    durable_err = authmod.password_durable_error()
+    return jsonify(ok=True, durable=not durable_err,
+                   message=("Password reset. You can sign in now."
+                            if not durable_err else
+                            "Password reset, but it could not be saved to "
+                            "Supabase, so it will be lost on the next restart."),
+                   csrf=sec.issue_csrf())
 
 # ------------------------------------------------------------ admin: stock
 @api.get("/admin/stock")

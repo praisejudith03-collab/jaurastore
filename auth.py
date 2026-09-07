@@ -46,12 +46,25 @@ def ensure_seed_admins():
     owns the only way to set the password.
     """
     init_db()
+    # On a fresh Render instance the SQLite file is empty. Seeding an unusable
+    # random hash there (the old behaviour) meant every admin was locked out
+    # after a redeploy until someone reached a shell, so restore the durable
+    # hash from Supabase when one exists.
+    durable = None
+    if Config.SUPABASE_ENABLED:
+        try:
+            from supabase_store import load_admin_users
+            durable = load_admin_users()
+        except Exception:
+            durable = None
     for email in Config.ADMIN_EMAILS:
         row = one("SELECT id FROM admins WHERE email=?", (email,))
         if not row:
+            hash_ = ((durable or {}).get(email)
+                     or generate_password_hash(secrets.token_urlsafe(32)))
             execute(
                 "INSERT INTO admins (email, password_hash, role) VALUES (?,?,?)",
-                (email, generate_password_hash(secrets.token_urlsafe(32)), "admin"),
+                (email, hash_, "admin"),
             )
 
 
@@ -72,25 +85,72 @@ def _hash_for(email):
 
 
 def verify_login(email, pw):
-    """Check an email + password against the LOCAL admins hash - the only truth.
+    """Check an email + password, local hash first, durable copy second.
 
-    The local ``admins`` row is authoritative even when Supabase Auth is
-    configured. ``set_password`` always writes the new hash locally and only
-    *best effort* mirrors it to Supabase, so trusting Supabase here meant a
-    failed mirror left the OLD password working forever. Never OR in a stale
-    remote password: if the local hash says no, the answer is no.
+    The local ``admins`` row is tried first because it is fast and offline.
+    It is NOT authoritative, though: it lives on Render's ephemeral disk, so
+    after a redeploy it holds a freshly seeded unusable hash while the real
+    password is still in the durable ``admin_users`` row. When the local check
+    fails we consult Supabase and, on a match, repair the local row so the
+    admin is not locked out by a restart.
+
+    The old "never OR in a remote password" rule existed because the Supabase
+    mirror used to be best-effort, so a failed mirror could leave an OLD
+    password working. That hole is closed at the write end instead:
+    ``set_password`` now refuses to report success unless the durable write
+    succeeded, so a durable hash is never stale relative to a change the
+    admin was told about.
     """
     email = (email or "").strip().lower()
     if not is_known_admin(email) or not pw:
         return False
     h = _hash_for(email)
+    if h and check_password_hash(h, str(pw)):
+        return True
+    if Config.SUPABASE_ENABLED:
+        durable = None
+        try:
+            from supabase_store import load_admin_users
+            durable = (load_admin_users() or {}).get(email)
+        except Exception:
+            durable = None
+        if durable and check_password_hash(durable, str(pw)):
+            # Repair the ephemeral copy so later logins are local-only. This
+            # must be an upsert, not an UPDATE: after a redeploy the row does
+            # not exist at all, and a plain UPDATE would silently match
+            # nothing and leave every subsequent login doing a remote round
+            # trip.
+            try:
+                execute(
+                    "INSERT INTO admins (email, password_hash, role) VALUES (?,?,?) "
+                    "ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash",
+                    (email, durable, "admin"),
+                )
+            except Exception:
+                pass
+            try:
+                from supabase_store import mark_admin_login
+                mark_admin_login(email)
+            except Exception:
+                pass
+            return True
     if not h:
         # Supabase-only admin that has never been mirrored locally: create the
         # local row (with an unusable hash) so a password set/reset can land.
-        if Config.SUPABASE_ENABLED:
-            _ensure_local_admin(email)
-        return False
-    return check_password_hash(h, str(pw))
+        _ensure_local_admin(email)
+    return False
+
+
+# Set by set_password when the durable (Supabase) copy of a new password could
+# not be written. The local change still applies, so the old password is dead,
+# but the new one will not survive a Render restart - the caller must say so
+# instead of reporting an unqualified success.
+_PASSWORD_DURABLE_ERROR = ""
+
+
+def password_durable_error():
+    """'' when the last password change reached Supabase, else the reason."""
+    return _PASSWORD_DURABLE_ERROR
 
 
 def set_password(email, pw, shared=True):
@@ -110,12 +170,35 @@ def set_password(email, pw, shared=True):
         return False
     hash_ = generate_password_hash(str(pw))
     targets = Config.ADMIN_EMAILS if shared else ([email] if email else [])
+    # The local hash is ALWAYS applied, so the previous password stops working
+    # immediately even if Supabase is unreachable - a password change must
+    # never leave the old credential live.
     for e in targets:
         execute(
             "INSERT INTO admins (email, password_hash, role) VALUES (?,?,?) "
             "ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash",
             (e, hash_, "admin"),
         )
+    # Then the durable copy. The SQLite `admins` table is on Render's
+    # EPHEMERAL disk, so a hash that only lands there is destroyed by the next
+    # redeploy and every admin is locked out. A failure here does not undo the
+    # local change, but it is recorded and reported: the caller tells the admin
+    # the new password works now but will not survive a restart.
+    global _PASSWORD_DURABLE_ERROR
+    _PASSWORD_DURABLE_ERROR = ""
+    if Config.SUPABASE_ENABLED:
+        try:
+            from supabase_store import save_admin_password
+            saved = [save_admin_password(e, hash_) for e in targets]
+        except Exception as exc:
+            saved = []
+            _PASSWORD_DURABLE_ERROR = f"{exc.__class__.__name__}"
+        if not any(saved):
+            _PASSWORD_DURABLE_ERROR = (_PASSWORD_DURABLE_ERROR or
+                                       "the durable admin_users write failed")
+            print("[auth] WARNING: password changed locally but NOT persisted "
+                  f"to Supabase ({_PASSWORD_DURABLE_ERROR}); it will be lost "
+                  "on the next Render restart")
     # When Supabase Auth is the login backend, mirror the same (shared) password
     # onto every admin account there so all of them sign in with it. Best effort.
     if Config.SUPABASE_ENABLED:

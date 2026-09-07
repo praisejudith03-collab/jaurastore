@@ -497,6 +497,61 @@ def load_categories_table():
 
 
 # ------------------------------------------------------------------ auth
+def save_admin_password(email, password_hash):
+    """Store a werkzeug password hash in the durable admin_users row.
+
+    Returns True only when PostgreSQL accepted the write. The caller must
+    treat False as a failed password change: reporting success while the
+    durable copy is stale is exactly what locked admins out after a redeploy.
+    """
+    c = client()
+    if c is None:
+        return False
+    email = str(email or "").strip().lower()
+    if not email or not password_hash:
+        return False
+    try:
+        c.table("admin_users").upsert(
+            {"email": email, "password_hash": str(password_hash),
+             "enabled": True, "updated_at": _now()},
+            on_conflict="email").execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] admin password save failed: {exc}")
+        return False
+
+
+def load_admin_users():
+    """{email: password_hash} for every enabled admin, or None when
+    Supabase is unreachable. None (not {}) means 'unknown' - the caller must
+    not read that as 'no admins exist'."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("admin_users")
+               .select("email,password_hash,enabled").execute())
+        rows = _res_data(res)
+        return {str(r.get("email") or "").strip().lower(): r.get("password_hash")
+                for r in rows if r.get("enabled") is not False}
+    except Exception as exc:
+        print(f"[supabase] admin users load failed: {exc}")
+        return None
+
+
+def mark_admin_login(email):
+    """Record last_login_at. Best effort - never blocks a sign-in."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table("admin_users").update({"last_login_at": _now()}) \
+            .eq("email", str(email or "").strip().lower()).execute()
+        return True
+    except Exception:
+        return False
+
+
 def supabase_verify_login(email, password):
     """Verify an admin email + password against Supabase Auth (GoTrue)."""
     c = client()
