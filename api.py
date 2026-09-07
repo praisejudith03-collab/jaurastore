@@ -1897,7 +1897,11 @@ SITE_KEYS = ("bank_name", "account_number", "account_name",
              "togo_payment_provider", "togo_payment_name",
              "togo_payment_account", "togo_payment_instructions",
              "naira_payment_bank", "naira_payment_name",
-             "naira_payment_account", "naira_payment_instructions")
+             "naira_payment_account", "naira_payment_instructions",
+             # Canonical shipping-note column. It was only reachable through
+             # the legacy `shippingNote` alias, so an admin form posting the
+             # real column name had it silently dropped.
+             "shipping_note")
 
 def _load_site():
     if Config.ENV == "testing":
@@ -2009,9 +2013,14 @@ def admin_site_update():
                 current[k] = value
         for k, v in values.items():
             current[colmap.get(k, k)] = v
+            # Keep the canonical column name as well. Production returns the
+            # real site_settings row (canonical columns) and _site_payload adds
+            # the legacy aliases; if this testing branch only kept the alias,
+            # a canonical-field-name bug would pass here and fail in production.
+            current[k] = v
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(current, fh)
-        return jsonify(ok=True, site=current)
+        return jsonify(ok=True, site=_site_payload(current))
     try:
         site = __import__("supabase_settings", fromlist=["update_site_settings"]).update_site_settings(values)
     except Exception as exc:

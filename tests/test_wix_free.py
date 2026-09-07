@@ -93,3 +93,40 @@ def test_e2e_selectors_followed_the_rename():
     assert ".au-tile" in e2e and ".au-save" in e2e
     # but it still navigates to a legacy product id
     assert "wix-001" in e2e
+
+
+def test_no_wix_branding_in_shipped_comments_or_ui_text():
+    """Class names are not the only leak.
+
+    css/style.css and js/store.js are downloaded by every visitor, and
+    js/admin.js renders text into the Admin Portal, so a comment reading
+    "Wix-style admin" or a note reading "exactly like Wix" advertises the old
+    platform just as much as a .wix- selector did. The only surviving mentions
+    anywhere are the legacy product ids and the legacyId compatibility logic,
+    and both are required.
+    """
+    for path in SHIPPED:
+        rel = os.path.relpath(path, ROOT)
+        if rel == "js/products-data.js":
+            continue                      # holds the legacy wix-NNN ids by design
+        body = open(path, encoding="utf-8").read()
+        for n, line in enumerate(body.splitlines(), 1):
+            if re.search(r"wix", line, re.IGNORECASE):
+                assert "legacy" in line.lower(), \
+                    f"{rel}:{n} still mentions Wix: {line.strip()[:120]}"
+
+
+def test_legacy_id_comments_are_the_only_allowed_mention():
+    """The legacyId explanation must survive - it is why the alias exists."""
+    store_js = open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8").read()
+    api_py = open(os.path.join(ROOT, "api.py"), encoding="utf-8").read()
+    assert re.search(r"legacyId[\s\S]{0,200}wix-\*|wix-\*[\s\S]{0,200}legacyId",
+                     store_js), "the legacyId rationale was lost from store.js"
+    assert re.search(r"legacyId[\s\S]{0,200}wix-\*|wix-\*[\s\S]{0,200}legacyId",
+                     api_py), "the legacyId rationale was lost from api.py"
+
+
+def test_admin_portal_shows_no_wix_reference_to_the_user():
+    admin_js = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
+    assert "like Wix" not in admin_js
+    assert not re.search(r"Wix", admin_js), "the Admin Portal still says 'Wix'"

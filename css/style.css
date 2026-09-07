@@ -816,7 +816,7 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
   .has-drop:hover .drop { display: none; }
 }
 
-/* ========== Wix Harmony motion, ticker, menu, search ========== */
+/* ========== motion, ticker, menu, search ========== */
 .announce {
   background: #3a2f28;
   overflow: hidden;
@@ -1109,7 +1109,7 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
 .vision .order-step b { font-size: 26px; }
 .vision .order-step span { margin-top: 0; }
 
-/* Product rail like Wix */
+/* Horizontal product rail */
 .rail-wrap { position: relative; }
 .rail {
   display: flex;
@@ -1523,7 +1523,7 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
   .logo img { height: 42px; max-width: 110px; }
 }
 
-/* Slim homepage + Wix Client Relations footer */
+/* Slim homepage + client-relations footer */
 .home-hero-slim {
   padding: 22px 0 8px;
   text-align: center;
@@ -1753,7 +1753,7 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
 /* Hide leftover header category strip */
 .catbar { display: none !important; }
 
-/* Wix-style category list in the menu */
+/* Category list in the menu */
 .menu-cat-label {
   margin: 18px 0 6px;
   font-size: 11px;
@@ -1774,7 +1774,7 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
 }
 .menu-cats a:hover { color: var(--gold-deep); }
 
-/* Simple Wix Client Relations footer */
+/* Simple client-relations footer */
 .footer.au-footer {
   background: #f6efe6;
   color: var(--espresso);
@@ -1828,7 +1828,7 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
 .mobile-nav { background: #f6f0f4; }
 .announce { background: #3a2f28; }
 
-/* Wix Harmony shop */
+/* Shop layout */
 body.au-shop { background: #e8e4e5; }
 .shop-page { padding: 18px 0 70px; }
 .crumbs {
@@ -2290,7 +2290,7 @@ body.menu-open { overflow: hidden; }
   display: block;
 }
 
-/* Homepage hero: full-bleed background video (same asset as the Wix
+/* Homepage hero: full-bleed background video (same asset as the legacy
    "New standard of modern luxury" band). Autoplay + muted + loop, with a
    dark shade and the hero copy layered on top. Serving it locally keeps it
    under the site CSP's media-src 'self'. */
@@ -3875,7 +3875,7 @@ body[data-page="home"] .just-in-grid,
 body[data-page="admin"] .dock { display: none !important; }
 body[data-page="admin"] { padding-bottom: 24px !important; }
 
-/* Wix-style admin products */
+/* Admin products list */
 .au-list-head { margin-bottom: 8px; }
 .au-cats-link {
   display: flex; width: 100%; justify-content: space-between;
@@ -3960,7 +3960,7 @@ body[data-page="admin"] { padding-bottom: 24px !important; }
 body[data-page="admin"] { padding-bottom: 100px !important; }
 body[data-page="admin"] .dock { display: none !important; }
 
-/* Dark Wix-style admin */
+/* Dark admin theme */
 body[data-page="admin"] {
   background: #12151c !important;
   color: #e8eaed;
@@ -4011,8 +4011,8 @@ body[data-page="admin"] label { color: #c5cad3; }
 .au-media-row { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 8px; }
 /* "Photos: N of 20 - tap + to add, x to remove" flashes the row it is talking
    about, so on a phone the owner can see which tiles the count means. */
-.au-media-row.is-flash { animation: wixMediaFlash 1.4s ease-out 1; border-radius: 10px; }
-@keyframes wixMediaFlash {
+.au-media-row.is-flash { animation: auMediaFlash 1.4s ease-out 1; border-radius: 10px; }
+@keyframes auMediaFlash {
   0% { box-shadow: 0 0 0 2px rgba(108, 182, 255, .85); background: rgba(108, 182, 255, .16); }
   60% { box-shadow: 0 0 0 8px rgba(108, 182, 255, 0); background: rgba(108, 182, 255, .07); }
   100% { box-shadow: 0 0 0 0 rgba(108, 182, 255, 0); background: transparent; }
@@ -4424,7 +4424,7 @@ body[data-page="admin"] .wa-float { display: none !important; }
 /* Out of stock stays on the website */
 .card.is-oos { display: flex !important; visibility: visible !important; opacity: 1 !important; }
 
-/* Wix-style product gallery */
+/* Product gallery */
 .pdp-gallery { position: relative; }
 .pdp-img { position: relative; }
 .pdp-nav {
@@ -4569,7 +4569,7 @@ body[data-page="admin"] .wa-float { display: none !important; }
 }
 .pdp-reviews { display: block !important; visibility: visible !important; }
 
-/* Wix-style moving conversion banner under the header */
+/* Moving conversion banner under the header */
 .conv-bar {
   display: block !important;
   overflow: hidden;
@@ -4650,7 +4650,7 @@ body[data-page="admin"] .conv-bar { display: none !important; }
 .rev-pick-lab { font-size: 12px; color: #7a7066; margin-top: 4px; }
 .rev-avg .star-row { margin-right: 8px; }
 
-/* Checkout fare ranges (Wix form) */
+/* Checkout fare ranges */
 .fare-field { margin-top: 8px; }
 .ck-fare-intro { font-size: 13px; color: #7a7066; margin: 6px 0 12px; line-height: 1.45; }
 .fare-list {
@@ -5168,7 +5168,7 @@ select.ck-zone-select {
 select.ck-zone-select:invalid { color: #7a7066; }
 
 /* ============================================================= */
-/* ADMIN — WIX-STYLE REDESIGN (v107)                             */
+/* ADMIN PORTAL — WORKSPACE REDESIGN (v107)                      */
 /* Clean light workspace: white cards, soft shadows, brand-purple */
 /* accents, sidebar on desktop, bottom app-nav on the phone.      */
 /* ============================================================= */
@@ -5342,7 +5342,7 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 .adx-card-del svg { width: 17px; height: 17px; }
 @media (hover: none) { .adx-card-del { opacity: 1; } }
 
-/* ---------- per-option stock (Wix variants) ---------- */
+/* ---------- per-option stock (product variants) ---------- */
 .adx-vars { background: #fff; border: 1px solid #e8e4de; border-radius: 12px; overflow: hidden; }
 .adx-var {
   display: flex; align-items: center; gap: 12px;

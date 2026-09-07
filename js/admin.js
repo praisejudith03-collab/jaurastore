@@ -502,7 +502,7 @@ function optionStockHTML(p) {
   const vals = (opt && opt.values) || p.colors || [];
   if (!vals.length) {
     return `<h3>Stock per option</h3>
-      <p class="admin-note">Add an option above (Colour, Size…) and a stock box appears here for each choice — exactly like Wix. Until then the single Quantity below is used.</p>`;
+      <p class="admin-note">Add an option above (Colour, Size…) and a stock box appears here for each choice. Until then the single Quantity below is used.</p>`;
   }
   const os = p.optionStock || {};
   const toCfa = JA.toCfa || ((n) => Math.round(Number(n || 0) * 0.44));
@@ -1451,7 +1451,9 @@ const PAYMENT_FIELDS = [
       site_logo_url: String(fd.get("site_logo_url") || "").trim(),
       bannerFrom: String(fd.get("bannerFrom") || "").trim(),
       bannerTo: String(fd.get("bannerTo") || "").trim(),
-      shippingNote: String(fd.get("shippingNote") || "").trim(),
+      // Canonical column name. The server also still accepts the legacy
+      // shippingNote alias, but the Admin form sends the real column.
+      shipping_note: String(fd.get("shipping_note") || "").trim(),
     };
     // Checkout payment details: same canonical columns, no client-side
     // fallback. An empty field is saved empty and the storefront hides it.
@@ -1490,7 +1492,7 @@ function fillSiteForm(site) {
     hero_banner_subtitle: site.hero_banner_subtitle,
     contact_email: site.contact_email, contact_phone: site.contact_phone,
     site_logo_url: site.site_logo_url,
-    shippingNote: site.shipping_note != null ? site.shipping_note : site.shippingNote,
+    shipping_note: site.shipping_note != null ? site.shipping_note : site.shippingNote,
     bannerFrom: site.banner_from != null ? site.banner_from : site.bannerFrom,
     bannerTo: site.banner_to != null ? site.banner_to : site.bannerTo,
   };
@@ -1700,7 +1702,7 @@ function settingsForm() {
     <p class="admin-note full">These dates appear on the moving banner under the header. Shoppers in Benin are told they will receive their order between these two days.</p>
     <div class="field"><label>Delivery window starts</label><input type="date" name="bannerFrom" id="banner-from" value="2026-09-15" /></div>
     <div class="field"><label>Delivery window ends</label><input type="date" name="bannerTo" id="banner-to" value="2026-09-25" /></div>
-    <div class="field full"><label>Delivery fee / shipping note (shown at checkout)</label><textarea name="shippingNote" id="shipping-note" rows="3" maxlength="800" placeholder="e.g. Delivery fee: Lagos ₦2000-₦5000, Cotonou 1000-3000 CFA. Pickup in Cotonou is free for lighter products.">${JA.escape(s.shippingNote || "")}</textarea><p class="admin-note">This note appears dynamically at checkout under the order totals. Leave empty to hide.</p></div>
+    <div class="field full"><label>Delivery fee / shipping note (shown at checkout)</label><textarea name="shipping_note" id="shipping-note" rows="3" maxlength="800" placeholder="e.g. Delivery fee: Lagos ₦2000-₦5000, Cotonou 1000-3000 CFA. Pickup in Cotonou is free for lighter products.">${JA.escape(s.shippingNote || "")}</textarea><p class="admin-note">This note appears dynamically at checkout under the order totals. Leave empty to hide.</p></div>
     <div class="field full"><p class="admin-err" id="set-form-error" hidden></p><button class="btn" id="set-form-save">Save settings</button></div>
   </form>`;
 }
@@ -1737,7 +1739,8 @@ function bindHeroVideo() {
     paintHeroVideoNow(site);
     try { fillSiteForm(site); } catch (e) {}
     const from = $("#banner-from"); const to = $("#banner-to"); if (from && site.bannerFrom) from.value = site.bannerFrom; if (to && site.bannerTo) to.value = site.bannerTo;
-    const ship = $("#shipping-note"); if (ship && site.shippingNote) ship.value = site.shippingNote;
+    const ship = $("#shipping-note");
+    if (ship) ship.value = site.shipping_note != null ? site.shipping_note : (site.shippingNote || "");
     // also fill logo/banner preview
     paintBrandingNow(site);
   }).catch(() => paintHeroVideoNow({}));
@@ -1866,7 +1869,7 @@ function bindShippingNote() {
   fetch("api/site", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((d) => {
     const site = (d && d.site) || {};
     const el = $("#shipping-note");
-    if (el && site.shippingNote) el.value = site.shippingNote;
+    if (el) el.value = site.shipping_note != null ? site.shipping_note : (site.shippingNote || "");
     paintBrandingNow(site);
   }).catch(()=>{});
 }

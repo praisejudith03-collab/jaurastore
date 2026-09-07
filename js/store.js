@@ -1309,7 +1309,7 @@ const JA = (() => {
 
   // Show a clean branded card if a product photo fails to load, instead of
   // the browser's broken-image icon. Every product now ships a working
-  // `image` (a committed repo path or the Wix CDN URL) plus a
+  // `image` (a committed repo path or a legacy CDN URL) plus a
   // `placeholderImage` repo path to fall back to, so nothing ever 404s.
   function fallbackImg(ev) {
     const el = ev && ev.currentTarget;
