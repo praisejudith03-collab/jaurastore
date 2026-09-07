@@ -512,7 +512,9 @@ Row counts intact: `seed.json` 258 · `wix_products.json` 258 ·
 products examined / matched / skipped : 275 / 182 / 93
 images discovered / missing / upload  : 275 / 5 / 182
 existing HTTPS URLs                   : 0   (262 blank, 13 relative)
-non-positive prices                   : 1   (wix-012, priceNgn=0)
+non-positive prices                   : 3   (wix-012 priceNgn=0, plus the
+                                                 test fixtures jau-mirror-fail
+                                                 and jau-mirror-ok, priceCfa=0)
 missing prices / missing stock        : 0 / 0
 duplicate rows / blank ids            : 0 / 0
 legacy wix-* id references            : 258
@@ -710,7 +712,9 @@ operator-offline decisions            : 2   (wix-001, wix-012)
 placeholder-only                      : 75
 test fixtures excluded                : 17
 existing HTTPS URLs                   : 0   (262 blank, 13 relative)
-non-positive prices                   : 1   (wix-012, priceNgn=0)
+non-positive prices                   : 3   (wix-012 priceNgn=0, plus the
+                                                 test fixtures jau-mirror-fail
+                                                 and jau-mirror-ok, priceCfa=0)
 missing prices / missing stock        : 0 / 0
 duplicate rows / blank ids            : 0 / 0
 legacy wix-* id references            : 258
