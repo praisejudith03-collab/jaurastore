@@ -406,8 +406,8 @@ def test_admin_media_row_says_how_many_photos_and_points_at_the_tiles():
     handler = block[1][:900]
     assert "scrollIntoView" in handler, "tapping it must scroll the media row into view"
     assert "is-flash" in handler, "tapping it must flash the media row"
-    assert re.search(r"\.wix-media-row\.is-flash", css), \
-        "css/style.css must style the flash (.wix-media-row.is-flash)"
+    assert re.search(r"\.au-media-row\.is-flash", css), \
+        "css/style.css must style the flash (.au-media-row.is-flash)"
 
 
 # ---------------------------------------------------------------------------

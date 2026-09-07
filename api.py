@@ -9,6 +9,7 @@ import emailer
 import storage
 import catalog as catalog_mod
 import analytics as analytics_mod
+import delivery
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
@@ -472,17 +473,23 @@ def _option_stock_key(product, variant):
 
 
 def _order_stock_moves(payload):
-    """[{id, option, qty}, ...] for every cart line on an order."""
+    """[{id, option, qty}, ...] for every cart line on an order.
+
+    The id is normalised to the product's canonical primary key. An order line
+    stores whichever id the customer's cart held - which can be a legacyId
+    alias - and stock must be applied to the row that actually exists, so a
+    confirm decrements and a decline restores the same canonical row.
+    """
     items = (payload or {}).get("items") or []
     try:
-        products = {str(p.get("id")): p for p in catalog_mod.merged(include_hidden=True)}
+        products = catalog_mod.product_index()
     except Exception:
         products = {}
     moves = []
     for it in items:
         if not isinstance(it, dict):
             continue
-        pid = str(it.get("id") or "")
+        pid = str(it.get("id") or "").strip()
         if not pid:
             continue
         try:
@@ -492,6 +499,10 @@ def _order_stock_moves(payload):
         if qty <= 0:
             continue
         product = products.get(pid)
+        # An alias resolves to the canonical id; an id that is not in the
+        # catalogue at all (a deleted product) is left as written so the move
+        # is still recorded rather than silently dropped.
+        pid = str((product or {}).get("id") or "").strip() or pid
         option = _option_stock_key(product, it.get("color") or it.get("variant") or "") if product else None
         moves.append({"id": pid, "option": option, "qty": qty})
     return moves
@@ -600,7 +611,9 @@ def _checkout_items(clean_items, currency):
         live = catalog_mod.merged(include_hidden=True)
     except Exception:
         live = []
-    products_map = {str((p or {}).get("id") or ""): p for p in live if p}
+    # Keyed by canonical id AND legacyId, so a cart saved against an old
+    # wix-* id still prices and stock-checks against the right row.
+    products_map = catalog_mod.product_index(live)
 
     aggregated = {}
     for it in clean_items:
@@ -738,13 +751,22 @@ def create_order():
     currency = sec.clean(d.get("currency"), 3).upper() or "NGN"
     total = sec.clean_int(d.get("total"), 0, 0, 10**12)
 
-    # delivery: location only, pickup only allowed as "Pickup in Cotonou is free for lighter products"
+    # ---- delivery zone + fare: the server is the authority ----
+    # The zone list used to be hardcoded in checkout.html and this endpoint
+    # accepted any free text, only regex-blocking the word "pickup". Now the
+    # zone is resolved against the admin-editable delivery_zones table, which
+    # also supplies the fare range. An unknown zone is rejected outright: that
+    # subsumes the old pickup heuristic (an invented "pick up at my house" is
+    # simply not a zone) and means the order always carries a fare the server
+    # can stand behind.
     zone = sec.clean(customer_raw.get("zone") or d.get("zone"), 80)
-    zone_lower = zone.lower()
-    # Allow the specific free pickup option, block other pickup attempts
-    is_allowed_pickup = bool(re.search(r"(?i)pickup in cotonou.*free.*lighter|free.*lighter.*cotonou", zone)) or zone_lower == "pickup in cotonou" or "pickup in cotonou is free for lighter products" in zone_lower
-    if not is_allowed_pickup and re.search(r"(?i)\bpick[\s-]?up\b|collect\s+in\s+store|self[\s-]?collect", zone):
-        return jsonify(ok=False, error="Choose a delivery location."), 400
+    fare_ok, fare = delivery.fare_for(zone, currency)
+    if not fare_ok:
+        return jsonify(ok=False,
+                       error=fare.get("error") or "Choose a delivery zone."), 400
+    # Store the canonical name, not whatever the browser sent, so analytics and
+    # the admin order list group by real zones.
+    zone = fare["zone_name"]
 
     # ---- server-authoritative lines: prices from the live catalogue ----
     # (Supabase in production; the browser's price/total is never trusted)
@@ -818,6 +840,10 @@ def create_order():
         "payment": sec.clean(d.get("payment"), 60) or currency,
         "proofUrl": proof_url,
         "source": sec.clean(d.get("source"), 20) or "web",
+        # The server-computed fare snapshot. The exact figure is agreed with
+        # the customer after payment (transport varies with weight), so this
+        # records the RANGE the checkout quoted plus who has to confirm it.
+        "delivery": fare,
     }
     if promo:
         order["promo"] = promo
@@ -963,6 +989,10 @@ def create_order():
                                  referralCode=referral_code,
                                  promo=promo or None,
                                  subtotal=subtotal, discount=discount, total=total,
+                                 # The fare range this checkout quoted, so the
+                                 # confirmation page can restate it instead of
+                                 # re-deriving it client-side.
+                                 delivery=fare,
                                  items=clean_items))
     return analytics_mod.stamp_cookie(resp, vid)
 
@@ -1186,7 +1216,17 @@ def change_password():
         return jsonify(ok=False, error=msg), 400
     authmod.set_password(actor, newpw)
     audit(actor, "admin.password_changed", "", _ip())
-    return jsonify(ok=True, message="Password updated.")
+    # The old password is dead either way, but if the durable copy could not be
+    # written the new one will not survive a Render restart - say so rather
+    # than reporting an unqualified success.
+    durable_err = authmod.password_durable_error()
+    if durable_err:
+        return jsonify(ok=True, durable=False,
+                       message="Password updated, but it could not be saved to "
+                               "Supabase, so it will be lost on the next restart. "
+                               "Please check the Supabase connection and set it "
+                               "again."), 200
+    return jsonify(ok=True, durable=True, message="Password updated.")
 
 @api.post("/admin/otp/request")
 def otp_request():
@@ -1242,7 +1282,13 @@ def otp_reset():
     authmod.set_password(email, newpw)
     session.pop("reset_ticket", None); session.pop("reset_ok", None)
     audit(email, "admin.password_reset_via_otp", "", _ip())
-    return jsonify(ok=True, message="Password reset. You can sign in now.", csrf=sec.issue_csrf())
+    durable_err = authmod.password_durable_error()
+    return jsonify(ok=True, durable=not durable_err,
+                   message=("Password reset. You can sign in now."
+                            if not durable_err else
+                            "Password reset, but it could not be saved to "
+                            "Supabase, so it will be lost on the next restart."),
+                   csrf=sec.issue_csrf())
 
 # ------------------------------------------------------------ admin: stock
 @api.get("/admin/stock")
@@ -1861,7 +1907,19 @@ def admin_upload_hero():
 SITE_KEYS = ("bank_name", "account_number", "account_name",
              "referral_commission_percentage", "hero_banner_title",
              "hero_banner_subtitle", "contact_email", "contact_phone",
-             "site_logo_url")
+             "site_logo_url",
+             # Checkout payment details: served from the Supabase row so the
+             # storefront carries no hardcoded account number.
+             "cfa_payment_provider", "cfa_payment_name",
+             "cfa_payment_account", "cfa_payment_instructions",
+             "togo_payment_provider", "togo_payment_name",
+             "togo_payment_account", "togo_payment_instructions",
+             "naira_payment_bank", "naira_payment_name",
+             "naira_payment_account", "naira_payment_instructions",
+             # Canonical shipping-note column. It was only reachable through
+             # the legacy `shippingNote` alias, so an admin form posting the
+             # real column name had it silently dropped.
+             "shipping_note")
 
 def _load_site():
     if Config.ENV == "testing":
@@ -1909,6 +1967,13 @@ def _site_payload(site):
     for col, alias in SITE_LEGACY_ALIASES.items():
         if col in out and alias not in out:
             out[alias] = out[col]
+    # Delivery zones ride along with the site config so the storefront stops
+    # hardcoding the fare list in checkout.html. Active zones only - an
+    # inactive zone must not be selectable at checkout.
+    try:
+        out["delivery_zones"] = delivery.zones()
+    except Exception:
+        out["delivery_zones"] = []
     return out
 _SITE_URL_KEYS = frozenset(SITE_KEYS) | {
     "site_logo_url", "hero_video_url", "hero_poster_url", "hero_doc_url",
@@ -1973,9 +2038,14 @@ def admin_site_update():
                 current[k] = value
         for k, v in values.items():
             current[colmap.get(k, k)] = v
+            # Keep the canonical column name as well. Production returns the
+            # real site_settings row (canonical columns) and _site_payload adds
+            # the legacy aliases; if this testing branch only kept the alias,
+            # a canonical-field-name bug would pass here and fail in production.
+            current[k] = v
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(current, fh)
-        return jsonify(ok=True, site=current)
+        return jsonify(ok=True, site=_site_payload(current))
     try:
         site = __import__("supabase_settings", fromlist=["update_site_settings"]).update_site_settings(values)
     except Exception as exc:
@@ -1983,6 +2053,162 @@ def admin_site_update():
         return jsonify(ok=False, error="Could not update Supabase site settings. No changes were made."), 503
     audit(authmod.current_admin(), "site.update", json.dumps(values)[:200], _ip())
     return jsonify(ok=True, site=_site_payload(site))
+
+# ==================================================== admin: delivery zones
+# Delivery zones and their fare ranges are admin-editable, and the storefront
+# reads them from GET /api/site. Every write returns the zone list re-read from
+# the store, so the portal repaints from what was actually saved rather than
+# from what the admin typed.
+
+@api.get("/admin/delivery-zones")
+@authmod.require_admin
+def admin_delivery_zones():
+    return jsonify(ok=True, zones=delivery.zones(include_inactive=True))
+
+
+@api.post("/admin/delivery-zones")
+@authmod.require_admin
+@sec.require_csrf
+def admin_delivery_zone_save():
+    d = request.get_json(silent=True) or {}
+    zone_id = sec.clean(d.get("id"), 64).strip().lower()
+    if not zone_id:
+        # Derive a stable slug from the name so the Admin form can create a
+        # zone without making the operator invent an id.
+        zone_id = re.sub(r"[^a-z0-9]+", "-",
+                         str(d.get("name") or "").lower()).strip("-")[:64]
+    if not zone_id:
+        return jsonify(ok=False, error="A zone needs a name."), 400
+    saved, error = delivery.save_zone(zone_id, d)
+    if error:
+        return jsonify(ok=False, error=error), 400
+    audit(authmod.current_admin(), "delivery_zone.save", zone_id, _ip())
+    return jsonify(ok=True, zone=saved, zones=delivery.zones(include_inactive=True))
+
+
+@api.delete("/admin/delivery-zones/<zone_id>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_delivery_zone_delete(zone_id):
+    ok, error = delivery.delete_zone(zone_id)
+    if not ok:
+        return jsonify(ok=False, error=error), 404
+    audit(authmod.current_admin(), "delivery_zone.delete", zone_id, _ip())
+    return jsonify(ok=True, zones=delivery.zones(include_inactive=True))
+
+# ============================================ admin: reviews & coupon usage
+@api.get("/admin/coupon-uses")
+@authmod.require_admin
+def admin_coupon_uses():
+    """The coupon redemption log. Answers "which order used this code", which
+    the coupons.uses counter never could."""
+    code = sec.clean(request.args.get("code"), 32) or None
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import load_coupon_uses
+            rows = load_coupon_uses(code)
+            if rows is not None:
+                return jsonify(ok=True, uses=rows, source="supabase:coupon_uses")
+        except Exception:
+            pass
+    sql = "SELECT code, email, order_id, percent, used_at FROM coupon_uses"
+    args = ()
+    if code:
+        sql += " WHERE code=?"
+        args = (code,)
+    rows = query(sql + " ORDER BY used_at DESC LIMIT 500", args)
+    return jsonify(ok=True, uses=[dict(r) for r in rows], source="local")
+
+
+@api.get("/admin/reviews")
+@authmod.require_admin
+def admin_reviews():
+    """Every review, including hidden ones - moderation needs to see them."""
+    pid = sec.clean(request.args.get("productId"), 64) or None
+    sql = ("SELECT product_id, order_id, email, name, rating, title, body, "
+           "hidden, created_at, updated_at FROM product_reviews")
+    args = ()
+    if pid:
+        sql += " WHERE product_id=?"
+        args = (pid,)
+    rows = query(sql + " ORDER BY created_at DESC LIMIT 500", args)
+    return jsonify(ok=True, reviews=[dict(r) for r in rows])
+
+
+@api.patch("/admin/reviews")
+@authmod.require_admin
+@sec.require_csrf
+def admin_reviews_moderate():
+    """Hide or unhide one review. Targets (product_id, email) - the unique key
+    - so it can never touch a different customer's review."""
+    d = request.get_json(silent=True) or {}
+    pid = sec.clean(d.get("productId"), 64)
+    email = sec.clean_email(d.get("email"))
+    if not pid or not email:
+        return jsonify(ok=False, error="A product id and the reviewer's email are required."), 400
+    hidden = 1 if d.get("hidden", True) else 0
+    row = one("SELECT id FROM product_reviews WHERE product_id=? AND email=?", (pid, email))
+    if not row:
+        return jsonify(ok=False, error="No review from that email on that product."), 404
+    execute("UPDATE product_reviews SET hidden=? WHERE product_id=? AND email=?",
+            (hidden, pid, email))
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import set_product_review_hidden
+            set_product_review_hidden(pid, email, bool(hidden))
+        except Exception:
+            pass
+    audit(authmod.current_admin(), "review.moderated",
+          f"{pid} {'hidden' if hidden else 'shown'} ({email})", _ip())
+    return jsonify(ok=True, productId=pid, email=email, hidden=bool(hidden))
+
+
+@api.delete("/admin/reviews")
+@authmod.require_admin
+@sec.require_csrf
+def admin_reviews_delete():
+    """Delete one review. The unique key is the only safe address for it."""
+    pid = sec.clean(request.args.get("productId"), 64)
+    email = sec.clean_email(request.args.get("email"))
+    if not pid or not email:
+        return jsonify(ok=False, error="A product id and the reviewer's email are required."), 400
+    row = one("SELECT id FROM product_reviews WHERE product_id=? AND email=?", (pid, email))
+    if not row:
+        return jsonify(ok=False, error="No review from that email on that product."), 404
+    execute("DELETE FROM product_reviews WHERE product_id=? AND email=?", (pid, email))
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import delete_product_review
+            delete_product_review(pid, email)
+        except Exception:
+            pass
+    audit(authmod.current_admin(), "review.deleted", f"{pid} ({email})", _ip())
+    return jsonify(ok=True, productId=pid, email=email, deleted=True)
+
+
+@api.post("/admin/reviews/migrate")
+@authmod.require_admin
+@sec.require_csrf
+def admin_reviews_migrate():
+    """Copy legacy reviews from the growth_settings blob into the real table.
+
+    Dry-run by default. It never deletes the blob - that only happens once the
+    copy has been verified, and it is a separate, deliberate act.
+    """
+    d = request.get_json(silent=True) or {}
+    dry = bool(d.get("dry_run", True))
+    if not (Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY):
+        return jsonify(ok=False,
+                       error="Supabase is not configured; there is nothing to migrate."), 503
+    try:
+        from supabase_store import migrate_product_reviews_from_blob
+        report = migrate_product_reviews_from_blob(dry_run=dry)
+    except Exception as exc:
+        return jsonify(ok=False, error=f"Migration failed: {exc}"), 503
+    audit(authmod.current_admin(), "reviews.migrate",
+          f"dry_run={dry} verified={report.get('verified')}", _ip())
+    return jsonify(ok=report.get("error") is None, report=report)
+
 
 # ==================================================== public: promo & referral
 @api.post("/promo/check")
@@ -2022,30 +2248,89 @@ def cart_recover(token):
     return jsonify(ok=True, **cart)
 
 # ================================================= public: verified reviews
+def _public_review(row):
+    """Shape one review row for the storefront.
+
+    `rating` / `title` / `body` / `created_at` are the contract. `stars` and
+    `note` are repeated as aliases so a browser still running the previous
+    js/app.js keeps rendering instead of showing blank reviews - the old bundle
+    stays in CDN and customer caches long after a deploy.
+    """
+    row = row or {}
+    rating = int(row.get("rating") or 5)
+    return {
+        "name": row.get("name"),
+        "rating": rating,
+        "title": row.get("title"),
+        "body": row.get("body"),
+        "created_at": row.get("created_at"),
+        "stars": rating,                      # deprecated alias
+        "note": row.get("body"),              # deprecated alias
+        "at": row.get("created_at"),          # deprecated alias
+    }
+
+
 @api.get("/reviews/<pid>")
 def reviews_list(pid):
+    """Reviews for one product.
+
+    Supabase product_reviews is the source of truth when it is configured;
+    SQLite is the local mirror. Note that None from the loader means
+    "unavailable", NOT "no reviews" - conflating those would show an empty
+    list during an outage and invite duplicate reviews.
+    """
     pid = sec.clean(pid, 64)
-    rows = query("SELECT name, stars, note, at FROM product_reviews "
-                 "WHERE product_id=? ORDER BY at DESC LIMIT 100", (pid,))
-    items = [dict(r) for r in rows]
+    items = None
+    source = "local"
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import load_product_reviews_table
+            rows = load_product_reviews_table(pid)
+            if rows is not None:
+                items = [_public_review(r)
+                         for r in rows if not r.get("hidden")][:100]
+                source = "supabase:product_reviews"
+        except Exception:
+            items = None
+    if items is None:
+        rows = query("SELECT name, rating, title, body, created_at "
+                     "FROM product_reviews "
+                     "WHERE product_id=? AND hidden=0 "
+                     "ORDER BY created_at DESC LIMIT 100", (pid,))
+        items = [_public_review(dict(r)) for r in rows]
     n = len(items)
-    avg = round(sum(r["stars"] for r in items) / n, 2) if n else 0
-    return jsonify(ok=True, productId=pid, count=n, average=avg, reviews=items)
+    avg = round(sum(int(r.get("rating") or 0) for r in items) / n, 2) if n else 0
+    return jsonify(ok=True, productId=pid, count=n, average=avg, reviews=items,
+                   source=source)
 
 @api.post("/reviews")
 @sec.require_csrf
 def reviews_create():
-    """A customer review: stars + note, only for products they bought.
-    The buyer is verified against the orders table by email."""
+    """A customer review: rating + title + body, only for products they bought.
+    The buyer is verified against the orders table by email.
+
+    Accepts the legacy `stars` / `note` keys as well, so a cached copy of the
+    old storefront bundle can still post.
+    """
     limited = sec.guard("review", limit=10, window=3600)
     if limited: return limited
     d = request.get_json(silent=True) or {}
     pid = sec.clean(d.get("productId"), 64)
     email = sec.clean_email(d.get("email"))
     name = sec.clean(d.get("name"), 60)
-    stars = sec.clean_int(d.get("stars"), 5, 1, 5)
-    note = sec.clean(d.get("note"), 600)
-    if not pid or not note:
+    title = sec.clean(d.get("title"), 120)
+    # dict.get(key, fallback) only falls back when the key is ABSENT, so an
+    # explicit {"rating": null} would have won over a valid "stars". Treat null
+    # as absent: an old bundle sends stars/note, a new one sends rating/body.
+    def _first(*keys):
+        for k in keys:
+            if d.get(k) is not None:
+                return d.get(k)
+        return None
+
+    rating = sec.clean_int(_first("rating", "stars"), 5, 1, 5)
+    body = sec.clean(_first("body", "note"), 600)
+    if not pid or not body:
         return jsonify(ok=False, error="Add a short note about the product."), 400
     if not email:
         return jsonify(ok=False, error="Enter the email you used for your order."), 400
@@ -2056,22 +2341,41 @@ def reviews_create():
         return jsonify(ok=False, error="Reviews are for customers who bought this product. "
                                        "Use the same email as your order."), 403
 
-    execute("INSERT INTO product_reviews (product_id, order_id, email, name, stars, note, at) "
-            "VALUES (?,?,?,?,?,?,?) ON CONFLICT(product_id, email) DO UPDATE SET "
-            "name=excluded.name, stars=excluded.stars, note=excluded.note, at=excluded.at",
-            (pid, bought["id"], email, name or "Customer", stars, note, _utcnow()))
-    # product_reviews is SQLite-only (wiped with the Render disk), so keep a
-    # JSON copy in Supabase growth_settings - the boot restore in app.py
-    # writes it back. Best effort: a Supabase hiccup never blocks the review.
+    now = _utcnow()
+    execute("INSERT INTO product_reviews (product_id, order_id, email, name, rating, "
+            "title, body, hidden, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(product_id, email) DO UPDATE SET "
+            "name=excluded.name, rating=excluded.rating, title=excluded.title, "
+            "body=excluded.body, updated_at=excluded.updated_at",
+            (pid, bought["id"], email, name or "Customer", rating, title, body,
+             0, now, now))
+    # Persist to the real product_reviews table, which is the source of truth.
+    # The old growth_settings JSON blob is no longer written: re-serialising the
+    # whole table on every review was last-write-wins, so two reviews arriving
+    # together lost one. One row is upserted on (product_id, email) instead.
+    durable = True
     if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
         try:
-            from supabase_store import save_product_reviews
-            rows = query("SELECT product_id, order_id, email, name, stars, note, at "
-                         "FROM product_reviews")
-            save_product_reviews([dict(r) for r in rows])
+            from supabase_store import save_product_reviews_table
+            _saved, err = save_product_reviews_table([{
+                "product_id": pid, "order_id": bought["id"], "email": email,
+                "name": name or "Customer", "rating": rating, "title": title,
+                "body": body, "created_at": now, "updated_at": now}])
+            durable = not err
         except Exception:
-            pass
-    audit("customer", "review.posted", f"{pid} {stars}★ by {email}", _ip())
+            durable = False
+    audit("customer", "review.posted", f"{pid} {rating}★ by {email}", _ip())
+    # The review is in SQLite either way, but if the durable write failed the
+    # caller is told - a silent "thank you" over a lost review is worse than a
+    # warning.
+    if not durable:
+        return jsonify(ok=True, productId=pid, count=1, average=float(rating),
+                       reviews=[_public_review({
+                           "name": name or "Customer", "rating": rating,
+                           "title": title, "body": body, "created_at": now})],
+                       source="local", durable=False,
+                       warning="Your review was saved but could not be stored "
+                               "durably; it may need re-submitting."), 200
     return reviews_list(pid)
 
 # =============================================== admin: growth & marketing
@@ -2140,8 +2444,14 @@ def admin_coupon_create():
     import growth
     d = request.get_json(silent=True) or {}
     code = growth.normalize_code(d.get("code")) or growth._mint_code("PROMO")
-    percent = sec.clean_int(d.get("percent"), None, 1, 90)
-    if not percent:
+    # Validate before clamping. sec.clean_int silently clamps to its bounds, so
+    # an admin who typed 99% used to get a 90% coupon and a success toast - a
+    # discount that was never what they asked for, with nothing to say so.
+    try:
+        percent = int(str(d.get("percent")).strip())
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="Percent must be a whole number."), 400
+    if percent < 1 or percent > 90:
         return jsonify(ok=False, error="Percent must be between 1 and 90."), 400
     if one("SELECT 1 FROM coupons WHERE code=?", (code,)) or \
        one("SELECT 1 FROM referral_codes WHERE code=?", (code,)):

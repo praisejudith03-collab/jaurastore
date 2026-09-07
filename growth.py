@@ -202,6 +202,22 @@ def _mirror_coupon(code):
         pass
 
 
+def _mirror_coupon_use(code, email, order_id, percent):
+    """Mirror one redemption to Supabase coupon_uses. Never raises.
+
+    Upsert on the (code, order_id) conflict target so the durable side is
+    idempotent too - a retried order must not leave two rows in production
+    even if the local insert somehow raced.
+    """
+    try:
+        from supabase_store import mirror_coupon_use
+        mirror_coupon_use({"code": code, "email": email or None,
+                           "order_id": order_id, "percent": percent,
+                           "used_at": _utcnow()})
+    except Exception:                              # pragma: no cover
+        pass
+
+
 def record_code_use(code, buyer_email, order_id):
     """Count a successful purchase against a code. On the exact milestone,
     automatically issue the referrer their capped reward coupon.
@@ -212,13 +228,36 @@ def record_code_use(code, buyer_email, order_id):
     if not code:
         return report
 
-    c = one("SELECT code, kind, max_uses, uses, active FROM coupons WHERE code=?", (code,))
+    # `percent` is needed for the coupon_uses row, so it has to be selected -
+    # an omitted column raises IndexError here, which the order flow swallows,
+    # and the redemption would silently never be recorded.
+    c = one("SELECT code, kind, percent, max_uses, uses, active FROM coupons WHERE code=?",
+            (code,))
     if c:
+        # Log the redemption FIRST and let the UNIQUE(code, order_id) index
+        # decide whether it is new. INSERT OR IGNORE affects 0 rows on a
+        # replay, so a confirm/retry loop can never inflate `uses` - the
+        # counter increment is gated on a row actually being written.
+        # order_id is NOT NULL in the table; a call without one cannot be made
+        # idempotent, so it is refused rather than silently double-counted.
+        oid = (order_id or "").strip()
+        if not oid:
+            audit("system", "coupon.rejected_no_order", f"{code} had no order id", "")
+            return report
+        cur = execute(
+            "INSERT OR IGNORE INTO coupon_uses (code, email, order_id, percent, used_at) "
+            "VALUES (?,?,?,?,?)",
+            (code, (buyer_email or "").lower() or None, oid, c["percent"], _utcnow()))
+        if not cur or cur.rowcount != 1:
+            audit("system", "coupon.duplicate_use", f"{code} already counted on {oid}", "")
+            report["duplicate"] = True
+            return report
         execute("UPDATE coupons SET uses=uses+1 WHERE code=?", (code,))
         if c["max_uses"] is not None and c["uses"] + 1 >= c["max_uses"]:
             execute("UPDATE coupons SET active=0 WHERE code=?", (code,))
-        audit("system", "coupon.used", f"{code} on {order_id}", "")
+        audit("system", "coupon.used", f"{code} on {oid}", "")
         _mirror_coupon(code)
+        _mirror_coupon_use(code, (buyer_email or "").lower(), oid, c["percent"])
         report["counted"] = True
         return report
 

@@ -204,7 +204,8 @@ def create_app():
         # defaults and the codes/coupons/reviews disappear from the store.
         try:
             from supabase_store import (load_growth_settings, load_coupons,
-                                        load_referral_codes, load_product_reviews)
+                                        load_referral_codes, load_product_reviews,
+                                        load_product_reviews_table)
             from db import (restore_growth_settings, upsert_coupons,
                             upsert_referral_codes, upsert_product_reviews)
             gs = load_growth_settings()
@@ -218,10 +219,22 @@ def create_app():
             if codes:
                 app.logger.info("restored %d referral codes from Supabase",
                                 upsert_referral_codes(codes))
-            reviews = load_product_reviews()
+            # product_reviews: the real table is the source of truth. The
+            # legacy growth_settings blob is only a fallback for installs that
+            # have not run the migration yet, and is never deleted here.
+            reviews = load_product_reviews_table()
             if reviews:
-                app.logger.info("restored %d product reviews from Supabase",
+                app.logger.info("restored %d product reviews from "
+                                "supabase:product_reviews",
                                 upsert_product_reviews(reviews))
+            else:
+                legacy = load_product_reviews()
+                if legacy:
+                    app.logger.warning(
+                        "product_reviews table empty; restored %d reviews from "
+                        "the legacy growth_settings blob - run the review "
+                        "migration to move them into the table", len(legacy))
+                    upsert_product_reviews(legacy)
         except Exception as exc:
             app.logger.warning("growth restore skipped: %s", exc)
         # One-shot category merge (folds the old `nails` / `packaging`

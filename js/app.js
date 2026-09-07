@@ -734,9 +734,10 @@ function paintProduct(root, p) {
         <p class="rev-avg">${revStats.n ? starsOf(revStats.avg) + " " + t(revStats.n === 1 ? "rev.count" : "rev.countMany", { n: revStats.n }) : t("rev.empty")}</p>
         <div class="rev-list">${rev.length ? rev.map((r) => `
           <article class="rev-note">
-            ${starsOf(r.stars)}
+            ${starsOf(r.rating != null ? r.rating : r.stars)}
             <strong>${JA.escape(r.name || "Customer")}</strong>
-            <p>${JA.escape(r.note || "")}</p>
+            ${r.title ? `<p class="rev-title"><strong>${JA.escape(r.title)}</strong></p>` : ""}
+            <p>${JA.escape(r.body != null ? r.body : (r.note || ""))}</p>
           </article>`).join("") : ""}</div>
         <form class="rev-form" data-rev-form>
           <h4>${t("rev.write")}</h4>
@@ -745,8 +746,9 @@ function paintProduct(root, p) {
           <label>${t("rev.email")}<input name="email" type="email" maxlength="120" required autocomplete="email" /></label>
           <p class="rev-pick-lab">${t("rev.stars")}</p>
           <div class="rev-pick" data-star-pick>${starsOf(5, true)}</div>
-          <input type="hidden" name="stars" value="5" />
-          <label>${t("rev.note")}<textarea name="note" rows="3" maxlength="600" required></textarea></label>
+          <input type="hidden" name="rating" value="5" />
+          <label>${t("rev.title") || "Title (optional)"}<input name="title" maxlength="120" autocomplete="off" /></label>
+          <label>${t("rev.note")}<textarea name="body" rows="3" maxlength="600" required></textarea></label>
           <button class="btn" type="submit">${t("rev.send")}</button>
         </form>
       </section>
@@ -878,7 +880,7 @@ function paintProduct(root, p) {
     }, { passive: true });
   }
   const pickBox = root.querySelector("[data-star-pick]");
-  const starInp = root.querySelector("[name=stars]");
+  const starInp = root.querySelector("[name=rating]");
   const paintPick = (n) => {
     if (!pickBox) return;
     pickBox.innerHTML = starsOf(n, true);
@@ -900,11 +902,13 @@ function paintProduct(root, p) {
   root.querySelector("[data-rev-form]")?.addEventListener("submit", (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const note = String(fd.get("note") || "").trim();
+    const bodyText = String(fd.get("body") || "").trim();
     const name = String(fd.get("name") || "").trim();
     const email = String(fd.get("email") || "").trim();
-    if (!note || !name || !email) { JA.toast(t("rev.need")); return; }
-    const body = { productId: p.id, name, email, note, stars: Number(fd.get("stars") || 5) };
+    const title = String(fd.get("title") || "").trim();
+    if (!bodyText || !name || !email) { JA.toast(t("rev.need")); return; }
+    const body = { productId: p.id, name, email, body: bodyText, title,
+                   rating: Number(fd.get("rating") || 5) };
     const btn = e.target.querySelector("button[type=submit]");
     if (btn) btn.disabled = true;
     const req = window.JA_NET
@@ -1015,19 +1019,62 @@ function fareWaUrl(order) {
   return "https://wa.me/" + num + "?text=" + encodeURIComponent(text);
 }
 
+// Payment details come ONLY from GET /api/site, whose source of truth is the
+// Supabase site_settings row. There is deliberately no hardcoded bank, account
+// number or holder-name fallback in the bundle: an unconfigured row must show
+// "contact us", never an account number that may belong to nobody.
+//   NGN  -> naira_payment_* (older rows still carry bank_name/account_number/
+//           account_name, which are equally server-side, so they are honoured)
+//   CFA  -> cfa_payment_*    (MTN MoMo Benin)
+//   TOGO -> togo_payment_*   (Moov Money Togo)
+// Hide an account row entirely when the server has no value for it, and show
+// the "not configured" notice when a whole method is missing.
+function _togglePayRow(sel, show) {
+  const el = document.querySelector(sel);
+  if (el) el.hidden = !show;
+}
+
+function _showPayNotice(sel, configured) {
+  const el = document.querySelector(sel);
+  if (!el) return;
+  el.hidden = !!configured;
+  if (!configured) el.textContent = t("ck.payNotConfigured");
+}
+
+function payDetails(kind) {
+  const s = JA.settings() || {};
+  const g = (k) => String(s[k] || "").trim();
+  if (kind === "CFA") {
+    return { provider: g("cfa_payment_provider"), name: g("cfa_payment_name"),
+             account: g("cfa_payment_account"), instructions: g("cfa_payment_instructions") };
+  }
+  if (kind === "TOGO") {
+    return { provider: g("togo_payment_provider"), name: g("togo_payment_name"),
+             account: g("togo_payment_account"), instructions: g("togo_payment_instructions") };
+  }
+  return { provider: g("naira_payment_bank") || g("bank_name"),
+           name: g("naira_payment_name") || g("account_name"),
+           account: g("naira_payment_account") || g("account_number"),
+           instructions: g("naira_payment_instructions") };
+}
+
+// True when the server actually has something to show for this method.
+function payConfigured(d) {
+  return !!(d && (d.provider || d.name || d.account));
+}
+
 function showOrderDone(order) {
   const root = document.querySelector("[data-checkout-root]") || document.querySelector("[data-checkout]");
   if (!root) return;
   const payName = order.currency === "NGN" ? t("ck.payNgn") : t("ck.payCfa");
   const locale = (window.I18N && I18N.lang() === "fr") ? "fr-FR" : "en-GB";
-  // Bank details: the live Supabase row (canonical bank_name/account_number/
-  // account_name). Legacy free-text bankCfa/bankNgn were removed.
-  const s = JA.settings();
-  const note = [
-    String(s.bank_name || "").trim() || "UBA",
-    String(s.account_number || "").trim() || "23474678931",
-    String(s.account_name || "").trim() || "OKORAFOR PRAISE",
-  ].join(" · ");
+  // Payment details: the live Supabase row, via GET /api/site. No fallback -
+  // if nothing is configured the customer is pointed at support instead of
+  // being shown a baked-in account number.
+  const pay = payDetails(order.currency === "NGN" ? "NGN" : "CFA");
+  const note = payConfigured(pay)
+    ? [pay.provider, pay.account, pay.name].filter(Boolean).join(" · ")
+    : t("ck.payNotConfigured");
   root.innerHTML = `
     <ol class="ck-steps" style="margin-bottom:28px">
       <li><a href="cart.html">${t("cart.stepCart")}</a></li>
@@ -1151,28 +1198,86 @@ function paintCheckoutTotals(form) {
   if (discCell) discCell.textContent = disc
     ? "− " + JA.money(disc, cur) + " (" + ckPromo.percent + "%)" : "—";
   if (tot) tot.textContent = JA.money(subVal - disc, cur);
-  // Bank details come from GET /api/site -> Supabase site_settings
-  // (bank_name / account_number / account_name). The legacy bankCfa / bankNgn
-  // free-text settings were removed.
-  const s = JA.settings();
-  const bankName = String(s.bank_name || "").trim() || "UBA";
-  const bankAcc = String(s.account_number || "").trim() || "23474678931";
-  const bankHolder = String(s.account_name || "").trim() || "OKORAFOR PRAISE";
+  // Payment details come from GET /api/site -> Supabase site_settings. The
+  // storefront holds no fallback: an unconfigured method renders the
+  // "not configured" line and hides the account rows rather than inventing
+  // values.
   const ngnBox = document.querySelector("[data-bank-ngn]");
   const cfaBox = document.querySelector("[data-bank-cfa]");
   if (ngnBox) ngnBox.hidden = cur !== "NGN";
   if (cfaBox) cfaBox.hidden = cur !== "CFA";
-  const ngnName = document.querySelector("[data-ngn-name]");
-  const ngnBank = document.querySelector("[data-ngn-bank]");
-  const ngnAcc = document.querySelector("[data-ngn-acc]");
-  if (ngnName) ngnName.textContent = bankHolder;
-  if (ngnBank) ngnBank.textContent = bankName;
-  if (ngnAcc) ngnAcc.textContent = bankAcc;
+  const setText = (sel, val) => {
+    const el = document.querySelector(sel);
+    if (el) el.textContent = val;
+  };
+  const ngn = payDetails("NGN");
+  setText("[data-ngn-name]", ngn.name);
+  setText("[data-ngn-bank]", ngn.provider);
+  setText("[data-ngn-acc]", ngn.account);
+  _togglePayRow("[data-ngn-row-bank]", !!ngn.provider);
+  _togglePayRow("[data-ngn-row-acc]", !!ngn.account);
+  _showPayNotice("[data-ngn-notice]", payConfigured(ngn));
+  const cfa = payDetails("CFA");
+  const togo = payDetails("TOGO");
+  setText("[data-cfa-name]", cfa.name);
+  setText("[data-cfa-provider]", cfa.provider);
+  setText("[data-cfa-acc]", cfa.account);
+  setText("[data-togo-provider]", togo.provider);
+  setText("[data-togo-name]", togo.name);
+  setText("[data-togo-acc]", togo.account);
+  _togglePayRow("[data-cfa-row]", payConfigured(cfa));
+  _togglePayRow("[data-togo-row]", payConfigured(togo));
+  _showPayNotice("[data-cfa-notice]", payConfigured(cfa) || payConfigured(togo));
   form.querySelectorAll(".pay-card").forEach((card) => {
     card.classList.toggle("is-on", card.querySelector("input")?.checked);
   });
   const countryNote = document.querySelector("[data-ck-country-note]");
   if (countryNote) countryNote.hidden = false;
+}
+
+/** One zone -> the label a customer should read. The fare is a RANGE because
+ *  transport varies with weight; a single number would over-promise. */
+function zoneLabel(z) {
+  const sym = z.currency === "NGN" ? "\u20A6" : "";
+  const suf = z.currency === "CFA" ? " CFA" : "";
+  const fmt = (n) => sym + Number(n || 0).toLocaleString("en-US") + suf;
+  if (z.kind === "pickup") return z.name;
+  if (z.kind === "quote") return z.name + " (confirm on WhatsApp)";
+  return z.name + " (" + fmt(z.fare_min) + " \u2013 " + fmt(z.fare_max) + ")";
+}
+
+/** Rebuild the zone <select> from the server's zone list.
+ *  Falls back to whatever checkout.html already contains if the server gave
+ *  nothing, so a static host or a failed fetch still shows a working form. */
+function paintDeliveryZones(form) {
+  const sel = form.querySelector("select[name=zone], select[data-delivery-zones]");
+  if (!sel) return;
+  const site = (JA.getSiteConfig && JA.getSiteConfig()) || {};
+  const list = Array.isArray(site.delivery_zones) ? site.delivery_zones : null;
+  if (!list || !list.length) return;
+  const previous = sel.value;
+  sel.textContent = "";
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = (window.JA_i18n && JA_i18n.t && JA_i18n.t("ck.zonePlaceholder"))
+    || "Choose a delivery zone";
+  ph.selected = true;
+  sel.appendChild(ph);
+  list.forEach((z) => {
+    if (!z || !z.name) return;
+    const opt = document.createElement("option");
+    // The server matches on the zone NAME, so that is the value we send.
+    opt.value = z.name;
+    opt.textContent = zoneLabel(z);
+    opt.dataset.zoneId = z.id || "";
+    opt.dataset.zoneKind = z.kind || "delivery";
+    opt.dataset.fareMin = String(z.fare_min || 0);
+    opt.dataset.fareMax = String(z.fare_max || 0);
+    opt.dataset.currency = z.currency || "";
+    if (previous && previous === z.name) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  sel.dataset.zonesFrom = "server";
 }
 
 function renderCheckout() {
@@ -1222,31 +1327,13 @@ function renderCheckout() {
 
   if (form.dataset.bound) return;
   form.dataset.bound = "1";
-  // Delivery only: allow "Pickup in Cotonou is free for lighter products" but block other pickup options
-  document.querySelectorAll("[data-delivery-zones] .fare-opt, .fare-list .fare-opt").forEach((opt) => {
-    const input = opt.querySelector("input");
-    const text = (opt.textContent || "") + " " + (input && input.value ? input.value : "");
-    const isAllowedPickup = /pickup in cotonou.*free.*lighter|free.*lighter.*cotonou/i.test(text);
-    if (!isAllowedPickup && /pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
-  });
-  document.querySelectorAll("select[data-delivery-zones] option").forEach((opt) => {
-    const text = (opt.textContent || "") + " " + (opt.value || "");
-    const isAllowedPickup = /pickup in cotonou.*free.*lighter|free.*lighter.*cotonou/i.test(text) || text.toLowerCase().includes("pickup in cotonou is free for lighter products");
-    if (!isAllowedPickup && /pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
-  });
-  // Ensure pickup free option exists — inject if missing (for dynamic selects)
-  try {
-    const zoneSelect = form.querySelector("[name=zone], select[data-delivery-zones]");
-    if (zoneSelect && zoneSelect.tagName === "SELECT") {
-      const hasPickup = [...zoneSelect.options].some((o) => /pickup in cotonou.*free.*lighter/i.test(o.value) || /pickup in cotonou is free/i.test(o.textContent));
-      if (!hasPickup) {
-        const opt = document.createElement("option");
-        opt.value = "Pickup in Cotonou is free for lighter products";
-        opt.textContent = "Pickup in Cotonou is free for lighter products";
-        zoneSelect.appendChild(opt);
-      }
-    }
-  } catch (e) {}
+  // ---- Delivery zones come from the server ----
+  // The list used to be hardcoded in checkout.html and then regex-filtered
+  // here, guessing which options counted as "pickup". The zone table is now
+  // admin-editable and served by GET /api/site, and the server rejects any
+  // zone it does not know - so the options are built from the data and no
+  // client-side guessing is left.
+  try { paintDeliveryZones(form); } catch (e) {}
   try { JA.track("checkout_start", { page: "checkout" }); } catch (e) {}
 
   // ---- Shipping note dynamic from Admin Settings ----

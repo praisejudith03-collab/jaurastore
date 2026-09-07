@@ -1090,7 +1090,7 @@ def _growth_order(client, oid, email, total=25000, currency="NGN",
     body = {
         "id": oid, "currency": currency, "total": total,
         "customer": {"name": "Growth Tester", "phone": "+2348012345678",
-                     "email": email, "city": "Lagos", "zone": "Lagos",
+                     "email": email, "city": "Lagos", "zone": "Lagos Mainland",
                      "address": "1 Test Street"},
         "items": [{"id": pid, "name": "Bag", "qty": qty, "price": total}],
     }
@@ -1184,6 +1184,14 @@ def test_growth_settings_admin_only_and_reward_capped(client):
 
 def test_admin_coupon_crud_expiry_and_max_uses(client):
     tok = login(client)
+    # Own this test's state. /tmp/jaura_test.db outlives the process, and a
+    # leftover JA-GRCP01 makes _growth_order return duplicate=True without
+    # consuming the coupon - so the maxUses assertion below would test nothing.
+    # coupon_uses is cleaned too: a redemption log entry from an earlier run
+    # would make the insert a no-op and the counter would not move.
+    execute("DELETE FROM orders WHERE id='JA-GRCP01'")
+    execute("DELETE FROM coupon_uses WHERE order_id='JA-GRCP01'")
+    execute("DELETE FROM coupons WHERE code='SALE-10'")
     # create
     r = client.post("/api/admin/coupons", headers={"X-CSRF-Token": tok},
                     json={"code": "SALE-10", "percent": 10, "maxUses": 1})

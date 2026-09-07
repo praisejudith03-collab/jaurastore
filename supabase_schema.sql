@@ -26,6 +26,7 @@
 -- every write would still fail with PGRST204.
 create table if not exists products (
   id               text primary key,
+  "legacyId"       text,
   sku              text,
   slug             text,
   name             text not null,
@@ -219,6 +220,25 @@ alter table site_settings add column if not exists banner_to text not null defau
 alter table site_settings add column if not exists conv_banner text not null default '';
 alter table site_settings add column if not exists conv_bold text not null default '';
 
+-- Payment details shown at checkout. These were hardcoded in checkout.html /
+-- js/app.js (bank "UBA", account 23474678931, the MoMo Benin and Moov Togo
+-- numbers) which meant changing an account number needed a redeploy and the
+-- values were visible in the shipped bundle. They are now columns on the
+-- id=1 site_settings row, served by GET /api/site and edited from the Admin
+-- Portal, so the storefront never carries a payment fallback.
+alter table site_settings add column if not exists cfa_payment_provider     text not null default '';
+alter table site_settings add column if not exists cfa_payment_name         text not null default '';
+alter table site_settings add column if not exists cfa_payment_account      text not null default '';
+alter table site_settings add column if not exists cfa_payment_instructions text not null default '';
+alter table site_settings add column if not exists togo_payment_provider     text not null default '';
+alter table site_settings add column if not exists togo_payment_name         text not null default '';
+alter table site_settings add column if not exists togo_payment_account      text not null default '';
+alter table site_settings add column if not exists togo_payment_instructions text not null default '';
+alter table site_settings add column if not exists naira_payment_bank         text not null default '';
+alter table site_settings add column if not exists naira_payment_name         text not null default '';
+alter table site_settings add column if not exists naira_payment_account      text not null default '';
+alter table site_settings add column if not exists naira_payment_instructions text not null default '';
+
 create table if not exists categories (
   id text primary key,
   name text not null,
@@ -228,12 +248,39 @@ create table if not exists categories (
   updated_at timestamptz not null default now()
 );
 
+-- Legacy id alias. A product's `id` is its primary key and is NEVER renamed
+-- while orders, reviews, carts or analytics still reference it. When a row is
+-- eventually given a canonical jau-* id, the previous wix-* id is copied here
+-- so old product links, order lines, reviews and cart entries keep resolving
+-- through catalog.product_index() / supabase_store.product_by_id(). It stays
+-- NULL for rows that were created with a canonical id and have no history.
+alter table products add column if not exists "legacyId" text;
+create unique index if not exists products_legacy_id_key
+  on products ("legacyId") where "legacyId" is not null;
+
 alter table products add column if not exists image_url text;
 alter table products add column if not exists stock_quantity integer not null default 0;
 do $$ begin
   alter table products add constraint products_stock_nonnegative check (stock_quantity >= 0) not valid;
 exception when duplicate_object then null;
 end $$;
+
+-- Admin credentials. The SQLite `admins` table lives on the Render disk, which
+-- is EPHEMERAL: after a redeploy it is re-seeded with a deliberately unusable
+-- random hash, which locked every admin out until someone got shell access.
+-- This table is the durable copy of the password hash, so a restart restores
+-- it instead of destroying it. Only a werkzeug hash is ever stored - never a
+-- plaintext password, and never anything derived from SECRET_KEY.
+create table if not exists admin_users (
+  id            bigint generated always as identity primary key,
+  email         text not null unique,
+  password_hash text not null,
+  role          text not null default 'admin',
+  enabled       boolean not null default true,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  last_login_at timestamptz
+);
 
 create table if not exists admin_reset_tokens (
   id bigint generated always as identity primary key,
@@ -246,6 +293,130 @@ create table if not exists admin_reset_tokens (
   created_at timestamptz not null default now()
 );
 create index if not exists admin_reset_tokens_lookup on admin_reset_tokens(email, purpose, created_at desc);
+
+-- Delivery zones and their fare ranges. Admin-editable, served to the
+-- storefront by GET /api/site so checkout no longer hardcodes the list.
+-- The fare is a RANGE because transport varies with weight; the exact figure
+-- is agreed with the customer after payment. `kind`:
+--   delivery = a published min..max range in `currency`
+--   pickup   = free collection, no fare
+--   quote    = fare agreed per order, no range published
+create table if not exists delivery_zones (
+  id          text primary key,
+  name        text not null unique,
+  currency    text not null default 'CFA' check (currency in ('CFA','NGN')),
+  fare_min    integer not null default 0 check (fare_min >= 0),
+  fare_max    integer not null default 0 check (fare_max >= 0),
+  kind        text not null default 'delivery'
+                check (kind in ('delivery','pickup','quote')),
+  active      boolean not null default true,
+  sort_order  integer not null default 0,
+  note        text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists delivery_zones_active on delivery_zones(active, sort_order);
+
+-- Coupon redemption log. `coupons.uses` is a counter and stays the fast path
+-- for the max_uses check, but a counter cannot answer "which order used this
+-- code" and cannot stop a retried order from counting twice. The unique pair
+-- (code, order_id) makes a redemption idempotent, so a confirm/retry loop
+-- cannot inflate the usage count.
+create table if not exists coupon_uses (
+  id        bigint generated always as identity primary key,
+  code      text not null,
+  email     text,
+  order_id  text not null,
+  percent   integer,
+  used_at   timestamptz not null default now(),
+  unique (code, order_id)
+);
+create index if not exists coupon_uses_code on coupon_uses(code, used_at desc);
+
+-- Product reviews. Mirrors the SQLite product_reviews table one-for-one so
+-- the same shape can be read from either side. unique(product_id, email) is
+-- what enforces one review per customer per product - the same rule the
+-- purchase-verified check relies on.
+-- Product reviews. unique(product_id, email) is what enforces one review per
+-- customer per product - the same rule the purchase-verified check relies on.
+--
+-- Column names are the agreed contract: rating / title / body / created_at /
+-- updated_at. An earlier draft shipped this table as stars / note / at; the
+-- guarded renames below move any database that already has it, preserving
+-- every row. A column rename rewrites no data and drops no row.
+create table if not exists product_reviews (
+  id          bigint generated always as identity primary key,
+  product_id  text not null,
+  order_id    text,
+  email       text not null,
+  name        text,
+  rating      integer not null default 5 check (rating between 1 and 5),
+  title       text,
+  body        text,
+  hidden      boolean not null default false,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  unique (product_id, email)
+);
+
+-- Idempotent upgrade path for a database created from the earlier draft.
+-- Each step is guarded so re-running the file changes nothing.
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+             where table_name = 'product_reviews' and column_name = 'stars') then
+    alter table product_reviews rename column stars to rating;
+  end if;
+  if exists (select 1 from information_schema.columns
+             where table_name = 'product_reviews' and column_name = 'note') then
+    alter table product_reviews rename column note to body;
+  end if;
+  if exists (select 1 from information_schema.columns
+             where table_name = 'product_reviews' and column_name = 'at') then
+    alter table product_reviews rename column at to created_at;
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'title') then
+    alter table product_reviews add column title text;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'hidden') then
+    alter table product_reviews add column hidden boolean not null default false;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'created_at') then
+    alter table product_reviews
+      add column created_at timestamptz not null default now();
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'updated_at') then
+    alter table product_reviews
+      add column updated_at timestamptz not null default now();
+  end if;
+end $$;
+
+create index if not exists product_reviews_pid on product_reviews(product_id);
+
+-- Seed the zones the storefront has always shown. on conflict do nothing, so
+-- re-running the schema never overwrites an admin's edited fares.
+insert into delivery_zones (id, name, currency, fare_min, fare_max, kind, sort_order)
+values
+  ('lagos-mainland', 'Lagos Mainland', 'NGN', 2000, 5000, 'delivery', 1),
+  ('lagos-island',   'Lagos Island',   'NGN', 3500, 6000, 'delivery', 2),
+  ('ng-other',       'Other Nigeria',  'NGN',    0,    0, 'quote',    3),
+  ('cotonou',        'Cotonou',        'CFA', 1000, 3000, 'delivery', 4),
+  ('calavi',         'Calavi',         'CFA', 1500, 3500, 'delivery', 5),
+  ('porto-novo',     'Porto-Novo',     'CFA', 1500, 3500, 'delivery', 6),
+  ('bj-other',       'Other Benin',    'CFA',    0,    0, 'quote',    7),
+  ('lome',           'Lomé',           'CFA', 2500, 3500, 'delivery', 8),
+  ('tg-other',       'Other Togo',     'CFA',    0,    0, 'quote',    9),
+  ('pickup-cotonou', 'Pickup in Cotonou is free for lighter products',
+                     'CFA',    0,    0, 'pickup',   10)
+on conflict (id) do nothing;
 
 -- Storage is provisioned once in Dashboard or with this statement. The service
 -- role is used only server-side; public objects are safe to render directly.

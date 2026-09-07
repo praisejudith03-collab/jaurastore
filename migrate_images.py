@@ -78,6 +78,11 @@ IMAGE_EXT = ("jpg", "jpeg", "png", "webp", "gif", "avif")
 MAX_BYTES = 6 * 1024 * 1024          # same ceiling as storage.MAX_BYTES
 PLACEHOLDER_STEM = "_placeholder"
 
+# Admin-override ids that the pytest suite writes into the tracked catalogue
+# (tests/test_stock_confirm.py, tests/test_catalog_mirror.py). They are test
+# scaffolding, not merchandising decisions, and must never be published.
+_FIXTURE_ID_RE = re.compile(r"^jau-(stock|mirror|unit|sync|opt)")
+
 # The ONLY columns this script is allowed to write. Price, stock, id, name,
 # category and every other column are deliberately absent, so a stray key can
 # never reach the database.
@@ -162,6 +167,41 @@ def _is_public_supabase_url(url):
     a broken image on the storefront while the report claimed success.
     """
     return bool(url) and bool(_PUBLIC_URL_RE.match(str(url).strip()))
+
+
+_HOST_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://([^/?#]+)")
+
+
+def _url_host(url):
+    """The scheme://HOST part of a URL, or "" when it is not absolute."""
+    m = _HOST_RE.match(str(url or "").strip())
+    return m.group(1).lower() if m else ""
+
+
+def classify_image_url(url, bucket="uploads"):
+    """Bucket a row's current image_url for the report's HTTPS-URL tally.
+
+    A migration report that only says "N already uploaded" hides the case that
+    actually matters on review: rows that ALREADY point at a complete HTTPS
+    URL. Those are not touched by this script, and an operator reading the
+    report needs to see how many there are and where they point.
+    """
+    u = str(url or "").strip()
+    if not u:
+        return "blank", ""
+    # Check the template form FIRST. `https://<SUPABASE_URL>/...` does start
+    # with https://, so testing that first would file it as a real host and
+    # hide a row that is actually broken.
+    if "<" in u or "{" in u:
+        return "unresolved_template", ""
+    host = _url_host(u)
+    if u.lower().startswith("https://"):
+        if re.search(r"/storage/v1/object/public/" + re.escape(bucket) + r"/", u):
+            return "already_public_supabase_uploads", host
+        return "other_https_host", host
+    if u.lower().startswith("http://"):
+        return "insecure_http", host          # would be a mixed-content bug
+    return "relative_or_other", ""
 
 
 def _mask(text):
@@ -416,6 +456,26 @@ def _price_missing(row):
     return row.get("priceNgn") is None or row.get("priceCfa") is None
 
 
+def _price_non_positive(row):
+    """A price that exists but is 0 or negative.
+
+    Kept separate from _price_missing on purpose: "missing" and "free" are
+    different problems with different fixes, and a report that lumps them
+    together lets a 0 slip through as merely absent. A 0 price on a row
+    intended to be live would put a free product on the storefront.
+    """
+    bad = []
+    for col in ("priceNgn", "priceCfa"):
+        raw = row.get(col)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue          # absent/unparseable is _price_missing's business
+        if value <= 0:
+            bad.append((col, raw))
+    return bad
+
+
 def _stock_missing(row):
     """True when NO stock value exists on the row.
 
@@ -445,10 +505,22 @@ def plan_products(products, bucket, supabase_url, client=None, only_ids=None,
         "images_discovered": 0,
         "images_missing": 0,
         "images_already_uploaded": 0,
+        "existing_https_urls": {
+            "count": 0,
+            "already_public_supabase_uploads": 0,
+            "other_https_host": 0,
+            "insecure_http": 0,
+            "unresolved_template": 0,
+            "relative_or_other": 0,
+            "blank": 0,
+            "host_breakdown": {},
+            "samples": [],
+        },
         "images_to_upload": 0,
         "duplicate_products": [],
         "duplicate_row_count": 0,
         "missing_prices": [],
+        "non_positive_prices": [],
         "missing_stock": [],
         "stock_value_source": {},
         "distinct_local_files": 0,
@@ -496,6 +568,11 @@ def plan_products(products, bucket, supabase_url, client=None, only_ids=None,
             rep["missing_prices"].append(
                 {"id": pid, "name": row.get("name"),
                  "priceNgn": row.get("priceNgn"), "priceCfa": row.get("priceCfa")})
+        bad_prices = _price_non_positive(row)
+        if bad_prices:
+            rep["non_positive_prices"].append(
+                {"id": pid, "name": row.get("name"),
+                 "offenders": {c: v for c, v in bad_prices}})
         if _stock_missing(row):
             rep["missing_stock"].append({"id": pid, "name": row.get("name")})
         else:
@@ -506,6 +583,35 @@ def plan_products(products, bucket, supabase_url, client=None, only_ids=None,
 
     for row in rows:
         pid = str(row["id"]).strip()
+        # --- Existing HTTPS URLs: rows that already point somewhere. ---
+        # Counted for EVERY examined row, before any skip, so the tally is
+        # about the data rather than about what this run would do to it.
+        current_url = str(row.get("image_url") or "").strip()
+        kind, host = classify_image_url(current_url, bucket)
+        tally = rep["existing_https_urls"]
+        tally[kind] += 1
+        if host:
+            tally["host_breakdown"][host] = tally["host_breakdown"].get(host, 0) + 1
+        if kind in ("already_public_supabase_uploads", "other_https_host",
+                    "insecure_http", "unresolved_template"):
+            tally["count"] += 1
+            if len(tally["samples"]) < 25:
+                tally["samples"].append({"id": pid, "kind": kind,
+                                         "image_url": current_url})
+
+        if kind == "already_public_supabase_uploads":
+            # Already points at a complete HTTPS public URL in `uploads`, so
+            # there is nothing to do. Checked BEFORE the local file, because
+            # requiring the file would report "missing image" for a row that
+            # is in fact fully migrated - and idempotency means a second run
+            # must re-plan nothing.
+            rep["products_skipped"] += 1
+            rep["images_already_uploaded"] += 1
+            rep["skipped_detail"].append({
+                "id": pid, "reason": "url_already_current",
+                "image_url": current_url, "image": str(row.get("image") or "")})
+            continue
+
         local, rel, status, detail = resolve_source_image(row)
         rep["images_discovered"] += 1
 
@@ -730,6 +836,272 @@ def execute_category_plan(client, plan, bucket):
     return out
 
 
+def live_intent_report(products, seed_count, overrides, deleted):
+    """State which products are intended to be live - with the evidence.
+
+    This exists because "publish the catalogue" is not a decision this script
+    is allowed to make, and the local data does not actually make it either:
+
+      * data/seed.json is the Wix import source. NONE of its rows carry an
+        `online` flag, and the schema defaults `online` to true - so importing
+        all 258 would put all 258 on the storefront. That is why the count in
+        Supabase (a subset) is the only real statement of intent.
+      * data/catalog.json's overrides are almost entirely TEST FIXTURES that
+        the pytest suite wrote into the tracked file (jau-stock-*, jau-mirror-*,
+        and the ids in `deleted`). They are not merchandising decisions and
+        must never be published to production.
+
+    This script only sets image_url on rows that already exist, so it cannot
+    publish any of them. The report says so explicitly rather than leaving a
+    reviewer to infer it.
+    """
+    ids = [str(p.get("id") or "") for p in products or []]
+    fixtures = sorted(pid for pid in overrides if _FIXTURE_ID_RE.match(pid))
+    explicit_offline = [str(p.get("id")) for p in products or []
+                        if p.get("online") is False]
+    seed_rows = [p for p in products or []
+                 if str(p.get("id") or "").startswith("wix-")]
+    with_photo = sum(1 for p in seed_rows
+                     if resolve_source_image(p)[2] == "found")
+    return {
+        "local_rows_considered": len(products or []),
+        "local_seed_rows": seed_count,
+        "seed_rows_carrying_an_explicit_online_flag":
+            sum(1 for p in seed_rows if p.get("online") is not None),
+        "seed_rows_with_a_real_committed_photo": with_photo,
+        "seed_rows_on_the_placeholder_only": len(seed_rows) - with_photo,
+        "rows_explicitly_marked_offline": explicit_offline,
+        "catalog_overrides": len(overrides),
+        "catalog_overrides_that_are_test_fixtures": fixtures,
+        "catalog_overrides_that_are_real_products":
+            sorted(set(overrides) - set(fixtures)),
+        "catalog_deleted_ids": len(deleted),
+        "decision": (
+            "NOT DECIDED BY THIS SCRIPT. No local row carries an online flag, "
+            "and the admin overrides are test fixtures, so the repository does "
+            "not express a publish intent. The rows already present in "
+            "Supabase are the live set; this migration only sets image_url on "
+            "them and inserts nothing. Importing all 258 seed rows would put "
+            "all 258 on the storefront, because the schema defaults online to "
+            "true - do not do that without an explicit merchandising decision."),
+    }
+
+
+# Operator decisions recorded explicitly, so the live set is a documented
+# decision rather than something a reviewer has to reverse-engineer from the
+# classifier's output. Every entry keeps the row intact: no delete, no rename,
+# no price change - only `online`, and only via the separate SQL the report
+# emits, never by this script.
+FORCED_OFFLINE = {
+    "wix-001": ("operator decision: placeholder image and stock_quantity=0; it "
+                "was flagged online=true before it was ready"),
+    "wix-012": ("operator decision: priceNgn=0 is not a valid retail price; the "
+                "intended price is unknown and must not be guessed"),
+}
+
+
+def classify_live_intent(product):
+    """Apply the operator's live-product policy to ONE row.
+
+    Policy (agreed, and deliberately conservative):
+      * a real committed photo + a valid price + valid stock  -> online = True
+      * placeholder-only                                     -> online = False
+      * anything else that cannot be verified                -> online = False
+        and reported for a human decision, never silently published
+
+    Returning online=False for the uncertain cases is the safe direction: a
+    product missing from the storefront is a visible, fixable problem, while a
+    broken product page with no photo and no price is a live one.
+    """
+    pid = str(product.get("id") or "")
+    if _FIXTURE_ID_RE.match(pid):
+        return False, "fixture", "pytest fixture row, never published"
+    if pid in FORCED_OFFLINE:
+        return False, "operator_offline", FORCED_OFFLINE[pid]
+
+    _local, rel, status, detail = resolve_source_image(product)
+    if status != "found":
+        if status == "placeholder":
+            return False, "placeholder_only", rel or detail
+        return False, "no_image", f"image status={status}: {detail}"
+
+    reasons = []
+    prices = {}
+    for col in ("priceNgn", "priceCfa"):
+        raw = product.get(col)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = None
+        prices[col] = raw
+        # 0 is not a usable price - it would put a free product on the store.
+        if value is None or value <= 0:
+            reasons.append(f"invalid {col}={raw!r}")
+
+    key = _stock_key(product)
+    stock = product.get("stock_quantity")
+    if stock is None:
+        stock = product.get("stock")
+    try:
+        stock_value = int(stock)
+    except (TypeError, ValueError):
+        stock_value = None
+    if key is None or stock_value is None:
+        reasons.append("stock missing")
+    elif stock_value <= 0:
+        reasons.append(f"stock is {stock_value}")
+
+    evidence = {"image": rel, "stock_source": key, "stock": stock_value,
+                **prices}
+    if reasons:
+        return False, "needs_review", "; ".join(reasons)
+    return True, "live", rel
+
+
+def _live_set_sql(live, operator_offline, placeholder, no_image,
+                  needs_review, fixtures):
+    """UPDATE-only SQL for the live-set decision.
+
+    Deliberately narrow: it touches `online` and `updated_at` and nothing else.
+    No DELETE, no rename, no price or stock column. Idempotent, because setting
+    a boolean to the value it already has is a no-op.
+    """
+    def ids(entries):
+        return ", ".join("'" + e["id"].replace("'", "''") + "'" for e in entries)
+
+    offline = list(operator_offline) + list(placeholder) + list(no_image) \
+        + list(needs_review)
+    parts = [
+        "-- Generated by migrate_images.py. REVIEW BEFORE RUNNING.",
+        "-- Applies the approved live-product decision. UPDATE only:",
+        "-- no row is deleted, no id is renamed, no price or stock is touched.",
+        "",
+    ]
+    if live:
+        parts += [
+            "-- Approved live products: real photo + valid price + valid stock.",
+            "update products set online = true, updated_at = now()",
+            " where id in (" + ids(live) + ");",
+            "",
+        ]
+    if offline:
+        parts += [
+            "-- Offline: operator decisions, placeholder-only, no image, or",
+            "-- awaiting review. Rows are kept intact.",
+            "update products set online = false, updated_at = now()",
+            " where id in (" + ids(offline) + ");",
+            "",
+        ]
+    if fixtures:
+        parts += [
+            "-- pytest fixtures. These must never exist in production; if any",
+            "-- do, investigate - do not publish them.",
+            "-- fixture ids: " + ", ".join(e["id"] for e in fixtures),
+        ]
+    return "\n".join(parts)
+
+
+def live_set_report(products, overrides):
+    """Exactly which products are intended to be live, and why - per id.
+
+    'Document exactly which products are intended to be live before
+    migration' means a reviewer must be able to read the list, not a count.
+    So this emits every id in each bucket plus the reason it landed there.
+    """
+    buckets = {}
+    for product in products or []:
+        online, reason, detail = classify_live_intent(product)
+        entry = {"id": str(product.get("id") or ""),
+                 "name": str(product.get("name") or "")[:120],
+                 "reason": detail}
+        buckets.setdefault(reason, []).append(entry)
+
+    live = sorted(buckets.get("live", []), key=lambda e: e["id"])
+    operator_offline = sorted(buckets.get("operator_offline", []),
+                              key=lambda e: e["id"])
+    fixtures = sorted(buckets.get("fixture", []), key=lambda e: e["id"])
+    placeholder = sorted(buckets.get("placeholder_only", []), key=lambda e: e["id"])
+    no_image = sorted(buckets.get("no_image", []), key=lambda e: e["id"])
+    needs_review = sorted(buckets.get("needs_review", []), key=lambda e: e["id"])
+
+    # wix-001 is worth calling out by name: it is the only local row carrying
+    # an explicit online flag, and it is set to True while the row points at
+    # the placeholder image with stock_quantity 0. Under this policy it must
+    # NOT be live, so the conflict is stated rather than left to inference.
+    conflicts = []
+    for product in products or []:
+        pid = str(product.get("id") or "")
+        if _FIXTURE_ID_RE.match(pid):
+            continue
+        if product.get("online") is True:
+            online, reason, detail = classify_live_intent(product)
+            if not online:
+                conflicts.append({"id": pid, "flagged_online": True,
+                                  "policy_says": reason, "detail": detail})
+
+    # Per-criterion tallies. A reviewer asked "how many rows pass each check"
+    # should not have to reconstruct it from the buckets.
+    total = len(products or [])
+    valid_image = valid_price = valid_stock = 0
+    for product in products or []:
+        if str(product.get("id") or "") in FORCED_OFFLINE:
+            continue
+        if _FIXTURE_ID_RE.match(str(product.get("id") or "")):
+            continue
+        if resolve_source_image(product)[2] == "found":
+            valid_image += 1
+        if not _price_missing(product) and not _price_non_positive(product):
+            valid_price += 1
+        if not _stock_missing(product):
+            try:
+                stock = product.get("stock_quantity")
+                if stock is None:
+                    stock = product.get("stock")
+                if int(stock) > 0:
+                    valid_stock += 1
+            except (TypeError, ValueError):
+                pass
+
+    return {
+        "total_source_rows": total,
+        "rows_with_a_valid_image": valid_image,
+        "rows_with_a_valid_price": valid_price,
+        "rows_with_valid_stock": valid_stock,
+        "policy": ("real committed photo + priceNgn>0 + priceCfa>0 + stock>0 "
+                   "-> online=true; placeholder-only or unverifiable -> "
+                   "online=false and reported for a human decision"),
+        "counts": {
+            "approved_live": len(live),
+            "operator_offline": len(operator_offline),
+            "placeholder_only": len(placeholder),
+            "no_image": len(no_image),
+            "needs_review": len(needs_review),
+            "test_fixtures_excluded": len(fixtures),
+        },
+        "approved_live_count": len(live),
+        "operator_offline": operator_offline,
+        "operator_offline_ids": [e["id"] for e in operator_offline],
+        "live_ids": [e["id"] for e in live],
+        "live": live,
+        "placeholder_only_ids": [e["id"] for e in placeholder],
+        "no_image_ids": [e["id"] for e in no_image],
+        "needs_review": needs_review,
+        "test_fixtures_excluded_ids": [e["id"] for e in fixtures],
+        "existing_online_flags_that_conflict_with_the_policy": conflicts,
+        # The SQL that WOULD apply this decision. Emitted as text so it is
+        # reviewed with the report - migrate_images.py never executes it, and
+        # never writes `online` itself.
+        "apply_sql": _live_set_sql(live, operator_offline, placeholder,
+                                   no_image, needs_review, fixtures),
+        "applied_by_this_script": False,
+        "note": ("This is a RECOMMENDATION, not an action. migrate_images.py "
+                 "writes only image_url and updated_at, so it never changes "
+                 "`online`. Apply the live set separately, after review, and "
+                 "never by importing all 258 seed rows - the schema defaults "
+                 "`online` to true, which would publish every one of them."),
+    }
+
+
 # ------------------------------------------------------------------- report
 def write_report(report, path):
     """Write the JSON report, masked.
@@ -768,6 +1140,7 @@ def summarize(report):
         f"  images missing           : {p['images_missing']}",
         f"  images already uploaded  : {p['images_already_uploaded']}",
         f"  images to upload         : {p['images_to_upload']}",
+        f"  non-positive prices      : {len(p['non_positive_prices'])}",
         f"  duplicate products       : {len(p['duplicate_products'])}",
         f"  blank product ids        : {len(p['blank_ids'])}",
         f"  distinct local files     : {p.get('distinct_local_files', 0)}",
@@ -947,6 +1320,14 @@ def main(argv=None):
             overrides if isinstance(overrides, dict) else {},
             deleted if isinstance(deleted, list) else [],
             supabase_rows=products if client is not None else None),
+        "live_set": live_set_report(
+            products,
+            overrides if isinstance(overrides, dict) else {}),
+        "live_intent": live_intent_report(
+            products,
+            seed_count if isinstance(seed_count, int) else 0,
+            overrides if isinstance(overrides, dict) else {},
+            deleted if isinstance(deleted, list) else []),
         "products": product_plan,
         "categories": cat_plan,
     }
@@ -957,6 +1338,13 @@ def main(argv=None):
         blockers.append(f"{len(product_plan['blank_ids'])} product rows have a blank id")
     if product_plan["duplicate_products"]:
         blockers.append(f"duplicate product ids: {product_plan['duplicate_products'][:10]}")
+    _urls = product_plan["existing_https_urls"]
+    if _urls["insecure_http"]:
+        blockers.append(f"{_urls['insecure_http']} row(s) already hold a plain "
+                        "http:// image_url - mixed content, fix before migrating")
+    if _urls["unresolved_template"]:
+        blockers.append(f"{_urls['unresolved_template']} row(s) hold an "
+                        "unresolved <SUPABASE_URL> template instead of a real URL")
     if product_plan["mapping_warnings"]:
         blockers.append(f"{len(product_plan['mapping_warnings'])} image->product "
                         "mapping warning(s) - see mapping_warnings")
