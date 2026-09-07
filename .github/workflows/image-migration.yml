@@ -1,0 +1,215 @@
+name: Image migration (manual, protected)
+
+# Why this workflow exists
+# ------------------------
+# The image migration writes to Supabase Storage and to products.image_url, so
+# it needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. Those must never appear
+# in source, in this file, in a commit, in a report, or in a chat log. This
+# sandbox has neither credential (`gh secret list` returns HTTP 403), so the
+# migration cannot and must not be run from here. It runs here instead, on a
+# manual trigger, with the key held only as a repository secret.
+#
+# PROTECTION - configure once in the repository settings:
+#   Settings -> Environments -> New environment "image-migration"
+#     Required reviewers: add at least one human approver
+#     Wait timer: 0
+#   Settings -> Secrets and variables -> Actions, add:
+#     SUPABASE_URL              (https://<project-ref>.supabase.co)
+#     SUPABASE_SERVICE_ROLE_KEY (service_role JWT - server side only)
+#
+# Nothing runs until a reviewer approves the run, and a real apply needs BOTH
+# dry_run=false AND confirm_apply=APPLY. Every run, dry or real, publishes the
+# JSON report as a downloadable artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true = plan only (zero uploads, zero DB writes). Set false ONLY after reviewing the report."
+        required: true
+        type: choice
+        default: "true"
+        options: ["true", "false"]
+      confirm_apply:
+        description: "Type APPLY to permit a real run. Ignored while dry_run is true."
+        required: false
+        type: string
+        default: ""
+      limit:
+        description: "Plan at most this many products (0 = all). Use a small number for a first real run."
+        required: false
+        type: string
+        default: "0"
+      live_only:
+        description: "Restrict the plan to products currently online."
+        required: false
+        type: choice
+        default: "false"
+        options: ["true", "false"]
+
+# One migration at a time. Two concurrent runs could both read the same
+# products.image_url and race on the write.
+concurrency:
+  group: image-migration
+  cancel-in-progress: false
+
+permissions:
+  contents: read          # read-only: this job never commits
+  actions: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    # Gates the whole job behind required reviewers configured on the
+    # "image-migration" environment.
+    environment:
+      name: image-migration
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_BUCKET: uploads          # never 'receipts'
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pillow requests
+
+      # The service-role key is a bearer credential. Masking it here means a
+      # stray traceback or HTTP error body cannot leak it into the log.
+      - name: Mask the service-role key
+        run: |
+          if [ -n "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::add-mask::$SUPABASE_SERVICE_ROLE_KEY"
+          fi
+
+      - name: Fail fast if credentials are missing
+        run: |
+          missing=""
+          [ -n "$SUPABASE_URL" ] || missing="$missing SUPABASE_URL"
+          [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || missing="$missing SUPABASE_SERVICE_ROLE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            echo "The values are never printed here."
+            exit 1
+          fi
+          echo "Credentials present. Length only (never the value):"
+          echo "  SUPABASE_URL host: $(printf '%s' "$SUPABASE_URL" | sed -E 's#https?://##; s#/.*##')"
+          echo "  service key length: ${#SUPABASE_SERVICE_ROLE_KEY}"
+
+      - name: Refuse a real run that was not explicitly confirmed
+        if: inputs.dry_run == 'false' && inputs.confirm_apply != 'APPLY'
+        run: |
+          echo "::error::dry_run=false needs confirm_apply=APPLY."
+          echo "Review the dry-run report artifact first, then re-run with both set."
+          exit 1
+
+      # A dry run always happens first, even when applying, so the artifact
+      # for a real run still contains the pre-flight plan.
+      - name: Dry-run plan (always, zero writes)
+        run: |
+          args=(--dry-run --report dry-run-report.json --bucket "$SUPABASE_BUCKET")
+          [ "${{ inputs.limit }}" != "0" ] && args+=(--limit "${{ inputs.limit }}")
+          [ "${{ inputs.live_only }}" = "true" ] && args+=(--live-only)
+          python3 migrate_images.py "${args[@]}" || {
+            code=$?
+            echo "::error::migrate_images.py exited $code (2 = missing credentials, 3 = blockers)"
+            exit $code
+          }
+
+      - name: Summarise the plan
+        run: |
+          python3 - <<'PY'
+          import json
+          r = json.load(open("dry-run-report.json"))
+          p = r["products"]
+          u = p["existing_https_urls"]
+          print("=== DRY-RUN PLAN ===")
+          print(f"data source        : {r['data_source']}")
+          print(f"products examined  : {p['products_examined']}")
+          print(f"products matched   : {p['products_matched']}")
+          print(f"products skipped   : {p['products_skipped']}")
+          print(f"images to upload   : {p['images_to_upload']}")
+          print(f"already uploaded   : {p['images_already_uploaded']}")
+          print(f"missing images     : {p['images_missing']}")
+          print(f"duplicate rows     : {p['duplicate_row_count']}")
+          print(f"existing HTTPS urls: {u['count']} "
+                f"(uploads {u['already_public_supabase_uploads']}, "
+                f"other host {u['other_https_host']}, "
+                f"insecure http {u['insecure_http']}, "
+                f"template {u['unresolved_template']})")
+          print(f"legacy wix ids     : {len(p['legacy_id_references'])}")
+          print(f"blockers           : {r['blockers'] or 'none'}")
+          print(f"env blockers       : {r['environment_blockers'] or 'none'}")
+          print(f"safe_to_apply      : {r['safe_to_apply']}")
+          PY
+
+      - name: Publish the dry-run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dry-run-report
+          path: dry-run-report.json
+          if-no-files-found: error
+
+      - name: Block the apply when the plan is not safe
+        if: inputs.dry_run == 'false'
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          r = json.load(open("dry-run-report.json"))
+          if not r.get("safe_to_apply"):
+              print("::error::safe_to_apply is false - refusing to apply.")
+              print("blockers:", r.get("blockers"))
+              print("environment blockers:", r.get("environment_blockers"))
+              sys.exit(1)
+          print("safe_to_apply is true - proceeding.")
+          PY
+
+      - name: Apply (uploads + image_url writes)
+        if: inputs.dry_run == 'false' && inputs.confirm_apply == 'APPLY'
+        run: |
+          args=(--report apply-report.json --bucket "$SUPABASE_BUCKET" --http-check)
+          [ "${{ inputs.limit }}" != "0" ] && args+=(--limit "${{ inputs.limit }}")
+          [ "${{ inputs.live_only }}" = "true" ] && args+=(--live-only)
+          python3 migrate_images.py "${args[@]}" || {
+            code=$?
+            echo "::error::apply exited $code - see apply-report.json"
+            exit $code
+          }
+
+      - name: Publish the apply report
+        if: always() && inputs.dry_run == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apply-report
+          path: apply-report.json
+          if-no-files-found: warn
+
+      # Reminder only. Local images are NOT deleted by this job or by the
+      # script; they stay until the live visual check passes.
+      - name: Post-run verification SQL
+        if: always() && inputs.dry_run == 'false'
+        run: |
+          cat <<'SQL'
+          Run these in the Supabase SQL editor after the job finishes.
+
+          -- 1. Rows still pointing somewhere other than the public bucket
+          select id, name, "image_url"
+          from products
+          where "online" = true
+            and ("image_url" is null
+                 or "image_url" !~ '^https://[^/]+\.supabase\.co/storage/v1/object/public/uploads/');
+
+          -- 2. Must return ZERO rows for live products
+          select id, name, "image_url"
+          from products
+          where "online" = true
+            and ("image_url" like 'http://%');
+          SQL
