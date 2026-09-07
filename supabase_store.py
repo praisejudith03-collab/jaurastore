@@ -182,6 +182,10 @@ def products_table_rows():
 def product_by_id(pid):
     """One live product row from Supabase, dict-shaped, or None.
 
+    Looks the id up as a primary key first, then as a `legacyId` alias, so an
+    old wix-* product link or order line still resolves after the row has been
+    given a canonical jau-* id.
+
     Never raises: an unreachable Supabase returns None and the caller
     decides how to surface that (checkout must not fall back to a stale
     local price).
@@ -189,18 +193,26 @@ def product_by_id(pid):
     c = client()
     if c is None:
         return None
-    try:
-        res = (c.table("products").select("*")
-               .eq("id", str(pid or "").strip()).limit(1).execute())
-        rows = _res_data(res)
-        if not rows:
-            return None
-        row = _canonicalize_product(rows[0], c)
-        from catalog import resolve_image
-        return resolve_image(row)
-    except Exception as exc:
-        print(f"[supabase] product read failed for {pid!r}: {exc}")
+    key = str(pid or "").strip()
+    if not key:
         return None
+    for column in ("id", "legacyId"):
+        try:
+            res = (c.table("products").select("*")
+                   .eq(column, key).limit(1).execute())
+        except Exception as exc:
+            # The legacyId column may not exist yet on an un-migrated table;
+            # that must not break the primary-key lookup that already ran.
+            if column == "legacyId":
+                return None
+            print(f"[supabase] product read failed for {pid!r}: {exc}")
+            return None
+        rows = _res_data(res)
+        if rows:
+            row = _canonicalize_product(rows[0], c)
+            from catalog import resolve_image
+            return resolve_image(row)
+    return None
 
 
 # Canonical column names the acceptance spec requires (image_url,

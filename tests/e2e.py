@@ -371,7 +371,7 @@ def main():
         page.fill("#prod-form input[name=priceNgn]", "12500")
         # upload the photo while we still have a connection
         page.set_input_files("#more-media", os.path.abspath("tests/fixtures/proof.jpg"))
-        page.wait_for_selector(".wix-tile.is-pending", state="detached", timeout=30000)
+        page.wait_for_selector(".au-tile.is-pending", state="detached", timeout=30000)
         page.wait_for_timeout(500)
         # the photo must really be a stored url before we pull the plug,
         # otherwise the form is entitled to ask us to wait for it
@@ -386,7 +386,7 @@ def main():
 
         ctx.set_offline(True)
         page.wait_for_timeout(400)
-        click_safe(page, "#prod-form .wix-save")
+        click_safe(page, "#prod-form .au-save")
         # the save has to finish writing to the outbox before the pill shows
         try:
             page.wait_for_selector("#ja-sync-pill", timeout=15000)
@@ -395,7 +395,7 @@ def main():
         pill = page.locator("#ja-sync-pill")
         if pill.count() == 0:
             diag = page.evaluate("""() => {
-              const btn = document.querySelector('#prod-form .wix-save');
+              const btn = document.querySelector('#prod-form .au-save');
               let hit = 'no button';
               if (btn) {
                 const b = btn.getBoundingClientRect();

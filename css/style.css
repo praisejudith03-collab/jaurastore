@@ -1546,58 +1546,58 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
 .section-tight { padding: 28px 0 36px; }
 .section-tight .section-head { margin-bottom: 18px; }
 
-.footer.wix-footer {
+.footer.au-footer {
   background: #f3eadf;
   color: var(--espresso);
   padding: 36px 0 18px;
   margin-top: 20px;
 }
-.wix-footer-grid {
+.au-footer-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 28px;
   align-items: start;
 }
-.wix-footer h4 {
+.au-footer h4 {
   font-size: 12px;
   letter-spacing: 0.28em;
   text-transform: uppercase;
   color: var(--gold-deep);
   margin-bottom: 12px;
 }
-.wix-footer p,
-.wix-footer a {
+.au-footer p,
+.au-footer a {
   color: var(--espresso);
   font-size: 14px;
   display: block;
   padding: 3px 0;
 }
-.wix-footer a:hover { color: var(--gold-deep); }
-.wix-footer-help {
+.au-footer a:hover { color: var(--gold-deep); }
+.au-footer-help {
   color: var(--muted) !important;
   margin-bottom: 14px;
   max-width: 340px;
 }
-.wix-footer-links {
+.au-footer-links {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 16px;
   margin-top: 18px;
 }
-.wix-footer-links a {
+.au-footer-links a {
   font-size: 12px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--taupe);
 }
-.wix-footer .legal {
+.au-footer .legal {
   border-top: 1px solid var(--line);
   color: var(--taupe);
   margin-top: 24px;
   padding-top: 14px;
 }
 @media (max-width: 700px) {
-  .wix-footer-grid { grid-template-columns: 1fr; gap: 20px; }
+  .au-footer-grid { grid-template-columns: 1fr; gap: 20px; }
   .home-hero-slim { padding: 16px 0 4px; }
   .home-hero-slim h1 { font-size: 24px; }
 }
@@ -1775,35 +1775,35 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
 .menu-cats a:hover { color: var(--gold-deep); }
 
 /* Simple Wix Client Relations footer */
-.footer.wix-footer {
+.footer.au-footer {
   background: #f6efe6;
   color: var(--espresso);
   padding: 40px 20px 32px;
   margin-top: 24px;
   text-align: center;
 }
-.wix-foot { max-width: 520px; margin: 0 auto; }
-.wix-foot h4 {
+.au-foot { max-width: 520px; margin: 0 auto; }
+.au-foot h4 {
   font-size: 13px;
   letter-spacing: 0.28em;
   text-transform: uppercase;
   color: var(--gold-deep);
   margin-bottom: 14px;
 }
-.wix-foot p, .wix-foot a {
+.au-foot p, .au-foot a {
   color: var(--espresso);
   font-size: 15px;
   display: block;
   padding: 3px 0;
 }
-.wix-foot .wix-footer-help {
+.au-foot .au-footer-help {
   color: var(--muted) !important;
   margin: 16px auto 18px;
   max-width: 380px;
   line-height: 1.5;
 }
-.wix-foot .btn { margin-top: 4px; }
-.wix-footer .legal { display: none; }
+.au-foot .btn { margin-top: 4px; }
+.au-footer .legal { display: none; }
 
 /* White + gold + blush */
 .header {
@@ -1814,11 +1814,11 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
 .how-bar { background: #ead5e4 !important; }
 .card { background: #fff; }
 .card-media { background: #f8f2f6; }
-.footer.wix-footer {
+.footer.au-footer {
   background: #f4eaf1 !important;
   border-top: 1px solid var(--gold);
 }
-.wix-foot h4 { color: var(--gold-deep); }
+.au-foot h4 { color: var(--gold-deep); }
 .btn, .btn-pill {
   background: var(--espresso);
   border-color: var(--espresso);
@@ -1829,7 +1829,7 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #efe8dc; }
 .announce { background: #3a2f28; }
 
 /* Wix Harmony shop */
-body.wix-shop { background: #e8e4e5; }
+body.au-shop { background: #e8e4e5; }
 .shop-page { padding: 18px 0 70px; }
 .crumbs {
   font-size: 15px;
@@ -1902,20 +1902,20 @@ body.wix-shop { background: #e8e4e5; }
   font-size: 16px;
   padding: 4px 0;
 }
-.wix-shop .product-grid {
+.au-shop .product-grid {
   grid-template-columns: repeat(2, 1fr);
   gap: 16px 12px;
 }
 @media (min-width: 800px) {
-  .wix-shop .product-grid { grid-template-columns: repeat(4, 1fr); }
+  .au-shop .product-grid { grid-template-columns: repeat(4, 1fr); }
 }
-.wix-shop .card { background: transparent; }
-.wix-shop .card-media {
+.au-shop .card { background: transparent; }
+.au-shop .card-media {
   background: #fff;
   border-radius: 2px;
 }
-.wix-shop .card h3 { font-family: var(--sans); font-size: 14px; }
-.wix-shop .quick-add { border-radius: 0; }
+.au-shop .card h3 { font-family: var(--sans); font-size: 14px; }
+.au-shop .quick-add { border-radius: 0; }
 
 /* Harmony palette leftovers */
 .hero-slim { background: #fff; }
@@ -1964,7 +1964,7 @@ body.wix-shop { background: #e8e4e5; }
   background: var(--purple) !important;
   color: #fff !important;
 }
-.wix-foot h4, .footer h4 { color: var(--purple) !important; }
+.au-foot h4, .footer h4 { color: var(--purple) !important; }
 .cat-pill.is-on { background: var(--purple) !important; border-color: var(--purple) !important; }
 .order-id {
   font-family: var(--serif);
@@ -1983,7 +1983,7 @@ body.wix-shop { background: #e8e4e5; }
 .btn:hover { background: var(--purple); border-color: var(--purple); }
  */
 body.menu-open { overflow: hidden; }
-.wix-menu {
+.au-menu {
   display: none;
   position: fixed;
   inset: 0;
@@ -1993,8 +1993,8 @@ body.menu-open { overflow: hidden; }
   -webkit-overflow-scrolling: touch;
   padding: 16px 18px 48px;
 }
-.wix-menu.open { display: block; }
-.wix-menu-top {
+.au-menu.open { display: block; }
+.au-menu-top {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2005,7 +2005,7 @@ body.menu-open { overflow: hidden; }
   z-index: 2;
   padding: 6px 0 12px;
 }
-.wix-search {
+.au-search {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2015,7 +2015,7 @@ body.menu-open { overflow: hidden; }
   width: min(280px, calc(100% - 56px));
   box-shadow: 0 1px 0 rgba(255,255,255,0.4) inset;
 }
-.wix-search-ico {
+.au-search-ico {
   width: 22px;
   height: 22px;
   stroke: #c4a574;
@@ -2023,7 +2023,7 @@ body.menu-open { overflow: hidden; }
   stroke-width: 1.8;
   flex-shrink: 0;
 }
-.wix-search input {
+.au-search input {
   flex: 1;
   border: 0;
   outline: 0;
@@ -2032,8 +2032,8 @@ body.menu-open { overflow: hidden; }
   color: #6b5e52;
   min-width: 0;
 }
-.wix-search input::placeholder { color: #c4b8a8; }
-.wix-close {
+.au-search input::placeholder { color: #c4b8a8; }
+.au-close {
   position: absolute;
   right: 4px;
   top: 10px;
@@ -2046,8 +2046,8 @@ body.menu-open { overflow: hidden; }
   height: 44px;
   padding: 0;
 }
-.wix-menu-scroll { padding: 4px 6px 20px; }
-.wix-link {
+.au-menu-scroll { padding: 4px 6px 20px; }
+.au-link {
   display: block;
   font-family: var(--sans) !important;
   font-size: 18px !important;
@@ -2057,13 +2057,13 @@ body.menu-open { overflow: hidden; }
   letter-spacing: 0;
   text-transform: none;
 }
-.wix-link.is-on,
-.wix-menu .wix-link[href="index.html"].is-on {
+.au-link.is-on,
+.au-menu .au-link[href="index.html"].is-on {
   text-decoration: underline;
   text-underline-offset: 4px;
 }
-.wix-cats { margin: 4px 0 14px; }
-.wix-cat {
+.au-cats { margin: 4px 0 14px; }
+.au-cat {
   display: block;
   font-family: var(--sans) !important;
   font-size: 13px !important;
@@ -2073,7 +2073,7 @@ body.menu-open { overflow: hidden; }
   color: #2a221c !important;
   padding: 9px 0 !important;
 }
-.wix-sub {
+.au-sub {
   display: block;
   font-family: var(--sans) !important;
   font-size: 13px !important;
@@ -2083,7 +2083,7 @@ body.menu-open { overflow: hidden; }
   color: #2a221c !important;
   padding: 8px 0 !important;
 }
-.wix-menu-tools {
+.au-menu-tools {
   display: flex;
   gap: 10px;
   align-items: center;
@@ -2091,13 +2091,13 @@ body.menu-open { overflow: hidden; }
   padding-top: 14px;
   border-top: 1px solid rgba(42,33,28,0.12);
 }
-.wix-menu-live {
+.au-menu-live {
   background: #f7f1e8;
   border-radius: 12px;
   margin: 0 0 14px;
   padding: 8px 10px;
 }
-.wix-hit {
+.au-hit {
   display: grid;
   grid-template-columns: 44px 1fr auto;
   gap: 10px;
@@ -2107,10 +2107,10 @@ body.menu-open { overflow: hidden; }
   font-size: 13px;
   color: #2a221c !important;
 }
-.wix-hit img { width: 44px; height: 44px; object-fit: cover; background: #fff; }
-.wix-hit em { font-style: normal; font-size: 12px; color: #6b3d7a; }
-.wix-hit-empty { padding: 10px; font-size: 13px; color: #6b5e52; }
-.wix-hit-more {
+.au-hit img { width: 44px; height: 44px; object-fit: cover; background: #fff; }
+.au-hit em { font-style: normal; font-size: 12px; color: #6b3d7a; }
+.au-hit-empty { padding: 10px; font-size: 13px; color: #6b5e52; }
+.au-hit-more {
   display: block;
   text-align: center;
   padding: 10px;
@@ -2163,7 +2163,7 @@ body.menu-open { overflow: hidden; }
   object-fit: contain;
   padding: 8px;
 }
-.wix-shop .card-media { max-height: 200px; }
+.au-shop .card-media { max-height: 200px; }
 .add-mini {
   display: inline-flex;
   align-items: center;
@@ -2182,7 +2182,7 @@ body.menu-open { overflow: hidden; }
 .quick-add { display: none !important; }
 
 /* Footer */
-.footer.wix-footer {
+.footer.au-footer {
   background: #fff8f4 !important;
   color: var(--espresso);
   padding: 40px 0 20px !important;
@@ -2203,7 +2203,7 @@ body.menu-open { overflow: hidden; }
   margin-bottom: 10px;
 }
 .foot-brand p { color: var(--muted); font-size: 13px; max-width: 280px; line-height: 1.5; }
-.wix-footer h4 {
+.au-footer h4 {
   font-family: var(--sans);
   font-size: 11px;
   letter-spacing: 0.22em;
@@ -2211,7 +2211,7 @@ body.menu-open { overflow: hidden; }
   color: var(--purple) !important;
   margin-bottom: 12px;
 }
-.wix-footer p, .wix-footer a { color: var(--espresso); font-size: 14px; padding: 3px 0; display: block; }
+.au-footer p, .au-footer a { color: var(--espresso); font-size: 14px; padding: 3px 0; display: block; }
 .tiktok-btn {
   display: inline-flex !important;
   align-items: center;
@@ -2580,8 +2580,8 @@ body.mini-open { overflow: hidden; }
 .wish-count:empty, .wish-count { min-width: 16px; }
 .foot-logo img { height: 72px; max-width: 180px; object-fit: contain; }
 .foot-tag { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--gold-deep); margin: 6px 0 8px; }
-.footer.wix-footer { position: relative; overflow: hidden; }
-.footer.wix-footer::before {
+.footer.au-footer { position: relative; overflow: hidden; }
+.footer.au-footer::before {
   content: "";
   position: absolute;
   left: -10%;
@@ -2604,7 +2604,7 @@ body.mini-open { overflow: hidden; }
   50% { transform: translate(10px,-12px) rotate(10deg); }
 }
 .price s { color: #c0392b !important; text-decoration-color: #c0392b; }
-.card-media, .card-media img, .wix-shop .card-media {
+.card-media, .card-media img, .au-shop .card-media {
   border-radius: 16px !important;
   overflow: hidden;
 }
@@ -2630,7 +2630,7 @@ body.mini-open { overflow: hidden; }
 .cat-slide .home-cat img { max-height: 90px; border-radius: 14px; }
 body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
 /* Category card titles: break between words, never letter-by-letter. */
-.cat-tile h3, .home-cat span, .menu-cats a, .wix-cat-card { word-break: normal; overflow-wrap: break-word; }
+.cat-tile h3, .home-cat span, .menu-cats a, .au-cat-card { word-break: normal; overflow-wrap: break-word; }
 .dock {
   position: fixed;
   left: 0; right: 0; bottom: 0;
@@ -2682,7 +2682,7 @@ body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
 
 /* Product photos: fill the card so items are easy to see */
 .card-media,
-.wix-shop .card-media {
+.au-shop .card-media {
   display: block;
   position: relative;
   aspect-ratio: 1 / 1 !important;
@@ -2694,7 +2694,7 @@ body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
   overflow: hidden;
 }
 .card-media img,
-.wix-shop .card-media img {
+.au-shop .card-media img {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -2703,12 +2703,12 @@ body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
   padding: 6px;
   background: #f7f1ea;
 }
-.wix-shop .product-grid {
+.au-shop .product-grid {
   grid-template-columns: repeat(2, 1fr);
   gap: 18px 12px;
 }
 @media (min-width: 800px) {
-  .wix-shop .product-grid { grid-template-columns: repeat(4, 1fr); gap: 22px 16px; }
+  .au-shop .product-grid { grid-template-columns: repeat(4, 1fr); gap: 22px 16px; }
 }
 .just-in-grid {
   grid-template-columns: repeat(2, 1fr) !important;
@@ -2725,7 +2725,7 @@ body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
   letter-spacing: 0.14em;
 }
 .card h3,
-.wix-shop .card h3 {
+.au-shop .card h3 {
   font-family: var(--sans) !important;
   font-size: 12px !important;
   font-weight: 500;
@@ -2803,7 +2803,7 @@ body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
   50% { transform: translate(6px,-8px) rotate(10deg); }
 }
 
-html, body, body.wix-shop { background: #eae5e9 !important; }
+html, body, body.au-shop { background: #eae5e9 !important; }
 .hero-slim, .home-hero, .home-hero-slim, .shop-page, .ck-hero, .page-hero {
   background: transparent !important;
 }
@@ -2820,15 +2820,15 @@ html, body, body.wix-shop { background: #eae5e9 !important; }
 .search-overlay, .dock { z-index: 80; }
 .mini-cart { z-index: 220; }
 .mini-mask { z-index: 210; }
-.wix-menu,
-.wix-menu.open {
+.au-menu,
+.au-menu.open {
   position: fixed !important;
   inset: 0 !important;
   z-index: 450 !important;
   display: none;
 }
-.wix-menu.open { display: block !important; }
-body.menu-open .wix-menu { display: block !important; }
+.au-menu.open { display: block !important; }
+body.menu-open .au-menu { display: block !important; }
 
 /* WhatsApp: always fixed on the right, above the dock */
 .wa-float {
@@ -3032,11 +3032,11 @@ body.welcome-open { overflow: hidden; }
   --purple: #6b5e52 !important;
   --mauve: #c4b09a !important;
 }
-html, body, body.wix-shop { background: #e8e3dd !important; }
+html, body, body.au-shop { background: #e8e3dd !important; }
 .header { background: rgba(255, 252, 248, 0.94) !important; border-bottom-color: #e6ddd2 !important; }
 .how-bar { background: #ebe3d8 !important; }
-.footer.wix-footer { background: #efe8de !important; border-top-color: #d4c4b0 !important; }
-.wix-menu, .wix-menu-top { background: #e8dfd4 !important; }
+.footer.au-footer { background: #efe8de !important; border-top-color: #d4c4b0 !important; }
+.au-menu, .au-menu-top { background: #e8dfd4 !important; }
 .shop-title { color: #8a7d70 !important; }
 .shop-banner { background: #efe8de; }
 .welcome-card {
@@ -3062,13 +3062,13 @@ html, body, body.wix-shop { background: #e8e3dd !important; }
   background: transparent;
 }
 .card-media,
-.wix-shop .card-media {
+.au-shop .card-media {
   background: #f7f3ee !important;
   border-radius: 18px !important;
   border: 1px solid #eee6dc;
 }
 .card-media img,
-.wix-shop .card-media img {
+.au-shop .card-media img {
   background: #f7f3ee !important;
   padding: 10px;
   object-fit: contain;
@@ -3081,7 +3081,7 @@ html, body, body.wix-shop { background: #e8e3dd !important; }
   text-transform: uppercase;
 }
 .card h3,
-.wix-shop .card h3 {
+.au-shop .card h3 {
   font-size: 15px !important;
   font-weight: 500 !important;
   color: #322c28;
@@ -3122,7 +3122,7 @@ body[data-page="home"] .dock { display: none !important; }
 body[data-page="home"] { padding-bottom: 24px !important; }
 
 /* Strong nude backdrop */
-html, body, body.wix-shop { background: #dccab6 !important; }
+html, body, body.au-shop { background: #dccab6 !important; }
 
 /* Background butterflies */
 .bg-flies { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
@@ -3212,7 +3212,7 @@ html, body, body.wix-shop { background: #dccab6 !important; }
   background: #111111 !important;
   color: #ffffff !important;
 }
-html, body, body.wix-shop { background: #e8e3dd !important; }
+html, body, body.au-shop { background: #e8e3dd !important; }
 
 body[data-page="home"] .hero-slim,
 body[data-page="home"] .section-tight,
@@ -3259,7 +3259,7 @@ body[data-page="home"] { padding-bottom: 72px !important; }
   color: #fff !important;
 }
 .product-grid,
-.wix-shop .product-grid,
+.au-shop .product-grid,
 body[data-page="home"] .just-in-grid,
 .just-in-grid {
   display: grid !important;
@@ -3268,7 +3268,7 @@ body[data-page="home"] .just-in-grid,
 }
 @media (min-width: 900px) {
   .product-grid,
-  .wix-shop .product-grid,
+  .au-shop .product-grid,
   body[data-page="home"] .just-in-grid,
   .just-in-grid {
     grid-template-columns: repeat(4, 1fr) !important;
@@ -3277,7 +3277,7 @@ body[data-page="home"] .just-in-grid,
 }
 .card { background: transparent !important; }
 .card-media,
-.wix-shop .card-media {
+.au-shop .card-media {
   max-height: none !important;
   aspect-ratio: 1 !important;
   border-radius: 18px !important;
@@ -3286,7 +3286,7 @@ body[data-page="home"] .just-in-grid,
   border: 1px solid #e6dccb;
 }
 .card-media img,
-.wix-shop .card-media img {
+.au-shop .card-media img {
   object-fit: cover !important;
   padding: 0 !important;
   width: 100%;
@@ -3344,7 +3344,7 @@ body[data-page="home"] .just-in-grid,
 
 /* v45 — just in 3-col, categories slide, lavender chrome, nude waves, red sale */
 :root { --lav: #c4a8e6; --lav-deep: #a888d0; }
-html, body, body.wix-shop { background: #dccab6 !important; }
+html, body, body.au-shop { background: #dccab6 !important; }
 #site-header, #site-footer, .wrap, .hero-slim, .lux-reel, .how-bar, .section-tight,
 .shop-page, .ck-hero, #admin-root, .admin-login, .admin-shell {
   position: relative;
@@ -3395,13 +3395,13 @@ body[data-page="home"] .just-in-grid .card-media { border-radius: 14px !importan
 
 /* Shop still 2-col on phones, like the screenshot */
 .product-grid,
-.wix-shop .product-grid {
+.au-shop .product-grid {
   display: grid !important;
   grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   gap: 16px 12px !important;
 }
 @media (min-width: 900px) {
-  .wix-shop .product-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+  .au-shop .product-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
 }
 
 /* Categories slide */
@@ -3432,7 +3432,7 @@ body[data-page="home"] .just-in-grid .card-media { border-radius: 14px !importan
   text-decoration-color: #c0392b !important;
 }
 
-.card h3, .wix-shop .card h3 { font-size: 13px !important; line-height: 1.3 !important; }
+.card h3, .au-shop .card h3 { font-size: 13px !important; line-height: 1.3 !important; }
 .card-cat { font-size: 9px !important; }
 .price, .price .now { font-size: 13px !important; }
 
@@ -3519,7 +3519,7 @@ body[data-page="home"] .just-in-grid,
 
 
 /* Darker nude (~15%) */
-html, body, body.wix-shop { background: #dccab6 !important; }
+html, body, body.au-shop { background: #dccab6 !important; }
 body[data-page="home"] .hero-slim,
 body[data-page="home"] .section-tight { background: #f3eee8 !important; }
 body[data-page="home"] .how-bar { background: #ebe3d8 !important; }
@@ -3691,7 +3691,7 @@ a.btn.lux-explore,
 body.filt-open { overflow: hidden; }
 
 /* v48 bg restore — previous nude, black video button stays */
-html, body, body.wix-shop { background: #dccab6 !important; }
+html, body, body.au-shop { background: #dccab6 !important; }
 .lux-explore, a.btn.lux-explore, .lux-reel .lux-explore {
   background: #111111 !important;
   border-color: #111111 !important;
@@ -3699,7 +3699,7 @@ html, body, body.wix-shop { background: #dccab6 !important; }
   box-shadow: none !important;
 }
 .shop-page, .product-grid, [data-shop-grid] { display: block; }
-.product-grid, .wix-shop .product-grid, [data-shop-grid] {
+.product-grid, .au-shop .product-grid, [data-shop-grid] {
   display: grid !important;
   visibility: visible !important;
 }
@@ -3755,7 +3755,7 @@ html, body, body.wix-shop { background: #dccab6 !important; }
 
 
 /* Footer WhatsApp channel + 4 moving butterflies */
-.wix-footer .foot-grid > div:last-child { position: relative; overflow: visible; }
+.au-footer .foot-grid > div:last-child { position: relative; overflow: visible; }
 .wa-channel {
   display: inline-block !important;
   margin-top: 10px;
@@ -3801,7 +3801,7 @@ html, body, body.wix-shop { background: #dccab6 !important; }
 /* Footer flies up; just-in rows (the old fixed .site-waves overlay was removed:
    the single footer wave .foot-wavez is the only wave layer sitewide) */
 
-.footer.wix-footer { position: relative !important; overflow: hidden !important; }
+.footer.au-footer { position: relative !important; overflow: hidden !important; }
 .foot-flies {
   position: absolute !important;
   inset: 0 !important;
@@ -3876,44 +3876,44 @@ body[data-page="admin"] .dock { display: none !important; }
 body[data-page="admin"] { padding-bottom: 24px !important; }
 
 /* Wix-style admin products */
-.wix-list-head { margin-bottom: 8px; }
-.wix-cats-link {
+.au-list-head { margin-bottom: 8px; }
+.au-cats-link {
   display: flex; width: 100%; justify-content: space-between;
   background: #fff; border: 1px solid #e6ddd2; border-radius: 12px;
   padding: 14px 16px; font-size: 15px; margin-bottom: 12px;
 }
-.wix-count { font-size: 13px; color: #7a7066; margin: 8px 0 12px; }
-.wix-list { display: flex; flex-direction: column; gap: 0; background: #fff; border-radius: 12px; overflow: hidden; }
-.wix-row {
+.au-count { font-size: 13px; color: #7a7066; margin: 8px 0 12px; }
+.au-list { display: flex; flex-direction: column; gap: 0; background: #fff; border-radius: 12px; overflow: hidden; }
+.au-row {
   display: grid; grid-template-columns: 56px 1fr 36px;
   gap: 12px; align-items: center;
   padding: 12px 10px; border-bottom: 1px solid #f0e8dc;
   background: #fff;
 }
-.wix-row img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; background: #f3eee8; }
-.wix-row-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.wix-row-info strong { font-size: 14px; line-height: 1.3; }
-.wix-ngn { font-size: 13px; font-weight: 600; }
-.wix-cfa { font-size: 12px; color: #3d6ea8; }
-.wix-cfa s { color: #888; margin-right: 6px; }
-.wix-stock { font-size: 12px; color: #6a7a6a; }
-.wix-off { font-size: 11px; color: #9a4a32; }
-.wix-more { border: 0; background: none; font-size: 22px; color: #666; }
-.wix-add {
+.au-row img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; background: #f3eee8; }
+.au-row-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.au-row-info strong { font-size: 14px; line-height: 1.3; }
+.au-ngn { font-size: 13px; font-weight: 600; }
+.au-cfa { font-size: 12px; color: #3d6ea8; }
+.au-cfa s { color: #888; margin-right: 6px; }
+.au-stock { font-size: 12px; color: #6a7a6a; }
+.au-off { font-size: 11px; color: #9a4a32; }
+.au-more { border: 0; background: none; font-size: 22px; color: #666; }
+.au-add {
   position: sticky; bottom: 96px; z-index: 60;
   display: block; width: calc(100% - 8px);
   margin: 16px auto 8px; padding: 14px;
   background: #1a73e8; color: #fff !important; border: 0; border-radius: 999px;
   font-size: 15px;
 }
-.wix-edit { background: #fff; padding: 12px 4px 40px; }
-.wix-edit h2 { font-size: 22px; margin: 8px 0 14px; }
-.wix-edit h3 { font-size: 16px; margin: 22px 0 8px; }
-.wix-back { border: 0; background: none; font-size: 14px; padding: 8px 0; }
-.wix-media img { width: 100%; max-height: 180px; object-fit: cover; border-radius: 10px; margin-bottom: 12px; }
-.wix-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.wix-tog { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; font-size: 14px; }
-.wix-tog input { width: 44px; height: 24px; }
+.au-edit { background: #fff; padding: 12px 4px 40px; }
+.au-edit h2 { font-size: 22px; margin: 8px 0 14px; }
+.au-edit h3 { font-size: 16px; margin: 22px 0 8px; }
+.au-back { border: 0; background: none; font-size: 14px; padding: 8px 0; }
+.au-media img { width: 100%; max-height: 180px; object-fit: cover; border-radius: 10px; margin-bottom: 12px; }
+.au-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.au-tog { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; font-size: 14px; }
+.au-tog input { width: 44px; height: 24px; }
 .opt-edit { display: grid; gap: 6px; margin: 8px 0; }
 .opt-edit input { width: 100%; padding: 10px; border: 1px solid #e6ddd2; border-radius: 8px; }
 
@@ -3993,74 +3993,74 @@ body[data-page="admin"] input, body[data-page="admin"] select, body[data-page="a
   padding: 10px 12px;
 }
 body[data-page="admin"] label { color: #c5cad3; }
-.wix-list { background: transparent !important; }
-.wix-row { background: transparent !important; border-bottom: 1px solid #2a3140 !important; }
-.wix-row-info strong { color: #fff; }
-.wix-ngn { color: #fff; }
-.wix-cfa { color: #6cb6ff; }
-.wix-cfa s { color: #8b93a1; }
-.wix-stock { color: #9aa4b2; }
-.wix-more { color: #9aa4b2 !important; }
-.wix-cats-link {
+.au-list { background: transparent !important; }
+.au-row { background: transparent !important; border-bottom: 1px solid #2a3140 !important; }
+.au-row-info strong { color: #fff; }
+.au-ngn { color: #fff; }
+.au-cfa { color: #6cb6ff; }
+.au-cfa s { color: #8b93a1; }
+.au-stock { color: #9aa4b2; }
+.au-more { color: #9aa4b2 !important; }
+.au-cats-link {
   background: #1b1f28 !important; color: #fff !important; border-color: #2a3140 !important;
 }
-.wix-count { color: #8b93a1; }
-.wix-add { background: transparent !important; color: #6cb6ff !important; box-shadow: none; }
-.wix-edit { background: transparent; color: #e8eaed; }
-.wix-back { color: #9aa4b2; }
-.wix-media-row { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 8px; }
+.au-count { color: #8b93a1; }
+.au-add { background: transparent !important; color: #6cb6ff !important; box-shadow: none; }
+.au-edit { background: transparent; color: #e8eaed; }
+.au-back { color: #9aa4b2; }
+.au-media-row { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 8px; }
 /* "Photos: N of 20 - tap + to add, x to remove" flashes the row it is talking
    about, so on a phone the owner can see which tiles the count means. */
-.wix-media-row.is-flash { animation: wixMediaFlash 1.4s ease-out 1; border-radius: 10px; }
+.au-media-row.is-flash { animation: wixMediaFlash 1.4s ease-out 1; border-radius: 10px; }
 @keyframes wixMediaFlash {
   0% { box-shadow: 0 0 0 2px rgba(108, 182, 255, .85); background: rgba(108, 182, 255, .16); }
   60% { box-shadow: 0 0 0 8px rgba(108, 182, 255, 0); background: rgba(108, 182, 255, .07); }
   100% { box-shadow: 0 0 0 0 rgba(108, 182, 255, 0); background: transparent; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .wix-media-row.is-flash { animation: none; background: rgba(108, 182, 255, .14); }
+  .au-media-row.is-flash { animation: none; background: rgba(108, 182, 255, .14); }
 }
-.wix-tile {
+.au-tile {
   position: relative; flex: 0 0 46%; max-width: 220px; aspect-ratio: 1;
   background: #0e1116; border: 1px solid #2a3140; border-radius: 8px; overflow: hidden;
 }
-.wix-tile img { width: 100%; height: 100%; object-fit: cover; }
-.wix-tile span {
+.au-tile img { width: 100%; height: 100%; object-fit: cover; }
+.au-tile span {
   position: absolute; top: 8px; right: 8px; background: #fff; color: #111;
   font-size: 11px; padding: 3px 8px; border-radius: 4px;
 }
-.wix-tile-x {
+.au-tile-x {
   position: absolute; left: 6px; top: 6px; width: 24px; height: 24px;
   border: 0; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff;
 }
-.wix-plus {
+.au-plus {
   display: grid; place-items: center; color: #6cb6ff; font-size: 36px;
   border: 1px dashed #3d6ea8; cursor: pointer;
 }
-.wix-view-media {
+.au-view-media {
   width: 100%; text-align: left; background: none; border: 0;
   color: #c5cad3; padding: 12px 0; font-size: 15px; border-bottom: 1px solid #2a3140;
 }
-.wix-price { display: flex; align-items: center; gap: 8px; }
-.wix-price i { font-style: normal; color: #9aa4b2; }
-.wix-opt { padding: 12px 0; border-bottom: 1px solid #2a3140; }
-.wix-opt-top strong { display: block; color: #fff; }
-.wix-opt-top span { font-size: 12px; color: #8b93a1; }
-.wix-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
-.wix-chips em {
+.au-price { display: flex; align-items: center; gap: 8px; }
+.au-price i { font-style: normal; color: #9aa4b2; }
+.au-opt { padding: 12px 0; border-bottom: 1px solid #2a3140; }
+.au-opt-top strong { display: block; color: #fff; }
+.au-opt-top span { font-size: 12px; color: #8b93a1; }
+.au-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.au-chips em {
   font-style: normal; border: 1px solid #5b6578; color: #e8eaed;
   padding: 6px 12px; border-radius: 999px; font-size: 13px;
 }
-.wix-link-btn { background: none; border: 0; color: #6cb6ff; padding: 12px 0; font-size: 15px; }
-.wix-var {
+.au-link-btn { background: none; border: 0; color: #6cb6ff; padding: 12px 0; font-size: 15px; }
+.au-var {
   display: flex; justify-content: space-between; align-items: center;
   padding: 14px 0; border-bottom: 1px solid #2a3140;
 }
-.wix-var strong { display: block; color: #fff; }
-.wix-var span { font-size: 13px; color: #8b93a1; }
-.wix-var span s { margin-right: 6px; }
-.wix-var em { font-style: normal; color: #c5cad3; font-size: 13px; }
-.wix-save { width: 100%; margin-top: 18px; }
+.au-var strong { display: block; color: #fff; }
+.au-var span { font-size: 13px; color: #8b93a1; }
+.au-var span s { margin-right: 6px; }
+.au-var em { font-style: normal; color: #c5cad3; font-size: 13px; }
+.au-save { width: 100%; margin-top: 18px; }
 .pdp-thumbs { display: flex; gap: 8px; margin-top: 10px; overflow-x: auto; }
 .pdp-thumb { flex: 0 0 56px; height: 56px; padding: 0; border: 1px solid #e6ddd2; background: #fff; }
 .pdp-thumb img { width: 100%; height: 100%; object-fit: cover; }
@@ -4093,24 +4093,24 @@ body[data-page="admin"] input, body[data-page="admin"] select, body[data-page="a
   border: 1px solid #e6ddd2 !important;
 }
 body[data-page="admin"] label { color: #5a524a; }
-.wix-row { background: #fff !important; border-bottom: 1px solid #eee6dc !important; }
-.wix-row-info strong { color: #2c2622; }
-.wix-ngn { color: #2c2622; }
-.wix-cfa { color: #3d6ea8; }
-.wix-cats-link { background: #fff !important; color: #2c2622 !important; border-color: #e6ddd2 !important; }
-.wix-edit { color: #322c28; }
-.wix-opt-top strong, .wix-var strong { color: #2c2622; }
-.wix-chips em { color: #2c2622; border-color: #c4b09a; }
-.wix-del-prod {
+.au-row { background: #fff !important; border-bottom: 1px solid #eee6dc !important; }
+.au-row-info strong { color: #2c2622; }
+.au-ngn { color: #2c2622; }
+.au-cfa { color: #3d6ea8; }
+.au-cats-link { background: #fff !important; color: #2c2622 !important; border-color: #e6ddd2 !important; }
+.au-edit { color: #322c28; }
+.au-opt-top strong, .au-var strong { color: #2c2622; }
+.au-chips em { color: #2c2622; border-color: #c4b09a; }
+.au-del-prod {
   display: block; width: 100%; margin-top: 10px; padding: 12px;
   background: none; border: 1px solid #9a4a32; color: #9a4a32; border-radius: 10px;
 }
-.wix-tile { background: #f6f1ea; border-color: #e6ddd2; }
-.wix-plus { color: #8a6f52; border-color: #c4b09a; }
+.au-tile { background: #f6f1ea; border-color: #e6ddd2; }
+.au-plus { color: #8a6f52; border-color: #c4b09a; }
 
 /* Moderate product photos, smaller OOS */
 .card-media,
-.wix-shop .card-media,
+.au-shop .card-media,
 body[data-page="home"] .just-in-grid .card-media {
   aspect-ratio: 1 / 1 !important;
   max-height: 280px !important;
@@ -4118,12 +4118,12 @@ body[data-page="home"] .just-in-grid .card-media {
   background: #f6efe7 !important;
 }
 .card-media img,
-.wix-shop .card-media img {
+.au-shop .card-media img {
   object-fit: contain !important;
   padding: 6px !important;
 }
 @media (min-width: 700px) {
-  .card-media, .wix-shop .card-media { max-height: 320px !important; min-height: 220px !important; }
+  .card-media, .au-shop .card-media { max-height: 320px !important; min-height: 220px !important; }
 }
 .pill.oos,
 .card.is-oos .pill.oos {
@@ -4159,7 +4159,7 @@ body[data-page="home"] .just-in-grid .card-media img {
 
 
 /* Clean homepage: header, dock, products visible */
-html, body, body[data-page="home"], body.wix-shop {
+html, body, body[data-page="home"], body.au-shop {
   background: #e7e2dc !important;
 }
 #site-header, .header {
@@ -4273,7 +4273,7 @@ body[data-page="home"] .cat-slide {
 }
 
 /* Shop like the screenshot */
-body.wix-shop { background: #e3dcd3 !important; }
+body.au-shop { background: #e3dcd3 !important; }
 .shop-banner img {
   display: block !important;
   width: 100% !important;
@@ -4285,7 +4285,7 @@ body.wix-shop { background: #e3dcd3 !important; }
   border-color: #c4a8e6 !important;
   color: #fff !important;
 }
-body.wix-shop .product-grid {
+body.au-shop .product-grid {
   display: grid !important;
   grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
 }
@@ -4355,7 +4355,7 @@ body[data-page="admin"] .wa-float { display: none !important; }
    58px wide at right:14px, so it owns the right ~72px; give the last footer
    column a matching right clearance so its buttons never sit underneath it. */
 @media (max-width: 640px) {
-  .wix-footer .foot-grid > div:last-child { padding-right: 74px; }
+  .au-footer .foot-grid > div:last-child { padding-right: 74px; }
   .wa-channel { max-width: none; }
 }
 
@@ -4501,7 +4501,7 @@ body[data-page="admin"] .wa-float { display: none !important; }
   width: 100%;
 }
 .admin-rev { position: relative; }
-.admin-rev .wix-opt-del { margin-top: 6px; }
+.admin-rev .au-opt-del { margin-top: 6px; }
 
 /* Product page must always show the item */
 .wrap.pdp,
@@ -4728,7 +4728,7 @@ body[data-page="admin"] .conv-bar { display: none !important; }
 }
 
 /* Footer wave */
-.footer.wix-footer { padding-bottom: 0 !important; }
+.footer.au-footer { padding-bottom: 0 !important; }
 .foot-copy { margin-bottom: 8px; }
 .foot-wave {
   display: block !important;
@@ -4740,8 +4740,8 @@ body[data-page="admin"] .conv-bar { display: none !important; }
 }
 
 /* Admin category cards */
-.wix-cats-admin { padding-bottom: 40px; }
-.wix-cat-card {
+.au-cats-admin { padding-bottom: 40px; }
+.au-cat-card {
   display: grid;
   grid-template-columns: 88px 1fr;
   gap: 14px;
@@ -4751,13 +4751,13 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   padding: 12px;
   margin-bottom: 12px;
 }
-.wix-cat-pic img { width: 88px; height: 88px; object-fit: cover; border-radius: 10px; background: #f3eee8; }
-.wix-cat-up { display: block; font-size: 11px; margin-top: 6px; color: #8a6f52; }
-.wix-cat-fields label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #7a7066; }
-.wix-cat-fields input[type=text], .wix-cat-fields input:not([type=checkbox]):not([type=file]) {
+.au-cat-pic img { width: 88px; height: 88px; object-fit: cover; border-radius: 10px; background: #f3eee8; }
+.au-cat-up { display: block; font-size: 11px; margin-top: 6px; color: #8a6f52; }
+.au-cat-fields label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #7a7066; }
+.au-cat-fields input[type=text], .au-cat-fields input:not([type=checkbox]):not([type=file]) {
   width: 100%; padding: 8px 10px; border: 1px solid #e6ddd2; border-radius: 8px; margin: 4px 0 8px;
 }
-.wix-cat-new { background: #fff; border: 1px dashed #c4b09a; border-radius: 14px; padding: 16px; margin: 18px 0; }
+.au-cat-new { background: #fff; border: 1px dashed #c4b09a; border-radius: 14px; padding: 16px; margin: 18px 0; }
 
 
 /* Naira first, converted CFA under it */
@@ -4769,7 +4769,7 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   color: #7a7066 !important;
   margin-top: 2px;
 }
-.wix-ngn s { color: #c0392b; margin-right: 6px; }
+.au-ngn s { color: #c0392b; margin-right: 6px; }
 
 /* =====================================================================
    Insights dashboard, sync indicator, account panel  (v89)
@@ -4831,8 +4831,8 @@ body[data-page="admin"] .conv-bar { display: none !important; }
 .order-card .status-pill { display: inline-block; }
 
 /* product photo placeholders ------------------------------------------- */
-.wix-tile.is-pending { opacity: .55; }
-.wix-tile.is-pending::after {
+.au-tile.is-pending { opacity: .55; }
+.au-tile.is-pending::after {
   content: "uploading"; position: absolute; left: 0; right: 0; bottom: 4px;
   font-size: 8px; letter-spacing: .04em; text-align: center; color: #fff;
 }
@@ -4846,7 +4846,7 @@ body[data-page="admin"] .conv-bar { display: none !important; }
 /* Fingers and mouse pointers both need room: no control under ~34px tall. */
 .rev-pick .star { min-height: 34px; min-width: 30px; }
 .currency-switch button { min-height: 34px; padding: 6px 12px; }
-.add-mini, .wish-btn, .wix-stock-tog, .wix-del-row { min-height: 36px; }
+.add-mini, .wish-btn, .au-stock-tog, .au-del-row { min-height: 36px; }
 .foot-wa, .btn { min-height: 42px; }
 @media (max-width: 640px) {
   .sync-pill { right: 12px; bottom: 100px; font-size: 12px; padding: 8px 13px; }
@@ -5051,7 +5051,7 @@ body[data-page="admin"] .conv-bar { display: none !important; }
 }
 
 /* Admin product quick-edit */
-.wix-quick {
+.au-quick {
   display: grid;
   grid-template-columns: auto 80px auto 52px;
   gap: 6px 8px;
@@ -5060,9 +5060,9 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   min-width: 220px;
   font-size: 12px;
 }
-.wix-quick label { color: var(--muted); font-size: 11px; min-width: auto; }
-.wix-quick input[type="text"], .wix-quick input:not([type]),
-.wix-quick input[type="number"], .wix-quick input[type="tel"] {
+.au-quick label { color: var(--muted); font-size: 11px; min-width: auto; }
+.au-quick input[type="text"], .au-quick input:not([type]),
+.au-quick input[type="number"], .au-quick input[type="tel"] {
   min-width: 0;
   width: 100%;
   padding: 6px 7px;
@@ -5071,7 +5071,7 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   background: #fff;
   color: var(--ink);
 }
-.wix-quick .wix-tog span { white-space: nowrap; }
+.au-quick .au-tog span { white-space: nowrap; }
 .ck-ship-notices p {
   margin: 0 0 6px;
   padding: 9px 12px;
@@ -5087,14 +5087,14 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   font-size: 13px;
 }
 @media (max-width: 620px) {
-  .wix-quick { grid-template-columns: auto 64px auto 46px; min-width: 0; }
+  .au-quick { grid-template-columns: auto 64px auto 46px; min-width: 0; }
 }
 
 /* ------------------------------------------------------------------
  * Footer redesign — smooth layered waves, full-width action buttons
  * (lavender Contact Us, green WhatsApp channel, black TikTok pill).
  * ---------------------------------------------------------------- */
-.footer.wix-footer { padding-bottom: 0 !important; overflow: visible !important; }
+.footer.au-footer { padding-bottom: 0 !important; overflow: visible !important; }
 #site-footer { position: relative; z-index: 3 !important; }
 body[data-page="home"] #site-footer { position: relative; z-index: 3 !important; }
 .foot-wavez {
@@ -5279,7 +5279,7 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 .adx-filters input[type="search"] { flex: 1 1 auto; min-width: 0; }
 .adx-filters select { flex: 0 1 190px; }
 .adx-count { flex-basis: 100%; font-size: 13px; color: #8a8177; }
-.adx-count .wix-cats-link { border: 0 !important; background: transparent !important; color: #5c3d8f !important; text-decoration: underline; cursor: pointer; padding: 0; font-size: 13px; }
+.adx-count .au-cats-link { border: 0 !important; background: transparent !important; color: #5c3d8f !important; text-decoration: underline; cursor: pointer; padding: 0; font-size: 13px; }
 .adx-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -5360,7 +5360,7 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 .adx-var-state.out { color: #a02c20; }
 
 /* drag & drop photo target */
-#media-box.is-drop .wix-media-row { outline: 2px dashed #7a5c9e; outline-offset: 4px; border-radius: 10px; background: #f5f1fa; }
+#media-box.is-drop .au-media-row { outline: 2px dashed #7a5c9e; outline-offset: 4px; border-radius: 10px; background: #f5f1fa; }
 
 /* ---------- dashboard ---------- */
 .adx-periods { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
@@ -5576,15 +5576,15 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 }
 .media-doc-chip span { font-size: 10px; font-weight: 400; color: var(--taupe); letter-spacing: 0; }
 .media-doc-chip:hover { border-color: var(--gold-deep); color: var(--gold-deep); }
-.wix-tile .media-doc-chip, .card .media-doc-chip, .pdp-thumb .media-doc-chip,
+.au-tile .media-doc-chip, .card .media-doc-chip, .pdp-thumb .media-doc-chip,
 .pdp-img .media-doc-chip { width: 100%; height: 100%; min-height: 100%; border: 0; border-radius: 8px; }
-.wix-cat-pic .cat-doc-chip { min-width: 88px; min-height: 88px; }
+.au-cat-pic .cat-doc-chip { min-width: 88px; min-height: 88px; }
 
 /* Video tiles in the admin media strip + storefront gallery/cards. */
-.wix-tile video, .pdp-img video, .pdp-thumb video, .card-media video {
+.au-tile video, .pdp-img video, .pdp-thumb video, .card-media video {
   width: 100%; height: 100%; object-fit: cover; border-radius: inherit; background: #f3eee8;
 }
-.wix-tile.wix-tile-video, .pdp-gallery { min-width: 0; }
+.au-tile.au-tile-video, .pdp-gallery { min-width: 0; }
 /* Home card slideshow: videos slide in exactly like photos (opacity). */
 .card-media[data-card-slides] video[data-slide] {
   position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important;
@@ -5943,7 +5943,7 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 /* 3. product grid on a phone: 2 columns, 10px row / 8px column gap */
 @media (max-width: 640px) {
   .product-grid,
-  .wix-shop .product-grid,
+  .au-shop .product-grid,
   [data-shop-grid],
   .just-in-grid,
   body[data-page="home"] .just-in-grid,
@@ -5953,7 +5953,7 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
     gap: 10px 8px !important;
   }
   .card-media,
-  .wix-shop .card-media,
+  .au-shop .card-media,
   body[data-page="home"] .just-in-grid .card-media {
     border-radius: 14px !important;
   }
@@ -6012,12 +6012,12 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 /* 7. corners line up: one radius for every framed block on a phone */
 @media (max-width: 640px) {
   .card-media,
-  .wix-shop .card-media,
+  .au-shop .card-media,
   .home-promo,
   .shop-banner,
   .proof-frame,
   .cat-tile,
-  .wix-cat-card {
+  .au-cat-card {
     border-radius: 14px !important;
   }
 }

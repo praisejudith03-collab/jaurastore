@@ -119,9 +119,12 @@ const JA = (() => {
     phoneNg: "+234 916 167 0236",
     email: "jaurastore@gmail.com",
     tiktok: "https://www.tiktok.com/@j_aura_store",
-    bank_name: "UBA",
-    account_number: "23474678931",
-    account_name: "OKORAFOR PRAISE",
+    // Payment details are never defaulted here: they come from GET /api/site
+    // (Supabase site_settings). A hardcoded fallback would ship a live account
+    // number in the bundle and would still show if the row were misconfigured.
+    bank_name: "",
+    account_number: "",
+    account_name: "",
     contact_email: "jaurastore@gmail.com",
     contact_phone: "+229 01 68 95 31 01",
     hero_banner_title: "",
@@ -307,7 +310,16 @@ const JA = (() => {
   }
 
   function product(idOrSlug) {
-    return products().find((p) => p.id === idOrSlug || p.slug === idOrSlug);
+    const want = String(idOrSlug || "").trim();
+    if (!want) return undefined;
+    const list = products();
+    // Canonical id / slug first, then the legacyId alias - so an old wix-*
+    // product link (a bookmark, a shared URL, a link in a past order email)
+    // still opens the right page after a row is given a canonical jau-* id.
+    // The canonical match must win: a legacyId is never allowed to shadow a
+    // real primary key.
+    return list.find((p) => p.id === want || p.slug === want)
+      || list.find((p) => String(p.legacyId || "").trim() === want);
   }
 
   function searchProducts(q, cat) {
@@ -1748,27 +1760,27 @@ const JA = (() => {
         ${convBannerHTML()}
       </div>
     </div>
-    <nav class="mobile-nav wix-menu" data-mobile>
-      <div class="wix-menu-top">
-        <form class="wix-search" data-menu-search>
-          <svg class="wix-search-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></svg>
+    <nav class="mobile-nav au-menu" data-mobile>
+      <div class="au-menu-top">
+        <form class="au-search" data-menu-search>
+          <svg class="au-search-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></svg>
           <input type="search" name="q" placeholder="${tx("search.placeholder")}" autocomplete="off" data-menu-q />
         </form>
-        <button type="button" class="wix-close" data-close-menu aria-label="${tx("nav.close")}">×</button>
+        <button type="button" class="au-close" data-close-menu aria-label="${tx("nav.close")}">×</button>
       </div>
-      <div class="wix-menu-live" data-menu-live hidden></div>
-      <div class="wix-menu-scroll">
-        <a class="wix-link ${on("home")}" href="index.html">${tx("nav.home")}</a>
-        <a class="wix-link ${on("shop")}" href="shop.html">${tx("nav.allProducts")}</a>
-        <a class="wix-link ${on("categories")}" href="categories.html">${tx("nav.categories")}</a>
-        <a class="wix-link ${on("faq")}" href="faq.html">${tx("nav.faq")}</a>
-        <a class="wix-link ${on("vision")}" href="about.html">${tx("nav.vision")}</a>
-        <a class="wix-link ${on("delivery")}" href="delivery.html">${tx("nav.delivery")}</a>
-        <a class="wix-link ${on("contact")}" href="contact.html">${tx("nav.care")}</a>
-        <a class="wix-link ${on("checkout")}" href="checkout.html">${tx("nav.checkout")}</a>
-        <a class="wix-link ${on("account")}" href="account.html">${tx("nav.account")}</a>
-        <a class="wix-link ${on("wishlist")}" href="wishlist.html">${tx("nav.wishlist")}</a>
-        <div class="wix-menu-tools">
+      <div class="au-menu-live" data-menu-live hidden></div>
+      <div class="au-menu-scroll">
+        <a class="au-link ${on("home")}" href="index.html">${tx("nav.home")}</a>
+        <a class="au-link ${on("shop")}" href="shop.html">${tx("nav.allProducts")}</a>
+        <a class="au-link ${on("categories")}" href="categories.html">${tx("nav.categories")}</a>
+        <a class="au-link ${on("faq")}" href="faq.html">${tx("nav.faq")}</a>
+        <a class="au-link ${on("vision")}" href="about.html">${tx("nav.vision")}</a>
+        <a class="au-link ${on("delivery")}" href="delivery.html">${tx("nav.delivery")}</a>
+        <a class="au-link ${on("contact")}" href="contact.html">${tx("nav.care")}</a>
+        <a class="au-link ${on("checkout")}" href="checkout.html">${tx("nav.checkout")}</a>
+        <a class="au-link ${on("account")}" href="account.html">${tx("nav.account")}</a>
+        <a class="au-link ${on("wishlist")}" href="wishlist.html">${tx("nav.wishlist")}</a>
+        <div class="au-menu-tools">
           <div class="lang-switch">
             <button type="button" data-lang="en">EN</button>
             <button type="button" data-lang="fr">FR</button>
@@ -1855,7 +1867,7 @@ const JA = (() => {
 
   function footerHTML() {
     const s = settings();
-    return `<footer class="footer wix-footer">
+    return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
           <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=128" alt="Jaura" /></a>
@@ -2335,13 +2347,13 @@ const JA = (() => {
       const hits = searchProducts(q).slice(0, 8);
       menuLive.hidden = false;
       menuLive.innerHTML = (hits.length
-        ? hits.map((p) => `<a class="wix-hit" href="product.html?id=${encodeURIComponent(p.id)}">
+        ? hits.map((p) => `<a class="au-hit" href="product.html?id=${encodeURIComponent(p.id)}">
             <img src="${asset(p.image)}" alt="" onerror="fallbackImg(event)" />
             <span>${escape(displayName(p))}</span>
             <em>${money(priceOf(p))}</em>
           </a>`).join("")
-        : `<p class="wix-hit-empty">${tx("shop.empty")}</p>`) +
-        `<a class="wix-hit-more" href="shop.html?q=${encodeURIComponent(q)}">${tx("search.seeAll", { n: searchProducts(q).length })}</a>`;
+        : `<p class="au-hit-empty">${tx("shop.empty")}</p>`) +
+        `<a class="au-hit-more" href="shop.html?q=${encodeURIComponent(q)}">${tx("search.seeAll", { n: searchProducts(q).length })}</a>`;
     };
     menuQ?.addEventListener("input", paintMenuLive);
     overlay?.addEventListener("click", (e) => {

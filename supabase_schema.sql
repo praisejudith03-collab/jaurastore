@@ -26,6 +26,7 @@
 -- every write would still fail with PGRST204.
 create table if not exists products (
   id               text primary key,
+  "legacyId"       text,
   sku              text,
   slug             text,
   name             text not null,
@@ -219,6 +220,25 @@ alter table site_settings add column if not exists banner_to text not null defau
 alter table site_settings add column if not exists conv_banner text not null default '';
 alter table site_settings add column if not exists conv_bold text not null default '';
 
+-- Payment details shown at checkout. These were hardcoded in checkout.html /
+-- js/app.js (bank "UBA", account 23474678931, the MoMo Benin and Moov Togo
+-- numbers) which meant changing an account number needed a redeploy and the
+-- values were visible in the shipped bundle. They are now columns on the
+-- id=1 site_settings row, served by GET /api/site and edited from the Admin
+-- Portal, so the storefront never carries a payment fallback.
+alter table site_settings add column if not exists cfa_payment_provider     text not null default '';
+alter table site_settings add column if not exists cfa_payment_name         text not null default '';
+alter table site_settings add column if not exists cfa_payment_account      text not null default '';
+alter table site_settings add column if not exists cfa_payment_instructions text not null default '';
+alter table site_settings add column if not exists togo_payment_provider     text not null default '';
+alter table site_settings add column if not exists togo_payment_name         text not null default '';
+alter table site_settings add column if not exists togo_payment_account      text not null default '';
+alter table site_settings add column if not exists togo_payment_instructions text not null default '';
+alter table site_settings add column if not exists naira_payment_bank         text not null default '';
+alter table site_settings add column if not exists naira_payment_name         text not null default '';
+alter table site_settings add column if not exists naira_payment_account      text not null default '';
+alter table site_settings add column if not exists naira_payment_instructions text not null default '';
+
 create table if not exists categories (
   id text primary key,
   name text not null,
@@ -227,6 +247,16 @@ create table if not exists categories (
   hidden boolean not null default false,
   updated_at timestamptz not null default now()
 );
+
+-- Legacy id alias. A product's `id` is its primary key and is NEVER renamed
+-- while orders, reviews, carts or analytics still reference it. When a row is
+-- eventually given a canonical jau-* id, the previous wix-* id is copied here
+-- so old product links, order lines, reviews and cart entries keep resolving
+-- through catalog.product_index() / supabase_store.product_by_id(). It stays
+-- NULL for rows that were created with a canonical id and have no history.
+alter table products add column if not exists "legacyId" text;
+create unique index if not exists products_legacy_id_key
+  on products ("legacyId") where "legacyId" is not null;
 
 alter table products add column if not exists image_url text;
 alter table products add column if not exists stock_quantity integer not null default 0;

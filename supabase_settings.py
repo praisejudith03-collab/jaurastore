@@ -13,6 +13,14 @@ DEFAULT_SETTINGS = {
     "hero_video_url": "", "hero_poster_url": "", "hero_doc_url": "",
     "shop_banner_url": "", "shipping_note": "", "banner_from": "",
     "banner_to": "", "conv_banner": "", "conv_bold": "",
+    # Checkout payment details. Served by GET /api/site and edited from the
+    # Admin Portal; the storefront must not carry a hardcoded fallback.
+    "cfa_payment_provider": "", "cfa_payment_name": "",
+    "cfa_payment_account": "", "cfa_payment_instructions": "",
+    "togo_payment_provider": "", "togo_payment_name": "",
+    "togo_payment_account": "", "togo_payment_instructions": "",
+    "naira_payment_bank": "", "naira_payment_name": "",
+    "naira_payment_account": "", "naira_payment_instructions": "",
 }
 
 def get_site_settings():

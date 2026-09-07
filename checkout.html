@@ -128,17 +128,19 @@
 
           <div class="bank-sheet" data-bank-ngn>
             <h4 data-i18n="ck.ourBank">Our bank details</h4>
-            <p class="bank-name-line" data-ngn-name>OKORAFOR PRAISE</p>
-            <div class="bank-row"><span data-i18n="ck.bank">Bank</span><strong data-ngn-bank>UBA</strong></div>
-            <div class="bank-row"><span data-i18n="ck.accNo">Account number</span><strong data-ngn-acc>23474678931</strong></div>
+            <p class="bank-name-line" data-ngn-name></p>
+            <div class="bank-row" data-ngn-row-bank hidden><span data-i18n="ck.bank">Bank</span><strong data-ngn-bank></strong></div>
+            <div class="bank-row" data-ngn-row-acc hidden><span data-i18n="ck.accNo">Account number</span><strong data-ngn-acc></strong></div>
+            <p class="bank-sub" data-ngn-notice hidden></p>
           </div>
           <div class="bank-sheet" data-bank-cfa hidden>
             <h4 data-i18n="ck.ourBank">Our bank details</h4>
             <p class="ck-pay-country-note" data-i18n="ck.payCountryNote">Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below. Minimum order is 5,000 CFA (₦12,000).</p>
-            <p class="bank-name-line" data-cfa-name>OKORAFOR GIFT</p>
-            <div class="bank-row"><span>MoMo Benin</span><strong data-cfa-acc>01 52 01 99 30</strong></div>
-            <div class="bank-row"><span>Moov Togo</span><strong>+229 01 68 95 31 10</strong></div>
-            <p class="bank-sub">OKORAFOR GOODNESS (Togo)</p>
+            <p class="bank-name-line" data-cfa-name></p>
+            <div class="bank-row" data-cfa-row hidden><span data-cfa-provider></span><strong data-cfa-acc></strong></div>
+            <div class="bank-row" data-togo-row hidden><span data-togo-provider></span><strong data-togo-acc></strong></div>
+            <p class="bank-sub" data-togo-name></p>
+            <p class="bank-sub" data-cfa-notice hidden></p>
           </div>
 
           <p class="ck-ship-wa" data-i18n="ck.fareNote">Your transport fare will be discussed with you on WhatsApp after you place the order.</p>

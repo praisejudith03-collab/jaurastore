@@ -14,7 +14,7 @@ Two persistence backends are supported:
   mirrored there. The local override file is still used as a read-through cache
   so a momentarily unavailable Supabase never empties the shop.
 """
-import os, json, secrets, datetime, contextlib
+import os, sys, json, secrets, datetime, contextlib
 from config import Config
 
 try:
@@ -251,6 +251,18 @@ def _sync_repo_async():
         return
     if getattr(Config, "ENV", "development") == "testing":
         return  # never touch the git repo from the test suite
+    # ENV alone is NOT a sufficient guard. A test may legitimately flip
+    # Config.ENV to "production" to exercise the production code path -
+    # test_admin_product_delete_ok_when_supabase_confirms does exactly that -
+    # and this function would then spawn a daemon thread running a real
+    # `repo_sync.regenerate(commit=True, push=True)` against the live
+    # checkout. That rewrote the tracked data/catalog.json and
+    # js/products-data.js mid-suite, and the CI harness then committed the
+    # test artefacts. Detect the test runner itself instead: pytest sets
+    # PYTEST_CURRENT_TEST and stays in sys.modules for the whole process,
+    # while no production process ever does either.
+    if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
+        return
     # Import lazily so repo_sync (which imports catalog) is only loaded here,
     # and to avoid a circular import at module load time.
     try:
@@ -469,9 +481,27 @@ def normalize(product):
         "colors": list(product.get("colors") or []),
         "options": list(product.get("options") or []),
         "optionStock": _clean_option_stock(product.get("optionStock")),
+        # The id this row had before it was given a canonical one, so old
+        # product links / order lines / reviews keep resolving. See
+        # product_index().
+        "legacyId": _clean_legacy_id(product.get("legacyId"), pid),
         "updated_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
     return out
+
+
+def _clean_legacy_id(raw, pid):
+    """A trimmed legacyId alias, or None when there is none.
+
+    Must be None (not "") when absent: the column carries a partial UNIQUE
+    index, so a shared empty string would collide across every product that
+    has no alias. It also must never equal the product's own id.
+    """
+    import security as sec
+    val = sec.clean(raw, 64)
+    if not val or val == pid:
+        return None
+    return val
 
 
 def _clean_option_stock(raw):
@@ -579,6 +609,50 @@ def _fill_missing_fields(rows, local_rows):
             r = {**r, **{k: v for k, v in src.items() if k not in r}}
         out.append(r)
     return out
+
+
+def product_index(products=None, include_hidden=True):
+    """Map every resolvable id -> the product row, canonical id first.
+
+    A product can be addressed by two ids:
+
+      * its `id` (the primary key; never renamed while orders reference it), and
+      * its `legacyId` alias, which holds the id the row had before it was
+        given a canonical jau-* id.
+
+    Old product links (`product.html?id=wix-001`), saved carts, order lines,
+    reviews and analytics events all carry whichever id was live when they
+    were written, so both must resolve to the same row.
+
+    The canonical `id` always wins: if one product's legacyId collides with
+    another product's id, the real owner keeps the key and the collision is
+    not silently aliased. Rows already keyed are never overwritten.
+    """
+    rows = merged(include_hidden=include_hidden) if products is None else products
+    index = {}
+    for p in rows or []:
+        pid = str((p or {}).get("id") or "").strip()
+        if pid and pid not in index:
+            index[pid] = p
+    for p in rows or []:
+        legacy = str((p or {}).get("legacyId") or "").strip()
+        if legacy and legacy not in index:
+            index[legacy] = p
+    return index
+
+
+def resolve_product_id(wanted, products=None, include_hidden=True):
+    """The canonical id for a requested id, or '' when nothing matches.
+
+    Lets callers normalise an inbound id (a legacy wix-* link, a cart line
+    saved before a rename) onto the row's primary key, so anything written
+    from now on - orders, reviews, analytics - stores one consistent id.
+    """
+    wanted = str(wanted or "").strip()
+    if not wanted:
+        return ""
+    prod = product_index(products, include_hidden=include_hidden).get(wanted)
+    return str((prod or {}).get("id") or "").strip()
 
 
 def merged(include_hidden=False):
@@ -799,6 +873,16 @@ def upsert(product, actor=None):
         live = merged(include_hidden=True)
     except Exception:
         live = []                     # never block a save on a Supabase read
+    # An ordinary admin edit (a price change, a photo swap) does not resend
+    # legacyId. Dropping it would silently break every old wix-* link, order
+    # line and review pointing at this row, so carry the stored alias forward.
+    if not clean.get("legacyId"):
+        for p in live:
+            if str((p or {}).get("id") or "") == clean["id"]:
+                keep = str((p or {}).get("legacyId") or "").strip()
+                if keep:
+                    clean["legacyId"] = keep
+                break
     taken = {str(p.get("slug") or "").strip().lower() for p in live
              if p and str(p.get("id") or "") != clean["id"] and p.get("slug")}
     wanted = str(clean.get("slug") or "")

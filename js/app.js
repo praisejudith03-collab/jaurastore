@@ -1015,19 +1015,62 @@ function fareWaUrl(order) {
   return "https://wa.me/" + num + "?text=" + encodeURIComponent(text);
 }
 
+// Payment details come ONLY from GET /api/site, whose source of truth is the
+// Supabase site_settings row. There is deliberately no hardcoded bank, account
+// number or holder-name fallback in the bundle: an unconfigured row must show
+// "contact us", never an account number that may belong to nobody.
+//   NGN  -> naira_payment_* (older rows still carry bank_name/account_number/
+//           account_name, which are equally server-side, so they are honoured)
+//   CFA  -> cfa_payment_*    (MTN MoMo Benin)
+//   TOGO -> togo_payment_*   (Moov Money Togo)
+// Hide an account row entirely when the server has no value for it, and show
+// the "not configured" notice when a whole method is missing.
+function _togglePayRow(sel, show) {
+  const el = document.querySelector(sel);
+  if (el) el.hidden = !show;
+}
+
+function _showPayNotice(sel, configured) {
+  const el = document.querySelector(sel);
+  if (!el) return;
+  el.hidden = !!configured;
+  if (!configured) el.textContent = t("ck.payNotConfigured");
+}
+
+function payDetails(kind) {
+  const s = JA.settings() || {};
+  const g = (k) => String(s[k] || "").trim();
+  if (kind === "CFA") {
+    return { provider: g("cfa_payment_provider"), name: g("cfa_payment_name"),
+             account: g("cfa_payment_account"), instructions: g("cfa_payment_instructions") };
+  }
+  if (kind === "TOGO") {
+    return { provider: g("togo_payment_provider"), name: g("togo_payment_name"),
+             account: g("togo_payment_account"), instructions: g("togo_payment_instructions") };
+  }
+  return { provider: g("naira_payment_bank") || g("bank_name"),
+           name: g("naira_payment_name") || g("account_name"),
+           account: g("naira_payment_account") || g("account_number"),
+           instructions: g("naira_payment_instructions") };
+}
+
+// True when the server actually has something to show for this method.
+function payConfigured(d) {
+  return !!(d && (d.provider || d.name || d.account));
+}
+
 function showOrderDone(order) {
   const root = document.querySelector("[data-checkout-root]") || document.querySelector("[data-checkout]");
   if (!root) return;
   const payName = order.currency === "NGN" ? t("ck.payNgn") : t("ck.payCfa");
   const locale = (window.I18N && I18N.lang() === "fr") ? "fr-FR" : "en-GB";
-  // Bank details: the live Supabase row (canonical bank_name/account_number/
-  // account_name). Legacy free-text bankCfa/bankNgn were removed.
-  const s = JA.settings();
-  const note = [
-    String(s.bank_name || "").trim() || "UBA",
-    String(s.account_number || "").trim() || "23474678931",
-    String(s.account_name || "").trim() || "OKORAFOR PRAISE",
-  ].join(" · ");
+  // Payment details: the live Supabase row, via GET /api/site. No fallback -
+  // if nothing is configured the customer is pointed at support instead of
+  // being shown a baked-in account number.
+  const pay = payDetails(order.currency === "NGN" ? "NGN" : "CFA");
+  const note = payConfigured(pay)
+    ? [pay.provider, pay.account, pay.name].filter(Boolean).join(" · ")
+    : t("ck.payNotConfigured");
   root.innerHTML = `
     <ol class="ck-steps" style="margin-bottom:28px">
       <li><a href="cart.html">${t("cart.stepCart")}</a></li>
@@ -1151,23 +1194,36 @@ function paintCheckoutTotals(form) {
   if (discCell) discCell.textContent = disc
     ? "− " + JA.money(disc, cur) + " (" + ckPromo.percent + "%)" : "—";
   if (tot) tot.textContent = JA.money(subVal - disc, cur);
-  // Bank details come from GET /api/site -> Supabase site_settings
-  // (bank_name / account_number / account_name). The legacy bankCfa / bankNgn
-  // free-text settings were removed.
-  const s = JA.settings();
-  const bankName = String(s.bank_name || "").trim() || "UBA";
-  const bankAcc = String(s.account_number || "").trim() || "23474678931";
-  const bankHolder = String(s.account_name || "").trim() || "OKORAFOR PRAISE";
+  // Payment details come from GET /api/site -> Supabase site_settings. The
+  // storefront holds no fallback: an unconfigured method renders the
+  // "not configured" line and hides the account rows rather than inventing
+  // values.
   const ngnBox = document.querySelector("[data-bank-ngn]");
   const cfaBox = document.querySelector("[data-bank-cfa]");
   if (ngnBox) ngnBox.hidden = cur !== "NGN";
   if (cfaBox) cfaBox.hidden = cur !== "CFA";
-  const ngnName = document.querySelector("[data-ngn-name]");
-  const ngnBank = document.querySelector("[data-ngn-bank]");
-  const ngnAcc = document.querySelector("[data-ngn-acc]");
-  if (ngnName) ngnName.textContent = bankHolder;
-  if (ngnBank) ngnBank.textContent = bankName;
-  if (ngnAcc) ngnAcc.textContent = bankAcc;
+  const setText = (sel, val) => {
+    const el = document.querySelector(sel);
+    if (el) el.textContent = val;
+  };
+  const ngn = payDetails("NGN");
+  setText("[data-ngn-name]", ngn.name);
+  setText("[data-ngn-bank]", ngn.provider);
+  setText("[data-ngn-acc]", ngn.account);
+  _togglePayRow("[data-ngn-row-bank]", !!ngn.provider);
+  _togglePayRow("[data-ngn-row-acc]", !!ngn.account);
+  _showPayNotice("[data-ngn-notice]", payConfigured(ngn));
+  const cfa = payDetails("CFA");
+  const togo = payDetails("TOGO");
+  setText("[data-cfa-name]", cfa.name);
+  setText("[data-cfa-provider]", cfa.provider);
+  setText("[data-cfa-acc]", cfa.account);
+  setText("[data-togo-provider]", togo.provider);
+  setText("[data-togo-name]", togo.name);
+  setText("[data-togo-acc]", togo.account);
+  _togglePayRow("[data-cfa-row]", payConfigured(cfa));
+  _togglePayRow("[data-togo-row]", payConfigured(togo));
+  _showPayNotice("[data-cfa-notice]", payConfigured(cfa) || payConfigured(togo));
   form.querySelectorAll(".pay-card").forEach((card) => {
     card.classList.toggle("is-on", card.querySelector("input")?.checked);
   });

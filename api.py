@@ -472,17 +472,23 @@ def _option_stock_key(product, variant):
 
 
 def _order_stock_moves(payload):
-    """[{id, option, qty}, ...] for every cart line on an order."""
+    """[{id, option, qty}, ...] for every cart line on an order.
+
+    The id is normalised to the product's canonical primary key. An order line
+    stores whichever id the customer's cart held - which can be a legacyId
+    alias - and stock must be applied to the row that actually exists, so a
+    confirm decrements and a decline restores the same canonical row.
+    """
     items = (payload or {}).get("items") or []
     try:
-        products = {str(p.get("id")): p for p in catalog_mod.merged(include_hidden=True)}
+        products = catalog_mod.product_index()
     except Exception:
         products = {}
     moves = []
     for it in items:
         if not isinstance(it, dict):
             continue
-        pid = str(it.get("id") or "")
+        pid = str(it.get("id") or "").strip()
         if not pid:
             continue
         try:
@@ -492,6 +498,10 @@ def _order_stock_moves(payload):
         if qty <= 0:
             continue
         product = products.get(pid)
+        # An alias resolves to the canonical id; an id that is not in the
+        # catalogue at all (a deleted product) is left as written so the move
+        # is still recorded rather than silently dropped.
+        pid = str((product or {}).get("id") or "").strip() or pid
         option = _option_stock_key(product, it.get("color") or it.get("variant") or "") if product else None
         moves.append({"id": pid, "option": option, "qty": qty})
     return moves
@@ -600,7 +610,9 @@ def _checkout_items(clean_items, currency):
         live = catalog_mod.merged(include_hidden=True)
     except Exception:
         live = []
-    products_map = {str((p or {}).get("id") or ""): p for p in live if p}
+    # Keyed by canonical id AND legacyId, so a cart saved against an old
+    # wix-* id still prices and stock-checks against the right row.
+    products_map = catalog_mod.product_index(live)
 
     aggregated = {}
     for it in clean_items:
@@ -1861,7 +1873,15 @@ def admin_upload_hero():
 SITE_KEYS = ("bank_name", "account_number", "account_name",
              "referral_commission_percentage", "hero_banner_title",
              "hero_banner_subtitle", "contact_email", "contact_phone",
-             "site_logo_url")
+             "site_logo_url",
+             # Checkout payment details: served from the Supabase row so the
+             # storefront carries no hardcoded account number.
+             "cfa_payment_provider", "cfa_payment_name",
+             "cfa_payment_account", "cfa_payment_instructions",
+             "togo_payment_provider", "togo_payment_name",
+             "togo_payment_account", "togo_payment_instructions",
+             "naira_payment_bank", "naira_payment_name",
+             "naira_payment_account", "naira_payment_instructions")
 
 def _load_site():
     if Config.ENV == "testing":

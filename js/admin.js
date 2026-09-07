@@ -85,7 +85,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
           <input type="password" name="password" required autocomplete="current-password" placeholder="Your admin password" />
           <button class="btn adx-login-btn" id="login-btn" data-no-i18n>Sign in</button>
         </form>
-        <button type="button" class="wix-link-btn" id="forgot-btn" style="margin-top:16px">Forgot password? Reset it by email</button>
+        <button type="button" class="au-link-btn" id="forgot-btn" style="margin-top:16px">Forgot password? Reset it by email</button>
         <div id="otp-slot"></div>
       </div>
     </div>`;
@@ -186,7 +186,7 @@ function mediaTileHTML(src, i, poster) {
   let body;
   if (kind === "video" && !pending) {
     const pos = poster ? `poster="${JA.asset(poster)}"` : "";
-    body = `<video class="wix-tile-video" src="${url}" ${pos} muted loop playsinline preload="metadata"></video>`;
+    body = `<video class="au-tile-video" src="${url}" ${pos} muted loop playsinline preload="metadata"></video>`;
   } else if (kind === "doc" && !pending) {
     const label = /\.docx?$/i.test(String(imgSrc(src) || "")) ? "DOC" : "PDF";
     body = `<a class="media-doc-chip" href="${url}" target="_blank" rel="noopener">${label}<span>View / Download</span></a>`;
@@ -194,10 +194,10 @@ function mediaTileHTML(src, i, poster) {
     body = `<img src="${url}" alt="" />`;
   }
   return `
-    <div class="wix-tile${main}${pendingCls}" data-img-i="${i}">
+    <div class="au-tile${main}${pendingCls}" data-img-i="${i}">
       ${body}
       ${i === 0 ? `<span>Main</span>` : `<span>${i + 1}</span>`}
-      <button type="button" class="wix-tile-x" data-del-img="${i}" aria-label="Remove">×</button>
+      <button type="button" class="au-tile-x" data-del-img="${i}" aria-label="Remove">×</button>
     </div>`;
 }
 let _mediaPaint = 0;
@@ -234,10 +234,10 @@ function mediaStripHTML(imgs) {
   const firstImg = (imgs || []).find((s) => mediaKind(s) === "image");
   const poster = firstImg ? imgSrc(firstImg) : "";
   const tiles = (imgs || []).map((src, i) => mediaTileHTML(src, i, poster)).join("");
-  const plus = (imgs || []).length < 20 ? `<label class="wix-tile wix-plus">+<input type="file" id="more-media" accept="image/*,video/*" multiple hidden /></label>` : "";
-  return `<div class="wix-media-row">${tiles}${plus}</div>
+  const plus = (imgs || []).length < 20 ? `<label class="au-tile au-plus">+<input type="file" id="more-media" accept="image/*,video/*" multiple hidden /></label>` : "";
+  return `<div class="au-media-row">${tiles}${plus}</div>
     <p class="admin-note">Drag & drop, or tap + to pick several at once. Photos up to 6 MB, videos up to 40 MB. Your photos & videos stay as they are — up to 20 items.</p>
-    <button type="button" class="wix-view-media" id="view-media">Photos: ${(imgs || []).length} of 20 — tap + to add, × to remove</button>`;
+    <button type="button" class="au-view-media" id="view-media">Photos: ${(imgs || []).length} of 20 — tap + to add, × to remove</button>`;
 }
 function editorOptions(p) {
   if (p && p.options && p.options.length) return p.options;
@@ -247,12 +247,12 @@ function editorOptions(p) {
 function optionRowHTML(o, i) {
   const vals = (o && o.values) || [];
   return `
-    <div class="wix-opt" data-opt-row>
-      <div class="wix-opt-top">
+    <div class="au-opt" data-opt-row>
+      <div class="au-opt-top">
         <strong>${JA.escape((o && o.title) || "New option")}</strong>
-        <button type="button" class="wix-opt-del" data-del-opt>Remove</button>
+        <button type="button" class="au-opt-del" data-del-opt>Remove</button>
       </div>
-      <div class="wix-chips">${vals.map((v) => `<em>${JA.escape(v)}</em>`).join("")}</div>
+      <div class="au-chips">${vals.map((v) => `<em>${JA.escape(v)}</em>`).join("")}</div>
       <input name="opt-title-${i}" value="${JA.escape((o && o.title) || "")}" placeholder="Option name (Colour, Size, Type, Length, Scent…)" />
       <input name="opt-vals-${i}" value="${JA.escape(vals.join(", "))}" placeholder="Values, comma separated — e.g. Ash, Blue, Black" />
     </div>`;
@@ -277,10 +277,10 @@ function refreshOptionChips() {
   const box = document.getElementById("opt-box");
   document.querySelectorAll("[data-opt-row]").forEach((row) => {
     const title = (row.querySelector('input[name^="opt-title"]')?.value || "").trim() || "New option";
-    const strong = row.querySelector(".wix-opt-top strong");
+    const strong = row.querySelector(".au-opt-top strong");
     if (strong) strong.textContent = title;
     const vals = (row.querySelector('input[name^="opt-vals"]')?.value || "").split(",").map((s) => s.trim()).filter(Boolean);
-    const chips = row.querySelector(".wix-chips");
+    const chips = row.querySelector(".au-chips");
     if (chips) chips.innerHTML = vals.map((v) => `<em>${JA.escape(v)}</em>`).join("");
   });
   const count = document.getElementById("opt-count");
@@ -395,7 +395,7 @@ function bindMedia() {
       // It used to answer with a toast and nothing else, so the owner could
       // not see which tiles the count referred to. Scroll them into view and
       // flash the row for a moment instead.
-      const row = box.querySelector(".wix-media-row");
+      const row = box.querySelector(".au-media-row");
       if (row) {
         if (typeof row.scrollIntoView === "function") {
           row.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -461,7 +461,7 @@ function reviewsAdminHTML(id) {
     <article class="rev-note admin-rev">
       <p>${JA.starsHTML ? JA.starsHTML(r.stars) : ""} <strong>${JA.escape(r.name || "")}</strong></p>
       <p>${JA.escape(r.note || "")}</p>
-      <button type="button" class="wix-opt-del" data-del-rev="${JA.escape(r.at || "")}">Remove</button>
+      <button type="button" class="au-opt-del" data-del-rev="${JA.escape(r.at || "")}">Remove</button>
     </article>`).join("");
 }
 function bindReviewsAdmin(id) {
@@ -581,16 +581,16 @@ function productForm(p = {}) {
   window.__editImages = productImages(p);
   const opts = editorOptions(p);
   const inStock = p.id ? Number(p.stock) > 0 : true;
-  return `<form id="prod-form" class="wix-edit">
-    <button type="button" class="wix-back" id="cancel-edit">← Store Products</button>
+  return `<form id="prod-form" class="au-edit">
+    <button type="button" class="au-back" id="cancel-edit">← Store Products</button>
     <h2>Product ${preCat ? `· ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
     <div class="field"><label>Product Name</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
     <div class="field"><label>Product Name (French — shown when the site is in French)</label><input name="nameFr" maxlength="80" value="${JA.escape(p.nameFr || "")}" placeholder="Optional" /></div>
     <input type="hidden" name="id" value="${p.id || ""}" />
-    <div class="wix-2">
-      <div class="field"><label>Price ₦</label><div class="wix-price"><input name="priceNgn" type="number" min="0" required value="${p.priceNgn || ""}" /><i>₦</i></div></div>
-      <div class="field"><label>Strikethrough ₦</label><div class="wix-price"><input name="compareNgn" type="number" min="0" value="${p.compareNgn || ""}" /><i>₦</i></div></div>
+    <div class="au-2">
+      <div class="field"><label>Price ₦</label><div class="au-price"><input name="priceNgn" type="number" min="0" required value="${p.priceNgn || ""}" /><i>₦</i></div></div>
+      <div class="field"><label>Strikethrough ₦</label><div class="au-price"><input name="compareNgn" type="number" min="0" value="${p.compareNgn || ""}" /><i>₦</i></div></div>
     </div>
     <p class="admin-note" id="cfa-preview">CFA on the website is converted from Naira at 1 ₦ = 0.44 F CFA. You only enter ₦.</p>
     <div class="field"><label>Add a description</label><textarea name="description" rows="3">${JA.escape(p.description || "")}</textarea></div>
@@ -600,23 +600,23 @@ function productForm(p = {}) {
         ${["sale", "new", "bestseller"].map((b) => `<option value="${b}" ${p.badge === b ? "selected" : ""}>${b}</option>`).join("")}
       </select>
     </div>
-    <label class="wix-tog"><span>Show in online store</span>
+    <label class="au-tog"><span>Show in online store</span>
       <input type="checkbox" name="online" ${p.online === false ? "" : "checked"} />
     </label>
     <div class="field"><label>Category</label><select name="category">${cats}</select></div>
     <h3>Product options <small id="opt-count">${opts.length}/20</small></h3>
     <div id="opt-box">${optionBlockHTML(opts)}</div>
-    <div class="wix-opt-presets">
+    <div class="au-opt-presets">
       <button type="button" data-preset="Colour">+ Colour</button>
       <button type="button" data-preset="Size">+ Size</button>
       <button type="button" data-preset="Type">+ Type</button>
       <button type="button" data-preset="Length">+ Length</button>
       <button type="button" data-preset="Scent">+ Scent</button>
     </div>
-    <button type="button" class="wix-link-btn" id="add-opt">+ Add Option</button>
+    <button type="button" class="au-link-btn" id="add-opt">+ Add Option</button>
     <div id="var-box">${optionStockHTML({ ...p, options: opts })}</div>
     <h3>Inventory</h3>
-    <div class="wix-2">
+    <div class="au-2">
       <div class="field"><label>Availability</label>
         <select name="stockStatus" id="stock-status">
           <option value="in" ${inStock ? "selected" : ""}>In stock</option>
@@ -635,22 +635,22 @@ function productForm(p = {}) {
     <h3>Customer reviews</h3>
     <p class="admin-note">Stars and notes show on the product page. Quantity stays in Admin only — shoppers never see the stock number.</p>
     <div id="rev-admin">${reviewsAdminHTML(p.id)}</div>
-    <div class="wix-2">
+    <div class="au-2">
       <div class="field"><label>Customer name</label><input id="rev-name" maxlength="60" placeholder="e.g. Ada" /></div>
       <div class="field"><label>Stars</label>
         <select id="rev-stars"><option value="5">5</option><option value="4">4</option><option value="3">3</option><option value="2">2</option><option value="1">1</option></select>
       </div>
     </div>
     <div class="field"><label>Customer note</label><textarea id="rev-note" rows="2" maxlength="600" placeholder="Their comment"></textarea></div>
-    <button type="button" class="wix-link-btn" id="rev-add">+ Add review to this product</button>
-    <button class="btn wix-save" type="submit">${p.id ? "Save" : "Add a Product"}</button>
-    ${p.id ? `<button type="button" class="wix-del-prod" data-del="${JA.escape(p.id)}">Delete this product</button>` : ""}
+    <button type="button" class="au-link-btn" id="rev-add">+ Add review to this product</button>
+    <button class="btn au-save" type="submit">${p.id ? "Save" : "Add a Product"}</button>
+    ${p.id ? `<button type="button" class="au-del-prod" data-del="${JA.escape(p.id)}">Delete this product</button>` : ""}
   </form>`;
 }
 async function handleProductSubmit(e, existing) {
   e.preventDefault();
   const fd = new FormData(e.target);
-  const saveBtn = e.target.querySelector(".wix-save");
+  const saveBtn = e.target.querySelector(".au-save");
   let rawImages = (window.__editImages || []).filter(Boolean);
   if (rawImages.some((s) => typeof s === "object") && window.JA_NET) {
     JA.toast("Finishing the photo upload…");
@@ -862,7 +862,7 @@ function productsTable() {
         <input id="prod-search" type="search" placeholder="Search products…" autocomplete="off" value="${qVal}" />
         <select id="prod-cat" aria-label="Filter by category"><option value="">All categories</option>${catOpts}</select>
       </div>
-      <p class="adx-count"><span id="prod-count">${all.length}</span> of <span id="prod-count-all">${all.length}</span> products${filteredNote} · <button type="button" class="wix-cats-link" data-tab="categories">Manage categories</button></p>
+      <p class="adx-count"><span id="prod-count">${all.length}</span> of <span id="prod-count-all">${all.length}</span> products${filteredNote} · <button type="button" class="au-cats-link" data-tab="categories">Manage categories</button></p>
     </div>
     <div class="adx-grid" id="prod-grid"></div>
     <p class="empty" id="prod-none" hidden>No products match that search.</p>
@@ -1049,7 +1049,7 @@ function orderCardHTML(o) {
 }
 let orderFilter = "all";
 function ordersPanel() {
-  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}<a class="wix-link-btn" href="api/admin/orders.csv" style="margin-left:auto">Download CSV</a></div><p class="admin-note">Tap an order to see everything — customer details, items, the payment receipt and the action buttons. Every checkout is kept forever.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><div id="proofs-box"><p class="empty">Loading receipts…</p></div>`;
+  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}<a class="au-link-btn" href="api/admin/orders.csv" style="margin-left:auto">Download CSV</a></div><p class="admin-note">Tap an order to see everything — customer details, items, the payment receipt and the action buttons. Every checkout is kept forever.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><div id="proofs-box"><p class="empty">Loading receipts…</p></div>`;
 }
 const PROOF_PAGE = 20;
 let proofsShown = PROOF_PAGE;
@@ -1389,7 +1389,7 @@ function paintDesk(tab = "analytics") {
     form.dataset.submitBound = "1";
     // "Delete this product" inside the editor: clear the Tombstone FIRST so
     // a failed delete is never reported as done.
-    $(".wix-del-prod", form)?.addEventListener("click", async () => {
+    $(".au-del-prod", form)?.addEventListener("click", async () => {
       const pid = String(editingId || "");
       if (!pid || pid === "new" || !confirm("Delete this product from the website? Customers will not see it.")) return;
       const res = await JA.removeProduct(pid);
@@ -1418,6 +1418,18 @@ function paintDesk(tab = "analytics") {
   }
   $("#back-all-products")?.addEventListener("click", () => { dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1; paintDesk("products"); });
 
+// The site_settings columns that carry checkout payment details. Kept in one
+// list so the form, the POST payload and the server-confirmed repaint can
+// never drift apart.
+const PAYMENT_FIELDS = [
+  "naira_payment_bank", "naira_payment_name", "naira_payment_account",
+  "naira_payment_instructions",
+  "cfa_payment_provider", "cfa_payment_name", "cfa_payment_account",
+  "cfa_payment_instructions",
+  "togo_payment_provider", "togo_payment_name", "togo_payment_account",
+  "togo_payment_instructions",
+];
+
   $("#set-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -1441,6 +1453,9 @@ function paintDesk(tab = "analytics") {
       bannerTo: String(fd.get("bannerTo") || "").trim(),
       shippingNote: String(fd.get("shippingNote") || "").trim(),
     };
+    // Checkout payment details: same canonical columns, no client-side
+    // fallback. An empty field is saved empty and the storefront hides it.
+    PAYMENT_FIELDS.forEach((k) => { payload[k] = String(fd.get(k) || "").trim(); });
     // include logo/banner if already uploaded (legacy aliases still map to
     // the same Supabase columns)
     const logoUrl = e.target.dataset.logoUrl || "";
@@ -1479,6 +1494,9 @@ function fillSiteForm(site) {
     bannerFrom: site.banner_from != null ? site.banner_from : site.bannerFrom,
     bannerTo: site.banner_to != null ? site.banner_to : site.bannerTo,
   };
+  // Repaint the payment columns from the saved server row too, so what the
+  // admin sees after Save is what Supabase actually stored.
+  PAYMENT_FIELDS.forEach((k) => { set[k] = site[k]; });
   const form = $("#set-form");
   if (!form) return;
   Object.keys(set).forEach((name) => {
@@ -1491,28 +1509,28 @@ function categoryManager() {
   const cats = JA.categories();
   const rows = cats.map((c, i) => {
     const n = JA.products().filter((p) => p.category === c.id).length;
-    return `<article class="wix-cat-card" data-cat-i="${i}" data-cat-id="${JA.escape(c.id)}">
-      <div class="wix-cat-pic">${_catAssetHTML(c.image)}<label class="wix-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf" data-cat-img="${i}" hidden /></label></div>
-      <div class="wix-cat-fields">
+    return `<article class="au-cat-card" data-cat-i="${i}" data-cat-id="${JA.escape(c.id)}">
+      <div class="au-cat-pic">${_catAssetHTML(c.image)}<label class="au-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf" data-cat-img="${i}" hidden /></label></div>
+      <div class="au-cat-fields">
         <input name="cat-id-${i}" type="hidden" value="${JA.escape(c.id)}" />
         <label>Name (English)</label><input name="cat-name-${i}" value="${JA.escape(c.name || "")}" />
         <label>Name (French)</label><input name="cat-fr-${i}" value="${JA.escape(c.nameFr || "")}" />
-        <label class="wix-tog"><span>Show on website</span><input type="checkbox" name="cat-on-${i}" ${c.hidden ? "" : "checked"} /></label>
-        <p class="admin-note">${n} product${n === 1 ? "" : "s"} · <button type="button" class="wix-link-btn" data-view-cat="${JA.escape(c.id)}">View products in this category</button></p>
-        <button type="button" class="wix-opt-del" data-cat-del="${JA.escape(c.id)}">Delete category</button>
+        <label class="au-tog"><span>Show on website</span><input type="checkbox" name="cat-on-${i}" ${c.hidden ? "" : "checked"} /></label>
+        <p class="admin-note">${n} product${n === 1 ? "" : "s"} · <button type="button" class="au-link-btn" data-view-cat="${JA.escape(c.id)}">View products in this category</button></p>
+        <button type="button" class="au-opt-del" data-cat-del="${JA.escape(c.id)}">Delete category</button>
       </div>
     </article>`;
   }).join("");
-  return `<div class="wix-cats-admin">
+  return `<div class="au-cats-admin">
     <h2>Categories</h2>
     <p class="admin-note">Add or delete categories here. They show on the shop and in filters instantly. Tap a card to see its products. When you add a product inside a category, it stays in that category after save.</p>
     <div id="cat-list">${rows}</div>
-    <div class="wix-cat-new">
+    <div class="au-cat-new">
       <h3>Add a category</h3>
-      <div class="wix-2"><div class="field"><label>Name</label><input id="new-cat-name" placeholder="e.g. Jewellery" /></div><div class="field"><label>French name</label><input id="new-cat-fr" placeholder="ex. Bijoux" /></div></div>
-      <button type="button" class="wix-link-btn" id="add-cat">+ Add category</button>
+      <div class="au-2"><div class="field"><label>Name</label><input id="new-cat-name" placeholder="e.g. Jewellery" /></div><div class="field"><label>French name</label><input id="new-cat-fr" placeholder="ex. Bijoux" /></div></div>
+      <button type="button" class="au-link-btn" id="add-cat">+ Add category</button>
     </div>
-    <button type="button" class="btn wix-save" id="save-cats">Save categories</button>
+    <button type="button" class="btn au-save" id="save-cats">Save categories</button>
   </div>`;
 }
 function _catAssetHTML(image) {
@@ -1533,7 +1551,7 @@ function collectCats() {
     // The uploaded Storage URL (dataset.catUrl) wins: it is the complete
     // HTTPS URL the server must store; the DOM img is only the preview.
     const uploadUrl = row.querySelector("[data-cat-img]")?.dataset.catUrl || "";
-    const asset = uploadUrl || row.querySelector(".wix-cat-pic img")?.getAttribute("src") || row.querySelector(".wix-cat-pic a.media-doc-chip")?.getAttribute("href") || "";
+    const asset = uploadUrl || row.querySelector(".au-cat-pic img")?.getAttribute("src") || row.querySelector(".au-cat-pic a.media-doc-chip")?.getAttribute("href") || "";
     out.push({ id, name, nameFr: (row.querySelector(`[name="cat-fr-${i}"]`)?.value || "").trim(), image: asset, hidden: !row.querySelector(`[name="cat-on-${i}"]`)?.checked, });
   });
   return out;
@@ -1557,7 +1575,7 @@ function bindCategories() {
     const f = input.files[0];
     const isDoc = /\.(pdf|doc|docx)$/i.test(f.name || "") || /pdf|word|msword|document/.test(f.type || "");
     if (isDoc && f.size > 8 * 1024 * 1024) { JA.toast("That asset is " + (f.size / 1048576).toFixed(1) + " MB. The limit is 8 MB."); input.value = ""; return; }
-    const card = input.closest("[data-cat-i]"); const pic = card?.querySelector(".wix-cat-pic");
+    const card = input.closest("[data-cat-i]"); const pic = card?.querySelector(".au-cat-pic");
     try {
       if (window.JA_NET) {
         const res = await window.JA_NET.api("api/admin/uploads/category", { method: "POST", blob: f, field: "file", filename: f.name || "category.jpg", timeout: 300000, label: "Category asset", });
@@ -1566,10 +1584,10 @@ function bindCategories() {
           // the real URL into categories.image_url through the server
           input.dataset.catUrl = res.url;
           if (pic) {
-            const upLabel = pic.querySelector(".wix-cat-up");
+            const upLabel = pic.querySelector(".au-cat-up");
             pic.innerHTML = _catAssetHTML(res.url);
             if (upLabel) pic.appendChild(upLabel);
-            else pic.innerHTML += `<label class="wix-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf" data-cat-img="${card.getAttribute("data-cat-i")}" hidden /></label>`;
+            else pic.innerHTML += `<label class="au-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf" data-cat-img="${card.getAttribute("data-cat-i")}" hidden /></label>`;
           }
           await persist("Asset saved — banner will use this image on shop page.");
           return;
@@ -1581,7 +1599,7 @@ function bindCategories() {
       }
       // no live server (test/dev static hosting): keep the local preview
       const data = await fileToData(f);
-      if (pic) { const upLabel = pic.querySelector(".wix-cat-up"); pic.innerHTML = `<img src="${data}" alt="" />`; if (upLabel) pic.appendChild(upLabel); }
+      if (pic) { const upLabel = pic.querySelector(".au-cat-up"); pic.innerHTML = `<img src="${data}" alt="" />`; if (upLabel) pic.appendChild(upLabel); }
       persist("Photo saved.");
     } catch (err) { JA.toast((err && err.message) || "Could not read that asset."); }
     finally { input.value = ""; }
@@ -1639,7 +1657,7 @@ function settingsForm() {
   <div class="admin-card" style="margin-top:22px">
     <h3 class="admin-h">Store branding — logo & shop banner</h3>
     <p class="admin-note">Upload your main store logo and the Shop page cursive banner image. They update sitewide instantly.</p>
-    <div class="wix-2">
+    <div class="au-2">
       <div class="field"><label>Main store logo (J Aura logo)</label><div id="logo-now"><p class="admin-note">Checking current logo…</p></div><label class="btn adx-upload-btn" style="margin-top:8px">Upload / Change logo<input type="file" id="logo-file" accept="image/*" hidden /></label><button type="button" class="btn btn-line" id="logo-remove" hidden style="margin-top:8px">Remove custom logo</button></div>
       <div class="field"><label>Shop Banner Cursive Image (wordmark-bg)</label><div id="shop-banner-now"><p class="admin-note">Checking current shop banner…</p></div><label class="btn adx-upload-btn" style="margin-top:8px">Upload / Change shop banner<input type="file" id="shop-banner-file" accept="image/*" hidden /></label><button type="button" class="btn btn-line" id="shop-banner-remove" hidden style="margin-top:8px">Remove custom banner</button></div>
     </div>
@@ -1664,6 +1682,20 @@ function settingsForm() {
     <div class="field"><label>Contact email</label><input name="contact_email" type="email" maxlength="200" value="${JA.escape(s.contact_email || "")}" /></div>
     <div class="field"><label>Contact phone</label><input name="contact_phone" maxlength="80" value="${JA.escape(s.contact_phone || "")}" /></div>
     <div class="field full"><label>Site logo URL</label><input name="site_logo_url" maxlength="500" value="${JA.escape(s.site_logo_url || "")}" placeholder="https://… or /uploads/…" /></div>
+    <h3 class="admin-h full">Checkout payment details</h3>
+    <p class="admin-note full">Shown to the customer at checkout. These live in Supabase and the storefront carries <strong>no hardcoded fallback</strong> — an empty field hides that line, it never invents an account number. Changing an account here is live immediately, with no redeploy.</p>
+    <div class="field"><label>Naira — bank</label><input name="naira_payment_bank" maxlength="120" value="${JA.escape(s.naira_payment_bank || "")}" /></div>
+    <div class="field"><label>Naira — account name</label><input name="naira_payment_name" maxlength="120" value="${JA.escape(s.naira_payment_name || "")}" /></div>
+    <div class="field"><label>Naira — account number</label><input name="naira_payment_account" maxlength="60" value="${JA.escape(s.naira_payment_account || "")}" /></div>
+    <div class="field"><label>Naira — instructions</label><input name="naira_payment_instructions" maxlength="300" value="${JA.escape(s.naira_payment_instructions || "")}" /></div>
+    <div class="field"><label>CFA (Benin) — provider</label><input name="cfa_payment_provider" maxlength="120" value="${JA.escape(s.cfa_payment_provider || "")}" placeholder="e.g. MTN MoMo Benin" /></div>
+    <div class="field"><label>CFA (Benin) — account name</label><input name="cfa_payment_name" maxlength="120" value="${JA.escape(s.cfa_payment_name || "")}" /></div>
+    <div class="field"><label>CFA (Benin) — account number</label><input name="cfa_payment_account" maxlength="60" value="${JA.escape(s.cfa_payment_account || "")}" /></div>
+    <div class="field"><label>CFA (Benin) — instructions</label><input name="cfa_payment_instructions" maxlength="300" value="${JA.escape(s.cfa_payment_instructions || "")}" /></div>
+    <div class="field"><label>Togo — provider</label><input name="togo_payment_provider" maxlength="120" value="${JA.escape(s.togo_payment_provider || "")}" placeholder="e.g. Moov Money Togo" /></div>
+    <div class="field"><label>Togo — account name</label><input name="togo_payment_name" maxlength="120" value="${JA.escape(s.togo_payment_name || "")}" /></div>
+    <div class="field"><label>Togo — account number</label><input name="togo_payment_account" maxlength="60" value="${JA.escape(s.togo_payment_account || "")}" /></div>
+    <div class="field"><label>Togo — instructions</label><input name="togo_payment_instructions" maxlength="300" value="${JA.escape(s.togo_payment_instructions || "")}" /></div>
     <h3 class="admin-h full">Benin delivery window</h3>
     <p class="admin-note full">These dates appear on the moving banner under the header. Shoppers in Benin are told they will receive their order between these two days.</p>
     <div class="field"><label>Delivery window starts</label><input type="date" name="bannerFrom" id="banner-from" value="2026-09-15" /></div>
