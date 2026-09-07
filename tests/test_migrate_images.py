@@ -498,3 +498,164 @@ def test_the_report_serialises_the_tally(tmp_path):
     assert "existing_https_urls" in out
     assert "already_public_supabase_uploads" in out
     assert _GOOD in out, "the public URL must survive masking"
+
+
+# ---------------------------------------------------------------------------
+# The live-product policy. "Do not automatically publish all 258 products" is
+# only enforceable if the intended live set is written down per id, so the
+# report classifies every row and a reviewer reads a list, not a count.
+# ---------------------------------------------------------------------------
+
+def _row(pid, **kw):
+    base = {"id": pid, "name": "Thing " + pid, "image": "images/products/x.jpg",
+            "priceNgn": 1000, "priceCfa": 500, "stock": 5}
+    base.update(kw)
+    return base
+
+
+def test_a_complete_row_is_live(monkeypatch):
+    monkeypatch.setattr(mi, "resolve_source_image",
+                        lambda p: ("/tmp/x.jpg", "images/products/x.jpg",
+                                   "found", ""))
+    online, reason, _ = mi.classify_live_intent(_row("wix-900"))
+    assert online is True and reason == "live"
+
+
+def test_a_placeholder_row_is_not_live(monkeypatch):
+    monkeypatch.setattr(mi, "resolve_source_image",
+                        lambda p: ("", "images/products/_placeholder.jpg",
+                                   "placeholder", "placeholder"))
+    online, reason, _ = mi.classify_live_intent(_row("wix-901"))
+    assert online is False and reason == "placeholder_only"
+
+
+def test_a_zero_price_blocks_a_row_even_with_a_photo(monkeypatch):
+    """A 0 price is not a missing value - it would put a free item on sale."""
+    monkeypatch.setattr(mi, "resolve_source_image",
+                        lambda p: ("/tmp/x.jpg", "images/products/x.jpg",
+                                   "found", ""))
+    online, reason, detail = mi.classify_live_intent(_row("wix-902", priceNgn=0))
+    assert online is False and reason == "needs_review"
+    assert "priceNgn" in detail
+
+
+def test_zero_stock_blocks_a_row(monkeypatch):
+    monkeypatch.setattr(mi, "resolve_source_image",
+                        lambda p: ("/tmp/x.jpg", "images/products/x.jpg",
+                                   "found", ""))
+    online, reason, detail = mi.classify_live_intent(
+        _row("wix-903", stock=0, stock_quantity=0))
+    assert online is False and reason == "needs_review"
+    assert "stock" in detail
+
+
+def test_a_missing_price_blocks_a_row(monkeypatch):
+    monkeypatch.setattr(mi, "resolve_source_image",
+                        lambda p: ("/tmp/x.jpg", "images/products/x.jpg",
+                                   "found", ""))
+    online, reason, _ = mi.classify_live_intent(_row("wix-904", priceCfa=None))
+    assert online is False and reason == "needs_review"
+
+
+@pytest.mark.parametrize("pid", ["jau-stock-1", "jau-mirror-2", "jau-unit-3",
+                                 "jau-sync-4", "jau-opt-5"])
+def test_pytest_fixtures_are_never_live(monkeypatch, pid):
+    """These ids were written into the tracked catalogue by the test suite.
+    Publishing one to production would be a real incident."""
+    monkeypatch.setattr(mi, "resolve_source_image",
+                        lambda p: ("/tmp/x.jpg", "images/products/x.jpg",
+                                   "found", ""))
+    online, reason, _ = mi.classify_live_intent(_row(pid))
+    assert online is False and reason == "fixture"
+
+
+def test_the_live_set_report_buckets_are_exhaustive(monkeypatch):
+    monkeypatch.setattr(mi, "resolve_source_image",
+                        lambda p: ("/tmp/x.jpg", p.get("image"), "found", "")
+                        if "placeholder" not in str(p.get("image"))
+                        else ("", p.get("image"), "placeholder", ""))
+    products = [
+        _row("wix-001", image="images/products/_placeholder.jpg"),
+        _row("wix-002"),
+        _row("wix-003", priceNgn=0),
+        _row("jau-stock-9"),
+    ]
+    rep = mi.live_set_report(products, {})
+    c = rep["counts"]
+    assert c == {"live": 1, "placeholder_only": 1, "no_image": 0,
+                 "needs_review": 1, "test_fixtures_excluded": 1}
+    assert rep["live_ids"] == ["wix-002"]
+    assert rep["placeholder_only_ids"] == ["wix-001"]
+    assert [e["id"] for e in rep["needs_review"]] == ["wix-003"]
+    assert rep["test_fixtures_excluded_ids"] == ["jau-stock-9"]
+    # the script must not claim to have applied anything
+    assert rep["applied_by_this_script"] is False
+
+
+def test_an_existing_online_flag_that_contradicts_the_policy_is_reported(monkeypatch):
+    """This is the real wix-001 case: the only local row flagged online=true
+    points at the placeholder, so the conflict must be stated, not buried."""
+    monkeypatch.setattr(mi, "resolve_source_image",
+                        lambda p: ("", "images/products/_placeholder.jpg",
+                                   "placeholder", ""))
+    rep = mi.live_set_report([_row("wix-001", online=True)], {})
+    conflicts = rep["existing_online_flags_that_conflict_with_the_policy"]
+    assert len(conflicts) == 1
+    assert conflicts[0]["id"] == "wix-001"
+    assert conflicts[0]["policy_says"] == "placeholder_only"
+
+
+def test_a_row_not_flagged_online_produces_no_conflict(monkeypatch):
+    monkeypatch.setattr(mi, "resolve_source_image",
+                        lambda p: ("", "images/products/_placeholder.jpg",
+                                   "placeholder", ""))
+    rep = mi.live_set_report([_row("wix-002", online=False)], {})
+    assert rep["existing_online_flags_that_conflict_with_the_policy"] == []
+
+
+def test_the_policy_never_publishes_everything():
+    """The headline failure mode this whole section exists to prevent."""
+    products, _seed, overrides, _deleted = mi.load_local_catalogue()
+    rep = mi.live_set_report(list(products.values()), overrides)
+    total = sum(rep["counts"].values())
+    assert total == len(products), "every row must be classified"
+    assert rep["counts"]["live"] < total, (
+        "the policy published every row - it is not filtering anything")
+    assert rep["counts"]["test_fixtures_excluded"] >= 1
+    # and the ids it does publish must all be real products
+    assert all(not mi._FIXTURE_ID_RE.match(i) for i in rep["live_ids"])
+
+
+# ---------------------------------------------------------------------------
+# A price of 0 is not the same as a missing price. Conflating them let wix-012
+# (priceNgn=0) read as "0 missing prices" while it was in fact unpriceable.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("row,want", [
+    ({"priceNgn": 1000, "priceCfa": 500}, []),
+    ({"priceNgn": 0, "priceCfa": 500}, [("priceNgn", 0)]),
+    ({"priceNgn": 1000, "priceCfa": 0}, [("priceCfa", 0)]),
+    ({"priceNgn": -5, "priceCfa": 500}, [("priceNgn", -5)]),
+    ({"priceNgn": 0, "priceCfa": 0}, [("priceNgn", 0), ("priceCfa", 0)]),
+    # absent/unparseable belongs to _price_missing, not here
+    ({"priceNgn": None, "priceCfa": 500}, []),
+    ({"priceCfa": 500}, []),
+    ({"priceNgn": "abc", "priceCfa": 500}, []),
+])
+def test_price_non_positive(row, want):
+    assert mi._price_non_positive(row) == want
+
+
+def test_zero_price_is_reported_separately_from_missing_price():
+    products = [
+        {"id": "wix-801", "name": "Free", "slug": "free", "image": "",
+         "priceNgn": 0, "priceCfa": 500, "stock": 3},
+        {"id": "wix-802", "name": "No price", "slug": "noprice", "image": "",
+         "priceNgn": None, "priceCfa": 500, "stock": 3},
+        {"id": "wix-803", "name": "Fine", "slug": "fine", "image": "",
+         "priceNgn": 1000, "priceCfa": 500, "stock": 3},
+    ]
+    rep = mi.plan_products(products, "uploads", "https://abcxyz.supabase.co")
+    assert [e["id"] for e in rep["non_positive_prices"]] == ["wix-801"]
+    assert rep["non_positive_prices"][0]["offenders"] == {"priceNgn": 0}
+    assert [e["id"] for e in rep["missing_prices"]] == ["wix-802"]

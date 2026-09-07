@@ -20,6 +20,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+import pytest  # noqa: E402
+
 import supabase_store  # noqa: E402
 
 SCHEMA_PATH = os.path.join(ROOT, "supabase_schema.sql")
@@ -99,3 +101,91 @@ def test_dead_snake_case_columns_are_documented_never_drop():
         "the comment must say the dead columns must never be dropped"
     assert re.search(r"never\s+rename", block, re.IGNORECASE), \
         "the comment must say the dead columns must never be renamed"
+
+
+# ---------------------------------------------------------------------------
+# The full table and column inventory the deployment depends on. Applying the
+# schema is an acceptance condition, so "does the file define it" is testable
+# here even though no database is reachable from the suite.
+# ---------------------------------------------------------------------------
+
+REQUIRED_TABLES = (
+    "site_settings", "products", "categories", "orders", "receipts",
+    "admin_users", "admin_reset_tokens", "coupons", "coupon_uses",
+    "referral_codes", "referral_uses", "delivery_zones", "product_reviews",
+)
+
+REQUIRED_PRODUCT_COLUMNS = (
+    "id", "legacyId", "name", "category", "priceNgn", "priceCfa",
+    "compareNgn", "compareCfa", "image_url", "images", "stock_quantity",
+    "description", "featured", "online", "updated_at",
+)
+
+
+@pytest.mark.parametrize("table", REQUIRED_TABLES)
+def test_required_table_is_defined(table):
+    m = re.search(r"create table (?:if not exists )?\"?" + re.escape(table) +
+                  r"\"?\s*\(", _schema_text(), re.IGNORECASE)
+    assert m, f"supabase_schema.sql does not create table {table!r}"
+
+
+def test_products_supports_every_column_the_app_writes():
+    create_cols = _create_table_columns("products")
+    repair_cols = _repair_columns("products")
+    have = create_cols | repair_cols
+    missing = [c for c in REQUIRED_PRODUCT_COLUMNS if c not in have]
+    assert not missing, (
+        f"products is missing required column(s): {missing}. A narrower "
+        "hand-built table must still be healable by re-running the schema.")
+
+
+def test_legacy_id_is_a_real_column_not_just_an_alias():
+    """Legacy wix-* links resolve through this, so it must be a column with a
+    uniqueness rule - not something reconstructed at read time."""
+    create_cols = _create_table_columns("products")
+    assert "legacyId" in create_cols
+    # The index is a PARTIAL one (`where "legacyId" is not null`) and spans two
+    # lines, so match across the newline - a single-line pattern misses it.
+    m = re.search(r"create\s+unique\s+index[\s\S]{0,120}?on\s+products\s*\(\s*\"legacyId\"\s*\)"
+                  r"[\s\S]{0,80}?where\s+\"legacyId\"\s+is\s+not\s+null",
+                  _schema_text(), re.IGNORECASE)
+    assert m, ("no partial unique index on products.\"legacyId\" - without it "
+               "two products could claim the same legacy wix-* alias")
+
+
+def test_coupon_uses_makes_a_redemption_idempotent():
+    """A retried order must not count the same coupon twice, so the log needs
+    a unique (code, order_id) pair rather than a bare insert."""
+    m = re.search(r"create table (?:if not exists )?coupon_uses\s*\((.*?)\n\);",
+                  _schema_text(), re.IGNORECASE | re.DOTALL)
+    assert m, "coupon_uses is not defined"
+    body = m.group(1).lower()
+    assert "unique (code, order_id)" in body.replace("  ", " ")
+
+
+def test_product_reviews_enforces_one_per_customer_per_product():
+    m = re.search(r"create table (?:if not exists )?product_reviews\s*\((.*?)\n\);",
+                  _schema_text(), re.IGNORECASE | re.DOTALL)
+    assert m, "product_reviews is not defined"
+    body = m.group(1).lower()
+    assert "unique (product_id, email)" in body.replace("  ", " ")
+    assert "check (stars between 1 and 5)" in body.replace("  ", " ")
+
+
+def test_delivery_zones_constrains_its_enums():
+    """A bad currency or kind would price a delivery wrongly, so the database
+    rejects it rather than trusting the caller."""
+    m = re.search(r"create table (?:if not exists )?delivery_zones\s*\((.*?)\n\);",
+                  _schema_text(), re.IGNORECASE | re.DOTALL)
+    assert m, "delivery_zones is not defined"
+    body = m.group(1).lower()
+    assert "check (currency in ('cfa','ngn'))" in body.replace("  ", " ")
+    assert "check (kind in ('delivery','pickup','quote'))" in body.replace("  ", " ")
+    assert "check (fare_min >= 0)" in body.replace("  ", " ")
+
+
+def test_the_schema_seeds_the_delivery_zones_idempotently():
+    """Re-running the schema must not overwrite an admin's edited fares."""
+    m = re.search(r"insert into delivery_zones[\s\S]*?on conflict \(id\) do nothing;",
+                  _schema_text(), re.IGNORECASE)
+    assert m, "delivery_zones seed is missing or is not idempotent"

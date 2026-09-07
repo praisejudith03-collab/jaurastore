@@ -10,11 +10,15 @@ below is either a code change with tests, or a dry-run report.
 ## Test tally (exact, as executed)
 
 ```
-.venv/bin/python -m pytest --collect-only -q   →  564 tests collected
-.venv/bin/python -m pytest tests/ -q -ra       →  564 passed
+.venv/bin/python -m pytest --collect-only -q   →  606 tests collected
+.venv/bin/python -m pytest tests/ -q -ra       →  606 passed
                                                   0 failed, 0 errors, 0 skipped
-                                                  in 59.23s
+                                                  in 56.40s
 ```
+
+> 564 → 606: +14 live-product-policy tests, +9 non-positive-price tests,
+> +19 schema inventory tests. See the addendum at the bottom for what changed
+> since the first version of this report.
 
 There are no skips and therefore no skip reasons. The suite was green on two
 consecutive full runs.
@@ -385,3 +389,136 @@ fa32ff0 Admin password survives a Render restart via a durable admin_users row
    schema change — `/api/site` 503s until Supabase is configured.
 4. Apply `supabase_schema.sql` (it is idempotent) to create `admin_users`,
    `admin_reset_tokens` and `delivery_zones`.
+
+---
+
+# Addendum — second pass (HEAD `010dc35` → current)
+
+## The sandbox was re-cloned; the branch pointer was restored, not the work
+
+On resuming, `git log` showed only the base commit `a2fa387` and all prior work
+appeared as uncommitted changes. Diagnosis: the sandbox had been **freshly
+cloned** (shallow, two shallow points) and `arena/01a07c7a-jaurastore` was
+recreated from `main`. The `.venv` was gone too, since it is excluded from
+snapshots — so the first "suite" run in this pass never executed at all.
+
+Recovery, with no destructive command:
+- `git ls-remote` showed the remote branch still at `010dc35`; `git fetch` made
+  the object available locally.
+- `git diff 010dc35` proved the 24 tracked files were **byte-identical** to that
+  commit; only the 14 new files appeared as "deleted" because they were untracked.
+- `git update-ref` moved the branch pointer, then `git reset --mixed` realigned
+  the index. Neither touches working-tree files — digests before and after are
+  identical, verified by `diff`.
+
+`.venv` was rebuilt (Flask 3.0.3, Pillow 12.3.0, pytest, pyyaml) and the suite
+re-run for real.
+
+## `data/catalog.json` holds 51 entries, not 18
+
+The brief states 18. The committed file has **51**: **34 real `wix-*`
+overrides** plus **17 pytest fixtures** (`jau-stock-*`, `jau-mirror-*`,
+`jau-unit-*`, `jau-sync-*`, `jau-opt-*`). The 33 extra `wix-*` rows came from
+harness "Sync catalogue state" commits after the earlier count was taken. This
+matters because the fixtures must never reach production.
+
+## Live-product policy implemented and documented per id
+
+Your recommended policy is now computed by `migrate_images.py`
+(`classify_live_intent` / `live_set_report`) and emitted as a `live_set` section
+listing **every id in each bucket**, not just a count:
+
+```
+policy: real committed photo + priceNgn>0 + priceCfa>0 + stock>0 -> online=true
+        placeholder-only or unverifiable -> online=false, reported for review
+
+live                     : 181
+placeholder_only         :  76
+no_image                 :   0
+needs_review             :   1
+test_fixtures_excluded   :  17
+                           ---
+                           275   (every local row classified)
+```
+
+`applied_by_this_script` is **false**. The script writes only `image_url` and
+`updated_at`, so it never changes `online`.
+
+### Two findings that need your decision
+
+1. **`wix-001` contradicts its own flag.** It is the only local row carrying an
+   explicit `online: true`, yet it points at `images/products/_placeholder.jpg`
+   and has `stock_quantity: 0` (while `stock` says 24). Under the policy it must
+   **not** be live. The report lists this under
+   `existing_online_flags_that_conflict_with_the_policy` rather than letting it
+   pass silently.
+2. **`wix-012` has `priceNgn: 0`.** It has a real photo, so it is inside the 182
+   to upload, but it is excluded from the live set as `needs_review`. A 0 price
+   on a live row would put a free product on the storefront.
+
+### "0 missing prices" was misleading
+
+`_price_missing` only tested `is None`, so `priceNgn: 0` counted as present —
+the plan said **0 missing prices** while `wix-012` was in fact unpriceable.
+Rather than conflate "absent" with "free", a separate `non_positive_prices`
+field now reports 0-or-negative values distinctly, and it appears in the printed
+summary. It is deliberately **not** a hard blocker: a 0 price should not prevent
+an image-only migration, and the live set already captures it.
+
+## Schema: two required tables were missing
+
+`coupon_uses` and `product_reviews` were absent from `supabase_schema.sql`. Both
+are now defined, and the full 13-table inventory plus the 15 required `products`
+columns are pinned by tests.
+
+- `coupon_uses` carries `unique (code, order_id)`, so a retried order cannot
+  count the same redemption twice.
+- `product_reviews` mirrors the SQLite shape with `unique (product_id, email)`
+  and `check (stars between 1 and 5)`.
+
+**Honest limitation — the DDL exists but the app does not use these two tables
+yet.** No code writes to `coupon_uses`. Reviews still go to SQLite and are
+mirrored to Supabase as **one JSON blob in a single `growth_settings` row**
+(`supabase_store.save_product_reviews`), which is durable but not queryable and
+is last-write-wins, so two concurrent reviews can lose one. Wiring both to the
+new tables is real remaining work, not a done item.
+
+## Verification run this pass
+
+```
+git status --short                              → clean
+pytest --collect-only -q                        → 606 collected
+pytest tests/ -q -ra                            → 606 passed, 0 failed/errors/skipped
+sha256 before vs after the suite                → identical for catalog.json,
+                                                  categories.json, seed.json,
+                                                  wix_products.json
+git diff -- data/catalog.json                   → empty
+git diff -- data/categories.json                → empty
+py_compile migrate_images.py                    → OK
+migrate_images.py --help                        → OK
+migrate_images.py --dry-run                     → exit 0, zero uploads, zero writes
+```
+
+Row counts intact: `seed.json` 258 · `wix_products.json` 258 ·
+`catalog.json` 51 · `categories.json` 11.
+
+## Dry-run report after these changes
+
+```
+products examined / matched / skipped : 275 / 182 / 93
+images discovered / missing / upload  : 275 / 5 / 182
+existing HTTPS URLs                   : 0   (262 blank, 13 relative)
+non-positive prices                   : 1   (wix-012, priceNgn=0)
+missing prices / missing stock        : 0 / 0
+duplicate rows / blank ids            : 0 / 0
+legacy wix-* id references            : 258
+proposed DB updates / storage paths   : 182 / 182
+plan blockers                         : none
+environment blockers                  : SUPABASE_URL unset; credentials absent
+safe_to_apply                         : False
+safety: no deletes, no inserts, no renames, no price/stock writes,
+        writable_columns = [image_url, updated_at], no credentials in report
+```
+
+**The real migration has still not been run.** It cannot be from here: no
+credentials, and `gh secret list` returns HTTP 403.

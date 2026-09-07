@@ -456,6 +456,26 @@ def _price_missing(row):
     return row.get("priceNgn") is None or row.get("priceCfa") is None
 
 
+def _price_non_positive(row):
+    """A price that exists but is 0 or negative.
+
+    Kept separate from _price_missing on purpose: "missing" and "free" are
+    different problems with different fixes, and a report that lumps them
+    together lets a 0 slip through as merely absent. A 0 price on a row
+    intended to be live would put a free product on the storefront.
+    """
+    bad = []
+    for col in ("priceNgn", "priceCfa"):
+        raw = row.get(col)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue          # absent/unparseable is _price_missing's business
+        if value <= 0:
+            bad.append((col, raw))
+    return bad
+
+
 def _stock_missing(row):
     """True when NO stock value exists on the row.
 
@@ -500,6 +520,7 @@ def plan_products(products, bucket, supabase_url, client=None, only_ids=None,
         "duplicate_products": [],
         "duplicate_row_count": 0,
         "missing_prices": [],
+        "non_positive_prices": [],
         "missing_stock": [],
         "stock_value_source": {},
         "distinct_local_files": 0,
@@ -547,6 +568,11 @@ def plan_products(products, bucket, supabase_url, client=None, only_ids=None,
             rep["missing_prices"].append(
                 {"id": pid, "name": row.get("name"),
                  "priceNgn": row.get("priceNgn"), "priceCfa": row.get("priceCfa")})
+        bad_prices = _price_non_positive(row)
+        if bad_prices:
+            rep["non_positive_prices"].append(
+                {"id": pid, "name": row.get("name"),
+                 "offenders": {c: v for c, v in bad_prices}})
         if _stock_missing(row):
             rep["missing_stock"].append({"id": pid, "name": row.get("name")})
         else:
@@ -861,6 +887,125 @@ def live_intent_report(products, seed_count, overrides, deleted):
     }
 
 
+def classify_live_intent(product):
+    """Apply the operator's live-product policy to ONE row.
+
+    Policy (agreed, and deliberately conservative):
+      * a real committed photo + a valid price + valid stock  -> online = True
+      * placeholder-only                                     -> online = False
+      * anything else that cannot be verified                -> online = False
+        and reported for a human decision, never silently published
+
+    Returning online=False for the uncertain cases is the safe direction: a
+    product missing from the storefront is a visible, fixable problem, while a
+    broken product page with no photo and no price is a live one.
+    """
+    pid = str(product.get("id") or "")
+    if _FIXTURE_ID_RE.match(pid):
+        return False, "fixture", "pytest fixture row, never published"
+
+    _local, rel, status, detail = resolve_source_image(product)
+    if status != "found":
+        if status == "placeholder":
+            return False, "placeholder_only", rel or detail
+        return False, "no_image", f"image status={status}: {detail}"
+
+    reasons = []
+    prices = {}
+    for col in ("priceNgn", "priceCfa"):
+        raw = product.get(col)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = None
+        prices[col] = raw
+        # 0 is not a usable price - it would put a free product on the store.
+        if value is None or value <= 0:
+            reasons.append(f"invalid {col}={raw!r}")
+
+    key = _stock_key(product)
+    stock = product.get("stock_quantity")
+    if stock is None:
+        stock = product.get("stock")
+    try:
+        stock_value = int(stock)
+    except (TypeError, ValueError):
+        stock_value = None
+    if key is None or stock_value is None:
+        reasons.append("stock missing")
+    elif stock_value <= 0:
+        reasons.append(f"stock is {stock_value}")
+
+    evidence = {"image": rel, "stock_source": key, "stock": stock_value,
+                **prices}
+    if reasons:
+        return False, "needs_review", "; ".join(reasons)
+    return True, "live", rel
+
+
+def live_set_report(products, overrides):
+    """Exactly which products are intended to be live, and why - per id.
+
+    'Document exactly which products are intended to be live before
+    migration' means a reviewer must be able to read the list, not a count.
+    So this emits every id in each bucket plus the reason it landed there.
+    """
+    buckets = {}
+    for product in products or []:
+        online, reason, detail = classify_live_intent(product)
+        entry = {"id": str(product.get("id") or ""),
+                 "name": str(product.get("name") or "")[:120],
+                 "reason": detail}
+        buckets.setdefault(reason, []).append(entry)
+
+    live = sorted(buckets.get("live", []), key=lambda e: e["id"])
+    fixtures = sorted(buckets.get("fixture", []), key=lambda e: e["id"])
+    placeholder = sorted(buckets.get("placeholder_only", []), key=lambda e: e["id"])
+    no_image = sorted(buckets.get("no_image", []), key=lambda e: e["id"])
+    needs_review = sorted(buckets.get("needs_review", []), key=lambda e: e["id"])
+
+    # wix-001 is worth calling out by name: it is the only local row carrying
+    # an explicit online flag, and it is set to True while the row points at
+    # the placeholder image with stock_quantity 0. Under this policy it must
+    # NOT be live, so the conflict is stated rather than left to inference.
+    conflicts = []
+    for product in products or []:
+        pid = str(product.get("id") or "")
+        if _FIXTURE_ID_RE.match(pid):
+            continue
+        if product.get("online") is True:
+            online, reason, detail = classify_live_intent(product)
+            if not online:
+                conflicts.append({"id": pid, "flagged_online": True,
+                                  "policy_says": reason, "detail": detail})
+
+    return {
+        "policy": ("real committed photo + priceNgn>0 + priceCfa>0 + stock>0 "
+                   "-> online=true; placeholder-only or unverifiable -> "
+                   "online=false and reported for a human decision"),
+        "counts": {
+            "live": len(live),
+            "placeholder_only": len(placeholder),
+            "no_image": len(no_image),
+            "needs_review": len(needs_review),
+            "test_fixtures_excluded": len(fixtures),
+        },
+        "live_ids": [e["id"] for e in live],
+        "live": live,
+        "placeholder_only_ids": [e["id"] for e in placeholder],
+        "no_image_ids": [e["id"] for e in no_image],
+        "needs_review": needs_review,
+        "test_fixtures_excluded_ids": [e["id"] for e in fixtures],
+        "existing_online_flags_that_conflict_with_the_policy": conflicts,
+        "applied_by_this_script": False,
+        "note": ("This is a RECOMMENDATION, not an action. migrate_images.py "
+                 "writes only image_url and updated_at, so it never changes "
+                 "`online`. Apply the live set separately, after review, and "
+                 "never by importing all 258 seed rows - the schema defaults "
+                 "`online` to true, which would publish every one of them."),
+    }
+
+
 # ------------------------------------------------------------------- report
 def write_report(report, path):
     """Write the JSON report, masked.
@@ -899,6 +1044,7 @@ def summarize(report):
         f"  images missing           : {p['images_missing']}",
         f"  images already uploaded  : {p['images_already_uploaded']}",
         f"  images to upload         : {p['images_to_upload']}",
+        f"  non-positive prices      : {len(p['non_positive_prices'])}",
         f"  duplicate products       : {len(p['duplicate_products'])}",
         f"  blank product ids        : {len(p['blank_ids'])}",
         f"  distinct local files     : {p.get('distinct_local_files', 0)}",
@@ -1078,6 +1224,9 @@ def main(argv=None):
             overrides if isinstance(overrides, dict) else {},
             deleted if isinstance(deleted, list) else [],
             supabase_rows=products if client is not None else None),
+        "live_set": live_set_report(
+            products,
+            overrides if isinstance(overrides, dict) else {}),
         "live_intent": live_intent_report(
             products,
             seed_count if isinstance(seed_count, int) else 0,

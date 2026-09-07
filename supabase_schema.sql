@@ -317,6 +317,39 @@ create table if not exists delivery_zones (
 );
 create index if not exists delivery_zones_active on delivery_zones(active, sort_order);
 
+-- Coupon redemption log. `coupons.uses` is a counter and stays the fast path
+-- for the max_uses check, but a counter cannot answer "which order used this
+-- code" and cannot stop a retried order from counting twice. The unique pair
+-- (code, order_id) makes a redemption idempotent, so a confirm/retry loop
+-- cannot inflate the usage count.
+create table if not exists coupon_uses (
+  id        bigint generated always as identity primary key,
+  code      text not null,
+  email     text,
+  order_id  text not null,
+  percent   integer,
+  used_at   timestamptz not null default now(),
+  unique (code, order_id)
+);
+create index if not exists coupon_uses_code on coupon_uses(code, used_at desc);
+
+-- Product reviews. Mirrors the SQLite product_reviews table one-for-one so
+-- the same shape can be read from either side. unique(product_id, email) is
+-- what enforces one review per customer per product - the same rule the
+-- purchase-verified check relies on.
+create table if not exists product_reviews (
+  id          bigint generated always as identity primary key,
+  product_id  text not null,
+  order_id    text,
+  email       text not null,
+  name        text,
+  stars       integer not null default 5 check (stars between 1 and 5),
+  note        text,
+  at          timestamptz not null default now(),
+  unique (product_id, email)
+);
+create index if not exists product_reviews_pid on product_reviews(product_id);
+
 -- Seed the zones the storefront has always shown. on conflict do nothing, so
 -- re-running the schema never overwrites an admin's edited fares.
 insert into delivery_zones (id, name, currency, fare_min, fare_max, kind, sort_order)
