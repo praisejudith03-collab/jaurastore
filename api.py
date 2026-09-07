@@ -2252,8 +2252,14 @@ def admin_coupon_create():
     import growth
     d = request.get_json(silent=True) or {}
     code = growth.normalize_code(d.get("code")) or growth._mint_code("PROMO")
-    percent = sec.clean_int(d.get("percent"), None, 1, 90)
-    if not percent:
+    # Validate before clamping. sec.clean_int silently clamps to its bounds, so
+    # an admin who typed 99% used to get a 90% coupon and a success toast - a
+    # discount that was never what they asked for, with nothing to say so.
+    try:
+        percent = int(str(d.get("percent")).strip())
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="Percent must be a whole number."), 400
+    if percent < 1 or percent > 90:
         return jsonify(ok=False, error="Percent must be between 1 and 90."), 400
     if one("SELECT 1 FROM coupons WHERE code=?", (code,)) or \
        one("SELECT 1 FROM referral_codes WHERE code=?", (code,)):
