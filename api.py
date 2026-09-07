@@ -2096,6 +2096,120 @@ def admin_delivery_zone_delete(zone_id):
     audit(authmod.current_admin(), "delivery_zone.delete", zone_id, _ip())
     return jsonify(ok=True, zones=delivery.zones(include_inactive=True))
 
+# ============================================ admin: reviews & coupon usage
+@api.get("/admin/coupon-uses")
+@authmod.require_admin
+def admin_coupon_uses():
+    """The coupon redemption log. Answers "which order used this code", which
+    the coupons.uses counter never could."""
+    code = sec.clean(request.args.get("code"), 32) or None
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import load_coupon_uses
+            rows = load_coupon_uses(code)
+            if rows is not None:
+                return jsonify(ok=True, uses=rows, source="supabase:coupon_uses")
+        except Exception:
+            pass
+    sql = "SELECT code, email, order_id, percent, used_at FROM coupon_uses"
+    args = ()
+    if code:
+        sql += " WHERE code=?"
+        args = (code,)
+    rows = query(sql + " ORDER BY used_at DESC LIMIT 500", args)
+    return jsonify(ok=True, uses=[dict(r) for r in rows], source="local")
+
+
+@api.get("/admin/reviews")
+@authmod.require_admin
+def admin_reviews():
+    """Every review, including hidden ones - moderation needs to see them."""
+    pid = sec.clean(request.args.get("productId"), 64) or None
+    sql = ("SELECT product_id, order_id, email, name, stars, note, at, hidden "
+           "FROM product_reviews")
+    args = ()
+    if pid:
+        sql += " WHERE product_id=?"
+        args = (pid,)
+    rows = query(sql + " ORDER BY at DESC LIMIT 500", args)
+    return jsonify(ok=True, reviews=[dict(r) for r in rows])
+
+
+@api.patch("/admin/reviews")
+@authmod.require_admin
+@sec.require_csrf
+def admin_reviews_moderate():
+    """Hide or unhide one review. Targets (product_id, email) - the unique key
+    - so it can never touch a different customer's review."""
+    d = request.get_json(silent=True) or {}
+    pid = sec.clean(d.get("productId"), 64)
+    email = sec.clean_email(d.get("email"))
+    if not pid or not email:
+        return jsonify(ok=False, error="A product id and the reviewer's email are required."), 400
+    hidden = 1 if d.get("hidden", True) else 0
+    row = one("SELECT id FROM product_reviews WHERE product_id=? AND email=?", (pid, email))
+    if not row:
+        return jsonify(ok=False, error="No review from that email on that product."), 404
+    execute("UPDATE product_reviews SET hidden=? WHERE product_id=? AND email=?",
+            (hidden, pid, email))
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import set_product_review_hidden
+            set_product_review_hidden(pid, email, bool(hidden))
+        except Exception:
+            pass
+    audit(authmod.current_admin(), "review.moderated",
+          f"{pid} {'hidden' if hidden else 'shown'} ({email})", _ip())
+    return jsonify(ok=True, productId=pid, email=email, hidden=bool(hidden))
+
+
+@api.delete("/admin/reviews")
+@authmod.require_admin
+@sec.require_csrf
+def admin_reviews_delete():
+    """Delete one review. The unique key is the only safe address for it."""
+    pid = sec.clean(request.args.get("productId"), 64)
+    email = sec.clean_email(request.args.get("email"))
+    if not pid or not email:
+        return jsonify(ok=False, error="A product id and the reviewer's email are required."), 400
+    row = one("SELECT id FROM product_reviews WHERE product_id=? AND email=?", (pid, email))
+    if not row:
+        return jsonify(ok=False, error="No review from that email on that product."), 404
+    execute("DELETE FROM product_reviews WHERE product_id=? AND email=?", (pid, email))
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import delete_product_review
+            delete_product_review(pid, email)
+        except Exception:
+            pass
+    audit(authmod.current_admin(), "review.deleted", f"{pid} ({email})", _ip())
+    return jsonify(ok=True, productId=pid, email=email, deleted=True)
+
+
+@api.post("/admin/reviews/migrate")
+@authmod.require_admin
+@sec.require_csrf
+def admin_reviews_migrate():
+    """Copy legacy reviews from the growth_settings blob into the real table.
+
+    Dry-run by default. It never deletes the blob - that only happens once the
+    copy has been verified, and it is a separate, deliberate act.
+    """
+    d = request.get_json(silent=True) or {}
+    dry = bool(d.get("dry_run", True))
+    if not (Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY):
+        return jsonify(ok=False,
+                       error="Supabase is not configured; there is nothing to migrate."), 503
+    try:
+        from supabase_store import migrate_product_reviews_from_blob
+        report = migrate_product_reviews_from_blob(dry_run=dry)
+    except Exception as exc:
+        return jsonify(ok=False, error=f"Migration failed: {exc}"), 503
+    audit(authmod.current_admin(), "reviews.migrate",
+          f"dry_run={dry} verified={report.get('verified')}", _ip())
+    return jsonify(ok=report.get("error") is None, report=report)
+
+
 # ==================================================== public: promo & referral
 @api.post("/promo/check")
 def promo_check():
@@ -2136,13 +2250,36 @@ def cart_recover(token):
 # ================================================= public: verified reviews
 @api.get("/reviews/<pid>")
 def reviews_list(pid):
+    """Reviews for one product.
+
+    Supabase product_reviews is the source of truth when it is configured;
+    SQLite is the local mirror. Note that None from the loader means
+    "unavailable", NOT "no reviews" - conflating those would show an empty
+    list during an outage and invite duplicate reviews.
+    """
     pid = sec.clean(pid, 64)
-    rows = query("SELECT name, stars, note, at FROM product_reviews "
-                 "WHERE product_id=? ORDER BY at DESC LIMIT 100", (pid,))
-    items = [dict(r) for r in rows]
+    items = None
+    source = "local"
+    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            from supabase_store import load_product_reviews_table
+            rows = load_product_reviews_table(pid)
+            if rows is not None:
+                items = [{"name": r.get("name"), "stars": int(r.get("stars") or 5),
+                          "note": r.get("note"), "at": r.get("at")}
+                         for r in rows if not r.get("hidden")][:100]
+                source = "supabase:product_reviews"
+        except Exception:
+            items = None
+    if items is None:
+        rows = query("SELECT name, stars, note, at FROM product_reviews "
+                     "WHERE product_id=? AND hidden=0 "
+                     "ORDER BY at DESC LIMIT 100", (pid,))
+        items = [dict(r) for r in rows]
     n = len(items)
-    avg = round(sum(r["stars"] for r in items) / n, 2) if n else 0
-    return jsonify(ok=True, productId=pid, count=n, average=avg, reviews=items)
+    avg = round(sum(int(r.get("stars") or 0) for r in items) / n, 2) if n else 0
+    return jsonify(ok=True, productId=pid, count=n, average=avg, reviews=items,
+                   source=source)
 
 @api.post("/reviews")
 @sec.require_csrf
@@ -2172,18 +2309,32 @@ def reviews_create():
             "VALUES (?,?,?,?,?,?,?) ON CONFLICT(product_id, email) DO UPDATE SET "
             "name=excluded.name, stars=excluded.stars, note=excluded.note, at=excluded.at",
             (pid, bought["id"], email, name or "Customer", stars, note, _utcnow()))
-    # product_reviews is SQLite-only (wiped with the Render disk), so keep a
-    # JSON copy in Supabase growth_settings - the boot restore in app.py
-    # writes it back. Best effort: a Supabase hiccup never blocks the review.
+    # Persist to the real product_reviews table, which is the source of truth.
+    # The old growth_settings JSON blob is no longer written: re-serialising the
+    # whole table on every review was last-write-wins, so two reviews arriving
+    # together lost one. One row is upserted on (product_id, email) instead.
+    durable = True
     if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
         try:
-            from supabase_store import save_product_reviews
-            rows = query("SELECT product_id, order_id, email, name, stars, note, at "
-                         "FROM product_reviews")
-            save_product_reviews([dict(r) for r in rows])
+            from supabase_store import save_product_reviews_table
+            _saved, err = save_product_reviews_table([{
+                "product_id": pid, "order_id": bought["id"], "email": email,
+                "name": name or "Customer", "stars": stars, "note": note,
+                "at": _utcnow()}])
+            durable = not err
         except Exception:
-            pass
+            durable = False
     audit("customer", "review.posted", f"{pid} {stars}★ by {email}", _ip())
+    # The review is in SQLite either way, but if the durable write failed the
+    # caller is told - a silent "thank you" over a lost review is worse than a
+    # warning.
+    if not durable:
+        return jsonify(ok=True, productId=pid, count=1, average=float(stars),
+                       reviews=[{"name": name or "Customer", "stars": stars,
+                                 "note": note, "at": _utcnow()}],
+                       source="local", durable=False,
+                       warning="Your review was saved but could not be stored "
+                               "durably; it may need re-submitting."), 200
     return reviews_list(pid)
 
 # =============================================== admin: growth & marketing

@@ -199,6 +199,9 @@ CREATE TABLE IF NOT EXISTS product_reviews (
   stars      INTEGER NOT NULL DEFAULT 5,
   note       TEXT,
   at         TEXT NOT NULL DEFAULT (datetime('now')),
+  -- Moderation flag. A hidden review is kept (it is a real customer's
+  -- verified purchase) but not shown on the storefront.
+  hidden     INTEGER NOT NULL DEFAULT 0,
   UNIQUE(product_id, email)
 );
 CREATE INDEX IF NOT EXISTS idx_reviews_pid ON product_reviews(product_id);
@@ -244,6 +247,23 @@ CREATE TABLE IF NOT EXISTS abandoned_carts (
 );
 CREATE INDEX IF NOT EXISTS idx_abandoned_email ON abandoned_carts(email);
 
+-- Coupon redemption log. `coupons.uses` stays the fast counter for the
+-- max_uses check, but a counter cannot answer "which order used this code" and
+-- cannot stop a retried order from counting twice. UNIQUE(code, order_id) is
+-- what makes a redemption idempotent: the INSERT OR IGNORE in
+-- growth.record_code_use reports 0 rows affected on a replay, and only a real
+-- insert increments the counter.
+CREATE TABLE IF NOT EXISTS coupon_uses (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  code     TEXT NOT NULL,
+  email    TEXT,
+  order_id TEXT NOT NULL,
+  percent  INTEGER,
+  used_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(code, order_id)
+);
+CREATE INDEX IF NOT EXISTS idx_coupon_uses_code ON coupon_uses(code, used_at);
+--
 -- Growth module settings (referral / coupons / abandoned cart), key-value.
 CREATE TABLE IF NOT EXISTS growth_settings (
   key   TEXT PRIMARY KEY,
@@ -336,15 +356,26 @@ ORDER_COLUMNS = {
 }
 
 
+# Columns added to product_reviews after it was first shipped. A deployed
+# database already has the table, so CREATE TABLE IF NOT EXISTS will not add
+# them - they have to be ALTERed in.
+REVIEW_COLUMNS = {
+    "hidden": "INTEGER NOT NULL DEFAULT 0",
+}
+
+
 def migrate():
     """Add any missing column to an existing database. Safe to run every boot."""
-    have = {r["name"] for r in query("PRAGMA table_info(orders)")}
-    if not have:
-        return 0
     added = 0
+    have = {r["name"] for r in query("PRAGMA table_info(orders)")}
     for col, ddl in ORDER_COLUMNS.items():
-        if col not in have:
+        if have and col not in have:
             execute(f"ALTER TABLE orders ADD COLUMN {col} {ddl}")
+            added += 1
+    rh = {r["name"] for r in query("PRAGMA table_info(product_reviews)")}
+    for col, ddl in REVIEW_COLUMNS.items():
+        if rh and col not in rh:
+            execute(f"ALTER TABLE product_reviews ADD COLUMN {col} {ddl}")
             added += 1
     return added
 

@@ -919,6 +919,41 @@ def mirror_coupon(row):
         print(f"[supabase] coupon upsert failed: {exc}")
 
 
+def mirror_coupon_use(row):
+    """Upsert one coupon redemption into coupon_uses. Never raises.
+
+    The conflict target is (code, order_id), matching the table's unique
+    constraint, so a retried order upserts the same row instead of adding a
+    second redemption. Returns True only when Supabase accepted the write.
+    """
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table("coupon_uses").upsert(
+            dict(row), on_conflict="code,order_id").execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] coupon_uses upsert failed: {exc}")
+        return False
+
+
+def load_coupon_uses(code=None):
+    """Redemption log, newest first. None when Supabase is unavailable."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        q = c.table("coupon_uses").select("*")
+        if code:
+            q = q.eq("code", code)
+        res = q.order("used_at", desc=True).execute()
+        return _res_data(res) or []
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] coupon_uses read failed: {exc}")
+        return None
+
+
 def mirror_growth_settings(settings_dict):
     """Upsert the whole growth_settings key/value map."""
     c = client()
@@ -1165,3 +1200,164 @@ def load_product_reviews():
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] product reviews load failed: {exc}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# product_reviews as a REAL table.
+#
+# The blob in growth_settings was durable but not queryable, and it was
+# last-write-wins: two reviews arriving together meant one silently vanished,
+# because the whole table was re-serialised and upserted as a single value.
+# These functions make the table the source of truth. The blob is kept as a
+# read-only backup until a migration has been verified - it is never deleted
+# here.
+# ---------------------------------------------------------------------------
+
+_REVIEW_COLUMNS = ("product_id", "order_id", "email", "name", "stars", "note", "at")
+
+
+def _clean_review(row):
+    """Normalise one review to the table's columns. Returns None if unusable."""
+    row = row or {}
+    product_id = str(row.get("product_id") or "").strip()
+    email = str(row.get("email") or "").strip().lower()
+    if not product_id or not email:
+        # The table's unique key is (product_id, email); a row missing either
+        # cannot be stored or de-duplicated, so it is skipped, not guessed at.
+        return None
+    try:
+        stars = int(row.get("stars") or 5)
+    except (TypeError, ValueError):
+        stars = 5
+    stars = max(1, min(5, stars))          # matches the check constraint
+    return {
+        "product_id": product_id,
+        "order_id": (str(row.get("order_id")).strip() or None
+                     if row.get("order_id") is not None else None),
+        "email": email,
+        "name": (str(row.get("name")).strip() or None
+                 if row.get("name") is not None else None),
+        "stars": stars,
+        "note": (str(row.get("note")).strip() or None
+                 if row.get("note") is not None else None),
+        "at": str(row.get("at") or "") or None,
+    }
+
+
+def save_product_reviews_table(rows):
+    """Upsert reviews into the real product_reviews table.
+
+    Returns (saved_count, error). The conflict target is (product_id, email),
+    so re-saving the same review updates it instead of failing or duplicating.
+    """
+    c = client()
+    if c is None:
+        return 0, "Supabase is unavailable"
+    clean = [r for r in (_clean_review(x) for x in (rows or [])) if r]
+    if not clean:
+        return 0, None
+    for row in clean:
+        if not row.get("at"):
+            row.pop("at", None)          # let the database default fill it
+    try:
+        c.table("product_reviews").upsert(
+            clean, on_conflict="product_id,email").execute()
+        return len(clean), None
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] product_reviews upsert failed: {exc}")
+        return 0, str(exc)
+
+
+def load_product_reviews_table(product_id=None):
+    """Reviews from the real table. None when Supabase is unavailable -
+    callers must not read that as 'no reviews exist'."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        q = c.table("product_reviews").select("*")
+        if product_id:
+            q = q.eq("product_id", product_id)
+        res = q.order("at", desc=True).execute()
+        return _res_data(res) or []
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] product_reviews read failed: {exc}")
+        return None
+
+
+def delete_product_review(product_id, email):
+    """Delete exactly one review. Returns True only if a row was removed."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table("product_reviews").delete() \
+            .eq("product_id", product_id) \
+            .eq("email", str(email or "").strip().lower()).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] product_reviews delete failed: {exc}")
+        return False
+
+
+def set_product_review_hidden(product_id, email, hidden=True):
+    """Moderate one review: hide or unhide it without deleting it.
+
+    Returns True only if Supabase accepted the update.
+    """
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table("product_reviews").update({"hidden": bool(hidden)}) \
+            .eq("product_id", product_id) \
+            .eq("email", str(email or "").strip().lower()).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] product_reviews moderation failed: {exc}")
+        return False
+
+
+def migrate_product_reviews_from_blob(dry_run=True):
+    """Copy reviews from the legacy growth_settings blob into the real table.
+
+    Never deletes the blob: it stays until the copy has been verified, so a
+    failed migration cannot lose review data. Returns a report dict.
+    """
+    report = {"source": "growth_settings:" + PRODUCT_REVIEWS_KEY,
+              "dry_run": bool(dry_run), "found": 0, "usable": 0,
+              "skipped": 0, "written": 0, "verified": 0, "error": None,
+              "blob_deleted": False}
+    blob = load_product_reviews()
+    if blob is None:
+        report["error"] = "no legacy blob present (or Supabase unavailable)"
+        return report
+    report["found"] = len(blob)
+    clean = []
+    for row in blob:
+        c = _clean_review(row)
+        if c is None:
+            report["skipped"] += 1
+        else:
+            clean.append(c)
+    report["usable"] = len(clean)
+    if dry_run or not clean:
+        return report
+    written, err = save_product_reviews_table(clean)
+    if err:
+        report["error"] = err
+        return report
+    report["written"] = written
+    # Verify by reading back per product, so "written" is not taken on trust.
+    verified = 0
+    for row in clean:
+        back = load_product_reviews_table(row["product_id"])
+        if back is None:
+            continue
+        if any(str(r.get("email") or "").lower() == row["email"] for r in back):
+            verified += 1
+    report["verified"] = verified
+    if verified < len(clean):
+        report["error"] = (f"only {verified}/{len(clean)} rows verified - the "
+                           "legacy blob has been left in place")
+    return report

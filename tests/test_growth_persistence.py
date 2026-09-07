@@ -38,10 +38,23 @@ class FakeTable:
         self._name = name
         self._filter = None
 
-    def upsert(self, rows):
+    def upsert(self, rows, on_conflict=None):
+        """Upsert, honouring on_conflict the way PostgREST does.
+
+        Without this the fake de-duplicated only on `id`, so coupon_uses and
+        product_reviews - which conflict on (code, order_id) and
+        (product_id, email) - appended a duplicate row on every retry and the
+        idempotency being tested could never be observed.
+        """
         store = self._owner.tables.setdefault(self._name, [])
+        rows = rows if isinstance(rows, list) else [rows]
         for r in rows:
-            if self._name == "growth_settings":
+            if on_conflict:
+                cols = [c.strip() for c in on_conflict.split(",")]
+                key = tuple(str(r.get(c)) for c in cols)
+                store[:] = [x for x in store
+                            if tuple(str(x.get(c)) for c in cols) != key]
+            elif self._name == "growth_settings":
                 store[:] = [x for x in store if x.get("key") != r.get("key")]
             else:
                 store[:] = [x for x in store if x.get("id") != r.get("id")]
@@ -198,10 +211,15 @@ def test_restore_never_deletes_local_only_keys():
 
 
 # ------------------------------------------------------------- review mirror
-def test_review_create_mirrors_to_supabase(client, sb):
-    """A customer review must land in Supabase (growth_settings JSON row),
-    because the SQLite row alone would be wiped on the next deploy."""
+def test_review_create_writes_to_the_product_reviews_table(client, sb):
+    """A customer review must land in the real Supabase product_reviews table.
+
+    It used to ride in growth_settings as one JSON blob, which was
+    last-write-wins: two reviews arriving together lost one. The table is now
+    the source of truth, so that is what this asserts.
+    """
     execute("DELETE FROM product_reviews")
+    execute("DELETE FROM orders WHERE id='JA-REV1'")
     execute("INSERT INTO orders (id, payload, email, status, at, updated_at) "
             "VALUES (?,?,?,?,?,?)",
             ("JA-REV1", json.dumps({"items": [{"id": "wix-001", "name": "A", "qty": 1}]}),
@@ -212,12 +230,59 @@ def test_review_create_mirrors_to_supabase(client, sb):
                           "stars": 4, "note": "Great quality."},
                     headers={"X-CSRF-Token": tok})
     assert r.status_code == 200, r.data
-    raw = _growth_value(sb, supabase_store.PRODUCT_REVIEWS_KEY)
-    assert raw is not None, "the review was not mirrored to growth_settings"
-    mirrored = json.loads(raw)
+    rows = sb.tables.get("product_reviews", [])
+    assert rows, "the review was not written to the product_reviews table"
     assert any(m["product_id"] == "wix-001" and m["email"] == "rev@x.com"
-               and m["stars"] == 4 for m in mirrored)
+               and m["stars"] == 4 for m in rows)
+    # the read path must come from the same table, not from SQLite
+    got = client.get("/api/reviews/wix-001").get_json()
+    assert got["source"] == "supabase:product_reviews"
+    assert got["count"] == 1 and got["average"] == 4
     execute("DELETE FROM product_reviews"); execute("DELETE FROM orders WHERE id='JA-REV1'")
+
+
+def test_two_reviews_from_different_customers_both_survive(client, sb):
+    """The exact bug the blob had: the second write replaced the first."""
+    execute("DELETE FROM product_reviews")
+    execute("DELETE FROM orders WHERE id IN ('JA-REV2','JA-REV3')")
+    for oid, email in (("JA-REV2", "a@x.com"), ("JA-REV3", "b@x.com")):
+        execute("INSERT INTO orders (id, payload, email, status, at, updated_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (oid, json.dumps({"items": [{"id": "wix-002", "name": "B", "qty": 1}]}),
+                 email, "confirmed", "2026-09-01T00:00:00", "2026-09-01T00:00:00"))
+    tok = client.get("/api/config").get_json()["csrf"]
+    for email, stars in (("a@x.com", 5), ("b@x.com", 3)):
+        r = client.post("/api/reviews",
+                        json={"productId": "wix-002", "email": email, "name": "R",
+                              "stars": stars, "note": "Fine."},
+                        headers={"X-CSRF-Token": tok})
+        assert r.status_code == 200, r.data
+    rows = sb.tables.get("product_reviews", [])
+    assert len(rows) == 2, f"expected both reviews, got {len(rows)}: {rows}"
+    got = client.get("/api/reviews/wix-002").get_json()
+    assert got["count"] == 2 and got["average"] == 4.0
+    execute("DELETE FROM product_reviews")
+    execute("DELETE FROM orders WHERE id IN ('JA-REV2','JA-REV3')")
+
+
+def test_resubmitting_the_same_review_updates_instead_of_duplicating(client, sb):
+    execute("DELETE FROM product_reviews")
+    execute("DELETE FROM orders WHERE id='JA-REV4'")
+    execute("INSERT INTO orders (id, payload, email, status, at, updated_at) "
+            "VALUES (?,?,?,?,?,?)",
+            ("JA-REV4", json.dumps({"items": [{"id": "wix-003", "name": "C", "qty": 1}]}),
+             "c@x.com", "confirmed", "2026-09-01T00:00:00", "2026-09-01T00:00:00"))
+    tok = client.get("/api/config").get_json()["csrf"]
+    for stars in (2, 5):
+        r = client.post("/api/reviews",
+                        json={"productId": "wix-003", "email": "c@x.com", "name": "C",
+                              "stars": stars, "note": "Changed my mind."},
+                        headers={"X-CSRF-Token": tok})
+        assert r.status_code == 200, r.data
+    rows = sb.tables.get("product_reviews", [])
+    assert len(rows) == 1, f"the unique key did not hold: {rows}"
+    assert rows[0]["stars"] == 5
+    execute("DELETE FROM product_reviews"); execute("DELETE FROM orders WHERE id='JA-REV4'")
 
 
 def test_product_reviews_roundtrip(sb):

@@ -574,18 +574,23 @@ def test_the_live_set_report_buckets_are_exhaustive(monkeypatch):
                         lambda p: ("/tmp/x.jpg", p.get("image"), "found", "")
                         if "placeholder" not in str(p.get("image"))
                         else ("", p.get("image"), "placeholder", ""))
+    # wix-777 rather than wix-001: wix-001 is now an explicit operator
+    # decision, so it would land in operator_offline and this test would stop
+    # exercising the placeholder path at all.
     products = [
-        _row("wix-001", image="images/products/_placeholder.jpg"),
+        _row("wix-777", image="images/products/_placeholder.jpg"),
         _row("wix-002"),
         _row("wix-003", priceNgn=0),
         _row("jau-stock-9"),
     ]
     rep = mi.live_set_report(products, {})
     c = rep["counts"]
-    assert c == {"live": 1, "placeholder_only": 1, "no_image": 0,
+    assert c == {"approved_live": 1, "operator_offline": 0,
+                 "placeholder_only": 1, "no_image": 0,
                  "needs_review": 1, "test_fixtures_excluded": 1}
+    assert rep["approved_live_count"] == 1
     assert rep["live_ids"] == ["wix-002"]
-    assert rep["placeholder_only_ids"] == ["wix-001"]
+    assert rep["placeholder_only_ids"] == ["wix-777"]
     assert [e["id"] for e in rep["needs_review"]] == ["wix-003"]
     assert rep["test_fixtures_excluded_ids"] == ["jau-stock-9"]
     # the script must not claim to have applied anything
@@ -602,7 +607,9 @@ def test_an_existing_online_flag_that_contradicts_the_policy_is_reported(monkeyp
     conflicts = rep["existing_online_flags_that_conflict_with_the_policy"]
     assert len(conflicts) == 1
     assert conflicts[0]["id"] == "wix-001"
-    assert conflicts[0]["policy_says"] == "placeholder_only"
+    # wix-001 is now an explicit operator decision, which takes precedence over
+    # the generic placeholder classification.
+    assert conflicts[0]["policy_says"] == "operator_offline"
 
 
 def test_a_row_not_flagged_online_produces_no_conflict(monkeypatch):
@@ -619,7 +626,7 @@ def test_the_policy_never_publishes_everything():
     rep = mi.live_set_report(list(products.values()), overrides)
     total = sum(rep["counts"].values())
     assert total == len(products), "every row must be classified"
-    assert rep["counts"]["live"] < total, (
+    assert rep["counts"]["approved_live"] < total, (
         "the policy published every row - it is not filtering anything")
     assert rep["counts"]["test_fixtures_excluded"] >= 1
     # and the ids it does publish must all be real products

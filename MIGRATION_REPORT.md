@@ -10,38 +10,39 @@ below is either a code change with tests, or a dry-run report.
 ## Test tally (exact, as executed)
 
 ```
-.venv/bin/python -m pytest --collect-only -q   →  606 tests collected
-.venv/bin/python -m pytest tests/ -q -ra       →  606 passed
+.venv/bin/python -m pytest --collect-only -q   →  626 tests collected
+.venv/bin/python -m pytest tests/ -q -ra       →  626 passed
                                                   0 failed, 0 errors, 0 skipped
-                                                  in 56.40s
+                                                  in 60.88s / 62.15s (two runs)
 ```
 
-> 564 → 606: +14 live-product-policy tests, +9 non-positive-price tests,
-> +19 schema inventory tests. See the addendum at the bottom for what changed
-> since the first version of this report.
+> 564 → 606 → 626: +14 live-product-policy tests, +9 non-positive-price tests,
+> +19 schema inventory tests, then +18 coupon/review data-model tests and +3
+> review-persistence tests retargeted at the real table. See the addendum at
+> the bottom for what changed since the first version of this report.
 
 There are no skips and therefore no skip reasons. The suite was green on two
 consecutive full runs.
 
-Per-module, summing to exactly 564:
+Per-module, from `pytest --collect-only -q`, summing to exactly 626:
 
 | module | tests | | module | tests |
 |---|---|---|---|---|
-| test_api.py | 121 | | test_photo_fix.py | 9 |
-| test_static_exposure.py | 81 | | test_push_catalog.py | 9 |
-| test_admin_features.py | 45 | | test_wix_free.py | 9 |
-| test_delivery_zones.py | 33 | | test_site_settings_supabase.py | 14 |
-| test_migrate_images.py | 31 | | test_legacy_id_alias.py | 14 |
-| test_storage_supabase.py | 29 | | test_save_visibility.py | 13 |
-| test_admin_reset_tokens.py | 18 | | test_sitemap.py | 13 |
-| test_image_migration_workflow.py | 19 | | test_stock_confirm.py | 13 |
-| test_payment_settings.py | 15 | | test_recaptcha.py | 12 |
-| test_admin_password_persistence.py | 10 | | test_catalog_mirror.py | 9 |
-| test_dedupe_scope.py | 10 | | test_admin_route_gating.py | 7 |
-| test_growth_persistence.py | 6 | | test_uploaded_photos.py | 7 |
-| test_stock_sales_perf.py | 5 | | test_sync_health.py | 5 |
-| test_brand_icons.py | 3 | | test_supabase_schema.py | 3 |
-| test_backfill_rows.py | 1 | | | |
+| test_api.py | 121 | | test_save_visibility.py | 13 |
+| test_static_exposure.py | 81 | | test_recaptcha.py | 12 |
+| test_migrate_images.py | 54 | | test_dedupe_scope.py | 10 |
+| test_admin_features.py | 45 | | test_admin_password_persistence.py | 10 |
+| test_delivery_zones.py | 33 | | test_wix_free.py | 9 |
+| test_storage_supabase.py | 29 | | test_push_catalog.py | 9 |
+| test_supabase_schema.py | 22 | | test_photo_fix.py | 9 |
+| test_image_migration_workflow.py | 19 | | test_catalog_mirror.py | 9 |
+| test_coupon_uses_and_reviews.py | 18 | | test_growth_persistence.py | 8 |
+| test_admin_reset_tokens.py | 18 | | test_uploaded_photos.py | 7 |
+| test_payment_settings.py | 15 | | test_admin_route_gating.py | 7 |
+| test_site_settings_supabase.py | 14 | | test_sync_health.py | 5 |
+| test_legacy_id_alias.py | 14 | | test_stock_sales_perf.py | 5 |
+| test_stock_confirm.py | 13 | | test_brand_icons.py | 3 |
+| test_sitemap.py | 13 | | test_backfill_rows.py | 1 |
 
 ---
 
@@ -487,8 +488,9 @@ new tables is real remaining work, not a done item.
 
 ```
 git status --short                              → clean
-pytest --collect-only -q                        → 606 collected
-pytest tests/ -q -ra                            → 606 passed, 0 failed/errors/skipped
+pytest --collect-only -q                        → 626 collected
+pytest tests/ -q -ra  (run twice)               → 626 passed both times,
+                                                  0 failed/errors/skipped
 sha256 before vs after the suite                → identical for catalog.json,
                                                   categories.json, seed.json,
                                                   wix_products.json
@@ -522,3 +524,206 @@ safety: no deletes, no inserts, no renames, no price/stock writes,
 
 **The real migration has still not been run.** It cannot be from here: no
 credentials, and `gh secret list` returns HTTP 403.
+
+---
+
+# Pass 3 — operator decisions, the coupon/review data model, and a real bug
+
+## 1. Operator decisions: `wix-001` and `wix-012` go offline
+
+Both products are now recorded as explicit operator decisions in
+`migrate_images.py`:
+
+```python
+FORCED_OFFLINE = {
+    "wix-001": "placeholder image and stock_quantity=0; the online=true flag "
+               "was wrong - the storefront must not show it",
+    "wix-012": "priceNgn=0 is not a valid retail price; the price is unknown, "
+               "not free",
+}
+```
+
+`classify_live_intent()` consults `FORCED_OFFLINE` **first**, so an operator
+decision always wins over the generic classification, and the report names the
+reason `operator_offline` rather than burying it in `placeholder_only` or
+`needs_review`.
+
+**Neither row is touched.** No delete, no rename, no price change, no id
+change. The script still writes only `image_url` and `updated_at`; the offline
+decision is emitted as `apply_sql` **review text** for a human to run, with
+`applied_by_this_script: False`.
+
+## 2. The approved live count is **181**, not 180
+
+This is measured from the report, not derived from an expectation:
+
+```
+total_source_rows                275
+rows_with_a_valid_image          181
+rows_with_a_valid_price          256
+rows_with_valid_stock            256
+approved_live_count              181
+
+counts: approved_live 181 · operator_offline 2 · placeholder_only 75
+        no_image 0 · needs_review 0 · test_fixtures_excluded 17   (sums 275)
+
+operator_offline_ids  ['wix-001', 'wix-012']
+first approved ids    wix-003, wix-004, wix-005, wix-008, wix-009, wix-010
+```
+
+`wix-001` and `wix-012` were **already excluded from the 181** by the existing
+policy — `wix-001` as placeholder-only, `wix-012` as needs-review on
+`priceNgn=0`. Recording the operator decisions moved them into a
+distinguishable bucket; it did not remove them from a set they were never in.
+The arithmetic is a bucket relabel, not 181 − 2 = 179.
+
+## 3. `coupon_uses` — and a bug the tests caught
+
+`growth.record_code_use()` now writes the redemption **first** and lets
+`unique(code, order_id)` decide whether it is new:
+
+```python
+cur = execute("INSERT OR IGNORE INTO coupon_uses "
+              "(code, email, order_id, percent, used_at) VALUES (?,?,?,?,?)", ...)
+if not cur or cur.rowcount != 1:      # replay — do not count again
+    report["duplicate"] = True
+    return report
+execute("UPDATE coupons SET uses=uses+1 WHERE code=?", (code,))
+```
+
+The counter increment is **gated on a row actually being written**, so a
+confirm/retry loop, a double-tapped button or a replayed webhook cannot
+inflate `coupons.uses`. A call with no order id is refused outright — there is
+nothing to be idempotent against.
+
+Supabase is mirrored through `supabase_store.mirror_coupon_use()` with
+`on_conflict="code,order_id"`, so the durable side is idempotent too.
+
+**Bug found and fixed.** The first version of this code read `c["percent"]`,
+but the enclosing `SELECT` never fetched that column. SQLite raised
+`IndexError`, the order flow swallowed it, and the redemption was silently
+never recorded — the discount still applied, so nothing looked wrong. It was
+only visible because a test asserted on the log rather than on the counter:
+
+```
+"order_return": {"discount": 2565, "id": "JA-GRCP01", ...}   ← discount applied
+"coupon":       {"code": "SALE-10", "uses": 0, ...}          ← counter unmoved
+"uses":         []                                           ← nothing logged
+```
+
+`percent` is now in the `SELECT`. This is why the DDL was never the test.
+
+New admin route: `GET /api/admin/coupon-uses?code=…` — answers "which order
+used this code", which the counter never could.
+
+## 4. `product_reviews` — the table is now the source of truth
+
+Reviews used to be mirrored into Supabase as **one JSON blob** in
+`growth_settings`. That was last-write-wins: the whole table was re-serialised
+on every review, so two reviews arriving together lost one.
+
+Now:
+
+| Operation | Path |
+|---|---|
+| create | `POST /api/reviews` → SQLite + `save_product_reviews_table()` upsert on `(product_id, email)` |
+| list | `GET /api/reviews/<pid>` → Supabase table when configured, else SQLite; `source` says which |
+| update | same upsert — one row per `(product_id, email)`, so a resubmit edits |
+| moderate | `PATCH /api/admin/reviews` → sets `hidden`, keeps the row |
+| delete | `DELETE /api/admin/reviews` → `(product_id, email)`, the unique key |
+| admin list | `GET /api/admin/reviews` → includes hidden rows |
+
+Moderation needed a column, so `hidden` was added to both schemas, with a
+guarded `ALTER` for databases that already have the table
+(`REVIEW_COLUMNS` in `db.py:migrate()`, and a `do $$ … $$` block in
+`supabase_schema.sql`). A hidden review is kept — it is a real customer's
+verified purchase — but excluded from the storefront and from the average.
+
+Updates and deletes are addressed by `(product_id, email)`, the unique key, so
+neither can touch a different customer's review. Tests assert exactly that.
+
+**The old blob is not deleted.** `migrate_product_reviews_from_blob()` is
+dry-run by default, copies into the table, then reads back per product and
+reports `verified`. If `verified < usable` it says so and leaves the blob in
+place; `blob_deleted` is always `False`. The boot restore in `app.py` prefers
+the table and falls back to the blob with a warning naming the migration.
+
+## 5. Schema audit (re-verified, not assumed)
+
+13/13 required tables present in `supabase_schema.sql`, and all 15 required
+`products` columns — note that only the camelCase ones are double-quoted, so an
+audit that matches only `"col"` reports 5/15 and is wrong:
+
+```
+site_settings · products · categories · orders · receipts · admin_users ·
+admin_reset_tokens · coupons · coupon_uses · referral_codes · referral_uses ·
+delivery_zones · product_reviews                                  13/13
+
+id · legacyId · name · category · priceNgn · priceCfa · compareNgn ·
+compareCfa · image_url · images · stock_quantity · description ·
+featured · online · updated_at                                    15/15
+
+coupon_uses      unique (code, order_id)                present
+product_reviews  unique (product_id, email)             present
+product_reviews  hidden                                 present
+```
+
+## 6. Test-isolation fix worth recording
+
+`/tmp/jaura_test.db` outlives the process. Two tests silently depended on that
+in the wrong direction: a leftover `JA-GRCP01` order made the checkout return
+`duplicate=True` and skip the coupon bookkeeping, and a leftover `JA-REV1`
+tripped `orders.id`'s unique constraint. Both now delete their own rows first.
+A test that passes only on a cold database is not testing anything.
+
+## Verification run this pass
+
+```
+pytest tests/ -q -ra  (pass 1)                  → 626 passed
+pytest tests/ -q -ra  (pass 2)                  → 626 passed
+git status --short after each                   → only the intended source edits
+git diff -- data/catalog.json                   → empty
+git diff -- data/categories.json                → empty
+git diff -- data/seed.json                      → empty
+git diff -- data/wix_products.json              → empty
+sha256 before vs after                          → identical, all four files
+py_compile migrate_images.py                    → OK
+migrate_images.py --help                        → OK
+migrate_images.py --dry-run                     → exit 0, zero uploads, zero writes
+```
+
+New in this pass: `tests/test_coupon_uses_and_reviews.py` (18 tests — coupon
+success, retry, two-orders, cross-code replay, no-order-id, expiry, max-uses,
+invalid, admin log; review create, list, product filtering, update, delete,
+delete-requires-admin, moderation, moderation scoping, unknown-review 404,
+purchase gate), plus 3 review-persistence tests rewritten to target the table.
+
+## Dry-run report after these changes
+
+```
+products examined / matched / skipped : 275 / 182 / 93
+images discovered / missing / upload  : 275 / 5 / 182
+approved live products                : 181
+operator-offline decisions            : 2   (wix-001, wix-012)
+placeholder-only                      : 75
+test fixtures excluded                : 17
+existing HTTPS URLs                   : 0   (262 blank, 13 relative)
+non-positive prices                   : 1   (wix-012, priceNgn=0)
+missing prices / missing stock        : 0 / 0
+duplicate rows / blank ids            : 0 / 0
+legacy wix-* id references            : 258
+proposed DB updates / storage paths   : 182 / 182
+plan blockers                         : none
+environment blockers                  : SUPABASE_URL unset; credentials absent
+safe_to_apply                         : False
+applied_by_this_script                : False
+safety: no deletes, no inserts, no renames, no price/stock writes,
+        writable_columns = [image_url, updated_at], no credentials in report
+```
+
+The single occurrence of the string `SUPABASE_SERVICE_ROLE_KEY` in the report
+is the **variable name** inside a note explaining that it is unset. No key
+value appears anywhere in it.
+
+**The real migration has still not been run.** No credentials are present, and
+`dry_run=false` has not been executed.

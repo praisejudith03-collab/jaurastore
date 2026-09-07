@@ -346,8 +346,19 @@ create table if not exists product_reviews (
   stars       integer not null default 5 check (stars between 1 and 5),
   note        text,
   at          timestamptz not null default now(),
+  -- Moderation flag: kept for the record, hidden from the storefront.
+  hidden      boolean not null default false,
   unique (product_id, email)
 );
+-- A deployed database already has product_reviews, so the create above is a
+-- no-op there and this column would be missing without the guard.
+do $$
+begin
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'hidden') then
+    alter table product_reviews add column hidden boolean not null default false;
+  end if;
+end $$;
 create index if not exists product_reviews_pid on product_reviews(product_id);
 
 -- Seed the zones the storefront has always shown. on conflict do nothing, so
