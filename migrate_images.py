@@ -78,6 +78,11 @@ IMAGE_EXT = ("jpg", "jpeg", "png", "webp", "gif", "avif")
 MAX_BYTES = 6 * 1024 * 1024          # same ceiling as storage.MAX_BYTES
 PLACEHOLDER_STEM = "_placeholder"
 
+# Admin-override ids that the pytest suite writes into the tracked catalogue
+# (tests/test_stock_confirm.py, tests/test_catalog_mirror.py). They are test
+# scaffolding, not merchandising decisions, and must never be published.
+_FIXTURE_ID_RE = re.compile(r"^jau-(stock|mirror|unit|sync|opt)")
+
 # The ONLY columns this script is allowed to write. Price, stock, id, name,
 # category and every other column are deliberately absent, so a stray key can
 # never reach the database.
@@ -730,6 +735,57 @@ def execute_category_plan(client, plan, bucket):
     return out
 
 
+def live_intent_report(products, seed_count, overrides, deleted):
+    """State which products are intended to be live - with the evidence.
+
+    This exists because "publish the catalogue" is not a decision this script
+    is allowed to make, and the local data does not actually make it either:
+
+      * data/seed.json is the Wix import source. NONE of its rows carry an
+        `online` flag, and the schema defaults `online` to true - so importing
+        all 258 would put all 258 on the storefront. That is why the count in
+        Supabase (a subset) is the only real statement of intent.
+      * data/catalog.json's overrides are almost entirely TEST FIXTURES that
+        the pytest suite wrote into the tracked file (jau-stock-*, jau-mirror-*,
+        and the ids in `deleted`). They are not merchandising decisions and
+        must never be published to production.
+
+    This script only sets image_url on rows that already exist, so it cannot
+    publish any of them. The report says so explicitly rather than leaving a
+    reviewer to infer it.
+    """
+    ids = [str(p.get("id") or "") for p in products or []]
+    fixtures = sorted(pid for pid in overrides if _FIXTURE_ID_RE.match(pid))
+    explicit_offline = [str(p.get("id")) for p in products or []
+                        if p.get("online") is False]
+    seed_rows = [p for p in products or []
+                 if str(p.get("id") or "").startswith("wix-")]
+    with_photo = sum(1 for p in seed_rows
+                     if resolve_source_image(p)[2] == "found")
+    return {
+        "local_rows_considered": len(products or []),
+        "local_seed_rows": seed_count,
+        "seed_rows_carrying_an_explicit_online_flag":
+            sum(1 for p in seed_rows if p.get("online") is not None),
+        "seed_rows_with_a_real_committed_photo": with_photo,
+        "seed_rows_on_the_placeholder_only": len(seed_rows) - with_photo,
+        "rows_explicitly_marked_offline": explicit_offline,
+        "catalog_overrides": len(overrides),
+        "catalog_overrides_that_are_test_fixtures": fixtures,
+        "catalog_overrides_that_are_real_products":
+            sorted(set(overrides) - set(fixtures)),
+        "catalog_deleted_ids": len(deleted),
+        "decision": (
+            "NOT DECIDED BY THIS SCRIPT. No local row carries an online flag, "
+            "and the admin overrides are test fixtures, so the repository does "
+            "not express a publish intent. The rows already present in "
+            "Supabase are the live set; this migration only sets image_url on "
+            "them and inserts nothing. Importing all 258 seed rows would put "
+            "all 258 on the storefront, because the schema defaults online to "
+            "true - do not do that without an explicit merchandising decision."),
+    }
+
+
 # ------------------------------------------------------------------- report
 def write_report(report, path):
     """Write the JSON report, masked.
@@ -947,6 +1003,11 @@ def main(argv=None):
             overrides if isinstance(overrides, dict) else {},
             deleted if isinstance(deleted, list) else [],
             supabase_rows=products if client is not None else None),
+        "live_intent": live_intent_report(
+            products,
+            seed_count if isinstance(seed_count, int) else 0,
+            overrides if isinstance(overrides, dict) else {},
+            deleted if isinstance(deleted, list) else []),
         "products": product_plan,
         "categories": cat_plan,
     }
