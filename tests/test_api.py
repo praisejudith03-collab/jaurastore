@@ -1090,7 +1090,7 @@ def _growth_order(client, oid, email, total=25000, currency="NGN",
     body = {
         "id": oid, "currency": currency, "total": total,
         "customer": {"name": "Growth Tester", "phone": "+2348012345678",
-                     "email": email, "city": "Lagos", "zone": "Lagos",
+                     "email": email, "city": "Lagos", "zone": "Lagos Mainland",
                      "address": "1 Test Street"},
         "items": [{"id": pid, "name": "Bag", "qty": qty, "price": total}],
     }

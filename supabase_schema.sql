@@ -294,6 +294,46 @@ create table if not exists admin_reset_tokens (
 );
 create index if not exists admin_reset_tokens_lookup on admin_reset_tokens(email, purpose, created_at desc);
 
+-- Delivery zones and their fare ranges. Admin-editable, served to the
+-- storefront by GET /api/site so checkout no longer hardcodes the list.
+-- The fare is a RANGE because transport varies with weight; the exact figure
+-- is agreed with the customer after payment. `kind`:
+--   delivery = a published min..max range in `currency`
+--   pickup   = free collection, no fare
+--   quote    = fare agreed per order, no range published
+create table if not exists delivery_zones (
+  id          text primary key,
+  name        text not null unique,
+  currency    text not null default 'CFA' check (currency in ('CFA','NGN')),
+  fare_min    integer not null default 0 check (fare_min >= 0),
+  fare_max    integer not null default 0 check (fare_max >= 0),
+  kind        text not null default 'delivery'
+                check (kind in ('delivery','pickup','quote')),
+  active      boolean not null default true,
+  sort_order  integer not null default 0,
+  note        text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists delivery_zones_active on delivery_zones(active, sort_order);
+
+-- Seed the zones the storefront has always shown. on conflict do nothing, so
+-- re-running the schema never overwrites an admin's edited fares.
+insert into delivery_zones (id, name, currency, fare_min, fare_max, kind, sort_order)
+values
+  ('lagos-mainland', 'Lagos Mainland', 'NGN', 2000, 5000, 'delivery', 1),
+  ('lagos-island',   'Lagos Island',   'NGN', 3500, 6000, 'delivery', 2),
+  ('ng-other',       'Other Nigeria',  'NGN',    0,    0, 'quote',    3),
+  ('cotonou',        'Cotonou',        'CFA', 1000, 3000, 'delivery', 4),
+  ('calavi',         'Calavi',         'CFA', 1500, 3500, 'delivery', 5),
+  ('porto-novo',     'Porto-Novo',     'CFA', 1500, 3500, 'delivery', 6),
+  ('bj-other',       'Other Benin',    'CFA',    0,    0, 'quote',    7),
+  ('lome',           'Lomé',           'CFA', 2500, 3500, 'delivery', 8),
+  ('tg-other',       'Other Togo',     'CFA',    0,    0, 'quote',    9),
+  ('pickup-cotonou', 'Pickup in Cotonou is free for lighter products',
+                     'CFA',    0,    0, 'pickup',   10)
+on conflict (id) do nothing;
+
 -- Storage is provisioned once in Dashboard or with this statement. The service
 -- role is used only server-side; public objects are safe to render directly.
 insert into storage.buckets (id, name, public)

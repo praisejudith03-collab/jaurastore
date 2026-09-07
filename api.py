@@ -9,6 +9,7 @@ import emailer
 import storage
 import catalog as catalog_mod
 import analytics as analytics_mod
+import delivery
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
@@ -750,13 +751,22 @@ def create_order():
     currency = sec.clean(d.get("currency"), 3).upper() or "NGN"
     total = sec.clean_int(d.get("total"), 0, 0, 10**12)
 
-    # delivery: location only, pickup only allowed as "Pickup in Cotonou is free for lighter products"
+    # ---- delivery zone + fare: the server is the authority ----
+    # The zone list used to be hardcoded in checkout.html and this endpoint
+    # accepted any free text, only regex-blocking the word "pickup". Now the
+    # zone is resolved against the admin-editable delivery_zones table, which
+    # also supplies the fare range. An unknown zone is rejected outright: that
+    # subsumes the old pickup heuristic (an invented "pick up at my house" is
+    # simply not a zone) and means the order always carries a fare the server
+    # can stand behind.
     zone = sec.clean(customer_raw.get("zone") or d.get("zone"), 80)
-    zone_lower = zone.lower()
-    # Allow the specific free pickup option, block other pickup attempts
-    is_allowed_pickup = bool(re.search(r"(?i)pickup in cotonou.*free.*lighter|free.*lighter.*cotonou", zone)) or zone_lower == "pickup in cotonou" or "pickup in cotonou is free for lighter products" in zone_lower
-    if not is_allowed_pickup and re.search(r"(?i)\bpick[\s-]?up\b|collect\s+in\s+store|self[\s-]?collect", zone):
-        return jsonify(ok=False, error="Choose a delivery location."), 400
+    fare_ok, fare = delivery.fare_for(zone, currency)
+    if not fare_ok:
+        return jsonify(ok=False,
+                       error=fare.get("error") or "Choose a delivery zone."), 400
+    # Store the canonical name, not whatever the browser sent, so analytics and
+    # the admin order list group by real zones.
+    zone = fare["zone_name"]
 
     # ---- server-authoritative lines: prices from the live catalogue ----
     # (Supabase in production; the browser's price/total is never trusted)
@@ -830,6 +840,10 @@ def create_order():
         "payment": sec.clean(d.get("payment"), 60) or currency,
         "proofUrl": proof_url,
         "source": sec.clean(d.get("source"), 20) or "web",
+        # The server-computed fare snapshot. The exact figure is agreed with
+        # the customer after payment (transport varies with weight), so this
+        # records the RANGE the checkout quoted plus who has to confirm it.
+        "delivery": fare,
     }
     if promo:
         order["promo"] = promo
@@ -975,6 +989,10 @@ def create_order():
                                  referralCode=referral_code,
                                  promo=promo or None,
                                  subtotal=subtotal, discount=discount, total=total,
+                                 # The fare range this checkout quoted, so the
+                                 # confirmation page can restate it instead of
+                                 # re-deriving it client-side.
+                                 delivery=fare,
                                  items=clean_items))
     return analytics_mod.stamp_cookie(resp, vid)
 
@@ -1949,6 +1967,13 @@ def _site_payload(site):
     for col, alias in SITE_LEGACY_ALIASES.items():
         if col in out and alias not in out:
             out[alias] = out[col]
+    # Delivery zones ride along with the site config so the storefront stops
+    # hardcoding the fare list in checkout.html. Active zones only - an
+    # inactive zone must not be selectable at checkout.
+    try:
+        out["delivery_zones"] = delivery.zones()
+    except Exception:
+        out["delivery_zones"] = []
     return out
 _SITE_URL_KEYS = frozenset(SITE_KEYS) | {
     "site_logo_url", "hero_video_url", "hero_poster_url", "hero_doc_url",
@@ -2028,6 +2053,48 @@ def admin_site_update():
         return jsonify(ok=False, error="Could not update Supabase site settings. No changes were made."), 503
     audit(authmod.current_admin(), "site.update", json.dumps(values)[:200], _ip())
     return jsonify(ok=True, site=_site_payload(site))
+
+# ==================================================== admin: delivery zones
+# Delivery zones and their fare ranges are admin-editable, and the storefront
+# reads them from GET /api/site. Every write returns the zone list re-read from
+# the store, so the portal repaints from what was actually saved rather than
+# from what the admin typed.
+
+@api.get("/admin/delivery-zones")
+@authmod.require_admin
+def admin_delivery_zones():
+    return jsonify(ok=True, zones=delivery.zones(include_inactive=True))
+
+
+@api.post("/admin/delivery-zones")
+@authmod.require_admin
+@sec.require_csrf
+def admin_delivery_zone_save():
+    d = request.get_json(silent=True) or {}
+    zone_id = sec.clean(d.get("id"), 64).strip().lower()
+    if not zone_id:
+        # Derive a stable slug from the name so the Admin form can create a
+        # zone without making the operator invent an id.
+        zone_id = re.sub(r"[^a-z0-9]+", "-",
+                         str(d.get("name") or "").lower()).strip("-")[:64]
+    if not zone_id:
+        return jsonify(ok=False, error="A zone needs a name."), 400
+    saved, error = delivery.save_zone(zone_id, d)
+    if error:
+        return jsonify(ok=False, error=error), 400
+    audit(authmod.current_admin(), "delivery_zone.save", zone_id, _ip())
+    return jsonify(ok=True, zone=saved, zones=delivery.zones(include_inactive=True))
+
+
+@api.delete("/admin/delivery-zones/<zone_id>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_delivery_zone_delete(zone_id):
+    ok, error = delivery.delete_zone(zone_id)
+    if not ok:
+        return jsonify(ok=False, error=error), 404
+    audit(authmod.current_admin(), "delivery_zone.delete", zone_id, _ip())
+    return jsonify(ok=True, zones=delivery.zones(include_inactive=True))
 
 # ==================================================== public: promo & referral
 @api.post("/promo/check")

@@ -59,6 +59,11 @@
           <div class="field"><label data-i18n="ck.city">Town / City *</label><input name="city" required data-i18n-placeholder="ck.cityPh" placeholder="Cotonou, Ikeja, Lekki…" /></div>
           <div class="field full fare-field">
             <label for="ck-zone" data-delivery-label data-i18n="ck.zone">State / Zone *</label>
+            <!-- The authoritative zone list comes from GET /api/site
+                 (Admin Portal -> Delivery zones). js/app.js paintDeliveryZones()
+                 REPLACES these options as soon as that response arrives. What is
+                 left below is only a static fallback for the case where the API
+                 is unreachable - do not edit fares here, they will be ignored. -->
             <select name="zone" id="ck-zone" class="ck-zone-select" required data-delivery-zones>
               <option value="" selected data-i18n="ck.zonePlaceholder">Choose a delivery zone</option>
               <option value="Lagos Mainland" data-i18n="ck.fare.mainland">Lagos Mainland (₦2,000 – ₦5,000)</option>

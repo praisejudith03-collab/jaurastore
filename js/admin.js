@@ -1380,7 +1380,14 @@ function paintDesk(tab = "analytics") {
   if (tab === "sales") fillSales();
   if (tab === "marketing") fillMarketing();
   if (tab === "account") bindAccount();
-  if (tab === "settings") { bindHeroVideo(); bindBanner(); bindSiteBranding(); bindShippingNote(); }
+  if (tab === "settings") {
+    bindHeroVideo(); bindBanner(); bindSiteBranding(); bindShippingNote();
+    // Zones render from dzCache, so bind first and repaint the table body
+    // once the server list arrives - no full repaint, which would drop the
+    // admin out of a half-filled zone form.
+    bindDeliveryZones();
+    loadDeliveryZones().then(() => paintZoneTable()).catch(() => {});
+  }
 
   const form = $("#prod-form");
   const existing = editingId && editingId !== "new" ? JA.product(editingId) : null;
@@ -1702,9 +1709,175 @@ function settingsForm() {
     <p class="admin-note full">These dates appear on the moving banner under the header. Shoppers in Benin are told they will receive their order between these two days.</p>
     <div class="field"><label>Delivery window starts</label><input type="date" name="bannerFrom" id="banner-from" value="2026-09-15" /></div>
     <div class="field"><label>Delivery window ends</label><input type="date" name="bannerTo" id="banner-to" value="2026-09-25" /></div>
-    <div class="field full"><label>Delivery fee / shipping note (shown at checkout)</label><textarea name="shipping_note" id="shipping-note" rows="3" maxlength="800" placeholder="e.g. Delivery fee: Lagos ₦2000-₦5000, Cotonou 1000-3000 CFA. Pickup in Cotonou is free for lighter products.">${JA.escape(s.shippingNote || "")}</textarea><p class="admin-note">This note appears dynamically at checkout under the order totals. Leave empty to hide.</p></div>
+    <div class="field full"><label>Delivery fee / shipping note (shown at checkout)</label><textarea name="shipping_note" id="shipping-note" rows="3" maxlength="800" placeholder="e.g. Delivery fee: Lagos ₦2000-₦5000, Cotonou 1000-3000 CFA. Pickup in Cotonou is free for lighter products.">${JA.escape(s.shipping_note != null ? s.shipping_note : (s.shippingNote || ""))}</textarea><p class="admin-note">This note appears dynamically at checkout under the order totals. Leave empty to hide.</p></div>
     <div class="field full"><p class="admin-err" id="set-form-error" hidden></p><button class="btn" id="set-form-save">Save settings</button></div>
-  </form>`;
+  </form>
+  ${deliveryZonesPanel()}`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Delivery zones and fares. These are the authoritative list the
+ * storefront renders at checkout (GET /api/site -> delivery_zones), and
+ * the server rejects any zone it does not recognise. The fare is a RANGE
+ * because transport varies with weight; the exact figure is agreed with
+ * the customer after payment.
+ * ------------------------------------------------------------------ */
+function zoneKindLabel(k) {
+  return k === "pickup" ? "Pickup (free)" : k === "quote" ? "Quote on WhatsApp" : "Delivery range";
+}
+function zoneFareLabel(z) {
+  if (z.kind === "pickup") return "Free collection";
+  if (z.kind === "quote") return "Agreed per order";
+  const sym = z.currency === "NGN" ? "\u20A6" : "";
+  const suf = z.currency === "CFA" ? " CFA" : "";
+  return sym + Number(z.fare_min || 0).toLocaleString("en-US") + suf + " \u2013 "
+       + sym + Number(z.fare_max || 0).toLocaleString("en-US") + suf;
+}
+function zoneRowsHTML() {
+  const list = (dzCache && dzCache.length) ? dzCache : [];
+  return list.map((z) => `
+    <tr>
+      <td>${JA.escape(z.name)}</td>
+      <td>${JA.escape(z.currency)}</td>
+      <td>${zoneFareLabel(z)}</td>
+      <td>${zoneKindLabel(z.kind)}</td>
+      <td>${z.active ? "Live" : "Hidden"}</td>
+      <td class="au-row-actions">
+        <button type="button" class="au-link-btn" data-zone-edit="${JA.escape(z.id)}">Edit</button>
+        <button type="button" class="au-link-btn au-danger" data-zone-del="${JA.escape(z.id)}">Delete</button>
+      </td>
+    </tr>`).join("");
+}
+function paintZoneTable() {
+  const body = document.querySelector("#zone-table tbody");
+  if (!body) return;
+  body.innerHTML = zoneRowsHTML()
+    || `<tr><td colspan="6">No zones yet. Add the first one below.</td></tr>`;
+}
+function deliveryZonesPanel() {
+  return `
+  <section class="admin-block" id="delivery-zones">
+    <h3 class="admin-h">Delivery zones and fares</h3>
+    <p class="admin-note">Checkout offers exactly these zones and the server refuses any other value, so editing here changes the storefront immediately. A fare is a range: transport varies with weight and the final figure is confirmed with the customer after payment.</p>
+    <p class="admin-err" id="zone-error" hidden></p>
+    <div class="au-table-wrap"><table class="au-table" id="zone-table">
+      <thead><tr><th>Zone</th><th>Currency</th><th>Fare</th><th>Type</th><th>Status</th><th></th></tr></thead>
+      <tbody>${zoneRowsHTML() || `<tr><td colspan="6">No zones yet. Add the first one below.</td></tr>`}</tbody>
+    </table></div>
+    <form id="zone-form" autocomplete="off">
+      <input type="hidden" name="zone_id" value="" />
+      <div class="field"><label>Zone name *</label><input name="zone_name" maxlength="80" required placeholder="e.g. Lagos Mainland" /></div>
+      <div class="field"><label>Currency</label><select name="zone_currency"><option value="CFA">CFA (XOF)</option><option value="NGN">Naira (NGN)</option></select></div>
+      <div class="field"><label>Type</label><select name="zone_kind">
+        <option value="delivery">Delivery range</option>
+        <option value="pickup">Pickup (free)</option>
+        <option value="quote">Quote on WhatsApp</option>
+      </select></div>
+      <div class="field"><label>Fare from</label><input name="zone_fare_min" type="number" min="0" step="1" value="0" /></div>
+      <div class="field"><label>Fare to</label><input name="zone_fare_max" type="number" min="0" step="1" value="0" /></div>
+      <div class="field"><label>Display order</label><input name="zone_sort" type="number" step="1" value="0" /></div>
+      <div class="field"><label>Status</label><select name="zone_active"><option value="1">Live</option><option value="0">Hidden</option></select></div>
+      <div class="field full"><button type="submit" class="btn" id="zone-save">Save zone</button>
+        <button type="button" class="btn btn-line" id="zone-cancel" hidden>Cancel edit</button></div>
+    </form>
+  </section>`;
+}
+
+let dzCache = [];
+
+async function loadDeliveryZones() {
+  const res = window.JA_NET ? await window.JA_NET.api("api/admin/delivery-zones") : null;
+  dzCache = (res && res.ok && Array.isArray(res.zones)) ? res.zones : [];
+  return dzCache;
+}
+
+function zoneError(msg) {
+  const el = $("#zone-error");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.hidden = !msg;
+}
+
+function bindDeliveryZones() {
+  const form = $("#zone-form");
+  if (!form || form.dataset.bound === "1") return;
+  form.dataset.bound = "1";
+  const block = $("#delivery-zones");
+
+  block.addEventListener("click", async (e) => {
+    const del = e.target.closest("[data-zone-del]");
+    if (del) {
+      const id = del.getAttribute("data-zone-del");
+      if (!window.confirm("Delete this delivery zone? Existing orders keep their saved snapshot.")) return;
+      del.disabled = true;
+      const res = window.JA_NET
+        ? await window.JA_NET.api("api/admin/delivery-zones/" + encodeURIComponent(id), { method: "DELETE" })
+        : null;
+      if (!res || !res.ok) {
+        del.disabled = false;
+        zoneError((res && res.error) || "Could not delete the zone.");
+        return;
+      }
+      dzCache = res.zones || [];
+      paintDesk("settings");
+      return;
+    }
+    const edit = e.target.closest("[data-zone-edit]");
+    if (edit) {
+      const z = dzCache.find((x) => x.id === edit.getAttribute("data-zone-edit"));
+      if (!z) return;
+      form.zone_id.value = z.id;
+      form.zone_name.value = z.name;
+      form.zone_currency.value = z.currency;
+      form.zone_kind.value = z.kind;
+      form.zone_fare_min.value = z.fare_min;
+      form.zone_fare_max.value = z.fare_max;
+      form.zone_sort.value = z.sort_order;
+      form.zone_active.value = z.active ? "1" : "0";
+      $("#zone-cancel").hidden = false;
+      $("#zone-save").textContent = "Update zone";
+      zoneError("");
+      form.zone_name.focus();
+    }
+  });
+
+  const cancel = $("#zone-cancel");
+  if (cancel) cancel.addEventListener("click", () => {
+    form.reset();
+    form.zone_id.value = "";
+    cancel.hidden = true;
+    $("#zone-save").textContent = "Save zone";
+    zoneError("");
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    zoneError("");
+    const btn = $("#zone-save");
+    const payload = {
+      id: form.zone_id.value || "",
+      name: form.zone_name.value.trim(),
+      currency: form.zone_currency.value,
+      kind: form.zone_kind.value,
+      fare_min: Number(form.zone_fare_min.value || 0),
+      fare_max: Number(form.zone_fare_max.value || 0),
+      sort_order: Number(form.zone_sort.value || 0),
+      active: form.zone_active.value === "1",
+    };
+    btn.disabled = true;
+    const res = window.JA_NET
+      ? await window.JA_NET.api("api/admin/delivery-zones", { method: "POST", json: payload })
+      : null;
+    btn.disabled = false;
+    // Success only after the server confirms, and the table is repainted from
+    // what the server sent back rather than from the form.
+    if (!res || !res.ok) {
+      zoneError((res && res.error) || "Could not save the zone. Nothing changed.");
+      return;
+    }
+    dzCache = res.zones || [];
+    paintDesk("settings");
+  });
 }
 async function saveSiteConfig(patch) {
   return window.JA_NET ? window.JA_NET.api("api/admin/site", { method: "POST", json: patch }) : Promise.resolve(null);

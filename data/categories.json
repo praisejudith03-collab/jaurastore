@@ -23,7 +23,7 @@
     },
     {
       "id": "beauty",
-      "name": "Beauty & skincare",
+      "name": "Beauty",
       "nameFr": "Beauté & soins",
       "image": "images/categories/beauty.jpg",
       "hidden": false
@@ -58,7 +58,7 @@
     },
     {
       "id": "gift-set",
-      "name": "Gift set",
+      "name": "Gift Sets & Packaging",
       "nameFr": "",
       "image": "images/categories/household.jpg",
       "hidden": false
@@ -78,6 +78,6 @@
       "hidden": false
     }
   ],
-  "updatedAt": "2026-08-31T21:54:10",
-  "updatedBy": "seed"
+  "updatedAt": "2026-09-07T17:41:04Z",
+  "updatedBy": "category_merge_v2"
 }

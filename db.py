@@ -249,7 +249,45 @@ CREATE TABLE IF NOT EXISTS growth_settings (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
+--
+-- Delivery zones and their fare ranges. Editable from the Admin Portal and
+-- served to the storefront by GET /api/site, so checkout.html no longer
+-- hardcodes the fare list. The fare is a RANGE, not a fixed price: transport
+-- varies with weight, and the exact figure is confirmed with the customer
+-- after payment. `kind` decides how checkout treats the row:
+--   delivery - a quoted range, min..max in `currency`
+--   pickup   - no fare (free collection)
+--   quote    - fare must be agreed with the customer, no range published
+CREATE TABLE IF NOT EXISTS delivery_zones (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  currency   TEXT NOT NULL DEFAULT 'CFA',
+  fare_min   INTEGER NOT NULL DEFAULT 0,
+  fare_max   INTEGER NOT NULL DEFAULT 0,
+  kind       TEXT NOT NULL DEFAULT 'delivery',
+  active     INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  note       TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
+
+# The zones the storefront has always shown, kept as the seed so a fresh
+# database behaves exactly like the live one. Ids are stable slugs so orders
+# keep resolving after a zone is renamed.
+DEFAULT_DELIVERY_ZONES = [
+    ("lagos-mainland", "Lagos Mainland", "NGN", 2000, 5000, "delivery", 1),
+    ("lagos-island", "Lagos Island", "NGN", 3500, 6000, "delivery", 2),
+    ("ng-other", "Other Nigeria", "NGN", 0, 0, "quote", 3),
+    ("cotonou", "Cotonou", "CFA", 1000, 3000, "delivery", 4),
+    ("calavi", "Calavi", "CFA", 1500, 3500, "delivery", 5),
+    ("porto-novo", "Porto-Novo", "CFA", 1500, 3500, "delivery", 6),
+    ("bj-other", "Other Benin", "CFA", 0, 0, "quote", 7),
+    ("lome", "Lom\u00e9", "CFA", 2500, 3500, "delivery", 8),
+    ("tg-other", "Other Togo", "CFA", 0, 0, "quote", 9),
+    ("pickup-cotonou", "Pickup in Cotonou is free for lighter products",
+     "CFA", 0, 0, "pickup", 10),
+]
 
 def connect():
     cx = getattr(_local, "conn", None)
@@ -261,9 +299,22 @@ def connect():
         _local.conn = cx
     return cx
 
+def seed_delivery_zones():
+    """Insert the default zones once. Idempotent: existing rows are untouched,
+    so an admin's edited fares survive a restart."""
+    for zid, name, cur, fmin, fmax, kind, order in DEFAULT_DELIVERY_ZONES:
+        execute(
+            "INSERT OR IGNORE INTO delivery_zones "
+            "(id, name, currency, fare_min, fare_max, kind, active, sort_order) "
+            "VALUES (?,?,?,?,?,?,1,?)",
+            (zid, name, cur, fmin, fmax, kind, order))
+
+
 def init_db():
     cx = connect()
     cx.executescript(SCHEMA)
+    cx.commit()
+    seed_delivery_zones()
     cx.commit()
     return cx
 

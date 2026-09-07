@@ -1231,6 +1231,51 @@ function paintCheckoutTotals(form) {
   if (countryNote) countryNote.hidden = false;
 }
 
+/** One zone -> the label a customer should read. The fare is a RANGE because
+ *  transport varies with weight; a single number would over-promise. */
+function zoneLabel(z) {
+  const sym = z.currency === "NGN" ? "\u20A6" : "";
+  const suf = z.currency === "CFA" ? " CFA" : "";
+  const fmt = (n) => sym + Number(n || 0).toLocaleString("en-US") + suf;
+  if (z.kind === "pickup") return z.name;
+  if (z.kind === "quote") return z.name + " (confirm on WhatsApp)";
+  return z.name + " (" + fmt(z.fare_min) + " \u2013 " + fmt(z.fare_max) + ")";
+}
+
+/** Rebuild the zone <select> from the server's zone list.
+ *  Falls back to whatever checkout.html already contains if the server gave
+ *  nothing, so a static host or a failed fetch still shows a working form. */
+function paintDeliveryZones(form) {
+  const sel = form.querySelector("select[name=zone], select[data-delivery-zones]");
+  if (!sel) return;
+  const site = (JA.getSiteConfig && JA.getSiteConfig()) || {};
+  const list = Array.isArray(site.delivery_zones) ? site.delivery_zones : null;
+  if (!list || !list.length) return;
+  const previous = sel.value;
+  sel.textContent = "";
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = (window.JA_i18n && JA_i18n.t && JA_i18n.t("ck.zonePlaceholder"))
+    || "Choose a delivery zone";
+  ph.selected = true;
+  sel.appendChild(ph);
+  list.forEach((z) => {
+    if (!z || !z.name) return;
+    const opt = document.createElement("option");
+    // The server matches on the zone NAME, so that is the value we send.
+    opt.value = z.name;
+    opt.textContent = zoneLabel(z);
+    opt.dataset.zoneId = z.id || "";
+    opt.dataset.zoneKind = z.kind || "delivery";
+    opt.dataset.fareMin = String(z.fare_min || 0);
+    opt.dataset.fareMax = String(z.fare_max || 0);
+    opt.dataset.currency = z.currency || "";
+    if (previous && previous === z.name) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  sel.dataset.zonesFrom = "server";
+}
+
 function renderCheckout() {
   const form = document.querySelector("[data-checkout]");
   const empty = document.querySelector("[data-empty]");
@@ -1278,31 +1323,13 @@ function renderCheckout() {
 
   if (form.dataset.bound) return;
   form.dataset.bound = "1";
-  // Delivery only: allow "Pickup in Cotonou is free for lighter products" but block other pickup options
-  document.querySelectorAll("[data-delivery-zones] .fare-opt, .fare-list .fare-opt").forEach((opt) => {
-    const input = opt.querySelector("input");
-    const text = (opt.textContent || "") + " " + (input && input.value ? input.value : "");
-    const isAllowedPickup = /pickup in cotonou.*free.*lighter|free.*lighter.*cotonou/i.test(text);
-    if (!isAllowedPickup && /pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
-  });
-  document.querySelectorAll("select[data-delivery-zones] option").forEach((opt) => {
-    const text = (opt.textContent || "") + " " + (opt.value || "");
-    const isAllowedPickup = /pickup in cotonou.*free.*lighter|free.*lighter.*cotonou/i.test(text) || text.toLowerCase().includes("pickup in cotonou is free for lighter products");
-    if (!isAllowedPickup && /pick\s*-?\s*up|collect\s+in\s+store|self\s*-?\s*collect/i.test(text)) opt.remove();
-  });
-  // Ensure pickup free option exists — inject if missing (for dynamic selects)
-  try {
-    const zoneSelect = form.querySelector("[name=zone], select[data-delivery-zones]");
-    if (zoneSelect && zoneSelect.tagName === "SELECT") {
-      const hasPickup = [...zoneSelect.options].some((o) => /pickup in cotonou.*free.*lighter/i.test(o.value) || /pickup in cotonou is free/i.test(o.textContent));
-      if (!hasPickup) {
-        const opt = document.createElement("option");
-        opt.value = "Pickup in Cotonou is free for lighter products";
-        opt.textContent = "Pickup in Cotonou is free for lighter products";
-        zoneSelect.appendChild(opt);
-      }
-    }
-  } catch (e) {}
+  // ---- Delivery zones come from the server ----
+  // The list used to be hardcoded in checkout.html and then regex-filtered
+  // here, guessing which options counted as "pickup". The zone table is now
+  // admin-editable and served by GET /api/site, and the server rejects any
+  // zone it does not know - so the options are built from the data and no
+  // client-side guessing is left.
+  try { paintDeliveryZones(form); } catch (e) {}
   try { JA.track("checkout_start", { page: "checkout" }); } catch (e) {}
 
   // ---- Shipping note dynamic from Admin Settings ----
