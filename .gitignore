@@ -40,3 +40,6 @@ data/backups/orders-backup.json
 # Migration reports are per-run artifacts, never source
 supabase_migration_report.json
 receipts_migration.json
+migration-dry-run.json
+migration-result.json
+migration-*.json
