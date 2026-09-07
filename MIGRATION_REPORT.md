@@ -927,3 +927,96 @@ outside the 181. Neither row is deleted, renamed, or repriced.
    (dry-run first) and verify row counts and samples before touching it. The
    blob has not been deleted.
 6. Post-migration SQL, the admin/persistence checklist, and the visual pass.
+
+---
+
+# Pass 5 — why 182 image updates vs 181 approved live
+
+## The one-row difference is `wix-012`
+
+The two numbers count different things:
+
+| number | axis | definition |
+|---|---|---|
+| **182** | image plan | the row points at a real local photo, so an upload + `image_url` write is proposed |
+| **181** | live set | the row is approved to be **public**: real photo **and** valid price **and** valid stock, not a fixture, not an operator decision |
+
+Set difference, computed from the report rather than inferred:
+
+```
+in the 182 proposed updates but NOT approved live : ['wix-012']
+approved live but NOT in the 182 proposed updates : []      (empty)
+```
+
+So **182 = 181 approved live + `wix-012`**. Exactly one extra row, and it is
+accounted for.
+
+## Are `wix-001` / `wix-012` among the 182?
+
+| product | among the 182 proposed image updates? | why |
+|---|---|---|
+| `wix-001` | **No** | `reason: placeholder` — it points at `images/products/_placeholder.jpg`, so the planner skips it. It is in the 93 skipped (88 placeholder + 5 blank). |
+| `wix-012` | **Yes** | it has a real photo, `images/products/24-k-nicotinamide-toner-300-ml.jpg`, 162,728 bytes, sha256 `3f817b09…`. It is operator-offline because `priceNgn=0`, **not** because the image is missing. |
+
+Neither is among the 181 approved live. The classification is unchanged:
+181 / operator-offline `wix-001`,`wix-012` / 75 placeholder-only / 17 fixtures /
+0 needs-review, summing to 275.
+
+## Giving an offline product a correct image is safe — and intended
+
+The proposed write for `wix-012`, verbatim from the report:
+
+```json
+{
+  "table": "products",
+  "operation": "UPDATE (never INSERT)",
+  "match": { "id": "wix-012" },
+  "set": { "image_url": "https://<SUPABASE_URL>/storage/v1/object/public/uploads/products/wix-012/3f817b09b3bb89f0-24-k-nicotinamide-toner-300-ml.jpg",
+           "updated_at": "<run timestamp>" },
+  "columns_never_written": ["id","priceNgn","priceCfa","compareNgn","compareCfa",
+                            "stock_quantity","stock","name","category","online"],
+  "observed_before": { "priceNgn": 0, "priceCfa": 3500, "stock_quantity": null,
+                       "stock": 24, "online": null, "image_url": null }
+}
+```
+
+Across **all 182** proposed updates the distinct `set` keys are exactly
+`['image_url', 'updated_at']` and the operation is always
+`UPDATE (never INSERT)`; a scan for `online|priceNgn|priceCfa|compareNgn|
+compareCfa|stock_quantity|id|legacyId|name|category` in any `set` returns
+**zero offending rows**. Fixing `wix-012`'s image now means that when a real
+price is supplied later, setting `online=true` is the only remaining step.
+
+## The real risk this surfaced: `online` defaults to TRUE
+
+`supabase_schema.sql` declares `online boolean default true` (line 47, and the
+repair at line 84). The observed source flags are:
+
+- `wix-001` → `flagged_online: true` (the flag that was wrong in the first place)
+- `wix-012` → `online: null`, which falls through to the same `default true`
+
+**The image migration cannot fix this, by design** — it never writes `online`.
+So the operator decision needs a separate, explicit statement. The report
+emits it as review text in `live_set.apply_sql`, whose offline clause begins:
+
+```sql
+update products set online = false, updated_at = now()
+ where id in ('wix-001', 'wix-012', 'wix-002', ...);   -- 77 ids total
+```
+
+Run that **before** trusting any storefront check. `applied_by_this_script`
+remains `False`; `migrate_images.py` only ever prints it.
+
+## One nuance in the post-migration verification query
+
+Query 2 catches an online product missing data via
+`image_url is null OR image_url not like 'https://%' OR "priceNgn" is null
+OR "priceCfa" is null OR stock_quantity is null`.
+
+For `wix-012` today it **would** fire — but on `stock_quantity is null`, not on
+the price. `priceNgn = 0` is not null, so a zero price passes that test. If
+`stock_quantity` is ever populated for `wix-012` while `priceNgn` is still 0
+and the row is online, query 2 returns nothing and the defect is invisible.
+Adding `or "priceNgn" <= 0 or "priceCfa" <= 0` closes that. Query 3
+(`where id in ('wix-001','wix-012')`, both must be `online=false`) is the check
+that actually protects this decision, and it is sufficient on its own.
