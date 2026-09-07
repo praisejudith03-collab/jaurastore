@@ -420,3 +420,81 @@ def test_dry_run_report_writes_no_file_outside_the_report_path(sandbox, monkeypa
     out = tmp_path / "dry.json"
     mi.main(["--dry-run", "--source", "supabase", "--report", str(out)])
     assert sorted(os.listdir(sandbox / "images" / "products")) == before
+
+
+# ---------------------------------------------------------------------------
+# Blocker 8 - the report must state "Existing HTTPS URLs" explicitly.
+# "N already uploaded" is not the same number: that counts objects found in
+# the bucket this run, while this tally is about rows that ALREADY point at a
+# complete HTTPS URL and therefore must be left alone.
+# ---------------------------------------------------------------------------
+
+_GOOD = "https://abcxyz.supabase.co/storage/v1/object/public/uploads/products/wix-001/deadbeef-a.jpg"
+
+
+@pytest.mark.parametrize("url,want_kind,want_host", [
+    (_GOOD, "already_public_supabase_uploads", "abcxyz.supabase.co"),
+    ("https://cdn.jaurastore.com/x.jpg", "other_https_host", "cdn.jaurastore.com"),
+    ("https://static.wixstatic.com/media/a.jpg", "other_https_host", "static.wixstatic.com"),
+    ("http://insecure.example.com/a.jpg", "insecure_http", "insecure.example.com"),
+    ("https://<SUPABASE_URL>/storage/v1/object/public/uploads/a.jpg",
+     "unresolved_template", ""),
+    ("images/a.jpg", "relative_or_other", ""),
+    ("", "blank", ""),
+    (None, "blank", ""),
+])
+def test_classify_image_url(url, want_kind, want_host):
+    kind, host = mi.classify_image_url(url)
+    assert kind == want_kind
+    assert host == want_host
+
+
+def test_a_url_in_another_bucket_is_not_counted_as_ours():
+    """Only the `uploads` bucket counts as already-migrated."""
+    kind, host = mi.classify_image_url(
+        "https://abcxyz.supabase.co/storage/v1/object/public/receipts/a.jpg")
+    assert kind == "other_https_host"
+    assert host == "abcxyz.supabase.co"
+
+
+def test_the_tally_counts_every_examined_row_not_just_uploads():
+    products = [
+        {"id": "wix-001", "name": "A", "image": "images/a.jpg",
+         "priceNgn": 10, "stock": 1, "image_url": _GOOD},
+        {"id": "wix-002", "name": "B", "image": "", "priceNgn": 10,
+         "stock": 1, "image_url": "https://cdn.example.com/b.jpg"},
+        {"id": "wix-003", "name": "C", "image": "", "priceNgn": 10,
+         "stock": 1, "image_url": ""},
+    ]
+    rep = mi.plan_products(products, "uploads", "https://abcxyz.supabase.co")
+    t = rep["existing_https_urls"]
+    assert t["count"] == 2, t
+    assert t["already_public_supabase_uploads"] == 1
+    assert t["other_https_host"] == 1
+    assert t["blank"] == 1
+    assert t["host_breakdown"] == {"abcxyz.supabase.co": 1,
+                                   "cdn.example.com": 1}
+    # a row with a good URL is skipped, never re-uploaded
+    reasons = {d["id"]: d["reason"] for d in rep["skipped_detail"]}
+    assert reasons.get("wix-001") == "url_already_current"
+    assert rep["images_to_upload"] == 0
+
+
+def test_an_insecure_url_is_a_blocker():
+    products = [{"id": "wix-001", "name": "A", "image": "", "priceNgn": 10,
+                 "stock": 1, "image_url": "http://insecure.example.com/a.jpg"}]
+    rep = mi.plan_products(products, "uploads", "https://abcxyz.supabase.co")
+    assert rep["existing_https_urls"]["insecure_http"] == 1
+
+
+def test_the_report_serialises_the_tally(tmp_path):
+    """write_report must carry the section through to disk, unmasked."""
+    products = [{"id": "wix-001", "name": "A", "image": "", "priceNgn": 10,
+                 "stock": 1, "image_url": _GOOD}]
+    rep = mi.plan_products(products, "uploads", "https://abcxyz.supabase.co")
+    path = str(tmp_path / "report.json")
+    assert mi.write_report({"products": rep, "dry_run": True}, path) is True
+    out = open(path, encoding="utf-8").read()
+    assert "existing_https_urls" in out
+    assert "already_public_supabase_uploads" in out
+    assert _GOOD in out, "the public URL must survive masking"

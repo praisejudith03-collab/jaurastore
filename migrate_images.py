@@ -169,6 +169,41 @@ def _is_public_supabase_url(url):
     return bool(url) and bool(_PUBLIC_URL_RE.match(str(url).strip()))
 
 
+_HOST_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://([^/?#]+)")
+
+
+def _url_host(url):
+    """The scheme://HOST part of a URL, or "" when it is not absolute."""
+    m = _HOST_RE.match(str(url or "").strip())
+    return m.group(1).lower() if m else ""
+
+
+def classify_image_url(url, bucket="uploads"):
+    """Bucket a row's current image_url for the report's HTTPS-URL tally.
+
+    A migration report that only says "N already uploaded" hides the case that
+    actually matters on review: rows that ALREADY point at a complete HTTPS
+    URL. Those are not touched by this script, and an operator reading the
+    report needs to see how many there are and where they point.
+    """
+    u = str(url or "").strip()
+    if not u:
+        return "blank", ""
+    # Check the template form FIRST. `https://<SUPABASE_URL>/...` does start
+    # with https://, so testing that first would file it as a real host and
+    # hide a row that is actually broken.
+    if "<" in u or "{" in u:
+        return "unresolved_template", ""
+    host = _url_host(u)
+    if u.lower().startswith("https://"):
+        if re.search(r"/storage/v1/object/public/" + re.escape(bucket) + r"/", u):
+            return "already_public_supabase_uploads", host
+        return "other_https_host", host
+    if u.lower().startswith("http://"):
+        return "insecure_http", host          # would be a mixed-content bug
+    return "relative_or_other", ""
+
+
 def _mask(text):
     """Redact anything that could be a secret before it is printed/stored.
 
@@ -450,6 +485,17 @@ def plan_products(products, bucket, supabase_url, client=None, only_ids=None,
         "images_discovered": 0,
         "images_missing": 0,
         "images_already_uploaded": 0,
+        "existing_https_urls": {
+            "count": 0,
+            "already_public_supabase_uploads": 0,
+            "other_https_host": 0,
+            "insecure_http": 0,
+            "unresolved_template": 0,
+            "relative_or_other": 0,
+            "blank": 0,
+            "host_breakdown": {},
+            "samples": [],
+        },
         "images_to_upload": 0,
         "duplicate_products": [],
         "duplicate_row_count": 0,
@@ -511,6 +557,35 @@ def plan_products(products, bucket, supabase_url, client=None, only_ids=None,
 
     for row in rows:
         pid = str(row["id"]).strip()
+        # --- Existing HTTPS URLs: rows that already point somewhere. ---
+        # Counted for EVERY examined row, before any skip, so the tally is
+        # about the data rather than about what this run would do to it.
+        current_url = str(row.get("image_url") or "").strip()
+        kind, host = classify_image_url(current_url, bucket)
+        tally = rep["existing_https_urls"]
+        tally[kind] += 1
+        if host:
+            tally["host_breakdown"][host] = tally["host_breakdown"].get(host, 0) + 1
+        if kind in ("already_public_supabase_uploads", "other_https_host",
+                    "insecure_http", "unresolved_template"):
+            tally["count"] += 1
+            if len(tally["samples"]) < 25:
+                tally["samples"].append({"id": pid, "kind": kind,
+                                         "image_url": current_url})
+
+        if kind == "already_public_supabase_uploads":
+            # Already points at a complete HTTPS public URL in `uploads`, so
+            # there is nothing to do. Checked BEFORE the local file, because
+            # requiring the file would report "missing image" for a row that
+            # is in fact fully migrated - and idempotency means a second run
+            # must re-plan nothing.
+            rep["products_skipped"] += 1
+            rep["images_already_uploaded"] += 1
+            rep["skipped_detail"].append({
+                "id": pid, "reason": "url_already_current",
+                "image_url": current_url, "image": str(row.get("image") or "")})
+            continue
+
         local, rel, status, detail = resolve_source_image(row)
         rep["images_discovered"] += 1
 
@@ -1018,6 +1093,13 @@ def main(argv=None):
         blockers.append(f"{len(product_plan['blank_ids'])} product rows have a blank id")
     if product_plan["duplicate_products"]:
         blockers.append(f"duplicate product ids: {product_plan['duplicate_products'][:10]}")
+    _urls = product_plan["existing_https_urls"]
+    if _urls["insecure_http"]:
+        blockers.append(f"{_urls['insecure_http']} row(s) already hold a plain "
+                        "http:// image_url - mixed content, fix before migrating")
+    if _urls["unresolved_template"]:
+        blockers.append(f"{_urls['unresolved_template']} row(s) hold an "
+                        "unresolved <SUPABASE_URL> template instead of a real URL")
     if product_plan["mapping_warnings"]:
         blockers.append(f"{len(product_plan['mapping_warnings'])} image->product "
                         "mapping warning(s) - see mapping_warnings")
