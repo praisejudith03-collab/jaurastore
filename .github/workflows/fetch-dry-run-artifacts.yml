@@ -70,12 +70,33 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p artifacts
+          # List the run's artifacts, then fetch each requested one's zip
+          # straight from the API (302 -> signed URL -> blob; the runner can
+          # reach the blob cluster). No git checkout needed, unlike
+          # `gh run download`.
+          ART_IDS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" \
+            --jq '.artifacts[] | "\(.id) \(.name)"')
           IFS=',' read -ra NAMES <<< "$TARGET_ARTIFACTS"
           for n in "${NAMES[@]}"; do
             [ -n "$n" ] || continue
+            idline=$(grep " $n\$" <<< "$ART_IDS" || true)
+            id=$(awk '{print $1}' <<< "$idline")
+            if [ -z "$id" ]; then
+              echo "ARTIFACT-NOT-FOUND: $n"; continue
+            fi
             mkdir -p "artifacts/$n"
-            if ! gh run download "$TARGET_RUN_ID" -n "$n" -D "artifacts/$n" \
-                2> "download-errors.$n"; then
+            if curl -fsSL --retry 3 --max-time 300 \
+                 -H "Authorization: Bearer $GH_TOKEN" \
+                 -H "Accept: application/vnd.github+json" \
+                 -o "artifacts/$n.zip" \
+                 "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
+                 2> "download-errors.$n"; then
+              if ! unzip -o -q "artifacts/$n.zip" -d "artifacts/$n" \
+                   2>> "download-errors.$n"; then
+                echo "UNZIP-FAILED: $n"
+              fi
+              rm -f "artifacts/$n.zip"
+            else
               echo "DOWNLOAD-FAILED: $n"; cat "download-errors.$n"
             fi
           done
