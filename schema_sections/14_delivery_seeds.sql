@@ -1,6 +1,10 @@
 -- SECTION: delivery_seeds
 -- Seed the zones the storefront has always shown. on conflict do nothing, so
 -- re-running the schema never overwrites an admin's edited fares.
+-- This block assumes delivery_zones already has all required columns (section
+-- 11 repairs any older table before this seed runs), so it never needs to
+-- invent or overwrite names, fares, active flags or sort order and it never
+-- deletes or replaces an existing zone. Every row is preserved.
 insert into delivery_zones (id, name, currency, fare_min, fare_max, kind, sort_order)
 values
   ('lagos-mainland', 'Lagos Mainland', 'NGN', 2000, 5000, 'delivery', 1),

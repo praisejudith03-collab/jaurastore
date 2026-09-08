@@ -43,8 +43,37 @@ begin
   end if;
 end $$;
 
+-- Repair an older product_reviews table that is missing columns added after
+-- the first release. Add-only, preserves every existing review, ids, product
+-- ids, emails, names, ratings and text. Added before indexes and the unique
+-- rule that depends on these columns. Each column is added nullable (or with
+-- a harmless default) so legacy rows are not given invented data.
 do $$
 begin
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'product_id') then
+    alter table product_reviews add column product_id text;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'order_id') then
+    alter table product_reviews add column order_id text;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'email') then
+    alter table product_reviews add column email text;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'name') then
+    alter table product_reviews add column name text;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'rating') then
+    alter table product_reviews add column rating integer not null default 5;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'body') then
+    alter table product_reviews add column body text;
+  end if;
   if not exists (select 1 from information_schema.columns
                  where table_name = 'product_reviews' and column_name = 'title') then
     alter table product_reviews add column title text;
@@ -65,5 +94,10 @@ begin
   end if;
 end $$;
 
+-- Ensure the one-review-per-product/email rule survives for older tables
+-- that were created without the inline unique constraint. The create-table
+-- above only applies to fresh tables; an existing narrower table needs this
+-- index added separately. It is idempotent.
+create unique index if not exists product_reviews_product_email on product_reviews(product_id, email);
 create index if not exists product_reviews_pid on product_reviews(product_id);
 

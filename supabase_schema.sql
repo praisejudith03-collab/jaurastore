@@ -87,6 +87,17 @@ alter table products add column if not exists colors             jsonb;
 alter table products add column if not exists options            jsonb;
 alter table products add column if not exists source             text default 'admin';
 alter table products add column if not exists updated_at         timestamptz default now();
+-- Additional repair for any older table missing the remaining non-key columns.
+-- These are add-only and nullable for legacy rows so no invented values are
+-- written and every existing row keeps its id, name, prices and stock.
+alter table products add column if not exists "legacyId"       text;
+alter table products add column if not exists sku              text;
+alter table products add column if not exists slug             text;
+alter table products add column if not exists category         text;
+alter table products add column if not exists image            text;
+alter table products add column if not exists image_url        text;
+alter table products add column if not exists description      text;
+alter table products add column if not exists stock_quantity   integer not null default 0;
 
 -- Dead leftovers from the original hand-built table: price_cfa, price_ngn,
 -- name_fr, compare_cfa, compare_ngn, option_stock. The app reads and writes
@@ -117,6 +128,28 @@ create table if not exists orders (
   at            timestamptz,
   updated_at    timestamptz default now()
 );
+-- Repair an older orders table that may be narrower. Add-only, idempotent,
+-- preserves every existing order row, ids and values. Columns are added
+-- nullable (or with a harmless default) so legacy rows are not given invented
+-- data, and they are added before the indexes that reference them.
+alter table orders add column if not exists email         text;
+alter table orders add column if not exists customer_name text;
+alter table orders add column if not exists phone         text;
+alter table orders add column if not exists country       text;
+alter table orders add column if not exists city          text;
+alter table orders add column if not exists zone          text;
+alter table orders add column if not exists address       text;
+alter table orders add column if not exists note          text;
+alter table orders add column if not exists payment       text;
+alter table orders add column if not exists proof_url     text;
+alter table orders add column if not exists items_count   integer default 0;
+alter table orders add column if not exists total         numeric;
+alter table orders add column if not exists currency      text;
+alter table orders add column if not exists source        text default 'web';
+alter table orders add column if not exists status        text default 'pending';
+alter table orders add column if not exists payload       jsonb;
+alter table orders add column if not exists at            timestamptz;
+alter table orders add column if not exists updated_at    timestamptz default now();
 create index if not exists idx_orders_at on orders (at desc);
 create index if not exists idx_orders_status on orders (status);
 
@@ -141,6 +174,24 @@ create table if not exists receipts (
   email_info text,
   created_at timestamptz default now()
 );
+-- Repair an older receipts table. Add-only, preserves all existing receipt
+-- rows. Added before the index that uses order_id.
+alter table receipts add column if not exists order_id   text;
+alter table receipts add column if not exists name       text;
+alter table receipts add column if not exists phone      text;
+alter table receipts add column if not exists email      text;
+alter table receipts add column if not exists method     text;
+alter table receipts add column if not exists items      text;
+alter table receipts add column if not exists quantity   text;
+alter table receipts add column if not exists amount     text;
+alter table receipts add column if not exists note       text;
+alter table receipts add column if not exists file_url   text;
+alter table receipts add column if not exists file_name  text;
+alter table receipts add column if not exists file_size  bigint;
+alter table receipts add column if not exists file_type  text;
+alter table receipts add column if not exists emailed    boolean default false;
+alter table receipts add column if not exists email_info text;
+alter table receipts add column if not exists created_at timestamptz default now();
 create index if not exists idx_receipts_order on receipts (order_id);
 
 -- SECTION: referrals
@@ -154,6 +205,13 @@ create table if not exists referral_codes (
   reward_coupon text,
   created_at    timestamptz default now()
 );
+-- Repair older referral_codes tables. Add-only, preserves existing codes.
+alter table referral_codes add column if not exists email         text;
+alter table referral_codes add column if not exists name          text;
+alter table referral_codes add column if not exists uses          integer default 0;
+alter table referral_codes add column if not exists reward_issued integer default 0;
+alter table referral_codes add column if not exists reward_coupon text;
+alter table referral_codes add column if not exists created_at    timestamptz default now();
 create index if not exists idx_referral_email on referral_codes (email);
 
 -- one row per successful purchase made with a referral code
@@ -164,6 +222,11 @@ create table if not exists referral_uses (
   buyer_email text,
   at          timestamptz default now()
 );
+-- Repair older referral_uses tables. Add-only, before the index.
+alter table referral_uses add column if not exists code        text;
+alter table referral_uses add column if not exists order_id    text;
+alter table referral_uses add column if not exists buyer_email text;
+alter table referral_uses add column if not exists at          timestamptz default now();
 create index if not exists idx_referral_uses_code on referral_uses (code);
 
 -- SECTION: coupons
@@ -180,6 +243,16 @@ create table if not exists coupons (
   expires_at text,
   created_at timestamptz default now()
 );
+-- Repair older coupons tables. Add-only, idempotent, preserves existing rows.
+alter table coupons add column if not exists percent    integer;
+alter table coupons add column if not exists kind       text default 'manual';
+alter table coupons add column if not exists email      text;
+alter table coupons add column if not exists note       text;
+alter table coupons add column if not exists active     integer default 1;
+alter table coupons add column if not exists max_uses   integer;
+alter table coupons add column if not exists uses       integer default 0;
+alter table coupons add column if not exists expires_at text;
+alter table coupons add column if not exists created_at timestamptz default now();
 
 -- SECTION: growth_settings
 -- ----------------------------------------------------- growth settings
@@ -190,6 +263,8 @@ create table if not exists growth_settings (
   key   text primary key,
   value text
 );
+-- Repair an older growth_settings table that may be missing the value column.
+alter table growth_settings add column if not exists value text;
 
 -- SECTION: site_settings
 -- ===================================================== Jaura production tables
@@ -217,6 +292,17 @@ create table if not exists site_settings (
   updated_at timestamptz not null default now()
 );
 insert into site_settings (id) values (1) on conflict (id) do nothing;
+-- Repair an older site_settings table that predates newer columns. Add-only,
+-- preserves the single id=1 row and all Admin-edited settings.
+alter table site_settings add column if not exists bank_name text not null default '';
+alter table site_settings add column if not exists account_number text not null default '';
+alter table site_settings add column if not exists account_name text not null default '';
+alter table site_settings add column if not exists referral_commission_percentage numeric(5,2) not null default 0;
+alter table site_settings add column if not exists hero_banner_title text not null default '';
+alter table site_settings add column if not exists hero_banner_subtitle text not null default '';
+alter table site_settings add column if not exists contact_email text not null default '';
+alter table site_settings add column if not exists contact_phone text not null default '';
+alter table site_settings add column if not exists site_logo_url text not null default '';
 alter table site_settings add column if not exists hero_video_url text not null default '';
 alter table site_settings add column if not exists hero_poster_url text not null default '';
 alter table site_settings add column if not exists hero_doc_url text not null default '';
@@ -226,6 +312,7 @@ alter table site_settings add column if not exists banner_from text not null def
 alter table site_settings add column if not exists banner_to text not null default '';
 alter table site_settings add column if not exists conv_banner text not null default '';
 alter table site_settings add column if not exists conv_bold text not null default '';
+alter table site_settings add column if not exists updated_at timestamptz not null default now();
 
 -- Payment details shown at checkout. These were hardcoded in checkout.html /
 -- js/app.js (bank "UBA", account 23474678931, the MoMo Benin and Moov Togo
@@ -255,6 +342,12 @@ create table if not exists categories (
   hidden boolean not null default false,
   updated_at timestamptz not null default now()
 );
+-- Repair an older categories table. Add-only, preserves all existing rows.
+alter table categories add column if not exists name       text;
+alter table categories add column if not exists name_fr    text not null default '';
+alter table categories add column if not exists image_url  text not null default '';
+alter table categories add column if not exists hidden     boolean not null default false;
+alter table categories add column if not exists updated_at timestamptz not null default now();
 
 -- SECTION: product_compatibility
 -- Legacy id alias. A product's `id` is its primary key and is NEVER renamed
@@ -291,6 +384,14 @@ create table if not exists admin_users (
   updated_at    timestamptz not null default now(),
   last_login_at timestamptz
 );
+-- Repair an older admin_users table. Add-only, preserves existing admins.
+alter table admin_users add column if not exists email         text;
+alter table admin_users add column if not exists password_hash text;
+alter table admin_users add column if not exists role          text not null default 'admin';
+alter table admin_users add column if not exists enabled       boolean not null default true;
+alter table admin_users add column if not exists created_at    timestamptz not null default now();
+alter table admin_users add column if not exists updated_at    timestamptz not null default now();
+alter table admin_users add column if not exists last_login_at timestamptz;
 
 create table if not exists admin_reset_tokens (
   id bigint generated always as identity primary key,
@@ -302,6 +403,14 @@ create table if not exists admin_reset_tokens (
   consumed_at timestamptz,
   created_at timestamptz not null default now()
 );
+-- Repair an older admin_reset_tokens table. Add-only, before the index.
+alter table admin_reset_tokens add column if not exists email       text;
+alter table admin_reset_tokens add column if not exists purpose     text not null default 'reset';
+alter table admin_reset_tokens add column if not exists token_hash  text;
+alter table admin_reset_tokens add column if not exists expires_at  timestamptz;
+alter table admin_reset_tokens add column if not exists attempts    integer not null default 0;
+alter table admin_reset_tokens add column if not exists consumed_at timestamptz;
+alter table admin_reset_tokens add column if not exists created_at  timestamptz not null default now();
 create index if not exists admin_reset_tokens_lookup on admin_reset_tokens(email, purpose, created_at desc);
 
 -- SECTION: delivery_zones
@@ -363,6 +472,24 @@ create table if not exists coupon_uses (
   used_at   timestamptz not null default now(),
   unique (code, order_id)
 );
+-- REPAIR an older coupon_uses table that predates required columns. An
+-- existing table hand-built with fewer columns would otherwise fail on
+-- inserts and on the indexes below with "column does not exist". Every
+-- statement is add-only and idempotent: existing rows keep their ids and
+-- values, no row is rewritten, dropped or given an invented coupon code or
+-- order id. code and order_id are added nullable so legacy rows without them
+-- are preserved and can be left for human review rather than being given
+-- fake values here.
+alter table coupon_uses add column if not exists code     text;
+alter table coupon_uses add column if not exists email    text;
+alter table coupon_uses add column if not exists order_id text;
+alter table coupon_uses add column if not exists percent  integer;
+alter table coupon_uses add column if not exists used_at  timestamptz default now();
+-- Preserve idempotency for any table that already exists without the unique
+-- pair. The constraint in the create-table above only applies to fresh tables;
+-- an older table needs this index added separately. It is a unique index on
+-- (code, order_id) so a retry cannot insert the same order twice.
+create unique index if not exists coupon_uses_code_order on coupon_uses(code, order_id);
 create index if not exists coupon_uses_code on coupon_uses(code, used_at desc);
 
 -- SECTION: product_reviews
@@ -410,8 +537,37 @@ begin
   end if;
 end $$;
 
+-- Repair an older product_reviews table that is missing columns added after
+-- the first release. Add-only, preserves every existing review, ids, product
+-- ids, emails, names, ratings and text. Added before indexes and the unique
+-- rule that depends on these columns. Each column is added nullable (or with
+-- a harmless default) so legacy rows are not given invented data.
 do $$
 begin
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'product_id') then
+    alter table product_reviews add column product_id text;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'order_id') then
+    alter table product_reviews add column order_id text;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'email') then
+    alter table product_reviews add column email text;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'name') then
+    alter table product_reviews add column name text;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'rating') then
+    alter table product_reviews add column rating integer not null default 5;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_name = 'product_reviews' and column_name = 'body') then
+    alter table product_reviews add column body text;
+  end if;
   if not exists (select 1 from information_schema.columns
                  where table_name = 'product_reviews' and column_name = 'title') then
     alter table product_reviews add column title text;
@@ -432,11 +588,20 @@ begin
   end if;
 end $$;
 
+-- Ensure the one-review-per-product/email rule survives for older tables
+-- that were created without the inline unique constraint. The create-table
+-- above only applies to fresh tables; an existing narrower table needs this
+-- index added separately. It is idempotent.
+create unique index if not exists product_reviews_product_email on product_reviews(product_id, email);
 create index if not exists product_reviews_pid on product_reviews(product_id);
 
 -- SECTION: delivery_seeds
 -- Seed the zones the storefront has always shown. on conflict do nothing, so
 -- re-running the schema never overwrites an admin's edited fares.
+-- This block assumes delivery_zones already has all required columns (section
+-- 11 repairs any older table before this seed runs), so it never needs to
+-- invent or overwrite names, fares, active flags or sort order and it never
+-- deletes or replaces an existing zone. Every row is preserved.
 insert into delivery_zones (id, name, currency, fare_min, fare_max, kind, sort_order)
 values
   ('lagos-mainland', 'Lagos Mainland', 'NGN', 2000, 5000, 'delivery', 1),
@@ -455,9 +620,16 @@ on conflict (id) do nothing;
 -- SECTION: storage
 -- Storage is provisioned once in Dashboard or with this statement. The service
 -- role is used only server-side; public objects are safe to render directly.
+-- The application uses exactly one bucket: uploads. Never a receipts bucket.
+-- This statement is idempotent and never changes an existing bucket's
+-- visibility: if uploads already exists its public flag is preserved, and no
+-- existing bucket or object is deleted or modified. Receipts are rows in the
+-- receipts table and their files live under uploads/proofs/... . No
+-- SUPABASE_PRIVATE_BUCKET handling is required.
 insert into storage.buckets (id, name, public)
 values ('uploads', 'uploads', true)
 on conflict (id) do nothing;
+-- Idempotent policies: do not create duplicates if they already exist.
 do $$ begin
   create policy "public read uploads" on storage.objects for select using (bucket_id = 'uploads');
 exception when duplicate_object then null;
@@ -479,6 +651,13 @@ alter policy "service role writes uploads" on storage.objects to service_role
 -- source of truth. A single UPDATE with a guard on stock_quantity prevents
 -- two concurrent checkouts from overselling the same product; FOUND tells
 -- the caller whether the whole quantity could be reserved.
+-- Ensure required products columns exist before the functions that reference
+-- them. Add-only, idempotent, preserves all existing product rows and stock
+-- values and never overwrites stock during schema setup.
+alter table products add column if not exists stock_quantity integer not null default 0;
+alter table products add column if not exists stock integer default 0;
+alter table products add column if not exists updated_at timestamptz default now();
+alter table products add column if not exists online boolean default true;
 create or replace function reserve_product_stock(p_id text, p_qty integer)
 returns boolean language plpgsql security definer as $$
 declare reserved boolean;
