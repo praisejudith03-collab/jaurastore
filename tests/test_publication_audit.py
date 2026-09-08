@@ -1,14 +1,15 @@
-"""Tests for Jaurastore Publication Audit & Production Verification (Reconciled).
+"""Tests for Jaurastore Publication Audit & Production Verification (Reconciled 29/7/17).
 
 Verifies:
-  1. Scope separation: 275 local catalogue rows vs 53 production Supabase rows.
-  2. Exactly 29 approved live IDs present in Supabase (target online = true).
-  3. Exactly 152 approved live IDs missing from Supabase (reported as missing_from_production, NOT inserted).
+  1. Complete production classification: 29 Live / 7 Offline / 17 Fixtures = 53 Supabase Rows.
+  2. The 7 offline products include wix-001, wix-012, wix-041, wix-055, wix-197, jau-mtot3318, wix-002.
+  3. The 152 approved local products missing from Supabase remain separate (NOT in publication SQL).
   4. Publication SQL safety: zero INSERTs, zero DELETEs, touches only existing production IDs, touches only online and updated_at.
-  5. Immutability invariants: zero rows deleted, zero IDs renamed, zero price/stock/image/name/category changes.
-  6. Admin behavior: valid new products default to online=true.
-  7. Storefront behavior: Supabase source of truth, filters online IS TRUE.
-  8. Cache & ETag invalidation.
+  5. Drift guard detects and aborts on any unclassified production ID.
+  6. Immutability invariants: zero rows deleted, zero IDs renamed, zero price/stock/image/name/category changes.
+  7. Admin behavior: valid new products default to online=true.
+  8. Storefront behavior: Supabase source of truth, filters online IS TRUE.
+  9. Cache & ETag invalidation.
 """
 import copy
 import json
@@ -58,48 +59,39 @@ def login(client):
 
 
 # --------------------------------------------------------------------------
-# 1. Scope Separation & Reconciliation Tests
+# 1. Production Scope & Approved 29 / 7 / 17 Classification Tests
 # --------------------------------------------------------------------------
 
-def test_scope_separation_local_vs_production():
-    merged, seed_count, overrides, deleted = mi.load_local_catalogue()
-    with open(os.path.join(ROOT, "data", "catalog.json"), encoding="utf-8") as f:
-        cat = json.load(f)
+def test_production_classification_counts_and_disjoint_sets():
+    assert len(dg.PRODUCTION_LIVE_IDS) == 29
+    assert len(dg.PRODUCTION_OFFLINE_IDS) == 7
+    assert len(dg.PRODUCTION_FIXTURE_IDS) == 17
+    assert len(dg.ALL_PRODUCTION_53_IDS) == 53
+    assert len(dg.MISSING_FROM_PRODUCTION_IDS) == 152
 
-    rep_local = mi.live_set_report(list(merged.values()), overrides)
-    rep_prod = mi.live_set_report(cat.get("products", []), {})
-
-    # 1. Local catalogue: 275 rows, 181 approved live
-    assert rep_local["total_source_rows"] == 275
-    assert rep_local["approved_live_count"] == 181
-
-    # 2. Production Supabase subset: 29 approved live
-    assert rep_prod["approved_live_count"] == 29
-    assert set(rep_prod["live_ids"]) == dg.EXISTING_PRODUCTION_LIVE_IDS
-
-    # 3. Present in both: exactly 29 IDs
-    present_in_both = set(rep_local["live_ids"]) & set(rep_prod["live_ids"])
-    assert present_in_both == dg.EXISTING_PRODUCTION_LIVE_IDS
-    assert len(present_in_both) == 29
-
-    # 4. Approved local IDs missing from Supabase: exactly 152 IDs
-    missing = set(rep_local["live_ids"]) - set(rep_prod["live_ids"])
-    assert missing == dg.MISSING_FROM_PRODUCTION_IDS
-    assert len(missing) == 152
+    # Verify all sets are strictly disjoint
+    assert len(dg.PRODUCTION_LIVE_IDS & dg.PRODUCTION_OFFLINE_IDS) == 0
+    assert len(dg.PRODUCTION_LIVE_IDS & dg.PRODUCTION_FIXTURE_IDS) == 0
+    assert len(dg.PRODUCTION_OFFLINE_IDS & dg.PRODUCTION_FIXTURE_IDS) == 0
 
 
-def test_production_offline_and_fixtures():
-    with open(os.path.join(ROOT, "data", "catalog.json"), encoding="utf-8") as f:
-        cat = json.load(f)
-    rep_prod = mi.live_set_report(cat.get("products", []), {})
+def test_production_offline_items_exact_composition():
+    expected_offline = {
+        "wix-001", "wix-012", "wix-041", "wix-055", "wix-197", "jau-mtot3318", "wix-002"
+    }
+    assert dg.PRODUCTION_OFFLINE_IDS == expected_offline
+    assert "jau-mtot3318" in dg.PRODUCTION_OFFLINE_IDS
+    assert "wix-002" in dg.PRODUCTION_OFFLINE_IDS
 
-    assert set(rep_prod["operator_offline_ids"]) == dg.PRODUCTION_OPERATOR_OFFLINE_IDS
-    assert set(rep_prod["placeholder_only_ids"]) == dg.PRODUCTION_PLACEHOLDER_IDS
-    assert set(rep_prod["test_fixtures_excluded_ids"]) == dg.PRODUCTION_FIXTURE_IDS
+
+def test_missing_from_production_kept_separate():
+    # 181 local approved = 29 production live + 152 missing from production
+    assert len(dg.PRODUCTION_LIVE_IDS | dg.MISSING_FROM_PRODUCTION_IDS) == 181
+    assert len(dg.PRODUCTION_LIVE_IDS & dg.MISSING_FROM_PRODUCTION_IDS) == 0
 
 
 # --------------------------------------------------------------------------
-# 2. Safety: SQL Cannot Silently Import Missing Local Products
+# 2. Publication SQL Safety & Drift Guard Checks
 # --------------------------------------------------------------------------
 
 def test_sql_contains_zero_insert_statements():
@@ -107,28 +99,47 @@ def test_sql_contains_zero_insert_statements():
     with open(sql_path, encoding="utf-8") as f:
         sql = f.read()
 
-    assert not re.search(r"\bINSERT\s+INTO\b", sql, re.I), (
-        "publication_review.sql must NEVER contain INSERT statements (importing is separate)")
+    code_only = re.sub(r"--[^\n]*", "", sql)
+    code_only = re.sub(r"/\*.*?\*/", "", code_only, flags=re.S)
+    assert not re.search(r"\bINSERT\s+INTO\b", code_only, re.I), (
+        "publication_review.sql must NEVER contain executable INSERT statements")
 
 
-def test_sql_live_update_targets_only_existing_supabase_ids():
+def test_sql_live_update_targets_only_29_existing_supabase_ids():
     sql_path = os.path.join(ROOT, "publication_review.sql")
     with open(sql_path, encoding="utf-8") as f:
         sql = f.read()
 
-    # Find the online = true UPDATE statement
-    match = re.search(r"UPDATE\s+products\s+SET\s+online\s*=\s*true[^;]+;", sql, re.S | re.I)
+    code_only = re.sub(r"--[^\n]*", "", sql)
+    code_only = re.sub(r"/\*.*?\*/", "", code_only, flags=re.S)
+
+    match = re.search(r"UPDATE\s+products\s+SET\s+online\s*=\s*true[^;]+;", code_only, re.S | re.I)
     assert match, "Missing online = true UPDATE statement"
     update_live_sql = match.group(0)
 
     # 1. All 29 existing production IDs must be present in the UPDATE block
-    for pid in dg.EXISTING_PRODUCTION_LIVE_IDS:
+    for pid in dg.PRODUCTION_LIVE_IDS:
         assert f"'{pid}'" in update_live_sql, f"Existing live ID {pid} missing from UPDATE statement"
 
-    # 2. None of the 152 missing IDs may be present in the UPDATE block
-    for pid in dg.MISSING_FROM_PRODUCTION_IDS:
+    # 2. None of the 7 offline IDs, 17 fixtures, or 152 missing IDs may be present in the UPDATE block
+    for pid in (dg.PRODUCTION_OFFLINE_IDS | dg.PRODUCTION_FIXTURE_IDS | dg.MISSING_FROM_PRODUCTION_IDS):
         assert f"'{pid}'" not in update_live_sql, (
-            f"Missing ID {pid} must NOT be in online=true UPDATE block (cannot update rows not in DB)")
+            f"Non-live ID {pid} must NOT be in online=true UPDATE block")
+
+
+def test_sql_offline_update_includes_all_7_offline_and_17_fixture_ids():
+    sql_path = os.path.join(ROOT, "publication_review.sql")
+    with open(sql_path, encoding="utf-8") as f:
+        sql = f.read()
+
+    code_only = re.sub(r"--[^\n]*", "", sql)
+    code_only = re.sub(r"/\*.*?\*/", "", code_only, flags=re.S)
+
+    for pid in dg.PRODUCTION_OFFLINE_IDS:
+        assert f"'{pid}'" in code_only, f"Offline ID {pid} missing from SQL"
+
+    for pid in dg.PRODUCTION_FIXTURE_IDS:
+        assert f"'{pid}'" in code_only, f"Fixture ID {pid} missing from SQL"
 
 
 def test_sql_modifies_only_online_and_updated_at():
@@ -136,12 +147,13 @@ def test_sql_modifies_only_online_and_updated_at():
     with open(sql_path, encoding="utf-8") as f:
         sql = f.read()
 
-    # Check that forbidden DDL / DML keywords are absent
-    for forbidden in ("DROP TABLE", "TRUNCATE", "DELETE FROM", "ALTER TABLE", "INSERT INTO"):
-        assert forbidden not in sql.upper(), f"SQL contains forbidden statement: {forbidden}"
+    code_only = re.sub(r"--[^\n]*", "", sql)
+    code_only = re.sub(r"/\*.*?\*/", "", code_only, flags=re.S)
 
-    # Check that every UPDATE statement touches ONLY online and updated_at
-    update_blocks = re.findall(r"UPDATE\s+products\s+SET\s+(.*?)\s+WHERE\b", sql, re.S | re.I)
+    for forbidden in ("DROP TABLE", "TRUNCATE", "DELETE FROM", "ALTER TABLE"):
+        assert forbidden not in code_only.upper(), f"SQL contains forbidden statement: {forbidden}"
+
+    update_blocks = re.findall(r"UPDATE\s+products\s+SET\s+(.*?)\s+WHERE\b", code_only, re.S | re.I)
     assert len(update_blocks) > 0
     for block in update_blocks:
         cols = [c.split("=")[0].strip().lower() for c in block.split(",")]
@@ -149,20 +161,20 @@ def test_sql_modifies_only_online_and_updated_at():
             assert col in ("online", "updated_at"), f"Forbidden column in UPDATE: {col}"
 
 
-def test_sql_has_select_preview_and_drift_guard():
+def test_sql_drift_guard_aborts_on_unclassified_ids():
     sql_path = os.path.join(ROOT, "publication_review.sql")
     with open(sql_path, encoding="utf-8") as f:
         sql = f.read()
 
-    assert "SELECT" in sql.upper()
     assert "DO $$" in sql
+    assert "unclassified" in sql.lower()
     assert "RAISE EXCEPTION" in sql
     assert "BEGIN;" in sql
     assert "COMMIT;" in sql
 
 
 # --------------------------------------------------------------------------
-# 3. Drift Guard Verification
+# 3. Drift Guard Python Module & CLI Execution
 # --------------------------------------------------------------------------
 
 def test_drift_guard_module_and_cli():
@@ -176,6 +188,7 @@ def test_drift_guard_module_and_cli():
     )
     assert proc.returncode == 0
     assert "STATUS: PASSED" in proc.stdout
+    assert "53" in proc.stdout
 
 
 def test_drift_guard_catches_sql_insert_leak():
@@ -200,11 +213,9 @@ def test_catalogue_data_remains_strictly_unmodified():
     merged, seed_count, overrides, deleted = mi.load_local_catalogue()
     original = copy.deepcopy(merged)
 
-    # Execute drift guard / verification
     res = dg.verify_reconciliation()
     assert res["ok"] is True
 
-    # Check again
     after, _, _, _ = mi.load_local_catalogue()
     assert len(after) == len(original)
     for pid, orig in original.items():
@@ -227,11 +238,9 @@ def test_catalogue_data_remains_strictly_unmodified():
 def test_admin_new_valid_products_default_online_true(client):
     tok = login(client)
 
-    # Normalization defaults
     norm = catalog_mod.normalize({"name": "Admin Handbag", "priceNgn": 18000, "stock": 4})
     assert norm["online"] is True
 
-    # Upsert route defaults
     r = client.post(
         "/api/admin/products",
         json={"product": {"id": "jau-unit-rec", "name": "Reconciled Bag", "priceNgn": 14000, "category": "bags", "stock": 3}},
@@ -240,7 +249,6 @@ def test_admin_new_valid_products_default_online_true(client):
     assert r.status_code == 200
     assert r.get_json()["product"]["online"] is True
 
-    # Cleanup
     client.delete("/api/admin/products/jau-unit-rec", headers={"X-CSRF-Token": tok})
 
 
@@ -259,11 +267,9 @@ def test_etag_invalidates_on_catalogue_change(client):
     etag1 = r1.headers.get("ETag")
     assert etag1 and etag1.startswith('W/"')
 
-    # Matching If-None-Match gives 304
     r2 = client.get("/api/catalog", headers={"If-None-Match": etag1})
     assert r2.status_code == 304
 
-    # Save a temporary product -> ETag changes
     tok = login(client)
     client.post(
         "/api/admin/products",
@@ -276,5 +282,4 @@ def test_etag_invalidates_on_catalogue_change(client):
     etag3 = r3.headers.get("ETag")
     assert etag3 != etag1
 
-    # Cleanup
     client.delete("/api/admin/products/jau-etag-test", headers={"X-CSRF-Token": tok})

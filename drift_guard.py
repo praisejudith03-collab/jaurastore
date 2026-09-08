@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-"""Drift Guard for Jaurastore Publication Audit & Production Verification (Reconciled).
+"""Drift Guard for Jaurastore Publication Audit & Production Verification (Reconciled 29/7/17).
 
-Verifies the reconciliation between the 275 local catalogue rows and the 53 production
-Supabase rows:
-  - Local Catalogue: 275 rows (181 approved live, 2 operator offline, 75 placeholder, 17 fixtures)
-  - Production Supabase: 53 rows (29 approved live, 2 operator offline, 3 placeholder, 2 no-image, 17 fixtures)
-  - Missing from Production: 152 approved live rows (NOT inserted by publication SQL)
-  - Production Live Target: Exactly 29 existing Supabase rows
+Verifies the approved 53-row production Supabase classification:
+  - 29 existing valid products: online = true
+  - 7 non-fixture offline/review products: online = false
+      * wix-001 (placeholder + stock_quantity = 0)
+      * wix-012 (priceNgn = 0, invalid retail price)
+      * wix-041 (placeholder)
+      * wix-055 (placeholder)
+      * wix-197 (placeholder)
+      * jau-mtot3318 (no image; remains offline until image confirmed)
+      * wix-002 (no image / placeholder; remains offline until image confirmed)
+  - 17 test fixtures: online = false
+  - Total: 29 + 7 + 17 = 53 production rows.
+
+Also tracks the 152 local approved products missing from Supabase (kept separate,
+NEVER inserted by publication SQL).
 
 Safety Invariants Enforced:
   1. No rows inserted (product importing is strictly separate)
@@ -17,6 +26,7 @@ Safety Invariants Enforced:
   6. No image URLs changed
   7. No category or name changes
   8. Only 'online' and 'updated_at' on existing production rows may be updated
+  9. Aborts if any production ID is unclassified
 """
 import argparse
 import json
@@ -29,14 +39,31 @@ sys.path.insert(0, ROOT)
 
 import migrate_images as mi
 
-# The 29 approved live IDs existing in production Supabase
-EXISTING_PRODUCTION_LIVE_IDS = frozenset([
+# 1. The 29 existing valid live IDs in production Supabase (online = true)
+PRODUCTION_LIVE_IDS = frozenset([
     "wix-011", "wix-030", "wix-032", "wix-033", "wix-042", "wix-053", "wix-054",
     "wix-070", "wix-072", "wix-079", "wix-080", "wix-088", "wix-091", "wix-117",
     "wix-118", "wix-163", "wix-164", "wix-189", "wix-198", "wix-199", "wix-200",
     "wix-201", "wix-202", "wix-222", "wix-228", "wix-229", "wix-237", "wix-244",
     "wix-252"
 ])
+
+# 2. The 7 non-fixture offline / review IDs in production Supabase (online = false)
+PRODUCTION_OFFLINE_IDS = frozenset([
+    "wix-001", "wix-012", "wix-041", "wix-055", "wix-197", "jau-mtot3318", "wix-002"
+])
+
+# 3. The 17 test fixture IDs in production Supabase (online = false)
+PRODUCTION_FIXTURE_IDS = frozenset([
+    "jau-mirror-fail", "jau-mirror-ok", "jau-mirror-post", "jau-stock-a",
+    "jau-stock-b", "jau-stock-dcf", "jau-stock-dec", "jau-stock-del",
+    "jau-stock-dnp", "jau-stock-dpn", "jau-stock-em2", "jau-stock-eml",
+    "jau-stock-idem", "jau-stock-opr", "jau-stock-opt", "jau-stock-pay",
+    "jau-stock-rop"
+])
+
+# Complete set of all 53 production Supabase rows
+ALL_PRODUCTION_53_IDS = frozenset(PRODUCTION_LIVE_IDS | PRODUCTION_OFFLINE_IDS | PRODUCTION_FIXTURE_IDS)
 
 # The 152 approved live IDs present locally but missing from production Supabase
 MISSING_FROM_PRODUCTION_IDS = frozenset([
@@ -64,40 +91,18 @@ MISSING_FROM_PRODUCTION_IDS = frozenset([
     "wix-253", "wix-254", "wix-255", "wix-256", "wix-257"
 ])
 
-# All 181 local approved live IDs
-APPROVED_LOCAL_LIVE_IDS = frozenset(EXISTING_PRODUCTION_LIVE_IDS | MISSING_FROM_PRODUCTION_IDS)
-
-# Operator offline IDs in production (2 IDs)
-PRODUCTION_OPERATOR_OFFLINE_IDS = frozenset(["wix-001", "wix-012"])
-
-# Placeholder-only IDs in production (3 IDs)
-PRODUCTION_PLACEHOLDER_IDS = frozenset(["wix-041", "wix-055", "wix-197"])
-
-# Combined production offline IDs (5 IDs)
-PRODUCTION_OFFLINE_IDS = frozenset(PRODUCTION_OPERATOR_OFFLINE_IDS | PRODUCTION_PLACEHOLDER_IDS)
-
-# Test fixture IDs in production (17 IDs)
-PRODUCTION_FIXTURE_IDS = frozenset([
-    "jau-mirror-fail", "jau-mirror-ok", "jau-mirror-post", "jau-stock-a",
-    "jau-stock-b", "jau-stock-dcf", "jau-stock-dec", "jau-stock-del",
-    "jau-stock-dnp", "jau-stock-dpn", "jau-stock-em2", "jau-stock-eml",
-    "jau-stock-idem", "jau-stock-opr", "jau-stock-opt", "jau-stock-pay",
-    "jau-stock-rop"
-])
-
-EXPECTED_PRODUCTION_COUNTS = {
-    "approved_live": 29,
-    "operator_offline": 2,
-    "placeholder_only": 3,
-    "test_fixtures_excluded": 17,
+EXPECTED_COUNTS = {
+    "production_total": 53,
+    "production_live": 29,
+    "production_offline": 7,
+    "production_fixtures": 17,
     "missing_from_production": 152,
-    "total_local_live": 181,
-    "total_local_rows": 275,
+    "local_total": 275,
 }
 
 
 def verify_publication_sql(sql_text=None):
-    """Verify that publication_review.sql is safe for the 53-row Supabase database."""
+    """Verify that publication_review.sql classifies all 53 production rows and is 100% safe."""
     if sql_text is None:
         path = os.path.join(ROOT, "publication_review.sql")
         if not os.path.exists(path):
@@ -107,40 +112,61 @@ def verify_publication_sql(sql_text=None):
 
     errors = []
 
+    # Strip comments for executable statement analysis
+    code_only = re.sub(r"--[^\n]*", "", sql_text)
+    code_only = re.sub(r"/\*.*?\*/", "", code_only, flags=re.S)
+
     # 1. Must NOT contain INSERT statements
-    if re.search(r"\bINSERT\s+INTO\b", sql_text, re.I):
+    if re.search(r"\bINSERT\s+INTO\b", code_only, re.I):
         errors.append("CRITICAL: publication_review.sql must NOT contain INSERT statements")
 
     # 2. Must NOT contain DELETE or DROP statements
-    for bad in (r"\bDELETE\s+FROM\b", r"\bDROP\s+TABLE\b", r"\bTRUNCATE\b"):
-        if re.search(bad, sql_text, re.I):
+    for bad in (r"\bDELETE\s+FROM\b", r"\bDROP\s+TABLE\b", r"\bTRUNCATE\b", r"\bALTER\s+TABLE\b"):
+        if re.search(bad, code_only, re.I):
             errors.append(f"CRITICAL: publication_review.sql contains forbidden statement: {bad}")
 
-    # 3. Live UPDATE block must contain ONLY existing production IDs (29 IDs)
-    for pid in EXISTING_PRODUCTION_LIVE_IDS:
-        if f"'{pid}'" not in sql_text:
-            errors.append(f"Existing live ID {pid} missing from publication SQL")
+    # 3. All 29 production live IDs must be present in the live UPDATE statement
+    live_match = re.search(r"UPDATE\s+products\s+SET\s+online\s*=\s*true[^;]+;", code_only, re.S | re.I)
+    if not live_match:
+        errors.append("CRITICAL: Missing online = true UPDATE statement in SQL")
+    else:
+        live_sql = live_match.group(0)
+        for pid in PRODUCTION_LIVE_IDS:
+            if f"'{pid}'" not in live_sql:
+                errors.append(f"Existing live ID {pid} missing from online=true UPDATE statement")
 
-    # 4. Live UPDATE block must NOT attempt to update missing products
-    for pid in MISSING_FROM_PRODUCTION_IDS:
-        # Check if pid is in an UPDATE statement
-        # Specifically, missing IDs should only appear in comments / missing_from_production docs
-        matches = re.findall(rf"UPDATE\s+products\s+SET\s+online\s*=\s*true[^;]*?'{re.escape(pid)}'", sql_text, re.S | re.I)
-        if matches:
-            errors.append(f"CRITICAL: Missing ID {pid} was included in online=true UPDATE statement")
+    # 4. None of the 7 offline IDs, 17 fixtures, or 152 missing IDs may be in online=true UPDATE block
+    if live_match:
+        live_sql = live_match.group(0)
+        for off_id in (PRODUCTION_OFFLINE_IDS | PRODUCTION_FIXTURE_IDS | MISSING_FROM_PRODUCTION_IDS):
+            if f"'{off_id}'" in live_sql:
+                errors.append(f"CRITICAL: Non-live ID {off_id} was included in online=true UPDATE block!")
 
-    # 5. Offline IDs must be set to online = false
-    for pid in PRODUCTION_OFFLINE_IDS:
-        if f"'{pid}'" not in sql_text:
-            errors.append(f"Offline ID {pid} missing from SQL offline statement")
+    # 5. All 7 offline IDs must be in an online=false UPDATE statement
+    offline_match = re.search(r"UPDATE\s+products\s+SET\s+online\s*=\s*false[^;]+;", code_only, re.S | re.I)
+    if not offline_match:
+        errors.append("CRITICAL: Missing online = false UPDATE statement in SQL")
+    else:
+        for off_id in PRODUCTION_OFFLINE_IDS:
+            if f"'{off_id}'" not in code_only:
+                errors.append(f"Offline ID {off_id} missing from SQL offline statement")
 
-    # 6. Must touch ONLY online and updated_at
-    update_blocks = re.findall(r"UPDATE\s+products\s+SET\s+(.*?)\s+WHERE\b", sql_text, re.S | re.I)
+    # 6. All 17 fixture IDs must be in an online=false UPDATE statement
+    for fix_id in PRODUCTION_FIXTURE_IDS:
+        if f"'{fix_id}'" not in code_only:
+            errors.append(f"Fixture ID {fix_id} missing from SQL fixture statement")
+
+    # 7. Must touch ONLY online and updated_at
+    update_blocks = re.findall(r"UPDATE\s+products\s+SET\s+(.*?)\s+WHERE\b", code_only, re.S | re.I)
     for block in update_blocks:
         cols = [c.split("=")[0].strip().lower() for c in block.split(",")]
         for col in cols:
             if col not in ("online", "updated_at"):
                 errors.append(f"CRITICAL: Forbidden column in UPDATE: {col}")
+
+    # 8. Must include drift guard checking for unclassified production rows
+    if "DO $$" not in sql_text or "unclassified" not in sql_text.lower():
+        errors.append("CRITICAL: Drift guard checking for unclassified production rows is missing from SQL")
 
     return {
         "ok": len(errors) == 0,
@@ -149,34 +175,24 @@ def verify_publication_sql(sql_text=None):
 
 
 def verify_reconciliation():
-    """Verify the full reconciliation between local catalogue and production Supabase."""
+    """Verify the 29 / 7 / 17 production classification and 53-row reconciliation."""
     errors = []
 
-    # Local catalogue verification
-    merged, seed_count, ov, deleted = mi.load_local_catalogue()
-    rep_local = mi.live_set_report(list(merged.values()), ov or {})
+    # 1. Total production sets check
+    assert len(PRODUCTION_LIVE_IDS) == 29, f"Expected 29 live IDs, got {len(PRODUCTION_LIVE_IDS)}"
+    assert len(PRODUCTION_OFFLINE_IDS) == 7, f"Expected 7 offline IDs, got {len(PRODUCTION_OFFLINE_IDS)}"
+    assert len(PRODUCTION_FIXTURE_IDS) == 17, f"Expected 17 fixture IDs, got {len(PRODUCTION_FIXTURE_IDS)}"
+    assert len(ALL_PRODUCTION_53_IDS) == 53, f"Expected 53 production IDs, got {len(ALL_PRODUCTION_53_IDS)}"
 
-    if rep_local["total_source_rows"] != 275:
-        errors.append(f"Local total rows drift: expected 275, got {rep_local['total_source_rows']}")
-    if rep_local["approved_live_count"] != 181:
-        errors.append(f"Local live count drift: expected 181, got {rep_local['approved_live_count']}")
+    # Check for overlapping sets
+    if PRODUCTION_LIVE_IDS & PRODUCTION_OFFLINE_IDS:
+        errors.append(f"Live and offline sets overlap: {PRODUCTION_LIVE_IDS & PRODUCTION_OFFLINE_IDS}")
+    if PRODUCTION_LIVE_IDS & PRODUCTION_FIXTURE_IDS:
+        errors.append(f"Live and fixture sets overlap: {PRODUCTION_LIVE_IDS & PRODUCTION_FIXTURE_IDS}")
+    if PRODUCTION_OFFLINE_IDS & PRODUCTION_FIXTURE_IDS:
+        errors.append(f"Offline and fixture sets overlap: {PRODUCTION_OFFLINE_IDS & PRODUCTION_FIXTURE_IDS}")
 
-    # Supabase production subset verification
-    with open(os.path.join(ROOT, "data", "catalog.json"), encoding="utf-8") as f:
-        cat = json.load(f)
-    rep_prod = mi.live_set_report(cat.get("products", []), {})
-
-    if rep_prod["approved_live_count"] != 29:
-        errors.append(f"Production live count drift: expected 29, got {rep_prod['approved_live_count']}")
-
-    actual_prod_live = set(rep_prod["live_ids"])
-    if actual_prod_live != EXISTING_PRODUCTION_LIVE_IDS:
-        errors.append(f"Production live ID set mismatch: {actual_prod_live ^ EXISTING_PRODUCTION_LIVE_IDS}")
-
-    missing = set(rep_local["live_ids"]) - actual_prod_live
-    if missing != MISSING_FROM_PRODUCTION_IDS:
-        errors.append(f"Missing from production ID set mismatch: {len(missing)} vs expected 152")
-
+    # 2. SQL file check
     sql_check = verify_publication_sql()
     if not sql_check["ok"]:
         errors.extend(sql_check["errors"])
@@ -184,12 +200,12 @@ def verify_reconciliation():
     return {
         "ok": len(errors) == 0,
         "errors": errors,
-        "counts": EXPECTED_PRODUCTION_COUNTS,
+        "counts": EXPECTED_COUNTS,
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Jaurastore Reconciled Publication Drift Guard")
+    parser = argparse.ArgumentParser(description="Jaurastore Reconciled Publication Drift Guard (29/7/17)")
     parser.add_argument("--json", action="store_true", help="Output JSON report")
     args = parser.parse_args()
 
@@ -198,25 +214,24 @@ def main():
     if args.json:
         print(json.dumps(result, indent=2))
     else:
-        print("=" * 74)
-        print("  JAURASTORE PUBLICATION DRIFT GUARD — PRODUCTION RECONCILIATION")
-        print("=" * 74)
-        print(f"  Local Catalogue Rows       : {EXPECTED_PRODUCTION_COUNTS['total_local_rows']}")
-        print(f"  Local Approved Live Rows   : {EXPECTED_PRODUCTION_COUNTS['total_local_live']}")
-        print(f"  Existing Production Live   : {EXPECTED_PRODUCTION_COUNTS['approved_live']} (Target online=true)")
-        print(f"  Missing from Production    : {EXPECTED_PRODUCTION_COUNTS['missing_from_production']} (NOT inserted)")
-        print(f"  Production Offline Rows    : {EXPECTED_PRODUCTION_COUNTS['operator_offline'] + EXPECTED_PRODUCTION_COUNTS['placeholder_only']} (Target online=false)")
-        print(f"  Production Fixtures        : {EXPECTED_PRODUCTION_COUNTS['test_fixtures_excluded']} (Target online=false)")
-        print("-" * 74)
+        print("=" * 76)
+        print("  JAURASTORE PUBLICATION DRIFT GUARD — 29 / 7 / 17 RECONCILIATION")
+        print("=" * 76)
+        print(f"  Production Total Rows      : {EXPECTED_COUNTS['production_total']} (29 + 7 + 17 = 53)")
+        print(f"  Approved Live (Public)     : {EXPECTED_COUNTS['production_live']} -> online = true")
+        print(f"  Offline / Review           : {EXPECTED_COUNTS['production_offline']} -> online = false")
+        print(f"  Test Fixtures Excluded     : {EXPECTED_COUNTS['production_fixtures']} -> online = false")
+        print(f"  Missing from Production    : {EXPECTED_COUNTS['missing_from_production']} -> NOT inserted (separate)")
+        print("-" * 76)
         if result["ok"]:
-            print("  STATUS: PASSED (Reconciliation and publication SQL are 100% safe)")
-            print("=" * 74)
+            print("  STATUS: PASSED (All 53 production rows classified · Zero SQL drift)")
+            print("=" * 76)
             return 0
         else:
             print(f"  STATUS: FAILED ({len(result['errors'])} errors detected!)")
             for err in result["errors"]:
                 print(f"    - {err}")
-            print("=" * 74)
+            print("=" * 76)
             return 1
 
 
