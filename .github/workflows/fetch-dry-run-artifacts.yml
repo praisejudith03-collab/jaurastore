@@ -152,6 +152,58 @@ jobs:
           PY
           true
 
+  fetch-dry-3:
+    runs-on: ubuntu-latest
+    env:
+      ART: "dry-run-report"
+      SEG: "3"
+    steps:
+      - name: Fetch segment and emit b64 chunks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p work
+          ART_IDS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" \
+            --jq '.artifacts[] | "\(.id) \(.name)"')
+          id=$(awk -v name="$ART" '$2 == name {print $1}' <<< "$ART_IDS")
+          if [ -z "$id" ]; then
+            echo "ARTIFACT-NOT-FOUND: $ART"
+            exit 0
+          fi
+          curl -fsSL --retry 3 --max-time 300 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -o "work/$ART.zip" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip"
+          mkdir -p "work/$ART"
+          unzip -o -q "work/$ART.zip" -d "work/$ART"
+          echo "files:"; find "work/$ART" -type f | sort
+          python3 - "$ART" <<'PY'
+          import base64, glob, os, sys
+          art = sys.argv[1]
+          files = [f for f in sorted(glob.glob(f"work/{art}/**/*", recursive=True))
+                   if os.path.isfile(f) and os.path.getsize(f)]
+          if not files:
+              print("no files under", art)
+              sys.exit(0)
+          data = b"\n".join(open(f, "rb").read() for f in files)
+          b64 = base64.b64encode(data).decode("ascii")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), int(os.environ["SEG_W"]), int(os.environ["CHUNK_W"])
+          start = seg * seg_w
+          part = b64[start:start + seg_w]
+          if not part:
+              print(f"segment {seg}: empty (b64 total {len(b64)}) - nothing to emit")
+              sys.exit(0)
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
+          PY
+          true
+
   fetch-dry-2:
     runs-on: ubuntu-latest
     env:
