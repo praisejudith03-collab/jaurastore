@@ -68,37 +68,58 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p artifacts
+          : > download-errors.log
           IFS=',' read -ra NAMES <<< "$TARGET_ARTIFACTS"
           for n in "${NAMES[@]}"; do
             [ -n "$n" ] || continue
-            gh run download "$TARGET_RUN_ID" -n "$n" -D "artifacts/$n"
+            mkdir -p "artifacts/$n"
+            if ! gh run download "$TARGET_RUN_ID" -n "$n" -D "artifacts/$n" \
+                > "download-errors.log.$n" 2>&1; then
+              echo "DOWNLOAD-FAILED: $n"
+              cat "download-errors.log.$n"
+              cat "download-errors.log.$n" >> download-errors.log
+            fi
           done
+          echo "--- files fetched ---"
           find artifacts -type f | sort
+          true
 
-      - name: Post the contents into a GitHub issue
+      - name: Post the results into a GitHub issue (always)
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          STATUS="${{ job.status }}"
           {
-            echo "Read-only helper output: full contents of the artifacts of run "
-            echo "$TARGET_RUN_ID in $GITHUB_REPOSITORY, posted verbatim for"
-            echo "verification. No secrets are included (this job has no access"
-            echo "to any repository secrets, and the migration scripts were not"
-            echo "run). Fetched by helper run ${{ github.run_id }}."
+            echo "Read-only helper output for artifacts of run $TARGET_RUN_ID "
+            echo "in $GITHUB_REPOSITORY (helper run ${{ github.run_id }}, "
+            echo "status: $STATUS). Posted verbatim for verification. No "
+            echo "secrets are included (this job has no access to any "
+            echo "repository secrets, and the migration scripts were not "
+            echo "run)."
             echo ""
+            if [ -s download-errors.log ]; then
+              echo "Download problems:"
+              echo "\`\`\`"
+              cat download-errors.log
+              echo "\`\`\`"
+              echo ""
+            fi
             while IFS= read -r f; do
+              [ -s "$f" ] || continue
               echo "<!-- file: $f -->"
               echo "\`\`\`json path=\"$f\""
               cat "$f"
               echo "\`\`\`"
               echo ""
             done < <(find artifacts -type f | sort)
+            echo "_File list:_ $(find artifacts -type f | wc -l) file(s)."
           } > issue-body.md
           BODY=$(cat issue-body.md)
           ISSUE_URL=$(gh issue create \
-            --title "$TARGET_ISSUE_TITLE" \
+            --title "$TARGET_ISSUE_TITLE (helper status: $STATUS)" \
             --body "$BODY" --json url -q .url)
           gh issue edit "$ISSUE_URL" --add-label "$TARGET_ISSUE_LABEL" \
             2>/dev/null || true   # label is cosmetic; missing label is fine
           echo "Issue created: $ISSUE_URL"
-          echo "::notice::Artifact contents posted to: $ISSUE_URL"
+          echo "::notice::Results posted to: $ISSUE_URL"
