@@ -49,9 +49,21 @@ jobs:
           echo "=== ARTIFACT METADATA ==="
           gh api "repos/$SOURCE_REPO/actions/runs/$SOURCE_RUN_ID/artifacts" \
             --jq '.artifacts[] | {id, name, size_in_bytes, expired, created_at}'
-          mkdir -p exported
+          mkdir -p exported downloaded
           gh run download "$SOURCE_RUN_ID" --repo "$SOURCE_REPO" --dir downloaded
           find downloaded -type f -exec cp {} exported/ \;
+
+          # Also fetch the raw artifact ZIP archives themselves (the exact bytes
+          # a browser download of the artifact produces), so the reviewer can
+          # compare their hashes with the owner-provided values too.
+          for ID_NAME in \
+            $(gh api "repos/$SOURCE_REPO/actions/runs/$SOURCE_RUN_ID/artifacts" \
+                --jq '.artifacts[] | "\(.id) \(.name)"'); do
+            set -- $ID_NAME
+            ART_ID="$1"; ART_NAME="$2"
+            gh api "repos/$SOURCE_REPO/actions/artifacts/$ART_ID/zip" > "exported/$ART_NAME.zip"
+          done
+
           echo "=== EXPORTED FILES ==="
           ls -la exported/
           cd exported
@@ -75,7 +87,7 @@ jobs:
           git rm -rf --cached . >/dev/null 2>&1 || true
           git clean -fdx >/dev/null 2>&1 || true
           cp /tmp/artifacts-export/* .
-          git add SHA256SUMS.txt *.json
+          git add SHA256SUMS.txt *.json *.zip
           git commit -m "Artifacts of dry-run 34207418484 (read-only export for review)" \
                      -m "$(cat /tmp/artifacts-export/SHA256SUMS.txt)"
           git push --force origin "HEAD:refs/heads/${SCRATCH_BRANCH}"
