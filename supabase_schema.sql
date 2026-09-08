@@ -15,6 +15,7 @@
 --   SUPABASE_SERVICE_ROLE_KEY    the service-role key (server-side only)
 -- =====================================================================
 
+-- SECTION: products
 -- ------------------------------------------------------------ products
 -- Canonical columns (source of truth): id, name, category, priceNgn,
 -- priceCfa, compareNgn, compareCfa, image_url, images, stock_quantity,
@@ -93,6 +94,7 @@ alter table products add column if not exists updated_at         timestamptz def
 -- never rename them - they are harmless legacy junk, but live rows still
 -- exist in the production table.
 
+-- SECTION: orders
 -- -------------------------------------------------------------- orders
 create table if not exists orders (
   id            text primary key,
@@ -118,6 +120,7 @@ create table if not exists orders (
 create index if not exists idx_orders_at on orders (at desc);
 create index if not exists idx_orders_status on orders (status);
 
+-- SECTION: receipts
 -- ------------------------------------------------------------ receipts
 create table if not exists receipts (
   id         text primary key,
@@ -140,6 +143,7 @@ create table if not exists receipts (
 );
 create index if not exists idx_receipts_order on receipts (order_id);
 
+-- SECTION: referrals
 -- ------------------------------------------------- referral programme
 create table if not exists referral_codes (
   code          text primary key,
@@ -162,6 +166,7 @@ create table if not exists referral_uses (
 );
 create index if not exists idx_referral_uses_code on referral_uses (code);
 
+-- SECTION: coupons
 -- ------------------------------------------------------------- coupons
 create table if not exists coupons (
   code       text primary key,
@@ -176,6 +181,7 @@ create table if not exists coupons (
   created_at timestamptz default now()
 );
 
+-- SECTION: growth_settings
 -- ----------------------------------------------------- growth settings
 -- key/value map: referralEnabled, abandonedEnabled, minSpendNgn, cfaRate,
 -- buyerPercent, referrerPercent, milestone, abandonedHours,
@@ -185,6 +191,7 @@ create table if not exists growth_settings (
   value text
 );
 
+-- SECTION: site_settings
 -- ===================================================== Jaura production tables
 -- These are the source of truth for runtime configuration and recovery.
 create table if not exists site_settings (
@@ -239,6 +246,7 @@ alter table site_settings add column if not exists naira_payment_name         te
 alter table site_settings add column if not exists naira_payment_account      text not null default '';
 alter table site_settings add column if not exists naira_payment_instructions text not null default '';
 
+-- SECTION: categories
 create table if not exists categories (
   id text primary key,
   name text not null,
@@ -248,6 +256,7 @@ create table if not exists categories (
   updated_at timestamptz not null default now()
 );
 
+-- SECTION: product_compatibility
 -- Legacy id alias. A product's `id` is its primary key and is NEVER renamed
 -- while orders, reviews, carts or analytics still reference it. When a row is
 -- eventually given a canonical jau-* id, the previous wix-* id is copied here
@@ -265,6 +274,7 @@ do $$ begin
 exception when duplicate_object then null;
 end $$;
 
+-- SECTION: admin_credentials
 -- Admin credentials. The SQLite `admins` table lives on the Render disk, which
 -- is EPHEMERAL: after a redeploy it is re-seeded with a deliberately unusable
 -- random hash, which locked every admin out until someone got shell access.
@@ -294,6 +304,7 @@ create table if not exists admin_reset_tokens (
 );
 create index if not exists admin_reset_tokens_lookup on admin_reset_tokens(email, purpose, created_at desc);
 
+-- SECTION: delivery_zones
 -- Delivery zones and their fare ranges. Admin-editable, served to the
 -- storefront by GET /api/site so checkout no longer hardcodes the list.
 -- The fare is a RANGE because transport varies with weight; the exact figure
@@ -317,6 +328,7 @@ create table if not exists delivery_zones (
 );
 create index if not exists delivery_zones_active on delivery_zones(active, sort_order);
 
+-- SECTION: coupon_redemptions
 -- Coupon redemption log. `coupons.uses` is a counter and stays the fast path
 -- for the max_uses check, but a counter cannot answer "which order used this
 -- code" and cannot stop a retried order from counting twice. The unique pair
@@ -333,6 +345,7 @@ create table if not exists coupon_uses (
 );
 create index if not exists coupon_uses_code on coupon_uses(code, used_at desc);
 
+-- SECTION: product_reviews
 -- Product reviews. Mirrors the SQLite product_reviews table one-for-one so
 -- the same shape can be read from either side. unique(product_id, email) is
 -- what enforces one review per customer per product - the same rule the
@@ -401,6 +414,7 @@ end $$;
 
 create index if not exists product_reviews_pid on product_reviews(product_id);
 
+-- SECTION: delivery_seeds
 -- Seed the zones the storefront has always shown. on conflict do nothing, so
 -- re-running the schema never overwrites an admin's edited fares.
 insert into delivery_zones (id, name, currency, fare_min, fare_max, kind, sort_order)
@@ -418,31 +432,28 @@ values
                      'CFA',    0,    0, 'pickup',   10)
 on conflict (id) do nothing;
 
+-- SECTION: storage
 -- Storage is provisioned once in Dashboard or with this statement. The service
 -- role is used only server-side; public objects are safe to render directly.
 insert into storage.buckets (id, name, public)
 values ('uploads', 'uploads', true)
-on conflict (id) do update set public = true;
+on conflict (id) do nothing;
 do $$ begin
   create policy "public read uploads" on storage.objects for select using (bucket_id = 'uploads');
 exception when duplicate_object then null;
 end $$;
 do $$ begin
-  create policy "service role writes uploads" on storage.objects for all using (bucket_id = 'uploads') with check (bucket_id = 'uploads');
+  create policy "service role writes uploads" on storage.objects for all to service_role using (bucket_id = 'uploads') with check (bucket_id = 'uploads');
 exception when duplicate_object then null;
 end $$;
+alter policy "service role writes uploads" on storage.objects to service_role
+  using (bucket_id = 'uploads') with check (bucket_id = 'uploads');
 
--- Payment receipts/proofs live in a PRIVATE bucket: the only URL ever handed
--- out is a short-lived signed URL minted server-side, so a receipt is never
--- publicly guessable and never reaches a customer/storefront response.
-insert into storage.buckets (id, name, public)
-values ('receipts', 'receipts', false)
-on conflict (id) do update set public = false;
-do $$ begin
-  create policy "service role writes receipts" on storage.objects for all using (bucket_id = 'receipts') with check (bucket_id = 'receipts');
-exception when duplicate_object then null;
-end $$;
+-- Proofs share uploads/proofs/<date>/<hash>-<128-bit-token>.<ext>.
+-- uploads is PUBLIC: signed links do not make objects private.
+-- This schema does not delete any existing bucket or stored object.
 
+-- SECTION: stock
 -- ------------------------------------------------------------------ stock
 -- Atomic stock reservation/release used by checkout when Supabase is the
 -- source of truth. A single UPDATE with a guard on stock_quantity prevents

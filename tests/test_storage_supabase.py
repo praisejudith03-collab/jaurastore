@@ -242,22 +242,22 @@ def test_misc_asset_is_public(fake):
 def test_payment_proof_gets_signed_url_not_public(fake):
     ok, msg, url = storage.save_image(_png(), "proofs", "receipt.png")
     assert ok, msg
-    # receipts live in the PRIVATE receipts bucket, signed (never public)
-    assert f"/storage/v1/object/sign/receipts/proofs/" in url
+    # proofs share uploads and are returned as signed links
+    assert f"/storage/v1/object/sign/uploads/proofs/" in url
     assert "token=" in url
     assert "/object/public/" not in url
     # the object itself is in the private bucket (the signed url points at it)
-    bucket_path = url.split("/receipts/proofs/", 1)[1].split("?", 1)[0]
-    assert f"proofs/{bucket_path}" in fake.objects["receipts"]
+    bucket_path = url.split("/uploads/proofs/", 1)[1].split("?", 1)[0]
+    assert f"proofs/{bucket_path}" in fake.objects["uploads"]
 
 
 def test_pdf_receipt_gets_signed_url(fake):
     ok, msg, url = storage.save_image(_pdf(), "proofs", "receipt.pdf",
                                       allow_pdf=True, max_bytes=storage.MAX_RECEIPT_BYTES)
     assert ok, msg
-    assert f"/storage/v1/object/sign/receipts/proofs/" in url
-    path = url.split("/receipts/proofs/", 1)[1].split("?", 1)[0]
-    assert fake.objects["receipts"][f"proofs/{path}"][1] == "application/pdf"
+    assert f"/storage/v1/object/sign/uploads/proofs/" in url
+    path = url.split("/uploads/proofs/", 1)[1].split("?", 1)[0]
+    assert fake.objects["uploads"][f"proofs/{path}"][1] == "application/pdf"
 
 
 def test_sensitive_is_by_folder_not_by_extension(fake):
@@ -269,7 +269,7 @@ def test_sensitive_is_by_folder_not_by_extension(fake):
     assert url_public.startswith("/uploads/products/")
     pub = storage.supabase_public_url(url_public[len("/uploads/"):])
     assert "/object/public/" in pub and "/object/sign/" not in pub
-    assert "/object/sign/receipts/" in url_signed and "/object/public/" not in url_signed
+    assert "/object/sign/uploads/" in url_signed and "/object/public/" not in url_signed
 
 
 # ------------------------------------------------------- uploads: never lost
@@ -351,17 +351,17 @@ def test_delete_signed_proof_url_removes_object(fake):
     ok, _, url = storage.save_image(_png(), "proofs", "receipt.png")
     assert ok
     assert storage.delete_upload(url) is True
-    path = url.split("/receipts/proofs/", 1)[1].split("?", 1)[0]
-    assert f"proofs/{path}" not in fake.objects.get("receipts", {})
+    path = url.split("/uploads/proofs/", 1)[1].split("?", 1)[0]
+    assert f"proofs/{path}" not in fake.objects.get("uploads", {})
 
 
 def test_delete_a_stale_signed_url_still_removes_object(fake):
     ok, _, url = storage.save_image(_png(), "proofs", "receipt.png")
     assert ok
-    path = url.split("/receipts/proofs/", 1)[1].split("?", 1)[0]
-    stale = f"{FAKE_ORIGIN}/storage/v1/object/sign/receipts/proofs/{path}?token=expired-token"
+    path = url.split("/uploads/proofs/", 1)[1].split("?", 1)[0]
+    stale = f"{FAKE_ORIGIN}/storage/v1/object/sign/uploads/proofs/{path}?token=expired-token"
     assert storage.delete_upload(stale) is True
-    assert f"proofs/{path}" not in fake.objects.get("receipts", {})
+    assert f"proofs/{path}" not in fake.objects.get("uploads", {})
 
 
 def test_delete_ignores_foreign_urls(fake):
@@ -383,17 +383,17 @@ def test_local_files_still_deleted(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------- key parsing / signing
-def test_key_from_url_supabase_shapes():
+def test_key_from_url_supabase_shapes(fake):
     assert (storage._key_from_url(
         f"{FAKE_ORIGIN}/storage/v1/object/public/uploads/products/a/b.png")
         == "products/a/b.png")
     assert (storage._key_from_url(
         f"{FAKE_ORIGIN}/storage/v1/object/sign/uploads/proofs/a/b.png?token=x")
         == "proofs/a/b.png")
-    # a non-default bucket name must parse too
+    # Other buckets must not be resolved by uploads-only helpers
     assert (storage._key_from_url(
         f"{FAKE_ORIGIN}/storage/v1/object/public/my-bucket/products/a/b.png")
-        == "products/a/b.png")
+        == "")
 
 
 def test_signed_url_for_refreshes_a_stored_proof_url(fake):
@@ -401,10 +401,10 @@ def test_signed_url_for_refreshes_a_stored_proof_url(fake):
     assert ok
     refreshed = storage.signed_url_for(url)
     assert refreshed != url                    # a fresh token, not the stale one
-    assert f"/storage/v1/object/sign/receipts/proofs/" in refreshed
+    assert f"/storage/v1/object/sign/uploads/proofs/" in refreshed
     # the object path is the same - only the token moved
-    assert url.split("/receipts/proofs/", 1)[1].split("?", 1)[0] == \
-        refreshed.split("/receipts/proofs/", 1)[1].split("?", 1)[0]
+    assert url.split("/uploads/proofs/", 1)[1].split("?", 1)[0] == \
+        refreshed.split("/uploads/proofs/", 1)[1].split("?", 1)[0]
     # a second call reuses the freshly minted url (cache) instead of
     # hitting the storage API again
     assert storage.signed_url_for(url) == refreshed
@@ -462,7 +462,7 @@ def test_admin_receipts_view_serves_fresh_signed_urls(client, fake):
     execute("DELETE FROM payment_proofs")      # isolated: this test's row only
     ok, _, url = storage.save_image(_png(), "proofs", "receipt.png")
     assert ok
-    stored_path = url.split("/receipts/proofs/", 1)[1].split("?", 1)[0]
+    stored_path = url.split("/uploads/proofs/", 1)[1].split("?", 1)[0]
     execute("INSERT INTO payment_proofs (order_id, name, phone, email, method, items, "
             "quantity, amount, note, file_url, file_name, file_size, mime, emailed, "
             "email_info, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -477,8 +477,8 @@ def test_admin_receipts_view_serves_fresh_signed_urls(client, fake):
     assert len(proofs) == 1
     served = proofs[0]["file_url"]
     assert served != url                        # refreshed, not the stored one
-    assert served.split("/receipts/proofs/", 1)[1].split("?", 1)[0] == stored_path
-    assert f"/storage/v1/object/sign/receipts/proofs/" in served
+    assert served.split("/uploads/proofs/", 1)[1].split("?", 1)[0] == stored_path
+    assert f"/storage/v1/object/sign/uploads/proofs/" in served
 
 
 # ------------------------------------------- variant stock survives a deploy

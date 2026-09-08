@@ -1258,12 +1258,12 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(argv)
     bucket = (args.bucket or DEFAULT_BUCKET).strip() or DEFAULT_BUCKET
+    if bucket != DEFAULT_BUCKET:
+        print("error: only the uploads Storage bucket is supported", file=sys.stderr)
+        return 2
 
     client, supabase_url = _client()
     configured = client is not None
-    if args.bucket == DEFAULT_BUCKET and os.environ.get("SUPABASE_PRIVATE_BUCKET"):
-        print("note: SUPABASE_PRIVATE_BUCKET is ignored - every product image "
-              "goes to the public bucket")
 
     if args.source == "supabase" and not configured:
         print("error: --source supabase needs SUPABASE_URL + "

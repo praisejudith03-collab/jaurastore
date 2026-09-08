@@ -1459,7 +1459,9 @@ def admin_payment_proofs():
         if d.get("file_url"):
             d["file_url"] = storage.signed_url_for(d["file_url"])
         proofs.append(d)
-    return jsonify(ok=True, count=len(proofs), proofs=proofs)
+    response = jsonify(ok=True, count=len(proofs), proofs=proofs)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @api.delete("/admin/payment-proofs/<int:pid>")
