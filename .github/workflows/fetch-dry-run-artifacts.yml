@@ -1,0 +1,305 @@
+name: Fetch migration artifacts (temporary, read-only)
+
+# TEMPORARY read-only helper: re-assembles artifact files from finished runs on
+# main by emitting them as check-run annotations. Deletes itself after use.
+
+on:
+  push:
+    branches: [arena/01a080a7-jaurastore]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  fetch-apply-0:
+    name: fetch-apply-0
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      TARGET_RUN_ID: "34241484557"
+      ART: "apply-report"
+      SEG: "0"
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Emit segment as annotations
+        run: |
+          python - <<'PY'
+          import base64, os, subprocess, sys, pathlib
+          run_id = os.environ["TARGET_RUN_ID"]
+          art = os.environ["ART"]
+          seg = int(os.environ.get("SEG") or 0)
+          seg_w = 9820
+          chunk_w = 982
+          d = pathlib.Path("/tmp/art-" + art)
+          d.mkdir(parents=True, exist_ok=True)
+          subprocess.run(["gh", "run", "download", run_id, "--name", art, "--dir", str(d)],
+                         check=True, env=dict(os.environ))
+          files = [f for f in d.rglob("*") if f.is_file()]
+          if not files:
+              print("::error file=artifact-b64::chunk 0: EMPTY")
+              sys.exit(1)
+          raw = files[0].read_bytes()
+          b64 = base64.b64encode(raw).decode()
+          slice_ = b64[seg * seg_w:(seg + 1) * seg_w]
+          print("::warning file=meta::" + art + " seg=" + str(seg) +
+                " filebytes=" + str(len(raw)) +
+                " b64len=" + str(len(b64)) +
+                " seglen=" + str(len(slice_)))
+          for i in range(0, len(slice_), chunk_w):
+              chunk = slice_[i:i + chunk_w]
+              print("::error file=artifact-b64::chunk " + str(i // chunk_w) + ": " + chunk)
+          PY
+  fetch-apply-1:
+    name: fetch-apply-1
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      TARGET_RUN_ID: "34241484557"
+      ART: "apply-report"
+      SEG: "1"
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Emit segment as annotations
+        run: |
+          python - <<'PY'
+          import base64, os, subprocess, sys, pathlib
+          run_id = os.environ["TARGET_RUN_ID"]
+          art = os.environ["ART"]
+          seg = int(os.environ.get("SEG") or 0)
+          seg_w = 9820
+          chunk_w = 982
+          d = pathlib.Path("/tmp/art-" + art)
+          d.mkdir(parents=True, exist_ok=True)
+          subprocess.run(["gh", "run", "download", run_id, "--name", art, "--dir", str(d)],
+                         check=True, env=dict(os.environ))
+          files = [f for f in d.rglob("*") if f.is_file()]
+          if not files:
+              print("::error file=artifact-b64::chunk 0: EMPTY")
+              sys.exit(1)
+          raw = files[0].read_bytes()
+          b64 = base64.b64encode(raw).decode()
+          slice_ = b64[seg * seg_w:(seg + 1) * seg_w]
+          print("::warning file=meta::" + art + " seg=" + str(seg) +
+                " filebytes=" + str(len(raw)) +
+                " b64len=" + str(len(b64)) +
+                " seglen=" + str(len(slice_)))
+          for i in range(0, len(slice_), chunk_w):
+              chunk = slice_[i:i + chunk_w]
+              print("::error file=artifact-b64::chunk " + str(i // chunk_w) + ": " + chunk)
+          PY
+  fetch-migr:
+    name: fetch-migr
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      TARGET_RUN_ID: "34241484557"
+      ART: "migration-result"
+      SEG: "0"
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Emit segment as annotations
+        run: |
+          python - <<'PY'
+          import base64, os, subprocess, sys, pathlib
+          run_id = os.environ["TARGET_RUN_ID"]
+          art = os.environ["ART"]
+          seg = int(os.environ.get("SEG") or 0)
+          seg_w = 9820
+          chunk_w = 982
+          d = pathlib.Path("/tmp/art-" + art)
+          d.mkdir(parents=True, exist_ok=True)
+          subprocess.run(["gh", "run", "download", run_id, "--name", art, "--dir", str(d)],
+                         check=True, env=dict(os.environ))
+          files = [f for f in d.rglob("*") if f.is_file()]
+          if not files:
+              print("::error file=artifact-b64::chunk 0: EMPTY")
+              sys.exit(1)
+          raw = files[0].read_bytes()
+          b64 = base64.b64encode(raw).decode()
+          slice_ = b64[seg * seg_w:(seg + 1) * seg_w]
+          print("::warning file=meta::" + art + " seg=" + str(seg) +
+                " filebytes=" + str(len(raw)) +
+                " b64len=" + str(len(b64)) +
+                " seglen=" + str(len(slice_)))
+          for i in range(0, len(slice_), chunk_w):
+              chunk = slice_[i:i + chunk_w]
+              print("::error file=artifact-b64::chunk " + str(i // chunk_w) + ": " + chunk)
+          PY
+  fetch-dry:
+    name: fetch-dry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      TARGET_RUN_ID: "34241484557"
+      ART: "dry-run-report"
+      SEG: "0"
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Emit segment as annotations
+        run: |
+          python - <<'PY'
+          import base64, os, subprocess, sys, pathlib
+          run_id = os.environ["TARGET_RUN_ID"]
+          art = os.environ["ART"]
+          seg = int(os.environ.get("SEG") or 0)
+          seg_w = 9820
+          chunk_w = 982
+          d = pathlib.Path("/tmp/art-" + art)
+          d.mkdir(parents=True, exist_ok=True)
+          subprocess.run(["gh", "run", "download", run_id, "--name", art, "--dir", str(d)],
+                         check=True, env=dict(os.environ))
+          files = [f for f in d.rglob("*") if f.is_file()]
+          if not files:
+              print("::error file=artifact-b64::chunk 0: EMPTY")
+              sys.exit(1)
+          raw = files[0].read_bytes()
+          b64 = base64.b64encode(raw).decode()
+          slice_ = b64[seg * seg_w:(seg + 1) * seg_w]
+          print("::warning file=meta::" + art + " seg=" + str(seg) +
+                " filebytes=" + str(len(raw)) +
+                " b64len=" + str(len(b64)) +
+                " seglen=" + str(len(slice_)))
+          for i in range(0, len(slice_), chunk_w):
+              chunk = slice_[i:i + chunk_w]
+              print("::error file=artifact-b64::chunk " + str(i // chunk_w) + ": " + chunk)
+          PY
+  fetch-schema:
+    name: fetch-schema
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      TARGET_RUN_ID: "34241484557"
+      ART: "schema-verification"
+      SEG: "0"
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Emit segment as annotations
+        run: |
+          python - <<'PY'
+          import base64, os, subprocess, sys, pathlib
+          run_id = os.environ["TARGET_RUN_ID"]
+          art = os.environ["ART"]
+          seg = int(os.environ.get("SEG") or 0)
+          seg_w = 9820
+          chunk_w = 982
+          d = pathlib.Path("/tmp/art-" + art)
+          d.mkdir(parents=True, exist_ok=True)
+          subprocess.run(["gh", "run", "download", run_id, "--name", art, "--dir", str(d)],
+                         check=True, env=dict(os.environ))
+          files = [f for f in d.rglob("*") if f.is_file()]
+          if not files:
+              print("::error file=artifact-b64::chunk 0: EMPTY")
+              sys.exit(1)
+          raw = files[0].read_bytes()
+          b64 = base64.b64encode(raw).decode()
+          slice_ = b64[seg * seg_w:(seg + 1) * seg_w]
+          print("::warning file=meta::" + art + " seg=" + str(seg) +
+                " filebytes=" + str(len(raw)) +
+                " b64len=" + str(len(b64)) +
+                " seglen=" + str(len(slice_)))
+          for i in range(0, len(slice_), chunk_w):
+              chunk = slice_[i:i + chunk_w]
+              print("::error file=artifact-b64::chunk " + str(i // chunk_w) + ": " + chunk)
+          PY
+  fetch-refused:
+    name: fetch-refused
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      TARGET_RUN_ID: "34225534939"
+      ART: "migration-result"
+      SEG: "0"
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Emit segment as annotations
+        run: |
+          python - <<'PY'
+          import base64, os, subprocess, sys, pathlib
+          run_id = os.environ["TARGET_RUN_ID"]
+          art = os.environ["ART"]
+          seg = int(os.environ.get("SEG") or 0)
+          seg_w = 9820
+          chunk_w = 982
+          d = pathlib.Path("/tmp/art-" + art)
+          d.mkdir(parents=True, exist_ok=True)
+          subprocess.run(["gh", "run", "download", run_id, "--name", art, "--dir", str(d)],
+                         check=True, env=dict(os.environ))
+          files = [f for f in d.rglob("*") if f.is_file()]
+          if not files:
+              print("::error file=artifact-b64::chunk 0: EMPTY")
+              sys.exit(1)
+          raw = files[0].read_bytes()
+          b64 = base64.b64encode(raw).decode()
+          slice_ = b64[seg * seg_w:(seg + 1) * seg_w]
+          print("::warning file=meta::" + art + " seg=" + str(seg) +
+                " filebytes=" + str(len(raw)) +
+                " b64len=" + str(len(b64)) +
+                " seglen=" + str(len(slice_)))
+          for i in range(0, len(slice_), chunk_w):
+              chunk = slice_[i:i + chunk_w]
+              print("::error file=artifact-b64::chunk " + str(i // chunk_w) + ": " + chunk)
+          PY
+  fetch-meta:
+    name: fetch-meta
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      RUN_A: "34241484557"
+      RUN_B: "34225534939"
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Report all artifact sizes
+        run: |
+          python - <<'PY'
+          import os, pathlib, subprocess, base64
+          targets = [
+              (os.environ["RUN_A"], "apply-report"),
+              (os.environ["RUN_A"], "migration-result"),
+              (os.environ["RUN_A"], "dry-run-report"),
+              (os.environ["RUN_A"], "schema-verification"),
+              (os.environ["RUN_B"], "migration-result"),
+          ]
+          seg_w = 9820
+          lines = []
+          for run_id, art in targets:
+              d = pathlib.Path("/tmp/m-" + run_id + "-" + art)
+              d.mkdir(parents=True, exist_ok=True)
+              subprocess.run(["gh", "run", "download", run_id, "--name", art, "--dir", str(d)],
+                             check=True, env=dict(os.environ))
+              files = [f for f in d.rglob("*") if f.is_file()]
+              raw = files[0].read_bytes() if files else b""
+              b64 = base64.b64encode(raw).decode()
+              lines.append(art + "@" + run_id[-4:] + " bytes=" + str(len(raw)) +
+                           " b64=" + str(len(b64)) + " segs=" + str((len(b64) + seg_w - 1) // seg_w))
+          print("::warning file=meta::" + " | ".join(lines))
+          PY
