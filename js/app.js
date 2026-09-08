@@ -2148,11 +2148,3 @@ async function boot() {
 }
 
 document.addEventListener("DOMContentLoaded", boot);
- "wishlist") draw();
-  });
-  document.querySelector("[data-sort]")?.addEventListener("change", renderShop);
-  document.querySelector("[data-shop-q]")?.addEventListener("input", renderShop);
-  if (page === "shop") bindShopFilter();
-}
-
-document.addEventListener("DOMContentLoaded", boot);
