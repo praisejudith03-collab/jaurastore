@@ -6,9 +6,9 @@ name: Artifact export (read-only, one-off)
 # or results-receiver.actions.githubusercontent.com (the hosts that serve Actions
 # artifact and log downloads), so `gh run download` and log fetching fail from
 # there. Git over github.com works, so this one-off job downloads the artifacts
-# of an already-completed run and pushes the two JSON files to a throwaway
-# scratch branch (with SHA256SUMS.txt) so the reviewer can fetch and verify them
-# with plain git.
+# of an already-completed run and pushes the files (plus SHA256SUMS.txt and the
+# job's own output log) to a throwaway scratch branch so the reviewer can fetch
+# and verify them with plain git.
 #
 # What it does NOT do:
 #   - never runs migrate_images.py or any migration code
@@ -42,52 +42,57 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REPO: ${{ github.repository }}
         run: |
-          set -euo pipefail
+          mkdir -p exported downloaded
+          exec > >(tee /tmp/export-log.txt) 2>&1
           echo "=== SOURCE RUN PROVENANCE ==="
           gh api "repos/$SOURCE_REPO/actions/runs/$SOURCE_RUN_ID" \
-            --jq '{id, name, event, status, conclusion, head_branch, head_sha, created_at, run_attempt, triggering_actor: .triggering_actor.login}'
+            --jq '{id, name, event, status, conclusion, head_branch, head_sha, created_at, run_attempt, triggering_actor: .triggering_actor.login}' \
+            || echo "provenance api failed rc=$?"
           echo "=== ARTIFACT METADATA ==="
           gh api "repos/$SOURCE_REPO/actions/runs/$SOURCE_RUN_ID/artifacts" \
-            --jq '.artifacts[] | {id, name, size_in_bytes, expired, created_at}'
-          mkdir -p exported downloaded
-          gh run download "$SOURCE_RUN_ID" --repo "$SOURCE_REPO" --dir downloaded
-          find downloaded -type f -exec cp {} exported/ \;
+            --jq '.artifacts[] | {id, name, size_in_bytes, expired, created_at}' \
+            || echo "metadata api failed rc=$?"
 
-          # Also fetch the raw artifact ZIP archives themselves (the exact bytes
-          # a browser download of the artifact produces), so the reviewer can
-          # compare their hashes with the owner-provided values too.
-          for ID_NAME in \
-            $(gh api "repos/$SOURCE_REPO/actions/runs/$SOURCE_RUN_ID/artifacts" \
-                --jq '.artifacts[] | "\(.id) \(.name)"'); do
-            set -- $ID_NAME
-            ART_ID="$1"; ART_NAME="$2"
-            gh api "repos/$SOURCE_REPO/actions/artifacts/$ART_ID/zip" > "exported/$ART_NAME.zip"
-          done
+          echo "=== EXTRACTED FILES (gh run download) ==="
+          gh run download "$SOURCE_RUN_ID" --repo "$SOURCE_REPO" --dir downloaded
+          echo "gh run download rc=$?"
+          find downloaded -type f -print -exec cp {} exported/ \;
+
+          echo "=== RAW ARTIFACT ZIPS ==="
+          gh api "repos/$SOURCE_REPO/actions/runs/$SOURCE_RUN_ID/artifacts" \
+            --jq '.artifacts[] | "\(.id)|\(.name)"' > /tmp/arts.txt
+          while IFS='|' read -r ART_ID ART_NAME; do
+            echo "downloading artifact $ART_NAME (id $ART_ID) as zip..."
+            if gh api "repos/$SOURCE_REPO/actions/artifacts/$ART_ID/zip" > "exported/$ART_NAME.zip"; then
+              echo "  ok: $(wc -c < "exported/$ART_NAME.zip") bytes"
+            else
+              echo "  FAILED rc=$?"
+            fi
+          done < /tmp/arts.txt
 
           echo "=== EXPORTED FILES ==="
           ls -la exported/
           cd exported
-          sha256sum * | tee SHA256SUMS.txt
-          echo "=== CONTENT HEADS ==="
+          sha256sum -- * | tee SHA256SUMS.txt
+          echo "=== JSON HEADS ==="
           for f in *.json; do echo "--- $f (first 200 bytes) ---"; head -c 200 "$f"; echo; done
 
       - name: Push the artifacts to the scratch branch
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_REPO: ${{ github.repository }}
         run: |
-          set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # Stash the exported files outside the worktree: the orphan checkout
           # below resets it.
           mkdir -p /tmp/artifacts-export
           cp exported/* /tmp/artifacts-export/
+          cp /tmp/export-log.txt /tmp/artifacts-export/_export-log.txt
           git checkout --orphan "$SCRATCH_BRANCH"
           git rm -rf --cached . >/dev/null 2>&1 || true
           git clean -fdx >/dev/null 2>&1 || true
           cp /tmp/artifacts-export/* .
-          git add SHA256SUMS.txt *.json *.zip
+          git add -A .
           git commit -m "Artifacts of dry-run 34207418484 (read-only export for review)" \
                      -m "$(cat /tmp/artifacts-export/SHA256SUMS.txt)"
           git push --force origin "HEAD:refs/heads/${SCRATCH_BRANCH}"
