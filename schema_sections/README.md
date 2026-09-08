@@ -8,6 +8,20 @@ Run them **in numeric order**: later batches depend on tables created earlier;
 “independently runnable” means a separate SQL Editor query, not arbitrary order
 on an empty database. Edit the source, not these generated SQL files.
 
+## Delivery seed repair: deployment hold
+
+If section 14 failed with `null value in column "zone_name"`, **do not rerun
+section 14 until the compatibility repair PR is merged into `main`**. The
+corrected section detects the legacy column and supplies both `name` and
+`zone_name` for new rows only. Fresh tables keep using `name` alone. Existing
+rows (including Admin-edited data and null current names) are not backfilled,
+renamed, or overwritten; conflicts on IDs or unique names are skipped.
+
+This repair does not require dropping or replacing `delivery_zones`, or rerunning
+the earlier successful sections. Keep sections **15 and 16 on hold** pending
+separate approval. Do not run the image migration or set `dry_run=false`.
+The general sequence below is not approval to resume the paused deployment.
+
 ## Mobile steps
 
 1. Open this directory on GitHub on branch `arena/01a07fac-jaurastore` (after
@@ -77,4 +91,12 @@ on an empty database. Edit the source, not these generated SQL files.
 ```sh
 python3 tools/split_schema.py          # regenerate from schema banners
 python3 tools/split_schema.py --check  # read-only drift detection
+python3 -m pip install -r requirements.txt pillow pyyaml pgserver==0.1.4
+python3 -m pytest tests/ -q            # complete suite, including PostgreSQL regression
 ```
+
+The delivery seed regression tests use PostgreSQL 16 binaries bundled by the
+**test-only** `pgserver` dependency. They start a disposable Unix-socket-only
+cluster, reproduce the old `zone_name NOT NULL` failure, and exercise sections
+11/14 in rolled-back transactions. They never connect to Supabase, use deployment
+credentials, or execute sections 15/16. Run these tests as a non-root user.
