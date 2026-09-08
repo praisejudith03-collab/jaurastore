@@ -2,7 +2,7 @@
 import os, re, html, datetime
 from urllib.parse import quote
 from flask import (Flask, send_from_directory, jsonify, request, redirect,
-                   Response, abort, make_response as _make_response)
+                   Response, abort, session, make_response as _make_response)
 from config import Config
 from db import init_db, migrate
 import security as sec
@@ -144,6 +144,8 @@ def create_app():
         # allows product + hero videos up to 40 MB (storage.MAX_VIDEO_BYTES)
         MAX_CONTENT_LENGTH=45 * 1024 * 1024,
     )
+    import customers as customers_mod
+    customers_mod.register_routes(api)
     app.register_blueprint(api)
 
     init_db()
@@ -174,8 +176,12 @@ def create_app():
         # Restore orders and receipts from Supabase so a redeploy that wiped the
         # disk still has them. Never blocks boot on failure.
         try:
-            from supabase_store import load_orders, load_receipts
-            from db import upsert_orders, upsert_receipts
+            from supabase_store import load_orders, load_receipts, load_customers
+            from db import upsert_orders, upsert_receipts, upsert_customers
+            customers_data = load_customers()
+            if customers_data:
+                saved_c = upsert_customers(customers_data)
+                app.logger.info("restored %d customers from Supabase", saved_c)
             orders_data = load_orders()
             if orders_data:
                 saved_o = upsert_orders(orders_data)
@@ -384,6 +390,26 @@ def create_app():
     @app.route(LEGACY_PREFIX + "/<path:p>")
     def legacy_path(p):
         return redirect("/" + p)
+
+    def _account_page():
+        resp = static_for("account.html")
+        if resp is None:
+            return "Not found", 404
+        return resp
+
+    @app.route("/account")
+    @app.route("/account/")
+    def account_home():
+        return _account_page()
+
+    @app.route("/account/logout")
+    def account_logout_get():
+        session.pop("customer_id", None)
+        return _account_page()
+
+    @app.route("/account/<path:rest>")
+    def account_spa(rest):
+        return _account_page()
 
     @app.route("/<path:p>")
     def catch_all(p):

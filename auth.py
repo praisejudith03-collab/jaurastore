@@ -298,6 +298,7 @@ def login(email):
     email = (email or "").strip().lower()
     session.permanent = True
     session["admin_email"] = email
+    session.pop("customer_id", None)
     execute("UPDATE admins SET last_login_at=? WHERE email=?",
             (datetime.datetime.utcnow().isoformat(timespec="seconds"), email))
 

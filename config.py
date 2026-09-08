@@ -24,13 +24,15 @@ class Config:
     CATALOG_PATH = os.environ.get("CATALOG_PATH", os.path.join(ROOT, "data", "catalog.json"))
     ADMIN_EMAILS = _emails()
 
-    MAIL_MODE = os.environ.get("MAIL_MODE", "none").lower()
-    MAIL_FROM = os.environ.get("MAIL_FROM", "jaurastore@gmail.com")
-    RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-    SMTP_HOST = os.environ.get("SMTP_HOST", "")
-    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or 587)
-    SMTP_USER = os.environ.get("SMTP_USER", "")
-    SMTP_PASS = os.environ.get("SMTP_PASS", "")
+    MAIL_MODE = os.environ.get("MAIL_MODE", "none").strip().lower()
+    MAIL_FROM = (os.environ.get("MAIL_FROM", "jaurastore@gmail.com") or "").strip()
+    RESEND_API_KEY = (os.environ.get("RESEND_API_KEY", "") or "").strip()
+    SMTP_HOST = (os.environ.get("SMTP_HOST", "") or "").strip()
+    SMTP_PORT = int((os.environ.get("SMTP_PORT", "587") or "587").strip() or 587)
+    SMTP_USER = (os.environ.get("SMTP_USER", "") or "").strip()
+    # Quotes/newlines sneak in from dashboard paste; internal spaces are
+    # stripped at send time for Gmail App Passwords (see emailer._smtp_pass).
+    SMTP_PASS = (os.environ.get("SMTP_PASS", "") or "").strip().strip('"').strip("'")
 
     # WhatsApp order notifications (either provider; see whatsapp.py)
     WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")

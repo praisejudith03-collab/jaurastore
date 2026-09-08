@@ -15,9 +15,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        # pyyaml enables workflow guards; pgserver bundles disposable PostgreSQL
-        # for the delivery seed regression tests (no Supabase credentials).
-        run: pip install -r requirements.txt pytest pillow pyyaml pgserver==0.1.4
+        # requirements-test.txt is the declared source for Pillow (upload
+        # tests), PyYAML (workflow guards) and pgserver (delivery seed
+        # PostgreSQL). Do not rely on undeclared pip extras.
+        run: pip install -r requirements.txt -r requirements-test.txt
 
       - name: Run test suite
         run: python -m pytest tests/ -q

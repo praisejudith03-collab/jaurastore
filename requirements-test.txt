@@ -1,0 +1,5 @@
+# Test-only extras. Production Render installs requirements.txt alone.
+# CI: pip install -r requirements.txt -r requirements-test.txt
+pillow>=10.0.0
+PyYAML>=6.0
+pgserver==0.1.4

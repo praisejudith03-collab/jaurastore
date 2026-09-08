@@ -1,8 +1,246 @@
 """Mail delivery: resend | smtp | none(kept on disk + console)."""
-import smtplib, ssl, datetime
+import datetime, re, socket, ssl, smtplib
 from urllib.parse import quote
 from email.message import EmailMessage
 from config import Config
+
+# Sanitized categories written to Render. Never a password, token, or key.
+# These slugs are the only failure labels the operator inspects after deploy.
+SMTP_AUTHENTICATION = "smtp_authentication"
+SMTP_TLS = "smtp_tls"
+SMTP_CONNECTION = "smtp_connection"
+SMTP_SENDER = "smtp_sender"
+SMTP_RECIPIENT = "smtp_recipient"
+SMTP_PROVIDER = "smtp_provider"
+CONFIGURATION = "configuration"
+# Aliases kept so older tests/callers still import a stable name.
+MAIL_MODE_NOT_SMTP = CONFIGURATION
+SMTP_AUTH_FAILURE = SMTP_AUTHENTICATION
+GMAIL_APP_PASSWORD_REJECTED = SMTP_AUTHENTICATION
+SMTP_TLS_FAILURE = SMTP_TLS
+SENDER_MISMATCH = SMTP_SENDER
+RECIPIENT_MISMATCH = SMTP_RECIPIENT
+RESET_TOKEN_DB_FAILURE = CONFIGURATION
+
+_SECRETISH = re.compile(
+    r"(?i)(password|passwd|smtp_pass|app password|secret|token|api[_-]?key|"
+    r"service.role|bearer|authorization)\s*[:=]\s*\S+")
+
+
+def _smtp_user():
+    return (Config.SMTP_USER or "").strip()
+
+
+def _smtp_pass():
+    """App passwords are 16 chars; dashboard paste often includes spaces or quotes."""
+    raw = (Config.SMTP_PASS or "").strip().strip('"').strip("'")
+    host = (Config.SMTP_HOST or "").lower()
+    if "gmail.com" in host or "google.com" in host:
+        raw = "".join(raw.split())
+    return raw
+
+
+def _email_addr(value):
+    s = (value or "").strip()
+    if "<" in s and ">" in s:
+        s = s[s.find("<") + 1:s.rfind(">")].strip()
+    return s
+
+
+def mail_config_fields():
+    """Safe snapshot for logs: host/port/mode and whether secrets exist."""
+    return {
+        "mail_mode": (Config.MAIL_MODE or "none").strip().lower() or "none",
+        "smtp_host": Config.SMTP_HOST or "",
+        "smtp_port": int(Config.SMTP_PORT or 0),
+        "smtp_user_configured": bool(_smtp_user()),
+        "smtp_password_configured": bool(_smtp_pass()),
+    }
+
+
+def sanitize_mail_text(text):
+    s = str(text or "")
+    secrets = [Config.SMTP_PASS, _smtp_pass(), Config.RESEND_API_KEY,
+               Config.SUPABASE_SERVICE_ROLE_KEY]
+    for secret in secrets:
+        if secret:
+            s = s.replace(str(secret), "<redacted>")
+            compact = "".join(str(secret).split())
+            if compact and compact != str(secret):
+                s = s.replace(compact, "<redacted>")
+    s = _SECRETISH.sub(r"\1=<redacted>", s)
+    s = re.sub(r"(?i)\b(code|token)\s*[:=]\s*\S+", r"\1=<redacted>", s)
+    return s[:240]
+
+
+def log_mail_event(category, extra=""):
+    """Stdout line for Render. extra is accepted but never printed."""
+    f = mail_config_fields()
+    print(
+        "[mail] mode={mode} host={host} port={port} "
+        "user_configured={user} password_configured={pw} category={cat}".format(
+            mode=f["mail_mode"], host=f["smtp_host"] or "-",
+            port=f["smtp_port"], user="yes" if f["smtp_user_configured"] else "no",
+            pw="yes" if f["smtp_password_configured"] else "no",
+            cat=category),
+        flush=True)
+
+
+def classify_smtp_failure(exc=None, info=""):
+    """Map an SMTP exception / info string onto one sanitized category slug."""
+    mode = (Config.MAIL_MODE or "").strip().lower()
+    if mode and mode not in ("smtp", "resend"):
+        return CONFIGURATION
+    blob = " ".join(
+        str(x) for x in (
+            info, exc, type(exc).__name__ if exc is not None else "",
+            getattr(exc, "smtp_code", ""), getattr(exc, "smtp_error", ""),
+        )).lower()
+    if "resend" in blob:
+        return SMTP_PROVIDER
+    if any(k in blob for k in (
+            "application-specific password", "app password", "badcredentials",
+            "5.7.8", "5.7.9", "username and password not accepted",
+            "please log in through your web browser",
+            "please log in via your web browser")):
+        return SMTP_AUTHENTICATION
+    if isinstance(exc, smtplib.SMTPAuthenticationError) or "smtp authentication" in blob:
+        return SMTP_AUTHENTICATION
+    if "auth" in blob and any(k in blob for k in ("required", "failed", "invalid", "not configured")):
+        return SMTP_AUTHENTICATION
+    if isinstance(exc, smtplib.SMTPSenderRefused) or any(k in blob for k in (
+            "sender refused", "not allowed to send", "from address",
+            "syntactically incorrect", "5.7.1")):
+        return SMTP_SENDER
+    if isinstance(exc, smtplib.SMTPRecipientsRefused) or any(k in blob for k in (
+            "recipient refused", "user unknown", "mailbox unavailable", "5.1.1")):
+        return SMTP_RECIPIENT
+    if isinstance(exc, ssl.SSLError) or any(k in blob for k in (
+            "starttls", "ssl error", "tls handshake", "certificate verify",
+            "wrong version number")):
+        return SMTP_TLS
+    if isinstance(exc, (socket.timeout, socket.gaierror, ConnectionRefusedError,
+                        ConnectionError, TimeoutError, smtplib.SMTPConnectError,
+                        smtplib.SMTPServerDisconnected)) or any(k in blob for k in (
+            "timed out", "timeout", "connection refused", "name or service not known",
+            "network is unreachable", "eof occurred", "disconnected",
+            "smtp not configured", "getaddrinfo", "gaierror")):
+        return SMTP_CONNECTION
+    if isinstance(exc, OSError):
+        return SMTP_CONNECTION
+    if "smtp error" in blob or isinstance(exc, smtplib.SMTPException):
+        return SMTP_CONNECTION
+    return SMTP_CONNECTION
+
+
+def _ipv4_connect(address, timeout):
+    """IPv4 first: broken IPv6 on some hosts black-holes smtp.gmail.com until 502."""
+    host, port = address
+    last = None
+    infos = socket.getaddrinfo(host, int(port), socket.AF_INET, socket.SOCK_STREAM)
+    for family, socktype, proto, _canon, sockaddr in infos:
+        sock = socket.socket(family, socktype, proto)
+        try:
+            sock.settimeout(timeout)
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            last = exc
+            sock.close()
+    if last:
+        raise last
+    raise socket.gaierror("no IPv4 address for %s" % host)
+
+
+class _SMTP4(smtplib.SMTP):
+    def _get_socket(self, host, port, timeout):
+        return _ipv4_connect((host, port), timeout)
+
+
+class _SMTP4_SSL(smtplib.SMTP_SSL):
+    def _get_socket(self, host, port, timeout):
+        raw = _ipv4_connect((host, port), timeout)
+        context = self.context or ssl.create_default_context()
+        return context.wrap_socket(raw, server_hostname=host)
+
+
+def _open_smtp(host, port, use_ssl, timeout=12):
+    """Port 465 = SMTP_SSL. Port 587 = STARTTLS before the caller may AUTH."""
+    ctx = ssl.create_default_context()
+    port = int(port)
+    if use_ssl or port == 465:
+        s = _SMTP4_SSL(host, port, timeout=timeout, context=ctx)
+        s.ehlo()
+        s._jaura_tls = True
+        return s
+    s = _SMTP4(timeout=timeout)
+    s.connect(host, port)
+    s.ehlo()
+    gmail = "gmail.com" in (host or "").lower() or "google.com" in (host or "").lower()
+    need_tls = port == 587 or gmail
+    try:
+        s.starttls(context=ctx)
+        s.ehlo()
+        s._jaura_tls = True
+    except smtplib.SMTPException:
+        s._jaura_tls = False
+        if need_tls:
+            try:
+                s.close()
+            except Exception:
+                pass
+            raise
+    return s
+
+
+def _gmail_from_header():
+    """Gmail rejects or rewrites a From that is not the authenticated account."""
+    user = _email_addr(_smtp_user()) or _email_addr(Config.MAIL_FROM)
+    header = (Config.MAIL_FROM or "").strip() or user
+    if user and _email_addr(header).lower() != user.lower():
+        return user
+    return header or user
+
+
+def _deliver_smtp(msg, recipients):
+    host = (Config.SMTP_HOST or "").strip()
+    if not host:
+        return False, "SMTP not configured"
+    port = int(Config.SMTP_PORT or 587)
+    user, password = _smtp_user(), _smtp_pass()
+    gmail = "gmail.com" in host.lower() or "google.com" in host.lower()
+    if gmail and not password:
+        return False, "SMTP authentication required"
+    attempts = [(port, port == 465)]
+    if gmail and port == 587:
+        attempts.append((465, True))
+    elif gmail and port == 465:
+        attempts.append((587, False))
+    last = None
+    for p, use_ssl in attempts:
+        s = None
+        try:
+            s = _open_smtp(host, p, use_ssl)
+            if user and password:
+                if int(p) == 587 and not getattr(s, "_jaura_tls", False):
+                    raise smtplib.SMTPException("STARTTLS required before authentication")
+                s.login(user, password)
+            envelope = _email_addr(user or Config.MAIL_FROM)
+            s.send_message(msg, from_addr=envelope or None, to_addrs=list(recipients))
+            return True, "smtp sent"
+        except Exception as exc:
+            last = exc
+            continue
+        finally:
+            if s is not None:
+                try:
+                    s.quit()
+                except Exception:
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+    return False, f"smtp error: {last}"
 
 def _via_resend(to, subject, body):
     import urllib.request, json
@@ -27,11 +265,20 @@ def send(to, subject, body):
     to = (to or "").strip()
     if not to:
         return False, "no recipient"
-    mode = Config.MAIL_MODE
+    mode = (Config.MAIL_MODE or "none").strip().lower()
     if mode == "resend":
-        return _via_resend(to, subject, body)
+        ok, info = _via_resend(to, subject, body)
+        if not ok:
+            log_mail_event(classify_smtp_failure(info=info), info)
+        return ok, info
     if mode == "smtp":
-        return _via_smtp_attached(to, subject, body, None, "", "", "", None)
+        ok, info = _via_smtp_attached(to, subject, body, None, "", "", "", None)
+        if not ok:
+            log_mail_event(classify_smtp_failure(info=info), info)
+        return ok, info
+    if mode not in ("none", "", "stub", "log"):
+        log_mail_event(MAIL_MODE_NOT_SMTP)
+        return False, MAIL_MODE_NOT_SMTP
     print(f"\n--- MAIL (MAIL_MODE=none, not actually sent) ---\nTo: {to}\nSubject: {subject}\n{body}\n------------------------------------------------\n", flush=True)
     return True, "stubbed (MAIL_MODE=none - logged to server console)"
 
@@ -57,33 +304,11 @@ def order_links(order_id):
 
 def send_with_reply_to(to, subject, body, reply_to):
     """A plain message whose Reply-To points somewhere else (the customer)."""
-    import smtplib
-    from email.message import EmailMessage
-    msg = EmailMessage()
-    msg["From"] = Config.MAIL_FROM
-    msg["To"] = to
-    msg["Subject"] = subject
-    if reply_to:
-        msg["Reply-To"] = reply_to
-    msg.set_content(body)
     if Config.MAIL_MODE == "resend":
         return _via_resend_attached(to, subject, body, None, "", "application/octet-stream", reply_to)
     if Config.MAIL_MODE != "smtp":
         return send(to, subject, body)
-    try:
-        with smtplib.SMTP(Config.SMTP_HOST, Config.SMTP_PORT, timeout=30) as s_:
-            s_.ehlo()
-            try:
-                s_.starttls(context=ssl.create_default_context())
-                s_.ehlo()
-            except smtplib.SMTPException:
-                pass
-            if Config.SMTP_USER and Config.SMTP_PASS:
-                s_.login(Config.SMTP_USER, Config.SMTP_PASS)
-            s_.send_message(msg, from_addr=Config.MAIL_FROM, to_addrs=[to])
-        return True, "sent"
-    except Exception as exc:
-        return False, f"smtp error: {exc}"
+    return _via_smtp_attached(to, subject, body, None, "", "", reply_to, None)
 
 
 def send_order_notice(order, data=None, filename="", mime="application/octet-stream"):
@@ -292,7 +517,7 @@ def _via_smtp_attached(to, subject, body, data, filename, mime, reply_to, cc=Non
     if not Config.SMTP_HOST:
         return False, "SMTP not configured"
     msg = EmailMessage()
-    msg["From"] = Config.MAIL_FROM
+    msg["From"] = _gmail_from_header()
     msg["To"] = to
     msg["Subject"] = subject
     if cc:
@@ -302,22 +527,11 @@ def _via_smtp_attached(to, subject, body, data, filename, mime, reply_to, cc=Non
     msg.set_content(body)
     if data:
         _attach(msg, data, filename, mime)
-    try:
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP(Config.SMTP_HOST, Config.SMTP_PORT, timeout=30) as s:
-            s.ehlo()
-            try:
-                s.starttls(context=ctx)
-                s.ehlo()
-            except smtplib.SMTPException:
-                pass                      # plain relay (local testing only)
-            if Config.SMTP_USER and Config.SMTP_PASS:
-                s.login(Config.SMTP_USER, Config.SMTP_PASS)
-            recipients = [to] + ([cc] if cc else [])
-            s.send_message(msg, from_addr=Config.MAIL_FROM, to_addrs=recipients)
+    recipients = [to] + ([cc] if cc else [])
+    ok, info = _deliver_smtp(msg, recipients)
+    if ok:
         return True, f"smtp sent ({len(data or b'')} bytes attached)"
-    except Exception as exc:
-        return False, f"smtp error: {exc}"
+    return False, info
 
 
 def _via_resend_attached(to, subject, body, data, filename, mime, reply_to):

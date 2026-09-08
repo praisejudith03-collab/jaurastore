@@ -6105,3 +6105,39 @@ select.ck-zone-select {
     min-height: clamp(230px, 62vw, 420px) !important;
   }
 }
+
+
+/* Customer account page */
+.acct-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin: 8px 0 22px;
+}
+.acct-card {
+  background: var(--paper, #fff);
+  border: 1px solid var(--line, #e6ddd2);
+  border-radius: 16px;
+  padding: 20px 18px 22px;
+}
+.acct-card h2 {
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 500;
+  margin: 0 0 8px;
+}
+.acct-narrow { max-width: 480px; margin: 0 auto; }
+.acct-lead { color: var(--muted); font-size: 14px; margin: 0 0 14px; line-height: 1.45; }
+.acct-hint { font-size: 12px; color: var(--taupe); margin: 6px 0 12px; }
+.acct-links { margin-top: 14px; font-size: 13px; }
+.acct-links a { text-decoration: underline; color: var(--gold-deep); }
+.acct-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0 18px; }
+.acct-guest { text-align: center; color: var(--muted); font-size: 13px; margin-top: 8px; }
+.acct-msg { font-size: 13px; margin: 8px 0 12px; padding: 8px 10px; border-radius: 8px; }
+.acct-msg.is-bad { background: #fdecea; color: #8a2b22; }
+.acct-msg.is-good { background: #f3f7f3; color: #3d5a3d; }
+.acct-orders { margin-top: 10px; }
+.acct-items { font-size: 13px; color: var(--muted); margin-top: 6px; }
+@media (max-width: 700px) {
+  .acct-grid { grid-template-columns: 1fr; }
+}

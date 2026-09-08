@@ -19,7 +19,8 @@ create table if not exists orders (
   status        text default 'pending',
   payload       jsonb,
   at            timestamptz,
-  updated_at    timestamptz default now()
+  updated_at    timestamptz default now(),
+  customer_user_id text
 );
 -- Repair an older orders table that may be narrower. Add-only, idempotent,
 -- preserves every existing order row, ids and values. Columns are added
@@ -43,6 +44,8 @@ alter table orders add column if not exists status        text default 'pending'
 alter table orders add column if not exists payload       jsonb;
 alter table orders add column if not exists at            timestamptz;
 alter table orders add column if not exists updated_at    timestamptz default now();
+alter table orders add column if not exists customer_user_id text;
 create index if not exists idx_orders_at on orders (at desc);
 create index if not exists idx_orders_status on orders (status);
+create index if not exists idx_orders_customer on orders (customer_user_id);
 

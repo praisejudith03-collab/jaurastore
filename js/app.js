@@ -1788,49 +1788,232 @@ function renderWishlist() {
   box.innerHTML = `<div class="product-grid">${items.map(JA.cardHTML).join("")}</div>`;
 }
 
-function renderAccount() {
-  const root = document.querySelector("[data-account-root]");
-  if (!root) return;
-  const me = JA.customer && JA.customer();
-  if (!me || !me.email) {
-    root.innerHTML = `
-      <form class="order-lookup" data-account-login>
-        <div class="field"><label>${t("account.email")}</label><input name="email" type="email" required placeholder="you@email.com" autocomplete="email" /></div>
-        <button class="btn" type="submit" style="margin-top:16px">${t("account.login")}</button>
+function accountApi(path, opts) {
+  opts = opts || {};
+  const req = window.JA_NET
+    ? JA_NET.api("/api/account/" + path, opts)
+    : fetch("/api/account/" + path, {
+        method: opts.method || "GET",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: opts.json ? JSON.stringify(opts.json) : undefined,
+      }).then((r) => r.json().then((d) => {
+        if (!r.ok) { const e = new Error((d && d.error) || "HTTP " + r.status); e.data = d; throw e; }
+        return d;
+      }));
+  return req;
+}
+
+function accountMsg(el, text, bad) {
+  if (!el) return;
+  el.hidden = !text;
+  el.textContent = text || "";
+  el.classList.toggle("is-bad", !!bad);
+  el.classList.toggle("is-good", !!text && !bad);
+}
+
+function paintAccountGuest(root, notice) {
+  root.innerHTML = `
+    <div class="acct-grid">
+      ${notice ? `<p class="acct-msg is-good">${JA.escape(notice)}</p>` : ""}
+      <form class="acct-card" data-account-login>
+        <h2>${t("account.login")}</h2>
+        <p class="acct-lead">${t("account.lead")}</p>
+        <div class="field"><label>${t("account.email")}</label><input name="email" type="email" required autocomplete="email" /></div>
+        <div class="field"><label>${t("account.password")}</label><input name="password" type="password" required autocomplete="current-password" /></div>
+        <p class="acct-msg" data-login-msg hidden></p>
+        <button class="btn" type="submit">${t("account.login")}</button>
+        <p class="acct-links"><a href="/account/forgot">${t("account.forgot")}</a></p>
       </form>
-      <p style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:22px">
-        <a class="btn btn-line" href="https://wa.me/${JA.settings().whatsapp}" target="_blank" rel="noopener">${t("footer.contactUs")}</a>
-      </p>`;
-    root.querySelector("[data-account-login]")?.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const email = String(new FormData(e.target).get("email") || "").trim();
-      if (!email) { JA.toast(t("account.needEmail")); return; }
-      JA.setCustomer({ email });
-      renderAccount();
-    });
-    return;
-  }
-  const list = (JA.ordersForEmail ? JA.ordersForEmail(me.email) : JA.orders().filter((o) => String(o.customer?.email || "").toLowerCase() === me.email));
+      <form class="acct-card" data-account-register>
+        <h2>${t("account.register")}</h2>
+        <p class="acct-lead">${t("account.registerLead")}</p>
+        <div class="field"><label>${t("account.name")}</label><input name="name" autocomplete="name" /></div>
+        <div class="field"><label>${t("account.email")}</label><input name="email" type="email" required autocomplete="email" /></div>
+        <div class="field"><label>${t("account.password")}</label><input name="password" type="password" required autocomplete="new-password" /></div>
+        <p class="acct-hint">${t("account.pwHint")}</p>
+        <p class="acct-msg" data-reg-msg hidden></p>
+        <button class="btn" type="submit">${t("account.register")}</button>
+      </form>
+    </div>
+    <p class="acct-guest">${t("account.guestOk")}</p>`;
+  const loginForm = root.querySelector("[data-account-login]");
+  loginForm?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const msg = root.querySelector("[data-login-msg]");
+    accountApi("login", { method: "POST", json: { email: fd.get("email"), password: fd.get("password") } })
+      .then((d) => { if (d && d.ok) renderAccount(); else accountMsg(msg, (d && d.error) || t("account.badLogin"), true); })
+      .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message || t("account.badLogin"), true));
+  });
+  root.querySelector("[data-account-register]")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const msg = root.querySelector("[data-reg-msg]");
+    accountApi("register", { method: "POST", json: { name: fd.get("name"), email: fd.get("email"), password: fd.get("password") } })
+      .then((d) => { if (d && d.ok) renderAccount(); else accountMsg(msg, (d && d.error) || t("account.badRegister"), true); })
+      .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message || t("account.badRegister"), true));
+  });
+}
+
+function paintAccountForgot(root) {
+  root.innerHTML = `
+    <form class="acct-card acct-narrow" data-account-forgot>
+      <h2>${t("account.forgot")}</h2>
+      <p class="acct-lead">${t("account.forgotLead")}</p>
+      <div class="field"><label>${t("account.email")}</label><input name="email" type="email" required autocomplete="email" /></div>
+      <p class="acct-msg" data-forgot-msg hidden></p>
+      <button class="btn" type="submit">${t("account.sendReset")}</button>
+      <p class="acct-links"><a href="/account">${t("account.back")}</a></p>
+    </form>`;
+  root.querySelector("[data-account-forgot]")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const email = String(new FormData(e.target).get("email") || "").trim();
+    const msg = root.querySelector("[data-forgot-msg]");
+    accountApi("forgot", { method: "POST", json: { email } })
+      .then((d) => accountMsg(msg, (d && d.message) || t("account.forgotSent"), false))
+      .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message, true));
+  });
+}
+
+function paintAccountReset(root, token) {
+  root.innerHTML = `
+    <form class="acct-card acct-narrow" data-account-reset>
+      <h2>${t("account.reset")}</h2>
+      <p class="acct-lead">${t("account.resetLead")}</p>
+      <div class="field"><label>${t("account.newPassword")}</label><input name="password" type="password" required autocomplete="new-password" /></div>
+      <p class="acct-hint">${t("account.pwHint")}</p>
+      <p class="acct-msg" data-reset-msg hidden></p>
+      <button class="btn" type="submit">${t("account.savePassword")}</button>
+    </form>`;
+  root.querySelector("[data-account-reset]")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const password = String(new FormData(e.target).get("password") || "");
+    const msg = root.querySelector("[data-reset-msg]");
+    accountApi("reset", { method: "POST", json: { token, newPassword: password } })
+      .then((d) => { if (d && d.ok) { history.replaceState({}, "", "/account"); renderAccount(); } else accountMsg(msg, (d && d.error) || t("account.badReset"), true); })
+      .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message || t("account.badReset"), true));
+  });
+}
+
+function orderStatusKey(status) {
+  if (status === "confirmed") return "order.confirmed";
+  if (status === "declined") return "order.declined";
+  return "order.pending";
+}
+
+function paintAccountHome(root, me, orders) {
+  const list = Array.isArray(orders) ? orders : [];
   root.innerHTML = `
     <p class="ck-confirm-note">${t("account.hello", { email: me.email })}</p>
-    <p style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:22px">
+    <p class="acct-actions">
       <button type="button" class="btn btn-line" data-account-out>${t("account.logout")}</button>
       <a class="btn btn-line" href="https://wa.me/${JA.settings().whatsapp}" target="_blank" rel="noopener">${t("footer.contactUs")}</a>
     </p>
-    <h2 class="serif-title" style="font-size:22px;margin-bottom:14px">${t("account.orders")}</h2>
-    ${list.length ? list.slice(0, 20).map((o) => `
-      <a class="order-card" href="https://wa.me/${JA.settings().whatsapp}?text=${encodeURIComponent("Hello JauraStore, I have a question about order " + o.id + ".")}" target="_blank" rel="noopener">
-        <div class="order-card-top">
-          <strong>${JA.escape(o.id)}</strong>
-          <span class="status-pill ${o.status || "pending"}">${t(o.status === "confirmed" ? "order.confirmed" : o.status === "declined" ? "order.declined" : "order.pending")}</span>
-        </div>
-        <p>${JA.escape(o.customer?.name || "")} · ${JA.money(o.total, o.currency)}</p>
-        <p style="font-size:12px;color:var(--muted)">${new Date(o.at).toLocaleString()}</p>
-      </a>`).join("") : `<p class="empty">${t("account.empty")}</p>`}`;
+    <div class="acct-grid">
+      <form class="acct-card" data-account-profile>
+        <h2>${t("account.profile")}</h2>
+        <div class="field"><label>${t("account.name")}</label><input name="name" value="${JA.escape(me.name || "")}" autocomplete="name" /></div>
+        <div class="field"><label>${t("account.email")}</label><input name="email" type="email" required value="${JA.escape(me.email || "")}" autocomplete="email" /></div>
+        <div class="field"><label>${t("ck.phone")}</label><input name="phone" value="${JA.escape(me.phone || "")}" autocomplete="tel" /></div>
+        <div class="field"><label>${t("ck.country")}</label><input name="country" value="${JA.escape(me.country || "")}" /></div>
+        <div class="field"><label>${t("ck.city")}</label><input name="city" value="${JA.escape(me.city || "")}" /></div>
+        <div class="field"><label>${t("ck.street")}</label><input name="delivery_address" value="${JA.escape(me.delivery_address || "")}" /></div>
+        <p class="acct-msg" data-profile-msg hidden></p>
+        <button class="btn" type="submit">${t("account.saveProfile")}</button>
+      </form>
+      <form class="acct-card" data-account-password>
+        <h2>${t("account.changePassword")}</h2>
+        <div class="field"><label>${t("account.currentPassword")}</label><input name="currentPassword" type="password" required autocomplete="current-password" /></div>
+        <div class="field"><label>${t("account.newPassword")}</label><input name="newPassword" type="password" required autocomplete="new-password" /></div>
+        <p class="acct-hint">${t("account.pwHint")}</p>
+        <p class="acct-msg" data-pw-msg hidden></p>
+        <button class="btn" type="submit">${t("account.savePassword")}</button>
+      </form>
+    </div>
+    <section class="acct-orders">
+      <h2 class="serif-title" style="font-size:22px;margin-bottom:14px">${t("account.orders")}</h2>
+      <p class="acct-lead">${t("account.claimLead")}</p>
+      <p class="acct-actions">
+        <button type="button" class="btn btn-line" data-claim-request>${t("account.claim")}</button>
+      </p>
+      <p class="acct-msg" data-claim-msg hidden></p>
+      ${list.length ? list.slice(0, 40).map((o) => `
+        <article class="order-card">
+          <div class="order-card-top">
+            <strong>${JA.escape(o.id)}</strong>
+            <span class="status-pill ${o.status || "pending"}">${t(orderStatusKey(o.status))}</span>
+          </div>
+          <p>${JA.money(o.total, o.currency)}</p>
+          <p style="font-size:12px;color:var(--muted)">${o.at ? new Date(o.at).toLocaleString() : ""}</p>
+          ${(o.items || []).length ? `<p class="acct-items">${(o.items || []).map((i) => JA.escape((i.qty || 1) + "× " + (i.name || ""))).join(" · ")}</p>` : ""}
+        </article>`).join("") : `<p class="empty">${t("account.empty")}</p>`}
+    </section>`;
   root.querySelector("[data-account-out]")?.addEventListener("click", () => {
-    JA.logoutCustomer();
-    renderAccount();
+    accountApi("logout", { method: "POST" }).catch(() => {}).finally(() => {
+      try { JA.logoutCustomer && JA.logoutCustomer(); } catch (e) {}
+      renderAccount();
+    });
   });
+  root.querySelector("[data-account-profile]")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const msg = root.querySelector("[data-profile-msg]");
+    accountApi("profile", { method: "PATCH", json: {
+      name: fd.get("name"), email: fd.get("email"), phone: fd.get("phone"),
+      country: fd.get("country"), city: fd.get("city"), delivery_address: fd.get("delivery_address"),
+      preferred_currency: fd.get("preferred_currency"),
+    } }).then((d) => accountMsg(msg, t("account.saved"), false))
+      .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message, true));
+  });
+  root.querySelector("[data-account-password]")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const msg = root.querySelector("[data-pw-msg]");
+    accountApi("password", { method: "POST", json: {
+      currentPassword: fd.get("currentPassword"), newPassword: fd.get("newPassword"),
+    } }).then(() => { accountMsg(msg, t("account.pwSaved"), false); e.target.reset(); })
+      .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message, true));
+  });
+  root.querySelector("[data-claim-request]")?.addEventListener("click", () => {
+    const msg = root.querySelector("[data-claim-msg]");
+    accountApi("claim-request", { method: "POST", json: {} })
+      .then((d) => accountMsg(msg, (d && d.message) || t("account.claimSent"), false))
+      .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message, true));
+  });
+}
+
+function renderAccount() {
+  const root = document.querySelector("[data-account-root]");
+  if (!root) return;
+  const path = (location.pathname || "").replace(/\/+$/, "") || "/";
+  const q = new URLSearchParams(location.search);
+  const resetTok = q.get("token") || "";
+  const claimTok = q.get("claim") || "";
+  if (/\/account\/reset-password$/.test(path) || (path.indexOf("reset-password") >= 0 && resetTok)) {
+    paintAccountReset(root, resetTok);
+    return;
+  }
+  if (/\/account\/forgot$/.test(path)) {
+    paintAccountForgot(root);
+    return;
+  }
+  accountApi("session").then((d) => {
+    const me = d && d.authenticated ? d.customer : null;
+    if (!me) {
+      paintAccountGuest(root);
+      return;
+    }
+    const afterClaim = claimTok
+      ? accountApi("claim", { method: "POST", json: { token: claimTok } }).then((c) => {
+          history.replaceState({}, "", "/account");
+          return c;
+        }).catch(() => null)
+      : Promise.resolve(null);
+    return afterClaim.then(() => accountApi("orders").catch(() => ({ orders: [] }))).then((ord) => {
+      paintAccountHome(root, me, (ord && ord.orders) || []);
+    });
+  }).catch(() => paintAccountGuest(root));
 }
 
 function bindContactForm() {

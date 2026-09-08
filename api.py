@@ -269,14 +269,21 @@ def track_view():
 @api.get("/stock")
 def stock():
     rows = query("SELECT product_id, variant_key, variant_label, qty, low_threshold FROM variant_stock")
+    admin = bool(authmod.current_admin())
     out = {}
     for r in rows:
-        out.setdefault(r["product_id"], []).append({
+        item = {
             "variant": r["variant_key"], "label": r["variant_label"],
-            "qty": r["qty"], "lowThreshold": r["low_threshold"],
             "state": "out" if r["qty"] <= 0 else ("low" if r["qty"] <= r["low_threshold"] else "in"),
-        })
-    return jsonify(ok=True, stock=out, lowStockThreshold=Config.LOW_STOCK_THRESHOLD)
+        }
+        if admin:
+            item["qty"] = r["qty"]
+            item["lowThreshold"] = r["low_threshold"]
+        out.setdefault(r["product_id"], []).append(item)
+    body = {"ok": True, "stock": out}
+    if admin:
+        body["lowStockThreshold"] = Config.LOW_STOCK_THRESHOLD
+    return jsonify(body)
 
 @api.get("/activity")
 def activity():
@@ -825,6 +832,8 @@ def create_order():
             proof_url = candidate
 
     now = _utcnow()
+    import customers as customers_mod
+    owner_id = customers_mod.current_customer_id()
     order = {
         "id": oid,
         "at": sec.clean(d.get("at"), 40) or now,
@@ -857,6 +866,8 @@ def create_order():
         "source": order["source"], "status": "pending",
         "payload": order, "at": order["at"], "updated_at": now,
     }
+    if owner_id:
+        sb_row["customer_user_id"] = owner_id
 
     prod_source = bool(catalog_mod._prod_source())
     reserved = []
@@ -938,6 +949,11 @@ def create_order():
                 _sb_create_order(sb_row)
             except Exception as exc:
                 print(f"[supabase] order mirror skipped: {exc}")
+    if owner_id:
+        try:
+            execute("UPDATE orders SET customer_user_id=? WHERE id=?", (owner_id, oid))
+        except Exception:
+            pass
 
     # conversion tracking: a finished checkout is the purchase event
     vid, _is_new = analytics_mod.visitor_id()
@@ -1239,9 +1255,28 @@ def otp_request():
         return jsonify(ok=True, message="If that address is registered, a code has been sent.")
     if authmod.otp_requested_recently(email):
         return jsonify(ok=False, error="A code was just sent. Wait a minute before requesting another."), 429
-    code = authmod.create_otp(email)
-    delivered, info = emailer.send_otp(email, code)
-    audit(email, "admin.otp_requested", f"via=email delivered={delivered} {info}", _ip())
+    try:
+        code = authmod.create_otp(email)
+    except Exception as exc:
+        emailer.log_mail_event(emailer.RESET_TOKEN_DB_FAILURE, type(exc).__name__)
+        audit(email, "admin.otp_requested",
+              f"via=email delivered=false category={emailer.RESET_TOKEN_DB_FAILURE}", _ip())
+        return jsonify(ok=False, error="The code could not be emailed. Check the mail settings on the server, or message the shop directly to recover access."), 502
+    try:
+        delivered, info = emailer.send_otp(email, code)
+    except Exception as exc:
+        delivered, info = False, type(exc).__name__
+        category = emailer.classify_smtp_failure(exc)
+        emailer.log_mail_event(category, type(exc).__name__)
+    else:
+        if delivered:
+            category = "sent"
+            emailer.log_mail_event("sent")
+        else:
+            category = emailer.classify_smtp_failure(info=info)
+            emailer.log_mail_event(category, info)
+    audit(email, "admin.otp_requested",
+          f"via=email delivered={bool(delivered)} category={category}", _ip())
     if not delivered:
         return jsonify(ok=False, error="The code could not be emailed. Check the mail settings on the server, or message the shop directly to recover access."), 502
     return jsonify(ok=True, message=f"Verification code sent to {email}.")

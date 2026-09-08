@@ -2,5 +2,6 @@ User-agent: *
 Allow: /
 Disallow: /admin.html
 Disallow: /account.html
+Disallow: /account
 
 Sitemap: https://jaurastore.com.ng/sitemap.xml
