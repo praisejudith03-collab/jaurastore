@@ -271,6 +271,26 @@ def test_catalogue_round_trip_is_live_immediately(client):
     assert body["product"]["image"] == ""
     assert body["product"]["priceCfa"] == 4400          # derived at 1 NGN = 0.44 CFA
 
+    # Saved, but with no real photo the publication policy keeps it off the
+    # public storefront: the admin sees it (all=1) with the reason, the
+    # public does not, and nothing was deleted.
+    assert body["publication"]["online"] is False
+    assert "no_image" in body["publication"]["codes"]
+    cat = client.get("/api/catalog?all=1").get_json()
+    assert any(p["id"] == "jau-unit" for p in cat["products"])
+    client.post("/api/admin/logout", headers={"X-CSRF-Token": tok})
+    cat = client.get("/api/catalog").get_json()
+    assert not any(p["id"] == "jau-unit" for p in cat["products"])
+
+    # With a real committed photo the same save goes live at once.
+    tok = login(client)
+    r = client.post("/api/admin/products", json={"product": {
+        "id": "jau-unit", "name": "Unit Bag", "category": "bags",
+        "priceNgn": 10000, "image": "images/products/10in1-raf-sandwich-maker.jpg",
+        "stock": 5,
+    }}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    assert r.get_json()["publication"]["online"] is True
     cat = client.get("/api/catalog").get_json()
     assert any(p["id"] == "jau-unit" for p in cat["products"])
 
@@ -449,7 +469,8 @@ def test_saved_product_is_still_there_after_a_fresh_read(client):
     tok = login(client)
     r = client.post("/api/admin/products",
                     json={"product": {"name": "Stays Saved Bag", "priceNgn": 9000,
-                                      "category": "bags", "stock": 5}},
+                                      "category": "bags", "stock": 5,
+                                      "image": "images/products/10in1-raf-sandwich-maker.jpg"}},
                     headers={"X-CSRF-Token": tok})
     assert r.status_code == 200, r.data
     pid = r.get_json()["product"]["id"]
@@ -464,7 +485,8 @@ def test_saved_product_is_still_there_after_a_fresh_read(client):
 
     # and still there after another request, and after a second save
     client.post("/api/admin/products",
-                json={"product": {"name": "Second Saved Bag", "priceNgn": 4000}},
+                json={"product": {"name": "Second Saved Bag", "priceNgn": 4000, "stock": 1,
+                                  "image": "images/products/12pcs-spice-jar-set.jpg"}},
                 headers={"X-CSRF-Token": tok})
     cat = client.get("/api/catalog").get_json()
     names = {p["name"] for p in cat["products"]}

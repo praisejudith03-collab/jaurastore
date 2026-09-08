@@ -62,7 +62,9 @@ def csrf(client):
 def _make(pid, legacy=None, price=8000, stock=10):
     rec = {"id": pid, "sku": pid.upper().replace("-", ""), "slug": pid,
            "name": "Alias Test " + pid, "category": "beauty",
-           "priceNgn": price, "stock": stock, "online": True}
+           "priceNgn": price, "stock": stock, "online": True,
+           # a real committed photo, or the publication policy keeps it offline
+           "image": "images/products/10in1-raf-sandwich-maker.jpg"}
     if legacy:
         rec["legacyId"] = legacy
     catalog_mod.upsert(rec, "tester")

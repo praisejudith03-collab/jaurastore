@@ -655,14 +655,56 @@ def resolve_product_id(wanted, products=None, include_hidden=True):
     return str((prod or {}).get("id") or "").strip()
 
 
-def merged(include_hidden=False):
-    """Seed products + every admin edit, minus what was deleted.
+def is_online(product):
+    """The storefront's publication test: ``online IS TRUE``.
 
-    This is the live catalogue. When Supabase is configured it is the source
-    of truth; otherwise the local override file supplies the edits.
+    Only an explicit boolean True publishes a row. ``None`` (a column the
+    table filled with its default, or a row saved before the flag existed)
+    and ``False`` are both offline. Every public read path goes through this
+    one function so two phones can never disagree on what is live.
+    """
+    return (product or {}).get("online") is True
+
+
+def is_public(product):
+    """The filter the storefront applies to a merged row.
+
+    Production (Supabase is the source): ``is_online`` - ``online IS TRUE``.
+    Dev / tests (seed + overrides): a legacy seed row carries no ``online``
+    key at all, so only an explicit ``False`` hides it and the dev shop is
+    not empty. ``merged(include_hidden=False)`` and ``/api/catalog`` share
+    this one rule so the body and its ETag always agree.
+    """
+    if _prod_source():
+        return is_online(product)
+    return (product or {}).get("online") is not False
+
+
+def merged(include_hidden=False):
+    """The catalogue: Supabase rows in production, seed + overrides otherwise.
+
+    * ``_prod_source()`` (Supabase configured, not testing): the Supabase
+      products table is the ONLY source. No seed row, no local override and
+      no stale snapshot is ever unioned in, so every device that asks this
+      server sees the same rows. A Supabase outage returns an empty
+      catalogue rather than a different, older one.
+    * otherwise (dev / tests / Supabase not configured): the legacy merge of
+      Supabase rows (when reachable), local overrides and the shipped seed.
+
+    ``include_hidden=False`` (the public storefront) keeps only rows whose
+    ``online`` is exactly True - see ``is_online``.
     """
     sb = _supabase_products()
-    if sb is not None:
+    if _prod_source():
+        products = list(sb or [])
+        # The local `deleted` list is still honoured: an admin tombstone
+        # written before Supabase became the source must not resurrect.
+        try:
+            deleted = set((overrides() or {}).get("deleted") or [])
+        except Exception:
+            deleted = set()
+        products = [p for p in products if str(p.get("id")) not in deleted]
+    elif sb is not None:
         # Supabase rows are the live catalogue; the seed only supplies
         # products Supabase does not have. Local overrides (a phone save that
         # has not reached Supabase yet, e.g. stretch-marks oil) are unioned
@@ -691,7 +733,7 @@ def merged(include_hidden=False):
         products = [p for pid, p in by_id.items() if pid not in deleted]
 
     if not include_hidden:
-        products = [p for p in products if p.get("online") is not False]
+        products = [p for p in products if is_public(p)]
 
     # Read-time category fold: never serve a merged / legacy category id
     # (nails, packaging, skincare) even when the source row still carries one.
@@ -708,14 +750,35 @@ def _fold_p(product):
     return p
 
 
-def meta():
-    """Metadata blob used for ETag / change detection on the catalogue."""
-    data, _p = _load_overrides()
-    products = merged(include_hidden=True)
+def meta(products=None):
+    """Metadata blob used for ETag / change detection on the catalogue.
+
+    Carries everything a publication change can move, so a phone that
+    revalidates never gets a 304 for an outdated list:
+
+    * ``updatedAt`` - the newest ``updated_at`` across ALL rows (hidden ones
+      included: unpublishing a product bumps it too), or the local override
+      stamp when Supabase is not the source;
+    * ``count``     - total rows;
+    * ``online``    - rows with ``online IS TRUE`` (the public size).
+    """
+    try:
+        data = overrides() or {}
+    except Exception:
+        data = {}
+    if products is None:
+        products = merged(include_hidden=True)
+    newest = ""
+    for p in products:
+        stamp = str((p or {}).get("updated_at") or "")
+        if stamp > newest:
+            newest = stamp
+    local_stamp = str(data.get("updatedAt") or "")
     return {
-        "updatedAt": data.get("updatedAt") or "",
+        "updatedAt": max(newest, local_stamp),
         "updatedBy": data.get("updatedBy") or "",
         "count": len(products),
+        "online": sum(1 for p in products if is_online(p)),
     }
 
 
@@ -791,7 +854,10 @@ def apply_stock_delta(pid, qty_delta, option_key=None, actor=None):
                 cur = 0
             os_map[matched] = max(0, cur + qty_delta)
             rec["optionStock"] = os_map
-    upsert(rec, actor=actor or "stock")
+    # A stock move is not a publication decision: the row keeps whatever
+    # `online` it already has (policy=False), so selling out never hides a
+    # product and a refund never publishes one.
+    upsert(rec, actor=actor or "stock", policy=False)
     return rec
 
 
@@ -855,8 +921,50 @@ def remirror_strays(actor=None):
     return len(strays) if ok else 0
 
 
-def upsert(product, actor=None):
+def apply_publication_policy(clean, explicit_online=None):
+    """Set ``clean["online"]`` from the publication policy. Mutates ``clean``.
+
+    * ``explicit_online is False``  -> offline, always (Admin "unpublish").
+    * otherwise                     -> online only when ``publication.decide``
+                                       says the row is complete (real
+                                       non-placeholder image, positive prices,
+                                       a stock number); an explicit ``True``
+                                       that the policy rejects stays offline
+                                       and the reasons are reported.
+
+    The fixture-id heuristic (``publication.FIXTURE_ID_RE``) is an audit rule
+    for rows that already leaked into the live table; a save is judged on
+    completeness only (``fixtures=False``), which is what keeps a fixture
+    without a real photo offline anyway.
+
+    Returns a small dict the API hands back to the admin form:
+    ``{"online": bool, "publishable": bool, "bucket": str, "reasons": [...],
+       "codes": [...], "requested": explicit_online}``.
+    """
+    from publication import decide
+    verdict = decide(clean, fixtures=False)
+    publishable = bool(verdict["online"])
+    if explicit_online is False:
+        clean["online"] = False
+    else:
+        clean["online"] = publishable
+    return {
+        "online": bool(clean["online"]),
+        "publishable": publishable,
+        "bucket": verdict["bucket"],
+        "reasons": list(verdict["reasons"]),
+        "codes": list(verdict.get("codes") or []),
+        "requested": explicit_online,
+    }
+
+
+def upsert(product, actor=None, policy=True):
     """Save (create or edit) one product. Returns (product, action, mirrored).
+
+    ``policy=True`` (every Admin / API save) runs the publication policy on
+    the row - see ``apply_publication_policy``. ``policy=False`` is for
+    internal writes that must not touch publication (stock moves): the row's
+    existing ``online`` value is kept as normalised.
 
     In production (Supabase enabled, not testing) the write goes straight to
     PostgreSQL: no local override file is touched, and a failed Supabase
@@ -867,6 +975,9 @@ def upsert(product, actor=None):
     clean = normalize(product)
     if clean is None:
         return None, "rejected", True
+    # Did the caller state an `online` value at all? The admin form always
+    # sends the checkbox, a bulk import or an API client may not.
+    explicit_online = (product or {}).get("online") if isinstance(product, dict) else None
 
     live = []
     try:
@@ -891,6 +1002,19 @@ def upsert(product, actor=None):
     action = "updated" if any(str((p or {}).get("id") or "") == clean["id"]
                               for p in live) else "created"
 
+    # Publication policy (publication.decide): a product may be online only
+    # when it is complete - real non-placeholder image, positive prices,
+    # valid stock, not a fixture, not operator-offline. An explicit
+    # "unpublish" from Admin (online=false) is always honoured; an explicit
+    # "publish" is honoured only if the row is publishable, otherwise it stays
+    # offline and the reason is returned so the form can say why.
+    if policy:
+        publication = apply_publication_policy(clean, explicit_online)
+    else:
+        publication = {"online": bool(clean.get("online")), "publishable": None,
+                       "bucket": "", "reasons": [], "codes": [], "requested": explicit_online,
+                       "skipped": True}
+
     if _prod_source():
         try:
             from supabase_store import upsert_products
@@ -902,7 +1026,8 @@ def upsert(product, actor=None):
         row = _read_back_product(clean["id"])
         if row is None:
             return None, "error", False
-        clean = row
+        clean = dict(row)
+        clean["publication"] = publication
         _sync_repo_async()
         return clean, action, True
 
@@ -931,7 +1056,59 @@ def upsert(product, actor=None):
         except Exception:
             mirrored = True
     _sync_repo_async()
+    clean = dict(clean)
+    clean["publication"] = publication
     return clean, action, mirrored
+
+
+def set_online(pid, online, actor=None):
+    """Flip ONLY the `online` flag (and updated_at) of one existing product.
+
+    Production: a single-column UPDATE on the Supabase row - no other column
+    is sent, nothing is inserted. Dev / tests: the local override row is
+    patched (or created from the merged copy) with the same two fields.
+    Returns True on success.
+    """
+    online = bool(online)
+    stamp = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    if _prod_source():
+        try:
+            from supabase_store import set_product_online
+            if not set_product_online(pid, online, stamp):
+                return False
+        except Exception:
+            return False
+        _sync_repo_async()
+        return True
+
+    current = None
+    for p in merged(include_hidden=True):
+        if str((p or {}).get("id") or "") == pid:
+            current = dict(p)
+            break
+    if current is None:
+        return False
+
+    def _apply(data, _path):
+        rows = [p for p in (data.get("products") or []) if p.get("id") != pid]
+        row = next((p for p in (data.get("products") or []) if p.get("id") == pid), None)
+        row = dict(row or current)
+        row["online"] = online
+        row["updated_at"] = stamp
+        rows.append(row)
+        data["products"] = rows
+        data["updatedAt"] = stamp
+        data["updatedBy"] = actor or ""
+        return data
+
+    _mutate(actor, _apply)
+    try:
+        from supabase_store import set_product_online
+        set_product_online(pid, online, stamp)
+    except Exception:
+        pass
+    _sync_repo_async()
+    return True
 
 
 def remove(pid, actor=None):
@@ -988,6 +1165,9 @@ def replace_all(products, actor=None):
         clean["slug"] = _free_slug(str(clean.get("slug") or ""), clean["id"], taken)
         if clean["slug"]:
             taken.add(clean["slug"])
+        # Same publication policy as a single save: a bulk import can never
+        # publish a row without a real photo / valid price / stock number.
+        apply_publication_policy(clean, (p or {}).get("online") if isinstance(p, dict) else None)
         kept.append(clean)
 
     if _prod_source():

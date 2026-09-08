@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=128" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=129" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -604,6 +604,7 @@ function productForm(p = {}) {
     <label class="au-tog"><span>Show in online store</span>
       <input type="checkbox" name="online" ${p.online === false ? "" : "checked"} />
     </label>
+    <p class="admin-note">A product goes live only with a real uploaded photo, a price above ₦0 and a stock number (0 is allowed). Anything missing keeps it hidden until you complete it — the row is kept, never deleted.</p>
     <div class="field"><label>Category</label><select name="category">${cats}</select></div>
     <h3>Product options <small id="opt-count">${opts.length}/20</small></h3>
     <div id="opt-box">${optionBlockHTML(opts)}</div>
@@ -729,8 +730,12 @@ async function handleProductSubmit(e, existing) {
     JA.toast((res && res.error) || "Could not save the product. No changes are live.");
     return;
   }
+  const pub = (res && res.data && res.data.publication) || null;
   if (res && res.mirrored === false) {
     JA.toast("Saved on the server only — not yet on the cloud copy. Tap Retry now.");
+  } else if (pub && pub.online === false) {
+    // Saved, but the publication policy kept it off the public site.
+    JA.toast("Saved — hidden from the store: " + publicationReasonText(pub) + " Complete it, then Publish.");
   } else {
     JA.toast(status === "out" ? "Live now · Out of stock." : "Live on the store now · " + images.length + " photo(s).");
   }
@@ -742,6 +747,30 @@ async function handleProductSubmit(e, existing) {
     prodPage = 1;
   }
   paintDesk("products");
+}
+
+// Human wording for the server's publication decision (api/admin/products
+// returns `publication: {online, bucket, reasons}`; the publish endpoint
+// answers 409 with the same `reasons` when a product cannot go live yet).
+const PUBLICATION_REASON_TEXT = {
+  fixture: "this is a test product",
+  operator_offline: "kept offline by the store owner",
+  placeholder_image: "the photo is a placeholder, not a product photo",
+  no_image: "no product photo yet",
+  relative_image: "the photo has not finished uploading to the cloud",
+  external_image: "the photo must be uploaded here, not linked",
+  invalid_price: "the price must be above ₦0",
+  invalid_stock: "enter a stock number (0 is fine)",
+  missing_name: "the product needs a name",
+  missing_category: "the product needs a category",
+  explicit_offline: "unticked \"Show in online store\"",
+};
+function publicationReasonText(pub) {
+  const codes = pub && Array.isArray(pub.codes) && pub.codes.length ? pub.codes : null;
+  const reasons = codes
+    ? codes.map((c) => PUBLICATION_REASON_TEXT[c] || String(c).replace(/_/g, " "))
+    : (pub && Array.isArray(pub.reasons) ? pub.reasons : []).map((r) => String(r));
+  return reasons.length ? reasons.join("; ") + "." : "";
 }
 
 let prodPage = 1;
@@ -796,6 +825,7 @@ function renderProdGrid() {
       <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
       <div class="adx-card-body"><strong>${JA.escape(p.name)}</strong><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+      <button type="button" class="adx-card-pub ${p.online === true ? "is-live" : ""}" data-pub="${JA.escape(p.id)}" data-online="${p.online === true ? "1" : "0"}" aria-label="${p.online === true ? "Unpublish" : "Publish"}">${p.online === true ? "Unpublish" : "Publish"}</button>
     </article>`;
   }).join("");
   const grid = document.getElementById("prod-grid");
@@ -826,6 +856,7 @@ function renderProdGrid() {
   }
 }
 function bindProdGridEvents() {
+  bindPublishButtons();
   document.querySelectorAll("#prod-grid [data-edit]").forEach((b) => {
     const open = () => { editingId = b.dataset.edit; paintDesk("products"); window.scrollTo({ top: 0, behavior: "smooth" }); };
     b.onclick = open;
@@ -846,6 +877,26 @@ function bindProdGridEvents() {
         renderProdGrid(); bindProdGridEvents();
       }
     };
+  });
+}
+function bindPublishButtons() {
+  document.querySelectorAll("#prod-grid [data-pub]").forEach((b) => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      if (!JA.setProductOnline) return;
+      const goOnline = b.dataset.online !== "1";
+      b.disabled = true;
+      const res = await JA.setProductOnline(b.dataset.pub, goOnline);
+      b.disabled = false;
+      if (!res || res.ok === false) {
+        const why = res && ((res.codes && res.codes.length) || (res.reasons && res.reasons.length)) ? " " + publicationReasonText({ codes: res.codes, reasons: res.reasons }) : "";
+        JA.toast(((res && res.error) || "Could not change the product.") + why);
+        return;
+      }
+      JA.toast(goOnline ? "Published — live on the store now." : "Unpublished — hidden from the store (kept in the catalogue).");
+      renderProdGrid(); bindProdGridEvents();
+    };
+    b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); b.click(); } };
   });
 }
 function productsTable() {
@@ -1346,7 +1397,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=128" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=129" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -1640,7 +1691,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=128", hidden: false }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=129", hidden: false }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

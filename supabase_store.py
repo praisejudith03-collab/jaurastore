@@ -324,6 +324,33 @@ def upsert_products(products):
     return _upsert_products_resilient(rows)
 
 
+def set_product_online(pid, online, stamp=None):
+    """UPDATE public.products SET online=?, updated_at=? WHERE id=?  - nothing else.
+
+    Returns True when the row was updated (or Supabase is not configured),
+    False when Supabase is enabled but the write failed or matched no row.
+    """
+    if not enabled():
+        return True
+    c = client()
+    if c is None:
+        return False
+    patch = {"online": bool(online), "updated_at": stamp or _now()}
+    assert set(patch) == {"online", "updated_at"}, "publish must touch only online"
+    try:
+        res = c.table("products").update(patch).eq("id", str(pid)).execute()
+    except Exception as exc:
+        print(f"[supabase] set_product_online failed for {pid!r}: {exc}")
+        return False
+    rows = _res_data(res)
+    # PostgREST returns the updated rows; an empty list means no row had
+    # that id (a return=minimal client still succeeds with [] - accept both
+    # only when we cannot tell).
+    if isinstance(rows, list) and rows == [] and hasattr(res, "data"):
+        return False
+    return True
+
+
 def delete_products(ids):
     """Soft-remove admin products in Supabase (via deleted flag)."""
     c = client()

@@ -71,6 +71,9 @@ def _make_stock_product(pid, stock=10, option_stock=None, options=None):
         "priceNgn": 8000,
         "stock": stock,
         "online": True,
+        # a real committed photo: the publication policy keeps a product
+        # without one offline, and an offline product cannot be ordered
+        "image": "images/products/10in1-raf-sandwich-maker.jpg",
     }
     if options:
         rec["options"] = options

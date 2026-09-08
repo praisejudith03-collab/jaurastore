@@ -159,16 +159,28 @@ def catalog():
     """Seed products + every admin edit, merged. This is the live catalogue."""
     admin = bool(authmod.current_admin())
     include_hidden = admin and request.args.get("all") == "1"
-    products = catalog_mod.merged(include_hidden=include_hidden)
+    # One read of the source, then both the public list and the change
+    # fingerprint are derived from it, so the ETag can never describe a
+    # different snapshot than the body.
+    everything = catalog_mod.merged(include_hidden=True)
+    meta = catalog_mod.meta(everything)
+    if include_hidden:
+        products = everything
+    else:
+        products = [p for p in everything if catalog_mod.is_public(p)]
     if not admin:
         products = [_public_product(p) for p in products]
     body = json.dumps({
         "ok": True,
         "products": products,
-        "meta": catalog_mod.meta(),
+        "meta": meta,
     }, ensure_ascii=False, separators=(",", ":"))
+    # The fingerprint moves when any row's updated_at, the row count or the
+    # number of online rows changes - i.e. on every publish / unpublish -
+    # and differs between the public and the admin (all=1) views.
     etag = 'W/"' + hashlib.sha256(
-        (str(catalog_mod.meta()) + str(len(catalog_mod.base_products()))).encode()
+        f"{meta.get('updatedAt')}|{meta.get('count')}|{meta.get('online')}|"
+        f"{int(bool(include_hidden))}|{int(bool(admin))}".encode()
     ).hexdigest()[:28] + '"'
     if request.headers.get("If-None-Match") == etag:
         resp = make_response("", 304)
@@ -176,7 +188,13 @@ def catalog():
         resp = make_response(body, 200)
     resp.headers["Content-Type"] = "application/json; charset=utf-8"
     resp.headers["ETag"] = etag
-    resp.headers["Cache-Control"] = "public, max-age=30"
+    # Short shared lifetime, always revalidated at the edge, and never shared
+    # between an admin session and the public (the body differs).
+    if admin:
+        resp.headers["Cache-Control"] = "private, no-store"
+    else:
+        resp.headers["Cache-Control"] = "public, max-age=30, must-revalidate"
+    resp.headers["Vary"] = "Cookie"
     return resp
 
 # ========================================================== public: categories
@@ -1705,7 +1723,53 @@ def admin_product_upsert():
             return jsonify(ok=False, error=(
                 "The product could not be saved to Supabase. No changes were made.")), 503
         return jsonify(ok=False, error="A product needs at least a name."), 400
+    publication = (product or {}).pop("publication", None) or {}
     return jsonify(ok=True, product=product, action=action, mirrored=mirrored,
+                   publication=publication, meta=catalog_mod.meta())
+
+
+@api.post("/admin/products/<pid>/publish")
+@authmod.require_admin
+@sec.require_csrf
+def admin_product_publish(pid):
+    """Explicit publish / unpublish of ONE product.
+
+    Body: ``{"online": true|false}``. Writes only ``online`` (+ ``updated_at``)
+    on the existing row - never a price, stock, image, name or id. Publishing
+    is refused (409, with the reasons) when the row is not publishable under
+    the policy; unpublishing is always allowed.
+    """
+    pid = sec.clean(pid, 64)
+    d = request.get_json(silent=True) or {}
+    want = d.get("online")
+    if not isinstance(want, bool):
+        return jsonify(ok=False, error="Send {online: true|false}."), 400
+    current = None
+    for p in catalog_mod.merged(include_hidden=True):
+        if str((p or {}).get("id") or "") == pid:
+            current = p
+            break
+    if current is None:
+        return jsonify(ok=False, error="Product not found."), 404
+    from publication import decide
+    verdict = decide(current)
+    if want and not verdict["online"]:
+        return jsonify(ok=False, error="This product is not ready to publish.",
+                       publication={"online": False, "publishable": False,
+                                    "bucket": verdict["bucket"],
+                                    "reasons": verdict["reasons"], "codes": verdict.get("codes") or []}), 409
+    ok = catalog_mod.set_online(pid, want, authmod.current_admin())
+    if not ok:
+        return jsonify(ok=False, error=(
+            "The change could not be saved to Supabase. No changes were made.")), 503
+    audit(authmod.current_admin(), "product.publish" if want else "product.unpublish",
+          pid, _ip())
+    updated = dict(current)
+    updated["online"] = want
+    return jsonify(ok=True, id=pid, online=want, product=updated,
+                   publication={"online": want, "publishable": bool(verdict["online"]),
+                                "bucket": verdict["bucket"],
+                                "reasons": verdict["reasons"], "codes": verdict.get("codes") or []},
                    meta=catalog_mod.meta())
 
 @api.delete("/admin/products/<pid>")

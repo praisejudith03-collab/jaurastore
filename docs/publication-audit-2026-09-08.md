@@ -1,5 +1,10 @@
 # Publication audit — Supabase `products` (53 rows), 2026-09-08
 
+> **Superseded (same day) by `publication-audit-2026-09-08-v2.md` /**
+> **`publication-online-flags-2026-09-08-v2.sql`**, which derive the same
+> 29 / 24 split from the codified publication policy (`publication.py`).
+> Kept for the record; do not run the v1 SQL.
+
 **Read-only.** Nothing in this document was executed against Supabase. The
 companion file `docs/publication-online-flags-2026-09-08.sql` is a *proposal*
 that must not be run until the ID list below is approved.
