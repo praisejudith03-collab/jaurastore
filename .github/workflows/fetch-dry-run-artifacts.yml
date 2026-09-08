@@ -1,7 +1,8 @@
 name: Fetch migration artifacts (temporary, read-only)
 
-# TEMPORARY read-only helper (tail pass): re-emits the last 60 b64 chars of the
-# three artifacts whose previous fetch hit the 10-annotation cap. Read-only.
+# TEMPORARY read-only helper (segment pass 2): the apply-report is 71,995 B
+# (10 segments) and migration-result 27,829 B (4 segments); pass 1 collected
+# the first segments. Read-only, no secrets.
 
 on:
   push:
@@ -18,15 +19,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  tail-apply:
-    name: tail-apply
+  seg-apply-2:
+    name: seg-apply-2
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch tail
+      - name: Fetch segment
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_RUN_ID: "34241484557"
           ART: "apply-report"
+          SEG: "2"
         run: |
           mkdir -p work
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" > work/arts.json 2> work/err.log \
@@ -48,20 +50,321 @@ jobs:
               sys.exit(0)
           data = b"\n".join(open(f, "rb").read() for f in files)
           b64 = base64.b64encode(data).decode("ascii")
-          tail = b64[-60:]
-          sys.stderr.write(f"::error file=tail::total={len(b64)} filebytes={len(data)} tail60={tail}\n")
-          print(f"{art}: filebytes={len(data)} b64={len(b64)}")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), 9820, 982
+          part = b64[seg * seg_w:(seg + 1) * seg_w]
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars; filebytes {len(data)}")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
           PY
           true
-  tail-migration:
-    name: tail-migration
+  seg-apply-3:
+    name: seg-apply-3
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch tail
+      - name: Fetch segment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_RUN_ID: "34241484557"
+          ART: "apply-report"
+          SEG: "3"
+        run: |
+          mkdir -p work
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" > work/arts.json 2> work/err.log \
+            || { echo "::error file=diag::gh api failed: $(head -c 300 work/err.log)"; exit 1; }
+          id=$(python3 -c "import json,os; d=json.load(open('work/arts.json')); print(next((a['id'] for a in d['artifacts'] if a['name']==os.environ['ART']),''))")
+          [ -z "$id" ] && { echo "::error file=diag::NOT-FOUND $ART"; exit 0; }
+          curl -fsSL --retry 3 --max-time 300 -H "Authorization: Bearer $GH_TOKEN" \
+            -o "work/$ART.zip" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
+            || { echo "::error file=diag::curl failed"; exit 1; }
+          mkdir -p "work/$ART"
+          unzip -o -q "work/$ART.zip" -d "work/$ART"
+          python3 - "$ART" <<'PY'
+          import base64, glob, os, sys
+          art = sys.argv[1]
+          files = [f for f in sorted(glob.glob(f"work/{art}/**/*", recursive=True))
+                   if os.path.isfile(f) and os.path.getsize(f)]
+          if not files:
+              print("no files")
+              sys.exit(0)
+          data = b"\n".join(open(f, "rb").read() for f in files)
+          b64 = base64.b64encode(data).decode("ascii")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), 9820, 982
+          part = b64[seg * seg_w:(seg + 1) * seg_w]
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars; filebytes {len(data)}")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
+          PY
+          true
+  seg-apply-4:
+    name: seg-apply-4
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch segment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_RUN_ID: "34241484557"
+          ART: "apply-report"
+          SEG: "4"
+        run: |
+          mkdir -p work
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" > work/arts.json 2> work/err.log \
+            || { echo "::error file=diag::gh api failed: $(head -c 300 work/err.log)"; exit 1; }
+          id=$(python3 -c "import json,os; d=json.load(open('work/arts.json')); print(next((a['id'] for a in d['artifacts'] if a['name']==os.environ['ART']),''))")
+          [ -z "$id" ] && { echo "::error file=diag::NOT-FOUND $ART"; exit 0; }
+          curl -fsSL --retry 3 --max-time 300 -H "Authorization: Bearer $GH_TOKEN" \
+            -o "work/$ART.zip" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
+            || { echo "::error file=diag::curl failed"; exit 1; }
+          mkdir -p "work/$ART"
+          unzip -o -q "work/$ART.zip" -d "work/$ART"
+          python3 - "$ART" <<'PY'
+          import base64, glob, os, sys
+          art = sys.argv[1]
+          files = [f for f in sorted(glob.glob(f"work/{art}/**/*", recursive=True))
+                   if os.path.isfile(f) and os.path.getsize(f)]
+          if not files:
+              print("no files")
+              sys.exit(0)
+          data = b"\n".join(open(f, "rb").read() for f in files)
+          b64 = base64.b64encode(data).decode("ascii")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), 9820, 982
+          part = b64[seg * seg_w:(seg + 1) * seg_w]
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars; filebytes {len(data)}")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
+          PY
+          true
+  seg-apply-5:
+    name: seg-apply-5
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch segment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_RUN_ID: "34241484557"
+          ART: "apply-report"
+          SEG: "5"
+        run: |
+          mkdir -p work
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" > work/arts.json 2> work/err.log \
+            || { echo "::error file=diag::gh api failed: $(head -c 300 work/err.log)"; exit 1; }
+          id=$(python3 -c "import json,os; d=json.load(open('work/arts.json')); print(next((a['id'] for a in d['artifacts'] if a['name']==os.environ['ART']),''))")
+          [ -z "$id" ] && { echo "::error file=diag::NOT-FOUND $ART"; exit 0; }
+          curl -fsSL --retry 3 --max-time 300 -H "Authorization: Bearer $GH_TOKEN" \
+            -o "work/$ART.zip" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
+            || { echo "::error file=diag::curl failed"; exit 1; }
+          mkdir -p "work/$ART"
+          unzip -o -q "work/$ART.zip" -d "work/$ART"
+          python3 - "$ART" <<'PY'
+          import base64, glob, os, sys
+          art = sys.argv[1]
+          files = [f for f in sorted(glob.glob(f"work/{art}/**/*", recursive=True))
+                   if os.path.isfile(f) and os.path.getsize(f)]
+          if not files:
+              print("no files")
+              sys.exit(0)
+          data = b"\n".join(open(f, "rb").read() for f in files)
+          b64 = base64.b64encode(data).decode("ascii")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), 9820, 982
+          part = b64[seg * seg_w:(seg + 1) * seg_w]
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars; filebytes {len(data)}")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
+          PY
+          true
+  seg-apply-6:
+    name: seg-apply-6
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch segment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_RUN_ID: "34241484557"
+          ART: "apply-report"
+          SEG: "6"
+        run: |
+          mkdir -p work
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" > work/arts.json 2> work/err.log \
+            || { echo "::error file=diag::gh api failed: $(head -c 300 work/err.log)"; exit 1; }
+          id=$(python3 -c "import json,os; d=json.load(open('work/arts.json')); print(next((a['id'] for a in d['artifacts'] if a['name']==os.environ['ART']),''))")
+          [ -z "$id" ] && { echo "::error file=diag::NOT-FOUND $ART"; exit 0; }
+          curl -fsSL --retry 3 --max-time 300 -H "Authorization: Bearer $GH_TOKEN" \
+            -o "work/$ART.zip" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
+            || { echo "::error file=diag::curl failed"; exit 1; }
+          mkdir -p "work/$ART"
+          unzip -o -q "work/$ART.zip" -d "work/$ART"
+          python3 - "$ART" <<'PY'
+          import base64, glob, os, sys
+          art = sys.argv[1]
+          files = [f for f in sorted(glob.glob(f"work/{art}/**/*", recursive=True))
+                   if os.path.isfile(f) and os.path.getsize(f)]
+          if not files:
+              print("no files")
+              sys.exit(0)
+          data = b"\n".join(open(f, "rb").read() for f in files)
+          b64 = base64.b64encode(data).decode("ascii")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), 9820, 982
+          part = b64[seg * seg_w:(seg + 1) * seg_w]
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars; filebytes {len(data)}")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
+          PY
+          true
+  seg-apply-7:
+    name: seg-apply-7
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch segment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_RUN_ID: "34241484557"
+          ART: "apply-report"
+          SEG: "7"
+        run: |
+          mkdir -p work
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" > work/arts.json 2> work/err.log \
+            || { echo "::error file=diag::gh api failed: $(head -c 300 work/err.log)"; exit 1; }
+          id=$(python3 -c "import json,os; d=json.load(open('work/arts.json')); print(next((a['id'] for a in d['artifacts'] if a['name']==os.environ['ART']),''))")
+          [ -z "$id" ] && { echo "::error file=diag::NOT-FOUND $ART"; exit 0; }
+          curl -fsSL --retry 3 --max-time 300 -H "Authorization: Bearer $GH_TOKEN" \
+            -o "work/$ART.zip" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
+            || { echo "::error file=diag::curl failed"; exit 1; }
+          mkdir -p "work/$ART"
+          unzip -o -q "work/$ART.zip" -d "work/$ART"
+          python3 - "$ART" <<'PY'
+          import base64, glob, os, sys
+          art = sys.argv[1]
+          files = [f for f in sorted(glob.glob(f"work/{art}/**/*", recursive=True))
+                   if os.path.isfile(f) and os.path.getsize(f)]
+          if not files:
+              print("no files")
+              sys.exit(0)
+          data = b"\n".join(open(f, "rb").read() for f in files)
+          b64 = base64.b64encode(data).decode("ascii")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), 9820, 982
+          part = b64[seg * seg_w:(seg + 1) * seg_w]
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars; filebytes {len(data)}")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
+          PY
+          true
+  seg-apply-8:
+    name: seg-apply-8
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch segment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_RUN_ID: "34241484557"
+          ART: "apply-report"
+          SEG: "8"
+        run: |
+          mkdir -p work
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" > work/arts.json 2> work/err.log \
+            || { echo "::error file=diag::gh api failed: $(head -c 300 work/err.log)"; exit 1; }
+          id=$(python3 -c "import json,os; d=json.load(open('work/arts.json')); print(next((a['id'] for a in d['artifacts'] if a['name']==os.environ['ART']),''))")
+          [ -z "$id" ] && { echo "::error file=diag::NOT-FOUND $ART"; exit 0; }
+          curl -fsSL --retry 3 --max-time 300 -H "Authorization: Bearer $GH_TOKEN" \
+            -o "work/$ART.zip" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
+            || { echo "::error file=diag::curl failed"; exit 1; }
+          mkdir -p "work/$ART"
+          unzip -o -q "work/$ART.zip" -d "work/$ART"
+          python3 - "$ART" <<'PY'
+          import base64, glob, os, sys
+          art = sys.argv[1]
+          files = [f for f in sorted(glob.glob(f"work/{art}/**/*", recursive=True))
+                   if os.path.isfile(f) and os.path.getsize(f)]
+          if not files:
+              print("no files")
+              sys.exit(0)
+          data = b"\n".join(open(f, "rb").read() for f in files)
+          b64 = base64.b64encode(data).decode("ascii")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), 9820, 982
+          part = b64[seg * seg_w:(seg + 1) * seg_w]
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars; filebytes {len(data)}")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
+          PY
+          true
+  seg-apply-9:
+    name: seg-apply-9
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch segment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_RUN_ID: "34241484557"
+          ART: "apply-report"
+          SEG: "9"
+        run: |
+          mkdir -p work
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" > work/arts.json 2> work/err.log \
+            || { echo "::error file=diag::gh api failed: $(head -c 300 work/err.log)"; exit 1; }
+          id=$(python3 -c "import json,os; d=json.load(open('work/arts.json')); print(next((a['id'] for a in d['artifacts'] if a['name']==os.environ['ART']),''))")
+          [ -z "$id" ] && { echo "::error file=diag::NOT-FOUND $ART"; exit 0; }
+          curl -fsSL --retry 3 --max-time 300 -H "Authorization: Bearer $GH_TOKEN" \
+            -o "work/$ART.zip" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
+            || { echo "::error file=diag::curl failed"; exit 1; }
+          mkdir -p "work/$ART"
+          unzip -o -q "work/$ART.zip" -d "work/$ART"
+          python3 - "$ART" <<'PY'
+          import base64, glob, os, sys
+          art = sys.argv[1]
+          files = [f for f in sorted(glob.glob(f"work/{art}/**/*", recursive=True))
+                   if os.path.isfile(f) and os.path.getsize(f)]
+          if not files:
+              print("no files")
+              sys.exit(0)
+          data = b"\n".join(open(f, "rb").read() for f in files)
+          b64 = base64.b64encode(data).decode("ascii")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), 9820, 982
+          part = b64[seg * seg_w:(seg + 1) * seg_w]
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars; filebytes {len(data)}")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
+          PY
+          true
+  seg-migr-1:
+    name: seg-migr-1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch segment
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_RUN_ID: "34241484557"
           ART: "migration-result"
+          SEG: "1"
         run: |
           mkdir -p work
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" > work/arts.json 2> work/err.log \
@@ -83,20 +386,27 @@ jobs:
               sys.exit(0)
           data = b"\n".join(open(f, "rb").read() for f in files)
           b64 = base64.b64encode(data).decode("ascii")
-          tail = b64[-60:]
-          sys.stderr.write(f"::error file=tail::total={len(b64)} filebytes={len(data)} tail60={tail}\n")
-          print(f"{art}: filebytes={len(data)} b64={len(b64)}")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), 9820, 982
+          part = b64[seg * seg_w:(seg + 1) * seg_w]
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars; filebytes {len(data)}")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
           PY
           true
-  tail-dry:
-    name: tail-dry
+  seg-migr-2:
+    name: seg-migr-2
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch tail
+      - name: Fetch segment
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_RUN_ID: "34241484557"
-          ART: "dry-run-report"
+          ART: "migration-result"
+          SEG: "2"
         run: |
           mkdir -p work
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" > work/arts.json 2> work/err.log \
@@ -118,8 +428,56 @@ jobs:
               sys.exit(0)
           data = b"\n".join(open(f, "rb").read() for f in files)
           b64 = base64.b64encode(data).decode("ascii")
-          tail = b64[-60:]
-          sys.stderr.write(f"::error file=tail::total={len(b64)} filebytes={len(data)} tail60={tail}\n")
-          print(f"{art}: filebytes={len(data)} b64={len(b64)}")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), 9820, 982
+          part = b64[seg * seg_w:(seg + 1) * seg_w]
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars; filebytes {len(data)}")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
+          PY
+          true
+  seg-migr-3:
+    name: seg-migr-3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch segment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_RUN_ID: "34241484557"
+          ART: "migration-result"
+          SEG: "3"
+        run: |
+          mkdir -p work
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" > work/arts.json 2> work/err.log \
+            || { echo "::error file=diag::gh api failed: $(head -c 300 work/err.log)"; exit 1; }
+          id=$(python3 -c "import json,os; d=json.load(open('work/arts.json')); print(next((a['id'] for a in d['artifacts'] if a['name']==os.environ['ART']),''))")
+          [ -z "$id" ] && { echo "::error file=diag::NOT-FOUND $ART"; exit 0; }
+          curl -fsSL --retry 3 --max-time 300 -H "Authorization: Bearer $GH_TOKEN" \
+            -o "work/$ART.zip" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
+            || { echo "::error file=diag::curl failed"; exit 1; }
+          mkdir -p "work/$ART"
+          unzip -o -q "work/$ART.zip" -d "work/$ART"
+          python3 - "$ART" <<'PY'
+          import base64, glob, os, sys
+          art = sys.argv[1]
+          files = [f for f in sorted(glob.glob(f"work/{art}/**/*", recursive=True))
+                   if os.path.isfile(f) and os.path.getsize(f)]
+          if not files:
+              print("no files")
+              sys.exit(0)
+          data = b"\n".join(open(f, "rb").read() for f in files)
+          b64 = base64.b64encode(data).decode("ascii")
+          seg, seg_w, chunk_w = int(os.environ["SEG"]), 9820, 982
+          part = b64[seg * seg_w:(seg + 1) * seg_w]
+          print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars; filebytes {len(data)}")
+          i = 0
+          for off in range(0, len(part), chunk_w):
+              i += 1
+              chunk = part[off:off + chunk_w]
+              sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+          print(f"emitted {i} chunk(s)")
           PY
           true
