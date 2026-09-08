@@ -181,6 +181,71 @@ jobs:
           print(f"safe_to_apply      : {r['safe_to_apply']}")
           PY
 
+      - name: Check the plan against the approved Supabase-source decision
+        if: inputs.dry_run == 'true'
+        run: |
+          python3 - <<'PY'
+          # Visibility only: a dry run must always publish its report, so this
+          # never exits non-zero. It makes drift from the approved decision
+          # loud at dry-run time instead of first surfacing at apply time.
+          import json
+          r = json.load(open("dry-run-report.json"))
+          ls = r.get("live_set") or {}
+          counts = ls.get("counts") or {}
+          plan = r.get("products") or {}
+          approved = {
+              "total_source_rows": 53,
+              "approved_live_count": 29,
+              "placeholder_only": 3,
+              "no_image": 2,
+              "test_fixtures_excluded": 17,
+              "needs_review": 0,
+              "proposed_updates": 30,
+              "duplicate_row_count": 0,
+              "mapping_warnings": 0,
+          }
+          got = {
+              "total_source_rows": ls.get("total_source_rows"),
+              "approved_live_count": ls.get("approved_live_count"),
+              "placeholder_only": counts.get("placeholder_only"),
+              "no_image": counts.get("no_image"),
+              "test_fixtures_excluded": counts.get("test_fixtures_excluded"),
+              "needs_review": counts.get("needs_review"),
+              "proposed_updates": len(plan.get("proposed_database_updates") or []),
+              "duplicate_row_count": plan.get("duplicate_row_count"),
+              "mapping_warnings": len(plan.get("mapping_warnings") or []),
+          }
+          offline = set(ls.get("operator_offline_ids") or [])
+          proposed_ids = {u.get("match", {}).get("id")
+                          for u in (plan.get("proposed_database_updates") or [])}
+          print("=== APPROVED DECISION CHECK (source: live Supabase products, decided 2026-09-08) ===")
+          drift = []
+          for key in sorted(approved):
+              ok = got.get(key) == approved[key]
+              if not ok:
+                  drift.append(key)
+              print(f"  {'ok' if ok else 'DRIFT':5} {key:24} "
+                    f"approved={approved[key]!r:5} actual={got.get(key)!r}")
+          for wid in ("wix-001", "wix-012"):
+              ok = wid in offline
+              if not ok:
+                  drift.append(wid)
+              print(f"  {'ok' if ok else 'DRIFT':5} {wid:24} "
+                    f"approved=offline actual={'offline' if wid in offline else 'NOT offline'}")
+          ok = "wix-001" not in proposed_ids
+          if not ok:
+              drift.append("wix-001 image")
+          print(f"  {'ok' if ok else 'DRIFT':5} {'wix-001 gets no image':24} "
+                f"approved=True actual={'wix-001' not in proposed_ids}")
+          if drift:
+              print("::warning::The dry-run plan drifted from the approved "
+                    "Supabase-source decision:", ", ".join(sorted(set(map(str, drift)))))
+              print("::warning::A real run (dry_run=false) will be refused by the "
+                    "apply guard until the decision is re-reviewed.")
+          else:
+              print("The plan matches the approved Supabase-source decision.")
+          PY
+
       - name: Publish the dry-run report
         if: always()
         uses: actions/upload-artifact@v4
@@ -201,30 +266,46 @@ jobs:
               print("environment blockers:", r.get("environment_blockers"))
               sys.exit(1)
 
-          # The classification below was reviewed and approved. If a data change
-          # moves it, the run stops for a human instead of publishing whatever
-          # the catalogue happens to contain today.
+          # APPROVED SOURCE DECISION (2026-09-08): the live Supabase products
+          # table is the approved migration source, and the numbers below are
+          # the approved classification of that source (verified against the
+          # SHA-256-checked dry-run artifacts of run 34207418484). The legacy
+          # Wix seed classification documented in MIGRATION_REPORT.md belongs
+          # to the legacy import analysis ONLY and is NOT the production
+          # guard. If a data change moves any number, the run stops for a
+          # human instead of publishing whatever the catalogue contains today.
           ls = r.get("live_set") or {}
+          counts = ls.get("counts") or {}
+          plan = r.get("products") or {}
           expected = {
-              "total_source_rows": 275,
-              "approved_live_count": 181,
-              "placeholder_only": 75,
+              "total_source_rows": 53,
+              "approved_live_count": 29,
+              "placeholder_only": 3,
+              "no_image": 2,
               "test_fixtures_excluded": 17,
               "needs_review": 0,
           }
-          counts = ls.get("counts") or {}
           got = {
               "total_source_rows": ls.get("total_source_rows"),
               "approved_live_count": ls.get("approved_live_count"),
               "placeholder_only": counts.get("placeholder_only"),
+              "no_image": counts.get("no_image"),
               "test_fixtures_excluded": counts.get("test_fixtures_excluded"),
               "needs_review": counts.get("needs_review"),
           }
           if got != expected:
               print("::error::The live-product classification no longer matches "
-                    "the approved decision. Stop and re-review before applying.")
+                    "the approved Supabase-source decision. Stop and re-review "
+                    "before applying.")
               print("expected:", expected)
               print("actual  :", got)
+              sys.exit(1)
+
+          proposed = plan.get("proposed_database_updates") or []
+          if len(proposed) != 30:
+              print("::error::proposed_database_updates is", len(proposed),
+                    "- the approved plan is exactly 30 image_url updates. "
+                    "Stop and re-review before applying.")
               sys.exit(1)
 
           offline = set(ls.get("operator_offline_ids") or [])
@@ -235,8 +316,25 @@ jobs:
           if set(ls.get("live_ids") or []) & {"wix-001", "wix-012"}:
               print("::error::wix-001 or wix-012 is in the approved live set.")
               sys.exit(1)
-          print("Classification matches the approved decision - proceeding.")
+
+          # wix-001 has only the branded placeholder - it must never receive
+          # an image_url. wix-012 has a real committed photo, so it MAY get
+          # its real public uploads image while staying offline (priceNgn=0).
+          by_id = {u.get("match", {}).get("id"): u for u in proposed}
+          if "wix-001" in by_id:
+              print("::error::wix-001 must not receive an image (placeholder only).")
+              sys.exit(1)
+          w12 = by_id.get("wix-012")
+          if w12 is not None:
+              url = str((w12.get("set") or {}).get("image_url") or "")
+              if not (url.startswith("https://") and "/uploads/" in url):
+                  print("::error::wix-012 may only receive its real public "
+                        "uploads image, got:", url or "<empty>")
+                  sys.exit(1)
+
+          print("Classification matches the approved Supabase-source decision - proceeding.")
           print(f"  approved live     : {got['approved_live_count']}")
+          print(f"  proposed updates  : {len(proposed)}")
           print(f"  operator offline  : {sorted(offline)}")
           PY
 

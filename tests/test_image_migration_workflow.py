@@ -209,3 +209,46 @@ def test_the_workflow_file_is_valid_yaml(wf):
     assert data["name"]
     assert set(data["jobs"]) == {"migrate"}
     assert data["jobs"]["migrate"]["runs-on"] == "ubuntu-latest"
+
+
+# --------------------------------------------------------------------------
+# the approved source decision (2026-09-08)
+# --------------------------------------------------------------------------
+
+def test_the_apply_guard_pins_the_approved_supabase_source_decision(wf):
+    """Source decision: the live Supabase products table is the approved
+    migration source. The legacy Wix seed classification documented in
+    MIGRATION_REPORT.md belongs to the legacy import analysis only and must
+    never come back as the production guard."""
+    block = next(s for s in _job(wf)["steps"]
+                 if s.get("name") == "Block the apply when the plan is not safe")
+    run = block["run"]
+    for pinned in ('"total_source_rows": 53', '"approved_live_count": 29',
+                   '"placeholder_only": 3', '"no_image": 2',
+                   '"test_fixtures_excluded": 17', '"needs_review": 0',
+                   "len(proposed) != 30"):
+        assert pinned in run, f"the apply guard no longer pins {pinned}"
+    assert "181" not in run and "275" not in run, (
+        "the legacy Wix seed classification is back in the apply guard")
+
+
+def test_the_apply_guard_keeps_the_two_operator_offline_rules(wf):
+    run = next(s for s in _job(wf)["steps"]
+               if s.get("name") == "Block the apply when the plan is not safe")["run"]
+    assert '"wix-001"' in run and '"wix-012"' in run
+    assert 'if "wix-001" in by_id' in run, "wix-001 must never receive an image"
+    assert 'w12 = by_id.get("wix-012")' in run, "wix-012's image rule is missing"
+
+
+def test_dry_runs_surface_drift_from_the_approved_decision(wf):
+    """Every dry run says out loud whether the plan still matches the
+    approved decision - without ever failing (the report must be published)."""
+    steps = _job(wf)["steps"]
+    vis = next(s for s in steps
+               if (s.get("name") or "").startswith("Check the plan against the approved"))
+    assert vis["if"] == "inputs.dry_run == 'true'"
+    assert "sys.exit" not in vis["run"], (
+        "the visibility check must never fail a dry run")
+    assert "::warning::" in vis["run"], "drift must be surfaced, not silent"
+    assert '"total_source_rows": 53' in vis["run"]
+    assert '"approved_live_count": 29' in vis["run"]
