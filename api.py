@@ -125,16 +125,14 @@ def public_config():
 
 @api.get("/products")
 def products():
-    """The seed catalogue as it ships, before any admin edit.
+    """Legacy route - old bundles called this before /api/catalog.
 
-    This used to call send_static_file(), but the app is created with
-    static_folder=None (everything is served from the project root), so that
-    call raised 500 on every request. The file is read directly instead.
+    It now serves the SAME live Supabase-backed catalogue with the SAME
+    no-store policy (see _catalog_response): a phone running older JavaScript
+    gets the current catalogue instead of the committed 258-row seed, so no
+    device can be pinned to a stale local JSON snapshot.
     """
-    body = jsonify(ok=True, products=[_public_product(p)
-                                      for p in catalog_mod.base_products()])
-    body.headers["Cache-Control"] = "public, max-age=300"
-    return body
+    return _catalog_response(request.args.get("all") == "1")
 
 # ============================================================ public: catalog
 # Customers never see numerical stock: the public catalogue carries only an
@@ -154,30 +152,55 @@ def _public_product(p):
     return out
 
 
-@api.get("/catalog")
-def catalog():
-    """Seed products + every admin edit, merged. This is the live catalogue."""
+def _catalog_response(include_hidden: bool):
+    """One body for /api/catalog and the legacy /api/products.
+
+    Every storefront device receives the identical response from the same
+    Supabase-backed feed, no matter which URL its bundle calls.
+
+    * Supabase is the only source in production (catalog.merged() raises on
+      an outage) -> a clear 503, never a local JSON snapshot. Phones with a
+      service worker keep shopping from the last good server response.
+    * no-store: the product list must never be answered from a browser,
+      service-worker or CDN cache. Combined with the SW's network-first
+      handling of /api/catalog, an online phone always revalidates.
+    * The ETag is a hash of the exact body (not of a local file's timestamp,
+      which never changed when only Supabase did) so a 304 can only mean
+      "the body you hold IS the current one".
+    """
     admin = bool(authmod.current_admin())
-    include_hidden = admin and request.args.get("all") == "1"
-    products = catalog_mod.merged(include_hidden=include_hidden)
+    want_hidden = bool(include_hidden) and admin
+    try:
+        products_all = catalog_mod.merged(include_hidden=True)
+    except Exception as exc:
+        print(f"[supabase] catalog read failed: {exc}", flush=True)
+        return jsonify(ok=False,
+                       error="The product list is temporarily unavailable. "
+                             "Please refresh in a moment."), 503
+    products = products_all if want_hidden else \
+        [p for p in products_all if p.get("online") is not False]
     if not admin:
         products = [_public_product(p) for p in products]
     body = json.dumps({
         "ok": True,
         "products": products,
-        "meta": catalog_mod.meta(),
+        "meta": catalog_mod.meta(products_all),
     }, ensure_ascii=False, separators=(",", ":"))
-    etag = 'W/"' + hashlib.sha256(
-        (str(catalog_mod.meta()) + str(len(catalog_mod.base_products()))).encode()
-    ).hexdigest()[:28] + '"'
+    etag = '"sha256-' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:32] + '"'
     if request.headers.get("If-None-Match") == etag:
         resp = make_response("", 304)
     else:
         resp = make_response(body, 200)
     resp.headers["Content-Type"] = "application/json; charset=utf-8"
     resp.headers["ETag"] = etag
-    resp.headers["Cache-Control"] = "public, max-age=30"
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return resp
+
+
+@api.get("/catalog")
+def catalog():
+    """The live catalogue, straight from the Supabase products table."""
+    return _catalog_response(request.args.get("all") == "1")
 
 # ========================================================== public: categories
 @api.get("/categories")

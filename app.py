@@ -317,7 +317,26 @@ def create_app():
             full = os.path.normpath(os.path.join(ROOT, rel))
         if not os.path.isfile(full):
             return None
-        return send_from_directory(os.path.dirname(full), os.path.basename(full))
+        resp = send_from_directory(os.path.dirname(full), os.path.basename(full))
+        name = os.path.basename(full)
+        # Explicit caching per asset class - the previous "no header" state
+        # let browsers heuristic-cache HTML, so phones sat on old page
+        # markup (and its old ?v= bundle pins) for days while other phones
+        # had the new one: the same store, a different catalogue per phone.
+        if name == "sw.js":
+            # The service worker script revalidates on every navigation so a
+            # VERSION bump reaches phones as soon as possible (the SW's own
+            # activate step then retires older versions).
+            resp.headers["Cache-Control"] = "no-cache"
+        elif name.endswith(".html") or name.endswith(".htm"):
+            # Pages revalidate: cheap (ETag/Last-Modified) and it is how a
+            # ?v= bump on the JS/CSS it references ever reaches a phone.
+            resp.headers["Cache-Control"] = "no-cache"
+        elif request.args:
+            # Versioned asset (?v=N in the URL): the URL changes on every
+            # deploy, so the exact URL may be cached forever.
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
 
     @app.after_request
     def _headers(resp):

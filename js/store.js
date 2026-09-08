@@ -197,24 +197,31 @@ const JA = (() => {
   }
 
   // One copy of every product, ever. The same piece can reach the browser
-  // under two ids (a Supabase row re-created next to its seed row, or a
+  // under two ids (a Supabase row re-created next to an older row, or a
   // locally queued edit next to the synced server copy), so products are
-  // keyed by id, then slug, then sku and the first copy seen wins. The list
-  // passed in is ordered so the preferred copy comes first.
+  // keyed by id, then by slug/sku CONFIRMED BY THE SAME NAME - the exact
+  // rule catalog._dedupe_products applies server-side. A shared slug or sku
+  // with a different name must never hide a distinct row: matching on
+  // slug/sku alone used to make the displayed count smaller than the count
+  // the server actually served. The list passed in is ordered so the
+  // preferred copy comes first.
   function dedupeProducts(list) {
     const byId = new Map(), bySlug = new Map(), bySku = new Map();
     const out = [];
     (Array.isArray(list) ? list : []).forEach((p) => {
       if (!p || !p.id) return;
       const id = String(p.id).trim();
+      const name = String(p.name || "").trim().toLowerCase();
       const slug = String(p.slug || "").trim().toLowerCase();
       const sku = String(p.sku || "").trim().toLowerCase();
       if (byId.has(id)) return;
-      if (slug && bySlug.has(slug)) return;
-      if (sku && bySku.has(sku)) return;
+      const sKey = slug ? slug + "\u0000" + name : "";
+      const kKey = sku ? sku + "\u0000" + name : "";
+      if (sKey && bySlug.has(sKey)) return;
+      if (kKey && bySku.has(kKey)) return;
       byId.set(id, p);
-      if (slug) bySlug.set(slug, p);
-      if (sku) bySku.set(sku, p);
+      if (sKey) bySlug.set(sKey, p);
+      if (kKey) bySku.set(kKey, p);
       out.push(p);
     });
     return out;
@@ -222,36 +229,65 @@ const JA = (() => {
 
   async function loadSeed() {
     if (seed.length) return seed;
+    // The admin portal asks for every authorised row (offline/draft
+    // included); the public storefront gets the live set only. The server
+    // honours ?all=1 solely for an authenticated admin session.
+    const isAdminPage = (document.body.dataset.page || "") === "admin";
+    const url = "api/catalog" + (isAdminPage ? "?all=1" : "");
+    const load = () => fetch(url, { credentials: "same-origin", cache: "no-store" })
+      .then((res) => {
+        if (!res.ok) throw new Error("catalog http " + res.status);
+        return res.json();
+      });
+    let d = null;
     try {
-      const res = await fetch("api/catalog", { credentials: "same-origin" });
-      if (res.ok) {
-        const d = await res.json();
-        if (d && Array.isArray(d.products) && d.products.length) {
-          catalogMeta = Object.assign({ server: true }, d.meta || {});
-          // keep only edits that have not reached the server yet
-          const pend = pendingMap();
-          const stillPending = (read(KEYS.custom, []) || []).filter((p) => p && pend[p.id]);
-          write(KEYS.custom, stillPending);
-          // The whole catalogue, one copy of each product: the server merges
-          // seed + admin + Supabase rows, and any duplicate that survives
-          // that merge (same product under two ids) is dropped here so the
-          // shop can never render the same piece twice.
-          seed = dedupeProducts(d.products);
-          window.JA_SEED = seed;
-          return seed;
+      d = await load();
+    } catch (e) {
+      // One retry: a cold dyno or a momentary drop must not push a phone
+      // into a degraded state.
+      await new Promise((r) => setTimeout(r, 900));
+      try { d = await load(); } catch (e2) { d = null; }
+    }
+    if (d && Array.isArray(d.products) && d.products.length) {
+      catalogMeta = Object.assign({ server: true }, d.meta || {});
+      // keep only edits that have not reached the server yet
+      const pend = pendingMap();
+      const stillPending = (read(KEYS.custom, []) || []).filter((p) => p && pend[p.id]);
+      write(KEYS.custom, stillPending);
+      // The whole catalogue, one copy of each product: the server serves the
+      // Supabase rows (Supabase is the single source in production) and any
+      // duplicate that survives that merge (same product under two ids) is
+      // dropped here so the shop can never render the same piece twice.
+      seed = dedupeProducts(d.products);
+      // The public feed carries stock only as an in/out flag - customers
+      // never see numbers (see _public_product). Normalise it to a soft
+      // quantity so the cart / PDP / checkout UI behaves identically on
+      // every device; the server re-validates the real quantity at order
+      // time, so the soft cap can never oversell. Admin sessions receive the
+      // raw numbers from the server and skip this (p.stock != null).
+      seed.forEach((p) => {
+        if (p && p.stock == null && p.stock_status) {
+          p.stock = p.stock_status === "in" ? 99 : 0;
         }
-      }
-    } catch (e) { /* offline or static hosting: fall back below */ }
-    // The bundled catalogue (js/products-data.js) is loaded on every page and is
-    // the static fallback; the server catalogue (api/catalog) is the source of
-    // truth. We deliberately do not fetch data/seed.json in the browser: that
-    // was a legacy static-JSON dependency that duplicated the catalogue and is
-    // now served on the server (api/catalog) instead.
-    if (Array.isArray(window.JA_SEED) && window.JA_SEED.length) {
-      seed = dedupeProducts(window.JA_SEED);
+      });
+      window.JA_SEED = seed;
       return seed;
     }
+    // No local-JSON fallback: when the server catalogue cannot be loaded the
+    // page shows an explicit retry state (renderShop / renderHome) instead of
+    // a bundled snapshot. A stale snapshot is exactly how different phones
+    // used to show different catalogues. Offline phones that have a service
+    // worker still get the last good server response (network-first), which
+    // is identical on every device.
+    catalogMeta = { server: false };
     return [];
+  }
+
+  // True when the in-memory catalogue came from the live server on this
+  // load. Pages use it to show an explicit retry state (never a stale local
+  // snapshot) when the catalogue could not be loaded.
+  function catalogLive() {
+    return !!(catalogMeta && catalogMeta.server);
   }
 
   function todayStamp() {
@@ -281,14 +317,26 @@ const JA = (() => {
 
   function products() {
     try {
-      const deletedRaw = read(KEYS.deleted, []);
-      const deleted = new Set(Array.isArray(deletedRaw) ? deletedRaw : []);
-      let custom = read(KEYS.custom, []);
-      if (!Array.isArray(custom)) custom = [];
-      custom = custom.filter((p) => p && p.id);
+      // Customer pages render ONLY the server catalogue - the same approved
+      // live set on every phone. The localStorage "pending edits" and
+      // "deleted" lists are admin-portal state: a customer browser that
+      // carried them (a shared phone, a past test) must never change what
+      // the storefront shows.
+      const isAdminPage = (document.body.dataset.page || "") === "admin";
+      let deleted = new Set();
+      let custom = [];
+      if (isAdminPage) {
+        const deletedRaw = read(KEYS.deleted, []);
+        deleted = new Set(Array.isArray(deletedRaw) ? deletedRaw : []);
+        custom = read(KEYS.custom, []);
+        if (!Array.isArray(custom)) custom = [];
+        custom = custom.filter((p) => p && p.id);
+      }
       const customIds = new Set(custom.map((p) => p.id));
-      const baseList = (seed && seed.length ? seed : (window.JA_SEED || []));
-      const base = baseList.filter((p) => p && p.id && !deleted.has(p.id) && !customIds.has(p.id));
+      // seed is the in-memory server catalogue ([] while it is not loaded).
+      // There is deliberately no window.JA_SEED / bundled-JSON fallback: a
+      // stale snapshot here would resurrect the per-phone catalogue drift.
+      const base = (seed || []).filter((p) => p && p.id && !deleted.has(p.id) && !customIds.has(p.id));
       const remap = (p) => {
         if (!p) return p;
         let out = p.category === "skincare" ? { ...p, category: "beauty" } : p;
@@ -302,10 +350,10 @@ const JA = (() => {
         return out;
       };
       const all = dedupeProducts([...custom, ...base].map(remap).filter(Boolean));
-      if ((document.body.dataset.page || "") === "admin") return all;
+      if (isAdminPage) return all;   // admin sees every authorised row
       return all.filter((p) => p.online !== false);
     } catch (e) {
-      return (seed && seed.length ? seed : (window.JA_SEED || [])).slice();
+      return (seed || []).slice();
     }
   }
 
@@ -1606,8 +1654,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=128";
-        const FLYER = "images/brand/logo-flyer.jpg?v=128";
+        const LOGO = "images/brand/logo.jpg?v=129";
+        const FLYER = "images/brand/logo-flyer.jpg?v=129";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -1731,7 +1779,7 @@ const JA = (() => {
           <a href="contact.html">${tx("nav.contact")}</a>
         </nav>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=128" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=129" alt="Jaura" />
         </a>
         <div class="nav-right">
           <div class="lang-switch" role="group" aria-label="${tx("lang.group")}">
@@ -1870,7 +1918,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=128" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=129" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -1954,7 +2002,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=128" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=129" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -1976,7 +2024,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=128";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=129";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -1988,7 +2036,7 @@ const JA = (() => {
   function logoPath() {
     let custom = "";
     try { custom = (settings() || {}).logoUrl || ""; } catch (e) { custom = ""; }
-    return custom || "images/brand/logo.jpg?v=128";
+    return custom || "images/brand/logo.jpg?v=129";
   }
   // FAQ answers Google can show as rich results. Kept in step with faq.html.
   const FAQ_LD = [
@@ -2021,7 +2069,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Jaura Store — fashion, beauty, household and lifestyle. Pay in Naira or F CFA. Lagos and Cotonou.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=128");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=129");
     document.title = title;
     [
       ["name", "description", description],
@@ -2067,7 +2115,7 @@ const JA = (() => {
       const ic = document.createElement("link");
       ic.rel = "icon";
       ic.type = "image/png";
-      ic.href = "images/brand/favicon.png?v=128";
+      ic.href = "images/brand/favicon.png?v=129";
       document.head.appendChild(ic);
     }
     let ld = document.getElementById("jaura-jsonld");
@@ -2451,7 +2499,7 @@ const JA = (() => {
 
   return {
     ready, CATEGORIES: DEFAULT_CATS, categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner,
-    products, product, searchProducts, categoryName, displayName,
+    products, product, catalogLive, searchProducts, categoryName, displayName,
     currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, BULK_QTY,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,

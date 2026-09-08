@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=128";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=128";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=129";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=129";
 }
 
 function renderCategories() {
@@ -195,15 +195,35 @@ function mountHeroVideo() {
     .catch(() => {});   // offline / static hosting: keep whatever is showing
 }
 
+// Shown when the live catalogue could not be loaded (server down / no
+// connection and no service-worker copy yet). We say so and offer a retry
+// instead of rendering a stale local snapshot - a stale snapshot is exactly
+// how different phones used to show different catalogues.
+function emptyCatalogHTML() {
+  const fr = (() => { try { return window.I18N && I18N.lang() === "fr"; } catch (e) { return false; } })();
+  const title = fr ? "Impossible de charger la liste des produits pour le moment."
+                   : "We couldn't load the product list right now.";
+  const sub = fr ? "Vérifiez votre connexion, puis réessayez."
+                 : "Check your connection, then try again.";
+  const btn = fr ? "Réessayer" : "Try again";
+  return `<div class="empty splend-empty">
+    <p>${title}</p>
+    <p>${sub}</p>
+    <button type="button" class="btn" data-catalog-retry>${btn}</button>
+  </div>`;
+}
+
 function renderHome() {
   const newIn = document.querySelector("[data-new]");
   if (newIn) {
     let list = [];
     try { list = newestTwelve(); } catch (e) { list = []; }
     if (!list.length) {
-      const raw = (typeof JA.products === "function" ? JA.products() : []) || window.JA_SEED || [];
-      list = raw.slice(0, 12);
+      list = (typeof JA.products === "function" ? JA.products() : []).slice(0, 12);
     }
+    if (!list.length && JA.catalogLive && !JA.catalogLive()) {
+      newIn.innerHTML = emptyCatalogHTML();
+    } else {
     try {
       newIn.innerHTML = list.map(JA.cardHTML).join("");
     } catch (e) {
@@ -213,6 +233,7 @@ function renderHome() {
         const name = p.name || "";
         return `<article class="card"><a class="card-media" href="product.html?id=${encodeURIComponent(id)}"><img src="${img}" alt="" onerror="fallbackImg(event)"></a><div class="card-body"><h3><a href="product.html?id=${encodeURIComponent(id)}">${name}</a></h3></div></article>`;
       }).join("");
+    }
     }
   }
   const cats = document.querySelector("[data-home-cats]");
@@ -506,7 +527,11 @@ function renderShop() {
   }
 
   const grid = document.querySelector("[data-shop-grid]");
-  if (grid) grid.innerHTML = slice.length ? slice.map(JA.cardHTML).join("") : `<p class="empty">${t("shop.empty")}</p>`;
+  if (grid) {
+    if (slice.length) grid.innerHTML = slice.map(JA.cardHTML).join("");
+    else if (cat === "all" && !q && JA.catalogLive && !JA.catalogLive()) grid.innerHTML = emptyCatalogHTML();
+    else grid.innerHTML = `<p class="empty">${t("shop.empty")}</p>`;
+  }
 
   const pager = document.querySelector("[data-pager]");
   if (pager && pages > 1) {
@@ -1952,6 +1977,11 @@ async function boot() {
     watchReveal();
   };
   draw();
+  // The retry button on the "couldn't load the catalogue" state: a plain
+  // reload re-arms loadSeed() and the service-worker network-first pass.
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("[data-catalog-retry]")) location.reload();
+  });
   document.addEventListener("ja:rerender", draw);
   document.addEventListener("ja:cart", () => {
     if (page === "cart") draw();

@@ -656,20 +656,37 @@ def resolve_product_id(wanted, products=None, include_hidden=True):
 
 
 def merged(include_hidden=False):
-    """Seed products + every admin edit, minus what was deleted.
+    """The live catalogue, exactly as Supabase has it (production).
 
-    This is the live catalogue. When Supabase is configured it is the source
-    of truth; otherwise the local override file supplies the edits.
+    Production/staging (Supabase enabled, not the test suite): the Supabase
+    products table is the ONLY source. Local files may ENRICH a Supabase row
+    with keys the table cannot hold (multi-photo arrays, extra editor fields)
+    but must never ADD rows: uniting ``data/seed.json`` (the 258-row Wix
+    import) or a stale overrides file resurrected deleted products and test
+    fixtures on every storefront - which is precisely how different phones
+    came to show different catalogues. If Supabase is unreachable the caller
+    gets a raised error and the route answers a clear 503; phones with a
+    service worker keep shopping from the last good server response. No
+    customer ever falls back to a committed JSON snapshot.
+
+    Test suite / local dev (no Supabase): the legacy blend of the seed file
+    and the admin overrides file, unchanged.
     """
     sb = _supabase_products()
-    if sb is not None:
-        # Supabase rows are the live catalogue; the seed only supplies
-        # products Supabase does not have. Local overrides (a phone save that
-        # has not reached Supabase yet, e.g. stretch-marks oil) are unioned
-        # last so they stay visible on every device. _dedupe_products keeps
-        # one copy of each product: matched by id, or by a slug/sku clash
-        # confirmed by the SAME name (a re-created piece). A slug or sku
-        # clash with a different product never hides it.
+    if sb is not None and Config.ENV != "testing":
+        # Supabase rows are the whole catalogue. _fill_missing_fields gives
+        # each row back only the keys its table cannot store (a column
+        # present as null was cleared on purpose and is never filled).
+        products = _fill_missing_fields(sb, overrides().get("products") or [])
+    elif sb is not None:
+        # Test/dev with a reachable Supabase: the historical blend. Supabase
+        # rows are the live catalogue; the seed only supplies products
+        # Supabase does not have. Local overrides (a phone save that has not
+        # reached Supabase yet, e.g. stretch-marks oil) are unioned last so
+        # they stay visible on every device. _dedupe_products keeps one copy
+        # of each product: matched by id, or by a slug/sku clash confirmed by
+        # the SAME name (a re-created piece). A slug or sku clash with a
+        # different product never hides it.
         ov = overrides()
         deleted = set(ov.get("deleted") or [])
         ov_products = ov.get("products") or []
@@ -682,6 +699,12 @@ def merged(include_hidden=False):
         products = _dedupe_products(products, ov_products)
         products = [p for p in products if str(p.get("id")) not in deleted]
     else:
+        if Config.ENV != "testing":
+            # Production must never serve a local JSON catalogue as if it
+            # were live: a stale snapshot is a wrong catalogue, not a
+            # degraded one. The route turns this into a clear 503 and the
+            # service worker serves phones the last good response offline.
+            raise RuntimeError("Supabase product store is unavailable")
         data, _p = _load_overrides()
         overrides_list = data.get("products") or []
         deleted = set(data.get("deleted") or [])
@@ -708,10 +731,21 @@ def _fold_p(product):
     return p
 
 
-def meta():
-    """Metadata blob used for ETag / change detection on the catalogue."""
+def meta(products=None):
+    """Metadata blob used for the catalogue header / change detection.
+
+    Pass the already-loaded full list to avoid a second store read per
+    request; the default keeps the old behaviour for other callers. A failed
+    read here degrades to an empty count instead of raising: meta() is
+    decorative (response headers, admin mutation receipts) - callers that
+    NEED the catalogue (the public feed) handle a store outage themselves.
+    """
     data, _p = _load_overrides()
-    products = merged(include_hidden=True)
+    if products is None:
+        try:
+            products = merged(include_hidden=True)
+        except Exception:
+            products = []
     return {
         "updatedAt": data.get("updatedAt") or "",
         "updatedBy": data.get("updatedBy") or "",

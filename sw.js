@@ -2,7 +2,7 @@
    Pages are network-first so a visitor with a connection always sees the
    newest store; when the connection drops, the last copy is served instead of
    an error. Saving is handled separately by js/net.js (outbox + retry). */
-const VERSION = "jaura-v128";
+const VERSION = "jaura-v129";
 const CORE = [
   "./",
   "./index.html",
@@ -10,16 +10,15 @@ const CORE = [
   "./product.html",
   "./cart.html",
   "./checkout.html",
-  "./css/style.css?v=128",
-  "./js/products-data.js?v=128",
-  "./js/i18n.js?v=128",
-  "./js/net.js?v=128",
-  "./js/store.js?v=128",
-  "./js/app.js?v=128",
-  "./images/brand/logo.jpg?v=128",
-  "./images/brand/favicon.png?v=128",
-  "./images/brand/apple-touch.png?v=128",
-  "./images/brand/og-cover.jpg?v=128",
+  "./css/style.css?v=129",
+  "./js/i18n.js?v=129",
+  "./js/net.js?v=129",
+  "./js/store.js?v=129",
+  "./js/app.js?v=129",
+  "./images/brand/logo.jpg?v=129",
+  "./images/brand/favicon.png?v=129",
+  "./images/brand/apple-touch.png?v=129",
+  "./images/brand/og-cover.jpg?v=129",
 ];
 const MAX_ASSETS = 140;
 
@@ -118,8 +117,13 @@ self.addEventListener("fetch", async (event) => {
     return;
   }
   if (url.pathname.indexOf("/api/") === 0) {
-    // the catalogue is worth keeping so the shop still opens with no signal
-    if (url.pathname.indexOf("/api/catalog") === 0) {
+    // The product feed (the live route and its legacy alias) is worth
+    // keeping so the shop still opens with no signal: network first while
+    // online - the server answers no-store, so an online phone always gets
+    // the current Supabase set - and the last good server response offline.
+    // No device may be served a product list from a bundled JSON file.
+    if (url.pathname.indexOf("/api/catalog") === 0 ||
+        url.pathname.indexOf("/api/products") === 0) {
       event.respondWith(networkFirst(req, false));
     }
     return;
