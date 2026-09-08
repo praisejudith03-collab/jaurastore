@@ -6,7 +6,8 @@ them from images/brand/logo.jpg (centred cart + "Jaura" wordmark, no
 tagline, no category icons) and refreshes the og-cover on brand cream.
 
 The regenerated files shipped with the shared cache token bumped from v=126
-to v=127 (the photo-display fix has since moved it to v=128), and every HTML
+to v=127 (moved to v=128 by the photo-display fix and to v=129 by the
+publication-policy release, which must drop every cached catalogue), and every HTML
 reference to a brand image must carry that token - otherwise phones and Google
 keep serving the stale illegible icon.
 
@@ -21,7 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # The shared cache token. Bumped for the brand-icon regeneration (126 -> 127)
 # and again for the photo-display fix, which changed sw.js and the storefront
 # scripts (127 -> 128).
-SHARED_TOKEN = "128"
+SHARED_TOKEN = "129"
 
 
 def _image_size(path):

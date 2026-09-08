@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=128";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=128";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=129";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=129";
 }
 
 function renderCategories() {
@@ -201,7 +201,9 @@ function renderHome() {
     let list = [];
     try { list = newestTwelve(); } catch (e) { list = []; }
     if (!list.length) {
-      const raw = (typeof JA.products === "function" ? JA.products() : []) || window.JA_SEED || [];
+      // JA.products() already applies the server's online filter; the raw
+      // bundled snapshot is never used here, it could resurface a hidden row.
+      const raw = (typeof JA.products === "function" ? JA.products() : []) || [];
       list = raw.slice(0, 12);
     }
     try {

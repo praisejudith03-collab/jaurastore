@@ -183,8 +183,24 @@ const JA = (() => {
   function markPending(id) { const p = pendingMap(); p[id] = Date.now(); write(KEYS.pending, p); }
   function clearPending(id) { const p = pendingMap(); delete p[id]; write(KEYS.pending, p); }
 
+  // Any catalogue write makes the service worker's saved copy of api/catalog
+  // stale. The page shares Cache Storage with the worker, so the entry is
+  // dropped here at once; the next api/catalog request has to hit the
+  // server (which answers with a fresh ETag, see api.py /catalog).
+  function dropCatalogCache() {
+    try {
+      if (!("caches" in window)) return Promise.resolve(false);
+      return caches.keys().then((keys) => Promise.all(keys.map((k) =>
+        caches.open(k).then((c) => c.keys().then((reqs) => Promise.all(
+          reqs.filter((r) => String(r.url || "").indexOf("/api/catalog") >= 0).map((r) => c.delete(r))
+        )))
+      ))).then(() => true).catch(() => false);
+    } catch (e) { return Promise.resolve(false); }
+  }
+
   function applyServerProduct(p) {
     if (!p || !p.id) return;
+    dropCatalogCache();
     const i = seed.findIndex((x) => x.id === p.id);
     if (i >= 0) seed[i] = p;
     else seed.unshift(p);
@@ -242,13 +258,14 @@ const JA = (() => {
         }
       }
     } catch (e) { /* offline or static hosting: fall back below */ }
-    // The bundled catalogue (js/products-data.js) is loaded on every page and is
-    // the static fallback; the server catalogue (api/catalog) is the source of
-    // truth. We deliberately do not fetch data/seed.json in the browser: that
-    // was a legacy static-JSON dependency that duplicated the catalogue and is
-    // now served on the server (api/catalog) instead.
+    // No server answer at all (offline, and the service worker had no cached
+    // copy either). The bundled snapshot (js/products-data.js) is the LAST
+    // resort so the shop is not blank with no signal - it is never mixed
+    // with a server catalogue, and it is dropped the moment api/catalog
+    // answers. Only rows the snapshot itself marks online=true are shown.
+    catalogMeta = { server: false, snapshot: true };
     if (Array.isArray(window.JA_SEED) && window.JA_SEED.length) {
-      seed = dedupeProducts(window.JA_SEED);
+      seed = dedupeProducts(window.JA_SEED.filter((p) => p && p.online === true));
       return seed;
     }
     return [];
@@ -287,7 +304,11 @@ const JA = (() => {
       if (!Array.isArray(custom)) custom = [];
       custom = custom.filter((p) => p && p.id);
       const customIds = new Set(custom.map((p) => p.id));
-      const baseList = (seed && seed.length ? seed : (window.JA_SEED || []));
+      // Once the server catalogue is loaded it is the only base list: the
+      // bundled snapshot must never leak a product the server has hidden.
+      const baseList = catalogMeta.server
+        ? seed
+        : (seed && seed.length ? seed : (window.JA_SEED || []).filter((p) => p && p.online === true));
       const base = baseList.filter((p) => p && p.id && !deleted.has(p.id) && !customIds.has(p.id));
       const remap = (p) => {
         if (!p) return p;
@@ -303,9 +324,13 @@ const JA = (() => {
       };
       const all = dedupeProducts([...custom, ...base].map(remap).filter(Boolean));
       if ((document.body.dataset.page || "") === "admin") return all;
-      return all.filter((p) => p.online !== false);
+      // The server already applied `online IS TRUE`; this repeats it so a
+      // locally queued edit (custom) or the offline snapshot obeys the same
+      // rule. A missing flag is offline, exactly as on the server.
+      return all.filter((p) => p.online === true);
     } catch (e) {
-      return (seed && seed.length ? seed : (window.JA_SEED || [])).slice();
+      return (seed && seed.length ? seed : (window.JA_SEED || []))
+        .filter((p) => p && p.online === true).slice();
     }
   }
 
@@ -768,7 +793,29 @@ const JA = (() => {
         return { ok: false, error: msg };
       });
   }
+  // Explicit publish / unpublish from the Admin. Only `online` changes on the
+  // server; a product the publication policy still rejects (no real photo,
+  // invalid price or stock) comes back as 409 with the reasons.
+  function setProductOnline(id, online) {
+    if (!window.JA_NET) return Promise.resolve({ ok: false, error: "offline" });
+    return window.JA_NET.api("api/admin/products/" + encodeURIComponent(id) + "/publish", {
+      method: "POST",
+      json: { online: !!online },
+      label: online ? "Publish" : "Unpublish",
+    }).then((d) => {
+      if (d && d.ok === false) {
+        return { ok: false, error: d.error || "Could not change the product.", reasons: d.reasons || [], codes: d.codes || [] };
+      }
+      if (d && d.product) applyServerProduct(d.product);
+      return { ok: true, data: d, product: d && d.product };
+    }).catch((err) => {
+      if (err && err.status === 401) { toast("Session expired — sign in again."); return { ok: false, error: err.message }; }
+      const body = (err && err.data) || {};
+      return { ok: false, error: body.error || (err && err.message) || "Could not change the product.", reasons: body.reasons || [], codes: body.codes || [] };
+    });
+  }
   function removeProduct(id) {
+    dropCatalogCache();
     write(KEYS.custom, read(KEYS.custom, []).filter((p) => p.id !== id));
     const deleted = read(KEYS.deleted, []);
     if (!deleted.includes(id)) deleted.push(id);
@@ -1606,8 +1653,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=128";
-        const FLYER = "images/brand/logo-flyer.jpg?v=128";
+        const LOGO = "images/brand/logo.jpg?v=129";
+        const FLYER = "images/brand/logo-flyer.jpg?v=129";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -1731,7 +1778,7 @@ const JA = (() => {
           <a href="contact.html">${tx("nav.contact")}</a>
         </nav>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=128" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=129" alt="Jaura" />
         </a>
         <div class="nav-right">
           <div class="lang-switch" role="group" aria-label="${tx("lang.group")}">
@@ -1870,7 +1917,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=128" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=129" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -1954,7 +2001,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=128" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=129" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -1976,7 +2023,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=128";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=129";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -1988,7 +2035,7 @@ const JA = (() => {
   function logoPath() {
     let custom = "";
     try { custom = (settings() || {}).logoUrl || ""; } catch (e) { custom = ""; }
-    return custom || "images/brand/logo.jpg?v=128";
+    return custom || "images/brand/logo.jpg?v=129";
   }
   // FAQ answers Google can show as rich results. Kept in step with faq.html.
   const FAQ_LD = [
@@ -2021,7 +2068,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Jaura Store — fashion, beauty, household and lifestyle. Pay in Naira or F CFA. Lagos and Cotonou.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=128");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=129");
     document.title = title;
     [
       ["name", "description", description],
@@ -2067,7 +2114,7 @@ const JA = (() => {
       const ic = document.createElement("link");
       ic.rel = "icon";
       ic.type = "image/png";
-      ic.href = "images/brand/favicon.png?v=128";
+      ic.href = "images/brand/favicon.png?v=129";
       document.head.appendChild(ic);
     }
     let ld = document.getElementById("jaura-jsonld");
@@ -2456,7 +2503,7 @@ const JA = (() => {
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,
     wish, isWished, toggleWish, wishDetailed, openMini, closeMini,
-    toast, upsertProduct, removeProduct, importProducts, applyServerProduct, syncPending, retryStrandedProducts, reloadCatalog,
+    toast, upsertProduct, removeProduct, setProductOnline, importProducts, applyServerProduct, syncPending, retryStrandedProducts, reloadCatalog,
     orders, saveOrder, getOrder, updateOrder, nextOrderId, sendReceipt,
     isAdmin, loginAdmin, logoutAdmin, adminSession, changePassword, requestOtp, verifyOtp, resetPassword,
     adminAnalytics, adminOrders, setOrderStatus, deleteOrder, flushEvents,
