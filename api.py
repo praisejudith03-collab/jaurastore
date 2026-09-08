@@ -1255,9 +1255,28 @@ def otp_request():
         return jsonify(ok=True, message="If that address is registered, a code has been sent.")
     if authmod.otp_requested_recently(email):
         return jsonify(ok=False, error="A code was just sent. Wait a minute before requesting another."), 429
-    code = authmod.create_otp(email)
-    delivered, info = emailer.send_otp(email, code)
-    audit(email, "admin.otp_requested", f"via=email delivered={delivered} {info}", _ip())
+    try:
+        code = authmod.create_otp(email)
+    except Exception as exc:
+        emailer.log_mail_event(emailer.RESET_TOKEN_DB_FAILURE, type(exc).__name__)
+        audit(email, "admin.otp_requested",
+              f"via=email delivered=false category={emailer.RESET_TOKEN_DB_FAILURE}", _ip())
+        return jsonify(ok=False, error="The code could not be emailed. Check the mail settings on the server, or message the shop directly to recover access."), 502
+    try:
+        delivered, info = emailer.send_otp(email, code)
+    except Exception as exc:
+        delivered, info = False, type(exc).__name__
+        category = emailer.classify_smtp_failure(exc)
+        emailer.log_mail_event(category, type(exc).__name__)
+    else:
+        if delivered:
+            category = "sent"
+            emailer.log_mail_event("sent")
+        else:
+            category = emailer.classify_smtp_failure(info=info)
+            emailer.log_mail_event(category, info)
+    audit(email, "admin.otp_requested",
+          f"via=email delivered={bool(delivered)} category={category}", _ip())
     if not delivered:
         return jsonify(ok=False, error="The code could not be emailed. Check the mail settings on the server, or message the shop directly to recover access."), 502
     return jsonify(ok=True, message=f"Verification code sent to {email}.")
