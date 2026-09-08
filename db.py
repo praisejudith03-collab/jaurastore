@@ -95,10 +95,40 @@ CREATE TABLE IF NOT EXISTS orders (
   source       TEXT NOT NULL DEFAULT 'web',
   status       TEXT NOT NULL DEFAULT 'pending',
   at           TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  customer_user_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_at ON orders(at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_user_id);
+
+CREATE TABLE IF NOT EXISTS customers (
+  id                  TEXT PRIMARY KEY,
+  email               TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash       TEXT NOT NULL,
+  name                TEXT,
+  phone               TEXT,
+  country             TEXT,
+  city                TEXT,
+  delivery_address    TEXT,
+  preferred_currency  TEXT NOT NULL DEFAULT 'NGN',
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email);
+
+CREATE TABLE IF NOT EXISTS customer_tokens (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id TEXT,
+  email       TEXT NOT NULL COLLATE NOCASE,
+  purpose     TEXT NOT NULL,
+  token_hash  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  consumed_at TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_customer_tokens_hash ON customer_tokens(token_hash, purpose);
+
 
 -- Payment confirmations sent from the public payment form. The uploaded
 -- receipt is kept, together with everything the customer typed.
@@ -358,6 +388,7 @@ ORDER_COLUMNS = {
     "items_count": "INTEGER NOT NULL DEFAULT 0",
     "source": "TEXT NOT NULL DEFAULT 'web'",
     "updated_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
+    "customer_user_id": "TEXT",
 }
 
 
@@ -383,11 +414,42 @@ REVIEW_RENAMES = (
 def migrate():
     """Add or rename any missing column. Safe to run every boot."""
     added = 0
+    cx = connect()
+    cx.executescript(
+        "CREATE TABLE IF NOT EXISTS customers ("
+        "  id TEXT PRIMARY KEY,"
+        "  email TEXT NOT NULL UNIQUE COLLATE NOCASE,"
+        "  password_hash TEXT NOT NULL,"
+        "  name TEXT, phone TEXT, country TEXT, city TEXT,"
+        "  delivery_address TEXT,"
+        "  preferred_currency TEXT NOT NULL DEFAULT 'NGN',"
+        "  created_at TEXT NOT NULL DEFAULT (datetime('now')),"
+        "  updated_at TEXT NOT NULL DEFAULT (datetime('now'))"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email);"
+        "CREATE TABLE IF NOT EXISTS customer_tokens ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  customer_id TEXT,"
+        "  email TEXT NOT NULL COLLATE NOCASE,"
+        "  purpose TEXT NOT NULL,"
+        "  token_hash TEXT NOT NULL,"
+        "  expires_at TEXT NOT NULL,"
+        "  consumed_at TEXT,"
+        "  created_at TEXT NOT NULL DEFAULT (datetime('now'))"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_customer_tokens_hash "
+        "  ON customer_tokens(token_hash, purpose);"
+    )
+    cx.commit()
     have = {r["name"] for r in query("PRAGMA table_info(orders)")}
     for col, ddl in ORDER_COLUMNS.items():
         if have and col not in have:
             execute(f"ALTER TABLE orders ADD COLUMN {col} {ddl}")
             added += 1
+    try:
+        execute("CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_user_id)")
+    except Exception:
+        pass
     rh = {r["name"] for r in query("PRAGMA table_info(product_reviews)")}
     if not rh:
         return added
@@ -463,6 +525,10 @@ def upsert_orders(orders):
                     o.get("updated_at"),
                 )
             )
+            cid = o.get("customer_user_id")
+            if cid:
+                execute("UPDATE orders SET customer_user_id=? WHERE id=?",
+                        (cid, o.get("id")))
             count += 1
         except Exception as exc:
             print(f"[db] upsert_order failed for {o.get('id')}: {exc}")
@@ -603,6 +669,40 @@ def upsert_referral_codes(rows):
             count += 1
         except Exception as exc:
             print(f"[db] upsert_referral_code failed: {exc}")
+    return count
+
+
+def upsert_customers(rows):
+    """Upsert restored customer accounts. Idempotent by id. Never overwrites
+    a local password_hash with empty."""
+    if not rows:
+        return 0
+    count = 0
+    for r in rows:
+        try:
+            cid = r.get("id")
+            email = (r.get("email") or "").strip().lower()
+            if not cid or not email:
+                continue
+            execute(
+                "INSERT INTO customers (id, email, password_hash, name, phone, country, city, "
+                "delivery_address, preferred_currency, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "email=excluded.email, "
+                "password_hash=COALESCE(NULLIF(excluded.password_hash,''), customers.password_hash), "
+                "name=excluded.name, phone=excluded.phone, country=excluded.country, "
+                "city=excluded.city, delivery_address=excluded.delivery_address, "
+                "preferred_currency=excluded.preferred_currency, "
+                "created_at=excluded.created_at, updated_at=excluded.updated_at",
+                (cid, email, r.get("password_hash") or "",
+                 r.get("name"), r.get("phone"), r.get("country"), r.get("city"),
+                 r.get("delivery_address"), r.get("preferred_currency") or "NGN",
+                 r.get("created_at"), r.get("updated_at")),
+            )
+            count += 1
+        except Exception as exc:
+            print(f"[db] upsert_customer failed for {r.get('id')}: {exc}")
     return count
 
 

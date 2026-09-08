@@ -269,14 +269,21 @@ def track_view():
 @api.get("/stock")
 def stock():
     rows = query("SELECT product_id, variant_key, variant_label, qty, low_threshold FROM variant_stock")
+    admin = bool(authmod.current_admin())
     out = {}
     for r in rows:
-        out.setdefault(r["product_id"], []).append({
+        item = {
             "variant": r["variant_key"], "label": r["variant_label"],
-            "qty": r["qty"], "lowThreshold": r["low_threshold"],
             "state": "out" if r["qty"] <= 0 else ("low" if r["qty"] <= r["low_threshold"] else "in"),
-        })
-    return jsonify(ok=True, stock=out, lowStockThreshold=Config.LOW_STOCK_THRESHOLD)
+        }
+        if admin:
+            item["qty"] = r["qty"]
+            item["lowThreshold"] = r["low_threshold"]
+        out.setdefault(r["product_id"], []).append(item)
+    body = {"ok": True, "stock": out}
+    if admin:
+        body["lowStockThreshold"] = Config.LOW_STOCK_THRESHOLD
+    return jsonify(body)
 
 @api.get("/activity")
 def activity():
@@ -825,6 +832,8 @@ def create_order():
             proof_url = candidate
 
     now = _utcnow()
+    import customers as customers_mod
+    owner_id = customers_mod.current_customer_id()
     order = {
         "id": oid,
         "at": sec.clean(d.get("at"), 40) or now,
@@ -857,6 +866,8 @@ def create_order():
         "source": order["source"], "status": "pending",
         "payload": order, "at": order["at"], "updated_at": now,
     }
+    if owner_id:
+        sb_row["customer_user_id"] = owner_id
 
     prod_source = bool(catalog_mod._prod_source())
     reserved = []
@@ -938,6 +949,11 @@ def create_order():
                 _sb_create_order(sb_row)
             except Exception as exc:
                 print(f"[supabase] order mirror skipped: {exc}")
+    if owner_id:
+        try:
+            execute("UPDATE orders SET customer_user_id=? WHERE id=?", (owner_id, oid))
+        except Exception:
+            pass
 
     # conversion tracking: a finished checkout is the purchase event
     vid, _is_new = analytics_mod.visitor_id()

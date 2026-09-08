@@ -44,3 +44,47 @@ alter table admin_reset_tokens add column if not exists consumed_at timestamptz;
 alter table admin_reset_tokens add column if not exists created_at  timestamptz not null default now();
 create index if not exists admin_reset_tokens_lookup on admin_reset_tokens(email, purpose, created_at desc);
 
+create table if not exists customers (
+  id text primary key,
+  email text not null unique,
+  password_hash text not null,
+  name text,
+  phone text,
+  country text,
+  city text,
+  delivery_address text,
+  preferred_currency text default 'NGN',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table customers add column if not exists email text;
+alter table customers add column if not exists password_hash text;
+alter table customers add column if not exists name text;
+alter table customers add column if not exists phone text;
+alter table customers add column if not exists country text;
+alter table customers add column if not exists city text;
+alter table customers add column if not exists delivery_address text;
+alter table customers add column if not exists preferred_currency text default 'NGN';
+alter table customers add column if not exists created_at timestamptz not null default now();
+alter table customers add column if not exists updated_at timestamptz not null default now();
+create index if not exists idx_customers_email on customers(email);
+
+create table if not exists customer_tokens (
+  id bigint generated always as identity primary key,
+  customer_id text,
+  email text not null,
+  purpose text not null,
+  token_hash text not null,
+  expires_at timestamptz not null,
+  consumed_at timestamptz,
+  created_at timestamptz not null default now()
+);
+alter table customer_tokens add column if not exists customer_id text;
+alter table customer_tokens add column if not exists email text;
+alter table customer_tokens add column if not exists purpose text;
+alter table customer_tokens add column if not exists token_hash text;
+alter table customer_tokens add column if not exists expires_at timestamptz;
+alter table customer_tokens add column if not exists consumed_at timestamptz;
+alter table customer_tokens add column if not exists created_at timestamptz not null default now();
+create index if not exists idx_customer_tokens_hash on customer_tokens(token_hash, purpose);
+

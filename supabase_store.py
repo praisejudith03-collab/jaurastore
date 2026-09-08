@@ -648,6 +648,83 @@ def create_order_strict(order):
         return False
 
 
+def save_customer(row):
+    """Upsert one customer account. No-op when unconfigured."""
+    c = client()
+    if c is None or not row:
+        return False
+    data = dict(row)
+    try:
+        c.table("customers").upsert(data).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] customer upsert failed: {exc}")
+        return False
+
+
+def load_customers(limit=2000):
+    """Customer rows, or [] when unconfigured. Never raises."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = (c.table("customers").select("*")
+               .order("updated_at", desc=True).limit(limit).execute())
+        return _res_data(res) or []
+    except Exception as exc:
+        print(f"[supabase] load_customers failed: {exc}")
+        return []
+
+
+def link_guest_orders(customer_id, email):
+    """Attach unowned orders that match email. No-op when unconfigured."""
+    c = client()
+    if c is None or not customer_id or not email:
+        return 0
+    try:
+        res = (c.table("orders").update({"customer_user_id": customer_id})
+               .eq("email", str(email).strip().lower())
+               .is_("customer_user_id", "null")
+               .execute())
+        data = _res_data(res)
+        return len(data) if data else 0
+    except Exception as exc:
+        print(f"[supabase] link_guest_orders failed: {exc}")
+        return 0
+
+
+def load_orders_for_customer(customer_id, limit=200):
+    """Orders owned by this customer id, or None when unconfigured."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("orders").select("*")
+               .eq("customer_user_id", customer_id)
+               .order("at", desc=True).limit(limit).execute())
+        return _res_data(res) or []
+    except Exception as exc:
+        print(f"[supabase] load_orders_for_customer failed: {exc}")
+        return None
+
+
+def load_order_for_customer(order_id, customer_id):
+    """One owned order, or None when missing/unconfigured."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("orders").select("*")
+               .eq("id", order_id)
+               .eq("customer_user_id", customer_id)
+               .limit(1).execute())
+        rows = _res_data(res)
+        return rows[0] if rows else None
+    except Exception as exc:
+        print(f"[supabase] load_order_for_customer failed: {exc}")
+        return None
+
+
 def update_order(order_id, status=None, payload=None):
     """Mirror an order status / payload change into Supabase."""
     c = client()
