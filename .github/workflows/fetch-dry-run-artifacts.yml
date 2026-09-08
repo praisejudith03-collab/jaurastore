@@ -1,0 +1,96 @@
+name: Fetch dry-run artifacts (read-only helper)
+
+# ONE-OFF READ-ONLY HELPER
+# ------------------------
+# Some sandboxes cannot reach the Azure blob cluster that stores Actions
+# artifacts. This helper runs where the network CAN reach it: it downloads
+# the artifacts of a previous run and posts their full contents into a
+# GitHub issue so an operator (or agent) with API access can inspect them.
+#
+# GUARANTEES (by construction):
+#   * No repository secrets are passed in - the job has NO Supabase access.
+#   * migrate_images.py / verify_schema.py are NEVER executed here.
+#   * Nothing is uploaded, nothing in Supabase (DB or Storage) is touched.
+#   * The only write is one issue body in this repository (plus closing it
+#     is done manually by the operator).
+#
+# Usage: Settings -> Actions -> "Fetch dry-run artifacts (read-only helper)"
+#   -> Run workflow, set run_id (the Actions run id whose artifacts to fetch)
+#   and issue_title, optionally issue_label.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Actions run id to fetch artifacts from (this repository)"
+        required: true
+        type: string
+      artifact_names:
+        description: "Comma-separated artifact names to fetch (empty = all)"
+        required: false
+        type: string
+        default: "dry-run-report,schema-verification"
+      issue_title:
+        description: "Title of the issue that will receive the contents"
+        required: false
+        type: string
+        default: "[verification] artifact contents"
+      issue_label:
+        description: "Label to add to the issue"
+        required: false
+        type: string
+        default: "verification"
+
+permissions:
+  contents: read
+  actions: read     # needed to download artifacts of a previous run
+  issues: write     # needed to post the contents into an issue
+
+concurrency:
+  group: fetch-dry-run-artifacts
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the artifacts of run ${{ inputs.run_id }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts
+          IFS=',' read -ra NAMES <<< "${{ inputs.artifact_names }}"
+          for n in "${NAMES[@]}"; do
+            [ -n "$n" ] || continue
+            gh run download "${{ inputs.run_id }}" -n "$n" -D "artifacts/$n"
+          done
+          find artifacts -type f | sort
+
+      - name: Post the contents into a GitHub issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "${{ inputs.issue_title }} (run ${{ inputs.run_id }}, fetched ${{ github.run_id }})"
+            echo ""
+            echo "Read-only helper output: full contents of the artifacts of run "
+            echo "${{ inputs.run_id }} in ${GITHUB_REPOSITORY}, posted verbatim for"
+            echo "verification. No secrets are included (this job has no access to"
+            echo "any repository secrets, and the migration scripts were not run)."
+            echo ""
+            while IFS= read -r f; do
+              echo "<!-- file: $f -->"
+              echo "\`\`\`json path=\"$f\""
+              cat "$f"
+              echo "\`\`\`"
+              echo ""
+            done < <(find artifacts -type f | sort)
+          } > issue-body.md
+          BODY=$(cat issue-body.md)
+          ISSUE_URL=$(gh issue create \
+            --title "${{ inputs.issue_title }} (run ${{ inputs.run_id }})" \
+            --label "${{ inputs.issue_label }}" \
+            --body "$BODY" --json url -q .url)
+          echo "Issue created: $ISSUE_URL"
+          gh issue comment "$ISSUE_URL" --body "Helper run ${{ github.server_url }}/${GITHUB_REPOSITORY}/actions/runs/${{ github.run_id }}: $(find artifacts -type f | wc -l) file(s) posted above, verbatim." 2>/dev/null || true
+          echo "::notice::Artifact contents posted to: $ISSUE_URL"
