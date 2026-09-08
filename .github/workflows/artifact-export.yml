@@ -67,11 +67,16 @@ jobs:
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Stash the exported files outside the worktree: the orphan checkout
+          # below resets it.
+          mkdir -p /tmp/artifacts-export
+          cp exported/* /tmp/artifacts-export/
           git checkout --orphan "$SCRATCH_BRANCH"
           git rm -rf --cached . >/dev/null 2>&1 || true
-          git clean -fd >/dev/null 2>&1 || true
-          mv exported/* .
+          git clean -fdx >/dev/null 2>&1 || true
+          cp /tmp/artifacts-export/* .
           git add SHA256SUMS.txt *.json
-          git commit -m "Artifacts of dry-run 34207418484 (read-only export for review)"
-          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${SOURCE_REPO}.git" "HEAD:refs/heads/${SCRATCH_BRANCH}"
+          git commit -m "Artifacts of dry-run 34207418484 (read-only export for review)" \
+                     -m "$(cat /tmp/artifacts-export/SHA256SUMS.txt)"
+          git push --force origin "HEAD:refs/heads/${SCRATCH_BRANCH}"
           echo "Pushed artifacts to branch $SCRATCH_BRANCH"
