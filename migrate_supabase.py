@@ -6,7 +6,7 @@ existing products into Supabase so it can become the source of truth:
 
     python3 migrate_supabase.py            # import seed.json + catalog.json
     python3 migrate_supabase.py --reset    # drop rows first (DANGEROUS)
-    python3 migrate_supabase.py --receipts # legacy receipts -> private bucket
+    python3 migrate_supabase.py --receipts # disabled legacy receipt migration
     python3 migrate_supabase.py --schema   # apply supabase_schema.sql (needs
                                            # SUPABASE_DB_URL + psql)
     python3 migrate_supabase.py --report out.json
@@ -21,20 +21,9 @@ Product import:
   --reset is passed; prices are preserved as-is.
 
 Receipt migration (--receipts):
-  Pre-cutover payment receipts were uploaded into the PUBLIC `uploads` bucket
-  (URLs like .../storage/v1/object/sign/uploads/proofs/...) or written to the
-  local uploads dir (/uploads/proofs/...). Those rows are re-pointed at a
-  fresh SIGNED URL in the PRIVATE `receipts` bucket:
-    - a public-bucket object is copied into the private bucket (the old
-      object is NEVER deleted - the report lists both URLs),
-    - a local file is uploaded into the private bucket (the local file is
-      NEVER deleted - the report lists its path),
-    - the receipts row's file_url is updated to the new signed URL,
-    - rows whose object is already private are skipped,
-    - rows whose object cannot be found are listed as errors, left untouched.
-  A JSON report (printed, and written when --report is given) records every
-  action so the cutover can be reviewed before the old bucket/disk copy is
-  cleaned up by hand.
+  Disabled: the old cross-bucket procedure is incompatible with the single
+  public uploads bucket. Existing receipt records and objects must be reviewed
+  before any explicit migration; this command makes no receipt/storage writes.
 
 Run the product import BEFORE switching on SUPABASE_URL /
 SUPABASE_SERVICE_ROLE_KEY so the shop has data to serve.
@@ -171,111 +160,10 @@ def _migrate_products(sb, reset):
     print("Now set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY to switch the shop over.")
 
 
-def _signed_url_from(c, private_bucket, path):
-    res = c.storage.from_(private_bucket).create_signed_url(path, 604800)
-    if isinstance(res, dict):
-        return res.get("signedUrl") or ""
-    return getattr(res, "signedUrl", "") or ""
-
-
 def _migrate_receipts(sb):
-    """Re-point legacy receipt rows at fresh signed URLs in the PRIVATE bucket."""
-    from supabase_store import (client, _bucket, _private_bucket,
-                                _bucket_from_url, _storage_path_from_url)
-    c = client()
-    if c is None:
-        print("Could not initialise the Supabase client.")
-        sys.exit(1)
-    public = _bucket()
-    private = _private_bucket()
-    try:
-        res = sb.table("receipts").select(
-            "id, order_id, file_url, proof_url, file_name").execute()
-    except Exception as exc:
-        print(f"receipts read failed: {exc}")
-        sys.exit(1)
-    rows = (res.data or []) if isinstance(res, dict) else getattr(res, "data", []) or []
-    report = {"private_bucket": private, "public_bucket": public,
-              "migrated": [], "skipped": [], "errors": [], "summary": {}}
-    for row in rows:
-        rid = str(row.get("id") or "")
-        old = str(row.get("file_url") or row.get("proof_url") or "").strip()
-        if not old:
-            report["skipped"].append({"id": rid, "reason": "no file_url"})
-            continue
-        if "/storage/v1/object/" in old:
-            b = _bucket_from_url(old)
-            path = _storage_path_from_url(old, b)
-        else:
-            b = ""
-            path = (old.removeprefix("/uploads/").strip("/")
-                    if old.startswith("/uploads/") else old.lstrip("/"))
-        if b == private:
-            # already points at the private bucket; leave it untouched
-            report["skipped"].append({"id": rid, "reason": "already private",
-                                      "url": old})
-            continue
-        if not path:
-            report["skipped"].append({"id": rid, "reason": "unrecognised url",
-                                      "url": old})
-            continue
-        # Only receipt objects (*proofs/*) get migrated
-        if path.lstrip("/").split("/", 1)[0].lower() not in ("proofs", "receipts"):
-            report["skipped"].append({"id": rid, "reason": "not a proof object",
-                                      "url": old})
-            continue
-        try:
-            try:
-                c.storage.from_(private).info(path)
-                note = "private copy exists; URL refreshed"
-            except Exception:
-                if b and b != private:
-                    # legacy object in the public bucket: copy, never delete
-                    data = c.storage.from_(b).download(path)
-                    c.storage.from_(private).upload(
-                        path, data, {"content-type": "application/octet-stream",
-                                     "upsert": "true"})
-                    note = ("copied to private bucket from "
-                            f"{b} (old object left in place)")
-                else:
-                    # local-disk legacy file: upload, never delete the file
-                    import storage as storage_mod
-                    root = storage_mod.local_root()
-                    full = os.path.abspath(os.path.join(
-                        root, path.replace("/", os.sep)))
-                    if not full.startswith(root + os.sep) or not os.path.isfile(full):
-                        raise FileNotFoundError(f"local file missing: {full}")
-                    with open(full, "rb") as fh:
-                        data = fh.read()
-                    c.storage.from_(private).upload(
-                        path, data, {"content-type": "application/octet-stream",
-                                     "upsert": "true"})
-                    note = f"uploaded from local disk ({full}; file left in place)"
-            signed = _signed_url_from(c, private, path)
-            if not signed:
-                raise RuntimeError("no signed URL returned")
-            sb.table("receipts").update({"file_url": signed}).eq("id", rid).execute()
-            report["migrated"].append({
-                "id": rid, "order_id": row.get("order_id") or "",
-                "object": path, "from": old, "to": signed, "note": note})
-        except Exception as exc:
-            report["errors"].append({"id": rid, "url": old,
-                                     "error": f"{exc.__class__.__name__}: {exc}"})
-    report["summary"] = {
-        "total": len(rows),
-        "migrated": len(report["migrated"]),
-        "skipped": len(report["skipped"]),
-        "errors": len(report["errors"]),
-    }
-    print(f"\nReceipt migration: {report['summary']['migrated']} migrated, "
-          f"{report['summary']['skipped']} skipped, "
-          f"{report['summary']['errors']} errors "
-          f"({report['summary']['total']} rows).")
-    for m in report["migrated"]:
-        print(f"  [migrated] {m['id']} {m['object']} -> {m['to']}")
-    for e in report["errors"]:
-        print(f"  [error]    {e['id']} {e['url']}: {e['error']}")
-    _write_report(report)
+    """Fail safely instead of running the obsolete cross-bucket migration."""
+    raise SystemExit("Receipt migration is disabled under the uploads-only policy. "
+                     "Review existing objects and records before planning a migration.")
 
 
 def _apply_schema():

@@ -739,62 +739,62 @@ def delete_receipt_strict(receipt_id=None, order_id=None, file_url=""):
 
 # ------------------------------------------------------------------ orders
 def _bucket():
-    """Public Storage bucket the uploaded files live in (see .env.example)."""
-    return os.environ.get("SUPABASE_BUCKET", "uploads").strip() or "uploads"
-
-
-def _private_bucket():
-    """Private Storage bucket for payment receipts / proofs (never public)."""
-    return os.environ.get("SUPABASE_PRIVATE_BUCKET", "receipts").strip() or "receipts"
+    """The sole supported Storage bucket (environment overrides are ignored)."""
+    return "uploads"
 
 
 _OBJECT_URL_RE = re.compile(
-    r"/storage/v1/object/(?:public|sign)/([^/]+)/(.+)$")
+    r"^/storage/v1/object/(?:public|sign)/([^/]+)/(.+)$")
+
+
+def _storage_url_parts(url):
+    """Validate the configured project origin before trusting an object URL."""
+    try:
+        base = urllib.parse.urlsplit((Config.SUPABASE_URL or "").strip())
+        parsed = urllib.parse.urlsplit((url or "").strip())
+        if (base.scheme not in ("http", "https") or not base.hostname
+                or base.username or base.password
+                or parsed.username or parsed.password
+                or (parsed.scheme, parsed.hostname, parsed.port) !=
+                   (base.scheme, base.hostname, base.port)):
+            return None
+        return _OBJECT_URL_RE.fullmatch(parsed.path)
+    except (ValueError, TypeError):
+        return None
 
 
 def _bucket_from_url(url):
-    """The bucket named in one of our storage URLs, or '' when foreign.
-
-    Receipts live in the PRIVATE ``receipts`` bucket (signed URLs), public
-    assets in the ``uploads`` bucket - so every helper must know which one a
-    URL points at before it signs, removes or rewrites it.
-    """
-    m = _OBJECT_URL_RE.search((url or "").strip())
-    if not m:
-        return ""
-    name = m.group(1)
-    return name if name in (_bucket(), _private_bucket()) else ""
+    """Return uploads only for this project's supported Storage URLs."""
+    m = _storage_url_parts(url)
+    return _bucket() if m and m.group(1) == _bucket() else ""
 
 
 def _storage_path_from_url(url, bucket=None):
-    """The bucket-relative object path inside one of our URLs, or ''.
+    """Resolve our object URL or legacy uploads path; reject foreign origins.
 
-    Accepts every URL shape the app can hold: a public object URL
-    (…/storage/v1/object/public/<bucket>/<path>), a signed URL
-    (…/storage/v1/object/sign/<bucket>/<path>?token=…), or a bare path such
-    as "/uploads/receipts/abc.jpg". A foreign URL (someone else's host)
-    yields '' - it is left alone. Works for both the public `uploads`
-    bucket and the private `receipts` bucket.
+    Missing SUPABASE_URL fails closed, including for relative paths.
     """
-    url = (url or "").strip()
-    if not url:
+    if not Config.SUPABASE_URL or bucket not in (None, "", _bucket()):
         return ""
-    m = _OBJECT_URL_RE.search(url)
-    if m:
-        path = m.group(2)
-        if not path:
+    raw = (url or "").strip()
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+    except ValueError:
+        return ""
+    if parsed.scheme or parsed.netloc:
+        m = _storage_url_parts(raw)
+        if not m or m.group(1) != _bucket():
             return ""
-        if m.group(1) not in (_bucket(), _private_bucket()):
-            return ""                     # somebody else's bucket/host
-    elif url.startswith("http"):
-        return ""                         # not ours; nothing to do
+        path = m.group(2)
     else:
-        path = url.lstrip("/")
+        path = parsed.path.lstrip("/")
         if path.startswith("uploads/"):
             path = path[len("uploads/"):]
-    path = path.split("?", 1)[0].split("#", 1)[0]
-    if urllib and urllib.parse:
-        path = urllib.parse.unquote(path)
+        if path.startswith("storage/"):
+            return ""
+    path = urllib.parse.unquote(path)
+    if not path or any(ord(c) < 32 for c in path) or "\\" in path or any(p in ("", ".", "..") for p in path.split("/")):
+        return ""
     return path
 
 

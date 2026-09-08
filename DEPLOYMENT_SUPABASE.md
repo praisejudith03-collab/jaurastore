@@ -22,7 +22,10 @@ In the Supabase SQL editor run the complete `supabase_schema.sql`
 * `orders`, `receipts` (with `file_url`), `admin_reset_tokens` (hashed
   tokens), referral/coupon tables
 * `reserve_product_stock` / `release_product_stock` RPCs (atomic stock)
-* Storage buckets: `uploads` (public) and `receipts` (PRIVATE) + policies
+* Exactly one provisioned Storage bucket: `uploads` (public) + policies.
+  The `receipts` database table is preserved. Existing buckets are not deleted.
+
+For mobile, follow [the ordered section guide](schema_sections/README.md).
 
 Alternatively, from the server:
 
@@ -42,21 +45,18 @@ Every row is written with the **canonical** `image_url`/`images`/
 preserved exactly as stored. Existing Supabase rows are never deleted
 unless `--reset`.
 
-## 3. Migrate legacy receipts into the PRIVATE bucket
+## 3. Receipt storage (no migration yet)
 
-```bash
-python3 migrate_supabase.py --receipts --report receipts_migration.json
-```
+New proofs use `uploads/proofs/...` with 128-bit random path tokens and signed
+URLs in the admin view. **The bucket is public**: anyone who knows an object's
+public URL can read it, even after a signed URL expires. This is not private
+storage. Do not publish receipt URLs or include them in public catalog data.
 
-* Copies public-bucket objects (`.../sign/uploads/proofs/...`) into the
-  private `receipts` bucket — the old object is **never deleted**.
-* Uploads local-disk files (`/uploads/proofs/...`) into the private bucket —
-  the local file is **never deleted**.
-* Re-points `receipts.file_url` at a fresh signed URL and writes a JSON
-  report (migrated / skipped / errors) for review.
-* Run BEFORE switching `UPLOAD_MODE=supabase` in production. Until then,
-  `storage.signed_url_for()` keeps admins able to open legacy receipts from
-  their original bucket (see `storage.py`), so there is no broken window.
+The obsolete `--receipts` cross-bucket migration is disabled. Existing objects
+in an old `receipts` bucket are not copied or deleted; their old URLs are left
+unchanged and cannot be refreshed/deleted by the uploads-only helpers. Review
+these records separately before deployment if that bucket contains real proofs.
+Do not delete that bucket or run the image migration as part of schema setup.
 
 ## 4. Render environment
 
@@ -66,7 +66,6 @@ Set:
 SUPABASE_URL=https://<project>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<service-role key>      # server-side only
 SUPABASE_BUCKET=uploads
-SUPABASE_PRIVATE_BUCKET=receipts
 UPLOAD_MODE=supabase
 FLASK_ENV=production
 SECRET_KEY=<random>
@@ -113,7 +112,7 @@ report's rows are confirmed migrated and the smoke test passed.
 * Product save/delete (row comes back re-queried from Supabase, stock number
   never shown to customers — public catalog only emits `stock_status`)
 * Checkout: tampered browser price is ignored; qty over stock is rejected;
-  receipt upload lands in the private bucket and the admin can View/Delete
+  receipt upload lands under `uploads/proofs/` and the admin can View/Delete
 * Password reset email → 6-digit code → new password (token row persisted in
   `admin_reset_tokens`)
 * Referral: complete an order on the milestone and confirm the reward coupon
@@ -156,6 +155,6 @@ static/test flows. For a real rollback:
 
 ## 10. Branch / PR
 
-Work on `arena/01a07876-jaurastore`, push that branch, and open a pull
+Work on `arena/01a07fac-jaurastore`, push that branch, and open a pull
 request targeting `main`. Do not push directly to `main`. Render deploys the
 merge commit; run the verification checklist above after deploy.

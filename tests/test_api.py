@@ -385,7 +385,9 @@ def test_receipts_are_private_to_the_admin(client):
     post_proof(client, PDF, "r.pdf")
     assert client.get("/api/admin/payment-proofs").status_code in (401, 403)
     login(client)
-    body = client.get("/api/admin/payment-proofs").get_json()
+    response = client.get("/api/admin/payment-proofs")
+    assert response.headers["Cache-Control"] == "private, no-store"
+    body = response.get_json()
     assert body["proofs"] and body["proofs"][0]["order_id"] == "JA-TEST01"
 
 
