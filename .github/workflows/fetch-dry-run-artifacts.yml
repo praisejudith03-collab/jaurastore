@@ -8,10 +8,10 @@ name: Fetch dry-run artifacts (read-only helper)
 # readable from API-only contexts.
 #
 # TRANSPORT: GitHub stores at most 10 check annotations per check run, and
-# each annotation message is capped at 1024 chars. So each matrix leg (= one
-# job = one check run) emits up to 10 chunks of 982 base64 chars = one
-# 9820-char b64 segment. Legs cover consecutive segments of each artifact's
-# base64 encoding; reassemble by concatenating, in (leg, chunk) order, then
+# each annotation message is capped at 1024 chars. So each job (= one check
+# run) emits up to 10 chunks of 982 base64 chars = one 9820-char b64
+# segment. Jobs cover consecutive segments of each artifact's base64
+# encoding; reassemble by concatenating, in (job, chunk) order, then
 # base64-decode.
 #
 # GUARANTEES (by construction):
@@ -44,7 +44,7 @@ concurrency:
 
 env:
   TARGET_RUN_ID: ${{ inputs.run_id || '34212824430' }}
-  SEG_W: "9820"          # b64 chars per leg (10 chunks x 982)
+  SEG_W: "9820"          # b64 chars per job (10 chunks x 982)
   CHUNK_W: "982"         # b64 chars per annotation chunk
 
 jobs:
@@ -59,12 +59,13 @@ jobs:
           - { art: dry-run-report,       seg: 2 }
           - { art: schema-verification,  seg: 0 }
           - { art: schema-verification,  seg: 1 }
+    env:
+      ART: ${{ matrix.art }}
+      SEG: "${{ matrix.seg }}"
     steps:
-      - name: Download artifact ${{ matrix.art }} and emit segment ${{ matrix.seg }}
+      - name: Fetch segment and emit b64 chunks
         env:
           GH_TOKEN: ${{ github.token }}
-          ART: ${{ matrix.art }}
-          SEG: ${{ matrix.seg }}
         run: |
           mkdir -p work
           ART_IDS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" \
@@ -82,7 +83,6 @@ jobs:
           mkdir -p "work/$ART"
           unzip -o -q "work/$ART.zip" -d "work/$ART"
           echo "files:"; find "work/$ART" -type f | sort
-          # Encode the (single) file's bytes and emit this leg's b64 segment.
           python3 - "$ART" <<'PY'
 import base64, glob, os, sys
 art = sys.argv[1]
