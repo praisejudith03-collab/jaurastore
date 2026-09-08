@@ -1,5 +1,6 @@
 """SMTP failure categories + secret-free logging for admin reset mail."""
 import os, smtplib, ssl, sys
+from email.message import EmailMessage
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DB_PATH", "/tmp/jaura_test.db")
@@ -21,6 +22,8 @@ from _pw import PW  # noqa: E402
 from mail_sink import MailSink  # noqa: E402
 
 EMAIL = "jaurastore@gmail.com"
+ALLOWED_LOG_KEYS = (
+    "mode=", "host=", "port=", "user_configured=", "password_configured=", "category=")
 
 
 @pytest.fixture(scope="module")
@@ -41,98 +44,208 @@ def client(app):
         yield c
 
 
-def test_classify_gmail_535_is_app_password(monkeypatch):
+def _gmail(monkeypatch, port=587, password="abcdefghijklmnop"):
     monkeypatch.setattr(Config, "MAIL_MODE", "smtp")
+    monkeypatch.setattr(Config, "MAIL_FROM", "other@example.com")
     monkeypatch.setattr(Config, "SMTP_HOST", "smtp.gmail.com")
+    monkeypatch.setattr(Config, "SMTP_PORT", port)
+    monkeypatch.setattr(Config, "SMTP_USER", "jaurastore@gmail.com")
+    monkeypatch.setattr(Config, "SMTP_PASS", password)
+
+
+def test_classify_gmail_535_is_smtp_authentication(monkeypatch):
+    _gmail(monkeypatch)
     exc = smtplib.SMTPAuthenticationError(
         535, b"5.7.8 Username and Password not accepted. BadCredentials")
-    assert emailer.classify_smtp_failure(exc) == emailer.GMAIL_APP_PASSWORD_REJECTED
+    assert emailer.classify_smtp_failure(exc) == "smtp_authentication"
 
 
-def test_classify_gmail_534_is_app_password(monkeypatch):
-    monkeypatch.setattr(Config, "MAIL_MODE", "smtp")
-    monkeypatch.setattr(Config, "SMTP_HOST", "smtp.gmail.com")
+def test_classify_gmail_534_is_smtp_authentication(monkeypatch):
+    _gmail(monkeypatch)
     exc = smtplib.SMTPAuthenticationError(
         534, b"5.7.9 Application-specific password required")
-    assert emailer.classify_smtp_failure(exc) == emailer.GMAIL_APP_PASSWORD_REJECTED
+    assert emailer.classify_smtp_failure(exc) == "smtp_authentication"
 
 
 def test_classify_non_gmail_auth(monkeypatch):
     monkeypatch.setattr(Config, "MAIL_MODE", "smtp")
     monkeypatch.setattr(Config, "SMTP_HOST", "mail.example.com")
     exc = smtplib.SMTPAuthenticationError(535, b"auth failed")
-    assert emailer.classify_smtp_failure(exc) == emailer.SMTP_AUTH_FAILURE
+    assert emailer.classify_smtp_failure(exc) == "smtp_authentication"
 
 
-def test_classify_tls_timeout(monkeypatch):
-    monkeypatch.setattr(Config, "MAIL_MODE", "smtp")
-    monkeypatch.setattr(Config, "SMTP_HOST", "smtp.gmail.com")
-    assert emailer.classify_smtp_failure(socket_timeout()) == emailer.SMTP_TLS_FAILURE
-    assert emailer.classify_smtp_failure(ssl.SSLError("TLS handshake")) == emailer.SMTP_TLS_FAILURE
-
-
-def socket_timeout():
-    return TimeoutError("timed out")
+def test_classify_tls_and_connection(monkeypatch):
+    _gmail(monkeypatch)
+    assert emailer.classify_smtp_failure(ssl.SSLError("TLS handshake")) == "smtp_tls"
+    assert emailer.classify_smtp_failure(TimeoutError("timed out")) == "smtp_connection"
+    assert emailer.classify_smtp_failure(
+        smtplib.SMTPConnectError(421, b"connection refused")) == "smtp_connection"
 
 
 def test_classify_sender_and_recipient(monkeypatch):
-    monkeypatch.setattr(Config, "MAIL_MODE", "smtp")
-    monkeypatch.setattr(Config, "SMTP_HOST", "smtp.gmail.com")
+    _gmail(monkeypatch)
     sender = smtplib.SMTPSenderRefused(550, b"5.7.1 not allowed to send", "other@x.com")
-    assert emailer.classify_smtp_failure(sender) == emailer.SENDER_MISMATCH
+    assert emailer.classify_smtp_failure(sender) == "smtp_sender"
     rcpt = smtplib.SMTPRecipientsRefused({"x@y.com": (550, b"5.1.1 mailbox unavailable")})
-    assert emailer.classify_smtp_failure(rcpt) == emailer.RECIPIENT_MISMATCH
+    assert emailer.classify_smtp_failure(rcpt) == "smtp_recipient"
 
 
 def test_classify_mail_mode_not_smtp(monkeypatch):
     monkeypatch.setattr(Config, "MAIL_MODE", "none")
-    assert emailer.classify_smtp_failure(info="whatever") == emailer.MAIL_MODE_NOT_SMTP
+    assert emailer.classify_smtp_failure(info="whatever") == "configuration"
 
 
-def test_log_mail_event_never_prints_secrets(capsys, monkeypatch):
-    monkeypatch.setattr(Config, "MAIL_MODE", "smtp")
-    monkeypatch.setattr(Config, "SMTP_HOST", "smtp.gmail.com")
-    monkeypatch.setattr(Config, "SMTP_PORT", 587)
-    monkeypatch.setattr(Config, "SMTP_USER", "jaurastore@gmail.com")
-    monkeypatch.setattr(Config, "SMTP_PASS", "abcd efgh ijkl mnop")
+def test_classify_resend_is_provider(monkeypatch):
+    monkeypatch.setattr(Config, "MAIL_MODE", "resend")
+    assert emailer.classify_smtp_failure(info="resend error: 401") == "smtp_provider"
+
+
+def test_log_mail_event_only_safe_fields(capsys, monkeypatch):
+    _gmail(monkeypatch, password="abcd efgh ijkl mnop")
     monkeypatch.setattr(Config, "RESEND_API_KEY", "re_secret_value")
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "service-role-secret")
     emailer.log_mail_event(
-        emailer.GMAIL_APP_PASSWORD_REJECTED,
+        "smtp_authentication",
         "password=abcd efgh ijkl mnop token=ABCDEF code: 123456 "
         "re_secret_value service-role-secret")
-    out = capsys.readouterr().out
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("[mail] ")
     assert "mode=smtp" in out
     assert "host=smtp.gmail.com" in out
     assert "port=587" in out
     assert "user_configured=yes" in out
     assert "password_configured=yes" in out
-    assert emailer.GMAIL_APP_PASSWORD_REJECTED in out
-    assert "abcd" not in out
-    assert "ijkl" not in out
-    assert "ABCDEF" not in out
-    assert "123456" not in out
-    assert "re_secret_value" not in out
-    assert "service-role-secret" not in out
-    assert "jaurastore@gmail.com" not in out.split("category=")[0] or True
-    # address may appear only if someone put it in extra; we didn't.
-    assert "SMTP_PASS" not in out
+    assert "category=smtp_authentication" in out
+    for banned in ("abcd", "ijkl", "ABCDEF", "123456", "re_secret_value",
+                   "service-role-secret", "SMTP_PASS", "extra=", "token=",
+                   "password=", "jaurastore@gmail.com"):
+        assert banned not in out, banned
+    # nothing except the allowed keys
+    assert " extra=" not in out
 
 
-def test_gmail_app_password_spaces_are_stripped(monkeypatch):
+def test_gmail_app_password_spaces_and_quotes_are_stripped(monkeypatch):
     monkeypatch.setattr(Config, "SMTP_HOST", "smtp.gmail.com")
     monkeypatch.setattr(Config, "SMTP_PASS", '  "abcd efgh ijkl mnop"  ')
     assert emailer._smtp_pass() == "abcdefghijklmnop"
+    monkeypatch.setattr(Config, "SMTP_PASS", "'wxyz abcd efgh ijkl'")
+    assert emailer._smtp_pass() == "wxyzabcdefghijkl"
+
+
+def test_mail_from_aligns_with_smtp_user(monkeypatch):
+    _gmail(monkeypatch)
+    assert emailer._gmail_from_header() == "jaurastore@gmail.com"
+    monkeypatch.setattr(Config, "MAIL_FROM", "Jaura Store <jaurastore@gmail.com>")
+    assert emailer._email_addr(emailer._gmail_from_header()).lower() == "jaurastore@gmail.com"
+
+
+def test_port_587_starttls_before_login(monkeypatch):
+    seq = []
+
+    class Fake:
+        def __init__(self, *a, **k):
+            self._jaura_tls = False
+
+        def connect(self, *a, **k):
+            seq.append("connect")
+
+        def ehlo(self):
+            seq.append("ehlo")
+
+        def starttls(self, context=None):
+            seq.append("starttls")
+            self._jaura_tls = True
+
+        def login(self, user, password):
+            seq.append("login")
+            assert "starttls" in seq, "AUTH on 587 without STARTTLS"
+            assert seq.index("starttls") < seq.index("login")
+            assert password == "abcdefghijklmnop"
+
+        def send_message(self, msg, from_addr=None, to_addrs=None):
+            seq.append("send")
+            assert from_addr == "jaurastore@gmail.com"
+
+        def quit(self):
+            seq.append("quit")
+
+        def close(self):
+            pass
+
+    _gmail(monkeypatch, password=' "abcd efgh ijkl mnop" ')
+    monkeypatch.setattr(emailer, "_SMTP4", Fake)
+    monkeypatch.setattr(emailer, "_SMTP4_SSL", Fake)
+    msg = EmailMessage()
+    msg["From"] = emailer._gmail_from_header()
+    msg["To"] = EMAIL
+    msg.set_content("x")
+    ok, info = emailer._deliver_smtp(msg, [EMAIL])
+    assert ok is True, info
+    assert seq.index("starttls") < seq.index("login")
+
+
+def test_port_465_uses_ssl_not_starttls(monkeypatch):
+    seen = []
+
+    class SSLFake:
+        def __init__(self, host, port, timeout=None, context=None):
+            seen.append(("ssl", host, int(port), context is not None))
+            self._jaura_tls = True
+
+        def ehlo(self):
+            seen.append("ehlo")
+
+        def login(self, user, password):
+            seen.append("login")
+
+        def send_message(self, *a, **k):
+            seen.append("send")
+
+        def quit(self):
+            seen.append("quit")
+
+        def close(self):
+            pass
+
+    class PlainFake:
+        def __init__(self, *a, **k):
+            raise AssertionError("port 465 must not use plain SMTP")
+
+    _gmail(monkeypatch, port=465)
+    monkeypatch.setattr(emailer, "_SMTP4_SSL", SSLFake)
+    monkeypatch.setattr(emailer, "_SMTP4", PlainFake)
+    msg = EmailMessage()
+    msg["From"] = "jaurastore@gmail.com"
+    msg["To"] = EMAIL
+    msg.set_content("x")
+    ok, info = emailer._deliver_smtp(msg, [EMAIL])
+    assert ok is True, info
+    assert seen[0][0] == "ssl" and seen[0][2] == 465
+    assert "login" in seen and "send" in seen
+
+
+def test_gmail_587_falls_back_to_465_ssl(monkeypatch):
+    attempts = []
+
+    def fake_open(host, port, use_ssl, timeout=12):
+        attempts.append((int(port), bool(use_ssl)))
+        raise smtplib.SMTPConnectError(421, b"no")
+
+    _gmail(monkeypatch, port=587)
+    monkeypatch.setattr(emailer, "_open_smtp", fake_open)
+    msg = EmailMessage()
+    msg["To"] = EMAIL
+    msg.set_content("x")
+    ok, info = emailer._deliver_smtp(msg, [EMAIL])
+    assert ok is False
+    assert attempts[0] == (587, False)
+    assert (465, True) in attempts
 
 
 def test_otp_request_logs_category_on_auth_fail(client, monkeypatch, capsys):
     execute("DELETE FROM otp_codes")
     execute("DELETE FROM rate_limits")
-    monkeypatch.setattr(Config, "MAIL_MODE", "smtp")
-    monkeypatch.setattr(Config, "SMTP_HOST", "smtp.gmail.com")
-    monkeypatch.setattr(Config, "SMTP_PORT", 587)
-    monkeypatch.setattr(Config, "SMTP_USER", "jaurastore@gmail.com")
-    monkeypatch.setattr(Config, "SMTP_PASS", "not-a-real-app-password")
+    _gmail(monkeypatch, password="not-a-real-app-password")
 
     def boom(*_a, **_k):
         raise smtplib.SMTPAuthenticationError(
@@ -147,9 +260,11 @@ def test_otp_request_logs_category_on_auth_fail(client, monkeypatch, capsys):
     assert body["ok"] is False
     assert "not-a-real-app-password" not in blob
     assert "SMTP_PASS" not in blob
-    assert emailer.GMAIL_APP_PASSWORD_REJECTED in out
+    assert "category=smtp_authentication" in out
     assert "user_configured=yes" in out
     assert "password_configured=yes" in out
+    assert "5.7.8" not in out
+    assert "BadCredentials" not in out
 
 
 def test_otp_request_db_failure_category(client, monkeypatch, capsys):
@@ -162,8 +277,9 @@ def test_otp_request_db_failure_category(client, monkeypatch, capsys):
     r = client.post("/api/admin/otp/request", json={"email": EMAIL})
     assert r.status_code == 502
     out = capsys.readouterr().out
-    assert emailer.RESET_TOKEN_DB_FAILURE in out
+    assert "category=configuration" in out
     assert "supabase unreachable" not in r.get_data(as_text=True)
+    assert "supabase unreachable" not in out
 
 
 def test_otp_still_sends_through_local_sink(client, monkeypatch):
@@ -181,8 +297,6 @@ def test_otp_still_sends_through_local_sink(client, monkeypatch):
         assert sink.messages, "reset mail never reached SMTP"
         raw = sink.messages[0]["data"].decode("utf-8", "replace")
         assert "verification code" in raw.lower()
-        # the 6-digit code is in the message (that is the point) but tests
-        # must not print it; just check it is a real code we can verify.
         import re
         code = re.search(r"\b(\d{6})\b", raw).group(1)
         v = client.post("/api/admin/otp/verify", json={"email": EMAIL, "code": code})
@@ -192,3 +306,9 @@ def test_otp_still_sends_through_local_sink(client, monkeypatch):
         assert z.status_code == 200, z.data
         assert authmod.verify_login(EMAIL, newpw) is True
         authmod.set_shared_password(PW)
+
+
+def test_bootstrap_password_not_applied_by_mailer(client):
+    from config import Config as C
+    assert C.BOOTSTRAP_ADMIN_PASSWORD == ""
+    assert authmod.verify_login(EMAIL, PW) is True

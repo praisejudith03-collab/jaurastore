@@ -1,5 +1,5 @@
 """Customer accounts: register/login, ownership, claim tokens, no leaks."""
-import json, os, re, sys
+import json, os, re, sys, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DB_PATH", "/tmp/jaura_test.db")
@@ -20,6 +20,15 @@ from _pw import PW  # noqa: E402
 
 EMAIL = "jaurastore@gmail.com"
 SHOP_PW = "Shopper1x"
+_RUN = uuid.uuid4().hex[:10]
+
+
+def _mail(tag):
+    return f"acct-{tag}-{_RUN}@example.com"
+
+
+def _oid(n):
+    return f"JA-{_RUN[:4].upper()}{n:02d}"
 
 
 @pytest.fixture(scope="module")
@@ -35,6 +44,11 @@ def client(app):
     authmod.ensure_seed_admins()
     authmod.set_password(EMAIL, PW)
     execute("DELETE FROM rate_limits")
+    try:
+        execute("DELETE FROM customer_tokens")
+        execute("DELETE FROM customers")
+    except Exception:
+        pass
     with app.test_client() as c:
         yield c
 
@@ -86,7 +100,7 @@ def test_account_spa_routes_serve_account_html(client):
 
 
 def test_register_login_logout_and_session(client):
-    email = "acct-reg@example.com"
+    email = _mail("reg")
     r = register(client, email, name="Ada Shopper", phone="+2348011111111")
     assert r.status_code == 201, r.data
     body = r.get_json()
@@ -108,18 +122,18 @@ def test_register_login_logout_and_session(client):
 
 def test_register_needs_csrf_and_strong_password(client):
     assert client.post("/api/account/register", json={
-        "email": "acct-weak@example.com", "password": "Shopper1x",
+        "email": _mail("weak"), "password": "Shopper1x",
     }).status_code == 403
-    r = register(client, "acct-weak@example.com", password="short")
+    r = register(client, _mail("weak"), password="short")
     assert r.status_code == 400
-    r = register(client, "acct-dup@example.com")
+    r = register(client, _mail("dup"))
     assert r.status_code == 201
-    r = register(client, "acct-dup@example.com")
+    r = register(client, _mail("dup"))
     assert r.status_code == 409
 
 
 def test_profile_and_password_change(client):
-    email = "acct-prof@example.com"
+    email = _mail("prof")
     assert register(client, email, name="Old Name").status_code == 201
     r = client.patch("/api/account/profile", headers=H(client), json={
         "name": "New Name", "phone": "+22990000000", "country": "Benin",
@@ -143,7 +157,7 @@ def test_profile_and_password_change(client):
 
 
 def test_forgot_reset_does_not_enumerate_and_is_one_use(client, monkeypatch):
-    email = "acct-reset@example.com"
+    email = _mail("reset")
     assert register(client, email).status_code == 201
     client.post("/api/account/logout")
     sent = []
@@ -176,8 +190,9 @@ def test_forgot_reset_does_not_enumerate_and_is_one_use(client, monkeypatch):
 
 
 def test_guest_checkout_is_not_listed_until_claim(client, monkeypatch):
-    email = "acct-claim@example.com"
-    place_order(client, "JA-ACC01", email)
+    email = _mail("claim")
+    oid = _oid(1)
+    place_order(client, oid, email)
     assert register(client, email, name="Claim Me").status_code == 201
     listed = client.get("/api/account/orders").get_json()["orders"]
     assert listed == []
@@ -194,54 +209,56 @@ def test_guest_checkout_is_not_listed_until_claim(client, monkeypatch):
     ok = client.post("/api/account/claim", headers=H(client), json={"token": token})
     assert ok.status_code == 200 and ok.get_json()["linked"] >= 1
     ids = {o["id"] for o in client.get("/api/account/orders").get_json()["orders"]}
-    assert "JA-ACC01" in ids
+    assert oid in ids
     # one-use
     again = client.post("/api/account/claim", headers=H(client), json={"token": token})
     assert again.status_code == 400
 
 
 def test_signed_in_checkout_owns_order_even_if_email_differs(client):
-    email = "acct-owner@example.com"
+    email = _mail("owner")
     assert register(client, email, name="Owner").status_code == 201
-    place_order(client, "JA-ACC02", "other-checkout@example.com", name="Someone Else")
-    row = one("SELECT customer_user_id, email FROM orders WHERE id='JA-ACC02'")
+    oid2, oid3 = _oid(2), _oid(3)
+    place_order(client, oid2, "other-checkout@example.com", name="Someone Else")
+    row = one("SELECT customer_user_id, email FROM orders WHERE id=?", (oid2,))
     assert row["email"] == "other-checkout@example.com"
     assert row["customer_user_id"]
     ids = {o["id"] for o in client.get("/api/account/orders").get_json()["orders"]}
-    assert "JA-ACC02" in ids
+    assert oid2 in ids
     guest = appmod.create_app().test_client()
     execute("DELETE FROM rate_limits WHERE action='order'")
-    place_order(guest, "JA-ACC03", email)
-    row = one("SELECT customer_user_id FROM orders WHERE id='JA-ACC03'")
+    place_order(guest, oid3, email)
+    row = one("SELECT customer_user_id FROM orders WHERE id=?", (oid3,))
     assert not row["customer_user_id"]
 
 
 def test_owned_miss_is_404_not_403_and_no_receipt_leak(client):
-    a = "acct-a@example.com"
-    b = "acct-b@example.com"
+    a = _mail("a")
+    b = _mail("b")
+    oid4 = _oid(4)
     assert register(client, a).status_code == 201
-    place_order(client, "JA-ACC04", a)
+    place_order(client, oid4, a)
     execute("UPDATE orders SET payload=? WHERE id=?",
-            (json.dumps({"id": "JA-ACC04", "proofUrl": "/uploads/proofs/secret.jpg",
+            (json.dumps({"id": oid4, "proofUrl": "/uploads/proofs/secret.jpg",
                          "items": [{"name": "Bag", "qty": 1, "price": 100}],
-                         "customer": {"email": a}}), "JA-ACC04"))
-    mine = client.get("/api/account/orders/JA-ACC04").get_json()["order"]
+                         "customer": {"email": a}}), oid4))
+    mine = client.get(f"/api/account/orders/{oid4}").get_json()["order"]
     blob = json.dumps(mine)
     assert "proof" not in blob.lower()
     assert "secret.jpg" not in blob
     assert a not in blob
-    assert mine["id"] == "JA-ACC04"
+    assert mine["id"] == oid4
     client.post("/api/account/logout")
     assert register(client, b).status_code == 201
-    r = client.get("/api/account/orders/JA-ACC04")
+    r = client.get(f"/api/account/orders/{oid4}")
     assert r.status_code == 404
-    pub = client.get("/api/orders/JA-ACC04").get_json()
+    pub = client.get(f"/api/orders/{oid4}").get_json()
     assert "email" not in json.dumps(pub)
 
 
 def test_login_rate_limit(client):
     execute("DELETE FROM rate_limits")
-    email = "acct-lock@example.com"
+    email = _mail("lock")
     assert register(client, email).status_code == 201
     client.post("/api/account/logout")
     codes = [login_cust(client, email, "BadPass" + str(i)).status_code for i in range(9)]

@@ -4,15 +4,23 @@ from urllib.parse import quote
 from email.message import EmailMessage
 from config import Config
 
-# Failure labels the admin-reset path logs to Render. Values are the exact
-# categories the operator asked for — never a password, token, or key.
-MAIL_MODE_NOT_SMTP = "MAIL_MODE is not smtp"
-SMTP_AUTH_FAILURE = "SMTP authentication failure"
-GMAIL_APP_PASSWORD_REJECTED = "Gmail App Password rejected"
-SMTP_TLS_FAILURE = "SMTP connection/TLS failure"
-SENDER_MISMATCH = "sender mismatch"
-RECIPIENT_MISMATCH = "recipient mismatch"
-RESET_TOKEN_DB_FAILURE = "reset-token/database failure"
+# Sanitized categories written to Render. Never a password, token, or key.
+# These slugs are the only failure labels the operator inspects after deploy.
+SMTP_AUTHENTICATION = "smtp_authentication"
+SMTP_TLS = "smtp_tls"
+SMTP_CONNECTION = "smtp_connection"
+SMTP_SENDER = "smtp_sender"
+SMTP_RECIPIENT = "smtp_recipient"
+SMTP_PROVIDER = "smtp_provider"
+CONFIGURATION = "configuration"
+# Aliases kept so older tests/callers still import a stable name.
+MAIL_MODE_NOT_SMTP = CONFIGURATION
+SMTP_AUTH_FAILURE = SMTP_AUTHENTICATION
+GMAIL_APP_PASSWORD_REJECTED = SMTP_AUTHENTICATION
+SMTP_TLS_FAILURE = SMTP_TLS
+SENDER_MISMATCH = SMTP_SENDER
+RECIPIENT_MISMATCH = SMTP_RECIPIENT
+RESET_TOKEN_DB_FAILURE = CONFIGURATION
 
 _SECRETISH = re.compile(
     r"(?i)(password|passwd|smtp_pass|app password|secret|token|api[_-]?key|"
@@ -66,61 +74,63 @@ def sanitize_mail_text(text):
 
 
 def log_mail_event(category, extra=""):
+    """Stdout line for Render. extra is accepted but never printed."""
     f = mail_config_fields()
-    extra = sanitize_mail_text(extra)
     print(
         "[mail] mode={mode} host={host} port={port} "
-        "user_configured={user} password_configured={pw} category={cat}"
-        "{extra}".format(
+        "user_configured={user} password_configured={pw} category={cat}".format(
             mode=f["mail_mode"], host=f["smtp_host"] or "-",
             port=f["smtp_port"], user="yes" if f["smtp_user_configured"] else "no",
             pw="yes" if f["smtp_password_configured"] else "no",
-            cat=category,
-            extra=(" extra=" + extra) if extra else ""),
+            cat=category),
         flush=True)
 
 
 def classify_smtp_failure(exc=None, info=""):
-    """Map an SMTP exception / info string onto one operator-facing category."""
+    """Map an SMTP exception / info string onto one sanitized category slug."""
     mode = (Config.MAIL_MODE or "").strip().lower()
     if mode and mode not in ("smtp", "resend"):
-        return MAIL_MODE_NOT_SMTP
+        return CONFIGURATION
     blob = " ".join(
         str(x) for x in (
             info, exc, type(exc).__name__ if exc is not None else "",
             getattr(exc, "smtp_code", ""), getattr(exc, "smtp_error", ""),
         )).lower()
-    host = (Config.SMTP_HOST or "").lower()
-    gmail = "gmail" in host or "google.com" in host or "gmail" in blob
-
+    if "resend" in blob:
+        return SMTP_PROVIDER
     if any(k in blob for k in (
             "application-specific password", "app password", "badcredentials",
             "5.7.8", "5.7.9", "username and password not accepted",
-            "please log in through your web browser", "please log in via your web browser")):
-        return GMAIL_APP_PASSWORD_REJECTED if gmail else SMTP_AUTH_FAILURE
+            "please log in through your web browser",
+            "please log in via your web browser")):
+        return SMTP_AUTHENTICATION
     if isinstance(exc, smtplib.SMTPAuthenticationError) or "smtp authentication" in blob:
-        return GMAIL_APP_PASSWORD_REJECTED if gmail else SMTP_AUTH_FAILURE
+        return SMTP_AUTHENTICATION
     if "auth" in blob and any(k in blob for k in ("required", "failed", "invalid", "not configured")):
-        return GMAIL_APP_PASSWORD_REJECTED if gmail else SMTP_AUTH_FAILURE
+        return SMTP_AUTHENTICATION
     if isinstance(exc, smtplib.SMTPSenderRefused) or any(k in blob for k in (
             "sender refused", "not allowed to send", "from address",
             "syntactically incorrect", "5.7.1")):
-        return SENDER_MISMATCH
+        return SMTP_SENDER
     if isinstance(exc, smtplib.SMTPRecipientsRefused) or any(k in blob for k in (
             "recipient refused", "user unknown", "mailbox unavailable", "5.1.1")):
-        return RECIPIENT_MISMATCH
-    if any(k in blob for k in (
-            "timed out", "timeout", "ssl", "tls", "starttls", "connection refused",
-            "name or service not known", "network is unreachable", "eof occurred",
-            "disconnected", "smtp not configured", "getaddrinfo", "gaierror")):
-        return SMTP_TLS_FAILURE
-    if isinstance(exc, (ssl.SSLError, socket.timeout, socket.gaierror, ConnectionError,
-                        TimeoutError, OSError, smtplib.SMTPServerDisconnected,
-                        smtplib.SMTPConnectError)):
-        return SMTP_TLS_FAILURE
+        return SMTP_RECIPIENT
+    if isinstance(exc, ssl.SSLError) or any(k in blob for k in (
+            "starttls", "ssl error", "tls handshake", "certificate verify",
+            "wrong version number")):
+        return SMTP_TLS
+    if isinstance(exc, (socket.timeout, socket.gaierror, ConnectionRefusedError,
+                        ConnectionError, TimeoutError, smtplib.SMTPConnectError,
+                        smtplib.SMTPServerDisconnected)) or any(k in blob for k in (
+            "timed out", "timeout", "connection refused", "name or service not known",
+            "network is unreachable", "eof occurred", "disconnected",
+            "smtp not configured", "getaddrinfo", "gaierror")):
+        return SMTP_CONNECTION
+    if isinstance(exc, OSError):
+        return SMTP_CONNECTION
     if "smtp error" in blob or isinstance(exc, smtplib.SMTPException):
-        return SMTP_TLS_FAILURE
-    return SMTP_TLS_FAILURE
+        return SMTP_CONNECTION
+    return SMTP_CONNECTION
 
 
 def _ipv4_connect(address, timeout):
@@ -155,22 +165,25 @@ class _SMTP4_SSL(smtplib.SMTP_SSL):
 
 
 def _open_smtp(host, port, use_ssl, timeout=12):
+    """Port 465 = SMTP_SSL. Port 587 = STARTTLS before the caller may AUTH."""
     ctx = ssl.create_default_context()
-    if use_ssl:
-        s = _SMTP4_SSL(host, int(port), timeout=timeout, context=ctx)
+    port = int(port)
+    if use_ssl or port == 465:
+        s = _SMTP4_SSL(host, port, timeout=timeout, context=ctx)
         s.ehlo()
+        s._jaura_tls = True
         return s
     s = _SMTP4(timeout=timeout)
-    s.connect(host, int(port))
+    s.connect(host, port)
     s.ehlo()
-    need_tls = (
-        int(port) in (587, 465)
-        or "gmail.com" in (host or "").lower()
-        or "google.com" in (host or "").lower())
+    gmail = "gmail.com" in (host or "").lower() or "google.com" in (host or "").lower()
+    need_tls = port == 587 or gmail
     try:
         s.starttls(context=ctx)
         s.ehlo()
+        s._jaura_tls = True
     except smtplib.SMTPException:
+        s._jaura_tls = False
         if need_tls:
             try:
                 s.close()
@@ -209,6 +222,8 @@ def _deliver_smtp(msg, recipients):
         try:
             s = _open_smtp(host, p, use_ssl)
             if user and password:
+                if int(p) == 587 and not getattr(s, "_jaura_tls", False):
+                    raise smtplib.SMTPException("STARTTLS required before authentication")
                 s.login(user, password)
             envelope = _email_addr(user or Config.MAIL_FROM)
             s.send_message(msg, from_addr=envelope or None, to_addrs=list(recipients))
@@ -289,33 +304,11 @@ def order_links(order_id):
 
 def send_with_reply_to(to, subject, body, reply_to):
     """A plain message whose Reply-To points somewhere else (the customer)."""
-    import smtplib
-    from email.message import EmailMessage
-    msg = EmailMessage()
-    msg["From"] = Config.MAIL_FROM
-    msg["To"] = to
-    msg["Subject"] = subject
-    if reply_to:
-        msg["Reply-To"] = reply_to
-    msg.set_content(body)
     if Config.MAIL_MODE == "resend":
         return _via_resend_attached(to, subject, body, None, "", "application/octet-stream", reply_to)
     if Config.MAIL_MODE != "smtp":
         return send(to, subject, body)
-    try:
-        with smtplib.SMTP(Config.SMTP_HOST, Config.SMTP_PORT, timeout=30) as s_:
-            s_.ehlo()
-            try:
-                s_.starttls(context=ssl.create_default_context())
-                s_.ehlo()
-            except smtplib.SMTPException:
-                pass
-            if Config.SMTP_USER and Config.SMTP_PASS:
-                s_.login(Config.SMTP_USER, Config.SMTP_PASS)
-            s_.send_message(msg, from_addr=Config.MAIL_FROM, to_addrs=[to])
-        return True, "sent"
-    except Exception as exc:
-        return False, f"smtp error: {exc}"
+    return _via_smtp_attached(to, subject, body, None, "", "", reply_to, None)
 
 
 def send_order_notice(order, data=None, filename="", mime="application/octet-stream"):
