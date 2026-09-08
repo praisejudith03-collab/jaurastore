@@ -239,3 +239,48 @@ def test_the_schema_seeds_the_delivery_zones_idempotently():
     m = re.search(r"insert into delivery_zones[\s\S]*?on conflict \(id\) do nothing;",
                   _schema_text(), re.IGNORECASE)
     assert m, "delivery_zones seed is missing or is not idempotent"
+
+
+def _delivery_zone_repair_columns():
+    return set(re.findall(
+        r"alter table delivery_zones\s+add column if not exists\s+\"?(\w+)\"?",
+        _schema_text(), re.IGNORECASE))
+
+
+def test_delivery_zones_repairs_an_older_table_before_using_new_columns():
+    """Production failure: an existing delivery_zones table predating `active`
+    made the index (and the seed's sort_order) fail with "column does not
+    exist". The repair block must add every non-key column, add-only, and must
+    come BEFORE anything that references those columns."""
+    sql = _schema_text()
+    repair = _delivery_zone_repair_columns()
+    create_cols = _create_table_columns("delivery_zones")
+    for col in sorted(create_cols - {"id"}):
+        assert col in repair, \
+            f"delivery_zones repair block is missing {col!r}"
+
+    active_add = sql.lower().index(
+        "alter table delivery_zones add column if not exists active")
+    sort_add = sql.lower().index(
+        "alter table delivery_zones add column if not exists sort_order")
+    index_at = sql.lower().index("on delivery_zones(active, sort_order)")
+    seed_at = sql.lower().index("insert into delivery_zones")
+    assert active_add < index_at, "`active` is added after the index that uses it"
+    assert sort_add < index_at, "`sort_order` is added after the index that uses it"
+    assert max(active_add, sort_add) < seed_at, \
+        "the seed runs before the repair block that adds its columns"
+
+
+def test_delivery_zones_repair_never_destroys_existing_rows():
+    """Existing ids, names, fares, active and sort_order values survive: the
+    repair is ADD COLUMN only - no drop/truncate/delete/update/rename."""
+    block = _schema_text().split("-- SECTION: delivery_zones", 1)[1]
+    block = block.split("-- SECTION:", 1)[0]
+    code = re.sub(r"--[^\n]*", "", block).lower()
+    for bad in ("drop", "truncate", "delete", "update ", "rename",
+                "create table delivery_zones"):
+        assert bad not in code, \
+            f"delivery_zones section must not contain {bad!r}"
+    for statement in re.findall(r"alter table delivery_zones[^;]*;", code):
+        assert "add column if not exists" in statement, \
+            f"non additive alter on delivery_zones: {statement!r}"
