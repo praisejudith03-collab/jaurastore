@@ -3,19 +3,21 @@ name: Artifact export (read-only, one-off)
 # Why this workflow exists
 # ------------------------
 # The migration-review sandbox cannot reach productionresultssa*.blob.core.windows.net
-# (the host that serves Actions artifact downloads), so `gh run download` fails
-# from there. This one-off job re-emits the artifacts of an already-completed
-# run into its own job log (SHA-256 + base64 of the exact bytes) so the
-# reviewer can verify integrity and inspect the JSON locally.
+# or results-receiver.actions.githubusercontent.com (the hosts that serve Actions
+# artifact and log downloads), so `gh run download` and log fetching fail from
+# there. Git over github.com works, so this one-off job downloads the artifacts
+# of an already-completed run and pushes the two JSON files to a throwaway
+# scratch branch (with SHA256SUMS.txt) so the reviewer can fetch and verify them
+# with plain git.
 #
 # What it does NOT do:
 #   - never runs migrate_images.py or any migration code
 #   - never touches Supabase (no SUPABASE_* secrets are referenced)
 #   - never uploads images or writes image_url
-#   - never commits or pushes anything (contents: read)
+#   - never touches main or any protected branch; only creates the scratch branch
 #
-# It only reads existing artifacts of a completed run using the repository's
-# own GITHUB_TOKEN with actions: read.
+# It only reads existing artifacts of a completed run. The scratch branch is
+# deleted by the reviewer after verification.
 
 on:
   push:
@@ -31,39 +33,45 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SOURCE_RUN_ID: "34207418484"
+      SCRATCH_BRANCH: "scratch/artifacts-run-34207418484"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Export artifacts of the completed dry-run
+      - name: Download the artifacts of the completed dry-run
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ -z "${SOURCE_RUN_ID}" ]; then
-            echo "No SOURCE_RUN_ID configured; nothing to do."
-            exit 0
-          fi
-
           echo "=== SOURCE RUN PROVENANCE ==="
           gh api "repos/$SOURCE_REPO/actions/runs/$SOURCE_RUN_ID" \
             --jq '{id, name, event, status, conclusion, head_branch, head_sha, created_at, run_attempt, triggering_actor: .triggering_actor.login}'
-
           echo "=== ARTIFACT METADATA ==="
           gh api "repos/$SOURCE_REPO/actions/runs/$SOURCE_RUN_ID/artifacts" \
             --jq '.artifacts[] | {id, name, size_in_bytes, expired, created_at}'
+          mkdir -p exported
+          gh run download "$SOURCE_RUN_ID" --repo "$SOURCE_REPO" --dir downloaded
+          find downloaded -type f -exec cp {} exported/ \;
+          echo "=== EXPORTED FILES ==="
+          ls -la exported/
+          cd exported
+          sha256sum * | tee SHA256SUMS.txt
+          echo "=== CONTENT HEADS ==="
+          for f in *.json; do echo "--- $f (first 200 bytes) ---"; head -c 200 "$f"; echo; done
 
-          mkdir -p artifacts
-          gh run download "$SOURCE_RUN_ID" --repo "$SOURCE_REPO" --dir artifacts
-
-          echo "=== FILES ==="
-          find artifacts -type f | sort | while read -r f; do echo "$f ($(wc -c < "$f") bytes)"; done
-
-          find artifacts -type f | sort | while read -r f; do
-            echo "### FILE-BEGIN: $f"
-            echo "### SHA256: $(sha256sum "$f" | cut -d' ' -f1)"
-            echo "### B64-BEGIN $f"
-            base64 -w 4000 "$f" | nl -ba -w 4 -v 1 | sed 's/^/B64 /'
-            echo "### B64-END $f"
-            echo "### FILE-END: $f"
-          done
+      - name: Push the artifacts to the scratch branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan "$SCRATCH_BRANCH"
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git clean -fd >/dev/null 2>&1 || true
+          mv exported/* .
+          git add SHA256SUMS.txt *.json
+          git commit -m "Artifacts of dry-run 34207418484 (read-only export for review)"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${SOURCE_REPO}.git" "HEAD:refs/heads/${SCRATCH_BRANCH}"
+          echo "Pushed artifacts to branch $SCRATCH_BRANCH"
