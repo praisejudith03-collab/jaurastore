@@ -25,7 +25,7 @@ on:
     paths: ['.github/workflows/artifact-export.yml']
 
 permissions:
-  contents: read
+  contents: write   # only to create the throwaway scratch branch with the artifacts
   actions: read
 
 jobs:
