@@ -15,6 +15,14 @@ create table if not exists admin_users (
   updated_at    timestamptz not null default now(),
   last_login_at timestamptz
 );
+-- Repair an older admin_users table. Add-only, preserves existing admins.
+alter table admin_users add column if not exists email         text;
+alter table admin_users add column if not exists password_hash text;
+alter table admin_users add column if not exists role          text not null default 'admin';
+alter table admin_users add column if not exists enabled       boolean not null default true;
+alter table admin_users add column if not exists created_at    timestamptz not null default now();
+alter table admin_users add column if not exists updated_at    timestamptz not null default now();
+alter table admin_users add column if not exists last_login_at timestamptz;
 
 create table if not exists admin_reset_tokens (
   id bigint generated always as identity primary key,
@@ -26,5 +34,13 @@ create table if not exists admin_reset_tokens (
   consumed_at timestamptz,
   created_at timestamptz not null default now()
 );
+-- Repair an older admin_reset_tokens table. Add-only, before the index.
+alter table admin_reset_tokens add column if not exists email       text;
+alter table admin_reset_tokens add column if not exists purpose     text not null default 'reset';
+alter table admin_reset_tokens add column if not exists token_hash  text;
+alter table admin_reset_tokens add column if not exists expires_at  timestamptz;
+alter table admin_reset_tokens add column if not exists attempts    integer not null default 0;
+alter table admin_reset_tokens add column if not exists consumed_at timestamptz;
+alter table admin_reset_tokens add column if not exists created_at  timestamptz not null default now();
 create index if not exists admin_reset_tokens_lookup on admin_reset_tokens(email, purpose, created_at desc);
 

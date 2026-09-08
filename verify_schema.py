@@ -45,13 +45,13 @@ REQUIRED_COLUMNS = {
     "products": ("id", '"legacyId"', "name", "category", '"priceNgn"', '"priceCfa"',
                  '"compareNgn"', '"compareCfa"', "image_url", "images",
                  "stock_quantity", "description", "featured", "online", "updated_at"),
-    "product_reviews": ("product_id", "email", "name", "rating", "title", "body",
+    "product_reviews": ("product_id", "order_id", "email", "name", "rating", "title", "body",
                         "hidden", "created_at", "updated_at"),
     "coupon_uses": ("code", "email", "order_id", "percent", "used_at"),
     "coupons": ("code", "percent", "kind", "active", "max_uses", "uses", "expires_at"),
     "referral_codes": ("code", "email", "name", "uses", "reward_issued"),
     "referral_uses": ("code", "order_id"),
-    "delivery_zones": ("zone_id", "zone_name", "country", "currency", "kind"),
+    "delivery_zones": ("id", "name", "currency", "fare_min", "fare_max", "kind", "active", "sort_order"),
 }
 
 # Constraints that a column probe cannot see. Verified against the SQL file,

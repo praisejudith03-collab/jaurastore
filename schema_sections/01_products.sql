@@ -87,6 +87,17 @@ alter table products add column if not exists colors             jsonb;
 alter table products add column if not exists options            jsonb;
 alter table products add column if not exists source             text default 'admin';
 alter table products add column if not exists updated_at         timestamptz default now();
+-- Additional repair for any older table missing the remaining non-key columns.
+-- These are add-only and nullable for legacy rows so no invented values are
+-- written and every existing row keeps its id, name, prices and stock.
+alter table products add column if not exists "legacyId"       text;
+alter table products add column if not exists sku              text;
+alter table products add column if not exists slug             text;
+alter table products add column if not exists category         text;
+alter table products add column if not exists image            text;
+alter table products add column if not exists image_url        text;
+alter table products add column if not exists description      text;
+alter table products add column if not exists stock_quantity   integer not null default 0;
 
 -- Dead leftovers from the original hand-built table: price_cfa, price_ngn,
 -- name_fr, compare_cfa, compare_ngn, option_stock. The app reads and writes

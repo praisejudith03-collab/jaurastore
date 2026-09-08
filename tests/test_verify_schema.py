@@ -111,7 +111,7 @@ def test_a_missing_products_column_is_reported():
 def test_the_required_column_inventory_covers_the_agreed_contract():
     """Guard against verify_schema.py drifting from the schema itself."""
     assert vs.REQUIRED_COLUMNS["product_reviews"] == (
-        "product_id", "email", "name", "rating", "title", "body", "hidden",
+        "product_id", "order_id", "email", "name", "rating", "title", "body", "hidden",
         "created_at", "updated_at")
     assert len(vs.REQUIRED_TABLES) == 13
     assert len(vs.REQUIRED_COLUMNS["products"]) == 15

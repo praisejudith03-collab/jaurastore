@@ -24,6 +24,17 @@ create table if not exists site_settings (
   updated_at timestamptz not null default now()
 );
 insert into site_settings (id) values (1) on conflict (id) do nothing;
+-- Repair an older site_settings table that predates newer columns. Add-only,
+-- preserves the single id=1 row and all Admin-edited settings.
+alter table site_settings add column if not exists bank_name text not null default '';
+alter table site_settings add column if not exists account_number text not null default '';
+alter table site_settings add column if not exists account_name text not null default '';
+alter table site_settings add column if not exists referral_commission_percentage numeric(5,2) not null default 0;
+alter table site_settings add column if not exists hero_banner_title text not null default '';
+alter table site_settings add column if not exists hero_banner_subtitle text not null default '';
+alter table site_settings add column if not exists contact_email text not null default '';
+alter table site_settings add column if not exists contact_phone text not null default '';
+alter table site_settings add column if not exists site_logo_url text not null default '';
 alter table site_settings add column if not exists hero_video_url text not null default '';
 alter table site_settings add column if not exists hero_poster_url text not null default '';
 alter table site_settings add column if not exists hero_doc_url text not null default '';
@@ -33,6 +44,7 @@ alter table site_settings add column if not exists banner_from text not null def
 alter table site_settings add column if not exists banner_to text not null default '';
 alter table site_settings add column if not exists conv_banner text not null default '';
 alter table site_settings add column if not exists conv_bold text not null default '';
+alter table site_settings add column if not exists updated_at timestamptz not null default now();
 
 -- Payment details shown at checkout. These were hardcoded in checkout.html /
 -- js/app.js (bank "UBA", account 23474678931, the MoMo Benin and Moov Togo
