@@ -236,7 +236,7 @@ def test_delivery_zones_constrains_its_enums():
 
 def test_the_schema_seeds_the_delivery_zones_idempotently():
     """Re-running the schema must not overwrite an admin's edited fares."""
-    m = re.search(r"insert into delivery_zones[\s\S]*?on conflict \(id\) do nothing;",
+    m = re.search(r"insert into delivery_zones[\s\S]*?on conflict do nothing;",
                   _schema_text(), re.IGNORECASE)
     assert m, "delivery_zones seed is missing or is not idempotent"
 

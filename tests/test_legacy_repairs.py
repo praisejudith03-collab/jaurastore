@@ -150,11 +150,13 @@ def test_delivery_seeds_is_idempotent_and_preserves_admin_edits():
     sec = _section("delivery_seeds")
     low = sec.lower()
     assert "insert into delivery_zones" in low
-    assert "on conflict (id) do nothing" in low
-    assert "on conflict (id) do update" not in low, "seed must not overwrite Admin-edited fares"
+    assert "on conflict do nothing" in low
+    assert "do update" not in low, "seed must not overwrite Admin-edited fares"
     code = re.sub(r"--[^\n]*", "", sec).lower()
-    for bad in ("drop", "truncate", "delete", "update ", "rename"):
-        assert bad not in code, f"delivery_seeds must not contain {bad!r}"
+    # Match SQL keywords, not the pg_attribute field `attisdropped`.
+    for bad in ("drop", "truncate", "delete", "update", "rename", "alter"):
+        assert not re.search(r"\b" + bad + r"\b", code), \
+            f"delivery_seeds must not contain {bad!r}"
 
 # ---------------------------------------------------------------------------
 # Section 15 storage - exactly one bucket
