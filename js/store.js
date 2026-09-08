@@ -305,7 +305,9 @@ const JA = (() => {
       if ((document.body.dataset.page || "") === "admin") return all;
       return all.filter((p) => p.online !== false);
     } catch (e) {
-      return (seed && seed.length ? seed : (window.JA_SEED || [])).slice();
+      const fallback = (seed && seed.length ? seed : (window.JA_SEED || [])).slice();
+      if ((document.body.dataset.page || "") === "admin") return fallback;
+      return fallback.filter((p) => p && p.online !== false);
     }
   }
 
