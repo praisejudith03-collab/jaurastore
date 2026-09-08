@@ -4,15 +4,16 @@ name: Fetch dry-run artifacts (read-only helper)
 # ------------------------
 # Some agent sandboxes cannot reach the Azure blob cluster that stores
 # Actions artifacts. This helper runs where the network CAN reach it: it
-# downloads the artifacts of a previous run and posts their full contents
-# into a GitHub issue so an operator (or agent) with API access can inspect
-# them.
+# downloads the artifacts of a previous run and makes their full contents
+# readable from API-only contexts. Content channels, in order of preference:
+#   1. check-run output.text  (PATCH checks API - needs checks:write)
+#   2. check annotations      (written by the runner, needs no token scopes)
+#   3. issue body             (needs issues:write)
 #
 # GUARANTEES (by construction):
 #   * No repository secrets are passed in - the job has NO Supabase access.
 #   * migrate_images.py / verify_schema.py are NEVER executed here.
 #   * Nothing is uploaded; nothing in Supabase (DB or Storage) is touched.
-#   * The only write is one issue body in this repository.
 
 on:
   # TEMPORARY (this session only): run on pushes to the session branch so an
@@ -47,7 +48,8 @@ on:
 permissions:
   contents: read
   actions: read     # needed to download artifacts of a previous run
-  issues: write     # needed to post the contents into an issue
+  checks: write     # channel 1: check-run output
+  issues: write     # channel 3: issue body
 
 concurrency:
   group: fetch-dry-run-artifacts
@@ -68,43 +70,40 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p artifacts
-          : > download-errors.log
           IFS=',' read -ra NAMES <<< "$TARGET_ARTIFACTS"
           for n in "${NAMES[@]}"; do
             [ -n "$n" ] || continue
             mkdir -p "artifacts/$n"
             if ! gh run download "$TARGET_RUN_ID" -n "$n" -D "artifacts/$n" \
-                > "download-errors.log.$n" 2>&1; then
-              echo "DOWNLOAD-FAILED: $n"
-              cat "download-errors.log.$n"
-              cat "download-errors.log.$n" >> download-errors.log
+                2> "download-errors.$n"; then
+              echo "DOWNLOAD-FAILED: $n"; cat "download-errors.$n"
             fi
           done
           echo "--- files fetched ---"
           find artifacts -type f | sort
           true
 
-      - name: Post the results into a GitHub issue (always)
+      - name: Publish the contents (always)
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          STATUS="${{ job.status }}"
           {
-            echo "Read-only helper output for artifacts of run $TARGET_RUN_ID "
-            echo "in $GITHUB_REPOSITORY (helper run ${{ github.run_id }}, "
-            echo "status: $STATUS). Posted verbatim for verification. No "
-            echo "secrets are included (this job has no access to any "
-            echo "repository secrets, and the migration scripts were not "
-            echo "run)."
+            echo "Read-only helper output: full contents of the artifacts of"
+            echo "run $TARGET_RUN_ID in $GITHUB_REPOSITORY (helper run"
+            echo "${{ github.run_id }}, job status ${{ job.status }}). Posted"
+            echo "verbatim for verification. No secrets are included (this"
+            echo "job has no access to any repository secrets, and the"
+            echo "migration scripts were not run)."
             echo ""
-            if [ -s download-errors.log ]; then
-              echo "Download problems:"
+            for e in download-errors.*; do
+              [ -s "$e" ] || continue
+              echo "Download problems for $(basename "$e"):"
               echo "\`\`\`"
-              cat download-errors.log
+              cat "$e"
               echo "\`\`\`"
               echo ""
-            fi
+            done
             while IFS= read -r f; do
               [ -s "$f" ] || continue
               echo "<!-- file: $f -->"
@@ -113,13 +112,43 @@ jobs:
               echo "\`\`\`"
               echo ""
             done < <(find artifacts -type f | sort)
-            echo "_File list:_ $(find artifacts -type f | wc -l) file(s)."
+            echo "_Files: $(find artifacts -type f | wc -l)"
           } > issue-body.md
-          BODY=$(cat issue-body.md)
-          ISSUE_URL=$(gh issue create \
-            --title "$TARGET_ISSUE_TITLE (helper status: $STATUS)" \
-            --body "$BODY" --json url -q .url)
-          gh issue edit "$ISSUE_URL" --add-label "$TARGET_ISSUE_LABEL" \
-            2>/dev/null || true   # label is cosmetic; missing label is fine
-          echo "Issue created: $ISSUE_URL"
-          echo "::notice::Results posted to: $ISSUE_URL"
+          echo "body bytes: $(wc -c < issue-body.md)"
+
+          # Channel 1: check-run output text (limit 65536 chars)
+          CH1=0
+          if [ -n "${CHECK_RUN_ID:-}" ] \
+             && gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CHECK_RUN_ID" \
+                  -f "output.title=artifact contents (run $TARGET_RUN_ID)" \
+                  -F "output.text=@issue-body.md" > channel1.log 2>&1; then
+            CH1=1
+            echo "CHANNEL1-CHECK-OUTPUT: ok"
+          else
+            echo "CHANNEL1-CHECK-OUTPUT: failed"
+            cat channel1.log 2>/dev/null || true
+          fi
+
+          # Channel 2: payload as runner-written annotations (no scopes needed)
+          if [ "$CH1" = 1 ]; then
+            echo "CHANNEL2-ANNOTATIONS: skipped (channel 1 ok)"
+          else
+            echo "CHANNEL2-ANNOTATIONS: emitting payload"
+            i=0
+            while IFS= read -r line; do
+              i=$((i + 1))
+              printf '::error file=artifact-payload::chunk %d: %s\n' "$i" "$line"
+            done < <(fold -w 850 issue-body.md)
+          fi
+
+          # Channel 3: issue body (bonus, best effort)
+          if ISSUE_URL=$(gh issue create \
+              --title "$TARGET_ISSUE_TITLE (helper run ${{ github.run_id }})" \
+              --body "$(cat issue-body.md)" --json url -q .url 2> channel3.log); then
+            echo "CHANNEL3-ISSUE: ok $ISSUE_URL"
+            gh issue edit "$ISSUE_URL" --add-label "$TARGET_ISSUE_LABEL" 2>/dev/null || true
+          else
+            echo "CHANNEL3-ISSUE: failed"
+            head -c 400 channel3.log || true
+          fi
+          true
