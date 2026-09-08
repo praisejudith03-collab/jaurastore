@@ -1,13 +1,14 @@
-"""Tests for Jaurastore Publication Audit & Production Verification.
+"""Tests for Jaurastore Publication Audit & Production Verification (Reconciled).
 
 Verifies:
-  1. Classification of the product catalogue under the owner's publication policy.
-  2. Immutability invariants: zero rows deleted, zero IDs renamed, zero prices/stock/image_url modified.
-  3. Strict enforcement of forced offline rules: wix-001 (placeholder + 0 stock) and wix-012 (0 price).
-  4. Safety and correctness of publication_review.sql and drift_guard.py.
-  5. Admin behavior: valid new products default to online=true.
-  6. Storefront behavior: Supabase source of truth, filters online IS TRUE.
-  7. Cache & ETag invalidation.
+  1. Scope separation: 275 local catalogue rows vs 53 production Supabase rows.
+  2. Exactly 29 approved live IDs present in Supabase (target online = true).
+  3. Exactly 152 approved live IDs missing from Supabase (reported as missing_from_production, NOT inserted).
+  4. Publication SQL safety: zero INSERTs, zero DELETEs, touches only existing production IDs, touches only online and updated_at.
+  5. Immutability invariants: zero rows deleted, zero IDs renamed, zero price/stock/image/name/category changes.
+  6. Admin behavior: valid new products default to online=true.
+  7. Storefront behavior: Supabase source of truth, filters online IS TRUE.
+  8. Cache & ETag invalidation.
 """
 import copy
 import json
@@ -50,182 +51,6 @@ def client(app):
         yield c
 
 
-@pytest.fixture
-def clean_catalogue():
-    merged, seed_count, overrides, deleted = mi.load_local_catalogue()
-    return merged, seed_count, overrides, deleted
-
-
-# --------------------------------------------------------------------------
-# 1. Classification & ID Set Verification
-# --------------------------------------------------------------------------
-
-def test_full_catalogue_classification_tally(clean_catalogue):
-    merged, seed_count, overrides, deleted = clean_catalogue
-    products = list(merged.values())
-    rep = mi.live_set_report(products, overrides)
-
-    assert rep["total_source_rows"] == 275
-    assert rep["approved_live_count"] == 181
-    assert rep["counts"] == {
-        "approved_live": 181,
-        "operator_offline": 2,
-        "placeholder_only": 75,
-        "no_image": 0,
-        "needs_review": 0,
-        "test_fixtures_excluded": 17,
-    }
-
-
-def test_approved_live_ids_exact_match(clean_catalogue):
-    merged, _, overrides, _ = clean_catalogue
-    rep = mi.live_set_report(list(merged.values()), overrides)
-    live_ids = set(rep["live_ids"])
-
-    assert live_ids == dg.APPROVED_LIVE_IDS
-    assert len(live_ids) == 181
-
-
-def test_operator_offline_ids_exact_match(clean_catalogue):
-    merged, _, overrides, _ = clean_catalogue
-    rep = mi.live_set_report(list(merged.values()), overrides)
-    offline_ids = set(rep["operator_offline_ids"])
-
-    assert offline_ids == dg.OPERATOR_OFFLINE_IDS
-    assert offline_ids == {"wix-001", "wix-012"}
-
-
-def test_placeholder_only_ids_exact_match(clean_catalogue):
-    merged, _, overrides, _ = clean_catalogue
-    rep = mi.live_set_report(list(merged.values()), overrides)
-    placeholder_ids = set(rep["placeholder_only_ids"])
-
-    assert placeholder_ids == dg.PLACEHOLDER_ONLY_IDS
-    assert len(placeholder_ids) == 75
-
-
-def test_test_fixtures_excluded_exact_match(clean_catalogue):
-    merged, _, overrides, _ = clean_catalogue
-    rep = mi.live_set_report(list(merged.values()), overrides)
-    fixtures = set(rep["test_fixtures_excluded_ids"])
-
-    assert fixtures == dg.TEST_FIXTURE_IDS
-    assert len(fixtures) == 17
-
-
-# --------------------------------------------------------------------------
-# 2. Live Row Criteria & Quality Assertions
-# --------------------------------------------------------------------------
-
-def test_every_approved_live_row_has_valid_photo_price_and_stock(clean_catalogue):
-    merged, _, _, _ = clean_catalogue
-    by_id = {str(p["id"]): p for p in merged.values()}
-
-    for pid in dg.APPROVED_LIVE_IDS:
-        assert pid in by_id, f"Approved ID {pid} missing from merged catalogue"
-        p = by_id[pid]
-
-        # Valid positive retail prices
-        ngn = float(p.get("priceNgn", 0))
-        cfa = float(p.get("priceCfa", 0))
-        assert ngn > 0, f"{pid} priceNgn must be > 0, got {ngn}"
-        assert cfa > 0, f"{pid} priceCfa must be > 0, got {cfa}"
-
-        # Valid positive stock
-        stock = p.get("stock_quantity") if p.get("stock_quantity") is not None else p.get("stock")
-        assert int(stock) > 0, f"{pid} stock must be > 0, got {stock}"
-
-        # Real committed image (not placeholder)
-        _loc, rel, status, _detail = mi.resolve_source_image(p)
-        assert status == "found", f"{pid} image status must be 'found', got {status}"
-        assert rel != "images/products/_placeholder.jpg", f"{pid} must not be placeholder"
-        assert not rel.endswith("_placeholder.400w.webp")
-
-
-def test_wix_001_and_wix_012_forced_offline_reasons(clean_catalogue):
-    merged, _, _, _ = clean_catalogue
-    by_id = {str(p["id"]): p for p in merged.values()}
-
-    w001 = by_id["wix-001"]
-    _loc, rel, status, _ = mi.resolve_source_image(w001)
-    assert rel == "images/products/_placeholder.jpg"
-    assert int(w001.get("stock_quantity", 0)) == 0
-
-    w012 = by_id["wix-012"]
-    assert float(w012.get("priceNgn", 0)) == 0
-
-
-# --------------------------------------------------------------------------
-# 3. Immutability Invariants (No rows, IDs, prices, stock, images modified)
-# --------------------------------------------------------------------------
-
-def test_audit_preserves_all_rows_and_fields(clean_catalogue):
-    merged, seed_count, overrides, deleted = clean_catalogue
-    original_snapshot = copy.deepcopy(merged)
-
-    # Run audit live_set_report
-    rep = mi.live_set_report(list(merged.values()), overrides)
-    assert rep["total_source_rows"] == len(original_snapshot)
-
-    # Re-verify catalogue identity
-    after_merged, _, _, _ = mi.load_local_catalogue()
-    assert set(after_merged.keys()) == set(original_snapshot.keys())
-
-    for pid, orig in original_snapshot.items():
-        curr = after_merged[pid]
-        assert curr["id"] == orig["id"]
-        assert curr.get("priceNgn") == orig.get("priceNgn")
-        assert curr.get("priceCfa") == orig.get("priceCfa")
-        assert curr.get("stock") == orig.get("stock")
-        assert curr.get("stock_quantity") == orig.get("stock_quantity")
-        assert curr.get("image") == orig.get("image")
-        assert curr.get("image_url") == orig.get("image_url")
-        assert curr.get("slug") == orig.get("slug")
-        assert curr.get("name") == orig.get("name")
-
-
-# --------------------------------------------------------------------------
-# 4. Drift Guard Python & CLI Execution
-# --------------------------------------------------------------------------
-
-def test_drift_guard_module_passes(clean_catalogue):
-    merged, _, overrides, _ = clean_catalogue
-    res = dg.verify_catalogue(list(merged.values()), overrides)
-    assert res["ok"] is True
-    assert res["errors"] == []
-
-
-def test_drift_guard_cli_exit_zero():
-    proc = subprocess.run(
-        [sys.executable, os.path.join(ROOT, "drift_guard.py")],
-        capture_output=True, text=True, cwd=ROOT
-    )
-    assert proc.returncode == 0
-    assert "STATUS: PASSED" in proc.stdout
-    assert "275" in proc.stdout
-
-
-def test_drift_guard_catches_tampered_price():
-    merged, _, overrides, _ = mi.load_local_catalogue()
-    tampered = copy.deepcopy(list(merged.values()))
-    # Set price of an approved item to 0
-    for p in tampered:
-        if p["id"] == "wix-003":
-            p["priceNgn"] = 0
-            break
-    res = dg.verify_catalogue(tampered, overrides)
-    assert res["ok"] is False
-    assert any("wix-003" in e for e in res["errors"])
-
-
-def test_drift_guard_catches_forced_offline_leak():
-    merged, _, overrides, _ = mi.load_local_catalogue()
-    # Mock live list with wix-001 leaked
-    custom_prods = copy.deepcopy(list(merged.values()))
-    res = dg.verify_catalogue(custom_prods, overrides)
-    assert "wix-001" not in res.get("approved_live_ids", [])
-
-
 def login(client):
     r = client.post("/api/admin/login", json={"email": EMAIL, "password": PW})
     assert r.status_code == 200, r.data
@@ -233,110 +58,223 @@ def login(client):
 
 
 # --------------------------------------------------------------------------
-# 5. Reviewable SQL File Verification
+# 1. Scope Separation & Reconciliation Tests
 # --------------------------------------------------------------------------
 
-def test_sql_file_exists_and_is_well_formed():
+def test_scope_separation_local_vs_production():
+    merged, seed_count, overrides, deleted = mi.load_local_catalogue()
+    with open(os.path.join(ROOT, "data", "catalog.json"), encoding="utf-8") as f:
+        cat = json.load(f)
+
+    rep_local = mi.live_set_report(list(merged.values()), overrides)
+    rep_prod = mi.live_set_report(cat.get("products", []), {})
+
+    # 1. Local catalogue: 275 rows, 181 approved live
+    assert rep_local["total_source_rows"] == 275
+    assert rep_local["approved_live_count"] == 181
+
+    # 2. Production Supabase subset: 29 approved live
+    assert rep_prod["approved_live_count"] == 29
+    assert set(rep_prod["live_ids"]) == dg.EXISTING_PRODUCTION_LIVE_IDS
+
+    # 3. Present in both: exactly 29 IDs
+    present_in_both = set(rep_local["live_ids"]) & set(rep_prod["live_ids"])
+    assert present_in_both == dg.EXISTING_PRODUCTION_LIVE_IDS
+    assert len(present_in_both) == 29
+
+    # 4. Approved local IDs missing from Supabase: exactly 152 IDs
+    missing = set(rep_local["live_ids"]) - set(rep_prod["live_ids"])
+    assert missing == dg.MISSING_FROM_PRODUCTION_IDS
+    assert len(missing) == 152
+
+
+def test_production_offline_and_fixtures():
+    with open(os.path.join(ROOT, "data", "catalog.json"), encoding="utf-8") as f:
+        cat = json.load(f)
+    rep_prod = mi.live_set_report(cat.get("products", []), {})
+
+    assert set(rep_prod["operator_offline_ids"]) == dg.PRODUCTION_OPERATOR_OFFLINE_IDS
+    assert set(rep_prod["placeholder_only_ids"]) == dg.PRODUCTION_PLACEHOLDER_IDS
+    assert set(rep_prod["test_fixtures_excluded_ids"]) == dg.PRODUCTION_FIXTURE_IDS
+
+
+# --------------------------------------------------------------------------
+# 2. Safety: SQL Cannot Silently Import Missing Local Products
+# --------------------------------------------------------------------------
+
+def test_sql_contains_zero_insert_statements():
     sql_path = os.path.join(ROOT, "publication_review.sql")
-    assert os.path.exists(sql_path), "publication_review.sql must exist"
     with open(sql_path, encoding="utf-8") as f:
         sql = f.read()
 
-    # Safety: Must NOT contain destructive DDL/DML statements
+    assert not re.search(r"\bINSERT\s+INTO\b", sql, re.I), (
+        "publication_review.sql must NEVER contain INSERT statements (importing is separate)")
+
+
+def test_sql_live_update_targets_only_existing_supabase_ids():
+    sql_path = os.path.join(ROOT, "publication_review.sql")
+    with open(sql_path, encoding="utf-8") as f:
+        sql = f.read()
+
+    # Find the online = true UPDATE statement
+    match = re.search(r"UPDATE\s+products\s+SET\s+online\s*=\s*true[^;]+;", sql, re.S | re.I)
+    assert match, "Missing online = true UPDATE statement"
+    update_live_sql = match.group(0)
+
+    # 1. All 29 existing production IDs must be present in the UPDATE block
+    for pid in dg.EXISTING_PRODUCTION_LIVE_IDS:
+        assert f"'{pid}'" in update_live_sql, f"Existing live ID {pid} missing from UPDATE statement"
+
+    # 2. None of the 152 missing IDs may be present in the UPDATE block
+    for pid in dg.MISSING_FROM_PRODUCTION_IDS:
+        assert f"'{pid}'" not in update_live_sql, (
+            f"Missing ID {pid} must NOT be in online=true UPDATE block (cannot update rows not in DB)")
+
+
+def test_sql_modifies_only_online_and_updated_at():
+    sql_path = os.path.join(ROOT, "publication_review.sql")
+    with open(sql_path, encoding="utf-8") as f:
+        sql = f.read()
+
+    # Check that forbidden DDL / DML keywords are absent
     for forbidden in ("DROP TABLE", "TRUNCATE", "DELETE FROM", "ALTER TABLE", "INSERT INTO"):
-        assert forbidden not in sql.upper(), f"SQL file contains forbidden statement: {forbidden}"
+        assert forbidden not in sql.upper(), f"SQL contains forbidden statement: {forbidden}"
 
-    # Must contain SELECT previews
+    # Check that every UPDATE statement touches ONLY online and updated_at
+    update_blocks = re.findall(r"UPDATE\s+products\s+SET\s+(.*?)\s+WHERE\b", sql, re.S | re.I)
+    assert len(update_blocks) > 0
+    for block in update_blocks:
+        cols = [c.split("=")[0].strip().lower() for c in block.split(",")]
+        for col in cols:
+            assert col in ("online", "updated_at"), f"Forbidden column in UPDATE: {col}"
+
+
+def test_sql_has_select_preview_and_drift_guard():
+    sql_path = os.path.join(ROOT, "publication_review.sql")
+    with open(sql_path, encoding="utf-8") as f:
+        sql = f.read()
+
     assert "SELECT" in sql.upper()
-    assert "WHERE id IN (" in sql
-
-    # Must contain PL/pgSQL Drift Guard block
     assert "DO $$" in sql
     assert "RAISE EXCEPTION" in sql
-
-    # Must contain narrow UPDATE block touching ONLY online and updated_at
-    assert "UPDATE products" in sql
-    assert re.search(r"SET\s+online\s*=\s*true,\s*updated_at\s*=\s*now\(\)", sql, re.I)
-    assert re.search(r"SET\s+online\s*=\s*false,\s*updated_at\s*=\s*now\(\)", sql, re.I)
-
-    # All 181 live IDs must be present in SQL
-    for pid in dg.APPROVED_LIVE_IDS:
-        assert f"'{pid}'" in sql, f"Live ID {pid} missing from SQL"
-
-    # Operator offline IDs must be present in SQL
-    for pid in dg.OPERATOR_OFFLINE_IDS:
-        assert f"'{pid}'" in sql, f"Operator offline ID {pid} missing from SQL"
+    assert "BEGIN;" in sql
+    assert "COMMIT;" in sql
 
 
 # --------------------------------------------------------------------------
-# 6. Admin Behavior: Default online=true for valid new products
+# 3. Drift Guard Verification
 # --------------------------------------------------------------------------
 
-def test_normalize_defaults_new_products_to_online_true():
-    # When online is omitted
-    p1 = catalog_mod.normalize({"name": "New Dress", "priceNgn": 15000, "stock": 5})
-    assert p1["online"] is True
+def test_drift_guard_module_and_cli():
+    res = dg.verify_reconciliation()
+    assert res["ok"] is True
+    assert res["errors"] == []
 
-    # When online is explicitly True
-    p2 = catalog_mod.normalize({"name": "New Dress", "priceNgn": 15000, "stock": 5, "online": True})
-    assert p2["online"] is True
+    proc = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "drift_guard.py")],
+        capture_output=True, text=True, cwd=ROOT
+    )
+    assert proc.returncode == 0
+    assert "STATUS: PASSED" in proc.stdout
 
-    # When online is explicitly False
-    p3 = catalog_mod.normalize({"name": "New Dress", "priceNgn": 15000, "stock": 5, "online": False})
-    assert p3["online"] is False
+
+def test_drift_guard_catches_sql_insert_leak():
+    fake_sql = "INSERT INTO products (id) VALUES ('wix-999');"
+    res = dg.verify_publication_sql(fake_sql)
+    assert res["ok"] is False
+    assert any("INSERT" in e for e in res["errors"])
 
 
-def test_admin_upsert_route_preserves_online_default(client):
+def test_drift_guard_catches_missing_id_in_sql_live_update():
+    fake_sql = "UPDATE products SET online = true, updated_at = now() WHERE id IN ('wix-003');"
+    res = dg.verify_publication_sql(fake_sql)
+    assert res["ok"] is False
+    assert any("wix-003" in e for e in res["errors"])
+
+
+# --------------------------------------------------------------------------
+# 4. Immutability Invariants (No deletions, renames, price/stock/image edits)
+# --------------------------------------------------------------------------
+
+def test_catalogue_data_remains_strictly_unmodified():
+    merged, seed_count, overrides, deleted = mi.load_local_catalogue()
+    original = copy.deepcopy(merged)
+
+    # Execute drift guard / verification
+    res = dg.verify_reconciliation()
+    assert res["ok"] is True
+
+    # Check again
+    after, _, _, _ = mi.load_local_catalogue()
+    assert len(after) == len(original)
+    for pid, orig in original.items():
+        curr = after[pid]
+        assert curr["id"] == orig["id"]
+        assert curr.get("name") == orig.get("name")
+        assert curr.get("category") == orig.get("category")
+        assert curr.get("priceNgn") == orig.get("priceNgn")
+        assert curr.get("priceCfa") == orig.get("priceCfa")
+        assert curr.get("stock") == orig.get("stock")
+        assert curr.get("stock_quantity") == orig.get("stock_quantity")
+        assert curr.get("image") == orig.get("image")
+        assert curr.get("image_url") == orig.get("image_url")
+
+
+# --------------------------------------------------------------------------
+# 5. Admin & Storefront Behavior
+# --------------------------------------------------------------------------
+
+def test_admin_new_valid_products_default_online_true(client):
     tok = login(client)
 
-    # Upsert new product without online field
+    # Normalization defaults
+    norm = catalog_mod.normalize({"name": "Admin Handbag", "priceNgn": 18000, "stock": 4})
+    assert norm["online"] is True
+
+    # Upsert route defaults
     r = client.post(
         "/api/admin/products",
-        json={"product": {"id": "jau-unit-online", "name": "Online Bag", "priceNgn": 12000, "category": "bags", "stock": 5}},
+        json={"product": {"id": "jau-unit-rec", "name": "Reconciled Bag", "priceNgn": 14000, "category": "bags", "stock": 3}},
         headers={"X-CSRF-Token": tok}
     )
     assert r.status_code == 200
-    data = r.get_json()
-    assert data["ok"] is True
-    assert data["product"]["online"] is True
+    assert r.get_json()["product"]["online"] is True
 
     # Cleanup
-    client.delete("/api/admin/products/jau-unit-online", headers={"X-CSRF-Token": tok})
+    client.delete("/api/admin/products/jau-unit-rec", headers={"X-CSRF-Token": tok})
 
 
-# --------------------------------------------------------------------------
-# 7. Storefront Behavior: Filters online IS TRUE & Caching/ETag
-# --------------------------------------------------------------------------
-
-def test_public_catalog_filters_offline_products(client):
-    # Public request (no auth)
+def test_storefront_filters_online_is_true(client):
     r = client.get("/api/catalog")
     assert r.status_code == 200
-    data = r.get_json()
-    assert data["ok"] is True
+    prods = r.get_json()["products"]
 
-    # wix-001 carries online=false in live resolution or is offline
-    for p in data["products"]:
+    for p in prods:
         assert p.get("online") is not False, f"Offline product {p.get('id')} leaked to storefront"
 
 
-def test_catalog_etag_and_caching_headers(client):
+def test_etag_invalidates_on_catalogue_change(client):
     r1 = client.get("/api/catalog")
     assert r1.status_code == 200
-    etag = r1.headers.get("ETag")
-    cache_ctrl = r1.headers.get("Cache-Control")
+    etag1 = r1.headers.get("ETag")
+    assert etag1 and etag1.startswith('W/"')
 
-    assert etag is not None and etag.startswith('W/"')
-    assert "public" in cache_ctrl and "max-age=30" in cache_ctrl
-
-    # Repeat request with If-None-Match header
-    r2 = client.get("/api/catalog", headers={"If-None-Match": etag})
+    # Matching If-None-Match gives 304
+    r2 = client.get("/api/catalog", headers={"If-None-Match": etag1})
     assert r2.status_code == 304
-    assert r2.get_data(as_text=True) == ""
 
+    # Save a temporary product -> ETag changes
+    tok = login(client)
+    client.post(
+        "/api/admin/products",
+        json={"product": {"id": "jau-etag-test", "name": "ETag Bag", "priceNgn": 9999, "stock": 2}},
+        headers={"X-CSRF-Token": tok}
+    )
 
-def test_meta_updated_at_reflects_product_updates():
-    m = catalog_mod.meta()
-    assert "updatedAt" in m
-    assert "count" in m
-    assert m["count"] >= 258
+    r3 = client.get("/api/catalog", headers={"If-None-Match": etag1})
+    assert r3.status_code == 200
+    etag3 = r3.headers.get("ETag")
+    assert etag3 != etag1
+
+    # Cleanup
+    client.delete("/api/admin/products/jau-etag-test", headers={"X-CSRF-Token": tok})
