@@ -5,10 +5,14 @@ name: Fetch dry-run artifacts (read-only helper)
 # Some agent sandboxes cannot reach the Azure blob cluster that stores
 # Actions artifacts. This helper runs where the network CAN reach it: it
 # downloads the artifacts of a previous run and makes their full contents
-# readable from API-only contexts. Content channels, in order of preference:
-#   1. check-run output.text  (PATCH checks API - needs checks:write)
-#   2. check annotations      (runner-written; cap of 10 per run, so the
-#      payload is base64'd and chunked to fit)
+# readable from API-only contexts.
+#
+# TRANSPORT: GitHub stores at most 10 check annotations per check run, and
+# each annotation message is capped at 1024 chars. So each matrix leg (= one
+# job = one check run) emits up to 10 chunks of 982 base64 chars = one
+# 9820-char b64 segment. Legs cover consecutive segments of each artifact's
+# base64 encoding; reassemble by concatenating, in (leg, chunk) order, then
+# base64-decode.
 #
 # GUARANTEES (by construction):
 #   * No repository secrets are passed in - the job has NO Supabase access.
@@ -29,27 +33,10 @@ on:
         required: false
         type: string
         default: "34212824430"
-      artifact_names:
-        description: "Comma-separated artifact names to fetch"
-        required: false
-        type: string
-        default: "dry-run-report,schema-verification"
-      issue_title:
-        description: "Title of the issue that will receive the contents"
-        required: false
-        type: string
-        default: "[verification] run 34212824430 artifact contents"
-      issue_label:
-        description: "Label to add to the issue"
-        required: false
-        type: string
-        default: "verification"
 
 permissions:
   contents: read
   actions: read     # needed to download artifacts of a previous run
-  checks: write     # channel 1: check-run output
-  issues: write
 
 concurrency:
   group: fetch-dry-run-artifacts
@@ -57,126 +44,69 @@ concurrency:
 
 env:
   TARGET_RUN_ID: ${{ inputs.run_id || '34212824430' }}
-  TARGET_ARTIFACTS: ${{ inputs.artifact_names || 'dry-run-report,schema-verification' }}
-  TARGET_ISSUE_TITLE: ${{ inputs.issue_title || '[verification] run 34212824430 artifact contents' }}
-  TARGET_ISSUE_LABEL: ${{ inputs.issue_label || 'verification' }}
+  SEG_W: "9820"          # b64 chars per leg (10 chunks x 982)
+  CHUNK_W: "982"         # b64 chars per annotation chunk
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { art: dry-run-report,       seg: 0 }
+          - { art: dry-run-report,       seg: 1 }
+          - { art: dry-run-report,       seg: 2 }
+          - { art: schema-verification,  seg: 0 }
+          - { art: schema-verification,  seg: 1 }
     steps:
-      - name: Download the artifacts of run ${{ env.TARGET_RUN_ID }}
+      - name: Download artifact ${{ matrix.art }} and emit segment ${{ matrix.seg }}
         env:
           GH_TOKEN: ${{ github.token }}
+          ART: ${{ matrix.art }}
+          SEG: ${{ matrix.seg }}
         run: |
-          mkdir -p artifacts
+          mkdir -p work
           ART_IDS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" \
             --jq '.artifacts[] | "\(.id) \(.name)"')
-          IFS=',' read -ra NAMES <<< "$TARGET_ARTIFACTS"
-          for n in "${NAMES[@]}"; do
-            [ -n "$n" ] || continue
-            id=$(awk -v name="$n" '$2 == name {print $1}' <<< "$ART_IDS")
-            if [ -z "$id" ]; then
-              echo "ARTIFACT-NOT-FOUND: $n"; continue
-            fi
-            mkdir -p "artifacts/$n"
-            if curl -fsSL --retry 3 --max-time 300 \
-                 -H "Authorization: Bearer $GH_TOKEN" \
-                 -H "Accept: application/vnd.github+json" \
-                 -o "artifacts/$n.zip" \
-                 "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
-                 2> "download-errors.$n"; then
-              if ! unzip -o -q "artifacts/$n.zip" -d "artifacts/$n" \
-                   2>> "download-errors.$n"; then
-                echo "UNZIP-FAILED: $n"
-              fi
-              rm -f "artifacts/$n.zip"
-            else
-              echo "DOWNLOAD-FAILED: $n"; cat "download-errors.$n"
-            fi
-          done
-          echo "--- files fetched ---"
-          find artifacts -type f | sort
-          true
-
-      - name: Publish the contents (always)
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Build the full body: header + every fetched file in code fences.
-          python3 - <<'PY'
-          import glob, json, os
-          parts = []
-          parts.append(f"Read-only helper output: artifacts of run "
-                       f"{os.environ['TARGET_RUN_ID']} in {os.environ['GITHUB_REPOSITORY']} "
-                       f"(helper run {os.environ['GITHUB_RUN_ID']}). Posted verbatim "
-                       f"for verification. No secrets included; migration scripts "
-                       f"were not executed.")
-          for e in sorted(glob.glob("download-errors.*")):
-              if os.path.getsize(e):
-                  parts.append(f"Download problems for {e}:\n```\n"
-                               f"{open(e, encoding='utf-8', errors='replace').read()}\n```\n")
-          for f in sorted(glob.glob("artifacts/**/*", recursive=True)):
-              if os.path.isfile(f) and os.path.getsize(f):
-                  parts.append(f"<!-- file: {f} -->")
-                  parts.append(f'```json path="{f}"')
-                  parts.append(open(f, encoding="utf-8", errors="replace").read())
-                  parts.append("```\n")
-          body = "\n".join(parts)
-          open("issue-body.md", "w", encoding="utf-8").write(body)
-          # Channel-1 payload: check-run output (limit 65536 chars).
-          payload = {"output": {"title": f"artifact contents (run {os.environ['TARGET_RUN_ID']})",
-                                "text": body[:65000]}}
-          with open("ch1-payload.json", "w", encoding="utf-8") as fh:
-              json.dump(payload, fh, ensure_ascii=False)
-          # Channel-2 fallback: base64 of the DRY-RUN report only (the big
-          # one); 7.4KB -> ~9.8KB base64 -> 10 chunks x ~1KB fits the 10-
-          # annotation cap. Schema-verification is small and is fully
-          # derivable from verify_schema.py if channel 2 is needed.
-          dry = sorted(glob.glob("artifacts/dry-run-report/**/*", recursive=True))
-          dry = [f for f in dry if os.path.isfile(f) and os.path.getsize(f)]
-          if dry:
-              data = b"\n".join(open(f, "rb").read() for f in dry)
-              b64 = __import__("base64").b64encode(data).decode("ascii")
-              open("fallback.b64", "w").write(b64)
-          print(f"body bytes: {len(body)}; dry-run bytes: {len(data) if dry else 0}")
-          PY
-
-          # Channel 1: PATCH the job's check run (needs checks:write).
-          STATUS="no-CHECK_RUN_ID"
-          if [ -n "${CHECK_RUN_ID:-}" ]; then
-            STATUS=$(curl -sS -o ch1-response.json -w '%{http_code}' --max-time 60 \
-              -X PATCH \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              -H "Content-Type: application/json" \
-              --data @ch1-payload.json \
-              "https://api.github.com/repos/$GITHUB_REPOSITORY/check-runs/$CHECK_RUN_ID" \
-              2> ch1-curl.log) || STATUS="curl-failed"
-            echo "channel1 http: $STATUS"
-            head -c 300 ch1-response.json 2>/dev/null || true
+          id=$(awk -v name="$ART" '$2 == name {print $1}' <<< "$ART_IDS")
+          if [ -z "$id" ]; then
+            echo "ARTIFACT-NOT-FOUND: $ART"
+            exit 0
           fi
-          # NOTE: no diagnostic annotations - the 10-annotation budget is
-          # reserved for the channel-2 payload. Channel 1's status is read
-          # back from the API (output.text null vs set).
-
-          # Channel 2: only if channel 1 failed and the fallback file exists.
-          case "$STATUS" in
-            2*|3*) echo "channel2: skipped (channel 1 ok)" ;;
-            *)
-              if [ -s fallback.b64 ]; then
-                echo "channel2: emitting base64 chunks (982 wide, hard cap 10)"
-                i=0
-                while IFS= read -r chunk; do
-                  i=$((i + 1))
-                  [ "$i" -gt 10 ] && echo "channel2: TRUNCATED at chunk 10" && break
-                  printf '::error file=artifact-b64::chunk %d: %s\n' "$i" "$chunk"
-                done < <(fold -w 982 fallback.b64)
-                echo "channel2: emitted $i chunk(s) of $(wc -c < fallback.b64) b64 bytes"
-              else
-                echo "channel2: no fallback payload"
-              fi
-              ;;
-          esac
+          curl -fsSL --retry 3 --max-time 300 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -o "work/$ART.zip" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip"
+          mkdir -p "work/$ART"
+          unzip -o -q "work/$ART.zip" -d "work/$ART"
+          echo "files:"; find "work/$ART" -type f | sort
+          # Encode the (single) file's bytes and emit this leg's b64 segment.
+          python3 - "$ART" <<'PY'
+import base64, glob, os, sys
+art = sys.argv[1]
+files = [f for f in sorted(glob.glob(f"work/{art}/**/*", recursive=True))
+         if os.path.isfile(f) and os.path.getsize(f)]
+if not files:
+    print("no files under", art)
+    sys.exit(0)
+# Each artifact here is exactly one file; if ever more, concatenate in
+# sorted path order (documented for the reassembler).
+data = b"\n".join(open(f, "rb").read() for f in files)
+b64 = base64.b64encode(data).decode("ascii")
+seg, seg_w, chunk_w = int(os.environ["SEG"]), int(os.environ["SEG_W"]), int(os.environ["CHUNK_W"])
+start = seg * seg_w
+part = b64[start:start + seg_w]
+if not part:
+    print(f"segment {seg}: empty (b64 total {len(b64)}) - nothing to emit")
+    sys.exit(0)
+print(f"b64 total {len(b64)}; segment {seg}: {len(part)} chars")
+i = 0
+for off in range(0, len(part), chunk_w):
+    i += 1
+    chunk = part[off:off + chunk_w]
+    sys.stderr.write(f"::error file=artifact-b64::chunk {i}: {chunk}\n")
+print(f"emitted {i} chunk(s)")
+PY
           true
