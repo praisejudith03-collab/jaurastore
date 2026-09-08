@@ -7,8 +7,8 @@ name: Fetch dry-run artifacts (read-only helper)
 # downloads the artifacts of a previous run and makes their full contents
 # readable from API-only contexts. Content channels, in order of preference:
 #   1. check-run output.text  (PATCH checks API - needs checks:write)
-#   2. check annotations      (written by the runner, needs no token scopes)
-#   3. issue body             (needs issues:write)
+#   2. check annotations      (runner-written; cap of 10 per run, so the
+#      payload is base64'd and chunked to fit)
 #
 # GUARANTEES (by construction):
 #   * No repository secrets are passed in - the job has NO Supabase access.
@@ -49,7 +49,7 @@ permissions:
   contents: read
   actions: read     # needed to download artifacts of a previous run
   checks: write     # channel 1: check-run output
-  issues: write     # channel 3: issue body
+  issues: write
 
 concurrency:
   group: fetch-dry-run-artifacts
@@ -70,17 +70,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p artifacts
-          # List the run's artifacts, then fetch each requested one's zip
-          # straight from the API (302 -> signed URL -> blob; the runner can
-          # reach the blob cluster). No git checkout needed, unlike
-          # `gh run download`.
           ART_IDS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TARGET_RUN_ID/artifacts" \
             --jq '.artifacts[] | "\(.id) \(.name)"')
           IFS=',' read -ra NAMES <<< "$TARGET_ARTIFACTS"
           for n in "${NAMES[@]}"; do
             [ -n "$n" ] || continue
-            idline=$(grep " $n\$" <<< "$ART_IDS" || true)
-            id=$(awk '{print $1}' <<< "$idline")
+            id=$(awk -v name="$n" '$2 == name {print $1}' <<< "$ART_IDS")
             if [ -z "$id" ]; then
               echo "ARTIFACT-NOT-FOUND: $n"; continue
             fi
@@ -109,67 +104,79 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          {
-            echo "Read-only helper output: full contents of the artifacts of"
-            echo "run $TARGET_RUN_ID in $GITHUB_REPOSITORY (helper run"
-            echo "${{ github.run_id }}, job status ${{ job.status }}). Posted"
-            echo "verbatim for verification. No secrets are included (this"
-            echo "job has no access to any repository secrets, and the"
-            echo "migration scripts were not run)."
-            echo ""
-            for e in download-errors.*; do
-              [ -s "$e" ] || continue
-              echo "Download problems for $(basename "$e"):"
-              echo "\`\`\`"
-              cat "$e"
-              echo "\`\`\`"
-              echo ""
-            done
-            while IFS= read -r f; do
-              [ -s "$f" ] || continue
-              echo "<!-- file: $f -->"
-              echo "\`\`\`json path=\"$f\""
-              cat "$f"
-              echo "\`\`\`"
-              echo ""
-            done < <(find artifacts -type f | sort)
-            echo "_Files: $(find artifacts -type f | wc -l)"
-          } > issue-body.md
-          echo "body bytes: $(wc -c < issue-body.md)"
+          # Build the full body: header + every fetched file in code fences.
+          python3 - <<'PY'
+          import glob, json, os
+          parts = []
+          parts.append(f"Read-only helper output: artifacts of run "
+                       f"{os.environ['TARGET_RUN_ID']} in {os.environ['GITHUB_REPOSITORY']} "
+                       f"(helper run {os.environ['GITHUB_RUN_ID']}). Posted verbatim "
+                       f"for verification. No secrets included; migration scripts "
+                       f"were not executed.")
+          for e in sorted(glob.glob("download-errors.*")):
+              if os.path.getsize(e):
+                  parts.append(f"Download problems for {e}:\n```\n"
+                               f"{open(e, encoding='utf-8', errors='replace').read()}\n```\n")
+          for f in sorted(glob.glob("artifacts/**/*", recursive=True)):
+              if os.path.isfile(f) and os.path.getsize(f):
+                  parts.append(f"<!-- file: {f} -->")
+                  parts.append(f'```json path="{f}"')
+                  parts.append(open(f, encoding="utf-8", errors="replace").read())
+                  parts.append("```\n")
+          body = "\n".join(parts)
+          open("issue-body.md", "w", encoding="utf-8").write(body)
+          # Channel-1 payload: check-run output (limit 65536 chars).
+          payload = {"output": {"title": f"artifact contents (run {os.environ['TARGET_RUN_ID']})",
+                                "text": body[:65000]}}
+          with open("ch1-payload.json", "w", encoding="utf-8") as fh:
+              json.dump(payload, fh, ensure_ascii=False)
+          # Channel-2 fallback: base64 of the DRY-RUN report only (the big
+          # one); 7.4KB -> ~9.8KB base64 -> 10 chunks x ~1KB fits the 10-
+          # annotation cap. Schema-verification is small and is fully
+          # derivable from verify_schema.py if channel 2 is needed.
+          dry = sorted(glob.glob("artifacts/dry-run-report/**/*", recursive=True))
+          dry = [f for f in dry if os.path.isfile(f) and os.path.getsize(f)]
+          if dry:
+              data = b"\n".join(open(f, "rb").read() for f in dry)
+              b64 = __import__("base64").b64encode(data).decode("ascii")
+              open("fallback.b64", "w").write(b64)
+          print(f"body bytes: {len(body)}; dry-run bytes: {len(data) if dry else 0}")
+          PY
 
-          # Channel 1: check-run output text (limit 65536 chars)
-          CH1=0
-          if [ -n "${CHECK_RUN_ID:-}" ] \
-             && gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CHECK_RUN_ID" \
-                  -f "output.title=artifact contents (run $TARGET_RUN_ID)" \
-                  -F "output.text=@issue-body.md" > channel1.log 2>&1; then
-            CH1=1
-            echo "CHANNEL1-CHECK-OUTPUT: ok"
-          else
-            echo "CHANNEL1-CHECK-OUTPUT: failed"
-            cat channel1.log 2>/dev/null || true
+          # Channel 1: PATCH the job's check run (needs checks:write).
+          STATUS="no-CHECK_RUN_ID"
+          if [ -n "${CHECK_RUN_ID:-}" ]; then
+            STATUS=$(curl -sS -o ch1-response.json -w '%{http_code}' --max-time 60 \
+              -X PATCH \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              --data @ch1-payload.json \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/check-runs/$CHECK_RUN_ID" \
+              2> ch1-curl.log) || STATUS="curl-failed"
+            echo "channel1 http: $STATUS"
+            head -c 300 ch1-response.json 2>/dev/null || true
           fi
+          # NOTE: no diagnostic annotations - the 10-annotation budget is
+          # reserved for the channel-2 payload. Channel 1's status is read
+          # back from the API (output.text null vs set).
 
-          # Channel 2: payload as runner-written annotations (no scopes needed)
-          if [ "$CH1" = 1 ]; then
-            echo "CHANNEL2-ANNOTATIONS: skipped (channel 1 ok)"
-          else
-            echo "CHANNEL2-ANNOTATIONS: emitting payload"
-            i=0
-            while IFS= read -r line; do
-              i=$((i + 1))
-              printf '::error file=artifact-payload::chunk %d: %s\n' "$i" "$line"
-            done < <(fold -w 850 issue-body.md)
-          fi
-
-          # Channel 3: issue body (bonus, best effort)
-          if ISSUE_URL=$(gh issue create \
-              --title "$TARGET_ISSUE_TITLE (helper run ${{ github.run_id }})" \
-              --body "$(cat issue-body.md)" --json url -q .url 2> channel3.log); then
-            echo "CHANNEL3-ISSUE: ok $ISSUE_URL"
-            gh issue edit "$ISSUE_URL" --add-label "$TARGET_ISSUE_LABEL" 2>/dev/null || true
-          else
-            echo "CHANNEL3-ISSUE: failed"
-            head -c 400 channel3.log || true
-          fi
+          # Channel 2: only if channel 1 failed and the fallback file exists.
+          case "$STATUS" in
+            2*|3*) echo "channel2: skipped (channel 1 ok)" ;;
+            *)
+              if [ -s fallback.b64 ]; then
+                echo "channel2: emitting base64 chunks (982 wide, hard cap 10)"
+                i=0
+                while IFS= read -r chunk; do
+                  i=$((i + 1))
+                  [ "$i" -gt 10 ] && echo "channel2: TRUNCATED at chunk 10" && break
+                  printf '::error file=artifact-b64::chunk %d: %s\n' "$i" "$chunk"
+                done < <(fold -w 982 fallback.b64)
+                echo "channel2: emitted $i chunk(s) of $(wc -c < fallback.b64) b64 bytes"
+              else
+                echo "channel2: no fallback payload"
+              fi
+              ;;
+          esac
           true
