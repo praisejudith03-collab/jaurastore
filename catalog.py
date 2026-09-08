@@ -712,8 +712,9 @@ def meta():
     """Metadata blob used for ETag / change detection on the catalogue."""
     data, _p = _load_overrides()
     products = merged(include_hidden=True)
+    latest_update = max((str(p.get("updated_at") or "") for p in products), default="")
     return {
-        "updatedAt": data.get("updatedAt") or "",
+        "updatedAt": max(str(data.get("updatedAt") or ""), latest_update),
         "updatedBy": data.get("updatedBy") or "",
         "count": len(products),
     }

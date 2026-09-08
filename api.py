@@ -167,16 +167,14 @@ def catalog():
         "products": products,
         "meta": catalog_mod.meta(),
     }, ensure_ascii=False, separators=(",", ":"))
-    etag = 'W/"' + hashlib.sha256(
-        (str(catalog_mod.meta()) + str(len(catalog_mod.base_products()))).encode()
-    ).hexdigest()[:28] + '"'
+    etag = 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:28] + '"'
     if request.headers.get("If-None-Match") == etag:
         resp = make_response("", 304)
     else:
         resp = make_response(body, 200)
     resp.headers["Content-Type"] = "application/json; charset=utf-8"
     resp.headers["ETag"] = etag
-    resp.headers["Cache-Control"] = "public, max-age=30"
+    resp.headers["Cache-Control"] = "public, max-age=30, must-revalidate"
     return resp
 
 # ========================================================== public: categories

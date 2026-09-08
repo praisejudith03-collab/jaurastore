@@ -1020,3 +1020,21 @@ and the row is online, query 2 returns nothing and the defect is invisible.
 Adding `or "priceNgn" <= 0 or "priceCfa" <= 0` closes that. Query 3
 (`where id in ('wix-001','wix-012')`, both must be `online=false`) is the check
 that actually protects this decision, and it is sufficient on its own.
+
+---
+
+## Production Verification Addendum (2026-09-08)
+
+### Owner Publication Policy Verification
+- **Approved Live (181 rows):** All valid existing products with committed real images, valid retail prices (`priceNgn > 0`, `priceCfa > 0`), and valid stock (`stock > 0`) approved for storefront visibility (`online = true`).
+- **Admin Default:** New valid products created in Admin default to `online = true`.
+- **Operator Offline (2 rows):** `wix-001` (placeholder + stock_quantity=0) and `wix-012` (priceNgn=0) remain strictly `online = false`.
+- **Placeholder Only (75 rows):** Retained intact as `online = false`.
+- **Test Fixtures (17 rows):** Retained intact as `online = false`.
+- **Review Artifacts Created:**
+  - `PUBLICATION_AUDIT.md` (Read-only comprehensive ID & policy report)
+  - `publication_review.sql` (SELECT preview, PL/pgSQL drift guard, narrow UPDATE block)
+  - `drift_guard.py` (CLI & automated verification tool)
+  - `tests/test_publication_audit.py` (Proves zero deletions, zero renames, zero price/stock/image mutations)
+- **Safety Status:** No migrations executed, no SQL updates applied, zero data deleted or modified.
+
