@@ -64,6 +64,11 @@ def test_root_logo_is_served(client):
     assert client.get("/logo.png").status_code == 200
 
 
+def test_static_logo_is_served(client):
+    """The official logo every page's favicon and the JSON-LD point at."""
+    assert client.get("/static/logo.png").status_code == 200
+
+
 def test_brand_assets_are_served(client):
     assert client.get("/images/brand/logo.jpg").status_code == 200
 

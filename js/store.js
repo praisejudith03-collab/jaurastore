@@ -1950,7 +1950,7 @@ const JA = (() => {
   function logoPath() {
     let custom = "";
     try { custom = (settings() || {}).logoUrl || ""; } catch (e) { custom = ""; }
-    return custom || "images/brand/logo.jpg?v=131";
+    return custom || "/static/logo.png";
   }
   // FAQ answers Google can show as rich results. Kept in step with faq.html.
   const FAQ_LD = [
@@ -1981,7 +1981,7 @@ const JA = (() => {
     const noindex = /^(admin|account|order|pay)$/.test(page);
     const file = (location.pathname.split("/").pop() || "index.html");
     const title = opts.title || document.title || "Jaura Store";
-    const description = opts.description || "Jaura Store — fashion, beauty, household and lifestyle. Pay in Naira or F CFA. Lagos and Cotonou.";
+    const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
     const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=131");
     document.title = title;
@@ -2029,7 +2029,7 @@ const JA = (() => {
       const ic = document.createElement("link");
       ic.rel = "icon";
       ic.type = "image/png";
-      ic.href = "images/brand/favicon.png?v=131";
+      ic.href = "/static/logo.png";
       document.head.appendChild(ic);
     }
     let ld = document.getElementById("jaura-jsonld");
@@ -2077,7 +2077,7 @@ const JA = (() => {
           image,
           email: "jaurastore@gmail.com",
           telephone: "+22968953110",
-          currenciesAccepted: "NGN, XOF",
+          currenciesAccepted: "NGN, CFA",
           sameAs: [
             "https://www.tiktok.com/@j_aura_store",
             "https://whatsapp.com/channel/0029Vb7qNQs4yltRRkChu01k"
@@ -2160,7 +2160,7 @@ const JA = (() => {
   function pageSeo() {
     const page = (document.body && document.body.dataset.page) || "home";
     const map = {
-      home: { title: "Jaura Store | Fashion, beauty & lifestyle · ₦ and F CFA", description: "Shop Jaura Store — clothes, shoes, bags, ankara, household, beauty and gadgets. Pay in Naira or F CFA. Lagos and Cotonou." },
+      home: { title: "Jaura Store | Official Fashion, Beauty & Lifestyle Store", description: "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa." },
       shop: { title: "All Products · Jaura Store", description: "Browse 250+ pieces at Jaura Store. Filter by category, colour and size. Pay in ₦ or F CFA." },
       categories: { title: "Categories · Jaura Store", description: "Shop Jaura Store by category: clothes, shoes, bags, ankara, household, beauty, gadgets and more." },
       product: { title: "Product · Jaura Store", description: "Shop this piece at Jaura Store in Naira or F CFA." },

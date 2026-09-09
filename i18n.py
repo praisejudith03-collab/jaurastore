@@ -93,7 +93,7 @@ def product_names():
                         names.add(" ".join(str(it[k]).split()))
     except Exception:
         pass
-    for src in ("data/catalog.json", "data/products.json", "data/wix_products.json"):
+    for src in ("data/catalog.json", "data/products.json"):
         path = os.path.join(os.path.dirname(HERE), src)
         if not os.path.exists(path):
             continue

@@ -1825,7 +1825,7 @@ def test_service_worker_precaches_the_current_asset_version():
     # the JSON-LD logo follows the owner's uploaded logo, with the shipped
     # brand file as the fallback when Admin -> Branding has none
     assert "logo: absUrl(logoPath())" in store
-    assert 'return custom || "images/brand/logo.jpg' in store
+    assert 'return custom || "/static/logo.png' in store
     # the hero reel is never left frozen
     app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
     reel = app_js.split('.lux-reel video', 1)[1][:2600]
