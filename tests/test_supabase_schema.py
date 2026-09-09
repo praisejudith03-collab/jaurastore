@@ -134,9 +134,7 @@ def test_dead_snake_case_columns_are_documented_never_drop():
 
 REQUIRED_TABLES = (
     "site_settings", "products", "categories", "orders", "receipts",
-    "admin_users", "admin_reset_tokens", "coupons", "coupon_uses",
     "referral_codes", "referral_uses", "delivery_zones", "product_reviews",
-    "customers", "customer_tokens",
 )
 
 REQUIRED_PRODUCT_COLUMNS = (

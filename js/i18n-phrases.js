@@ -14,8 +14,8 @@ window.I18N_PHRASES = {
   // ---------------------------------------------------------------- payment
   "Payment confirmation": "Confirmation de paiement",
   "Send your payment receipt": "Envoyez votre reçu de paiement",
-  "Upload the receipt or screenshot from your bank or MoMo. We email it to":
-    "Téléversez le reçu ou la capture de votre banque ou MoMo. Nous l'envoyons par e-mail à",
+  "Upload the receipt or screenshot from your bank or MoMo. It is saved in the admin portal, then we confirm your payment.":
+    "Téléversez le reçu ou la capture de votre banque ou MoMo. Il est enregistré dans le portail admin, puis nous confirmons votre paiement.",
   "with your details, so nothing gets lost on WhatsApp.":
     "avec vos coordonnées, pour que rien ne se perde sur WhatsApp.",
   "Pay into": "Payez sur",
@@ -35,8 +35,8 @@ window.I18N_PHRASES = {
     "Tout ce que nous devons savoir sur ce paiement",
   "Your receipt — JPG, PNG or PDF (max 8 MB) *":
     "Votre reçu — JPG, PNG ou PDF (max 8 Mo) *",
-  "We attach the original file to the email, exactly as you upload it.":
-    "Nous joignons le fichier original à l'e-mail, exactement tel que vous l'envoyez.",
+  "The original file is saved exactly as you upload it.":
+    "Le fichier original est enregistré exactement comme vous l'envoyez.",
   "Send receipt to Jaura Store": "Envoyer le reçu à Jaura Store",
   "Your details are used only to match your payment to your order.":
     "Vos coordonnées servent uniquement à relier votre paiement à votre commande.",
@@ -95,11 +95,6 @@ window.I18N_PHRASES = {
   "Signing in…": "Connexion…",
   "Sign out": "Se déconnecter",
   "Could not sign in.": "Impossible de se connecter.",
-  "Forgot password? Reset it by email":
-    "Mot de passe oublié ? Réinitialisez-le par e-mail",
-  "Reset your password": "Réinitialiser votre mot de passe",
-  "We email a 6-digit code to the admin address. Enter it below with a new password.":
-    "Nous envoyons un code à 6 chiffres à l'adresse administrateur. Saisissez-le ci-dessous avec un nouveau mot de passe.",
 
   // ---------------------------------------------------------- admin: general
   "Admin · Jaura Store": "Admin · Jaura Store",
@@ -244,10 +239,6 @@ window.I18N_PHRASES = {
     "Pas de connexion. Réessayez, ou confirmez depuis le portail admin.",
   "That link did not work. Sign in to the admin portal instead.":
     "Ce lien n'a pas fonctionné. Connectez-vous plutôt au portail admin.",
-  "Payment confirmed. The customer has been emailed a receipt.":
-    "Paiement confirmé. Un reçu a été envoyé au client par e-mail.",
-  "Order declined. The customer has been emailed about it.":
-    "Commande refusée. Le client en a été informé par e-mail.",
   "Confirm payment": "Confirmer le paiement",
   "Decline order": "Refuser la commande",
   "Yes — payment received": "Oui — paiement reçu",
@@ -257,7 +248,7 @@ window.I18N_PHRASES = {
   "Please upload an image screenshot.": "Veuillez téléverser une capture d'écran.",
   "Payment screenshot": "Capture du paiement",
   "Your payment receipt": "Votre reçu de paiement",
-  "Your receipt has been emailed to": "Votre reçu a été envoyé par e-mail à",
+  "Your receipt is saved for": "Votre reçu est enregistré pour",
   "with the original file attached. We will confirm your payment shortly.":
     "avec le fichier original en pièce jointe. Nous confirmerons votre paiement sous peu.",
   "Your receipt is saved with us. We will confirm your payment shortly.":
@@ -293,8 +284,6 @@ window.I18N_PHRASES = {
   "To process and deliver your order, confirm payment, answer questions and keep you updated on that order. We do not sell your data.":
     "Pour traiter et livrer votre commande, confirmer le paiement, répondre à vos questions et vous tenir informé de cette commande. Nous ne vendons pas vos données.",
   "Who we share it with": "Avec qui nous les partageons",
-  "Only the partners needed to fulfil your order (delivery partners) and to process communications (our email provider). Each is required to protect your data.":
-    "Uniquement les partenaires nécessaires à votre commande (partenaires de livraison) et aux communications (notre fournisseur d'e-mail). Chacun est tenu de protéger vos données.",
   "How long we keep it": "Combien de temps nous les gardons",
   "Order records are kept for accounting and warranty purposes. Marketing messages are only sent if you asked for them, and you can opt out at any time.":
     "Les commandes sont conservées à des fins comptables et de garantie. Les messages marketing ne sont envoyés que si vous les avez demandés, et vous pouvez vous désinscrire à tout moment.",

@@ -1,4 +1,4 @@
-"""Customer accounts: register/login, ownership, claim tokens, no leaks."""
+"""Customer accounts: register/login, ownership and no leaks."""
 import json, os, re, sys, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -7,16 +7,15 @@ os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_test_catalog.json")
 os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_EMAILS", "jaurastore@gmail.com")
-os.environ.setdefault("MAIL_MODE", "none")
 
 import pytest  # noqa: E402
 import app as appmod  # noqa: E402
 import auth as authmod  # noqa: E402
-import emailer  # noqa: E402
 from db import execute, init_db, one  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _pw import PW  # noqa: E402
+os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = PW
 
 EMAIL = "jaurastore@gmail.com"
 SHOP_PW = "Shopper1x"
@@ -41,11 +40,8 @@ def app():
 @pytest.fixture()
 def client(app):
     init_db()
-    authmod.ensure_seed_admins()
-    authmod.set_password(EMAIL, PW)
     execute("DELETE FROM rate_limits")
     try:
-        execute("DELETE FROM customer_tokens")
         execute("DELETE FROM customers")
     except Exception:
         pass
@@ -91,7 +87,7 @@ def test_no_public_register_alias(client):
 
 
 def test_account_spa_routes_serve_account_html(client):
-    for path in ("/account", "/account/", "/account/forgot", "/account/reset-password"):
+    for path in ("/account", "/account/"):
         r = client.get(path)
         assert r.status_code == 200, path
         body = r.get_data(as_text=True)
@@ -156,63 +152,8 @@ def test_profile_and_password_change(client):
     assert login_cust(client, email, "FreshPass9").status_code == 200
 
 
-def test_forgot_reset_does_not_enumerate_and_is_one_use(client, monkeypatch):
-    email = _mail("reset")
-    assert register(client, email).status_code == 201
-    client.post("/api/account/logout")
-    sent = []
-
-    def fake_send(to, subject, body):
-        sent.append((to, subject, body))
-        return True, "ok"
-
-    monkeypatch.setattr(emailer, "send", fake_send)
-    unknown = client.post("/api/account/forgot", headers=H(client),
-                          json={"email": "nobody-acct@example.com"})
-    known = client.post("/api/account/forgot", headers=H(client),
-                        json={"email": email})
-    assert unknown.status_code == known.status_code == 200
-    assert unknown.get_json()["message"] == known.get_json()["message"]
-    assert len(sent) == 1
-    token = re.search(r"token=([A-Za-z0-9_-]+)", sent[0][2]).group(1)
-    weak = client.post("/api/account/reset", headers=H(client),
-                       json={"token": token, "newPassword": "short"})
-    assert weak.status_code == 400
-    # weak password must not burn the token
-    ok = client.post("/api/account/reset", headers=H(client),
-                     json={"token": token, "newPassword": "ResetPass9"})
-    assert ok.status_code == 200, ok.data
-    again = client.post("/api/account/reset", headers=H(client),
-                        json={"token": token, "newPassword": "ResetPass8"})
-    assert again.status_code == 400
-    client.post("/api/account/logout")
-    assert login_cust(client, email, "ResetPass9").status_code == 200
 
 
-def test_guest_checkout_is_not_listed_until_claim(client, monkeypatch):
-    email = _mail("claim")
-    oid = _oid(1)
-    place_order(client, oid, email)
-    assert register(client, email, name="Claim Me").status_code == 201
-    listed = client.get("/api/account/orders").get_json()["orders"]
-    assert listed == []
-    sent = []
-    monkeypatch.setattr(emailer, "send",
-                        lambda to, subject, body: sent.append(body) or (True, "ok"))
-    req = client.post("/api/account/claim-request", json={}, headers=H(client))
-    assert req.status_code == 200
-    token = re.search(r"claim=([A-Za-z0-9_-]+)", sent[0]).group(1)
-    # wrong token does nothing
-    bad = client.post("/api/account/claim", headers=H(client), json={"token": "nope"})
-    assert bad.status_code == 400
-    assert client.get("/api/account/orders").get_json()["orders"] == []
-    ok = client.post("/api/account/claim", headers=H(client), json={"token": token})
-    assert ok.status_code == 200 and ok.get_json()["linked"] >= 1
-    ids = {o["id"] for o in client.get("/api/account/orders").get_json()["orders"]}
-    assert oid in ids
-    # one-use
-    again = client.post("/api/account/claim", headers=H(client), json={"token": token})
-    assert again.status_code == 400
 
 
 def test_signed_in_checkout_owns_order_even_if_email_differs(client):

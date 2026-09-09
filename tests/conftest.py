@@ -32,7 +32,7 @@ os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_test_catalog.json")
 os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_EMAILS", "jaurastore@gmail.com")
-os.environ.setdefault("MAIL_MODE", "none")
+os.environ.setdefault("ADMIN_BOOTSTRAP_PASSWORD", "TestAdmin2026x")
 # The admin category editor writes to CATEGORIES_PATH, which api.py resolves at
 # IMPORT time - so it has to be redirected here, before any test module imports
 # app/api, or a test that saves categories rewrites the tracked

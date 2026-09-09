@@ -274,53 +274,15 @@ def main():
               proof.get("message") or proof.get("error"))
 
         page.wait_for_timeout(2000)
-        rows = db_rows("SELECT order_id, name, phone, email, method, file_name, file_size, mime, emailed "
+        rows = db_rows("SELECT order_id, name, phone, email, method, file_name, file_size, mime "
                        "FROM payment_proofs ORDER BY id DESC LIMIT 1")
         check("receipt stored on the server", bool(rows), rows[:1])
         if rows:
             r = rows[0]
             check("receipt is the original pdf",
                   r["mime"] == "application/pdf" and r["file_name"].endswith(".pdf"), r["file_name"])
-            check("email carried the customer details",
+            check("receipt carries the customer details",
                   r["order_id"] == order_id and r["name"] == "Grace Mensah" and r["phone"], r)
-
-        # prove the attachment in the mailbox is byte-for-byte the original
-        # Delivery is only checkable when this environment actually sends mail
-        # (see tests/test_api.py::..._emailed_with_the_original_file_attached,
-        # which proves it in CI with an in-process SMTP sink).
-        folder = os.environ.get("MAIL_SINK", "/tmp/mail")
-        sent = sorted(f for f in os.listdir(folder) if f.endswith(".eml")) if os.path.isdir(folder) else []
-        if sent:
-            import email as emailmod
-            from email import policy as _policy
-            # the business copy is the one carrying the attachment; the
-            # customer only gets a short confirmation
-            msg = None
-            for fname in reversed(sent):
-                with open(os.path.join(folder, fname), "rb") as fh:
-                    candidate = emailmod.message_from_binary_file(fh, policy=_policy.default)
-                if list(candidate.iter_attachments()):
-                    msg = candidate
-                    break
-            msg = msg or candidate
-            atts = list(msg.iter_attachments())
-            orig = open("tests/fixtures/receipt.pdf", "rb").read()
-            ok = bool(atts) and atts[-1].get_payload(decode=True) == orig
-            check("emailed attachment is the original file, byte for byte", ok,
-                  [(a.get_filename(), len(a.get_payload(decode=True))) for a in atts])
-            check("receipt email is addressed to the shop", "jaurastore" in (msg["To"] or ""),
-                  msg["To"])
-            body = msg.get_body(preferencelist=("plain",))
-            text = body.get_content() if body else ""
-            check("email lists name, phone, order id, products, quantity and method",
-                  all(k in text for k in ("Grace Mensah", "+229 97 00 11 22",
-                                          (rows[0]["order_id"] if rows else order_id),
-                                          "Quantity", "Payment method")),
-                  [ln for ln in text.splitlines() if ln.startswith(("Customer", "Phone", "Order", "Product", "Quantity", "Payment"))][:6])
-        else:
-            print("      note: mail is not being delivered in this environment, so the "
-                  "attachment was not checked here. It is covered by "
-                  "tests/test_api.py (in-process SMTP sink).")
 
         # -------------------------------------------------------------- admin
         page.goto(BASE + "/admin.html", wait_until="networkidle")

@@ -1,23 +1,16 @@
-"""Customer accounts, sessions, password reset and guest-order claims.
+"""Customer accounts and sessions.
 
 Shoppers are not admins. A customer session lives in Flask's ``customer_id``
-key and is independent of ``admin_email``. Guest checkout stays available:
-an order is linked to an account only when the shopper is already signed in
-(at checkout) or later claims it with a one-use emailed token. Matching
-email alone never lists or attaches an order.
+key and is independent of ``admin_email``. Guest checkout stays available,
+but account access has no claim-by-email flow.
 """
-import datetime, hashlib, json, secrets
+import datetime, json, secrets
 from flask import jsonify, request, session
 from werkzeug.security import generate_password_hash, check_password_hash
 from config import Config
 from db import execute, one, query, audit
 import auth as authmod
 import security as sec
-import emailer
-
-TOKEN_TTL = 3600
-RESET_PURPOSE = "reset"
-CLAIM_PURPOSE = "claim"
 
 
 def _now():
@@ -27,10 +20,6 @@ def _now():
 def _ip():
     fwd = request.headers.get("X-Forwarded-For", "")
     return (fwd.split(",")[0].strip() if fwd else "") or request.remote_addr or ""
-
-
-def _origin():
-    return (Config.SITE_ORIGIN or "").rstrip("/")
 
 
 def public_customer(row):
@@ -88,44 +77,6 @@ def require_customer(f):
     return wrapper
 
 
-def hash_token(raw):
-    return hashlib.sha256(
-        (str(Config.SECRET_KEY) + ":cust:" + str(raw or "")).encode("utf-8")
-    ).hexdigest()
-
-
-def issue_token(email, purpose, customer_id=None):
-    raw = secrets.token_urlsafe(32)
-    expires = (datetime.datetime.utcnow()
-               + datetime.timedelta(seconds=TOKEN_TTL)).isoformat(timespec="seconds")
-    execute(
-        "INSERT INTO customer_tokens (customer_id, email, purpose, token_hash, expires_at) "
-        "VALUES (?,?,?,?,?)",
-        (customer_id, (email or "").strip().lower(), purpose, hash_token(raw), expires),
-    )
-    return raw
-
-
-def consume_token(raw, purpose):
-    """Return the token row if valid, else None. Marks it consumed."""
-    if not raw:
-        return None
-    row = one(
-        "SELECT * FROM customer_tokens WHERE token_hash=? AND purpose=? AND consumed_at IS NULL",
-        (hash_token(raw), purpose),
-    )
-    if not row:
-        return None
-    try:
-        expires = datetime.datetime.fromisoformat(row["expires_at"])
-    except (ValueError, TypeError):
-        return None
-    if datetime.datetime.utcnow() > expires:
-        return None
-    execute("UPDATE customer_tokens SET consumed_at=? WHERE id=?", (_now(), row["id"]))
-    return row
-
-
 def customer_order_view(row):
     """Strip proof URLs, hashes and admin fields from an order row."""
     if not row:
@@ -167,26 +118,6 @@ def customer_order_view(row):
         "delivery": delivery,
         "payment": d.get("payment") or payload.get("payment") or "",
     }
-
-
-def claim_unlinked_orders(customer_id, email):
-    """Attach guest orders that share this email and have no owner yet."""
-    email = (email or "").strip().lower()
-    if not customer_id or not email:
-        return 0
-    cur = execute(
-        "UPDATE orders SET customer_user_id=? WHERE lower(email)=? "
-        "AND (customer_user_id IS NULL OR customer_user_id='')",
-        (customer_id, email),
-    )
-    n = cur.rowcount if cur is not None else 0
-    if n:
-        try:
-            from supabase_store import link_guest_orders
-            link_guest_orders(customer_id, email)
-        except Exception:
-            pass
-    return n or 0
 
 
 def persist_customer(row):
@@ -338,59 +269,6 @@ def register_routes(bp):
         audit(row["email"], "customer.password_changed", "", _ip())
         return jsonify(ok=True, message="Password updated.")
 
-    @bp.post("/account/forgot")
-    @sec.require_csrf
-    def account_forgot():
-        d = request.get_json(silent=True) or {}
-        email = sec.clean_email(d.get("email"))
-        limited = sec.guard("cust-forgot", limit=5, window=900,
-                            key_extra=email or "anon")
-        if limited:
-            return limited
-        msg = "If that address is registered, a reset link has been sent."
-        if not email:
-            return jsonify(ok=True, message=msg)
-        row = one("SELECT * FROM customers WHERE email=?", (email,))
-        if row:
-            raw = issue_token(email, RESET_PURPOSE, row["id"])
-            link = _origin() + "/account/reset-password?token=" + raw
-            try:
-                emailer.send(
-                    email,
-                    "Reset your J Aura Store password",
-                    "Use this link within one hour to choose a new password:\n" + link,
-                )
-            except Exception:
-                pass
-            audit(email, "customer.reset_requested", "", _ip())
-        return jsonify(ok=True, message=msg)
-
-    @bp.post("/account/reset")
-    @sec.require_csrf
-    def account_reset():
-        limited = sec.guard("cust-reset", limit=8, window=600)
-        if limited:
-            return limited
-        d = request.get_json(silent=True) or {}
-        newpw = d.get("newPassword") or d.get("password") or ""
-        ok, msg = authmod.password_strong(newpw)
-        if not ok:
-            return jsonify(ok=False, error=msg), 400
-        token_row = consume_token(d.get("token") or "", RESET_PURPOSE)
-        if not token_row:
-            return jsonify(ok=False, error="That reset link is invalid or has expired."), 400
-        cid = token_row["customer_id"]
-        row = one("SELECT * FROM customers WHERE id=?", (cid,)) if cid else None
-        if not row:
-            return jsonify(ok=False, error="That reset link is invalid or has expired."), 400
-        execute("UPDATE customers SET password_hash=?, updated_at=? WHERE id=?",
-                (generate_password_hash(str(newpw)), _now(), cid))
-        persist_customer(one("SELECT * FROM customers WHERE id=?", (cid,)))
-        login_session(cid)
-        audit(row["email"], "customer.password_reset", "", _ip())
-        return jsonify(ok=True, customer=public_customer(
-            one("SELECT * FROM customers WHERE id=?", (cid,))), csrf=sec.issue_csrf())
-
     @bp.get("/account/orders")
     @require_customer
     def account_orders():
@@ -427,44 +305,3 @@ def register_routes(bp):
         if not row:
             return jsonify(ok=False, error="We could not find that order."), 404
         return jsonify(ok=True, order=customer_order_view(row))
-
-    @bp.post("/account/claim-request")
-    @require_customer
-    @sec.require_csrf
-    def account_claim_request():
-        limited = sec.guard("cust-claim", limit=8, window=600)
-        if limited:
-            return limited
-        row = current_customer()
-        raw = issue_token(row["email"], CLAIM_PURPOSE, row["id"])
-        link = _origin() + "/account/orders?claim=" + raw
-        try:
-            emailer.send(
-                row["email"],
-                "Confirm guest orders for your J Aura Store account",
-                "Use this link within one hour to attach guest orders placed "
-                "with this email:\n" + link,
-            )
-        except Exception:
-            pass
-        audit(row["email"], "customer.claim_requested", "", _ip())
-        return jsonify(ok=True,
-                       message="If that address has guest orders, a confirmation link has been sent.")
-
-    @bp.post("/account/claim")
-    @require_customer
-    @sec.require_csrf
-    def account_claim():
-        limited = sec.guard("cust-claim", limit=8, window=600)
-        if limited:
-            return limited
-        d = request.get_json(silent=True) or {}
-        token_row = consume_token(d.get("token") or "", CLAIM_PURPOSE)
-        if not token_row:
-            return jsonify(ok=False, error="That confirmation link is invalid or has expired."), 400
-        cid = current_customer_id()
-        if token_row["customer_id"] and token_row["customer_id"] != cid:
-            return jsonify(ok=False, error="That confirmation link is invalid or has expired."), 400
-        n = claim_unlinked_orders(cid, token_row["email"])
-        audit(token_row["email"], "customer.claim", f"linked={n}", _ip())
-        return jsonify(ok=True, linked=n)

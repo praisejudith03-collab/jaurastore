@@ -82,11 +82,10 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
           ${needsEmail ? `<label>Email</label>
           <input type="email" name="email" required autocomplete="username" value="${JA.escape(loginEmail)}" />` : ""}
           <label ${needsEmail ? 'style="margin-top:14px"' : ""} data-no-i18n>Password</label>
-          <input type="password" name="password" required autocomplete="current-password" placeholder="Your admin password" />
+          <input type="password" name="password" required autocomplete="current-password" placeholder="Permanent admin password" />
           <button class="btn adx-login-btn" id="login-btn" data-no-i18n>Sign in</button>
         </form>
-        <button type="button" class="au-link-btn" id="forgot-btn" style="margin-top:16px">Forgot password? Reset it by email</button>
-        <div id="otp-slot"></div>
+        <p class="admin-note" style="margin-top:16px">Admin access uses the permanent password configured by the store owner.</p>
       </div>
     </div>`;
   const form = $("#login-form");
@@ -107,81 +106,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
     }
     else paintLogin(res.error || "Could not sign in.");
   });
-  $("#forgot-btn").addEventListener("click", () => paintOtpRequest());
-  // Emergency recovery is intentionally not prominent: use only when OTP email fails.
-  const recovery = document.createElement("button");
-  recovery.type = "button"; recovery.className = "au-link-btn";
-  recovery.textContent = "Owner emergency recovery";
-  recovery.style.marginTop = "8px";
-  recovery.onclick = () => paintRecovery();
-  form.parentNode.appendChild(recovery);
 }
-function paintRecovery(msg) {
-  const slot = $("#otp-slot"); if (!slot) return;
-  slot.innerHTML = `<div class="otp-box"><h3>Owner emergency recovery</h3>
-    <p class="admin-note">Use only if email OTP cannot deliver. Your recovery secret must stay private and is sent over HTTPS.</p>
-    ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
-    <form id="recovery-form" class="field">
-      <label>Admin email</label><input type="email" name="email" required autocomplete="username">
-      <label>Recovery secret</label><input type="password" name="secret" required autocomplete="off">
-      <label>New password</label><input type="password" name="password" required autocomplete="new-password">
-      <button class="btn">Recover access</button>
-    </form></div>`;
-  $("#recovery-form").addEventListener("submit", async e => {
-    e.preventDefault(); const fd = new FormData(e.target);
-    const r = await fetch("api/admin/recovery", {method:"POST", headers:{"Content-Type":"application/json", "X-Admin-Recovery-Secret":String(fd.get("secret"))}, body:JSON.stringify({email:String(fd.get("email")),newPassword:String(fd.get("password"))})}).then(x=>x.json());
-    if (!r.ok) { paintRecovery(r.error || "Recovery failed."); return; }
-    paintLogin("Recovery completed. Sign in with your new password.");
-  });
-}
-
-function paintOtpRequest(msg) {
-  const slot = $("#otp-slot");
-  if (!slot) return;
-  slot.innerHTML = `
-    <div class="otp-box">
-      <h3>Reset your password</h3>
-      <p class="admin-note">Enter the admin email so we know which account, then we send a 6-digit code to that email. Enter it below with a new password.</p>
-      ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
-      <form id="otp-req" class="field">
-        <label>Admin email</label>
-        <input type="email" name="email" required value="${JA.escape(loginEmail)}" />
-        <button class="btn" style="margin-top:14px" id="otp-send">Send code</button>
-      </form>
-      <div id="otp-step2"></div>
-    </div>`;
-  $("#otp-req").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const email = String(new FormData(e.target).get("email") || "").trim();
-    loginEmail = email;
-    const b = $("#otp-send");
-    b.disabled = true; b.textContent = "Sending…";
-    const r = await JA.requestOtp(email);
-    b.disabled = false; b.textContent = "Send code";
-    if (!r.ok) { paintOtpRequest(r.error || "Could not send the code."); return; }
-    $("#otp-step2").innerHTML = `
-      <form id="otp-do" class="field">
-        <label>6-digit code</label>
-        <input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" required autocomplete="one-time-code" />
-        <label style="margin-top:12px">New password</label>
-        <input type="password" name="newPassword" required autocomplete="new-password" />
-        <p class="admin-note">At least 10 characters, with upper case, lower case and a number.</p>
-        <button class="btn" style="margin-top:12px">Set new password</button>
-      </form>
-      <p class="admin-note">${JA.escape(r.message || "")}</p>`;
-    $("#otp-do").addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      const fd = new FormData(ev.target);
-      const v = await JA.verifyOtp(email, String(fd.get("code") || "").trim());
-      if (!v.ok) { JA.toast(v.error || "That code did not work."); return; }
-      const rp = await JA.resetPassword(String(fd.get("newPassword") || ""));
-      if (!rp.ok) { JA.toast(rp.error || "Could not set the password."); return; }
-      JA.toast("Password updated. Sign in with it now.");
-      paintLogin("Password updated — sign in with your new password.");
-    });
-  });
-}
-
 let editingId = null;
 function productImages(p) {
   if (p && p.images && p.images.length) return p.images.slice(0, 20);
@@ -1085,7 +1010,7 @@ async function fillProofs() {
   try { const res = await fetch("api/admin/payment-proofs", { credentials: "same-origin", cache: "no-store" }); if (res.ok) rows = ((await res.json()) || {}).proofs || []; } catch (e) { rows = []; }
   if (!rows.length) { box.innerHTML = `<p class="empty">No receipts uploaded yet.</p>`; return; }
   const shown = rows.slice(0, proofsShown);
-  box.innerHTML = `<div class="table-wrap"><table class="proofs-table"><thead><tr><th>Sent</th><th>Order</th><th>Customer</th><th>Contact</th><th>Method</th><th>Receipt</th><th>Emailed</th><th>Manage</th></tr></thead><tbody>${shown.map((p) => `<tr><td data-label="Sent"><span class="cell-nowrap">${esc((p.at || "").replace("T", " ").slice(0, 16))}</span></td><td data-label="Order"><span class="cell-nowrap">${esc(p.order_id || "")}</span></td><td data-label="Customer">${esc(p.name || "")}<br /><small>${esc(p.items || "")}</small></td><td data-label="Contact"><span class="cell-nowrap">${esc(p.phone || "")}</span><br /><small>${esc(p.email || "")}</small></td><td data-label="Method">${esc(p.method || "")}</td><td data-label="Receipt">${p.file_url ? (fileTypeOf(p.file_url) === "image" ? `<a href="${esc(p.file_url)}" target="_blank" rel="noopener"><img class="proof-thumb" src="${esc(p.file_url)}" alt="Receipt" loading="lazy" /></a>` : `<button type="button" class="btn btn-line" data-receipt-open="${esc(p.file_url)}" data-receipt-label="Receipt for ${esc(p.order_id || "")}" data-receipt-name="${esc(p.file_name || "receipt")}">View ${esc((p.file_name || "").split(".").pop().toUpperCase())}</button>`) + `<br /><a class="btn btn-line" href="${esc(p.file_url)}" download="${esc(p.file_name || "receipt")}">Download</a><small>${Math.max(1, Math.round((p.file_size || 0) / 1024))} KB</small>` : "—"}</td><td data-label="Emailed">${p.emailed ? "yes" : `<span style="color:#c0392b" title="${esc(p.email_info || "")}">no</span>`}</td><td data-label="Manage"><button type="button" class="btn btn-line proof-del" data-del-proof="${esc(String(p.id))}">Delete</button></td></tr>`).join("")}</tbody></table></div><p class="admin-note">The original file is attached to the email we send you, and kept here.</p>` + (rows.length > proofsShown ? `<p class="admin-more"><button type="button" class="btn btn-line" id="proofs-more">Show ${Math.min(PROOF_PAGE, rows.length - proofsShown)} more of ${rows.length}</button></p>` : `<p class="admin-note">Showing all ${rows.length} receipts.</p>`);
+  box.innerHTML = `<div class="table-wrap"><table class="proofs-table"><thead><tr><th>Sent</th><th>Order</th><th>Customer</th><th>Contact</th><th>Method</th><th>Receipt</th><th>Manage</th></tr></thead><tbody>${shown.map((p) => `<tr><td data-label="Sent"><span class="cell-nowrap">${esc((p.at || "").replace("T", " ").slice(0, 16))}</span></td><td data-label="Order"><span class="cell-nowrap">${esc(p.order_id || "")}</span></td><td data-label="Customer">${esc(p.name || "")}<br /><small>${esc(p.items || "")}</small></td><td data-label="Contact"><span class="cell-nowrap">${esc(p.phone || "")}</span><br /><small>${esc(p.email || "")}</small></td><td data-label="Method">${esc(p.method || "")}</td><td data-label="Receipt">${p.file_url ? (fileTypeOf(p.file_url) === "image" ? `<a href="${esc(p.file_url)}" target="_blank" rel="noopener"><img class="proof-thumb" src="${esc(p.file_url)}" alt="Receipt" loading="lazy" /></a>` : `<button type="button" class="btn btn-line" data-receipt-open="${esc(p.file_url)}" data-receipt-label="Receipt for ${esc(p.order_id || "")}" data-receipt-name="${esc(p.file_name || "receipt")}">View ${esc((p.file_name || "").split(".").pop().toUpperCase())}</button>`) + `<br /><a class="btn btn-line" href="${esc(p.file_url)}" download="${esc(p.file_name || "receipt")}">Download</a><small>${Math.max(1, Math.round((p.file_size || 0) / 1024))} KB</small>` : "—"}</td><td data-label="Manage"><button type="button" class="btn btn-line proof-del" data-del-proof="${esc(String(p.id))}">Delete</button></td></tr>`).join("")}</tbody></table></div><p class="admin-note">The original file is stored in the configured receipt storage and is available here.</p>` + (rows.length > proofsShown ? `<p class="admin-more"><button type="button" class="btn btn-line" id="proofs-more">Show ${Math.min(PROOF_PAGE, rows.length - proofsShown)} more of ${rows.length}</button></p>` : `<p class="admin-note">Showing all ${rows.length} receipts.</p>`);
   const more = $("#proofs-more"); if (more) more.onclick = () => { proofsShown += PROOF_PAGE; fillProofs(); };
   box.querySelectorAll("[data-del-proof]").forEach((b) => {
     b.onclick = async () => {
@@ -1149,7 +1074,6 @@ function bindOrderButtons() {
       const res = await JA.setOrderStatus(id, "confirmed");
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not update the order."); b.disabled = false; return; }
       const o = serverOrders.find((x) => x.id === id);
-      if (o && JA.sendReceipt) { JA.toast("Sending receipt…"); await JA.sendReceipt({ ...o, status: "confirmed" }); }
       JA.toast("Confirmed · " + id); fillOrders();
     };
   });
@@ -1181,23 +1105,11 @@ function bindOrderButtons() {
   });
 }
 function accountPanel() {
-  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. The shop uses <strong>one shared admin password</strong> — changing it here updates it for every admin account.</p><form id="pw-form" class="form-grid" style="max-width:560px"><div class="field"><label>Current password</label><input type="password" name="current" required autocomplete="current-password" /></div><div class="field"><label>New shared password</label><input type="password" name="next" required autocomplete="new-password" /></div><div class="field"><label>Repeat new shared password</label><input type="password" name="again" required autocomplete="new-password" /></div><div class="field full"><button class="btn" id="pw-btn">Change shared password</button></div></form><p class="admin-note">At least 10 characters, with an upper case letter, a lower case letter and a number.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn" id="sync-github">Sync to GitHub</button></div><div id="sync-status" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Saved changes go straight to the store. If your Wi-Fi drops, they wait in this device and push themselves up when the connection returns.</p></div></details>`;
+  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. Admin authentication uses the permanent <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> environment value. The permanent password is managed outside the application.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn" id="sync-github">Sync to GitHub</button></div><div id="sync-status" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Saved changes go straight to the store. If your Wi-Fi drops, they wait in this device and push themselves up when the connection returns.</p></div></details>`;
 }
 function bindAccount() {
   const email = $("#acct-email");
   if (email) JA.adminSession(true).then((e) => { email.textContent = e || "unknown"; });
-  $("#pw-form")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const current = String(fd.get("current") || ""); const next = String(fd.get("next") || ""); const again = String(fd.get("again") || "");
-    if (next !== again) { JA.toast("The two new passwords do not match."); return; }
-    const btn = $("#pw-form")?.querySelector("#pw-btn") || $("#pw-btn");
-    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
-    const res = await JA.changePassword(current, next);
-    if (btn) { btn.disabled = false; btn.textContent = "Change password"; }
-    if (!res.ok) { JA.toast(res.error || "Could not change the password."); return; }
-    e.target.reset(); JA.toast("Password changed.");
-  });
   const note = $("#sync-note");
   const paintSync = () => { if (!note) return; const n = JA.syncPending ? JA.syncPending() : 0; note.textContent = n ? `${n} change(s) are waiting for a connection.` : "Everything you saved is live on the store."; };
   paintSync(); if (window.JA_NET) window.JA_NET.onStatus(paintSync);
@@ -1240,7 +1152,7 @@ function bindAccount() {
   });
 }
 function marketingPanel() {
-  return `<div class="admin-card" id="mk-settings-card"><h3 class="admin-h">Referral & abandoned-cart settings</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-coupons-card"><h3 class="admin-h">Coupons</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-referrals-card"><h3 class="admin-h">Referral codes</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-abandoned-card"><h3 class="admin-h">Abandoned checkouts</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-backup-card"><h3 class="admin-h">Backups</h3><p class="admin-note">Product data is backed up to GitHub automatically every night at midnight. Customer orders stay on the server. You can also run a backup right now.</p><button type="button" class="btn" id="mk-backup-now">Back up now</button><p class="admin-note" id="mk-backup-out" hidden></p></div>`;
+  return `<div class="admin-card" id="mk-settings-card"><h3 class="admin-h">Referral settings</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-coupons-card"><h3 class="admin-h">Coupons</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-referrals-card"><h3 class="admin-h">Referral codes</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-backup-card"><h3 class="admin-h">Backups</h3><p class="admin-note">Product data is backed up to GitHub automatically every night at midnight. Customer orders stay on the server. You can also run a backup right now.</p><button type="button" class="btn" id="mk-backup-now">Back up now</button><p class="admin-note" id="mk-backup-out" hidden></p></div>`;
 }
 async function fillMarketing() {
   const api = (path, opts) => window.JA_NET.api(path, opts);
@@ -1248,12 +1160,12 @@ async function fillMarketing() {
   try {
     const d = await api("api/admin/growth/settings"); const s = d.settings || {}; const card = $("#mk-settings-card");
     if (card) {
-      card.innerHTML = `<h3 class="admin-h">Referral & abandoned-cart settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? F CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's discount % (code used at checkout)<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><label class="mk-toggle"><input type="checkbox" name="abandonedEnabled" ${s.abandonedEnabled ? "checked" : ""} /> Abandoned-cart emails ON — remind shoppers who stopped at checkout</label><div class="admin-grid"><label>Send the reminder after (hours)<input name="abandonedHours" type="number" min="1" max="168" value="${num(s.abandonedHours)}" /></label><label>Email subject<input name="abandonedSubject" value="${esc(s.abandonedSubject || "")}" /></label></div><label>Email template — {name}, {items} and {link} are filled in automatically<textarea name="abandonedTemplate" rows="5">${esc(s.abandonedTemplate || "")}</textarea></label><button class="btn" type="submit">Save settings</button></form>`;
+      card.innerHTML = `<h3 class="admin-h">Referral settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? F CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's discount % (code used at checkout)<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p></label><button class="btn" type="submit">Save settings</button></form>`;
       const cfaNote = () => { const f = $("#mk-set-form"); const note = $("#mk-cfa-note"); if (!f || !note) return; const spend = Number(f.minSpendNgn.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = rate > 0 ? `CFA shoppers qualify from ${Math.round(spend * rate).toLocaleString()} F CFA (₦${spend.toLocaleString()} × ${rate}).` : ""; };
       cfaNote(); ["minSpendNgn", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", cfaNote); });
       $("#mk-set-form").onsubmit = async (e) => {
         e.preventDefault(); const fd = new FormData(e.target);
-        const patch = { referralEnabled: e.target.referralEnabled.checked, abandonedEnabled: e.target.abandonedEnabled.checked, minSpendNgn: Number(fd.get("minSpendNgn")), cfaRate: Number(fd.get("cfaRate")), buyerPercent: Number(fd.get("buyerPercent")), referrerPercent: Number(fd.get("referrerPercent")), milestone: Number(fd.get("milestone")), abandonedHours: Number(fd.get("abandonedHours")), abandonedSubject: fd.get("abandonedSubject"), abandonedTemplate: fd.get("abandonedTemplate"), };
+        const patch = { referralEnabled: e.target.referralEnabled.checked, minSpendNgn: Number(fd.get("minSpendNgn")), cfaRate: Number(fd.get("cfaRate")), buyerPercent: Number(fd.get("buyerPercent")), referrerPercent: Number(fd.get("referrerPercent")), milestone: Number(fd.get("milestone")) , };
         try { await api("api/admin/growth/settings", { method: "POST", json: patch }); JA.toast("Marketing settings saved."); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not save."); }
       };
     }
@@ -1275,14 +1187,7 @@ async function fillMarketing() {
     const d = await api("api/admin/referrals"); const card = $("#mk-referrals-card");
     if (card) {
       const rows = (d.referrals || []).map((r) => `<tr><td><strong>${esc(r.code)}</strong></td><td>${esc(r.name || "")}<br /><small>${esc(r.email)}</small></td><td>${num(r.uses)}</td><td>${r.reward_issued ? "Rewarded — " + esc(r.reward_coupon || "") : "Not yet"}</td><td><small>${esc(r.created_at || "")}</small></td></tr>`).join("");
-      card.innerHTML = `<h3 class="admin-h">Referral codes</h3><p class="admin-note">Codes are minted automatically for qualifying orders. When a code reaches the milestone, the referrer's reward coupon is issued and emailed automatically.</p>${rows ? `<table class="mk-table"><thead><tr><th>Code</th><th>Customer</th><th>Uses</th><th>Reward</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">No referral codes yet.</p>`}`;
-    }
-  } catch (e) {}
-  try {
-    const d = await api("api/admin/abandoned"); const card = $("#mk-abandoned-card");
-    if (card) {
-      const st = d.stats || {}; const rows = (d.carts || []).slice(0, 30).map((a) => `<tr><td>${esc(a.email)}</td><td>${(a.items || []).map((i) => `${i.qty}× ${esc(i.name || i.id)}`).join(", ")}</td><td>${a.completed_at ? "Recovered ✓" : a.reminded_at ? "Reminded" : "Waiting"}</td><td><small>${esc(a.updated_at || "")}</small></td></tr>`).join("");
-      card.innerHTML = `<h3 class="admin-h">Abandoned checkouts</h3><p class="admin-note"><strong>${num(st.total || 0)}</strong> captured · <strong>${num(st.reminded || 0)}</strong> reminded · <strong>${num(st.recovered || 0)}</strong> recovered</p>${rows ? `<table class="mk-table"><thead><tr><th>Email</th><th>Cart</th><th>State</th><th>Last seen</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">No abandoned checkouts recorded yet.</p>`}`;
+      card.innerHTML = `<h3 class="admin-h">Referral codes</h3><p class="admin-note">Codes are minted automatically for qualifying orders. When a code reaches the milestone, the referrer's reward coupon is issued and shown here.</p>${rows ? `<table class="mk-table"><thead><tr><th>Code</th><th>Customer</th><th>Uses</th><th>Reward</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">No referral codes yet.</p>`}`;
     }
   } catch (e) {}
   const bk = $("#mk-backup-now");

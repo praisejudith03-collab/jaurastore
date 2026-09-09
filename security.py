@@ -185,8 +185,8 @@ CSP = (
     "font-src https://fonts.gstatic.com data:; "
     "script-src 'self' https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/; "
     "frame-src 'self' https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/; "
-    "connect-src 'self' https://formsubmit.co https://open.er-api.com https://www.google.com; "
-    "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://formsubmit.co"
+    "connect-src 'self' https://open.er-api.com https://www.google.com; "
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 )
 
 def apply_headers(resp):
@@ -200,24 +200,3 @@ def apply_headers(resp):
     if prod:
         resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return resp
-
-
-# ------------------------------------------------- one-tap links from email
-
-def order_token(order_id, action="confirm"):
-    """A signature for the confirm / decline link we email to the shop.
-
-    The link has to work from a mail client, so it cannot carry a session
-    cookie or a CSRF token. Instead every link is signed with SECRET_KEY and
-    only permits that one action on that one order - guessing or editing the
-    order id invalidates it.
-    """
-    from config import Config
-    msg = ("%s:%s" % (str(order_id or "").strip().upper(), str(action).lower())).encode()
-    return hmac.new(str(Config.SECRET_KEY or "").encode(), msg, hashlib.sha256).hexdigest()[:40]
-
-
-def order_token_ok(order_id, action, token):
-    if not token:
-        return False
-    return hmac.compare_digest(str(token).strip(), order_token(order_id, action))

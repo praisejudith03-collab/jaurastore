@@ -23,7 +23,6 @@ os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_test_catalog.json")
 os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_EMAILS", "jaurastore@gmail.com")
-os.environ.setdefault("MAIL_MODE", "none")
 os.environ.setdefault("SITE_CONFIG_PATH", "/tmp/jaura_test_site_admin.json")
 
 import pytest  # noqa: E402
@@ -34,6 +33,7 @@ from db import execute, init_db, one, query  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _pw import PW  # noqa: E402
+os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = PW
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EMAIL = "jaurastore@gmail.com"
@@ -42,7 +42,7 @@ EMAIL = "jaurastore@gmail.com"
 # removed without updating this list the audit test at the bottom fails, so the
 # coverage here cannot silently rot.
 EXPECTED_ADMIN_ROUTES = {
-    ("GET", "/api/admin/abandoned"), ("GET", "/api/admin/analytics"),
+("GET", "/api/admin/analytics"),
     ("GET", "/api/admin/audit"), ("POST", "/api/admin/backup"),
     ("PUT", "/api/admin/categories"), ("GET", "/api/admin/coupons"),
     ("POST", "/api/admin/coupons"), ("DELETE", "/api/admin/coupons/<code>"),
@@ -55,10 +55,11 @@ EXPECTED_ADMIN_ROUTES = {
     ("POST", "/api/admin/logout"), ("GET", "/api/admin/low-stock"),
     ("GET", "/api/admin/most-viewed"), ("GET", "/api/admin/orders"),
     ("GET", "/api/admin/orders.csv"), ("DELETE", "/api/admin/orders/<oid>"),
-    ("PATCH", "/api/admin/orders/<oid>"), ("POST", "/api/admin/otp/request"),
-    ("POST", "/api/admin/otp/reset"), ("POST", "/api/admin/otp/verify"),
-    ("POST", "/api/admin/password"), ("POST", "/api/admin/recovery"), ("GET", "/api/admin/payment-proofs"),
-    ("DELETE", "/api/admin/payment-proofs/<int:pid>"),
+    ("PATCH", "/api/admin/orders/<oid>"),
+
+    ("GET", "/api/admin/payment-proofs"),
+    ("DELETE", "/api/admin/payment-proofs/<pid>"),
+
     ("POST", "/api/admin/products"), ("PUT", "/api/admin/products"),
     ("DELETE", "/api/admin/products/<pid>"), ("GET", "/api/admin/referrals"),
     ("GET", "/api/admin/coupon-uses"), ("POST", "/api/admin/reviews/migrate"),
@@ -129,8 +130,6 @@ class _Admin:
 def admin(app):
     """A logged-in admin client that sends its CSRF token on every call."""
     init_db()
-    authmod.ensure_seed_admins()
-    authmod.set_password(EMAIL, PW)
     execute("DELETE FROM rate_limits")
     with app.test_client() as c:
         r = c.post("/api/admin/login", json={"email": EMAIL, "password": PW})
@@ -443,7 +442,7 @@ def test_payment_proofs_list_and_delete(admin):
 
 @pytest.mark.parametrize("path", [
     "/api/admin/analytics", "/api/admin/sales", "/api/admin/most-viewed",
-    "/api/admin/abandoned", "/api/admin/audit", "/api/admin/live",
+    "/api/admin/audit", "/api/admin/live",
     "/api/admin/sync/status",
 ])
 def test_reporting_endpoints_answer_for_an_admin(admin, path):
@@ -506,7 +505,7 @@ def test_video_upload_endpoint_rejects_an_oversize_body(admin):
 
 
 # ===========================================================================
-# session, password, OTP, logout
+# session and logout
 # ===========================================================================
 
 def test_session_probe_reports_the_logged_in_admin(admin):
@@ -517,20 +516,8 @@ def test_session_probe_reports_the_logged_in_admin(admin):
     assert body["email"] == EMAIL
 
 
-def test_password_change_requires_csrf(admin):
-    admin.drop_csrf()
-    r = admin.post("/api/admin/password",
-                   json={"currentPassword": PW, "newPassword": "Zzz12345!"})
-    assert r.status_code in (400, 403)
 
 
-def test_otp_request_answers_without_leaking_a_code(admin):
-    r = admin.post("/api/admin/otp/request", json={"email": EMAIL})
-    assert r.status_code in (200, 429), r.data
-    body = r.get_json()
-    assert isinstance(body, dict)
-    assert "code" not in body or not body.get("code"), \
-        "a reset code must never be returned to the browser"
 
 
 def test_logout_ends_the_session(admin):

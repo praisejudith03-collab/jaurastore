@@ -5,8 +5,8 @@
 -- Every statement is idempotent (IF NOT EXISTS), so re-running is safe.
 --
 -- Supabase PostgreSQL is the production source of truth for products,
--- orders, receipts, categories, site settings, referral commission
--- settings and admin reset tokens. SQLite on the Render disk is only a
+-- orders, receipts, categories, site settings and referral commission
+-- settings. SQLite on the Render disk is only a
 -- boot-time cache the app restores FROM these tables; production writes
 -- go to PostgreSQL first and failures are surfaced, never swallowed.
 --
@@ -173,8 +173,6 @@ create table if not exists receipts (
   file_name  text,
   file_size  bigint,
   file_type  text,
-  emailed    boolean default false,
-  email_info text,
   created_at timestamptz default now()
 );
 -- Repair an older receipts table. Add-only, preserves all existing receipt
@@ -192,8 +190,6 @@ alter table receipts add column if not exists file_url   text;
 alter table receipts add column if not exists file_name  text;
 alter table receipts add column if not exists file_size  bigint;
 alter table receipts add column if not exists file_type  text;
-alter table receipts add column if not exists emailed    boolean default false;
-alter table receipts add column if not exists email_info text;
 alter table receipts add column if not exists created_at timestamptz default now();
 create index if not exists idx_receipts_order on receipts (order_id);
 
@@ -259,9 +255,8 @@ alter table coupons add column if not exists created_at timestamptz default now(
 
 -- SECTION: growth_settings
 -- ----------------------------------------------------- growth settings
--- key/value map: referralEnabled, abandonedEnabled, minSpendNgn, cfaRate,
--- buyerPercent, referrerPercent, milestone, abandonedHours,
--- abandonedSubject, abandonedTemplate
+-- key/value map: referralEnabled, minSpendNgn, cfaRate,
+-- buyerPercent, referrerPercent, milestone
 create table if not exists growth_settings (
   key   text primary key,
   value text
@@ -271,7 +266,7 @@ alter table growth_settings add column if not exists value text;
 
 -- SECTION: site_settings
 -- ===================================================== Jaura production tables
--- These are the source of truth for runtime configuration and recovery.
+-- These are the source of truth for runtime configuration.
 create table if not exists site_settings (
   id bigint primary key check (id = 1),
   bank_name text not null default '',
@@ -370,52 +365,7 @@ do $$ begin
 exception when duplicate_object then null;
 end $$;
 
--- SECTION: admin_credentials
--- Admin credentials. The SQLite `admins` table lives on the Render disk, which
--- is EPHEMERAL: after a redeploy it is re-seeded with a deliberately unusable
--- random hash, which locked every admin out until someone got shell access.
--- This table is the durable copy of the password hash, so a restart restores
--- it instead of destroying it. Only a werkzeug hash is ever stored - never a
--- plaintext password, and never anything derived from SECRET_KEY.
-create table if not exists admin_users (
-  id            bigint generated always as identity primary key,
-  email         text not null unique,
-  password_hash text not null,
-  role          text not null default 'admin',
-  enabled       boolean not null default true,
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now(),
-  last_login_at timestamptz
-);
--- Repair an older admin_users table. Add-only, preserves existing admins.
-alter table admin_users add column if not exists email         text;
-alter table admin_users add column if not exists password_hash text;
-alter table admin_users add column if not exists role          text not null default 'admin';
-alter table admin_users add column if not exists enabled       boolean not null default true;
-alter table admin_users add column if not exists created_at    timestamptz not null default now();
-alter table admin_users add column if not exists updated_at    timestamptz not null default now();
-alter table admin_users add column if not exists last_login_at timestamptz;
-
-create table if not exists admin_reset_tokens (
-  id bigint generated always as identity primary key,
-  email text not null,
-  purpose text not null default 'reset',
-  token_hash text not null,
-  expires_at timestamptz not null,
-  attempts integer not null default 0 check (attempts >= 0),
-  consumed_at timestamptz,
-  created_at timestamptz not null default now()
-);
--- Repair an older admin_reset_tokens table. Add-only, before the index.
-alter table admin_reset_tokens add column if not exists email       text;
-alter table admin_reset_tokens add column if not exists purpose     text not null default 'reset';
-alter table admin_reset_tokens add column if not exists token_hash  text;
-alter table admin_reset_tokens add column if not exists expires_at  timestamptz;
-alter table admin_reset_tokens add column if not exists attempts    integer not null default 0;
-alter table admin_reset_tokens add column if not exists consumed_at timestamptz;
-alter table admin_reset_tokens add column if not exists created_at  timestamptz not null default now();
-create index if not exists admin_reset_tokens_lookup on admin_reset_tokens(email, purpose, created_at desc);
-
+-- SECTION: customer_accounts
 create table if not exists customers (
   id text primary key,
   email text not null unique,
@@ -440,25 +390,6 @@ alter table customers add column if not exists preferred_currency text default '
 alter table customers add column if not exists created_at timestamptz not null default now();
 alter table customers add column if not exists updated_at timestamptz not null default now();
 create index if not exists idx_customers_email on customers(email);
-
-create table if not exists customer_tokens (
-  id bigint generated always as identity primary key,
-  customer_id text,
-  email text not null,
-  purpose text not null,
-  token_hash text not null,
-  expires_at timestamptz not null,
-  consumed_at timestamptz,
-  created_at timestamptz not null default now()
-);
-alter table customer_tokens add column if not exists customer_id text;
-alter table customer_tokens add column if not exists email text;
-alter table customer_tokens add column if not exists purpose text;
-alter table customer_tokens add column if not exists token_hash text;
-alter table customer_tokens add column if not exists expires_at timestamptz;
-alter table customer_tokens add column if not exists consumed_at timestamptz;
-alter table customer_tokens add column if not exists created_at timestamptz not null default now();
-create index if not exists idx_customer_tokens_hash on customer_tokens(token_hash, purpose);
 
 -- SECTION: delivery_zones
 -- Delivery zones and their fare ranges. Admin-editable, served to the

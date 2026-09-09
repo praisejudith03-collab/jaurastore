@@ -1286,26 +1286,6 @@ function renderCheckout() {
   if (!form) return;
   if (form.dataset.done === "1") return;
 
-  // A reminder email's "recover my cart" link: restore the saved cart first.
-  const recTok = new URLSearchParams(location.search).get("recover");
-  if (recTok && form.dataset.recovered !== "1") {
-    form.dataset.recovered = "1";
-    fetch("api/cart/recover/" + encodeURIComponent(recTok))
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (!d || !d.ok || !Array.isArray(d.items) || !d.items.length) return;
-        try {
-          localStorage.setItem("jaura_cart", JSON.stringify(d.items.map((i) => ({
-            id: i.id, qty: Math.max(1, Number(i.qty) || 1), color: i.color || "",
-          }))));
-          if (d.currency) localStorage.setItem("jaura_currency", d.currency === "NGN" ? "NGN" : "CFA");
-          localStorage.setItem("ja_cart_token", recTok);
-        } catch (e) {}
-        location.replace("checkout.html");
-      })
-      .catch(() => {});
-  }
-
   const items = JA.cartDetailed();
   if (!items.length) {
     if (empty) empty.hidden = false;
@@ -1460,38 +1440,6 @@ function renderCheckout() {
     if (e.key === "Enter") { e.preventDefault(); promoBtn?.click(); }
   });
 
-  // ---- abandoned-cart capture: save the email + cart as soon as we can,
-  // so a stalled checkout gets a recovery email with its cart intact ----
-  const cartToken = () => {
-    let tk = "";
-    try { tk = localStorage.getItem("ja_cart_token") || ""; } catch (e) {}
-    if (!tk) {
-      tk = "CT-" + Math.random().toString(36).slice(2, 10).toUpperCase() + Date.now().toString(36).toUpperCase();
-      try { localStorage.setItem("ja_cart_token", tk); } catch (e) {}
-    }
-    return tk;
-  };
-  const captureCart = () => {
-    const email = String(form.querySelector("[name=email]")?.value || "").trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
-    const detailed = JA.cartDetailed();
-    if (!detailed.length || !window.JA_NET) return;
-    JA_NET.api("api/cart/abandon", {
-      method: "POST",
-      json: {
-        token: cartToken(),
-        email,
-        currency: checkoutCurrency(form),
-        items: detailed.map((i) => ({
-          id: i.id, name: JA.displayName(i.product), qty: i.qty, color: i.color || "",
-        })),
-      },
-    }).catch(() => {});
-  };
-  form.querySelector("[name=email]")?.addEventListener("blur", captureCart);
-  form.querySelector("[name=email]")?.addEventListener("change", captureCart);
-  if (form.querySelector("[name=email]")?.value) captureCart();
-
   const shot = form.querySelector("[name=proof]");
   const preview = form.querySelector("[data-proof-preview]");
   let proofJob = null;            // the compression still running, if any
@@ -1645,7 +1593,6 @@ function renderCheckout() {
       at: new Date().toISOString(),
       status: "pending",
       promoCode: ckPromo ? ckPromo.code : "",
-      cartToken: (() => { try { return localStorage.getItem("ja_cart_token") || ""; } catch (e) { return ""; } })(),
       customer: {
         name: fullName,
         firstName: clean(data.firstName),
@@ -1670,7 +1617,6 @@ function renderCheckout() {
       })),
     });
     JA.clearCart();
-    try { localStorage.removeItem("ja_cart_token"); } catch (err) {}
     ckPromo = null;
     form.dataset.done = "1";
     showOrderDone(order);
@@ -1690,86 +1636,6 @@ function renderCheckout() {
       navigator.clipboard?.writeText(id).then(() => JA.toast("Order ID copied: " + id));
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
-  });
-}
-
-function renderConfirm() {
-  const root = document.querySelector("[data-confirm]");
-  if (!root) return;
-  const q = new URLSearchParams(location.search);
-  const id = (q.get("id") || "").trim().toUpperCase();
-  const action = (q.get("action") || "confirm").toLowerCase();
-  const token = q.get("token") || "";
-  const ask = action === "decline" ? "decline" : "confirm";
-
-  const shell = (inner) => `
-    <div class="order-done">
-      <div class="kicker">${ask === "confirm" ? "Confirm payment" : "Decline order"}</div>
-      <h1 class="serif-title">${JA.escape(id || "Order")}</h1>
-      ${inner}
-    </div>`;
-
-  if (!id || !token) {
-    root.innerHTML = shell(`<p class="empty">This link is incomplete. Open the email
-      again, or sign in to the admin portal to confirm the order.</p>`);
-    return;
-  }
-
-  // The page never acts on its own: a mail scanner pre-fetching the link must
-  // not confirm anything. It waits for a human to press the button.
-  root.innerHTML = shell(`
-    <p id="c-summary" class="empty">Loading this order…</p>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:18px">
-      <button type="button" class="btn" data-c-go="${ask}">
-        ${ask === "confirm" ? "Yes — payment received" : "Decline this order"}
-      </button>
-      <a class="btn btn-line" href="admin.html">Open admin portal</a>
-    </div>
-    <p id="c-result" class="ck-fare-help" style="margin-top:18px"></p>`);
-
-  fetch(`api/orders/${encodeURIComponent(id)}`)
-    .then((r) => (r.ok ? r.json() : null))
-    .then((d) => {
-      const el = document.getElementById("c-summary");
-      if (!el) return;
-      if (!d) { el.textContent = "We could not read this order."; return; }
-      const cur = d.currency === "NGN" ? "\u20a6" : "F CFA";
-      el.innerHTML = `
-        <p><strong>${JA.escape(String(d.id || id))}</strong> ·
-           <span class="status-pill ${JA.escape(d.status || "pending")}">${JA.escape(d.status || "pending")}</span></p>
-        <p>${JA.escape(d.customer_name || "")}${d.city ? " · " + JA.escape(d.city) : ""}</p>
-        <p>Total <strong>${cur}${JA.escape(String(d.total || ""))}</strong></p>`;
-    })
-    .catch(() => {});
-
-  const btn = root.querySelector("[data-c-go]");
-  btn?.addEventListener("click", async () => {
-    btn.disabled = true;
-    const res = document.getElementById("c-result");
-    res.textContent = "Working…";
-    try {
-      const r = await fetch(
-        `api/orders/${encodeURIComponent(id)}/confirm?action=${encodeURIComponent(ask)}`
-        + `&token=${encodeURIComponent(token)}`, { cache: "no-store" });
-      const d = await r.json().catch(() => ({}));
-      if (r.ok && d.ok) {
-        root.innerHTML = shell(`
-          <p class="ck-confirm-note">${ask === "confirm"
-            ? "Payment confirmed. The customer has been emailed a receipt."
-            : "Order declined. The customer has been emailed about it."}</p>
-          <p class="status-pill ${d.status}">${JA.escape(d.status)}</p>
-          <p style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:18px">
-            <a class="btn" href="admin.html">Open admin portal</a>
-            <a class="btn btn-line" href="shop.html">Back to the shop</a>
-          </p>`);
-        return;
-      }
-      res.textContent = (d && d.error) || "That link did not work. Sign in to the admin portal instead.";
-      btn.disabled = false;
-    } catch (e) {
-      res.textContent = "No connection. Try again, or confirm from the admin portal.";
-      btn.disabled = false;
-    }
   });
 }
 
@@ -1823,7 +1689,6 @@ function paintAccountGuest(root, notice) {
         <div class="field"><label>${t("account.password")}</label><input name="password" type="password" required autocomplete="current-password" /></div>
         <p class="acct-msg" data-login-msg hidden></p>
         <button class="btn" type="submit">${t("account.login")}</button>
-        <p class="acct-links"><a href="/account/forgot">${t("account.forgot")}</a></p>
       </form>
       <form class="acct-card" data-account-register>
         <h2>${t("account.register")}</h2>
@@ -1853,46 +1718,6 @@ function paintAccountGuest(root, notice) {
     accountApi("register", { method: "POST", json: { name: fd.get("name"), email: fd.get("email"), password: fd.get("password") } })
       .then((d) => { if (d && d.ok) renderAccount(); else accountMsg(msg, (d && d.error) || t("account.badRegister"), true); })
       .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message || t("account.badRegister"), true));
-  });
-}
-
-function paintAccountForgot(root) {
-  root.innerHTML = `
-    <form class="acct-card acct-narrow" data-account-forgot>
-      <h2>${t("account.forgot")}</h2>
-      <p class="acct-lead">${t("account.forgotLead")}</p>
-      <div class="field"><label>${t("account.email")}</label><input name="email" type="email" required autocomplete="email" /></div>
-      <p class="acct-msg" data-forgot-msg hidden></p>
-      <button class="btn" type="submit">${t("account.sendReset")}</button>
-      <p class="acct-links"><a href="/account">${t("account.back")}</a></p>
-    </form>`;
-  root.querySelector("[data-account-forgot]")?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const email = String(new FormData(e.target).get("email") || "").trim();
-    const msg = root.querySelector("[data-forgot-msg]");
-    accountApi("forgot", { method: "POST", json: { email } })
-      .then((d) => accountMsg(msg, (d && d.message) || t("account.forgotSent"), false))
-      .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message, true));
-  });
-}
-
-function paintAccountReset(root, token) {
-  root.innerHTML = `
-    <form class="acct-card acct-narrow" data-account-reset>
-      <h2>${t("account.reset")}</h2>
-      <p class="acct-lead">${t("account.resetLead")}</p>
-      <div class="field"><label>${t("account.newPassword")}</label><input name="password" type="password" required autocomplete="new-password" /></div>
-      <p class="acct-hint">${t("account.pwHint")}</p>
-      <p class="acct-msg" data-reset-msg hidden></p>
-      <button class="btn" type="submit">${t("account.savePassword")}</button>
-    </form>`;
-  root.querySelector("[data-account-reset]")?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const password = String(new FormData(e.target).get("password") || "");
-    const msg = root.querySelector("[data-reset-msg]");
-    accountApi("reset", { method: "POST", json: { token, newPassword: password } })
-      .then((d) => { if (d && d.ok) { history.replaceState({}, "", "/account"); renderAccount(); } else accountMsg(msg, (d && d.error) || t("account.badReset"), true); })
-      .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message || t("account.badReset"), true));
   });
 }
 
@@ -1933,11 +1758,6 @@ function paintAccountHome(root, me, orders) {
     </div>
     <section class="acct-orders">
       <h2 class="serif-title" style="font-size:22px;margin-bottom:14px">${t("account.orders")}</h2>
-      <p class="acct-lead">${t("account.claimLead")}</p>
-      <p class="acct-actions">
-        <button type="button" class="btn btn-line" data-claim-request>${t("account.claim")}</button>
-      </p>
-      <p class="acct-msg" data-claim-msg hidden></p>
       ${list.length ? list.slice(0, 40).map((o) => `
         <article class="order-card">
           <div class="order-card-top">
@@ -1975,12 +1795,6 @@ function paintAccountHome(root, me, orders) {
     } }).then(() => { accountMsg(msg, t("account.pwSaved"), false); e.target.reset(); })
       .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message, true));
   });
-  root.querySelector("[data-claim-request]")?.addEventListener("click", () => {
-    const msg = root.querySelector("[data-claim-msg]");
-    accountApi("claim-request", { method: "POST", json: {} })
-      .then((d) => accountMsg(msg, (d && d.message) || t("account.claimSent"), false))
-      .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message, true));
-  });
 }
 
 function renderAccount() {
@@ -1988,29 +1802,13 @@ function renderAccount() {
   if (!root) return;
   const path = (location.pathname || "").replace(/\/+$/, "") || "/";
   const q = new URLSearchParams(location.search);
-  const resetTok = q.get("token") || "";
-  const claimTok = q.get("claim") || "";
-  if (/\/account\/reset-password$/.test(path) || (path.indexOf("reset-password") >= 0 && resetTok)) {
-    paintAccountReset(root, resetTok);
-    return;
-  }
-  if (/\/account\/forgot$/.test(path)) {
-    paintAccountForgot(root);
-    return;
-  }
   accountApi("session").then((d) => {
     const me = d && d.authenticated ? d.customer : null;
     if (!me) {
       paintAccountGuest(root);
       return;
     }
-    const afterClaim = claimTok
-      ? accountApi("claim", { method: "POST", json: { token: claimTok } }).then((c) => {
-          history.replaceState({}, "", "/account");
-          return c;
-        }).catch(() => null)
-      : Promise.resolve(null);
-    return afterClaim.then(() => accountApi("orders").catch(() => ({ orders: [] }))).then((ord) => {
+    return accountApi("orders").catch(() => ({ orders: [] })).then((ord) => {
       paintAccountHome(root, me, (ord && ord.orders) || []);
     });
   }).catch(() => paintAccountGuest(root));
@@ -2020,30 +1818,9 @@ function bindContactForm() {
   const form = document.querySelector("[data-contact-form]");
   if (!form || form.dataset.bound) return;
   form.dataset.bound = "1";
-  form.addEventListener("submit", async (e) => {
+  form.addEventListener("submit", (e) => {
     e.preventDefault();
-    const data = Object.fromEntries(new FormData(form).entries());
-    const btn = form.querySelector("button[type=submit]");
-    if (btn) { btn.disabled = true; }
-    try {
-      await fetch("https://formsubmit.co/ajax/jaurastore@gmail.com", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          _subject: "JauraStore message from " + (data.name || ""),
-          _template: "box",
-          _captcha: "false",
-          name: data.name || "",
-          email: data.email || "jaurastore@gmail.com",
-          message: data.message || "",
-        }),
-      });
-      JA.toast(t("contact.sent"));
-      form.reset();
-    } catch {
-      JA.toast(t("contact.sent"));
-    }
-    if (btn) btn.disabled = false;
+    JA.toast("Please contact the store through the WhatsApp link on this page.");
   });
 }
 
@@ -2127,7 +1904,6 @@ async function boot() {
     try { JA.startCardPlay && JA.startCardPlay(); } catch (e) {}
     if (page === "cart") renderCart();
     if (page === "checkout") renderCheckout();
-    if (page === "confirm") renderConfirm();
     if (page === "wishlist") renderWishlist();
     if (page === "account") renderAccount();
     if (page === "contact") bindContactForm();

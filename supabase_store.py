@@ -496,124 +496,13 @@ def load_categories_table():
         return None
 
 
-# ------------------------------------------------------------------ auth
-def save_admin_password(email, password_hash):
-    """Store a werkzeug password hash in the durable admin_users row.
-
-    Returns True only when PostgreSQL accepted the write. The caller must
-    treat False as a failed password change: reporting success while the
-    durable copy is stale is exactly what locked admins out after a redeploy.
-    """
-    c = client()
-    if c is None:
-        return False
-    email = str(email or "").strip().lower()
-    if not email or not password_hash:
-        return False
-    try:
-        c.table("admin_users").upsert(
-            {"email": email, "password_hash": str(password_hash),
-             "enabled": True, "updated_at": _now()},
-            on_conflict="email").execute()
-        return True
-    except Exception as exc:
-        print(f"[supabase] admin password save failed: {exc}")
-        return False
-
-
-def load_admin_users():
-    """{email: password_hash} for every enabled admin, or None when
-    Supabase is unreachable. None (not {}) means 'unknown' - the caller must
-    not read that as 'no admins exist'."""
-    c = client()
-    if c is None:
-        return None
-    try:
-        res = (c.table("admin_users")
-               .select("email,password_hash,enabled").execute())
-        rows = _res_data(res)
-        return {str(r.get("email") or "").strip().lower(): r.get("password_hash")
-                for r in rows if r.get("enabled") is not False}
-    except Exception as exc:
-        print(f"[supabase] admin users load failed: {exc}")
-        return None
-
-
-def mark_admin_login(email):
-    """Record last_login_at. Best effort - never blocks a sign-in."""
-    c = client()
-    if c is None:
-        return False
-    try:
-        c.table("admin_users").update({"last_login_at": _now()}) \
-            .eq("email", str(email or "").strip().lower()).execute()
-        return True
-    except Exception:
-        return False
-
-
-def supabase_verify_login(email, password):
-    """Verify an admin email + password against Supabase Auth (GoTrue)."""
-    c = client()
-    if c is None:
-        return False
-    try:
-        res = c.auth.sign_in_with_password({"email": email, "password": password})
-        user = res.user if hasattr(res, "user") else (res or {}).get("user")
-        return bool(user)
-    except Exception:
-        return False
-
-
-def supabase_set_shared_password(password):
-    """Set the SAME password on every admin Supabase Auth account.
-
-    The shop uses one shared admin password across all admin emails, so when
-    Supabase Auth is the login backend we must update every admin user there -
-    not just the local mirror. Best effort: a Supabase failure is logged and
-    swallowed so a password change never blocks the admin.
-    """
-    if not enabled():
-        return False
-    import urllib.request, urllib.error
-    base = Config.SUPABASE_URL
-    key = Config.SUPABASE_SERVICE_ROLE_KEY
-    ok_total = False
-    for email in Config.ADMIN_EMAILS:
-        try:
-            # Resolve the user id by looking up the email (admin API).
-            req = urllib.request.Request(
-                base + "/auth/v1/admin/users?filter=email%20eq%20" +
-                urllib.parse.quote(str(email)),
-                headers={"apikey": key, "Authorization": "Bearer " + key})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                users = json.loads(resp.read().decode("utf-8", "replace"))
-            usr = (users.get("users") or [{}])[0]
-            uid = usr.get("id")
-            if not uid:
-                continue
-            body = json.dumps({"password": password}).encode("utf-8")
-            req2 = urllib.request.Request(
-                base + "/auth/v1/admin/users/" + urllib.parse.quote(str(uid)),
-                data=body, method="PUT",
-                headers={"apikey": key, "Authorization": "Bearer " + key,
-                         "Content-Type": "application/json"})
-            with urllib.request.urlopen(req2, timeout=15) as resp2:
-                resp2.read()
-            ok_total = True
-        except Exception as exc:
-            print(f"[supabase] password update failed for {email}: {exc}")
-    return ok_total
-
-
 # ------------------------------------------------------------------ orders
 # `engine` is a legacy argument (the SQLite handle the caller used to pass
 # for a read-back that no longer happens). It MUST stay optional: api.py's
 # checkout calls this with the order row alone, and a required-but-unpassed
 # parameter raised TypeError inside the route - after the order was already
-# written to SQLite - so every live checkout answered 500, the confirmation
-# e-mail and the purchase event were skipped, and the order never reached
-# the orders table.
+# written to SQLite - so every live checkout answered 500 and the purchase event was skipped;
+# the order never reached the orders table.
 def create_order(order, engine=None):
     """Persist a completed checkout into Supabase (best-effort mirror)."""
     c = client()
@@ -1113,29 +1002,39 @@ def load_orders(limit=500):
 
 
 def load_receipts(limit=500):
-    """Return the receipt list stored in Supabase receipts table, or []. Never raises."""
+    """Return receipts from Supabase, or None when the production read fails."""
     c = client()
     if c is None:
-        return []
+        return None
     try:
         res = (c.table("receipts")
                .select("*")
                .order("created_at", desc=True)
                .limit(limit)
                .execute())
-        data = _res_data(res)
-        return data or []
+        return _res_data(res) or []
     except Exception as exc:
         print(f"[supabase] load_receipts failed: {exc}")
-        return []
+        return None
 
 
-# The variant_stock table (per-variant stock levels from the admin's Stock
-# panel) exists only in the SQLite database on the Render disk, which a
-# redeploy wipes. Like the category table, we keep a JSON copy in
-# growth_settings (no new schema): admin_stock_set mirrors the whole table
-# after every change, and the boot restore in app.py writes it back before
-# the first request is served.
+def load_receipt(receipt_id):
+    """Read one receipt from Supabase for an authenticated admin action."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = c.table("receipts").select("*").eq("id", str(receipt_id)).limit(1).execute()
+        rows = _res_data(res)
+        return rows[0] if rows else None
+    except Exception as exc:
+        print(f"[supabase] load_receipt failed: {exc}")
+        return None
+
+
+# Per-variant stock is kept in Supabase PostgreSQL as one JSON value. This
+# avoids a local-first write in production while preserving the existing
+# growth_settings schema.
 VARIANT_STOCK_KEY = "variant_stock_json"
 
 
@@ -1154,6 +1053,43 @@ def save_variant_stock(rows):
         print(f"[supabase] variant stock save failed: {exc}")
         return False
 
+
+
+def load_variant_stock_strict():
+    """Read production stock and distinguish an empty table from a failed read."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("growth_settings").select("value")
+               .eq("key", VARIANT_STOCK_KEY).limit(1).execute())
+        rows = _res_data(res)
+        if not rows:
+            return []
+        raw = (rows[0] or {}).get("value")
+        if raw in (None, ""):
+            return []
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        return data if isinstance(data, list) else []
+    except Exception as exc:
+        print(f"[supabase] variant stock read failed: {exc}")
+        return None
+
+
+def replace_variant_stock_strict(rows):
+    """Write stock to Supabase and return the exact post-write read-back."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        payload = json.dumps(list(rows or []), ensure_ascii=False)
+        c.table("growth_settings").upsert(
+            [{"key": VARIANT_STOCK_KEY, "value": payload}]
+        ).execute()
+        return load_variant_stock_strict()
+    except Exception as exc:
+        print(f"[supabase] variant stock write failed: {exc}")
+        return None
 
 def load_variant_stock():
     """Return the variant_stock rows stored under VARIANT_STOCK_KEY, or None."""

@@ -24,16 +24,6 @@ class Config:
     CATALOG_PATH = os.environ.get("CATALOG_PATH", os.path.join(ROOT, "data", "catalog.json"))
     ADMIN_EMAILS = _emails()
 
-    MAIL_MODE = os.environ.get("MAIL_MODE", "none").strip().lower()
-    MAIL_FROM = (os.environ.get("MAIL_FROM", "jaurastore@gmail.com") or "").strip()
-    RESEND_API_KEY = (os.environ.get("RESEND_API_KEY", "") or "").strip()
-    SMTP_HOST = (os.environ.get("SMTP_HOST", "") or "").strip()
-    SMTP_PORT = int((os.environ.get("SMTP_PORT", "587") or "587").strip() or 587)
-    SMTP_USER = (os.environ.get("SMTP_USER", "") or "").strip()
-    # Quotes/newlines sneak in from dashboard paste; internal spaces are
-    # stripped at send time for Gmail App Passwords (see emailer._smtp_pass).
-    SMTP_PASS = (os.environ.get("SMTP_PASS", "") or "").strip().strip('"').strip("'")
-
     # WhatsApp order notifications (either provider; see whatsapp.py)
     WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
     WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID", "")
@@ -41,7 +31,7 @@ class Config:
     WHATSAPP_NOTIFY_NUMBER = "".join(
         c for c in os.environ.get("WHATSAPP_NOTIFY_NUMBER", "2290168953101") if c.isdigit())
 
-    # In-process scheduler (abandoned-cart reminders + midnight backup)
+    # In-process scheduler (keep-alive, maintenance + midnight backup)
     SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "1") != "0"
 
     SITE_ORIGIN = os.environ.get("SITE_ORIGIN", "http://localhost:8080")
@@ -141,26 +131,11 @@ class Config:
     SESSION_COOKIE_SECURE = ENV == "production"
     PERMANENT_SESSION_LIFETIME = 60 * 60 * 24 * 365
 
-    OTP_TTL_SECONDS = 600
-    OTP_MAX_ATTEMPTS = 5
-    OTP_RESEND_COOLDOWN = 60
-
-    # ------------------------------------------------- admin access recovery
-    # Last-resort way back into the admin portal when the password is lost and
-    # no reset code can be received. There is deliberately NO default here:
-    # a default lives in the repository, and this repository is public, so it
-    # would be a published password. Leave the variable UNSET and recovery goes
-    # through the emailed reset code, or seed_admin.py.
-    #
-    # To recover: set ADMIN_BOOTSTRAP_PASSWORD in the host dashboard (Render:
-    # both services expose it with sync: false), reboot once, sign in, change
-    # the password from Admin -> My account, then clear the variable again.
-    # auth.apply_bootstrap_password() is inert while this is empty - no marker
-    # is stamped and nothing is forced - and it fires at most once per database
-    # when it is set.
-    BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "")
-    # One-time emergency recovery secret. Never give this a default.
-    ADMIN_RECOVERY_SECRET = os.environ.get("ADMIN_RECOVERY_SECRET", "")
+    # ------------------------------------------------- permanent admin auth
+    # The only admin password is held by the Render environment. It is read
+    # dynamically by auth.verify_login(); this attribute is informational and
+    # is never used to persist or rotate a password.
+    ADMIN_BOOTSTRAP_PASSWORD = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "")
 
     LOW_STOCK_THRESHOLD = 5
 

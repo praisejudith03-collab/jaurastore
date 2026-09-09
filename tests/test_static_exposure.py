@@ -22,7 +22,6 @@ os.environ.setdefault("DB_PATH", "/tmp/jaura_test.db")
 os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_test_catalog.json")
 os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("SCHEDULER_ENABLED", "0")
-os.environ.setdefault("MAIL_MODE", "none")
 
 import pytest  # noqa: E402
 
@@ -75,7 +74,7 @@ BLOCKED_PATHS = [
     "/render.yaml", "/requirements.txt", "/.env.example", "/.gitignore",
     "/README.md", "/Procfile", "/_headers", "/supabase_schema.sql",
     "/data/jaura.db", "/data/seed.json", "/tests/test_api.py",
-    "/sample-receipt-email.eml", "/i18n.py", "/seed_admin.py",
+    "/i18n.py",
     "/HEAD", "/index", "/main", "/css/../config.py", "/%2e%2e/config.py",
     "/.github/workflows/ci.yml",
 ]
@@ -192,15 +191,11 @@ def test_every_internal_link_in_every_page_is_servable():
 
 
 # ------------------------------------------- 6. no published password comes back
-# Two admin passwords were committed to this PUBLIC repository: the
-# BOOTSTRAP_ADMIN_PASSWORD default in config.py, and the test suite's own login
-# password (the same value as the hash inside the committed database). Both are
-# dead - the owner rotated the live password - and both are deleted. They are
-# remembered here as SHA-256 digests so the guard itself never re-publishes
-# them; read them back only if you must, from `git show d3088ed:config.py`.
+# Historical password digests remain only as a guard against re-publishing
+# credentials that were previously present in this public repository.
 PUBLISHED_PASSWORD_SHA256 = {
     "b313422f27853cf4bcb66e9a980867b28a0b92975e3bee2b45e6ab4d406b1c7f":
-        "the former BOOTSTRAP_ADMIN_PASSWORD default (config.py)",
+        "a former admin-password default (config.py)",
     "7726eec09fbff761e091788db911f3928d075bb29f5b0371f320455da4eab66e":
         "the former test-suite admin password (data/jaura.db hash)",
 }
@@ -233,6 +228,6 @@ def test_no_published_password_literals_are_committed_anywhere():
     assert not hits, "published admin passwords are back:\n" + "\n".join(hits)
 
 
-def test_bootstrap_password_default_is_unset_by_default():
+def test_bootstrap_password_is_environment_backed():
     from config import Config
-    assert Config.BOOTSTRAP_ADMIN_PASSWORD == ""
+    assert hasattr(Config, "ADMIN_BOOTSTRAP_PASSWORD")

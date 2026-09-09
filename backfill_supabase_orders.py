@@ -72,8 +72,6 @@ def receipt_row(row, now):
         "file_url": _get(row, "file_url"), "file_name": _get(row, "file_name"),
         "file_size": _get(row, "file_size", 0),
         "file_type": _get(row, "mime"),
-        "emailed": bool(_get(row, "emailed", 0)),
-        "email_info": _get(row, "email_info"),
         "created_at": now,
     }
 

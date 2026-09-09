@@ -316,7 +316,7 @@ const JA = (() => {
     if (!want) return undefined;
     const list = products();
     // Canonical id / slug first, then the legacyId alias - so an old wix-*
-    // product link (a bookmark, a shared URL, a link in a past order email)
+    // product link (a bookmark or a shared URL)
     // still opens the right page after a row is given a canonical jau-* id.
     // The canonical match must win: a legacyId is never allowed to shadow a
     // real primary key.
@@ -897,7 +897,6 @@ const JA = (() => {
       })),
     };
     if (order.promoCode) payload.promoCode = order.promoCode;
-    if (order.cartToken) payload.cartToken = order.cartToken;
 
     if (window.JA_NET) {
       const opts = {
@@ -935,110 +934,11 @@ const JA = (() => {
       window.JA_NET.api("api/orders", opts).catch(() => {});
     }
 
-    notifyOrder({ ...order, proof });
     return order;
-  }
-
-  function notifyOrder(order) {
-    const fr = (() => { try { return window.I18N && I18N.lang() === "fr"; } catch (e) { return false; } })();
-    const total = money(order.total, order.currency);
-    const shot = order.proof || getProof(order.id);
-    const lines = [
-      "NEW J AURA ORDER " + order.id,
-      "Date: " + order.at,
-      "Name: " + (order.customer.name || ""),
-      "Phone: " + (order.customer.phone || ""),
-      "Email: " + (order.customer.email || ""),
-      "City: " + (order.customer.city || "") + " / " + (order.customer.zone || ""),
-      "Address: " + (order.customer.address || ""),
-      "Pay: " + order.currency + " " + total,
-      "Items:",
-      ...(order.items || []).map((i) => "- " + i.qty + "x " + i.name + (i.color ? " (" + i.color + ")" : "")),
-      order.customer.note ? "Note: " + order.customer.note : "",
-      shot ? "Payment screenshot: attached to this email (and saved in the admin portal)." : "Payment screenshot: missing",
-    ].filter(Boolean).join("\n");
-    const autoEn = "Thank you for your JauraStore order " + order.id + ".\n\nWe have received your order (" + total + ") and your payment screenshot. JauraStore will confirm your payment, and a confirmation message will be sent to this email.\n\nKeep your order ID: " + order.id;
-    const autoFr = "Merci pour votre commande JauraStore " + order.id + ".\n\nNous avons bien reçu votre commande (" + total + ") et votre capture de paiement. JauraStore confirmera votre paiement, et un message de confirmation sera envoyé à cet e-mail.\n\nGardez votre n° de commande : " + order.id;
-    const fd = new FormData();
-    fd.append("_subject", "JauraStore order " + order.id);
-    fd.append("_template", "box");
-    fd.append("_captcha", "false");
-    fd.append("name", order.customer.name || "Customer");
-    fd.append("email", order.customer.email || "jaurastore@gmail.com");
-    fd.append("_replyto", order.customer.email || "jaurastore@gmail.com");
-    fd.append("phone", order.customer.phone || "");
-    fd.append("order_id", order.id);
-    fd.append("total", total);
-    fd.append("message", lines);
-    if (order.customer.email) fd.append("_autoresponse", fr ? autoFr : autoEn);
-    const blob = shot ? dataUrlToBlob(shot) : null;
-    const fname = proofFileName(order.id, blob);
-    if (blob) {
-      fd.append("attachment", blob, fname);
-      fd.append("file", blob, fname);
-    }
-    fetch("https://formsubmit.co/ajax/jaurastore@gmail.com", {
-      method: "POST",
-      headers: { Accept: "application/json" },
-      body: fd,
-    }).catch(() => {});
   }
 
   function getOrder(id) {
     return orders().find((o) => o.id === id);
-  }
-  function receiptText(order) {
-    const total = money(order.total, order.currency);
-    const c = order.customer || {};
-    const items = (order.items || []).map((i) => "• " + i.qty + " × " + i.name + (i.color ? " (" + i.color + ")" : "")).join("\n");
-    return [
-      "Thank you for patronizing Jaura Store.",
-      "",
-      "Your payment for order " + order.id + " has been confirmed.",
-      "",
-      "ORDER DETAILS",
-      "Order ID: " + order.id,
-      "Date: " + (order.at || ""),
-      "Name: " + (c.name || ""),
-      "Phone: " + (c.phone || ""),
-      "Email: " + (c.email || ""),
-      "City / zone: " + (c.city || "") + " / " + (c.zone || ""),
-      "Address: " + (c.address || ""),
-      c.note ? "Note: " + c.note : "",
-      "",
-      "ITEMS",
-      items || "—",
-      "",
-      "Total paid: " + total + " (" + (order.currency || "") + ")",
-      "",
-      "We will discuss transport fare on WhatsApp using this order ID.",
-      "",
-      "With thanks,",
-      "Jaura Store",
-      "jaurastore@gmail.com",
-      "WhatsApp: +229 68 95 31 10",
-    ].filter((line, i, arr) => line !== "" || (arr[i - 1] !== "")).join("\n");
-  }
-  function sendReceipt(order) {
-    const email = String(order.customer?.email || "").trim();
-    if (!email) return Promise.resolve(false);
-    const body = receiptText(order);
-    const fd = new FormData();
-    fd.append("_subject", "Jaura Store · payment confirmed · " + order.id);
-    fd.append("_template", "box");
-    fd.append("_captcha", "false");
-    fd.append("name", order.customer.name || "Customer");
-    fd.append("email", email);
-    fd.append("_replyto", "jaurastore@gmail.com");
-    fd.append("_cc", email);
-    fd.append("order_id", order.id);
-    fd.append("message", body);
-    fd.append("_autoresponse", body);
-    return fetch("https://formsubmit.co/ajax/jaurastore@gmail.com", {
-      method: "POST",
-      headers: { Accept: "application/json" },
-      body: fd,
-    }).then(() => true).catch(() => false);
   }
   function updateOrder(id, patch) {
     const all = orders().map((o) => (o.id === id ? { ...o, ...patch, updatedAt: new Date().toISOString() } : o));
@@ -1215,48 +1115,6 @@ const JA = (() => {
     try { await fetch("api/admin/logout", { method: "POST", credentials: "same-origin" }); } catch (e) {}
     adminCache = { at: 0, email: null, checked: true };
   }
-  async function changePassword(currentPassword, newPassword) {
-    const res = await fetch("api/admin/password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-CSRF-Token": await window.JA_NET.csrf() },
-      credentials: "same-origin",
-      body: JSON.stringify({ currentPassword, newPassword }),
-    });
-    const d = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: (d && d.error) || "Could not change the password." };
-    return { ok: true, message: d.message || "Password updated." };
-  }
-  async function requestOtp(email) {
-    const res = await fetch("api/admin/otp/request", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-CSRF-Token": await window.JA_NET.csrf() },
-      credentials: "same-origin",
-      body: JSON.stringify({ email }),
-    });
-    const d = await res.json().catch(() => ({}));
-    return { ok: !!res.ok, message: d.message, error: d.error };
-  }
-  async function verifyOtp(email, code) {
-    const res = await fetch("api/admin/otp/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-CSRF-Token": await window.JA_NET.csrf() },
-      credentials: "same-origin",
-      body: JSON.stringify({ email, code }),
-    });
-    const d = await res.json().catch(() => ({}));
-    return { ok: !!res.ok, message: d.message, error: d.error };
-  }
-  async function resetPassword(newPassword) {
-    const res = await fetch("api/admin/otp/reset", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-CSRF-Token": await window.JA_NET.csrf() },
-      credentials: "same-origin",
-      body: JSON.stringify({ newPassword }),
-    });
-    const d = await res.json().catch(() => ({}));
-    return { ok: !!res.ok, message: d.message, error: d.error };
-  }
-
   // ------------------------------------------------------- admin data (server)
   async function adminAnalytics(days) {
     const res = await fetch("api/admin/analytics?days=" + encodeURIComponent(days || 30),
@@ -1994,11 +1852,11 @@ const JA = (() => {
   }
   // FAQ answers Google can show as rich results. Kept in step with faq.html.
   const FAQ_LD = [
-    ["How do I order?", "01 Select your items. 02 Review your bag. 03 Complete checkout. 04 Send payment in F CFA or Naira. 05 Send your payment screenshot to us on WhatsApp. 06 Jaura Store will confirm your payment and a confirmation message will be sent to your email."],
+    ["How do I order?", "01 Select your items. 02 Review your bag. 03 Complete checkout. 04 Send payment in F CFA or Naira. 05 Send your payment screenshot to us on WhatsApp. 06 Jaura Store will confirm your payment and your receipt is saved in the admin portal."],
     ["Can I pay in CFA and Naira?", "Yes. Tap F CFA or Naira in the menu and prices switch at once. At checkout choose Direct bank transfer — F CFA or Direct bank transfer — Naira."],
     ["What is the exchange rate?", "Naira is the main price. F CFA is converted each day from the live Naira rate, then rounded."],
     ["Where do you deliver?", "Benin (Cotonou, Calavi, Porto-Novo — 6 to 14 business days), Lagos Mainland, Lagos Island, Lome and neighbouring West African states. Shipment rates are confirmed at checkout by city."],
-    ["How do I send payment?", "Transfer using the details shown for your chosen currency, then send a screenshot of your payment to us on WhatsApp. You do not need to upload a receipt on the site. A confirmation message will be sent to your email."],
+    ["How do I send payment?", "Transfer using the details shown for your chosen currency, then send a screenshot of your payment to us on WhatsApp. You do not need to upload a receipt on the site. Your receipt is saved in the admin portal."],
     ["How do I track my order?", "Message us on WhatsApp with your order ID (for example JA-M8K2Q1) and we will tell you if it is waiting, confirmed, or declined."],
     ["How can I reach you?", "WhatsApp +229 01 68 95 31 01, phone +229 01 68 95 31 01 or +234 916 167 0236, email jaurastore@gmail.com. Lagos, Nigeria and Cotonou, Benin."],
   ];
@@ -2459,8 +2317,8 @@ const JA = (() => {
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,
     wish, isWished, toggleWish, wishDetailed, openMini, closeMini,
     toast, upsertProduct, removeProduct, importProducts, applyServerProduct, syncPending, retryStrandedProducts, reloadCatalog,
-    orders, saveOrder, getOrder, updateOrder, nextOrderId, sendReceipt,
-    isAdmin, loginAdmin, logoutAdmin, adminSession, changePassword, requestOtp, verifyOtp, resetPassword,
+    orders, saveOrder, getOrder, updateOrder, nextOrderId,
+    isAdmin, loginAdmin, logoutAdmin, adminSession,
     adminAnalytics, adminOrders, setOrderStatus, deleteOrder, flushEvents,
     customer, setCustomer, logoutCustomer, ordersForEmail, getProof, dataUrlToBlob,
     cardHTML, asset, escape, mountChrome, track, getStats, setSeo, absUrl, SITE,
