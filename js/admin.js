@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=129" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=131" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1105,13 +1105,13 @@ function bindOrderButtons() {
   });
 }
 function accountPanel() {
-  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. Admin authentication uses the permanent <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> environment value. The permanent password is managed outside the application.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn" id="sync-github">Sync to GitHub</button></div><div id="sync-status" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Saved changes go straight to the store. If your Wi-Fi drops, they wait in this device and push themselves up when the connection returns.</p></div></details>`;
+  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. You sign in with <strong>ADMIN_MASTER_PASSWORD</strong> — that is your main admin password. <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> is the backup one, and it still works if the master password is ever unset. Both are managed in Render (Environment → Environment Variables), not in this portal: change one there and the new password works at your next sign-in.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn" id="sync-github" hidden>Sync to GitHub</button></div><div id="sync-status" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Everything you save goes straight to the live store. If your Wi-Fi drops, the change waits on this device and sends itself as soon as you are back online.</p></div></details>`;
 }
 function bindAccount() {
   const email = $("#acct-email");
   if (email) JA.adminSession(true).then((e) => { email.textContent = e || "unknown"; });
   const note = $("#sync-note");
-  const paintSync = () => { if (!note) return; const n = JA.syncPending ? JA.syncPending() : 0; note.textContent = n ? `${n} change(s) are waiting for a connection.` : "Everything you saved is live on the store."; };
+  const paintSync = () => { if (!note) return; const n = JA.syncPending ? JA.syncPending() : 0; note.textContent = n ? `${n} change(s) are waiting for a connection.` : "Everything you save goes straight to the live store."; };
   paintSync(); if (window.JA_NET) window.JA_NET.onStatus(paintSync);
   // Retry Now: flush the outbox AND re-POST stranded KEYS.custom
   // (jaura_custom_products) so a save that never left this phone still ships.
@@ -1133,8 +1133,22 @@ function bindAccount() {
       const label = health === "ok" ? "OK"
         : health === "unreachable" ? "UNREACHABLE"
         : "not configured";
-      const bits = []; bits.push("Supabase: " + label); bits.push(d.gitToken ? "GitHub push: on" : "GitHub push: off"); if (d.gitRepo) bits.push("repo: " + d.gitRepo); if (d.gitBranch) bits.push("branch: " + d.gitBranch);
-      statusBox.innerHTML = bits.map((b) => JA.escape(b)).join(" &middot; ") + "<br><small>" + (d.onWrite ? "Admin changes are committed to the repo automatically." : "Automatic repo commit is off — use the Sync button.") + "</small>";
+      // Only offer "Sync to GitHub" when a token is actually configured -
+      // the button used to sit there permanently and always fail.
+      const ghBtn = $("#sync-github");
+      if (ghBtn) ghBtn.hidden = !d.gitToken;
+      const bits = [];
+      bits.push(health === "ok"
+        ? "Your store database is connected."
+        : health === "unreachable"
+          ? "Your store database cannot be reached right now."
+          : "No store database is configured.");
+      if (d.gitToken) {
+        bits.push(d.onWrite
+          ? "A backup copy of every change is also saved to GitHub automatically."
+          : "GitHub backup is available — use the Sync button.");
+      }
+      statusBox.innerHTML = bits.map((b) => JA.escape(b)).join("<br>");
     } catch (e) { statusBox.textContent = "Sync status unavailable."; }
   }
   refreshSyncStatus();
@@ -1260,7 +1274,7 @@ async function fillSales() {
     };
   });
 }
-const TAB_TITLES = { analytics: "Dashboard", products: "Products", orders: "Orders", sales: "Sales", marketing: "Marketing", categories: "Categories", settings: "Settings", account: "Account", };
+const TAB_TITLES = { analytics: "Dashboard", products: "Products", orders: "Orders", sales: "Sales", marketing: "Marketing", categories: "Categories", delivery: "Delivery", settings: "Settings", account: "Account", };
 const ADX_ICONS = {
   analytics: `<svg viewBox="0 0 24 24"><path d="M4 19V9h3v10H4zm6.5 0V5h3v14h-3zm6.5 0v-7h3v7h-3z"/></svg>`,
   products: `<svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v9l-8 4-8-4V8zm8 4l8-4M12 12v9M12 12L4 8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
@@ -1268,6 +1282,7 @@ const ADX_ICONS = {
   sales: `<svg viewBox="0 0 24 24"><path d="M4 20V10m5.5 10V4m5.5 16v-8m5 8V7" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   marketing: `<svg viewBox="0 0 24 24"><path d="M3 11l12-5v12L3 13v-2zm12-1.5L20 6v12l-5-3.5M7 14v5h3v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   categories: `<svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
+  delivery: `<svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="18" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="17.5" cy="18" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   settings: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1m0-12.8l-2.1 2.1M7.7 16.3l-2.1 2.1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   account: `<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
 };
@@ -1277,8 +1292,8 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=129" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
-        <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("settings")}${navBtn("account")}</nav>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=131" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
       <main class="adx-main">
@@ -1289,6 +1304,7 @@ function paintDesk(tab = "analytics") {
         <section class="panel ${tab === "sales" ? "is-on" : ""}" id="panel-sales">${tab === "sales" ? salesPanel() : ""}</section>
         <section class="panel ${tab === "marketing" ? "is-on" : ""}" id="panel-marketing">${tab === "marketing" ? marketingPanel() : ""}</section>
         <section class="panel ${tab === "categories" ? "is-on" : ""}" id="panel-categories">${tab === "categories" ? categoryManager() : ""}</section>
+        <section class="panel ${tab === "delivery" ? "is-on" : ""}" id="panel-delivery">${tab === "delivery" ? deliveryDesk() : ""}</section>
         <section class="panel ${tab === "settings" ? "is-on" : ""}" id="panel-settings">${tab === "settings" ? settingsForm() : ""}</section>
         <section class="panel ${tab === "account" ? "is-on" : ""}" id="panel-account">${tab === "account" ? accountPanel() : ""}</section>
       </main>
@@ -1300,6 +1316,7 @@ function paintDesk(tab = "analytics") {
       <button type="button" data-tab="sales" class="${tab === "sales" ? "is-on" : ""}">${ADX_ICONS.sales}<span>Sales</span></button>
       <button type="button" data-tab="marketing" class="${tab === "marketing" ? "is-on" : ""}">${ADX_ICONS.marketing}<span>Marketing</span></button>
       <button type="button" data-tab="categories" class="${tab === "categories" ? "is-on" : ""}">${ADX_ICONS.categories}<span>Categories</span></button>
+      <button type="button" data-tab="delivery" class="${tab === "delivery" ? "is-on" : ""}">${ADX_ICONS.delivery}<span>Delivery</span></button>
       <button type="button" data-tab="settings" class="${tab === "settings" ? "is-on" : ""}">${ADX_ICONS.settings}<span>Settings</span></button>
       <button type="button" data-tab="account" class="${tab === "account" ? "is-on" : ""}">${ADX_ICONS.account}<span>Account</span></button>
     </nav>`;
@@ -1314,6 +1331,9 @@ function paintDesk(tab = "analytics") {
   if (tab === "account") bindAccount();
   if (tab === "settings") {
     bindHeroVideo(); bindBanner(); bindSiteBranding(); bindShippingNote();
+  }
+  if (tab === "delivery") {
+    bindDeliveryPage();
     // Zones render from dzCache, so bind first and repaint the table body
     // once the server list arrives - no full repaint, which would drop the
     // admin out of a half-filled zone form.
@@ -1571,7 +1591,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=129", hidden: false }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=131", hidden: false }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -1643,8 +1663,176 @@ function settingsForm() {
     <div class="field"><label>Delivery window ends</label><input type="date" name="bannerTo" id="banner-to" value="2026-09-25" /></div>
     <div class="field full"><label>Delivery fee / shipping note (shown at checkout)</label><textarea name="shipping_note" id="shipping-note" rows="3" maxlength="800" placeholder="e.g. Delivery fee: Lagos ₦2000-₦5000, Cotonou 1000-3000 CFA. Pickup in Cotonou is free for lighter products.">${JA.escape(s.shipping_note != null ? s.shipping_note : (s.shippingNote || ""))}</textarea><p class="admin-note">This note appears dynamically at checkout under the order totals. Leave empty to hide.</p></div>
     <div class="field full"><p class="admin-err" id="set-form-error" hidden></p><button class="btn" id="set-form-save">Save settings</button></div>
-  </form>
-  ${deliveryZonesPanel()}`;
+  </form>`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Admin -> Delivery. Two things the owner could never change without a
+ * developer live here: the Delivery PAGE customers read (delivery.html
+ * was frozen in the repo) and the delivery ZONES checkout offers.
+ * ------------------------------------------------------------------ */
+
+// Whatever the store is serving right now; the form is painted from this and
+// re-painted from the server's answer after every save.
+let dpCache = null;
+
+const DP_FALLBACK = {
+  title: "Delivery Locations",
+  lead: "Curated coverage across West Africa",
+  blocks: [
+    { heading: "Nigeria", locations: [{ name: "Lagos Mainland", detail: "" }] },
+    { heading: "Benin Republic", locations: [{ name: "Cotonou", detail: "" }] },
+    { heading: "Togo", locations: [{ name: "Lom\u00e9", detail: "" }] },
+  ],
+};
+
+function dpCurrent() {
+  if (dpCache && Array.isArray(dpCache.blocks) && dpCache.blocks.length) return dpCache;
+  const site = (JA.getSiteConfig && JA.getSiteConfig()) || {};
+  const page = site.delivery_page;
+  if (page && Array.isArray(page.blocks) && page.blocks.length) return page;
+  return DP_FALLBACK;
+}
+
+function dpLocationRow(loc, bi, li) {
+  return `
+    <div class="dp-loc" data-dp-loc="${bi}:${li}">
+      <input class="dp-loc-name" data-dp-name="${bi}:${li}" maxlength="80" placeholder="Town or area" value="${JA.escape((loc && loc.name) || "")}" />
+      <input class="dp-loc-detail" data-dp-detail="${bi}:${li}" maxlength="300" placeholder="Districts covered (optional)" value="${JA.escape((loc && loc.detail) || "")}" />
+      <button type="button" class="au-link-btn au-danger" data-dp-loc-del="${bi}:${li}">Remove</button>
+    </div>`;
+}
+
+function dpBlockHTML(b, bi) {
+  const locs = (Array.isArray(b.locations) ? b.locations : []);
+  return `
+    <section class="admin-block dp-block" data-dp-block="${bi}">
+      <div class="field full">
+        <label>Section heading</label>
+        <input data-dp-heading="${bi}" maxlength="80" placeholder="e.g. Nigeria" value="${JA.escape(b.heading || "")}" />
+      </div>
+      <div class="dp-locs">${locs.map((l, li) => dpLocationRow(l, bi, li)).join("")}</div>
+      <div class="field full">
+        <button type="button" class="btn btn-line" data-dp-loc-add="${bi}">Add a location</button>
+        <button type="button" class="au-link-btn au-danger" data-dp-block-del="${bi}">Remove this section</button>
+      </div>
+    </section>`;
+}
+
+function deliveryPagePanel() {
+  const p = dpCurrent();
+  const blocks = (Array.isArray(p.blocks) ? p.blocks : []);
+  return `
+  <div class="admin-card" id="delivery-page">
+    <h3 class="admin-h">The Delivery page customers read</h3>
+    <p class="admin-note">This is the page at <strong>delivery.html</strong>. Add a town here and it appears on the live site straight away \u2014 no developer needed. Leave it untouched and the page keeps showing what is already there.</p>
+    <p class="admin-err" id="dp-error" hidden></p>
+    <div class="field full"><label>Page title</label><input id="dp-title" maxlength="120" value="${JA.escape(p.title || "")}" /></div>
+    <div class="field full"><label>Intro line</label><input id="dp-lead" maxlength="240" value="${JA.escape(p.lead || "")}" /></div>
+    <div id="dp-blocks">${blocks.map((b, i) => dpBlockHTML(b, i)).join("")}</div>
+    <div class="field full" style="margin-top:14px">
+      <button type="button" class="btn btn-line" id="dp-add-block">Add a section</button>
+      <button type="button" class="btn" id="dp-save">Save the delivery page</button>
+    </div>
+  </div>`;
+}
+
+/** Read the whole form back into a page object. */
+function dpReadForm() {
+  const title = ($("#dp-title") || {}).value || "";
+  const lead = ($("#dp-lead") || {}).value || "";
+  const blocks = [];
+  document.querySelectorAll("[data-dp-block]").forEach((el) => {
+    const bi = el.getAttribute("data-dp-block");
+    const heading = (el.querySelector(`[data-dp-heading="${bi}"]`) || {}).value || "";
+    const locations = [];
+    el.querySelectorAll("[data-dp-loc]").forEach((row) => {
+      const key = row.getAttribute("data-dp-loc");
+      const name = (row.querySelector(`[data-dp-name="${key}"]`) || {}).value || "";
+      const detail = (row.querySelector(`[data-dp-detail="${key}"]`) || {}).value || "";
+      if (String(name).trim()) locations.push({ name: String(name).trim(), detail: String(detail).trim() });
+    });
+    if (String(heading).trim() || locations.length) {
+      blocks.push({ heading: String(heading).trim(), locations });
+    }
+  });
+  return { title: String(title).trim(), lead: String(lead).trim(), blocks };
+}
+
+function dpError(msg) {
+  const el = $("#dp-error");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.hidden = !msg;
+}
+
+function bindDeliveryPage() {
+  const box = $("#delivery-page");
+  if (!box || box.dataset.bound === "1") return;
+  box.dataset.bound = "1";
+
+  // Every structural edit works on the CURRENT form contents, so a half-typed
+  // town is never lost when the owner adds another row.
+  const repaint = (page) => { dpCache = page; paintDesk("delivery"); };
+
+  box.addEventListener("click", (e) => {
+    const addLoc = e.target.closest("[data-dp-loc-add]");
+    if (addLoc) {
+      const page = dpReadForm();
+      const bi = Number(addLoc.getAttribute("data-dp-loc-add"));
+      if (!page.blocks[bi]) page.blocks[bi] = { heading: "", locations: [] };
+      page.blocks[bi].locations.push({ name: "", detail: "" });
+      repaint(page);
+      return;
+    }
+    const delLoc = e.target.closest("[data-dp-loc-del]");
+    if (delLoc) {
+      const page = dpReadForm();
+      const [bi, li] = delLoc.getAttribute("data-dp-loc-del").split(":").map(Number);
+      if (page.blocks[bi] && page.blocks[bi].locations) page.blocks[bi].locations.splice(li, 1);
+      repaint(page);
+      return;
+    }
+    const delBlock = e.target.closest("[data-dp-block-del]");
+    if (delBlock) {
+      const page = dpReadForm();
+      page.blocks.splice(Number(delBlock.getAttribute("data-dp-block-del")), 1);
+      repaint(page);
+      return;
+    }
+    if (e.target.closest("#dp-add-block")) {
+      const page = dpReadForm();
+      page.blocks.push({ heading: "", locations: [{ name: "", detail: "" }] });
+      repaint(page);
+    }
+  });
+
+  $("#dp-save")?.addEventListener("click", async () => {
+    dpError("");
+    const page = dpReadForm();
+    if (!page.blocks.some((b) => (b.locations || []).length)) {
+      dpError("Add at least one location before saving.");
+      return;
+    }
+    const btn = $("#dp-save");
+    if (btn) btn.disabled = true;
+    const res = window.JA_NET
+      ? await window.JA_NET.api("api/admin/delivery-page", { method: "POST", json: { page } })
+      : null;
+    if (btn) btn.disabled = false;
+    if (!res || !res.ok) {
+      dpError((res && res.error) || "Could not save the delivery page. Nothing changed.");
+      return;
+    }
+    // Repaint from what the server actually stored, not from the form.
+    dpCache = res.page || page;
+    JA.toast("Delivery page saved \u2014 it is live on the store now.");
+    paintDesk("delivery");
+  });
+}
+
+function deliveryDesk() {
+  return deliveryPagePanel() + deliveryZonesPanel();
 }
 
 /* ------------------------------------------------------------------ *
@@ -1751,7 +1939,7 @@ function bindDeliveryZones() {
         return;
       }
       dzCache = res.zones || [];
-      paintDesk("settings");
+      paintDesk("delivery");
       return;
     }
     const edit = e.target.closest("[data-zone-edit]");
@@ -1808,7 +1996,7 @@ function bindDeliveryZones() {
       return;
     }
     dzCache = res.zones || [];
-    paintDesk("settings");
+    paintDesk("delivery");
   });
 }
 async function saveSiteConfig(patch) {

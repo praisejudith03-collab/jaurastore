@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=129";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=129";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=131";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=131";
 }
 
 function renderCategories() {
@@ -1034,13 +1034,6 @@ function _togglePayRow(sel, show) {
   if (el) el.hidden = !show;
 }
 
-function _showPayNotice(sel, configured) {
-  const el = document.querySelector(sel);
-  if (!el) return;
-  el.hidden = !!configured;
-  if (!configured) el.textContent = t("ck.payNotConfigured");
-}
-
 function payDetails(kind) {
   const s = JA.settings() || {};
   const g = (k) => String(s[k] || "").trim();
@@ -1072,9 +1065,12 @@ function showOrderDone(order) {
   // if nothing is configured the customer is pointed at support instead of
   // being shown a baked-in account number.
   const pay = payDetails(order.currency === "NGN" ? "NGN" : "CFA");
+  // An unconfigured method shows NOTHING here: a "being updated" notice on
+  // the thank-you screen read like the order had failed. The pay box is
+  // simply omitted when there is nothing real to print.
   const note = payConfigured(pay)
     ? [pay.provider, pay.account, pay.name].filter(Boolean).join(" · ")
-    : t("ck.payNotConfigured");
+    : "";
   root.innerHTML = `
     <ol class="ck-steps" style="margin-bottom:28px">
       <li><a href="cart.html">${t("cart.stepCart")}</a></li>
@@ -1087,7 +1083,6 @@ function showOrderDone(order) {
       <p class="order-id-label">${t("ck.orderNo")}</p>
       <p class="order-id" id="ja-order-id">${JA.escape(order.id)}</p>
       <p class="ck-id-help">${t("ck.idHelp")}</p>
-      <p class="ck-confirm-note">${t("ck.emailNote")}</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 18px">
         <button type="button" class="btn" data-copy-id="${JA.escape(order.id)}">${t("ck.copyId")}</button>
         <a class="btn btn-line" href="${fareWaUrl(order)}" target="_blank" rel="noopener">${t("ck.waId")}</a>
@@ -1102,10 +1097,10 @@ function showOrderDone(order) {
       <p class="status-pill ${order.status}">${t("ck.waiting")}</p>
       <p>${t("ck.saveId")}</p>
       <p class="ck-fare-help">${t("ck.fareRange")}</p>
-      <div class="pay-box" style="margin-top:16px">
+      ${note ? `<div class="pay-box" style="margin-top:16px">
         <p class="proof-label">${t("ck.account")}</p>
         <p class="pay-note">${JA.escape(note)}</p>
-      </div>
+      </div>` : ""}
       ${((JA.getProof && JA.getProof(order.id, order.proof)) || (String(order.proof || "").startsWith("data:") ? order.proof : "")) ? `<p class="proof-label">${t("ck.uploadReceipt")}</p><img class="proof-preview" src="${(JA.getProof && JA.getProof(order.id, order.proof)) || order.proof}" alt="Payment screenshot" />` : ""}
       <table class="ck-table" style="margin-top:22px">
         <thead><tr><th>${t("ck.product")}</th><th>${t("ck.total")}</th></tr></thead>
@@ -1216,7 +1211,6 @@ function paintCheckoutTotals(form) {
   setText("[data-ngn-acc]", ngn.account);
   _togglePayRow("[data-ngn-row-bank]", !!ngn.provider);
   _togglePayRow("[data-ngn-row-acc]", !!ngn.account);
-  _showPayNotice("[data-ngn-notice]", payConfigured(ngn));
   const cfa = payDetails("CFA");
   const togo = payDetails("TOGO");
   setText("[data-cfa-name]", cfa.name);
@@ -1227,7 +1221,6 @@ function paintCheckoutTotals(form) {
   setText("[data-togo-acc]", togo.account);
   _togglePayRow("[data-cfa-row]", payConfigured(cfa));
   _togglePayRow("[data-togo-row]", payConfigured(togo));
-  _showPayNotice("[data-cfa-notice]", payConfigured(cfa) || payConfigured(togo));
   form.querySelectorAll(".pay-card").forEach((card) => {
     card.classList.toggle("is-on", card.querySelector("input")?.checked);
   });
@@ -1242,8 +1235,29 @@ function zoneLabel(z) {
   const suf = z.currency === "CFA" ? " CFA" : "";
   const fmt = (n) => sym + Number(n || 0).toLocaleString("en-US") + suf;
   if (z.kind === "pickup") return z.name;
-  if (z.kind === "quote") return z.name + " (confirm on WhatsApp)";
-  return z.name + " (" + fmt(z.fare_min) + " \u2013 " + fmt(z.fare_max) + ")";
+  if (z.kind === "quote") return z.name + " \u2014 fare agreed on WhatsApp";
+  return z.name + " \u2014 " + fmt(z.fare_min) + " to " + fmt(z.fare_max);
+}
+
+/** The zone list, split into the three groups a customer actually thinks in:
+ *  where they are (Nigeria / Benin & Togo) and whether they are collecting.
+ *  A flat list of every city in two currencies was the single most confusing
+ *  part of the checkout. Order is fixed - Nigeria, then Benin & Togo, then
+ *  pickup - and an empty group is dropped. */
+function zoneGroups(list) {
+  const zones = Array.isArray(list) ? list.filter((z) => z && z.name) : [];
+  const groups = [
+    { id: "ngn", label: "Nigeria (\u20A6 Naira)", zones: [] },
+    { id: "cfa", label: "Benin & Togo (F CFA)", zones: [] },
+    { id: "pickup", label: "Pickup / collection", zones: [] },
+  ];
+  const by = { ngn: groups[0], cfa: groups[1], pickup: groups[2] };
+  zones.forEach((z) => {
+    if (z.kind === "pickup") { by.pickup.zones.push(z); return; }
+    if (String(z.currency).toUpperCase() === "NGN") { by.ngn.zones.push(z); return; }
+    by.cfa.zones.push(z);
+  });
+  return groups.filter((g) => g.zones.length);
 }
 
 /** Rebuild the zone <select> from the server's zone list.
@@ -1263,21 +1277,76 @@ function paintDeliveryZones(form) {
     || "Choose a delivery zone";
   ph.selected = true;
   sel.appendChild(ph);
-  list.forEach((z) => {
-    if (!z || !z.name) return;
-    const opt = document.createElement("option");
-    // The server matches on the zone NAME, so that is the value we send.
-    opt.value = z.name;
-    opt.textContent = zoneLabel(z);
-    opt.dataset.zoneId = z.id || "";
-    opt.dataset.zoneKind = z.kind || "delivery";
-    opt.dataset.fareMin = String(z.fare_min || 0);
-    opt.dataset.fareMax = String(z.fare_max || 0);
-    opt.dataset.currency = z.currency || "";
-    if (previous && previous === z.name) opt.selected = true;
-    sel.appendChild(opt);
+  zoneGroups(list).forEach((group) => {
+    const og = document.createElement("optgroup");
+    og.label = group.label;
+    group.zones.forEach((z) => {
+      const opt = document.createElement("option");
+      // The server matches on the zone NAME, so that is the value we send.
+      opt.value = z.name;
+      opt.textContent = zoneLabel(z);
+      opt.dataset.zoneId = z.id || "";
+      opt.dataset.zoneKind = z.kind || "delivery";
+      opt.dataset.fareMin = String(z.fare_min || 0);
+      opt.dataset.fareMax = String(z.fare_max || 0);
+      opt.dataset.currency = z.currency || "";
+      if (previous && previous === z.name) { opt.selected = true; ph.selected = false; }
+      og.appendChild(opt);
+    });
+    sel.appendChild(og);
   });
   sel.dataset.zonesFrom = "server";
+}
+
+/* ------------------------------------------------------------------ *
+ * The Delivery page. The static markup in delivery.html stays as the
+ * FALLBACK (it is what a static host, an offline phone or a failed fetch
+ * shows). When the owner has saved a Delivery page in Admin -> Delivery it
+ * arrives on the site row as delivery_page and is painted over the static
+ * content, so the locations customers read are the ones the owner edited
+ * rather than a list frozen in the HTML at deploy time.
+ * ------------------------------------------------------------------ */
+function deliveryPageHTML(page) {
+  const esc = (v) => JA.escape(String(v == null ? "" : v));
+  const blocks = (Array.isArray(page.blocks) ? page.blocks : []).map((b) => {
+    const rows = (Array.isArray(b.locations) ? b.locations : []).map((loc) => {
+      const name = esc(loc && loc.name);
+      const detail = esc(loc && loc.detail);
+      if (!name) return "";
+      return `<p><strong>${name}</strong>${detail ? " \u2014 <span>" + detail + "</span>" : ""}</p>`;
+    }).join("");
+    if (!esc(b && b.heading) && !rows) return "";
+    return `<section class="del-block"><h2>${esc(b && b.heading)}</h2>${rows}</section>`;
+  }).join("");
+  if (!blocks) return "";
+  return `
+    <header class="del-hero">
+      <h1>${esc(page.title)}</h1>
+      <i class="del-rule"></i>
+      ${page.lead ? `<p class="del-kicker">${esc(page.lead)}</p>` : ""}
+    </header>
+    ${blocks}`;
+}
+
+function renderDeliveryPage() {
+  const root = document.querySelector("[data-delivery-root]");
+  if (!root) return;
+  const paint = () => {
+    const site = (JA.getSiteConfig && JA.getSiteConfig()) || {};
+    const page = site.delivery_page;
+    if (!page || typeof page !== "object") return;   // keep the static fallback
+    const html = deliveryPageHTML(page);
+    if (!html) return;                                // nothing usable saved
+    root.innerHTML = html;
+    root.dataset.deliveryFrom = "server";
+  };
+  paint();
+  // The site row may land after the first draw (or the owner may save while
+  // the page is open): repaint on ja:site, bound once.
+  if (root.dataset.siteBound !== "1") {
+    root.dataset.siteBound = "1";
+    document.addEventListener("ja:site", paint);
+  }
 }
 
 function renderCheckout() {
@@ -1347,6 +1416,11 @@ function renderCheckout() {
         const el = document.querySelector("[data-shipping-note]");
         if (el) { el.textContent = sd.shippingNote; el.hidden = false; }
       }
+      // The bank details and the zone list live in that same site row. When
+      // it lands (or the owner changes it) the checkout must repaint, or the
+      // customer keeps reading the details from the previous load.
+      try { paintDeliveryZones(form); } catch (e) {}
+      try { paintCheckoutTotals(form); } catch (e) {}
     });
   } catch (e) {}
 
@@ -1845,11 +1919,17 @@ async function boot() {
   try { await JA.loadServerCategories(); } catch (e) {}
   // Custom moving-banner text (owner-editable in Admin → Settings): paint it
   // over the default delivery-window line on every page.
+  // The live site row (banner text, branding, bank details, delivery zones,
+  // the editable Delivery page) must be in JA BEFORE the first draw: the
+  // checkout builds its bank box and its zone <select> straight out of it,
+  // and painting first meant the customer saw an empty bank sheet until the
+  // fetch happened to land.
   try {
     const r = await fetch("api/site", { cache: "no-store" });
     const d = r.ok ? await r.json() : null;
     const site = (d && d.site) || {};
-    if (JA.setBanner) JA.setBanner(site.convBanner || "", site.convBold || "");
+    if (JA.applySiteConfig) JA.applySiteConfig(site);
+    else if (JA.setBanner) JA.setBanner(site.convBanner || "", site.convBold || "");
   } catch (e) {}
   document.querySelectorAll(".lux-reel video").forEach((v) => {
     v.muted = true;
@@ -1905,6 +1985,7 @@ async function boot() {
     try { JA.startCardPlay && JA.startCardPlay(); } catch (e) {}
     if (page === "cart") renderCart();
     if (page === "checkout") renderCheckout();
+    if (page === "delivery") renderDeliveryPage();
     if (page === "wishlist") renderWishlist();
     if (page === "account") renderAccount();
     if (page === "contact") bindContactForm();

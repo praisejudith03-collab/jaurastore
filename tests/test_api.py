@@ -237,6 +237,58 @@ def test_categories_are_public_and_admin_writable(tmp_path, monkeypatch, client)
     assert on_disk["categories"] and on_disk["updatedBy"] == EMAIL
 
 
+def test_an_empty_categories_table_self_heals_to_the_defaults(monkeypatch):
+    """A reachable but EMPTY Supabase categories table is a table that was
+    never seeded (or was wiped) - not "this shop has no categories".
+
+    Serving [] left every phone with an empty category strip and no way back.
+    _categories_data() now falls back to the built-in defaults, photos
+    included, so the storefront always has something to show.
+    """
+    import api as apimod
+    import supabase_store as sb
+    from config import Config
+
+    monkeypatch.setattr(Config, "ENV", "production", raising=False)
+    monkeypatch.setattr(sb, "enabled", lambda: True, raising=False)
+    monkeypatch.setattr(sb, "load_categories_table", lambda: [], raising=False)
+
+    data = apimod._categories_data()
+    cats = data["categories"]
+    assert len(cats) == len(apimod.DEFAULT_CATEGORIES)
+    assert {c["id"] for c in cats} == {c["id"] for c in apimod.DEFAULT_CATEGORIES}
+    # the photos must survive the self-heal, or the strip renders blank tiles
+    assert all(c.get("image") for c in cats)
+    assert any(c["id"] == "beauty" for c in cats)
+
+
+def test_a_populated_categories_table_is_served_as_is(monkeypatch):
+    """The owner's own rows always win over the defaults."""
+    import api as apimod
+    import supabase_store as sb
+    from config import Config
+
+    rows = [{"id": "only", "name": "Only one", "image": "images/x.jpg", "hidden": False}]
+    monkeypatch.setattr(Config, "ENV", "production", raising=False)
+    monkeypatch.setattr(sb, "enabled", lambda: True, raising=False)
+    monkeypatch.setattr(sb, "load_categories_table", lambda: list(rows), raising=False)
+    assert apimod._categories_data()["categories"] == rows
+
+
+def test_an_unreachable_categories_table_still_raises(monkeypatch):
+    """None means UNREACHABLE and must stay a 503 - self-healing an outage
+    into the defaults would hide a real Supabase failure."""
+    import api as apimod
+    import supabase_store as sb
+    from config import Config
+
+    monkeypatch.setattr(Config, "ENV", "production", raising=False)
+    monkeypatch.setattr(sb, "enabled", lambda: True, raising=False)
+    monkeypatch.setattr(sb, "load_categories_table", lambda: None, raising=False)
+    with pytest.raises(RuntimeError):
+        apimod._categories_data()
+
+
 def test_catalogue_round_trip_is_live_immediately(client):
     tok = login(client)
     r = client.post("/api/admin/products", json={"product": {

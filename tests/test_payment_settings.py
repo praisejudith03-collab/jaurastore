@@ -102,8 +102,13 @@ def test_app_js_has_no_payment_fallback_operator():
     assert '|| "UBA"' not in app_js
     assert "payDetails(" in app_js, "checkout must read details via payDetails()"
     assert "payConfigured(" in app_js
-    # an unconfigured method must render the notice, not a fabricated account
-    assert "ck.payNotConfigured" in app_js
+    # An unconfigured method now renders NOTHING at all. The old "payment
+    # details are being updated" notice read to customers like the shop was
+    # broken, so the key and both notice elements were removed; an empty
+    # method simply keeps its account rows hidden.
+    assert "ck.payNotConfigured" not in app_js
+    assert "_showPayNotice" not in app_js
+    assert "ck.emailNote" not in app_js
 
 
 def test_checkout_html_placeholders_are_empty_and_server_driven():
@@ -111,9 +116,11 @@ def test_checkout_html_placeholders_are_empty_and_server_driven():
     # every element app.js paints must exist, and start out empty
     for attr in ("data-ngn-name", "data-ngn-bank", "data-ngn-acc",
                  "data-cfa-name", "data-cfa-provider", "data-cfa-acc",
-                 "data-togo-provider", "data-togo-acc", "data-togo-name",
-                 "data-ngn-notice", "data-cfa-notice"):
+                 "data-togo-provider", "data-togo-acc", "data-togo-name"):
         assert attr in html, f"checkout.html is missing {attr}"
+    # the "being updated" notices are gone for good
+    for gone in ("data-ngn-notice", "data-cfa-notice", "ck.emailNote"):
+        assert gone not in html, f"checkout.html still carries {gone}"
     for attr in ("data-ngn-acc", "data-cfa-acc", "data-togo-acc",
                  "data-ngn-name", "data-cfa-name"):
         m = re.search(re.escape(attr) + r"[^>]*>([^<]*)<", html)
@@ -325,3 +332,50 @@ def test_an_empty_payment_row_is_saved_empty_not_defaulted(client):
     assert r.status_code == 200
     assert r.get_json()["site"]["naira_payment_account"] == ""
     assert client.get("/api/site").get_json()["site"]["naira_payment_account"] == ""
+
+
+def test_pay_intro_is_the_short_currency_wording():
+    """The intro paragraph tells the customer one thing: pay into the account
+    for the currency they picked. The old version also promised a receipt
+    "saved in the admin portal", which meant nothing to a shopper."""
+    expected = ("Make your payment directly into our bank account first in "
+                "the details below according to your currency choice.")
+    html = open(os.path.join(ROOT, "checkout.html"), encoding="utf-8").read()
+    assert expected in html
+    i18n = open(os.path.join(ROOT, "js", "i18n.js"), encoding="utf-8").read()
+    assert expected in i18n, "the English ck.payIntro must carry the new wording"
+    assert "Payez d\u2019abord directement sur notre compte bancaire" in i18n, \
+        "the French ck.payIntro must be translated too"
+    # the purged strings are gone from every surface
+    for gone in ("ck.payNotConfigured", "ck.emailNote"):
+        assert gone not in i18n, f"{gone} must not come back"
+    # the intro paragraph itself no longer promises an admin-portal receipt
+    m = re.search(r'data-i18n="ck\.payIntro">([^<]*)<', html)
+    assert m and "admin portal" not in m.group(1)
+    # and the "payment details are being updated" line is gone for good
+    assert "being updated" not in i18n
+    assert "en cours de mise \u00e0 jour" not in i18n
+
+
+def test_checkout_repaints_bank_details_when_the_site_row_lands():
+    """The site row arrives asynchronously. When it does (or the owner edits
+    it while the page is open) the bank box AND the zone list must repaint,
+    otherwise the customer reads details from the previous load."""
+    app_js = open(os.path.join(ROOT, "js", "app.js"), encoding="utf-8").read()
+    m = re.search(r'document\.addEventListener\("ja:site",\s*\(ev\)\s*=>\s*\{(.*?)\n    \}\);',
+                  app_js, re.S)
+    assert m, "checkout ja:site listener not found"
+    body = m.group(1)
+    assert "paintDeliveryZones(form)" in body
+    assert "paintCheckoutTotals(form)" in body
+
+
+def test_boot_applies_the_site_row_before_the_first_draw():
+    """Painting first and fetching after is what left the bank sheet empty on
+    a fresh checkout load."""
+    app_js = open(os.path.join(ROOT, "js", "app.js"), encoding="utf-8").read()
+    boot = app_js[app_js.index("async function boot()"):]
+    apply_at = boot.index("JA.applySiteConfig")
+    draw_at = boot.index("draw();")
+    assert apply_at < draw_at, "applySiteConfig must run before the first draw()"
+    assert "await fetch(\"api/site\"" in boot
