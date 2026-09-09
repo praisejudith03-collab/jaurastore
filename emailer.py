@@ -287,7 +287,10 @@ def _via_resend(to, subject, body):
     except HTTPError as exc:
         # Status is useful; the body is inspected only to distinguish sender
         # validation and is never returned or logged.
-        return _resend_result(exc.code, exc.read(4096).decode("utf-8", "ignore"))
+        body = exc.read(4096)
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", "ignore")
+        return _resend_result(exc.code, body)
     except (URLError, TimeoutError, socket.timeout, OSError):
         return False, RESEND_NETWORK
     except Exception:
@@ -594,7 +597,10 @@ def _via_resend_attached(to, subject, body, data, filename, mime, reply_to):
         with urllib.request.urlopen(req, timeout=30) as r:
             return _resend_result(r.status)
     except HTTPError as exc:
-        return _resend_result(exc.code, exc.read(4096).decode("utf-8", "ignore"))
+        body = exc.read(4096)
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", "ignore")
+        return _resend_result(exc.code, body)
     except (URLError, TimeoutError, socket.timeout, OSError):
         return False, RESEND_NETWORK
     except Exception:

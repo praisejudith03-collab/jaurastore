@@ -13,6 +13,7 @@ import auth as authmod
 
 @pytest.fixture(scope="module")
 def app():
+    Config.ADMIN_RECOVERY_SECRET = "test-recovery-secret"
     init_db(); a = appmod.create_app(); a.config.update(TESTING=True); return a
 
 @pytest.fixture()
