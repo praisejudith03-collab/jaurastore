@@ -283,14 +283,12 @@ def test_storefront_fallback_seed_is_not_served_when_supabase_answers(client, mo
     assert len(body["products"]) == 258
 
 
-def _login_admin(client):
-    """Sign the sole admin in and return the session-holding client."""
-    import auth as authmod
-    from db import init_db
-    init_db()
-    authmod.ensure_seed_admins()
-    authmod.set_password(EMAIL, "AdminPass2026x")
-    r = client.post("/api/admin/login", json={"password": "AdminPass2026x"})
+def _login_admin(client, monkeypatch):
+    """Sign the sole admin in (env-backed master password) and return the
+    session-holding client."""
+    monkeypatch.setenv("ADMIN_MASTER_PASSWORD", "AdminMaster2026")
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD", "AdminBootstrap7")
+    r = client.post("/api/admin/login", json={"password": "AdminMaster2026"})
     assert r.status_code == 200, r.data
     return client
 
@@ -316,7 +314,7 @@ def test_admin_catalog_all_returns_exactly_what_is_saved(client, monkeypatch):
     assert all(p["id"] not in offline for p in pub["products"])
 
     # then, signed in as the admin: ?all=1 lists EVERY saved row (276)
-    _login_admin(client)
+    _login_admin(client, monkeypatch)
     body = client.get("/api/catalog?all=1").get_json()
     ids = [str(p["id"]) for p in body["products"]]
     assert len(ids) == 276, \

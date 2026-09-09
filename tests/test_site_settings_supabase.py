@@ -1,9 +1,9 @@
-"""Site settings + admin reset tokens, Supabase-backed (production path).
+"""Site settings, Supabase-backed (production path).
 
 Supabase PostgreSQL is the production source of truth for the site_settings
-row (bank details, referral commission, hero/contact/logo) and for admin
-reset tokens. These tests run the REAL supabase_settings module against an
-in-memory fake client - no mocking of the logic under test - and cover:
+row (bank details, referral commission, hero/contact/logo). These tests run
+the REAL supabase_settings module against an in-memory fake client - no
+mocking of the logic under test - and cover:
 
 * get/update site_settings: canonical fields persist in the id=1 row and the
   saved row is returned to the caller,
@@ -11,8 +11,6 @@ in-memory fake client - no mocking of the logic under test - and cover:
   never written),
 * /api/admin/site in the production path posts the exact canonical keys and
   /api/site serves the live row (with legacy aliases for older pages),
-* admin reset tokens: mint -> verify -> consume, attempts counter, cooldown
-  and expiry, all persisted in Supabase instead of process memory,
 * the referral payout reads ONLY site_settings.referral_commission_percentage
   at reward time (a stale process-local 10% never wins).
 
@@ -29,7 +27,6 @@ os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_test_catalog.json")
 os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_EMAILS", "jaurastore@gmail.com")
-os.environ.setdefault("MAIL_MODE", "none")
 
 import pytest  # noqa: E402
 
@@ -44,7 +41,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _pw import PW  # noqa: E402  - one strong password per run; ADMIN_PW pins it
 
 EMAIL = "jaurastore@gmail.com"
-authmod.set_password(EMAIL, PW)
 
 FAKE_ORIGIN = "https://fake.supabase.co"
 
@@ -304,58 +300,6 @@ def test_admin_site_endpoint_rejects_invalid_referral(client, sb, monkeypatch):
     # nothing was written
     assert sb.tables["site_settings"][0]["bank_name"] == ""
 
-
-# ------------------------------------------------------------- reset tokens
-def test_reset_token_mint_verify_consume(sb):
-    token = supabase_settings.create_reset_token("OWNER@JaunaStore.com")
-    assert len(token) == 6
-    rows = sb.tables["admin_reset_tokens"]
-    assert len(rows) == 1
-    assert rows[0]["email"] == "owner@jaunastore.com"   # normalized
-    # the plaintext code is never stored: only a hash that cannot be reversed
-    assert rows[0]["token_hash"].startswith(("pbkdf2:", "scrypt:"))
-    assert token not in rows[0]["token_hash"]
-    ok, msg = supabase_settings.verify_reset_token("owner@jaunastore.com", token)
-    assert ok, msg
-    # consumed: a second use is refused (no pending token left)
-    ok2, _ = supabase_settings.verify_reset_token("owner@jaunastore.com", token)
-    assert ok2 is False
-
-
-def test_reset_token_wrong_code_counts_attempts(sb):
-    token = supabase_settings.create_reset_token("owner@x.com")
-    for i in range(1, 6):
-        ok, msg = supabase_settings.verify_reset_token("owner@x.com", "000000")
-        assert ok is False and msg
-        assert sb.tables["admin_reset_tokens"][0]["attempts"] == i
-    # attempts exhausted: even the right code is refused
-    ok, msg = supabase_settings.verify_reset_token("owner@x.com", token)
-    assert ok is False and "Too many attempts" in msg
-
-
-def test_reset_token_two_requests_keep_only_the_latest(sb):
-    supabase_settings.create_reset_token("owner@x.com")
-    second = supabase_settings.create_reset_token("owner@x.com")
-    rows = sb.tables["admin_reset_tokens"]
-    assert len(rows) == 1                    # old request replaced, not stacked
-    ok, _ = supabase_settings.verify_reset_token("owner@x.com", second)
-    assert ok
-
-
-def test_reset_token_expired_is_refused(sb, monkeypatch):
-    supabase_settings.create_reset_token("owner@x.com")
-    sb.tables["admin_reset_tokens"][0]["expires_at"] = (
-        datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-    ok, msg = supabase_settings.verify_reset_token("owner@x.com", "123456")
-    assert ok is False and "expired" in msg.lower()
-
-
-def test_reset_token_recent_cooldown(sb):
-    assert supabase_settings.reset_token_recent("owner@x.com", cooldown=60) is False
-    supabase_settings.create_reset_token("owner@x.com")
-    assert supabase_settings.reset_token_recent("owner@x.com", cooldown=60) is True
-    assert supabase_settings.reset_token_recent(
-        "owner@x.com", cooldown=0) is False
 
 
 # ------------------------------------------------- referral payout from DB

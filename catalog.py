@@ -874,7 +874,7 @@ def upsert(product, actor=None):
         live = merged(include_hidden=True)
     except Exception:
         live = []                     # never block a save on a Supabase read
-    # An ordinary admin edit (a price change, a photo swap) does not resend
+    # An ordinary admin edit (a price change, a photo swap) does not re-emit
     # legacyId. Dropping it would silently break every old wix-* link, order
     # line and review pointing at this row, so carry the stored alias forward.
     if not clean.get("legacyId"):

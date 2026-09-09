@@ -4821,8 +4821,6 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   background: #fdecea; border: 1px solid #f5c6c2; color: #8a2b22;
   border-radius: 10px; padding: 10px 13px; font-size: 13.5px; margin-bottom: 14px;
 }
-.otp-box { margin-top: 18px; border-top: 1px solid var(--line, #e6ddd2); padding-top: 16px; }
-.otp-box h3 { font: 500 16px/1.3 Georgia, serif; margin: 0 0 8px; }
 
 /* order cards ---------------------------------------------------------- */
 .order-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
@@ -5228,7 +5226,6 @@ body[data-page="admin"] { background: #f4f5f7 !important; }
 .adx-login-form label { font-size: 13px; font-weight: 600; }
 .adx-login-form input { width: 100%; margin-top: 6px; }
 .adx-login-btn { width: 100%; margin-top: 18px; padding: 13px; border-radius: 10px; }
-.adx-login-card .otp-box { text-align: left; margin-top: 18px; }
 
 /* ---------- shell ---------- */
 .adx {

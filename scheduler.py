@@ -1,8 +1,6 @@
-"""In-process scheduler: abandoned-cart reminders + the midnight backup.
+"""In-process scheduler for the midnight backup and catalog maintenance.
 
 One daemon thread, one tick every 5 minutes:
-  * growth.send_abandoned_reminders() — emails checkouts stalled for the
-    configured number of hours (default 2);
   * backup.run() — the first tick on or after midnight backs up all
     products and orders to GitHub (once per calendar day).
 
@@ -47,11 +45,6 @@ def _tick(logger=None):
         _keep_alive(logger)
     except Exception as exc:                      # pragma: no cover
         if logger: logger.warning("keep-alive failed: %s", exc)
-    try:
-        import growth
-        growth.send_abandoned_reminders()
-    except Exception as exc:                      # pragma: no cover
-        if logger: logger.warning("abandoned reminders skipped: %s", exc)
     try:
         import backup
         if backup.due():

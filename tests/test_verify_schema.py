@@ -73,7 +73,7 @@ def test_a_fully_applied_schema_passes():
     rep = vs.check_live(FakeClient(_complete_schema()))
     assert rep["ok"] is True
     assert rep["missing_tables"] == []
-    assert len(rep["tables"]) == len(vs.REQUIRED_TABLES) == 13
+    assert len(rep["tables"]) == len(vs.REQUIRED_TABLES) == 11
 
 
 def test_a_missing_table_is_reported_by_name():
@@ -113,7 +113,7 @@ def test_the_required_column_inventory_covers_the_agreed_contract():
     assert vs.REQUIRED_COLUMNS["product_reviews"] == (
         "product_id", "order_id", "email", "name", "rating", "title", "body", "hidden",
         "created_at", "updated_at")
-    assert len(vs.REQUIRED_TABLES) == 13
+    assert len(vs.REQUIRED_TABLES) == 11
     assert len(vs.REQUIRED_COLUMNS["products"]) == 15
 
 

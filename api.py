@@ -1,11 +1,10 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
-import csv, io, json, os, datetime, secrets, hashlib, re, hmac
+import csv, io, json, os, datetime, secrets, hashlib, re
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
 from db import execute, one, query, audit
 import security as sec
 import auth as authmod
-import emailer
 import storage
 import catalog as catalog_mod
 import analytics as analytics_mod
@@ -266,9 +265,20 @@ def track_view():
             (pid, datetime.datetime.utcnow().isoformat(timespec="seconds")))
     return jsonify(ok=True)
 
+def _stock_rows_for_read():
+    """Production reads come from Supabase; local SQLite is test/dev only."""
+    if catalog_mod._prod_source():
+        from supabase_store import load_variant_stock_strict
+        return load_variant_stock_strict()
+    return [dict(r) for r in query(
+        "SELECT product_id, variant_key, variant_label, qty, low_threshold FROM variant_stock")]
+
+
 @api.get("/stock")
 def stock():
-    rows = query("SELECT product_id, variant_key, variant_label, qty, low_threshold FROM variant_stock")
+    rows = _stock_rows_for_read()
+    if rows is None:
+        return jsonify(ok=False, error="Stock is temporarily unavailable."), 503
     admin = bool(authmod.current_admin())
     out = {}
     for r in rows:
@@ -538,7 +548,7 @@ def _sync_order_stock(payload, old_status, new_status, actor=None):
     """Decrement catalog stock when an order becomes confirmed; restore when it leaves.
 
     Mutates ``payload`` in place: ``stockApplied`` holds the exact deltas so a
-    second confirm (email already=True, admin re-save) never double-decrements,
+    second confirm (already=True, admin re-save) never double-decrements,
     and a decline / reopen / delete restores the same quantities.
 
     In production the stock was already reserved atomically at checkout, so a
@@ -962,16 +972,6 @@ def create_order():
         "value": total, "currency": currency, "sid": sec.clean(d.get("sid"), 48),
     }], vid, False)
 
-    if Config.MAIL_MODE != "none":
-        try:
-            if proof_file and proof_url:
-                emailer.send_order_notice(
-                    order, data, f"payment-{oid}-checkout.{ext}", storage.mime_for(ext))
-            else:
-                emailer.send_order_notice(order)
-        except Exception:
-            pass
-
     # WhatsApp notification to the owner (fire-and-forget; never blocks the sale)
     import threading as _threading
     def _notify_whatsapp(order_copy):
@@ -983,8 +983,7 @@ def create_order():
             pass
     _threading.Thread(target=_notify_whatsapp, args=(dict(order),), daemon=True).start()
 
-    # growth hooks: count the promo use, mint a referral code when the order
-    # qualifies, and close any abandoned-cart record for this checkout
+    # growth hooks: count the promo use and mint a referral code when the order qualifies
     referral_code = ""
     try:
         if promo:
@@ -995,7 +994,6 @@ def create_order():
             order["referralCode"] = referral_code
             execute("UPDATE orders SET payload=? WHERE id=?",
                     (json.dumps(order, ensure_ascii=False), oid))
-        growth.complete_abandoned(sec.clean(d.get("cartToken"), 64), email)
     except Exception:
         pass
 
@@ -1023,8 +1021,8 @@ ALLOWED_PAYMENT_METHODS = (
 @api.post("/payment-proof")
 @sec.require_csrf
 def payment_proof():
-    """A customer sends their receipt. The original file is stored and emailed
-    to the shop as a real attachment, together with their details."""
+    """A customer sends their receipt. The original file is stored in the
+    configured storage and listed in the authenticated admin portal."""
     limited = sec.guard("payment-proof", limit=20, window=3600,
                         key_extra=sec.clean(request.form.get("email"), 120))
     if limited: return limited
@@ -1080,10 +1078,7 @@ def payment_proof():
         "at": _utcnow(),
     }
 
-    try:
-        delivered, info = emailer.send_payment_proof(details, data, attach_name, mime)
-    except Exception as exc:                      # never lose the receipt
-        delivered, info = False, f"mail error: {exc}"
+    # Receipts are stored in Supabase PostgreSQL and Supabase Storage.
 
     proof_row = {
         "id": order_id, "order_id": order_id, "name": name, "phone": phone,
@@ -1091,7 +1086,6 @@ def payment_proof():
         "quantity": details["quantity"], "amount": details["amount"],
         "note": details["note"], "file_url": url, "file_name": attach_name,
         "file_size": len(data), "file_type": mime,
-        "emailed": bool(delivered), "email_info": str(info)[:300],
     }
 
     prod_source = bool(catalog_mod._prod_source())
@@ -1116,22 +1110,20 @@ def payment_proof():
         try:
             execute(
                 "INSERT INTO payment_proofs (order_id, name, phone, email, method, items, quantity, "
-                "amount, note, file_url, file_name, file_size, mime, emailed, email_info) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "amount, note, file_url, file_name, file_size, mime) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (order_id, name, phone, email, method, details["items"], details["quantity"],
-                 details["amount"], details["note"], url, attach_name, len(data), mime,
-                 1 if delivered else 0, str(info)[:300]),
+                 details["amount"], details["note"], url, attach_name, len(data), mime),
             )
         except Exception as exc:
             print(f"[sqlite] receipt cache write skipped: {exc}")
     else:
         execute(
             "INSERT INTO payment_proofs (order_id, name, phone, email, method, items, quantity, "
-            "amount, note, file_url, file_name, file_size, mime, emailed, email_info) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "amount, note, file_url, file_name, file_size, mime) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (order_id, name, phone, email, method, details["items"], details["quantity"],
-             details["amount"], details["note"], url, attach_name, len(data), mime,
-             1 if delivered else 0, str(info)[:300]),
+             details["amount"], details["note"], url, attach_name, len(data), mime),
         )
         # mirror into Supabase when enabled (best effort outside production)
         from supabase_store import create_receipt as _sb_create_receipt
@@ -1140,13 +1132,11 @@ def payment_proof():
                 _sb_create_receipt(proof_row)
             except Exception as exc:
                 print(f"[supabase] receipt mirror skipped: {exc}")
-    audit("customer", "payment_proof", f"{order_id} {attach_name} emailed={delivered}", _ip())
+    audit("customer", "payment_proof", f"{order_id} {attach_name} stored", _ip())
 
-    return jsonify(ok=True, emailed=delivered, info=info, url=url,
+    return jsonify(ok=True, stored=True, url=url,
                    fileName=attach_name, size=len(data),
-                   message=("Receipt sent to " + Config.ADMIN_EMAILS[0] + " with your file attached."
-                            if delivered else
-                           "Your receipt is saved with us. We will confirm your payment shortly."))
+                   message="Your receipt is saved in the admin portal. We will confirm your payment shortly.")
 
 
 @api.get("/payment-methods")
@@ -1191,12 +1181,12 @@ def admin_login():
             # several admin accounts -> the single-account convenience cannot
             # know which shared-password account to open
             return jsonify(ok=False, error="Enter the admin email address to sign in."), 400
-    # ADMIN_MASTER_PASSWORD is the primary credential: checked first, read
-    # live from the environment (auth.master_password), so a new value saved
-    # in the Render dashboard works on the very next attempt - no database
-    # update, no restart. It only ever opens a CONFIGURED admin account; the
-    # account's own database password remains valid alongside it, and the
-    # one-shot ADMIN_BOOTSTRAP_PASSWORD recovery flow is untouched.
+    # ADMIN_MASTER_PASSWORD is the primary credential: checked first inside
+    # auth.verify_login(), read live from the environment, so a new value
+    # saved in the Render dashboard works on the very next attempt - no
+    # restart, no database update. ADMIN_BOOTSTRAP_PASSWORD stays as the
+    # secondary/permanent credential, and only CONFIGURED admin accounts can
+    # ever be opened (no enumeration).
     known = authmod.is_known_admin(email)
     via_master = known and authmod.master_password_matches(pw)
     # identical response for unknown email vs wrong password (no enumeration)
@@ -1222,163 +1212,16 @@ def admin_session():
     a = authmod.current_admin()
     return jsonify(ok=True, authenticated=bool(a), email=a, csrf=sec.issue_csrf())
 
-@api.post("/admin/password")
-@authmod.require_admin
-@sec.require_csrf
-def change_password():
-    limited = sec.guard("admin-password", limit=8, window=600)
-    if limited: return limited
-    actor = authmod.current_admin()
-    d = request.get_json(silent=True) or {}
-    # The current-password check goes through auth.verify_login, so the
-    # ADMIN_MASTER_PASSWORD (the primary credential) is accepted here too.
-    # Changing the shared database password never changes or disables the
-    # master password - that lives only in the host environment.
-    if not authmod.verify_login(actor, d.get("currentPassword") or ""):
-        audit(actor, "admin.password_change_failed", "wrong current password", _ip())
-        return jsonify(ok=False, error="Your current password is incorrect."), 403
-    newpw = d.get("newPassword") or ""
-    ok, msg = authmod.password_strong(newpw)
-    if not ok:
-        return jsonify(ok=False, error=msg), 400
-    authmod.set_password(actor, newpw)
-    # Force this authenticated session to re-authenticate after a credential change.
-    session.clear()
-    audit(actor, "admin.password_changed", "", _ip())
-    # The old password is dead either way, but if the durable copy could not be
-    # written the new one will not survive a Render restart - say so rather
-    # than reporting an unqualified success.
-    durable_err = authmod.password_durable_error()
-    if durable_err:
-        return jsonify(ok=True, durable=False,
-                       message="Password updated, but it could not be saved to "
-                               "Supabase, so it will be lost on the next restart. "
-                               "Please check the Supabase connection and set it "
-                               "again."), 200
-    return jsonify(ok=True, durable=True, message="Password updated.")
-
-@api.post("/admin/otp/request")
-def otp_request():
-    d = request.get_json(silent=True) or {}
-    email = sec.clean_email(d.get("email"))
-    if not email:
-        return jsonify(ok=False, error="Enter a valid email address."), 400
-    limited = sec.guard("otp-request", limit=3, window=900, key_extra=email)
-    if limited: return limited
-    if not authmod.is_known_admin(email):
-        # do not reveal whether an address is an admin
-        return jsonify(ok=True, message="If that address is registered, a code has been sent.")
-    if authmod.otp_requested_recently(email):
-        return jsonify(ok=False, error="A code was just sent. Wait a minute before requesting another."), 429
-    try:
-        code = authmod.create_otp(email)
-    except Exception as exc:
-        emailer.log_mail_event(emailer.RESET_TOKEN_DB_FAILURE, type(exc).__name__)
-        audit(email, "admin.otp_requested",
-              f"via=email delivered=false category={emailer.RESET_TOKEN_DB_FAILURE}", _ip())
-        return jsonify(ok=False, error="The code could not be emailed. Check the mail settings on the server, or message the shop directly to recover access."), 502
-    try:
-        delivered, info = emailer.send_otp(email, code)
-    except Exception as exc:
-        delivered, info = False, type(exc).__name__
-        category = emailer.classify_smtp_failure(exc)
-        emailer.log_mail_event(category, type(exc).__name__)
-    else:
-        if delivered:
-            category = "sent"
-            emailer.log_mail_event("sent")
-        else:
-            category = emailer.classify_smtp_failure(info=info)
-            emailer.log_mail_event(category, info)
-    audit(email, "admin.otp_requested",
-          f"via=email delivered={bool(delivered)} category={category}", _ip())
-    if not delivered:
-        return jsonify(ok=False, error="The code could not be emailed. Check the mail settings on the server, or message the shop directly to recover access."), 502
-    return jsonify(ok=True, message=f"Verification code sent to {email}.")
-
-@api.post("/admin/otp/verify")
-def otp_verify():
-    d = request.get_json(silent=True) or {}
-    email = sec.clean_email(d.get("email")); code = sec.clean(d.get("code"), 12)
-    if not email or not code:
-        return jsonify(ok=False, error="Email and code are required."), 400
-    limited = sec.guard("otp-verify", limit=8, window=600, key_extra=email)
-    if limited: return limited
-    ok, msg = authmod.verify_otp(email, code)
-    if not ok:
-        return jsonify(ok=False, error=msg), 400
-    ticket = secrets.token_urlsafe(32)
-    session["reset_ticket"] = email
-    session["reset_ok"] = True
-    audit(email, "admin.otp_verified", "", _ip())
-    return jsonify(ok=True, message="Code verified. Set your new password.", ticket=ticket)
-
-@api.post("/admin/otp/reset")
-def otp_reset():
-    d = request.get_json(silent=True) or {}
-    email = session.get("reset_ticket") or sec.clean_email(d.get("email"))
-    if not session.get("reset_ok") or not email:
-        return jsonify(ok=False, error="Verify a code first."), 403
-    limited = sec.guard("otp-reset", limit=6, window=600, key_extra=email)
-    if limited: return limited
-    newpw = d.get("newPassword") or ""
-    ok, msg = authmod.password_strong(newpw)
-    if not ok:
-        return jsonify(ok=False, error=msg), 400
-    if not authmod.is_known_admin(email):
-        return jsonify(ok=False, error="Unknown account."), 404
-    authmod.set_password(email, newpw)
-    # Do not leave any reset/authentication state alive after a reset.
-    session.clear()
-    audit(email, "admin.password_reset_via_otp", "", _ip())
-    durable_err = authmod.password_durable_error()
-    return jsonify(ok=True, durable=not durable_err,
-                   message=("Password reset. You can sign in now."
-                            if not durable_err else
-                            "Password reset, but it could not be saved to "
-                            "Supabase, so it will be lost on the next restart."),
-                   csrf=sec.issue_csrf())
-
-@api.post("/admin/recovery")
-def admin_recovery():
-    """One-use emergency recovery; email OTP remains the normal path."""
-    if Config.ENV == "production" and request.headers.get("X-Forwarded-Proto", "").lower() != "https":
-        return jsonify(ok=False, error="HTTPS is required."), 400
-    limited = sec.guard("admin-recovery", limit=5, window=900, key_extra=_ip())
-    if limited: return limited
-    d = request.get_json(silent=True) or {}
-    supplied = str(request.headers.get("X-Admin-Recovery-Secret", ""))
-    configured = str(Config.ADMIN_RECOVERY_SECRET or "")
-    valid_secret = bool(configured) and hmac.compare_digest(supplied, configured)
-    # Always validate the same shape and use a generic response; account
-    # existence is never disclosed.
-    email = sec.clean_email(d.get("email"))
-    newpw = d.get("newPassword") or ""
-    strong, msg = authmod.password_strong(newpw)
-    if not valid_secret or not email or not strong:
-        audit("recovery", "admin.recovery_failed", "invalid request", _ip())
-        return jsonify(ok=False, error="Recovery request could not be completed."), 403
-    row = one("SELECT used_at FROM admin_recovery_state WHERE id=1")
-    if row and row["used_at"]:
-        return jsonify(ok=False, error="Recovery is no longer available."), 410
-    if not authmod.is_known_admin(email):
-        return jsonify(ok=False, error="Recovery request could not be completed."), 403
-    # Consume before hashing/writing to prevent replay, including concurrent calls.
-    now = datetime.datetime.utcnow().isoformat()
-    execute("INSERT INTO admin_recovery_state(id, used_at) VALUES(1, ?) "
-            "ON CONFLICT(id) DO UPDATE SET used_at=excluded.used_at", (now,))
-    if not authmod.set_password(email, newpw):
-        return jsonify(ok=False, error="Recovery request could not be completed."), 500
-    audit("recovery", "admin.recovery_succeeded", "", _ip())
-    return jsonify(ok=True, message="Recovery completed. Sign in with the new password.")
-
 # ------------------------------------------------------------ admin: stock
 @api.get("/admin/stock")
 @authmod.require_admin
 def admin_stock():
-    rows = query("SELECT product_id, variant_key, variant_label, qty, low_threshold, updated_at "
-                 "FROM variant_stock ORDER BY product_id, variant_key")
-    return jsonify(ok=True, items=[dict(r) for r in rows])
+    rows = _stock_rows_for_read()
+    if rows is None:
+        return jsonify(ok=False, error="Stock is temporarily unavailable."), 503
+    rows = sorted((dict(r) for r in rows),
+                  key=lambda r: (str(r.get("product_id") or ""), str(r.get("variant_key") or "")))
+    return jsonify(ok=True, items=rows)
 
 @api.put("/admin/stock")
 @authmod.require_admin
@@ -1392,41 +1235,57 @@ def admin_stock_set():
     thr = sec.clean_int(d.get("lowThreshold"), Config.LOW_STOCK_THRESHOLD, 0, 10**7)
     if not pid or qty is None:
         return jsonify(ok=False, error="productId and qty are required."), 400
-    execute("INSERT INTO variant_stock (product_id, variant_key, variant_label, qty, low_threshold, updated_at) "
-            "VALUES (?,?,?,?,?,?) ON CONFLICT(product_id, variant_key) DO UPDATE SET "
-            "qty=excluded.qty, low_threshold=excluded.low_threshold, "
-            "variant_label=COALESCE(excluded.variant_label, variant_stock.variant_label), updated_at=excluded.updated_at",
-            (pid, variant, label, qty, thr, datetime.datetime.utcnow().isoformat(timespec="seconds")))
-    # variant_stock is SQLite-only (wiped with the Render disk), so mirror the
-    # whole table into Supabase growth_settings - the boot restore in app.py
-    # writes it back. Best effort: a Supabase hiccup never blocks the change,
-    # but the response reports it so the portal can say the durable copy is
-    # still pending.
-    mirrored = True
-    if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
-        try:
-            from supabase_store import save_variant_stock
-            rows = query("SELECT product_id, variant_key, variant_label, qty, low_threshold, "
-                         "updated_at FROM variant_stock")
-            mirrored = bool(save_variant_stock([dict(r) for r in rows]))
-        except Exception:
-            mirrored = False
+    now = datetime.datetime.utcnow().isoformat(timespec="seconds")
+    if catalog_mod._prod_source():
+        from supabase_store import load_variant_stock_strict, replace_variant_stock_strict
+        rows = load_variant_stock_strict()
+        if rows is None:
+            return jsonify(ok=False, error="Stock is temporarily unavailable. No changes were made."), 503
+        updated = []
+        found = False
+        for row in rows:
+            row = dict(row)
+            if str(row.get("product_id") or "") == pid and str(row.get("variant_key") or "__default__") == variant:
+                row.update({"product_id": pid, "variant_key": variant, "variant_label": label or row.get("variant_label"),
+                            "qty": qty, "low_threshold": thr, "updated_at": now})
+                found = True
+            updated.append(row)
+        if not found:
+            updated.append({"product_id": pid, "variant_key": variant, "variant_label": label,
+                            "qty": qty, "low_threshold": thr, "updated_at": now})
+        saved = replace_variant_stock_strict(updated)
+        if saved is None:
+            return jsonify(ok=False, error="Stock could not be saved to Supabase. No changes were made."), 503
+        items = sorted((dict(r) for r in saved),
+                       key=lambda r: (str(r.get("product_id") or ""), str(r.get("variant_key") or "")))
+    else:
+        execute("INSERT INTO variant_stock (product_id, variant_key, variant_label, qty, low_threshold, updated_at) "
+                "VALUES (?,?,?,?,?,?) ON CONFLICT(product_id, variant_key) DO UPDATE SET "
+                "qty=excluded.qty, low_threshold=excluded.low_threshold, "
+                "variant_label=COALESCE(excluded.variant_label, variant_stock.variant_label), updated_at=excluded.updated_at",
+                (pid, variant, label, qty, thr, now))
+        items = [dict(r) for r in query(
+            "SELECT product_id, variant_key, variant_label, qty, low_threshold, updated_at "
+            "FROM variant_stock ORDER BY product_id, variant_key")]
+        if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
+            try:
+                from supabase_store import save_variant_stock
+                save_variant_stock(items)
+            except Exception:
+                pass
     audit(authmod.current_admin(), "stock.set", f"{pid}/{variant} = {qty}", _ip())
-    # Re-query after the save: the dashboard repaints from what was actually
-    # stored (the saved row and the whole table), never from the form values.
-    row = one("SELECT product_id, variant_key, variant_label, qty, low_threshold, updated_at "
-              "FROM variant_stock WHERE product_id=? AND variant_key=?", (pid, variant))
-    rows = query("SELECT product_id, variant_key, variant_label, qty, low_threshold, updated_at "
-                 "FROM variant_stock ORDER BY product_id, variant_key")
-    return jsonify(ok=True, item=(dict(row) if row else None),
-                   items=[dict(r) for r in rows], mirrored=mirrored)
+    return jsonify(ok=True, item=next((r for r in items if r.get("product_id") == pid and
+                                       (r.get("variant_key") or "__default__") == variant), None),
+                   items=items)
 
 @api.get("/admin/low-stock")
 @authmod.require_admin
 def low_stock():
-    rows = query("SELECT product_id, variant_key, variant_label, qty, low_threshold FROM variant_stock "
-                 "WHERE qty <= low_threshold ORDER BY qty ASC LIMIT 200")
-    items = [dict(r) for r in rows]
+    rows = _stock_rows_for_read()
+    if rows is None:
+        return jsonify(ok=False, error="Stock is temporarily unavailable."), 503
+    items = [dict(r) for r in rows if int(r.get("qty") or 0) <= int(r.get("low_threshold") or 0)]
+    items.sort(key=lambda r: int(r.get("qty") or 0))
     return jsonify(ok=True, count=len(items), items=items)
 
 # --------------------------------------------------------- admin: analytics
@@ -1534,20 +1393,23 @@ def admin_orders_csv():
 @api.get("/admin/payment-proofs")
 @authmod.require_admin
 def admin_payment_proofs():
-    """Every receipt a customer has sent from the payment form.
-
-    Proof URLs saved in Supabase mode are signed URLs, and signed URLs
-    expire after 7 days - storage.signed_url_for() refreshes each one here
-    (best effort, public / local URLs pass through untouched) so a receipt
-    stays viewable for as long as the file exists.
-    """
+    """Read payment receipts from the configured production store."""
     limit = sec.clean_int(request.args.get("limit"), 200, 1, 1000)
-    rows = query("SELECT id, order_id, name, phone, email, method, items, quantity, amount, "
-                 "note, file_url, file_name, file_size, mime, emailed, email_info, at "
-                 "FROM payment_proofs ORDER BY at DESC LIMIT ?", (limit,))
+    if catalog_mod._prod_source():
+        from supabase_store import load_receipts
+        rows = load_receipts(limit)
+        if rows is None:
+            return jsonify(ok=False, error="Receipts are temporarily unavailable."), 503
+    else:
+        rows = [dict(r) for r in query(
+            "SELECT id, order_id, name, phone, email, method, items, quantity, amount, "
+            "note, file_url, file_name, file_size, mime, at "
+            "FROM payment_proofs ORDER BY at DESC LIMIT ?", (limit,))]
     proofs = []
-    for r in rows:
-        d = dict(r)
+    for row in rows:
+        d = dict(row)
+        d.setdefault("at", d.get("created_at") or "")
+        d.setdefault("mime", d.get("file_type") or "")
         if d.get("file_url"):
             d["file_url"] = storage.signed_url_for(d["file_url"])
         proofs.append(d)
@@ -1556,111 +1418,47 @@ def admin_payment_proofs():
     return response
 
 
-@api.delete("/admin/payment-proofs/<int:pid>")
+@api.delete("/admin/payment-proofs/<pid>")
 @authmod.require_admin
 @sec.require_csrf
 def admin_payment_proof_delete(pid):
-    """Delete one payment receipt: the uploaded file AND the row.
+    """Delete one payment receipt and its Storage object."""
+    prod_source = bool(catalog_mod._prod_source())
+    if prod_source:
+        from supabase_store import load_receipt, delete_receipt_strict
+        row = load_receipt(pid)
+        if not row:
+            return jsonify(ok=False, error="That receipt is no longer there."), 404
+        file_url = row.get("file_url") or ""
+        if file_url and not storage.delete_upload(file_url):
+            return jsonify(ok=False, error=(
+                "The receipt file could not be removed from Storage. No changes were made.")), 503
+        if not delete_receipt_strict(receipt_id=pid, order_id=row.get("order_id"), file_url=file_url):
+            return jsonify(ok=False, error=(
+                "The receipt could not be removed from Supabase. No changes were made.")), 503
+        audit(authmod.current_admin(), "payment_proof.delete",
+              f"{pid} {row.get('order_id') or ''} stored", _ip())
+        return jsonify(ok=True, id=str(pid), fileRemoved=bool(file_url))
 
-    Used by the Delete button on Orders -> Receipts. The file is removed too,
-    so a deleted receipt can no longer be downloaded from its old URL.
-    """
-    row = one("SELECT id, order_id, file_url, file_name FROM payment_proofs WHERE id=?", (pid,))
+    try:
+        local_id = int(pid)
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="Invalid receipt id."), 400
+    row = one("SELECT id, order_id, file_url, file_name FROM payment_proofs WHERE id=?", (local_id,))
     if not row:
         return jsonify(ok=False, error="That receipt is no longer there."), 404
     file_url = row["file_url"] or ""
-    removed = False
-    try:
-        removed = storage.delete_upload(file_url)
-    except Exception:
-        removed = False
-    prod_source = bool(catalog_mod._prod_source())
-    if prod_source:
-        # storage object AND the Supabase row must both go; a failure is
-        # reported and the local row is kept so the admin can retry.
-        if file_url and not removed:
-            return jsonify(ok=False, error=(
-                "The receipt file could not be removed from Storage. "
-                "No changes were made.")), 503
+    removed = storage.delete_upload(file_url) if file_url else False
+    execute("DELETE FROM payment_proofs WHERE id=?", (local_id,))
+    if Config.SUPABASE_ENABLED:
         try:
-            from supabase_store import delete_receipt_strict
-            deleted = bool(delete_receipt_strict(receipt_id=pid,
-                                                 order_id=row["order_id"],
-                                                 file_url=file_url))
-        except Exception:
-            deleted = False
-        if not deleted:
-            return jsonify(ok=False, error=(
-                "The receipt could not be removed from Supabase. "
-                "No changes were made.")), 503
-    execute("DELETE FROM payment_proofs WHERE id=?", (pid,))
-    if Config.SUPABASE_ENABLED and not prod_source:
-        try:
-            from supabase_store import delete_receipt as _sb_delete_receipt
-            _sb_delete_receipt(receipt_id=pid, order_id=row["order_id"], file_url=file_url)
+            from supabase_store import delete_receipt
+            delete_receipt(receipt_id=local_id, order_id=row["order_id"], file_url=file_url)
         except Exception:
             pass
     audit(authmod.current_admin(), "payment_proof.delete",
-          f"{pid} {row['order_id'] or ''} file_removed={removed}", _ip())
-    return jsonify(ok=True, id=pid, fileRemoved=removed)
-
-
-@api.get("/orders/<oid>/confirm")
-def order_confirm_by_email(oid):
-    """Confirm or decline from the link in the email - one tap, no sign in.
-
-    The link cannot carry a session cookie, so it is signed with SECRET_KEY
-    (see security.order_token): it only works for this order and this one
-    action, and the page behind it never acts until a human presses a button.
-    """
-    oid = sec.clean(oid, 24).upper()
-    action = sec.clean(request.args.get("action") or "confirm", 20).lower()
-    token = sec.clean(request.args.get("token") or "", 64)
-    if action not in ("confirm", "decline"):
-        return jsonify(ok=False, error="That action is not recognised."), 400
-    if not sec.order_token_ok(oid, action, token):
-        audit("email-link", "order.bad_token", oid, _ip())
-        return jsonify(ok=False, error="That link is not valid for this order."), 403
-    limited = sec.guard("order-confirm", limit=60, window=3600, key_extra=oid)
-    if limited:
-        return limited
-
-    row = one("SELECT id, status, payload FROM orders WHERE id=?", (oid,))
-    if not row:
-        return jsonify(ok=False, error="We could not find that order."), 404
-    try:
-        payload = json.loads(row["payload"] or "{}")
-    except ValueError:
-        payload = {}
-
-    status = "confirmed" if action == "confirm" else "declined"
-    # the column is the truth; the payload is only a copy for the customer view
-    old_status = row["status"] or payload.get("status") or "pending"
-    if old_status == status:
-        payload["status"] = status
-        execute("UPDATE orders SET payload=? WHERE id=?",
-                (json.dumps(payload, ensure_ascii=False), oid))
-        return jsonify(ok=True, id=oid, status=status, already=True)
-
-    payload["status"] = status
-    payload["updatedAt"] = _utcnow()
-    payload["updatedBy"] = "email link"
-    _sync_order_stock(payload, old_status, status, actor="email link")
-    execute("UPDATE orders SET status=?, payload=?, updated_at=? WHERE id=?",
-            (status, json.dumps(payload, ensure_ascii=False), _utcnow(), oid))
-    audit("email-link", f"order.{status}", oid, _ip())
-
-    emailed = False
-    customer = (payload.get("customer") or {})
-    if str(customer.get("email") or "").strip():
-        try:
-            if status == "confirmed":
-                emailed = bool(emailer.send_receipt(payload)[0])
-            else:
-                emailed = bool(emailer.send_order_declined(payload)[0])
-        except Exception:
-            emailed = False
-    return jsonify(ok=True, id=oid, status=status, customerEmailed=emailed)
+          f"{local_id} {row['order_id'] or ''} file_removed={removed}", _ip())
+    return jsonify(ok=True, id=local_id, fileRemoved=removed)
 
 
 @api.patch("/admin/orders/<oid>")
@@ -1690,19 +1488,6 @@ def admin_order_update(oid):
             (status, json.dumps(payload, ensure_ascii=False), _utcnow(), oid))
     audit(authmod.current_admin(), f"order.{status}", oid, _ip())
 
-    # tell the customer: confirming or declining from the portal must send the
-    # same email the one-tap link in the admin's inbox sends
-    emailed = False
-    customer = (payload.get("customer") or {})
-    if status in ("confirmed", "declined") and str(customer.get("email") or "").strip():
-        try:
-            if status == "confirmed":
-                emailed = bool(emailer.send_receipt(payload)[0])
-            else:
-                emailed = bool(emailer.send_order_declined(payload)[0])
-        except Exception:
-            emailed = False
-
     # mirror the new status so the Supabase copy (used by the boot restore)
     # cannot put a stale pending order back
     if Config.SUPABASE_ENABLED:
@@ -1712,7 +1497,7 @@ def admin_order_update(oid):
         except Exception:
             pass
 
-    return jsonify(ok=True, id=oid, status=status, customerEmailed=emailed)
+    return jsonify(ok=True, id=oid, status=status)
 
 
 @api.delete("/admin/orders/<oid>")
@@ -2316,31 +2101,6 @@ def promo_check():
     status = 200 if res.get("ok") else 404
     return jsonify(res), status
 
-# ==================================================== public: abandoned carts
-@api.post("/cart/abandon")
-@sec.require_csrf
-def cart_abandon():
-    """Capture an in-progress checkout early (email + cart), so a stalled
-    one can be emailed a recovery link after the configured delay."""
-    limited = sec.guard("cart-abandon", limit=60, window=3600)
-    if limited: return limited
-    import growth
-    if not growth.settings()["abandonedEnabled"]:
-        return jsonify(ok=True, skipped=True)
-    d = request.get_json(silent=True) or {}
-    ok = growth.save_abandoned(d.get("token"), d.get("email"),
-                               d.get("items"), d.get("currency"))
-    return jsonify(ok=bool(ok))
-
-@api.get("/cart/recover/<token>")
-def cart_recover(token):
-    """The link in the reminder email: returns the saved cart."""
-    import growth
-    cart = growth.recover_cart(token)
-    if not cart:
-        return jsonify(ok=False, error="This cart link has expired or was already used."), 404
-    return jsonify(ok=True, **cart)
-
 # ================================================= public: verified reviews
 def _public_review(row):
     """Shape one review row for the storefront.
@@ -2602,26 +2362,6 @@ def admin_coupon_delete(code):
     except Exception:                              # pragma: no cover
         pass
     return jsonify(ok=True)
-
-@api.get("/admin/abandoned")
-@authmod.require_admin
-def admin_abandoned():
-    rows = query("SELECT id, email, cart_json, currency, created_at, updated_at, "
-                 "reminded_at, completed_at FROM abandoned_carts "
-                 "ORDER BY updated_at DESC LIMIT 200")
-    items = []
-    for r in rows:
-        d = dict(r)
-        try:
-            d["items"] = json.loads(d.pop("cart_json") or "[]")
-        except ValueError:
-            d["items"] = []
-        items.append(d)
-    stats = dict(one("SELECT COUNT(*) total, "
-                     "SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) recovered, "
-                     "SUM(CASE WHEN reminded_at IS NOT NULL THEN 1 ELSE 0 END) reminded "
-                     "FROM abandoned_carts") or {})
-    return jsonify(ok=True, carts=items, stats=stats)
 
 @api.post("/admin/backup")
 @authmod.require_admin

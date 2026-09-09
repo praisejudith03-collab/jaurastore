@@ -1,6 +1,6 @@
 -- SECTION: site_settings
 -- ===================================================== Jaura production tables
--- These are the source of truth for runtime configuration and recovery.
+-- These are the source of truth for runtime configuration.
 create table if not exists site_settings (
   id bigint primary key check (id = 1),
   bank_name text not null default '',

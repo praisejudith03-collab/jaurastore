@@ -29,8 +29,6 @@ REQUIRED_TABLES = (
     "categories",
     "orders",
     "receipts",
-    "admin_users",
-    "admin_reset_tokens",
     "coupons",
     "coupon_uses",
     "referral_codes",
