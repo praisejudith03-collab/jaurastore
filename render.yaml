@@ -50,6 +50,11 @@ services:
         sync: false
       - key: RECAPTCHA_SECRET_KEY
         sync: false
+      # Dedicated admin master password (PRIMARY admin credential). Set it in
+      # the dashboard; sync:false keeps the secret out of git. Updating the
+      # value here takes effect on the next login - no database change.
+      - key: ADMIN_MASTER_PASSWORD
+        sync: false
       # Emergency admin recovery ONLY — leave it empty. While it is empty,
       # auth.apply_bootstrap_password() is inert, so nothing is ever forced.
       # To use it: set a value, reboot once, sign in, change the password from
@@ -150,6 +155,11 @@ services:
       - key: RECAPTCHA_SITE_KEY
         sync: false
       - key: RECAPTCHA_SECRET_KEY
+        sync: false
+      # Dedicated admin master password (PRIMARY admin credential). Set it in
+      # the dashboard; sync:false keeps the secret out of git. Updating the
+      # value here takes effect on the next login - no database change.
+      - key: ADMIN_MASTER_PASSWORD
         sync: false
       # Emergency admin recovery ONLY — leave it empty. While it is empty,
       # auth.apply_bootstrap_password() is inert, so nothing is ever forced.

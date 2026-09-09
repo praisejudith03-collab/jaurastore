@@ -1191,14 +1191,23 @@ def admin_login():
             # several admin accounts -> the single-account convenience cannot
             # know which shared-password account to open
             return jsonify(ok=False, error="Enter the admin email address to sign in."), 400
+    # ADMIN_MASTER_PASSWORD is the primary credential: checked first, read
+    # live from the environment (auth.master_password), so a new value saved
+    # in the Render dashboard works on the very next attempt - no database
+    # update, no restart. It only ever opens a CONFIGURED admin account; the
+    # account's own database password remains valid alongside it, and the
+    # one-shot ADMIN_BOOTSTRAP_PASSWORD recovery flow is untouched.
+    known = authmod.is_known_admin(email)
+    via_master = known and authmod.master_password_matches(pw)
     # identical response for unknown email vs wrong password (no enumeration)
-    ok = authmod.is_known_admin(email) and authmod.verify_login(email, pw)
+    ok = via_master or (known and authmod.verify_login(email, pw))
     if not ok:
         audit(email or "?", "admin.login_failed", "bad credentials", _ip())
         return jsonify(ok=False, error="Invalid email or password."), 401
     authmod.login(email)
     sec.clear_rate("admin-login", email)
-    audit(email, "admin.login", "success", _ip())
+    audit(email, "admin.login",
+          "master password" if via_master else "password", _ip())
     return jsonify(ok=True, email=email, csrf=sec.issue_csrf())
 
 @api.post("/admin/logout")
@@ -1221,6 +1230,10 @@ def change_password():
     if limited: return limited
     actor = authmod.current_admin()
     d = request.get_json(silent=True) or {}
+    # The current-password check goes through auth.verify_login, so the
+    # ADMIN_MASTER_PASSWORD (the primary credential) is accepted here too.
+    # Changing the shared database password never changes or disables the
+    # master password - that lives only in the host environment.
     if not authmod.verify_login(actor, d.get("currentPassword") or ""):
         audit(actor, "admin.password_change_failed", "wrong current password", _ip())
         return jsonify(ok=False, error="Your current password is incorrect."), 403
@@ -1386,17 +1399,27 @@ def admin_stock_set():
             (pid, variant, label, qty, thr, datetime.datetime.utcnow().isoformat(timespec="seconds")))
     # variant_stock is SQLite-only (wiped with the Render disk), so mirror the
     # whole table into Supabase growth_settings - the boot restore in app.py
-    # writes it back. Best effort: a Supabase hiccup never blocks the change.
+    # writes it back. Best effort: a Supabase hiccup never blocks the change,
+    # but the response reports it so the portal can say the durable copy is
+    # still pending.
+    mirrored = True
     if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
         try:
             from supabase_store import save_variant_stock
             rows = query("SELECT product_id, variant_key, variant_label, qty, low_threshold, "
                          "updated_at FROM variant_stock")
-            save_variant_stock([dict(r) for r in rows])
+            mirrored = bool(save_variant_stock([dict(r) for r in rows]))
         except Exception:
-            pass
+            mirrored = False
     audit(authmod.current_admin(), "stock.set", f"{pid}/{variant} = {qty}", _ip())
-    return jsonify(ok=True)
+    # Re-query after the save: the dashboard repaints from what was actually
+    # stored (the saved row and the whole table), never from the form values.
+    row = one("SELECT product_id, variant_key, variant_label, qty, low_threshold, updated_at "
+              "FROM variant_stock WHERE product_id=? AND variant_key=?", (pid, variant))
+    rows = query("SELECT product_id, variant_key, variant_label, qty, low_threshold, updated_at "
+                 "FROM variant_stock ORDER BY product_id, variant_key")
+    return jsonify(ok=True, item=(dict(row) if row else None),
+                   items=[dict(r) for r in rows], mirrored=mirrored)
 
 @api.get("/admin/low-stock")
 @authmod.require_admin

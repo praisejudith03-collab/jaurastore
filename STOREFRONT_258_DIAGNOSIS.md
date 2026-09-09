@@ -134,3 +134,24 @@ Four independent layers now guard the catalogue:
 * If you ever **intentionally** unpublish or delete one of the 258 approved `wix-*` rows, update `EXPECTED_WIX_IDS` in `tools/catalog_watchdog.py` (or disable the workflow) in the same change — otherwise the alert is correctly telling you the catalogue shrank.
 * New products you add via the admin portal are protected automatically: the watchdog requires **every** online Supabase row to appear on the storefront, whatever its id.
 
+---
+
+## Addendum (2026-09-09, finalization): admin master password + admin catalogue parity
+
+**`ADMIN_MASTER_PASSWORD` — the primary admin credential.** A dedicated environment variable that signs in to any configured admin account (and satisfies the "current password" check in the Change Password form) with **no database hash involved**. It is re-read live from the environment on every attempt, so updating it in Render → Environment works on the very next login — no database update, no restart. Guardrails: constant-time comparison, only opens `ADMIN_EMAILS` accounts (no enumeration vector), identical wrong-password 401s, rate-limited like any login, audit-logged as `admin.login · master password`. The account's own database password keeps working alongside it, and the `ADMIN_BOOTSTRAP_PASSWORD` one-shot recovery and the email-OTP/reset routes are untouched. Pinned by `tests/test_admin_master_password.py` (12 tests, including "the stored hashes never move when the master password changes").
+
+**Admin portal now shows exactly what is saved.** The admin pages previously loaded the *public* `api/catalog` (online rows only, stock numbers stripped) — so the portal undercounted (258 vs 276 saved), hid every offline row (an unpublished product could not be re-published from the grid), and showed wrong stock pills. Admin pages now request `api/catalog?all=1`: every saved row (online **and** offline, flagged "Hidden"), stock numbers intact, count = saved total (276). The storefront on every phone keeps the public online-only projection (258), and both views come from the same live Supabase read — the numbers can no longer drift apart (regression tests in `tests/test_catalog_supabase_258.py` and `tests/_store_sim.mjs`).
+
+**Admin mutations — verified Supabase-first with re-query on save:**
+
+| Portal form | Endpoint | Supabase write | Response after save |
+|---|---|---|---|
+| Save Product / Update Price / stock field | `POST /api/admin/products` | strict PostgreSQL upsert (503 on failure) | **re-queried row** (`_read_back_product`) + `meta`; the portal repaints from it (`applyServerProduct`) |
+| Save Settings | `POST /api/admin/site` | `site_settings` table update (503 on failure) | updated row re-read from PostgreSQL |
+| Upload Image / video / hero / category | `POST /api/admin/uploads/*` | Supabase Storage (`UPLOAD_MODE=supabase`) | stored public URL |
+| Update Stock (variant panel) | `PUT /api/admin/stock` | write + whole-table mirror to Supabase (`growth_settings`, boot-restored) | **now re-queried**: returns the saved `item`, the full `items` list and a `mirrored` flag (previously a bare `ok`) |
+| View / Delete Receipt | `GET/DELETE /api/admin/payment-proofs[...]` | Supabase Storage objects + rows; delete is strict (503 on failure) | re-read rows with signed URLs |
+| Delete Product | `DELETE /api/admin/products/<id>` | Supabase tombstone first (503 on failure) | re-computed `meta` |
+
+**Watchdog status at finalization:** `tools/catalog_watchdog.py` and `.github/workflows/catalog-watchdog.yml` are on PR #56 with 11 passing tests. The hourly schedule registers as soon as the PR merges (GitHub runs scheduled workflows from the default branch only); it also has a manual "Run workflow" button. It needs the repository secrets `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (Settings → Secrets and variables → Actions — the same names the customer-import workflow uses).
+

@@ -233,7 +233,16 @@ const JA = (() => {
   async function loadSeed() {
     if (seed.length) return seed;
     try {
-      const res = await fetch("api/catalog", { credentials: "same-origin" });
+      // The admin portal must see EXACTLY what is saved: every row,
+      // including hidden/offline ones, with the stock numbers and costs the
+      // public answer strips out. Admin pages therefore request the full
+      // catalogue (?all=1 - served only to a signed-in admin session; the
+      // server silently answers with the public list when the session has
+      // expired, so nothing ever breaks). The storefront keeps the plain
+      // public catalogue, so customers and every phone see the online rows.
+      const adminView = (document.body.dataset.page || "") === "admin";
+      const res = await fetch("api/catalog" + (adminView ? "?all=1" : ""),
+                               { credentials: "same-origin" });
       if (res.ok) {
         const d = await res.json();
         if (d && Array.isArray(d.products) && d.products.length) {

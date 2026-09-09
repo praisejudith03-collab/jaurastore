@@ -41,7 +41,7 @@ function check(name, ok, detail = "") {
 }
 
 // ------------------------------------------------------------- browser sandbox
-function makeSandbox(servedProducts) {
+function makeSandbox(servedProducts, opts = {}) {
   const storage = new Map();
   const localStorage = {
     getItem: (k) => (storage.has(k) ? storage.get(k) : null),
@@ -49,17 +49,21 @@ function makeSandbox(servedProducts) {
     removeItem: (k) => storage.delete(k),
     clear: () => storage.clear(),
   };
+  const fetched = [];
   const sandbox = {
     console,
     setTimeout, clearTimeout, setInterval, clearInterval,
     Date, Math, JSON, Number, String, Array, Object, Boolean, Set, Map, Promise,
-    fetch: () => Promise.resolve({
-      ok: true,
-      json: () => Promise.resolve({ ok: true, products: servedProducts, meta: { count: servedProducts.length } }),
-    }),
+    fetch: (url) => {
+      fetched.push(String(url));
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ ok: true, products: servedProducts, meta: { count: servedProducts.length } }),
+      });
+    },
     localStorage,
     sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-    document: { body: { dataset: { page: "" } }, addEventListener: () => {}, createElement: () => ({ style: {}, setAttribute: () => {}, appendChild: () => {} }) },
+    document: { body: { dataset: { page: opts.adminPage ? "admin" : "" } }, addEventListener: () => {}, createElement: () => ({ style: {}, setAttribute: () => {}, appendChild: () => {} }) },
     navigator: { onLine: true, language: "en" },
     location: { href: "https://jaurastore.com.ng/shop.html", origin: "https://jaurastore.com.ng", protocol: "https:", host: "jaurastore.com.ng", pathname: "/shop.html", search: "" },
     requestAnimationFrame: (fn) => setTimeout(fn, 0),
@@ -69,7 +73,7 @@ function makeSandbox(servedProducts) {
   vm.createContext(sandbox);
   vm.runInContext(storeSrc, sandbox, { filename: "js/store.js" });
   const JA = vm.runInContext("JA", sandbox);
-  return { JA, storage };
+  return { JA, storage, fetched };
 }
 
 const online = (p) => ({ ...p, online: true });
@@ -154,6 +158,34 @@ const offlineFixture = (id, name) => ({
   check("the stale local delete was forgotten, the server-unknown one kept",
     remembered.length === 1 && remembered[0] === "jau-gone-forever",
     `jaura_deleted = ${JSON.stringify(remembered)}`);
+}
+
+// ------------------------------- 5. the admin portal loads the FULL catalogue
+{
+  // The admin answer: every saved row incl. offline ones, with stock numbers.
+  const withStock = (p) => ({ ...p, stock: 24, stock_quantity: 24 });
+  const served = [...WIX.map((p) => withStock(online(p))),
+                  ...[
+                    ["jau-stock-a", "Stock Test jau-stock-a"], ["jau-mtot3318", "Tote bag"],
+                  ].map(([id, name]) => ({ ...offlineFixture(id, name), stock: 3, stock_quantity: 3 }))];
+  const { JA, fetched } = makeSandbox(served, { adminPage: true });
+  await JA.reloadCatalog();
+  const products = JA.products();               // admin page: no online filter
+  check("admin portal requests the full catalogue (?all=1)",
+    fetched.some((u) => String(u).includes("api/catalog?all=1")),
+    `fetches: ${JSON.stringify(fetched)}`);
+  check("admin portal sees every saved row, hidden ones included",
+    products.length === served.length &&
+    products.some((p) => p.id === "jau-mtot3318" && p.online === false),
+    `JA.products() returned ${products.length} of ${served.length}`);
+  check("admin portal keeps the stock numbers (public answer strips them)",
+    products.every((p) => Number(p.stock) > 0 || p.online === false));
+  // and the storefront still asks for the public list
+  const { JA: JAShop, fetched: shopFetches } = makeSandbox(served);
+  await JAShop.reloadCatalog();
+  check("the storefront still requests the plain public catalogue",
+    shopFetches.some((u) => String(u).includes("api/catalog")) &&
+    !shopFetches.some((u) => String(u).includes("all=1")));
 }
 
 console.log(failures ? `\n${failures} storefront check(s) FAILED` : "\nall storefront checks passed");

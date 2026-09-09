@@ -11,7 +11,7 @@ Two backends:
   for login. A password change therefore takes effect immediately: the old
   password stops working even if the Supabase mirror failed.
 """
-import html, re, secrets, time, datetime
+import hmac, html, os, re, secrets, time, datetime
 import sqlite3
 from flask import session
 from config import Config
@@ -35,6 +35,36 @@ def password_strong(pw):
     if not re.search(r"[0-9]", pw):
         return False, "Password needs at least one number."
     return True, ""
+
+
+# ------------------------------------------------------------ master password
+def master_password():
+    """The live master password from ADMIN_MASTER_PASSWORD ('' when unset).
+
+    Read from the environment on EVERY call, never cached at import time:
+    saving a new value in the host dashboard (Render -> Environment) takes
+    effect on the very next login attempt - no restart, and above all no
+    database update. The variable has no default; an unset variable simply
+    means "no master password" and every login goes through the normal
+    database password path.
+    """
+    try:
+        return str(os.environ.get("ADMIN_MASTER_PASSWORD", "") or "").strip()
+    except Exception:                            # pragma: no cover - env safety
+        return ""
+
+
+def master_password_matches(pw):
+    """True when ``pw`` equals the configured ADMIN_MASTER_PASSWORD.
+
+    Compared in constant time. False whenever the master password is unset -
+    an empty configuration must never authenticate anyone.
+    """
+    want = master_password()
+    if not want or not pw:
+        return False
+    return hmac.compare_digest(want.encode("utf-8"), str(pw).encode("utf-8"))
+
 
 
 # ------------------------------------------------------------------- accounts
@@ -85,7 +115,13 @@ def _hash_for(email):
 
 
 def verify_login(email, pw):
-    """Check an email + password, local hash first, durable copy second.
+    """Check an email + password: master password first, then the DB hashes.
+
+    ADMIN_MASTER_PASSWORD is the PRIMARY credential: when it is set, it opens
+    every configured admin account with no database round trip, so a fresh
+    value from the host dashboard works immediately. The account's own
+    password keeps working alongside it - local hash first, durable Supabase
+    copy second.
 
     The local ``admins`` row is tried first because it is fast and offline.
     It is NOT authoritative, though: it lives on Render's ephemeral disk, so
@@ -104,6 +140,13 @@ def verify_login(email, pw):
     email = (email or "").strip().lower()
     if not is_known_admin(email) or not pw:
         return False
+    # Primary credential: the master password from the live environment.
+    # It authenticates any CONFIGURED admin account (never an unknown email),
+    # and never touches the password hashes - changing it in the dashboard
+    # cannot require a database update because no database is involved.
+    if master_password_matches(pw):
+        _ensure_local_admin(email)
+        return True
     h = _hash_for(email)
     if h and check_password_hash(h, str(pw)):
         return True

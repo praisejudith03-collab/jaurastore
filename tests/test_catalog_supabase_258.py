@@ -34,6 +34,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # section 4) plus the one offline/review row (section 3). All online=false:
 # they must never leak into the public catalogue, but they DO count towards
 # the admin/hidden catalogue total (meta.count).
+EMAIL = "jaurastore@gmail.com"
+
 OFFLINE_NON_WIX_ROWS = [
     ("jau-mirror-fail", "X"), ("jau-mirror-ok", "Y"), ("jau-mirror-post", "Mirror Post"),
     ("jau-stock-a", "Stock Test jau-stock-a"), ("jau-stock-b", "Stock Test jau-stock-b"),
@@ -279,3 +281,51 @@ def test_storefront_fallback_seed_is_not_served_when_supabase_answers(client, mo
     assert "live Supabase copy" in first["name"], \
         "the Supabase row did not win over the local seed copy"
     assert len(body["products"]) == 258
+
+
+def _login_admin(client):
+    """Sign the sole admin in and return the session-holding client."""
+    import auth as authmod
+    from db import init_db
+    init_db()
+    authmod.ensure_seed_admins()
+    authmod.set_password(EMAIL, "AdminPass2026x")
+    r = client.post("/api/admin/login", json={"password": "AdminPass2026x"})
+    assert r.status_code == 200, r.data
+    return client
+
+
+def test_admin_catalog_all_returns_exactly_what_is_saved(client, monkeypatch):
+    """The admin portal reads GET /api/catalog?all=1: EVERY saved row (276 -
+    online AND offline), with the stock numbers the public answer strips, and
+    the count equals the saved total. This is what makes the admin product
+    count match the database on every device, while the public storefront
+    (all phones) keeps showing the online rows (258)."""
+    import catalog as catalog_mod
+    rows, wix_ids = _production_table()
+    _install_table(monkeypatch, rows)
+    monkeypatch.setattr(catalog_mod, "overrides", _production_overrides)
+    offline = {pid for pid, _ in OFFLINE_NON_WIX_ROWS}
+
+    # first, as an anonymous visitor: the public answer is the online-only
+    # projection - 258 products, no stock keys, no offline rows
+    pub = client.get("/api/catalog").get_json()
+    assert len(pub["products"]) == 258
+    pub_row = next(p for p in pub["products"] if p["id"] == "wix-001")
+    assert "stock" not in pub_row and "stock_quantity" not in pub_row
+    assert all(p["id"] not in offline for p in pub["products"])
+
+    # then, signed in as the admin: ?all=1 lists EVERY saved row (276)
+    _login_admin(client)
+    body = client.get("/api/catalog?all=1").get_json()
+    ids = [str(p["id"]) for p in body["products"]]
+    assert len(ids) == 276, \
+        f"the admin catalogue must list every saved row (276), got {len(ids)}"
+    assert len(ids) == len(set(ids))
+    assert set(ids) == set(wix_ids) | offline
+    assert any(p["id"] in offline and p.get("online") is False
+               for p in body["products"]), "offline rows must be visible to the admin"
+    wix_row = next(p for p in body["products"] if p["id"] == "wix-001")
+    assert "stock" in wix_row or "stock_quantity" in wix_row, \
+        "the admin answer must keep the stock numbers (the public one strips them)"
+    assert body["meta"]["count"] == 276

@@ -146,6 +146,20 @@ class Config:
     OTP_RESEND_COOLDOWN = 60
 
     # ------------------------------------------------- admin access recovery
+    # -------------------------------------------------- admin master password
+    # ADMIN_MASTER_PASSWORD is the PRIMARY credential for the admin portal.
+    # When it is set, it signs in to any configured admin account and unlocks
+    # the password-change form as the "current password" - no database hash is
+    # involved, so a new value saved in the host dashboard works on the very
+    # next login attempt (auth.master_password() reads the LIVE environment on
+    # every attempt; this attribute is only the import-time snapshot). There
+    # is deliberately NO default: a default would publish the password in this
+    # public repository. The account's own database password keeps working
+    # alongside it, and ADMIN_BOOTSTRAP_PASSWORD below (one-shot emergency
+    # recovery) stays untouched as the fallback.
+    ADMIN_MASTER_PASSWORD = os.environ.get("ADMIN_MASTER_PASSWORD", "")
+
+    # ------------------------------------------------- admin access recovery
     # Last-resort way back into the admin portal when the password is lost and
     # no reset code can be received. There is deliberately NO default here:
     # a default lives in the repository, and this repository is public, so it
