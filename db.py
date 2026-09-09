@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   PRIMARY KEY (key, action)
 );
 
+CREATE TABLE IF NOT EXISTS admin_recovery_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  used_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id     INTEGER PRIMARY KEY AUTOINCREMENT,
   actor  TEXT,

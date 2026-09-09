@@ -19,9 +19,11 @@ services:
       - key: ADMIN_EMAILS
         value: jaurastore@gmail.com
       - key: MAIL_MODE
-        value: smtp
+        value: resend
       - key: MAIL_FROM
         value: jaurastore@gmail.com
+      - key: RESEND_API_KEY
+        sync: false
       - key: SMTP_HOST
         value: smtp.gmail.com
       - key: SMTP_PORT
@@ -118,9 +120,11 @@ services:
       - key: ADMIN_EMAILS
         value: jaurastore@gmail.com
       - key: MAIL_MODE
-        value: smtp
+        value: resend
       - key: MAIL_FROM
         value: jaurastore@gmail.com
+      - key: RESEND_API_KEY
+        sync: false
       - key: SMTP_HOST
         value: smtp.gmail.com
       - key: SMTP_PORT

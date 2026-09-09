@@ -1,5 +1,5 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
-import csv, io, json, os, datetime, secrets, hashlib, re
+import csv, io, json, os, datetime, secrets, hashlib, re, hmac
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
 from db import execute, one, query, audit
@@ -1229,6 +1229,8 @@ def change_password():
     if not ok:
         return jsonify(ok=False, error=msg), 400
     authmod.set_password(actor, newpw)
+    # Force this authenticated session to re-authenticate after a credential change.
+    session.clear()
     audit(actor, "admin.password_changed", "", _ip())
     # The old password is dead either way, but if the durable copy could not be
     # written the new one will not survive a Render restart - say so rather
@@ -1313,7 +1315,8 @@ def otp_reset():
     if not authmod.is_known_admin(email):
         return jsonify(ok=False, error="Unknown account."), 404
     authmod.set_password(email, newpw)
-    session.pop("reset_ticket", None); session.pop("reset_ok", None)
+    # Do not leave any reset/authentication state alive after a reset.
+    session.clear()
     audit(email, "admin.password_reset_via_otp", "", _ip())
     durable_err = authmod.password_durable_error()
     return jsonify(ok=True, durable=not durable_err,
@@ -1322,6 +1325,39 @@ def otp_reset():
                             "Password reset, but it could not be saved to "
                             "Supabase, so it will be lost on the next restart."),
                    csrf=sec.issue_csrf())
+
+@api.post("/admin/recovery")
+def admin_recovery():
+    """One-use emergency recovery; email OTP remains the normal path."""
+    if Config.ENV == "production" and request.headers.get("X-Forwarded-Proto", "").lower() != "https":
+        return jsonify(ok=False, error="HTTPS is required."), 400
+    limited = sec.guard("admin-recovery", limit=5, window=900, key_extra=_ip())
+    if limited: return limited
+    d = request.get_json(silent=True) or {}
+    supplied = str(request.headers.get("X-Admin-Recovery-Secret", ""))
+    configured = str(Config.ADMIN_RECOVERY_SECRET or "")
+    valid_secret = bool(configured) and hmac.compare_digest(supplied, configured)
+    # Always validate the same shape and use a generic response; account
+    # existence is never disclosed.
+    email = sec.clean_email(d.get("email"))
+    newpw = d.get("newPassword") or ""
+    strong, msg = authmod.password_strong(newpw)
+    if not valid_secret or not email or not strong:
+        audit("recovery", "admin.recovery_failed", "invalid request", _ip())
+        return jsonify(ok=False, error="Recovery request could not be completed."), 403
+    row = one("SELECT used_at FROM admin_recovery_state WHERE id=1")
+    if row and row["used_at"]:
+        return jsonify(ok=False, error="Recovery is no longer available."), 410
+    if not authmod.is_known_admin(email):
+        return jsonify(ok=False, error="Recovery request could not be completed."), 403
+    # Consume before hashing/writing to prevent replay, including concurrent calls.
+    now = datetime.datetime.utcnow().isoformat()
+    execute("INSERT INTO admin_recovery_state(id, used_at) VALUES(1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET used_at=excluded.used_at", (now,))
+    if not authmod.set_password(email, newpw):
+        return jsonify(ok=False, error="Recovery request could not be completed."), 500
+    audit("recovery", "admin.recovery_succeeded", "", _ip())
+    return jsonify(ok=True, message="Recovery completed. Sign in with the new password.")
 
 # ------------------------------------------------------------ admin: stock
 @api.get("/admin/stock")

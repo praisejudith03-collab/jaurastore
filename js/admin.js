@@ -108,7 +108,33 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
     else paintLogin(res.error || "Could not sign in.");
   });
   $("#forgot-btn").addEventListener("click", () => paintOtpRequest());
+  // Emergency recovery is intentionally not prominent: use only when OTP email fails.
+  const recovery = document.createElement("button");
+  recovery.type = "button"; recovery.className = "au-link-btn";
+  recovery.textContent = "Owner emergency recovery";
+  recovery.style.marginTop = "8px";
+  recovery.onclick = () => paintRecovery();
+  form.parentNode.appendChild(recovery);
 }
+function paintRecovery(msg) {
+  const slot = $("#otp-slot"); if (!slot) return;
+  slot.innerHTML = `<div class="otp-box"><h3>Owner emergency recovery</h3>
+    <p class="admin-note">Use only if email OTP cannot deliver. Your recovery secret must stay private and is sent over HTTPS.</p>
+    ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
+    <form id="recovery-form" class="field">
+      <label>Admin email</label><input type="email" name="email" required autocomplete="username">
+      <label>Recovery secret</label><input type="password" name="secret" required autocomplete="off">
+      <label>New password</label><input type="password" name="password" required autocomplete="new-password">
+      <button class="btn">Recover access</button>
+    </form></div>`;
+  $("#recovery-form").addEventListener("submit", async e => {
+    e.preventDefault(); const fd = new FormData(e.target);
+    const r = await fetch("api/admin/recovery", {method:"POST", headers:{"Content-Type":"application/json", "X-Admin-Recovery-Secret":String(fd.get("secret"))}, body:JSON.stringify({email:String(fd.get("email")),newPassword:String(fd.get("password"))})}).then(x=>x.json());
+    if (!r.ok) { paintRecovery(r.error || "Recovery failed."); return; }
+    paintLogin("Recovery completed. Sign in with your new password.");
+  });
+}
+
 function paintOtpRequest(msg) {
   const slot = $("#otp-slot");
   if (!slot) return;

@@ -159,6 +159,8 @@ class Config:
     # is stamped and nothing is forced - and it fires at most once per database
     # when it is set.
     BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "")
+    # One-time emergency recovery secret. Never give this a default.
+    ADMIN_RECOVERY_SECRET = os.environ.get("ADMIN_RECOVERY_SECRET", "")
 
     LOW_STOCK_THRESHOLD = 5
 

@@ -1,6 +1,7 @@
 """Mail delivery: resend | smtp | none(kept on disk + console)."""
 import datetime, re, socket, ssl, smtplib
 from urllib.parse import quote
+from urllib.error import HTTPError, URLError
 from email.message import EmailMessage
 from config import Config
 
@@ -12,6 +13,12 @@ SMTP_CONNECTION = "smtp_connection"
 SMTP_SENDER = "smtp_sender"
 SMTP_RECIPIENT = "smtp_recipient"
 SMTP_PROVIDER = "smtp_provider"
+RESEND_MISSING_KEY = "resend_missing_api_key"
+RESEND_UNAUTHORIZED = "resend_unauthorized"
+RESEND_UNVERIFIED_SENDER = "resend_unverified_sender"
+RESEND_INVALID_REQUEST = "resend_invalid_request"
+RESEND_NETWORK = "resend_network_failure"
+RESEND_DELIVERED = "resend_delivered"
 CONFIGURATION = "configuration"
 # Aliases kept so older tests/callers still import a stable name.
 MAIL_MODE_NOT_SMTP = CONFIGURATION
@@ -89,6 +96,12 @@ def log_mail_event(category, extra=""):
 def classify_smtp_failure(exc=None, info=""):
     """Map an SMTP exception / info string onto one sanitized category slug."""
     mode = (Config.MAIL_MODE or "").strip().lower()
+    known = {RESEND_MISSING_KEY, RESEND_UNAUTHORIZED, RESEND_UNVERIFIED_SENDER,
+             RESEND_INVALID_REQUEST, RESEND_NETWORK, RESEND_DELIVERED}
+    if str(info) in known:
+        return str(info)
+    if mode == "resend" and not str(info or "").strip():
+        return RESEND_NETWORK
     if mode and mode not in ("smtp", "resend"):
         return CONFIGURATION
     blob = " ".join(
@@ -242,10 +255,24 @@ def _deliver_smtp(msg, recipients):
                         pass
     return False, f"smtp error: {last}"
 
+def _resend_result(status, body=""):
+    """Return only an operator-safe Resend diagnostic; never return response text."""
+    if status in (200, 201):
+        return True, RESEND_DELIVERED
+    if status in (401, 403):
+        return False, RESEND_UNAUTHORIZED
+    if status == 422:
+        text = str(body).lower()
+        if "from" in text or "sender" in text or "domain" in text:
+            return False, RESEND_UNVERIFIED_SENDER
+        return False, RESEND_INVALID_REQUEST
+    return False, RESEND_NETWORK
+
+
 def _via_resend(to, subject, body):
     import urllib.request, json
-    if not Config.RESEND_API_KEY:
-        return False, "RESEND_API_KEY not set"
+    if not (Config.RESEND_API_KEY or "").strip():
+        return False, RESEND_MISSING_KEY
     payload = json.dumps({
         "from": Config.MAIL_FROM, "to": [to],
         "subject": subject, "text": body,
@@ -256,9 +283,18 @@ def _via_resend(to, subject, body):
                  "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
-            return r.status in (200, 201), f"resend {r.status}"
-    except Exception as exc:
-        return False, f"resend error: {exc}"
+            return _resend_result(r.status)
+    except HTTPError as exc:
+        # Status is useful; the body is inspected only to distinguish sender
+        # validation and is never returned or logged.
+        body = exc.read(4096)
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", "ignore")
+        return _resend_result(exc.code, body)
+    except (URLError, TimeoutError, socket.timeout, OSError):
+        return False, RESEND_NETWORK
+    except Exception:
+        return False, RESEND_NETWORK
 
 def send(to, subject, body):
     """Returns (delivered: bool, info: str). Never raises."""
@@ -536,8 +572,8 @@ def _via_smtp_attached(to, subject, body, data, filename, mime, reply_to, cc=Non
 
 def _via_resend_attached(to, subject, body, data, filename, mime, reply_to):
     import base64, json, urllib.request
-    if not Config.RESEND_API_KEY:
-        return False, "RESEND_API_KEY not set"
+    if not (Config.RESEND_API_KEY or "").strip():
+        return False, RESEND_MISSING_KEY
     payload = {
         "from": Config.MAIL_FROM,
         "to": [to],
@@ -559,9 +595,16 @@ def _via_resend_attached(to, subject, body, data, filename, mime, reply_to):
                  "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status in (200, 201), f"resend {r.status}"
-    except Exception as exc:
-        return False, f"resend error: {exc}"
+            return _resend_result(r.status)
+    except HTTPError as exc:
+        body = exc.read(4096)
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", "ignore")
+        return _resend_result(exc.code, body)
+    except (URLError, TimeoutError, socket.timeout, OSError):
+        return False, RESEND_NETWORK
+    except Exception:
+        return False, RESEND_NETWORK
 
 
 def _stub_with_attachment(to, subject, body, data, filename, mime):

@@ -57,7 +57,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("GET", "/api/admin/orders.csv"), ("DELETE", "/api/admin/orders/<oid>"),
     ("PATCH", "/api/admin/orders/<oid>"), ("POST", "/api/admin/otp/request"),
     ("POST", "/api/admin/otp/reset"), ("POST", "/api/admin/otp/verify"),
-    ("POST", "/api/admin/password"), ("GET", "/api/admin/payment-proofs"),
+    ("POST", "/api/admin/password"), ("POST", "/api/admin/recovery"), ("GET", "/api/admin/payment-proofs"),
     ("DELETE", "/api/admin/payment-proofs/<int:pid>"),
     ("POST", "/api/admin/products"), ("PUT", "/api/admin/products"),
     ("DELETE", "/api/admin/products/<pid>"), ("GET", "/api/admin/referrals"),
