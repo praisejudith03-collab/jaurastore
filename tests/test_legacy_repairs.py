@@ -223,7 +223,7 @@ def test_orders_repairs_before_indexes():
 
 def test_receipts_repairs_before_indexes():
     sec = _section("receipts")
-    for col in ("order_id", "file_url", "email", "created_at"):
+    for col in ("order_id", "file_url", "email", "file_type", "created_at"):
         assert re.search(r"alter table receipts add column if not exists\s+" + col + r"\b", sec, re.IGNORECASE), f"receipts repair missing {col}"
     low = sec.lower()
     assert low.index("alter table receipts add column if not exists order_id") < low.index("create index if not exists idx_receipts_order")
@@ -251,12 +251,6 @@ def test_site_settings_repairs_all_core_columns():
     for col in ("bank_name", "account_number", "referral_commission_percentage", "hero_banner_title", "contact_email", "site_logo_url", "updated_at"):
         assert re.search(r"alter table site_settings add column if not exists\s+" + col + r"\b", sec, re.IGNORECASE), f"site_settings repair missing {col}"
 
-def test_admin_credentials_repairs_before_indexes():
-    sec = _section("admin_credentials")
-    assert re.search(r"alter table admin_users add column if not exists\s+email\b", sec, re.IGNORECASE)
-    assert re.search(r"alter table admin_reset_tokens add column if not exists\s+email\b", sec, re.IGNORECASE)
-    low = sec.lower()
-    assert low.index("alter table admin_reset_tokens add column if not exists email") < low.index("create index if not exists admin_reset_tokens_lookup")
 
 def test_growth_settings_repairs_value():
     sec = _section("growth_settings")

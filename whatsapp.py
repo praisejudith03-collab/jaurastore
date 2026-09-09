@@ -70,8 +70,8 @@ def _via_callmebot(text):
 
 
 def send_text(text):
-    """Send a plain text message to the owner's WhatsApp (admin alerts, reset
-    codes). Returns (sent, detail). Never raises."""
+    """Send an optional plain text order alert to the owner's WhatsApp.
+    Returns (sent, detail). Never raises."""
     try:
         if Config.WHATSAPP_TOKEN and Config.WHATSAPP_PHONE_ID:
             return _via_cloud_api(text), "cloud-api"

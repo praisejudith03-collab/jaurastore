@@ -45,8 +45,6 @@ def app():
 @pytest.fixture()
 def client(app):
     init_db()
-    authmod.ensure_seed_admins()
-    authmod.set_password(EMAIL, PW)
     execute("DELETE FROM rate_limits")
     with app.test_client() as c:
         yield c

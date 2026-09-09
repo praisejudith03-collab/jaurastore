@@ -6,7 +6,7 @@ file - /tmp/jaura_test.db - so they have to agree on the password.
 
 It is generated afresh on every run rather than committed: this repository is
 public, and a password written into it is a password anyone can read. The two
-that used to live here (the `BOOTSTRAP_ADMIN_PASSWORD` default in config.py and
+that used to live here (the `ADMIN_BOOTSTRAP_PASSWORD` environment credential and
 this suite's own login password) were published that way; both are dead values
 now and `tests/test_static_exposure.py` fails the build if either comes back.
 

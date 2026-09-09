@@ -442,8 +442,8 @@ def test_receipt_deletion_still_removes_the_bucket_object():
     """Deleting a receipt (or its order) still deletes the file - and a
     receipt whose Supabase RECORD failed to save removes its orphan object."""
     api = _read("api.py")
-    assert api.count("storage.delete_upload(") == 3, \
-        "three delete_upload call sites: orphan cleanup, the receipt and the order"
+    assert api.count("storage.delete_upload(") == 4, \
+        "four delete_upload call sites: orphan cleanup, production/local receipt deletes and the order"
     assert "delete_upload" in _function_body(api, "payment_proof"), \
         "a failed strict receipt write removes the orphan storage object"
     assert "delete_upload" in _function_body(api, "admin_payment_proof_delete"), \

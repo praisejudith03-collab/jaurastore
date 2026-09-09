@@ -7,38 +7,12 @@ SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
-CREATE TABLE IF NOT EXISTS admins (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  email         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-  password_hash TEXT    NOT NULL,
-  role          TEXT    NOT NULL DEFAULT 'admin',
-  created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-  last_login_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS otp_codes (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  email       TEXT    NOT NULL COLLATE NOCASE,
-  code_hash   TEXT    NOT NULL,
-  purpose     TEXT    NOT NULL DEFAULT 'reset',
-  expires_at  TEXT    NOT NULL,
-  attempts    INTEGER NOT NULL DEFAULT 0,
-  consumed_at TEXT,
-  created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email, purpose);
-
 CREATE TABLE IF NOT EXISTS rate_limits (
   key        TEXT    NOT NULL,
   action     TEXT    NOT NULL,
   hits       INTEGER NOT NULL DEFAULT 0,
   window_end REAL    NOT NULL,
   PRIMARY KEY (key, action)
-);
-
-CREATE TABLE IF NOT EXISTS admin_recovery_state (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  used_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -122,21 +96,8 @@ CREATE TABLE IF NOT EXISTS customers (
 );
 CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email);
 
-CREATE TABLE IF NOT EXISTS customer_tokens (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  customer_id TEXT,
-  email       TEXT NOT NULL COLLATE NOCASE,
-  purpose     TEXT NOT NULL,
-  token_hash  TEXT NOT NULL,
-  expires_at  TEXT NOT NULL,
-  consumed_at TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_customer_tokens_hash ON customer_tokens(token_hash, purpose);
-
-
--- Payment confirmations sent from the public payment form. The uploaded
--- receipt is kept, together with everything the customer typed.
+-- Payment receipts uploaded from the public checkout. The original file is
+-- kept together with everything the customer typed.
 CREATE TABLE IF NOT EXISTS payment_proofs (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   order_id   TEXT,
@@ -152,8 +113,6 @@ CREATE TABLE IF NOT EXISTS payment_proofs (
   file_name  TEXT,
   file_size  INTEGER,
   mime       TEXT,
-  emailed    INTEGER NOT NULL DEFAULT 0,
-  email_info TEXT,
   at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_proof_at ON payment_proofs(at DESC);
@@ -273,20 +232,6 @@ CREATE TABLE IF NOT EXISTS coupons (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Abandoned checkouts: captured early, reminded once by email.
-CREATE TABLE IF NOT EXISTS abandoned_carts (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  token        TEXT UNIQUE NOT NULL,
-  email        TEXT NOT NULL,
-  cart_json    TEXT NOT NULL,
-  currency     TEXT,
-  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
-  reminded_at  TEXT,
-  completed_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_abandoned_email ON abandoned_carts(email);
-
 -- Coupon redemption log. `coupons.uses` stays the fast counter for the
 -- max_uses check, but a counter cannot answer "which order used this code" and
 -- cannot stop a retried order from counting twice. UNIQUE(code, order_id) is
@@ -304,7 +249,7 @@ CREATE TABLE IF NOT EXISTS coupon_uses (
 );
 CREATE INDEX IF NOT EXISTS idx_coupon_uses_code ON coupon_uses(code, used_at);
 --
--- Growth module settings (referral / coupons / abandoned cart), key-value.
+-- Growth module settings (referral / coupons), key-value.
 CREATE TABLE IF NOT EXISTS growth_settings (
   key   TEXT PRIMARY KEY,
   value TEXT
@@ -432,18 +377,6 @@ def migrate():
         "  updated_at TEXT NOT NULL DEFAULT (datetime('now'))"
         ");"
         "CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email);"
-        "CREATE TABLE IF NOT EXISTS customer_tokens ("
-        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "  customer_id TEXT,"
-        "  email TEXT NOT NULL COLLATE NOCASE,"
-        "  purpose TEXT NOT NULL,"
-        "  token_hash TEXT NOT NULL,"
-        "  expires_at TEXT NOT NULL,"
-        "  consumed_at TEXT,"
-        "  created_at TEXT NOT NULL DEFAULT (datetime('now'))"
-        ");"
-        "CREATE INDEX IF NOT EXISTS idx_customer_tokens_hash "
-        "  ON customer_tokens(token_hash, purpose);"
     )
     cx.commit()
     have = {r["name"] for r in query("PRAGMA table_info(orders)")}
@@ -554,29 +487,28 @@ def upsert_receipts(receipts):
                 existing = one("SELECT id FROM payment_proofs WHERE order_id=?", (order_id,))
             mime = r.get("mime") or r.get("file_type") or ""
             at = r.get("at") or r.get("created_at") or ""
-            emailed = 1 if r.get("emailed") else 0
             if existing:
                 execute(
                     "UPDATE payment_proofs SET name=?, phone=?, email=?, method=?, items=?, quantity=?, "
-                    "amount=?, note=?, file_url=?, file_name=?, file_size=?, mime=?, emailed=?, email_info=?, at=? "
+                    "amount=?, note=?, file_url=?, file_name=?, file_size=?, mime=?, at=? "
                     "WHERE id=?",
                     (
                         r.get("name"), r.get("phone"), r.get("email"), r.get("method"),
                         r.get("items"), r.get("quantity"), r.get("amount"), r.get("note"),
                         file_url, r.get("file_name"), r.get("file_size"), mime,
-                        emailed, r.get("email_info"), at, existing["id"]
+                        at, existing["id"]
                     )
                 )
             else:
                 execute(
                     "INSERT INTO payment_proofs (order_id, name, phone, email, method, items, quantity, "
-                    "amount, note, file_url, file_name, file_size, mime, emailed, email_info, at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "amount, note, file_url, file_name, file_size, mime, at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         order_id, r.get("name"), r.get("phone"), r.get("email"), r.get("method"),
                         r.get("items"), r.get("quantity"), r.get("amount"), r.get("note"),
                         file_url, r.get("file_name"), r.get("file_size"), mime,
-                        emailed, r.get("email_info"), at
+                        at
                     )
                 )
             count += 1

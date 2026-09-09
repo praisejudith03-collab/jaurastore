@@ -15,8 +15,6 @@ create table if not exists receipts (
   file_name  text,
   file_size  bigint,
   file_type  text,
-  emailed    boolean default false,
-  email_info text,
   created_at timestamptz default now()
 );
 -- Repair an older receipts table. Add-only, preserves all existing receipt
@@ -34,8 +32,6 @@ alter table receipts add column if not exists file_url   text;
 alter table receipts add column if not exists file_name  text;
 alter table receipts add column if not exists file_size  bigint;
 alter table receipts add column if not exists file_type  text;
-alter table receipts add column if not exists emailed    boolean default false;
-alter table receipts add column if not exists email_info text;
 alter table receipts add column if not exists created_at timestamptz default now();
 create index if not exists idx_receipts_order on receipts (order_id);
 

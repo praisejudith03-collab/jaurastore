@@ -19,7 +19,6 @@ os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_test_catalog.json")  # never t
 os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_EMAILS", "jaurastore@gmail.com")
-os.environ.setdefault("MAIL_MODE", "none")
 
 import pytest  # noqa: E402
 
@@ -140,7 +139,6 @@ def test_owner_referral_settings_survive_a_wiped_disk(sb):
         {"key": "buyerPercent", "value": "7"},
         {"key": "referrerPercent", "value": "10"},
         {"key": "milestone", "value": "2"},
-        {"key": "abandonedHours", "value": "3"},
     ]
     _wipe_growth_tables()
     assert growth.settings()["minSpendNgn"] == growth.DEFAULTS["minSpendNgn"]  # wiped
@@ -150,7 +148,6 @@ def test_owner_referral_settings_survive_a_wiped_disk(sb):
     assert s["buyerPercent"] == 7
     assert s["referrerPercent"] == 10
     assert s["milestone"] == 2
-    assert s["abandonedHours"] == 3
     assert s["referralEnabled"] == 1
 
 

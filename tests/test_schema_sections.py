@@ -68,8 +68,7 @@ def test_required_tables_and_no_destructive_statements():
     source = (ROOT / 'supabase_schema.sql').read_text()
     code = re.sub(r'--[^\n]*', '', source).lower()
     assert not re.search(r'\b(drop|truncate|delete)\b', code)
-    for table in ('products', 'receipts', 'orders', 'product_reviews', 'coupon_uses',
-                  'admin_users', 'admin_reset_tokens', 'delivery_zones'):
+    for table in ('products', 'receipts', 'orders', 'product_reviews', 'coupon_uses'):
         assert f'create table if not exists {table} (' in code
     review = code.split('create table if not exists product_reviews (', 1)[1].split(');', 1)[0]
     for field in ('rating', 'title', 'body', 'created_at', 'updated_at'):

@@ -192,8 +192,9 @@ def create_app():
                 app.logger.info("restored %d receipts from Supabase", saved_r)
         except Exception as exc:
             app.logger.warning("orders/receipts restore skipped: %s", exc)
-        # Restore per-variant stock levels: the Stock panel is SQLite-only, so
-        # without this a redeploy that wipes the disk resets every quantity.
+        # Restore the local variant-stock cache for compatibility with local
+        # admin tooling after an ephemeral-disk deploy. Production request
+        # reads still use the strict Supabase path in api.py.
         try:
             from supabase_store import load_variant_stock
             from db import upsert_variant_stock
@@ -202,9 +203,9 @@ def create_app():
                 saved_s = upsert_variant_stock(stock_data)
                 app.logger.info("restored %d variant stock rows from Supabase", saved_s)
         except Exception as exc:
-            app.logger.warning("variant stock restore skipped: %s", exc)
+            app.logger.warning("variant stock cache restore skipped: %s", exc)
         # Restore the growth module from Supabase: the referral settings the
-        # owner configured (thresholds, percentages, toggles, email template),
+        # owner configured (thresholds, percentages and toggles),
         # issued referral codes, coupons and product reviews. SQLite is only
         # the working copy - without this, a redeploy resets the settings to
         # defaults and the codes/coupons/reviews disappear from the store.
@@ -256,28 +257,7 @@ def create_app():
                 app.logger.warning("category merge skipped: %s", exc)
     except Exception as exc:           # never let housekeeping stop the boot
         app.logger.warning("startup maintenance skipped: %s", exc)
-    authmod.ensure_seed_admins()
-
-    # One-shot access recovery: when the admin password is lost and no reset
-    # code can be received, the shared admin password is forced once on boot to
-    # ADMIN_BOOTSTRAP_PASSWORD. There is no default for it - a default would be
-    # a password published in the repository - so while it is unset
-    # auth.apply_bootstrap_password() is inert and nothing is forced. Set it in
-    # the host dashboard, reboot once, sign in, change the password from the
-    # admin portal, then clear the variable again. It stamps an
-    # `admin_bootstrap_applied` marker so it can never fire twice.
-    # Skipped under FLASK_ENV=testing so test passwords are never overwritten.
-    if Config.ENV != "testing":
-        try:
-            if authmod.apply_bootstrap_password(
-                    os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "")):
-                app.logger.warning(
-                    "admin bootstrap password applied once - sign in and change "
-                    "it from the admin portal now")
-        except Exception as exc:                       # pragma: no cover
-            app.logger.warning("admin bootstrap password not applied: %s", exc)
-
-    # abandoned-cart reminders + the midnight products/orders backup
+    # midnight products/orders backup
     if Config.SCHEDULER_ENABLED and Config.ENV not in ("testing",):
         try:
             import scheduler

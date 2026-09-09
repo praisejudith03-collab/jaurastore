@@ -21,7 +21,6 @@ os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_test_catalog.json")  # never t
 os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_EMAILS", "jaurastore@gmail.com")
-os.environ.setdefault("MAIL_MODE", "none")
 
 import pytest  # noqa: E402
 
@@ -32,6 +31,7 @@ from db import execute, init_db, one, query  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _pw import PW  # noqa: E402
+os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = PW
 
 EMAIL = "jaurastore@gmail.com"
 
@@ -53,8 +53,6 @@ def app():
 @pytest.fixture()
 def client(app):
     init_db()
-    authmod.ensure_seed_admins()
-    authmod.set_password(EMAIL, PW)
     execute("DELETE FROM rate_limits")
     _reset()
     with app.test_client() as c:

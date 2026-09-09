@@ -27,8 +27,7 @@ RECEIPT = {"order_id": "JA-BF1", "name": "N", "phone": "p",
            "email": "e@x.com", "method": "momo", "items": "i",
            "quantity": "1", "amount": "5000", "note": "",
            "file_url": "/uploads/proofs/x.jpg", "file_name": "x.jpg",
-           "file_size": 10, "mime": "image/jpeg", "emailed": 1,
-           "email_info": "ok"}
+           "file_size": 10, "mime": "image/jpeg"}
 
 
 def test_backfill_rows_match_the_live_mirrors():
@@ -50,6 +49,6 @@ def test_backfill_rows_match_the_live_mirrors():
     assert rec["id"] == "JA-BF1" == rec["order_id"]
     receives = {"id", "order_id", "name", "phone", "email", "method", "items",
                 "quantity", "amount", "note", "file_url", "file_name",
-                "file_size", "file_type", "emailed", "email_info"}
+                "file_size", "file_type"}
     assert set(rec) == receives | {"created_at"}
-    assert rec["file_type"] == "image/jpeg" and rec["emailed"] is True
+    assert rec["file_type"] == "image/jpeg"

@@ -23,7 +23,6 @@ os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_test_catalog.json")  # never t
 os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_EMAILS", "jaurastore@gmail.com")
-os.environ.setdefault("MAIL_MODE", "none")
 
 import pytest  # noqa: E402
 
@@ -165,8 +164,6 @@ def app():
 @pytest.fixture()
 def client(app):
     init_db()
-    authmod.ensure_seed_admins()
-    authmod.set_password(EMAIL, PW)
     execute("DELETE FROM rate_limits")
     with app.test_client() as c:
         yield c
@@ -464,10 +461,10 @@ def test_admin_receipts_view_serves_fresh_signed_urls(client, fake):
     assert ok
     stored_path = url.split("/uploads/proofs/", 1)[1].split("?", 1)[0]
     execute("INSERT INTO payment_proofs (order_id, name, phone, email, method, items, "
-            "quantity, amount, note, file_url, file_name, file_size, mime, emailed, "
-            "email_info, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "quantity, amount, note, file_url, file_name, file_size, mime, at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             ("JA-TEST", "C", "0800", "c@x.com", "Bank transfer", "item", "1",
-             "1000", "", url, "receipt.png", 10, "image/png", 1, "ok", "2026-09-04T00:00:00"))
+             "1000", "", url, "receipt.png", 10, "image/png", "2026-09-04T00:00:00"))
     row = one("SELECT id FROM payment_proofs WHERE file_url=?", (url,))
     assert row, "test setup: the receipt row must exist"
 

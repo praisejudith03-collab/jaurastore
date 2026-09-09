@@ -47,7 +47,7 @@ The general sequence below is not approval to resume the paused deployment.
 
    01 products → 02 orders → 03 receipts → 04 referrals → 05 coupons →
    06 growth_settings → 07 site_settings → 08 categories →
-   09 product_compatibility → 10 admin_credentials → 11 delivery_zones →
+   09 product_compatibility → 10 customer_accounts → 11 delivery_zones →
    12 coupon_redemptions → 13 product_reviews → 14 delivery_seeds →
    15 storage → 16 stock.
 
@@ -60,7 +60,7 @@ The general sequence below is not approval to resume the paused deployment.
    select table_name from information_schema.tables
    where table_schema = 'public'
      and table_name in ('products', 'orders', 'receipts', 'product_reviews',
-                        'coupon_uses', 'admin_users', 'admin_reset_tokens',
+                        'coupon_uses', 'customers',
                         'delivery_zones')
    order by table_name;
    ```

@@ -21,7 +21,6 @@ os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_test_catalog.json")
 os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_EMAILS", "jaurastore@gmail.com")
-os.environ.setdefault("MAIL_MODE", "none")
 os.environ.setdefault("SITE_CONFIG_PATH", "/tmp/jaura_test_site_pay.json")
 
 import pytest  # noqa: E402
@@ -33,6 +32,7 @@ from db import execute, init_db  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _pw import PW  # noqa: E402
+os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = PW
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EMAIL = "jaurastore@gmail.com"
@@ -51,7 +51,7 @@ FORBIDDEN = ("23474678931", "OKORAFOR PRAISE", "OKORAFOR GIFT",
              "OKORAFOR GOODNESS", "01 52 01 99 30", "+229 01 68 95 31 10")
 
 SHIPPED_FRONTEND = ("js/app.js", "js/store.js", "js/admin.js", "js/i18n.js",
-                    "checkout.html", "index.html", "cart.html", "confirm.html")
+                    "checkout.html", "index.html", "cart.html")
 
 
 @pytest.fixture(scope="module")
@@ -77,8 +77,6 @@ def _own_site_config(monkeypatch, tmp_path):
 @pytest.fixture()
 def client(app):
     init_db()
-    authmod.ensure_seed_admins()
-    authmod.set_password(EMAIL, PW)
     execute("DELETE FROM rate_limits")
     with app.test_client() as c:
         yield c

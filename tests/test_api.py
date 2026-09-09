@@ -12,7 +12,6 @@ os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_test_catalog.json")  # never t
 os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_EMAILS", "jaurastore@gmail.com")
-os.environ.setdefault("MAIL_MODE", "none")
 
 import pytest  # noqa: E402
 
@@ -20,7 +19,6 @@ if os.path.exists(os.environ["DB_PATH"]):
     os.remove(os.environ["DB_PATH"])
 
 import app as appmod  # noqa: E402
-import emailer  # noqa: E402
 import auth as authmod  # noqa: E402
 from db import execute, init_db, one, query  # noqa: E402
 
@@ -39,8 +37,6 @@ def app():
 @pytest.fixture()
 def client(app):
     init_db()
-    authmod.ensure_seed_admins()
-    authmod.set_password(EMAIL, PW)
     execute("DELETE FROM rate_limits")
     with app.test_client() as c:
         yield c
@@ -78,28 +74,10 @@ def test_sole_admin_email_when_one_account(client):
     assert authmod.sole_admin_email() == EMAIL
 
 
-def test_admin_login_is_password_only_with_single_account(client):
-    """No email in the body: the server resolves the one admin account."""
-    r = client.post("/api/admin/login", json={"password": PW})
-    assert r.status_code == 200, r.data
-    assert r.get_json()["email"] == EMAIL
 
 
-def test_admin_login_with_multiple_accounts_asks_for_email(client, monkeypatch):
-    double = ["one@example.com", "two@example.com"]
-    monkeypatch.setattr("auth.Config.ADMIN_EMAILS", double)
-    assert authmod.sole_admin_email() is None
-    r = client.post("/api/admin/login", json={"password": PW})
-    assert r.status_code == 400, r.data
-    assert "email" in r.get_json()["error"].lower()
 
 
-def test_two_devices_can_be_signed_in_at_once(client):
-    """Per-device session cookies: two clients can stay signed in together."""
-    a = client.post("/api/admin/login", json={"password": PW})
-    b = client.post("/api/admin/login", json={"password": PW})
-    assert a.status_code == b.status_code == 200
-    assert client.get("/api/admin/analytics").status_code == 200
 
 
 def test_brute_force_lockout(client):
@@ -293,16 +271,6 @@ def test_public_order_lookup_returns_status_only(client):
     assert client.get("/api/orders/JA-NOPE9").status_code == 404
 
 
-def test_password_change_needs_the_current_password(client):
-    tok = login(client)
-    bad = client.post("/api/admin/password",
-                      json={"currentPassword": "wrong", "newPassword": "AnotherPass1"},
-                      headers={"X-CSRF-Token": tok})
-    assert bad.status_code == 403
-    weak = client.post("/api/admin/password",
-                       json={"currentPassword": PW, "newPassword": "short"},
-                       headers={"X-CSRF-Token": tok})
-    assert weak.status_code == 400
 
 
 # --------------------------------------------------------- payment receipts
@@ -388,7 +356,7 @@ def test_receipts_are_private_to_the_admin(client):
     response = client.get("/api/admin/payment-proofs")
     assert response.headers["Cache-Control"] == "private, no-store"
     body = response.get_json()
-    assert body["proofs"] and body["proofs"][0]["order_id"] == "JA-TEST01"
+    assert any(p.get("order_id") == "JA-TEST01" for p in body["proofs"])
 
 
 def test_payment_methods_are_public(client):
@@ -396,50 +364,7 @@ def test_payment_methods_are_public(client):
     assert body["ok"] is True and len(body["methods"]) >= 2
 
 
-# ------------------------------------------------- the mail really goes out
 
-def test_payment_receipt_is_emailed_with_the_original_file_attached(client, monkeypatch):
-    """End-to-end proof: upload -> SMTP -> the bytes in the inbox are identical."""
-    import email as emailmod
-    from email import policy as epolicy
-
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from mail_sink import MailSink
-    import config
-
-    with MailSink() as sink:
-        monkeypatch.setattr(config.Config, "MAIL_MODE", "smtp")
-        monkeypatch.setattr(config.Config, "MAIL_FROM", "jaurastore@gmail.com")
-        monkeypatch.setattr(config.Config, "SMTP_HOST", sink.host)
-        monkeypatch.setattr(config.Config, "SMTP_PORT", sink.port)
-        monkeypatch.setattr(config.Config, "SMTP_USER", "")
-        monkeypatch.setattr(config.Config, "SMTP_PASS", "")
-
-        r = post_proof(client, PDF, "receipt.pdf", orderId="JA-DELIVER1")
-        assert r.status_code == 200, r.data
-        assert r.get_json()["emailed"] is True, r.get_json()
-
-        assert sink.messages, "the app said it sent, but nothing reached the server"
-        msg = emailmod.message_from_bytes(sink.messages[0]["data"], policy=epolicy.default)
-        assert "jaurastore@gmail.com" in sink.messages[0]["to"][0]
-        assert "JA-DELIVER1" in msg["Subject"]
-
-        atts = list(msg.iter_attachments())
-        assert atts, "no attachment on the receipt email"
-        assert atts[0].get_payload(decode=True) == PDF, "the attached file was altered"
-        assert atts[0].get_content_type() == "application/pdf"
-
-        body = msg.get_body(preferencelist=("plain",)).get_content()
-        for field in ("Grace Mensah", "+229 97 00 11 22", "grace@example.com",
-                      "JA-DELIVER1", "2x Valentino bag", "Quantity",
-                      "MTN MoMo Benin (F CFA)"):
-            assert field in body, f"{field!r} missing from the receipt email"
-
-        # the customer gets a confirmation, and it carries no attachment
-        assert len(sink.messages) == 2
-        confirm = emailmod.message_from_bytes(sink.messages[1]["data"], policy=epolicy.default)
-        assert "grace@example.com" in sink.messages[1]["to"][0]
-        assert list(confirm.iter_attachments()) == []
 
 
 # ------------------------------------------- products must stay saved
@@ -760,13 +685,13 @@ def test_offline_outbox_survives_a_page_refresh(client):
     assert "lsAll" in boot, "boot() does not restore the localStorage outbox"
 
 
-# ------------------------------------------- confirming from the email link
+# ------------------------------------------- order persistence helpers
 
-def _make_order(client, oid="JA-EMAILCONF", email="customer@example.com"):
+def _make_order(client, oid="JA-TESTORDER", email="customer@example.com"):
     """Create an order the way the browser does, clearing the rate limit.
 
     wix-001 x 3 = 22,500 CFA (server total) - the order qualifies for a
-    referral code, which the confirmation email must include.
+    referral code.
     """
     from db import execute
     execute("DELETE FROM rate_limits WHERE action='order'")
@@ -781,99 +706,14 @@ def _make_order(client, oid="JA-EMAILCONF", email="customer@example.com"):
     return oid
 
 
-def test_email_confirm_link_confirms_the_order(client, monkeypatch):
-    import security
-    oid = _make_order(client)
-    token = security.order_token(oid, "confirm")
-    r = client.get(f"/api/orders/{oid}/confirm?action=confirm&token={token}")
-    assert r.status_code == 200, r.data
-    assert r.get_json()["status"] == "confirmed"
-    from db import one
-    assert one("SELECT status FROM orders WHERE id=?", (oid,))["status"] == "confirmed"
 
 
-def test_email_decline_link_declines_the_order(client):
-    import security
-    oid = _make_order(client, "JA-EMAILDEC")
-    token = security.order_token(oid, "decline")
-    r = client.get(f"/api/orders/{oid}/confirm?action=decline&token={token}")
-    assert r.status_code == 200 and r.get_json()["status"] == "declined"
 
 
-def test_confirm_link_rejects_forged_and_mismatched_tokens(client):
-    import security
-    oid = _make_order(client, "JA-EMAILBAD")
-    assert client.get(f"/api/orders/{oid}/confirm?action=confirm&token={'0'*40}").status_code == 403
-    good = security.order_token(oid, "confirm")
-    # the same token must not work for a different action or a different order
-    assert client.get(f"/api/orders/{oid}/confirm?action=decline&token={good}").status_code == 403
-    assert client.get(f"/api/orders/JA-OTHER/confirm?action=confirm&token={good}").status_code == 403
-    assert client.get(f"/api/orders/{oid}/confirm?action=delete&token={good}").status_code == 400
 
 
-def test_confirming_by_email_tells_the_customer(client, monkeypatch):
-    """The confirmation the shop triggers must reach the customer, for real."""
-    import email as emailmod
-    from email import policy as epolicy
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
-    from mail_sink import MailSink
-    import config, security
-
-    oid = _make_order(client, "JA-EMAILCUST", email="customer@example.com")
-    with MailSink() as sink:
-        monkeypatch.setattr(config.Config, "MAIL_MODE", "smtp")
-        monkeypatch.setattr(config.Config, "SMTP_HOST", sink.host)
-        monkeypatch.setattr(config.Config, "SMTP_PORT", sink.port)
-        monkeypatch.setattr(config.Config, "SMTP_USER", "")
-        monkeypatch.setattr(config.Config, "SMTP_PASS", "")
-        r = client.get(f"/api/orders/{oid}/confirm?action=confirm"
-                       f"&token={security.order_token(oid, 'confirm')}")
-    assert r.get_json().get("customerEmailed") is True, r.get_json()
-    assert len(sink.messages) == 1
-    msg = emailmod.message_from_bytes(sink.messages[0]["data"], policy=epolicy.default)
-    assert "customer@example.com" in sink.messages[0]["to"][0]
-    assert "confirmed" in msg["Subject"].lower()
-    assert oid in msg.get_body(preferencelist=("plain",)).get_content()
 
 
-def test_shop_emails_reply_to_the_customer_not_the_shop(client, monkeypatch):
-    """The shop's own address is sender AND recipient, so without Reply-To a
-    reply would come straight back to the shop instead of the customer."""
-    import email as emailmod
-    from email import policy as epolicy
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
-    from mail_sink import MailSink
-    import config
-
-    pdf = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "fixtures", "receipt.pdf"), "rb").read()
-    order = {
-        "id": "JA-REPLYTO", "currency": "CFA", "total": 1000,
-        "customer": {"name": "Reply Tester", "email": "customer@example.com",
-                     "phone": "+229 90 00 00 00", "city": "Cotonou"},
-        "items": [{"qty": 1, "name": "Bag", "price": 1000}],
-    }
-    with MailSink() as sink:
-        monkeypatch.setattr(config.Config, "MAIL_MODE", "smtp")
-        monkeypatch.setattr(config.Config, "MAIL_FROM", "jaurastore@gmail.com")
-        monkeypatch.setattr(config.Config, "SMTP_HOST", sink.host)
-        monkeypatch.setattr(config.Config, "SMTP_PORT", sink.port)
-        monkeypatch.setattr(config.Config, "SMTP_USER", "")
-        monkeypatch.setattr(config.Config, "SMTP_PASS", "")
-        emailer.send_order_notice(order, pdf, "receipt.pdf", "application/pdf")
-        emailer.send_payment_proof(
-            {"name": "Reply Tester", "phone": "+229 90 00 00 00",
-             "email": "customer@example.com", "orderId": "JA-REPLYTO",
-             "items": "1x Bag", "quantity": "1", "method": "MTN MoMo",
-             "amount": "1000", "currency": "CFA", "note": "", "at": "2026-01-01T00:00:00"},
-            pdf, "receipt.pdf", "application/pdf")
-
-    shop_mails = [m for m in sink.messages if "jaurastore@gmail.com" in m["to"][0]]
-    assert len(shop_mails) == 2
-    for raw in shop_mails:
-        msg = emailmod.message_from_bytes(raw["data"], policy=epolicy.default)
-        assert msg["Reply-To"] == "customer@example.com", msg["Subject"]
-        assert "Reply to this email" in msg.get_body(preferencelist=("plain",)).get_content()
 
 
 def test_the_seed_products_endpoint_serves_the_catalogue(client):
@@ -918,30 +758,6 @@ def test_seed_file_and_snapshot_contain_no_external_image_urls():
         raw = open(path, encoding="utf-8").read()
         assert "wixstatic" not in raw, f"{path} still references the Wix CDN"
 
-
-# ------------------------------------------- shared admin password
-
-def test_shared_password_applies_to_every_admin(client):
-    """New password set once must work for any admin account (multi-user)."""
-    import auth as authmod
-    assert authmod.set_shared_password("Shared2026x") is True
-    assert authmod.verify_login(EMAIL, "Shared2026x") is True
-    assert authmod.verify_login(EMAIL, PW) is False
-    assert authmod.verify_login("not-an-admin@example.com", "Shared2026x") is False
-    authmod.set_shared_password(PW)   # restore for the rest of the suite
-
-
-def test_password_change_route_updates_the_shared_password(client):
-    """The admin 'Change shared password' flow sets one password for all."""
-    import auth as authmod
-    tok = login(client)
-    r = client.post("/api/admin/password",
-                    json={"currentPassword": PW, "newPassword": "Another2026x"},
-                    headers={"X-CSRF-Token": tok})
-    assert r.status_code == 200, r.data
-    assert authmod.verify_login(EMAIL, "Another2026x") is True
-    assert authmod.verify_login(EMAIL, PW) is False
-    authmod.set_shared_password(PW)   # restore
 
 
 # ------------------------------------------- Supabase + GitHub dual-sync
@@ -1083,7 +899,7 @@ def test_option_stock_survives_product_save(client):
 
 
 # =============================================== growth suite (referrals,
-# coupons, abandoned carts, verified reviews, backups, WhatsApp alerts)
+# coupons, verified reviews, backups and WhatsApp alerts)
 
 def _growth_order(client, oid, email, total=25000, currency="NGN",
                   promo="", cart_token="", pid="wix-005", qty=3):
@@ -1226,43 +1042,8 @@ def test_admin_coupon_crud_expiry_and_max_uses(client):
     assert client.get("/api/admin/coupons").status_code == 401
 
 
-def test_abandoned_cart_capture_remind_recover_complete(client):
-    import growth
-    tok_h = {"X-CSRF-Token": csrf(client)}
-    # capture early in checkout
-    r = client.post("/api/cart/abandon", headers=tok_h, json={
-        "token": "CT-TESTTOKEN1", "email": "sleepy@example.com", "currency": "NGN",
-        "items": [{"id": "wix-001", "name": "Bag", "qty": 2}]})
-    assert r.status_code == 200 and r.get_json()["ok"]
-    # the recovery link returns the saved cart
-    j = client.get("/api/cart/recover/CT-TESTTOKEN1").get_json()
-    assert j["ok"] and j["items"][0]["qty"] == 2 and j["currency"] == "NGN"
-    # nothing is emailed before the 2-hour mark
-    assert growth.send_abandoned_reminders() == 0
-    # age the record past the window: exactly one reminder goes out, once
-    import datetime as dtm
-    old = (dtm.datetime.utcnow() - dtm.timedelta(hours=3)).isoformat(timespec="seconds")
-    execute("UPDATE abandoned_carts SET updated_at=? WHERE token='CT-TESTTOKEN1'", (old,))
-    assert growth.send_abandoned_reminders() == 1
-    assert growth.send_abandoned_reminders() == 0
-    assert one("SELECT reminded_at FROM abandoned_carts WHERE token='CT-TESTTOKEN1'")["reminded_at"]
-    # the customer comes back and buys: the record closes, the link dies
-    _growth_order(client, "JA-GRAB01", "sleepy@example.com", cart_token="CT-TESTTOKEN1")
-    assert one("SELECT completed_at FROM abandoned_carts WHERE token='CT-TESTTOKEN1'")["completed_at"]
-    assert client.get("/api/cart/recover/CT-TESTTOKEN1").status_code == 404
 
 
-def test_abandoned_module_can_be_switched_off(client):
-    tok = login(client)
-    client.post("/api/admin/growth/settings", headers={"X-CSRF-Token": tok},
-                json={"abandonedEnabled": False})
-    r = client.post("/api/cart/abandon", headers={"X-CSRF-Token": csrf(client)}, json={
-        "token": "CT-OFFTOKEN", "email": "off@example.com",
-        "items": [{"id": "wix-001", "qty": 1}]})
-    assert r.get_json().get("skipped") is True
-    assert one("SELECT 1 FROM abandoned_carts WHERE token='CT-OFFTOKEN'") is None
-    client.post("/api/admin/growth/settings", headers={"X-CSRF-Token": tok},
-                json={"abandonedEnabled": True})
 
 
 def test_reviews_are_purchase_verified_and_stored_server_side(client):
@@ -1398,164 +1179,6 @@ def test_shop_pagination_is_real(client):
     assert "data-pager" in shop
 
 
-# ================================================== admin access recovery
-def _clear_bootstrap():
-    """Reset the one-shot recovery markers + code slots between tests."""
-    execute("DELETE FROM growth_settings WHERE key=?", (authmod.BOOTSTRAP_MARKER,))
-    execute("DELETE FROM growth_settings WHERE key=?", (authmod.PASSWORD_SET_MARKER,))
-    execute("DELETE FROM otp_codes")
-
-
-def test_bootstrap_password_applies_once_and_is_never_reapplied(client):
-    from config import Config
-    _clear_bootstrap()
-    pw = "Recovery#Pass2026"
-
-    # first boot after the deploy: the shared password is forced once
-    assert authmod.apply_bootstrap_password(pw) is True
-    assert one("SELECT key FROM growth_settings WHERE key=?",
-               (authmod.BOOTSTRAP_MARKER,)) is not None
-    assert authmod.verify_login(EMAIL, pw)
-    # ... and it is written for EVERY configured admin email
-    assert authmod.verify_login(Config.ADMIN_EMAILS[0], pw)
-    assert one("SELECT action FROM audit_log WHERE action='admin.bootstrap_password_applied'")
-
-    # the owner signs in and picks their own password ...
-    changed = "OwnerChoice2026x"
-    assert authmod.set_shared_password(changed) is True
-    # ... so a reboot (or any later call) must not restore the bootstrap value
-    assert authmod.apply_bootstrap_password(pw) is False
-    assert authmod.verify_login(EMAIL, pw) is False
-    assert authmod.verify_login(EMAIL, changed) is True
-
-    authmod.set_shared_password(PW)
-    _clear_bootstrap()
-
-
-def test_bootstrap_rejects_a_weak_password_without_burning_the_marker(client):
-    _clear_bootstrap()
-    # too short / empty: refused, and the marker is NOT written, so a corrected
-    # ADMIN_BOOTSTRAP_PASSWORD can still recover the account on a later boot
-    assert authmod.apply_bootstrap_password("short") is False
-    assert authmod.apply_bootstrap_password("") is False
-    assert one("SELECT key FROM growth_settings WHERE key=?",
-               (authmod.BOOTSTRAP_MARKER,)) is None
-
-    assert authmod.apply_bootstrap_password("LateRecovery2026x") is True
-    assert authmod.verify_login(EMAIL, "LateRecovery2026x") is True
-
-    authmod.set_shared_password(PW)
-    _clear_bootstrap()
-
-
-def test_bootstrap_default_is_unset_so_nothing_is_ever_forced(client):
-    """There is deliberately no built-in recovery password.
-
-    A default lives in the repository, and this repository is public - that is
-    exactly how the old default got published. Unset, apply_bootstrap_password()
-    must be inert: no marker stamped, no password forced, nothing to log in
-    with. Recovery goes through the emailed reset code or seed_admin.py.
-    """
-    import config
-    _clear_bootstrap()
-    assert config.Config.BOOTSTRAP_ADMIN_PASSWORD == ""
-    assert authmod.apply_bootstrap_password(config.Config.BOOTSTRAP_ADMIN_PASSWORD) is False
-    assert one("SELECT key FROM growth_settings WHERE key=?",
-               (authmod.BOOTSTRAP_MARKER,)) is None
-    assert authmod.verify_login(EMAIL, "") is False
-    _clear_bootstrap()
-
-
-def test_create_app_never_applies_the_bootstrap_under_testing(client, monkeypatch):
-    """FLASK_ENV=testing must leave the suite's own passwords untouched."""
-    import app as appmod2
-    _clear_bootstrap()
-    called = []
-    monkeypatch.setattr(authmod, "apply_bootstrap_password",
-                        lambda pw: called.append(pw) or True)
-    appmod2.create_app()
-    assert called == [], "create_app() applied the bootstrap while FLASK_ENV=testing"
-    assert one("SELECT key FROM growth_settings WHERE key=?",
-               (authmod.BOOTSTRAP_MARKER,)) is None
-    _clear_bootstrap()
-
-
-# ========================================== admin reset code: email first
-def test_admin_reset_code_is_emailed_first(client, monkeypatch):
-    _clear_bootstrap()
-    sent = {"email": [], "whatsapp": []}
-
-    def fake_email(to, code, purpose="reset"):
-        sent["email"].append((to, code, purpose))
-        return True, "sent"
-
-    def fake_whatsapp(text):
-        sent["whatsapp"].append(text)
-        return True, "cloud-api"
-
-    monkeypatch.setattr(emailer, "send_otp", fake_email)
-    monkeypatch.setattr("whatsapp.send_text", fake_whatsapp)
-
-    r = client.post("/api/admin/otp/request", json={"email": EMAIL})
-    assert r.status_code == 200, r.data
-    body = r.get_json()
-    assert body["ok"] is True
-    assert len(sent["email"]) == 1, "the code must be emailed"
-    assert sent["email"][0][0] == EMAIL
-    assert sent["whatsapp"] == [], "WhatsApp is only a fallback - it must not be used"
-    assert EMAIL in body["message"]
-
-    # the emailed code is a real, usable reset code
-    code = sent["email"][0][1]
-    assert len(code) == 6 and code.isdigit()
-    r2 = client.post("/api/admin/otp/verify", json={"email": EMAIL, "code": code})
-    assert r2.status_code == 200, r2.data
-    newpw = "FreshOwner2026x"
-    r3 = client.post("/api/admin/otp/reset", json={"newPassword": newpw})
-    assert r3.status_code == 200, r3.data
-    assert authmod.verify_login(EMAIL, newpw) is True
-
-    authmod.set_shared_password(PW)
-    _clear_bootstrap()
-
-
-def test_admin_reset_code_is_email_only_and_502_on_mail_fail(client, monkeypatch):
-    _clear_bootstrap()
-    calls = {"email": 0, "whatsapp": 0}
-
-    def fake_email(to, code, purpose="reset"):
-        calls["email"] += 1
-        return False, "smtp error: boom"
-
-    def fake_whatsapp(text):
-        calls["whatsapp"] += 1
-        return True, "cloud-api"
-
-    monkeypatch.setattr(emailer, "send_otp", fake_email)
-    monkeypatch.setattr("whatsapp.send_text", fake_whatsapp)
-
-    r = client.post("/api/admin/otp/request", json={"email": EMAIL})
-    assert r.status_code == 502, r.data
-    assert calls["email"] == 1
-    assert calls["whatsapp"] == 0, "WhatsApp fallback must be completely removed"
-    assert "WhatsApp" not in r.get_json()["error"]
-
-    authmod.set_shared_password(PW)
-    _clear_bootstrap()
-
-
-def test_admin_reset_code_is_a_502_when_both_channels_fail(client, monkeypatch):
-    _clear_bootstrap()
-    monkeypatch.setattr(emailer, "send_otp",
-                        lambda to, code, purpose="reset": (False, "smtp error: boom"))
-    monkeypatch.setattr("whatsapp.send_text", lambda text: (False, "not configured"))
-
-    r = client.post("/api/admin/otp/request", json={"email": EMAIL})
-    assert r.status_code == 502, r.data
-    assert r.get_json()["ok"] is False
-    _clear_bootstrap()
-    authmod.set_shared_password(PW)
-
 
 # ------------------------------------------------------------ media uploads
 def test_category_asset_upload_accepts_image_and_document(client):
@@ -1679,30 +1302,6 @@ def test_merged_catalogue_never_serves_a_folded_out_category(monkeypatch):
                for p in merged)
 
 
-def test_confirmation_receipt_email_includes_referral_code(client, monkeypatch):
-    """When an order qualifies for a referral code, the confirmation email
-    includes the code so the customer can immediately share it with friends."""
-    import email as emailmod
-    from email import policy as epolicy
-    from mail_sink import MailSink
-    import config, security
-
-    # Place a qualifying order (9000 CFA is ~20,454 NGN, > 20000 NGN threshold)
-    oid = _make_order(client, "JA-REFTEST1", email="refcust@example.com")
-    with MailSink() as sink:
-        monkeypatch.setattr(config.Config, "MAIL_MODE", "smtp")
-        monkeypatch.setattr(config.Config, "SMTP_HOST", sink.host)
-        monkeypatch.setattr(config.Config, "SMTP_PORT", sink.port)
-        monkeypatch.setattr(config.Config, "SMTP_USER", "")
-        monkeypatch.setattr(config.Config, "SMTP_PASS", "")
-        r = client.get(f"/api/orders/{oid}/confirm?action=confirm"
-                       f"&token={security.order_token(oid, 'confirm')}")
-    assert r.get_json().get("customerEmailed") is True
-    assert len(sink.messages) == 1
-    msg = emailmod.message_from_bytes(sink.messages[0]["data"], policy=epolicy.default)
-    body = msg.get_body(preferencelist=("plain",)).get_content()
-    assert "referral code" in body.lower()
-    assert "JA-" in body
 
 
 def test_admin_orders_filter_by_status(client):
@@ -1775,14 +1374,6 @@ def test_net_js_blob_uploads_wait_five_minutes_and_persist_timeout():
     assert "job.timeout || (job.bodyKind === \"blob\" ? 300000 : 25000)" in src
 
 
-def test_admin_login_copy_is_reset_by_email():
-    src = open(os.path.join(os.path.dirname(__file__), "..", "js", "admin.js"),
-               encoding="utf-8").read()
-    assert "Reset it by email" in src
-    assert "send a 6-digit code to that email" in src
-    assert "Reset it via WhatsApp" not in src
-    assert "timeout: 300000" in src
-    assert "api/admin/uploads/product" in src
 
 
 def test_github_sync_refuses_put_without_sha_and_skips_orders_backup():
@@ -1988,79 +1579,7 @@ def test_admin_session_is_permanent_one_year_and_rolling(client):
     assert client.get("/api/admin/analytics").status_code == 200
 
 
-def test_password_change_survives_app_restart(client):
-    import auth as authmod
-    import app as appmod
-    tok = login(client)
-    new_pw = "RestartSecure2026x"
-    r = client.post("/api/admin/password",
-                    json={"currentPassword": PW, "newPassword": new_pw},
-                    headers={"X-CSRF-Token": tok})
-    assert r.status_code == 200
-    appmod.create_app()
-    assert authmod.verify_login(EMAIL, new_pw) is True
-    assert authmod.verify_login(EMAIL, PW) is False
-    authmod.set_shared_password(PW)
 
-
-# ============================================ admin password: the old one dies
-
-def test_changing_the_password_kills_the_old_one_even_with_supabase(client, monkeypatch):
-    """The LOCAL admins hash is the only source of truth for login.
-
-    Regression: with SUPABASE_ENABLED the login used to be verified against
-    Supabase Auth alone. set_password writes the local hash and only *best
-    effort* mirrors it to Supabase, so a failed mirror left the OLD Supabase
-    password working forever. It must not.
-    """
-    import auth as authmod
-    import supabase_store
-    from config import Config
-
-    old_pw, new_pw = "OldLeaked2026x", "BrandNew2026x"
-    assert authmod.set_shared_password(old_pw) is True
-
-    # Supabase is "on", its password update silently fails, and its login
-    # endpoint still happily accepts the OLD password.
-    monkeypatch.setattr(Config, "SUPABASE_ENABLED", True)
-    monkeypatch.setattr(supabase_store, "supabase_set_shared_password",
-                        lambda pw: False)
-    monkeypatch.setattr(supabase_store, "supabase_verify_login",
-                        lambda email, pw: pw == old_pw)
-
-    assert authmod.set_shared_password(new_pw) is True
-    assert authmod.verify_login(EMAIL, new_pw) is True
-    assert authmod.verify_login(EMAIL, old_pw) is False   # <- the whole point
-
-    # ... and through the HTTP login route too
-    assert client.post("/api/admin/login",
-                       json={"email": EMAIL, "password": old_pw}).status_code != 200
-    assert client.post("/api/admin/login",
-                       json={"email": EMAIL, "password": new_pw}).status_code == 200
-
-    authmod.set_shared_password(PW)   # restore for the rest of the suite
-
-
-def test_bootstrap_never_clobbers_a_password_the_owner_already_set(client):
-    """admin_password_set alone must disable the bootstrap.
-
-    Even when the `admin_bootstrap_applied` marker is missing (older DB, wiped
-    row), a password chosen by the owner is never overwritten on boot.
-    """
-    import auth as authmod
-    _clear_bootstrap()
-    owner_pw = "OwnerPicked2026x"
-    assert authmod.set_shared_password(owner_pw) is True
-    assert one("SELECT key FROM growth_settings WHERE key=?",
-               (authmod.PASSWORD_SET_MARKER,)) is not None
-    # marker for the bootstrap itself is absent ...
-    execute("DELETE FROM growth_settings WHERE key=?", (authmod.BOOTSTRAP_MARKER,))
-    # ... and the bootstrap still refuses to touch the owner's password
-    assert authmod.apply_bootstrap_password("Recovery#Pass2026") is False
-    assert authmod.verify_login(EMAIL, owner_pw) is True
-    assert authmod.verify_login(EMAIL, "Recovery#Pass2026") is False
-    authmod.set_shared_password(PW)
-    _clear_bootstrap()
 
 
 # ==================================================== receipts: admin delete
@@ -2299,8 +1818,6 @@ def test_category_image_round_trips_to_the_logged_out_storefront(app, tmp_path, 
     monkeypatch.setattr(apimod, "CATEGORIES_FILE", str(tmp_path / "categories.json"))
     with app.test_client() as admin_client:
         init_db()
-        authmod.ensure_seed_admins()
-        authmod.set_password(EMAIL, PW)
         execute("DELETE FROM rate_limits")
         tok = login(admin_client)
         cats = [

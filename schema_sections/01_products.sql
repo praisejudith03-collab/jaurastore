@@ -5,8 +5,8 @@
 -- Every statement is idempotent (IF NOT EXISTS), so re-running is safe.
 --
 -- Supabase PostgreSQL is the production source of truth for products,
--- orders, receipts, categories, site settings, referral commission
--- settings and admin reset tokens. SQLite on the Render disk is only a
+-- orders, receipts, categories, site settings and referral commission
+-- settings. SQLite on the Render disk is only a
 -- boot-time cache the app restores FROM these tables; production writes
 -- go to PostgreSQL first and failures are surfaced, never swallowed.
 --

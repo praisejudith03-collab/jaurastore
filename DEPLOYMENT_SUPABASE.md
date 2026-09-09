@@ -1,7 +1,7 @@
 # Supabase/Render production cutover
 
 Supabase PostgreSQL is the production source of truth for **site_settings,
-products, categories, orders, payment receipts, admin reset tokens and the
+products, categories, orders, payment receipts and the
 referral commission**; Supabase Storage is the source of truth for product
 images/videos, category images, banners/logos and checkout receipts. Local
 JSON files, `data/uploads/`, `/static/uploads/` and `localStorage` are never
@@ -19,8 +19,7 @@ In the Supabase SQL editor run the complete `supabase_schema.sql`
 * `site_settings` — the id=1 row with bank details, referral commission,
   hero/contact/logo columns
 * `categories` — `image_url`
-* `orders`, `receipts` (with `file_url`), `admin_reset_tokens` (hashed
-  tokens), referral/coupon tables
+* `orders`, `receipts` (with `file_url`), referral/coupon tables
 * `reserve_product_stock` / `release_product_stock` RPCs (atomic stock)
 * Exactly one provisioned Storage bucket: `uploads` (public) + policies.
   The `receipts` database table is preserved. Existing buckets are not deleted.
@@ -70,7 +69,7 @@ UPLOAD_MODE=supabase
 FLASK_ENV=production
 SECRET_KEY=<random>
 ADMIN_EMAILS=<admin email>
-MAIL_* / RESEND_API_KEY  (admin password reset + receipts emails)
+ADMIN_BOOTSTRAP_PASSWORD=<permanent admin password>
 RECAPTCHA_SITE_KEY / RECAPTCHA_SECRET_KEY (optional, recommended)
 ```
 
@@ -113,8 +112,8 @@ report's rows are confirmed migrated and the smoke test passed.
   never shown to customers — public catalog only emits `stock_status`)
 * Checkout: tampered browser price is ignored; qty over stock is rejected;
   receipt upload lands under `uploads/proofs/` and the admin can View/Delete
-* Password reset email → 6-digit code → new password (token row persisted in
-  `admin_reset_tokens`)
+* Admin login: compare the submitted password with `ADMIN_BOOTSTRAP_PASSWORD`;
+  no reset, OTP or password-change flow exists.
 * Referral: complete an order on the milestone and confirm the reward coupon
   percent equals `site_settings.referral_commission_percentage`
 
@@ -150,11 +149,11 @@ static/test flows. For a real rollback:
 | `DELETE /api/admin/payment-proofs/<id>` | delete receipt row + Storage object |
 | `POST /api/admin/growth/settings` | marketing + referral settings |
 | `POST /api/admin/coupons` | create coupon |
-| `POST /api/admin/password`, `/admin/otp/*` | admin auth/reset |
+| `POST /api/admin/login` | environment-backed permanent admin authentication |
 | `POST /api/admin/backup`, `/api/admin/sync/repo` | ops |
 
 ## 10. Branch / PR
 
-Work on `arena/01a07fac-jaurastore`, push that branch, and open a pull
+Work on `arena/01a085bd-jaurastore`, push that branch, and open a pull
 request targeting `main`. Do not push directly to `main`. Render deploys the
 merge commit; run the verification checklist above after deploy.
