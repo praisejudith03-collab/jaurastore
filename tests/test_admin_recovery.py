@@ -1,10 +1,25 @@
 """Security regression tests for the one-time admin recovery endpoint."""
 import os
+import pytest
+os.environ.setdefault("DB_PATH", "/tmp/jaura_recovery_test.db")
+os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_recovery_catalog.json")
 os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("ADMIN_RECOVERY_SECRET", "test-recovery-secret")
 
 from config import Config
-from db import execute, one
+from db import execute, one, init_db
+import app as appmod
+import auth as authmod
+
+@pytest.fixture(scope="module")
+def app():
+    init_db(); a = appmod.create_app(); a.config.update(TESTING=True); return a
+
+@pytest.fixture()
+def client(app):
+    init_db(); authmod.ensure_seed_admins(); authmod.set_password(EMAIL, "ExistingAdmin2026x")
+    execute("DELETE FROM rate_limits")
+    with app.test_client() as c: yield c
 
 EMAIL = "jaurastore@gmail.com"
 PW = "RecoveryNew2026x"

@@ -1329,7 +1329,7 @@ def otp_reset():
 @api.post("/admin/recovery")
 def admin_recovery():
     """One-use emergency recovery; email OTP remains the normal path."""
-    if Config.ENV == "production" and request.headers.get("X-Forwarded-Proto", "https") != "https":
+    if Config.ENV == "production" and request.headers.get("X-Forwarded-Proto", "").lower() != "https":
         return jsonify(ok=False, error="HTTPS is required."), 400
     limited = sec.guard("admin-recovery", limit=5, window=900, key_extra=_ip())
     if limited: return limited
