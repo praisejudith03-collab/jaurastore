@@ -1,0 +1,70 @@
+name: Customer catalogue import
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Protected no-write validation (true/false)'
+        required: true
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      confirmation:
+        description: 'Type IMPORT only for an approved real import'
+        required: true
+        default: ''
+        type: string
+
+jobs:
+  import:
+    # Configure this environment with required reviewers before use. This job
+    # is intentionally unavailable to push, schedule, or application boot.
+    environment: image-migration-review
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_BUCKET: uploads
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - name: Validate protected mode
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -eu
+          if [ "$DRY_RUN" = false ] && [ "$CONFIRMATION" != IMPORT ]; then
+            echo 'Real import requires confirmation=IMPORT.' >&2
+            exit 1
+          fi
+          if [ "$DRY_RUN" != true ] && [ "$DRY_RUN" != false ]; then
+            echo 'dry_run must be true or false.' >&2
+            exit 1
+          fi
+      - name: Run protected catalogue report/import
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -eu
+          # The report is uploaded as an artifact; credentials are never args
+          # or output. The script itself defaults to no-write mode.
+          if [ "$DRY_RUN" = true ]; then
+            python import_customer_catalog.py --dry-run \
+              --report customer-catalog-import-dry-run.json
+          else
+            python import_customer_catalog.py --confirm-real-import \
+              --report customer-catalog-import-result.json
+          fi
+      - name: Upload catalogue report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: customer-catalog-import-report-${{ github.run_id }}
+          path: customer-catalog-import-*.json
+          if-no-files-found: error
+          retention-days: 14
