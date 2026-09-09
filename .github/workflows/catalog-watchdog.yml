@@ -1,0 +1,92 @@
+# Catalog watchdog: the storefront may never silently lose a product.
+#
+# Hourly (plus a manual "Run workflow" button) it runs tools/catalog_watchdog.py,
+# which compares the live storefront (GET https://jaurastore.com.ng/api/catalog)
+# against the Supabase products table read DIRECTLY over PostgREST, and fails
+# when:
+#   - an online Supabase row is missing from the public catalogue (the
+#     "258 in Supabase, 241 in the browser" defect class),
+#   - a served row is not online in Supabase,
+#   - any of the approved wix-001..wix-258 rows disappears or goes offline,
+#   - the response looks like the bundled js/products-data.js fallback rather
+#     than Supabase.
+#
+# On failure it opens (or comments on) a "Catalog watchdog" issue, which is the
+# shop owner's alert. On recovery it comments and closes the issue.
+#
+# Notes:
+#   * Scheduled workflows run only on the default branch. GitHub disables a
+#     cron workflow after 60 days with no repository activity - any commit,
+#     including a README touch, re-enables it.
+#   * If you INTENTIONALLY unpublish or delete one of the 258 approved wix-*
+#     rows, update tools/catalog_watchdog.py EXPECTED_WIX_IDS in the same
+#     change (or disable this workflow) - otherwise the alert is correct.
+#   * Needs the repository secrets SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
+#     (Settings -> Secrets and variables -> Actions). The key is never printed.
+name: Catalog watchdog
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: catalog-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      WATCHDOG_BASE_URL: https://jaurastore.com.ng
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run the catalog watchdog
+        run: |
+          set -o pipefail
+          python3 tools/catalog_watchdog.py 2>&1 | tee watchdog.log
+      - name: Open or update the alert issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -e
+          {
+            echo "The production catalog watchdog failed on $(date -u '+%Y-%m-%d %H:%M UTC')."
+            echo
+            echo "Run: ${RUN_URL}"
+            echo
+            echo '```'
+            cat watchdog.log
+            echo '```'
+            echo
+            echo "This issue was opened automatically. Investigate before unpublishing/deleting anything else, and close it once the catalogue is back to full strength."
+          } > issue-body.md
+          NUMBER=$(gh issue list --state open --search "in:title Catalog watchdog" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$NUMBER" ]; then
+            gh issue comment "$NUMBER" --body-file issue-body.md
+          else
+            gh issue create --title "Catalog watchdog: products missing from the storefront" --body-file issue-body.md
+          fi
+      - name: Close the alert issue on recovery
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          NUMBER=$(gh issue list --state open --search "in:title Catalog watchdog" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$NUMBER" ]; then
+            gh issue comment "$NUMBER" --body "Watchdog passed again at $(date -u '+%Y-%m-%d %H:%M UTC') - the catalogue is back to full strength. Closing automatically."
+            gh issue close "$NUMBER"
+          fi

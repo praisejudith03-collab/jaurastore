@@ -106,3 +106,31 @@ The live evidence (checks 1–3) shows both variables are configured and working
 * Shop page "All" → **258 products** on both a fresh device and the previously affected device.
 * `GET /sitemap.xml` → 258 product URLs.
 * Admin portal (logged in, "show hidden") → 276 rows.
+
+---
+
+## Keeping it at 258 — protection against a future drop or disappearance
+
+Four independent layers now guard the catalogue:
+
+| Layer | What it catches | When it runs |
+|---|---|---|
+| **Code fixes** (this branch): browser dedupe is name-confirmed like the server's, and local deletions reconcile with the served catalogue | the two defects that produced 241 | continuously, in every visitor's browser |
+| **Regression tests** (`tests/test_catalog_supabase_258.py`, `tests/_store_sim.mjs`): all 258 online wix-* rows must survive the full Supabase → `/api/catalog` → `JA.products()` path, ids/slug/SKU preserved | any code change that reintroduces a drop (dedupe, pagination, filtering, fallback) | every push / PR (CI) |
+| **Catalog watchdog** (`tools/catalog_watchdog.py` + `.github/workflows/catalog-watchdog.yml`): compares the live storefront against the Supabase table read **directly** over PostgREST — independent of the app's own code | a regression that reaches production anyway: missing/extra rows, duplicates, an approved wix row gone or offline in Supabase, or a silent fallback to the local `products-data.js` snapshot (caught by table-column canaries) | **hourly**, plus a manual "Run workflow" button |
+| **Alerting**: on watchdog failure a "Catalog watchdog" GitHub issue is opened (or commented on); on recovery it is commented and auto-closed | anything the watchdog flags, within about an hour | with the watchdog |
+
+### What an alert means and what to do
+
+* *"N online Supabase product(s) are MISSING from the public catalogue"* — the storefront is serving fewer products than Supabase holds (the 241-class defect). Check the latest deploy; run the Actions tab → **CI** on that commit.
+* *"…no longer exist in the Supabase products table" / "not online=true"* — a catalogue row was deleted or taken offline in Supabase itself. If you did not do this deliberately, restore from your Supabase backups / re-run the reviewed import (it is id-keyed and never deletes).
+* *"…served that Supabase does not list online"* or *"duplicate product ids"* — the public catalogue and the database disagree in the other direction; investigate before editing data.
+* *"…may be serving the bundled js/products-data.js fallback"* — the app could not read Supabase at runtime: check Render → Environment (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`) and the deploy logs, then redeploy.
+
+### Watchdog notes (mobile-safe)
+
+* It needs the repository secrets `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (GitHub repo → **Settings → Secrets and variables → Actions** — the same two values Render uses; the key is never printed anywhere). The existing customer-import workflow already uses these secret names.
+* Scheduled workflows run only on the **default branch** and are auto-disabled by GitHub after 60 days with no repository activity — any commit re-enables them. The watchdog also has a **Run workflow** button for on-demand checks.
+* If you ever **intentionally** unpublish or delete one of the 258 approved `wix-*` rows, update `EXPECTED_WIX_IDS` in `tools/catalog_watchdog.py` (or disable the workflow) in the same change — otherwise the alert is correctly telling you the catalogue shrank.
+* New products you add via the admin portal are protected automatically: the watchdog requires **every** online Supabase row to appear on the storefront, whatever its id.
+
