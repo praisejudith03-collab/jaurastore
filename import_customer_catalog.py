@@ -43,8 +43,10 @@ def safe_row(p):
     r = dict(p)
     r["online"] = True
     r["stock_quantity"] = r.get("stock", 0)
-    r["image_url"] = r.get("image", "")
-    r["images"] = r.get("images", []) or []
+    # Local repository paths are catalogue mappings, not uploaded objects.
+    # Never promote them to production image_url without confirmed HTTPS upload.
+    r["image_url"] = "" if not str(r.get("image", "")).startswith("https://") else r["image"]
+    r["images"] = [u for u in (r.get("images", []) or []) if str(u).startswith("https://")]
     return r
 
 def proposed_update(old, incoming):
@@ -66,22 +68,28 @@ def report(existing, source, excluded):
     common = sorted(set(src_ids) & set(old_by))
     updates = {i: proposed_update(old_by[i], next(p for p in source if p["id"] == i)) for i in common}
     updates = {i:v for i,v in updates.items() if v}
-    invalid = []
+    invalid_prices, invalid_stock = [], []
     for p in source:
         for f in ("priceCfa", "priceNgn"):
-            if not isinstance(p.get(f), (int,float)) or p[f] < 0: invalid.append(f"{p['id']}:{f}")
-        if not isinstance(p.get("stock"), int) or p["stock"] < 0: invalid.append(f"{p['id']}:stock")
+            if not isinstance(p.get(f), (int,float)) or isinstance(p[f], bool) or p[f] < 0: invalid_prices.append(f"{p['id']}:{f}")
+        if not isinstance(p.get("stock"), int) or isinstance(p.get("stock"), bool) or p["stock"] < 0: invalid_stock.append(f"{p['id']}:stock")
     mappings = {p["id"]: p.get("image", "") for p in source}
-    return {"source_count": len(source), "existing_supabase_count": len(existing),
+    return {"source_count": len(source), "source_prefix_check": len(source) == 258,
+            "existing_supabase_count": len(existing),
             "missing_ids": missing, "existing_ids": common, "duplicate_source_ids": dup_src,
             "duplicate_supabase_ids": dup_old, "proposed_inserts": missing,
             "proposed_updates": updates, "image_mappings": mappings,
-            "price_stock_validation": {"invalid": invalid, "valid": not invalid},
+            "invalid_prices": invalid_prices, "invalid_stock": invalid_stock,
+            "price_stock_validation": {"valid": not (invalid_prices or invalid_stock)},
             "fixture_exclusions": sorted(excluded),
-            "online_true_decisions": {"count": len(source), "policy": "set true for every wix-* row"}}
+            "proposed_skips": [],
+            "online_true_decisions": {"count": len(source), "policy": "set true for every wix-* row"},
+            "safe_to_apply": (len(source) == 258 and not dup_src and not dup_old
+                              and not invalid_prices and not invalid_stock)}
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true", help="explicitly select the protected no-write mode")
     ap.add_argument("--confirm-real-import", action="store_true")
     ap.add_argument("--report", default="customer_catalog_import_report.json")
     args = ap.parse_args()
@@ -94,7 +102,7 @@ def main():
     if not args.confirm_real_import:
         print("DRY RUN: nothing was written.")
         return 0
-    if result["price_stock_validation"]["invalid"] or result["duplicate_source_ids"] or result["duplicate_supabase_ids"]:
+    if not result["safe_to_apply"]:
         raise SystemExit("Import refused: validation or duplicate IDs failed; review the report")
     from supabase_store import upsert_products
     by = {str(p["id"]): p for p in existing if p.get("id")}
