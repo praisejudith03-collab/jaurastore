@@ -45,7 +45,6 @@ REPO_ROOT = (os.environ.get("REPO_SYNC_ROOT") or "").strip() or ROOT
 REPO_DATA_FILES = (
     "js/products-data.js",
     "data/seed.json",
-    "data/wix_products.json",
     "data/catalog.json",
 )
 

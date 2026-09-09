@@ -20,6 +20,7 @@ const CORE = [
   "./images/brand/favicon.png?v=131",
   "./images/brand/apple-touch.png?v=131",
   "./images/brand/og-cover.jpg?v=131",
+  "./static/logo.png",
 ];
 const MAX_ASSETS = 140;
 

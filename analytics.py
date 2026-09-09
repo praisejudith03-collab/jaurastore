@@ -170,7 +170,7 @@ def _period_block(since_day, since_iso):
 
 
 def periods():
-    """Visits today / this week / this month — the Wix-style headline cards."""
+    """Visits today / this week / this month — the headline cards."""
     return {
         "today": _period_block(_day(), _iso(_now().replace(hour=0, minute=0, second=0, microsecond=0))),
         "week": _period_block(_days_ago(6), _iso(_now() - datetime.timedelta(days=6))),
