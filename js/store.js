@@ -183,7 +183,47 @@ const JA = (() => {
   function markPending(id) { const p = pendingMap(); p[id] = Date.now(); write(KEYS.pending, p); }
   function clearPending(id) { const p = pendingMap(); delete p[id]; write(KEYS.pending, p); }
 
+  // The PUBLIC catalogue answer deliberately strips the stock numbers (they
+  // are a business secret): a public row carries only stock_status ("in" /
+  // "out") and, for a product sold per variant, an option_stock map. The
+  // storefront however decides "sold out" from a NUMBER (stockFor ->
+  // Number(p.stock)), so a public row with no `stock` key read as 0 and the
+  // whole shop rendered "Out of stock" with Add-to-cart dead. Translate the
+  // public shape into the numeric one the UI expects, without ever inventing
+  // a count for a product the server says is unavailable.
+  function normalizeServerProduct(p) {
+    if (!p || typeof p !== "object") return p;
+    // An admin row (?all=1) already carries the real number: keep it exactly.
+    if (typeof p.stock === "number") return p;
+    const out = { ...p };
+    const os = p.option_stock;
+    if (os && typeof os === "object" && !Array.isArray(os) && Object.keys(os).length) {
+      // Per-variant stock: the map IS the truth, and the total is its sum, so
+      // a product whose every variant is 0 still reads as sold out.
+      const map = {};
+      let sum = 0;
+      Object.keys(os).forEach((k) => {
+        const n = Math.max(0, Math.round(Number(os[k]) || 0));
+        map[k] = n;
+        sum += n;
+      });
+      out.optionStock = map;
+      out.stock = sum;
+      return out;
+    }
+    if (String(p.stock_status || "").toLowerCase() === "out") {
+      out.stock = 0;
+      return out;
+    }
+    // "in" (or an older row with no status at all): sellable. The exact count
+    // is not public, so use a high sentinel - the server re-checks the real
+    // stock when the order is placed.
+    out.stock = 9999;
+    return out;
+  }
+
   function applyServerProduct(p) {
+    p = normalizeServerProduct(p);
     if (!p || !p.id) return;
     const i = seed.findIndex((x) => x.id === p.id);
     if (i >= 0) seed[i] = p;
@@ -275,7 +315,7 @@ const JA = (() => {
           // seed + admin + Supabase rows, and any duplicate that survives
           // that merge (same product under two ids) is dropped here so the
           // shop can never render the same piece twice.
-          seed = dedupeProducts(d.products);
+          seed = dedupeProducts(d.products.map(normalizeServerProduct));
           window.JA_SEED = seed;
           return seed;
         }
@@ -1505,8 +1545,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=129";
-        const FLYER = "images/brand/logo-flyer.jpg?v=129";
+        const LOGO = "images/brand/logo.jpg?v=131";
+        const FLYER = "images/brand/logo-flyer.jpg?v=131";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -1555,37 +1595,60 @@ const JA = (() => {
   let _siteConfig = {};
   function getSiteConfig() { return _siteConfig; }
 
+  /** Apply one /api/site answer to the whole front-end.
+   *
+   *  Every page needs the live site row before its FIRST paint (the checkout
+   *  bank details and the delivery-zone <select> are built from it), so this
+   *  is a plain synchronous function rather than something buried inside the
+   *  banner fetch: boot() awaits api/site once and calls this before drawing.
+   *  It is also what the ja:site listeners repaint from. */
+  function applySiteConfig(site) {
+    site = site || {};
+    // Server row (Supabase site_settings) is the truth; the copy used by
+    // settings() and the checkout keeps ALL canonical fields live.
+    _siteConfig = site;
+    if (site.bannerFrom) _bannerDates.from = site.bannerFrom;
+    if (site.bannerTo) _bannerDates.to = site.bannerTo;
+    if (site.convBanner) _bannerText.conv = site.convBanner;
+    if (site.convBold) _bannerText.bold = site.convBold;
+    // Mirror the canonical keys for the offline paint pass only. The payment
+    // columns are mirrored too: a phone that opens the checkout offline must
+    // still see the bank details it was shown a minute ago, instead of an
+    // empty box.
+    try {
+      if (site.shippingNote) saveSettings({ shippingNote: site.shippingNote });
+      if (site.logoUrl) saveSettings({ logoUrl: site.logoUrl });
+      if (site.shopBannerUrl) saveSettings({ shopBannerUrl: site.shopBannerUrl });
+      if (site.site_logo_url) saveSettings({ site_logo_url: site.site_logo_url, logoUrl: site.site_logo_url });
+      if (site.contact_email) saveSettings({ contact_email: site.contact_email, email: site.contact_email });
+      if (site.contact_phone) saveSettings({ contact_phone: site.contact_phone });
+      if (site.bank_name) saveSettings({ bank_name: site.bank_name });
+      if (site.account_number) saveSettings({ account_number: site.account_number });
+      if (site.account_name) saveSettings({ account_name: site.account_name });
+      if (site.hero_banner_title) saveSettings({ hero_banner_title: site.hero_banner_title });
+      if (site.hero_banner_subtitle) saveSettings({ hero_banner_subtitle: site.hero_banner_subtitle });
+      [
+        "naira_payment_bank", "naira_payment_name", "naira_payment_account",
+        "naira_payment_instructions",
+        "cfa_payment_provider", "cfa_payment_name", "cfa_payment_account",
+        "cfa_payment_instructions",
+        "togo_payment_provider", "togo_payment_name", "togo_payment_account",
+        "togo_payment_instructions",
+      ].forEach((k) => {
+        if (site[k]) saveSettings({ [k]: site[k] });
+      });
+    } catch (e) { /* offline cache only - never blocks the live values */ }
+    paintConvBanner();
+    applySiteBranding(site);
+    // Fire event for other pages
+    try { document.dispatchEvent(new CustomEvent('ja:site', { detail: site })); } catch (e) {}
+    return site;
+  }
+
   function loadBannerDates() {
     return fetch("api/site", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        const site = (d && d.site) || {};
-        // Server row (Supabase site_settings) is the truth; the copy used by
-        // settings() and the checkout keeps ALL canonical fields live.
-        _siteConfig = site;
-        if (site.bannerFrom) _bannerDates.from = site.bannerFrom;
-        if (site.bannerTo) _bannerDates.to = site.bannerTo;
-        if (site.convBanner) _bannerText.conv = site.convBanner;
-        if (site.convBold) _bannerText.bold = site.convBold;
-        // Mirror the branding keys for the offline paint pass only.
-        try {
-          if (site.shippingNote) saveSettings({ shippingNote: site.shippingNote });
-          if (site.logoUrl) saveSettings({ logoUrl: site.logoUrl });
-          if (site.shopBannerUrl) saveSettings({ shopBannerUrl: site.shopBannerUrl });
-          if (site.site_logo_url) saveSettings({ site_logo_url: site.site_logo_url, logoUrl: site.site_logo_url });
-          if (site.contact_email) saveSettings({ contact_email: site.contact_email, email: site.contact_email });
-          if (site.contact_phone) saveSettings({ contact_phone: site.contact_phone });
-          if (site.bank_name) saveSettings({ bank_name: site.bank_name });
-          if (site.account_number) saveSettings({ account_number: site.account_number });
-          if (site.account_name) saveSettings({ account_name: site.account_name });
-          if (site.hero_banner_title) saveSettings({ hero_banner_title: site.hero_banner_title });
-          if (site.hero_banner_subtitle) saveSettings({ hero_banner_subtitle: site.hero_banner_subtitle });
-        } catch (e) { /* offline cache only - never blocks the live values */ }
-        paintConvBanner();
-        applySiteBranding(site);
-        // Fire event for other pages
-        try { document.dispatchEvent(new CustomEvent('ja:site', { detail: site })); } catch (e) {}
-      })
+      .then((d) => { applySiteConfig((d && d.site) || {}); })
       .catch(() => {
         // Offline fallback: use local settings
         try {
@@ -1630,7 +1693,7 @@ const JA = (() => {
           <a href="contact.html">${tx("nav.contact")}</a>
         </nav>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=129" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=131" alt="Jaura" />
         </a>
         <div class="nav-right">
           <div class="lang-switch" role="group" aria-label="${tx("lang.group")}">
@@ -1769,7 +1832,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=129" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=131" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -1853,7 +1916,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=129" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=131" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -1875,7 +1938,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=129";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=131";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -1887,7 +1950,7 @@ const JA = (() => {
   function logoPath() {
     let custom = "";
     try { custom = (settings() || {}).logoUrl || ""; } catch (e) { custom = ""; }
-    return custom || "images/brand/logo.jpg?v=129";
+    return custom || "images/brand/logo.jpg?v=131";
   }
   // FAQ answers Google can show as rich results. Kept in step with faq.html.
   const FAQ_LD = [
@@ -1920,7 +1983,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Jaura Store — fashion, beauty, household and lifestyle. Pay in Naira or F CFA. Lagos and Cotonou.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=129");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=131");
     document.title = title;
     [
       ["name", "description", description],
@@ -1966,7 +2029,7 @@ const JA = (() => {
       const ic = document.createElement("link");
       ic.rel = "icon";
       ic.type = "image/png";
-      ic.href = "images/brand/favicon.png?v=129";
+      ic.href = "images/brand/favicon.png?v=131";
       document.head.appendChild(ic);
     }
     let ld = document.getElementById("jaura-jsonld");
@@ -2362,6 +2425,6 @@ const JA = (() => {
     customer, setCustomer, logoutCustomer, ordersForEmail, getProof, dataUrlToBlob,
     cardHTML, asset, escape, mountChrome, track, getStats, setSeo, absUrl, SITE,
     galleryOf, startCardPlay, reviews, addReview, removeReview, setReviews, reviewStats, starsHTML,
-    mediaHTML, mediaKind, getSiteConfig, applySiteBranding,
+    mediaHTML, mediaKind, getSiteConfig, applySiteBranding, applySiteConfig, normalizeServerProduct,
   };
 })();

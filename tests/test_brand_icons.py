@@ -22,7 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # again for the photo-display fix (127 -> 128), and again for the storefront
 # catalogue fix - name-confirmed dedupe + server-side delete reconciliation in
 # js/store.js (128 -> 129).
-SHARED_TOKEN = "129"
+SHARED_TOKEN = "131"
 
 
 def _image_size(path):

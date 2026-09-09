@@ -955,6 +955,54 @@ def save_categories(categories):
         return False
 
 
+# The Delivery page the owner edits in Admin -> Delivery. Same growth_settings
+# pattern as the categories above: one JSON row, no new schema, survives a
+# Render redeploy (the repo copy of delivery.html is only the fallback).
+DELIVERY_PAGE_KEY = "delivery_page_json"
+
+
+def save_delivery_page(page):
+    """Persist the Delivery page as one growth_settings row. Never raises."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        payload = json.dumps(page, ensure_ascii=False)
+        c.table("growth_settings").upsert(
+            [{"key": DELIVERY_PAGE_KEY, "value": payload}]
+        ).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] delivery page save failed: {exc}")
+        return False
+
+
+def load_delivery_page():
+    """Return the Delivery page stored under DELIVERY_PAGE_KEY, or None."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("growth_settings")
+               .select("value")
+               .eq("key", DELIVERY_PAGE_KEY)
+               .limit(1)
+               .execute())
+        rows = _res_data(res)
+        if not rows:
+            return None
+        raw = (rows[0] or {}).get("value")
+        if raw is None or raw == "":
+            return None
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(data, dict) and data:
+            return data
+        return None
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] delivery page load failed: {exc}")
+        return None
+
+
 def load_categories():
     """Return the category list stored under CATEGORIES_KEY, or None."""
     c = client()

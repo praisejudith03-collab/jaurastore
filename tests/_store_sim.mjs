@@ -188,5 +188,68 @@ const offlineFixture = (id, name) => ({
     !shopFetches.some((u) => String(u).includes("all=1")));
 }
 
+// ------------------- 6. the PUBLIC catalogue's stock shape reaches the UI
+{
+  // The public /api/catalog answer carries NO numeric stock - that is a
+  // business secret. It ships stock_status ("in"/"out") plus, for a product
+  // sold per variant, an option_stock map. The storefront decides "sold out"
+  // from a NUMBER, so a public row used to read as stock 0 and the WHOLE shop
+  // rendered "Out of stock" with Add-to-cart dead. normalizeServerProduct
+  // translates the public shape on the way in.
+  const publicRow = (id, name, extra) => ({
+    id, sku: `PUB-${id}`, slug: id, name, category: "household",
+    priceNgn: 5000, priceCfa: 2200, image: "images/products/_placeholder.jpg",
+    online: true, ...extra,
+  });
+  const served = [
+    publicRow("jau-pub-in", "In stock piece", { stock_status: "in" }),
+    publicRow("jau-pub-out", "Sold out piece", { stock_status: "out" }),
+    publicRow("jau-pub-opt", "Per-variant piece", {
+      stock_status: "in", option_stock: { Red: 2, Blue: 0, Green: 5 },
+    }),
+    publicRow("jau-pub-none", "No status at all", {}),
+  ];
+  const { JA } = makeSandbox(served);
+  await JA.reloadCatalog();
+  const get = (id) => JA.products().find((p) => p.id === id);
+
+  const inRow = get("jau-pub-in");
+  check("a public \"in\" row becomes sellable stock",
+    inRow && Number(inRow.stock) > 0, `stock = ${inRow && inRow.stock}`);
+  check("an \"in\" product does NOT render the out-of-stock pill",
+    !JA.cardHTML(inRow).includes("is-oos"));
+
+  const outRow = get("jau-pub-out");
+  check("a public \"out\" row becomes stock 0",
+    outRow && Number(outRow.stock) === 0, `stock = ${outRow && outRow.stock}`);
+  check("an \"out\" product DOES render the out-of-stock pill",
+    JA.cardHTML(outRow).includes("is-oos"));
+
+  const optRow = get("jau-pub-opt");
+  check("option_stock becomes optionStock and the total is its sum",
+    optRow && Number(optRow.stock) === 7 && optRow.optionStock
+      && optRow.optionStock.Red === 2 && optRow.optionStock.Blue === 0,
+    `stock = ${optRow && optRow.stock}`);
+  check("stockFor answers per variant from the translated map",
+    JA.stockFor(optRow, "Red") === 2
+    && JA.stockFor(optRow, "Blue") === 0
+    && JA.stockFor(optRow, "Green") === 5);
+  check("a per-variant product with any stock left is not sold out",
+    !JA.cardHTML(optRow).includes("is-oos"));
+
+  check("a row with no stock_status at all stays sellable",
+    Number(get("jau-pub-none").stock) > 0);
+
+  // an ADMIN row (real number) must survive untouched
+  const kept = JA.normalizeServerProduct({ id: "x", stock: 4, stock_status: "out" });
+  check("a row that already carries a numeric stock is returned unchanged",
+    kept.stock === 4);
+  // a fully-zero option map reads as sold out
+  const zero = JA.normalizeServerProduct({
+    id: "z", stock_status: "in", option_stock: { S: 0, M: 0 } });
+  check("a product whose every variant is 0 is sold out",
+    zero.stock === 0);
+}
+
 console.log(failures ? `\n${failures} storefront check(s) FAILED` : "\nall storefront checks passed");
 process.exit(failures ? 1 : 0);

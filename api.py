@@ -56,6 +56,16 @@ def _categories_data():
                 rows = load_categories_table()
                 if rows is None:
                     raise RuntimeError("Supabase categories unavailable")
+                # A reachable but EMPTY table is not "the shop has no
+                # categories", it is a table that was never seeded (or was
+                # wiped). Serving [] left every phone with an empty category
+                # strip and no way back. Self-heal to the built-in defaults,
+                # photos included, so the storefront always has something to
+                # show; the owner's own rows replace these the moment they
+                # save any category.
+                if not rows:
+                    return {"categories": [dict(c) for c in DEFAULT_CATEGORIES],
+                            "updatedAt": "", "updatedBy": ""}
                 return {"categories": rows, "updatedAt": "", "updatedBy": ""}
         except RuntimeError:
             raise
@@ -1840,6 +1850,121 @@ SITE_LEGACY_MAP = {
 SITE_LEGACY_ALIASES = {col: key for key, col in SITE_LEGACY_MAP.items()}
 
 
+# ------------------------------------------------------------- delivery page
+# The Delivery page (delivery.html) used to be frozen in the repo: the owner
+# could not add a town without a developer. It is now an editable document
+# stored in Supabase growth_settings and served on the site row; the static
+# markup stays as the offline / static-host fallback.
+DELIVERY_PAGE_FILE = _os.environ.get(
+    "DELIVERY_PAGE_PATH",
+    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "delivery_page.json"))
+
+
+def _normalize_delivery_page(raw):
+    """Sanitise an incoming Delivery page. Returns None when unusable.
+
+    Everything is stripped of markup (sec.clean) and length-capped, so a
+    saved page can never inject HTML into the storefront. A page is only
+    accepted when it has at least one block carrying at least one NAMED
+    location - an empty document would silently blank the page for every
+    customer.
+    """
+    if not isinstance(raw, dict):
+        return None
+    title = sec.clean(raw.get("title"), 120, allow_newlines=False)
+    lead = sec.clean(raw.get("lead"), 240, allow_newlines=False)
+    blocks_in = raw.get("blocks")
+    if not isinstance(blocks_in, list):
+        return None
+    blocks = []
+    for b in blocks_in[:12]:                       # at most 12 blocks
+        if not isinstance(b, dict):
+            continue
+        heading = sec.clean(b.get("heading"), 80, allow_newlines=False)
+        locs_in = b.get("locations")
+        locations = []
+        if isinstance(locs_in, list):
+            for loc in locs_in[:40]:
+                if not isinstance(loc, dict):
+                    continue
+                name = sec.clean(loc.get("name"), 80, allow_newlines=False)
+                detail = sec.clean(loc.get("detail"), 300, allow_newlines=False)
+                if not name:
+                    continue
+                locations.append({"name": name, "detail": detail})
+        if not heading and not locations:
+            continue
+        blocks.append({"heading": heading, "locations": locations})
+    if not any(b["locations"] for b in blocks):
+        return None
+    return {
+        "title": title or "Delivery Locations",
+        "lead": lead,
+        "blocks": blocks,
+    }
+
+
+def _load_delivery_page():
+    """The saved Delivery page, or None when the owner has not made one."""
+    if Config.ENV == "testing":
+        path = _os.environ.get("DELIVERY_PAGE_PATH", DELIVERY_PAGE_FILE)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) and data else None
+    try:
+        from supabase_store import enabled as _sb_enabled
+        from supabase_store import load_delivery_page
+        if _sb_enabled():
+            return load_delivery_page()
+    except Exception as exc:
+        print(f"[supabase] delivery page read failed: {exc}")
+    return None
+
+
+def _save_delivery_page(page):
+    """Write the page, then RE-READ it and return what is actually stored.
+
+    The portal repaints from this answer, so the owner always sees what the
+    store will serve rather than what they typed into the form.
+    """
+    if Config.ENV == "testing":
+        path = _os.environ.get("DELIVERY_PAGE_PATH", DELIVERY_PAGE_FILE)
+        _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(page, fh, ensure_ascii=False, indent=2)
+        _os.replace(tmp, path)
+        return _load_delivery_page()
+    from supabase_store import enabled as _sb_enabled
+    from supabase_store import save_delivery_page
+    if not _sb_enabled():
+        raise RuntimeError("Supabase is not configured")
+    if not save_delivery_page(page):
+        raise RuntimeError("Supabase delivery page write failed")
+    return _load_delivery_page()
+
+
+@api.post("/admin/delivery-page")
+@authmod.require_admin
+@sec.require_csrf
+def admin_delivery_page_save():
+    d = request.get_json(silent=True) or {}
+    page = _normalize_delivery_page(d.get("page") if isinstance(d.get("page"), dict) else d)
+    if page is None:
+        return jsonify(ok=False,
+                       error="Add at least one location before saving."), 400
+    try:
+        saved = _save_delivery_page(page)
+    except Exception as exc:
+        print(f"[delivery-page] save failed: {exc}")
+        return jsonify(ok=False, error="Could not save the delivery page."), 503
+    audit(authmod.current_admin(), "delivery_page.save", "delivery_page", _ip())
+    return jsonify(ok=True, page=saved)
+
+
 def _site_payload(site):
     """Canonical site_settings row + the legacy front-end aliases."""
     out = dict(site or {})
@@ -1853,6 +1978,12 @@ def _site_payload(site):
         out["delivery_zones"] = delivery.zones()
     except Exception:
         out["delivery_zones"] = []
+    # The owner-editable Delivery page. None when nothing has been saved yet,
+    # and the storefront then keeps the static delivery.html fallback.
+    try:
+        out["delivery_page"] = _load_delivery_page()
+    except Exception:
+        out["delivery_page"] = None
     return out
 _SITE_URL_KEYS = frozenset(SITE_KEYS) | {
     "site_logo_url", "hero_video_url", "hero_poster_url", "hero_doc_url",
