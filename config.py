@@ -132,9 +132,13 @@ class Config:
     PERMANENT_SESSION_LIFETIME = 60 * 60 * 24 * 365
 
     # ------------------------------------------------- permanent admin auth
-    # The only admin password is held by the Render environment. It is read
-    # dynamically by auth.verify_login(); this attribute is informational and
-    # is never used to persist or rotate a password.
+    # The admin passwords are held by the Render environment only.
+    # ADMIN_MASTER_PASSWORD is the PRIMARY master password; ADMIN_BOOTSTRAP_PASSWORD
+    # is the secondary/permanent fallback. Both are read dynamically on every
+    # attempt by auth.verify_login(); these attributes are informational and
+    # are never used to persist or rotate a password. No default: a default
+    # would publish the password in this public repository.
+    ADMIN_MASTER_PASSWORD = os.environ.get("ADMIN_MASTER_PASSWORD", "")
     ADMIN_BOOTSTRAP_PASSWORD = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "")
 
     LOW_STOCK_THRESHOLD = 5

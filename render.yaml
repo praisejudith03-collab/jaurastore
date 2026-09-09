@@ -37,6 +37,11 @@ services:
         sync: false
       # Permanent admin authentication. Set this in Render; it is never stored
       # in the database and is read for every login attempt.
+      # Dedicated admin master password (PRIMARY admin credential). Set it in
+      # the dashboard; sync:false keeps the secret out of git. Updating the
+      # value takes effect on the next login - no database change.
+      - key: ADMIN_MASTER_PASSWORD
+        sync: false
       - key: ADMIN_BOOTSTRAP_PASSWORD
         sync: false
       # Supabase (source of truth for products, carts, orders, admin auth).
@@ -121,6 +126,11 @@ services:
         sync: false
       # Permanent admin authentication. Set this in Render; it is never stored
       # in the database and is read for every login attempt.
+      # Dedicated admin master password (PRIMARY admin credential). Set it in
+      # the dashboard; sync:false keeps the secret out of git. Updating the
+      # value takes effect on the next login - no database change.
+      - key: ADMIN_MASTER_PASSWORD
+        sync: false
       - key: ADMIN_BOOTSTRAP_PASSWORD
         sync: false
       # Supabase (source of truth for products, carts, orders, admin auth).

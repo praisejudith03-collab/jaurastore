@@ -1,7 +1,9 @@
 """Environment-backed admin authentication and Flask sessions.
 
-The shop has one permanent admin credential: ``ADMIN_BOOTSTRAP_PASSWORD``.
-It is read from the process environment for every login attempt and is never
+The shop has permanent admin credentials held in the environment only:
+``ADMIN_MASTER_PASSWORD`` (the primary master password) and
+``ADMIN_BOOTSTRAP_PASSWORD`` (the secondary/permanent fallback). Both are
+read from the process environment for every login attempt and are never
 stored in SQLite, Supabase, a cookie, or an audit record. ``ADMIN_EMAILS``
 continues to identify which email addresses may open the admin session; it is
 not a password-recovery mechanism.
@@ -44,22 +46,54 @@ def sole_admin_email():
     return Config.ADMIN_EMAILS[0] if len(Config.ADMIN_EMAILS) == 1 else None
 
 
+def master_password():
+    """The live master password from ``ADMIN_MASTER_PASSWORD`` ('' when unset).
+
+    Read from the environment on EVERY call, never cached at import time:
+    saving a new value in the host dashboard takes effect on the very next
+    login attempt, with no restart, no database write, nothing else. The
+    variable has no default - unset simply means "no master password", and
+    every login is checked against ``ADMIN_BOOTSTRAP_PASSWORD`` (the
+    secondary/permanent credential) only.
+    """
+    return str(os.environ.get("ADMIN_MASTER_PASSWORD", "") or "").strip()
+
+
+def master_password_matches(supplied):
+    want = master_password()
+    if not want or not supplied:
+        return False
+    return hmac.compare_digest(str(supplied).encode("utf-8"), want.encode("utf-8"))
+
+
+def bootstrap_password():
+    """The live permanent credential from ``ADMIN_BOOTSTRAP_PASSWORD``."""
+    return str(os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "") or "").strip()
+
+
 def admin_password_configured():
-    """Whether the permanent environment credential is present."""
-    return bool(os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", ""))
+    """Whether any permanent environment credential is present."""
+    return bool(master_password() or bootstrap_password())
 
 
 def verify_login(email, password):
-    """Check the admin identity and permanent environment password.
+    """Check the admin identity and the environment credentials.
 
-    The environment is intentionally read at call time. A Render environment
-    update followed by a process restart therefore changes the credential
-    without a database migration or an admin-panel password write.
+    ``ADMIN_MASTER_PASSWORD`` is the PRIMARY master password;
+    ``ADMIN_BOOTSTRAP_PASSWORD`` is the secondary (permanent fallback).
+
+    Both are intentionally read from the environment at call time. A Render
+    environment update followed by a process restart changes either
+    credential with no database migration and no admin-panel password write.
+    Neither credential is ever stored in SQLite, Supabase, a cookie, or an
+    audit record.
     """
     if not is_known_admin(email):
         return False
-    configured = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD", "")
     supplied = str(password or "")
+    if master_password_matches(supplied):
+        return True
+    configured = bootstrap_password()
     return bool(configured) and hmac.compare_digest(supplied, configured)
 
 

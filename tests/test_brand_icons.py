@@ -18,10 +18,11 @@ import struct
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# The shared cache token. Bumped for the brand-icon regeneration (126 -> 127)
-# and again for the photo-display fix, which changed sw.js and the storefront
-# scripts (127 -> 128).
-SHARED_TOKEN = "128"
+# The shared cache token. Bumped for the brand-icon regeneration (126 -> 127),
+# again for the photo-display fix (127 -> 128), and again for the storefront
+# catalogue fix - name-confirmed dedupe + server-side delete reconciliation in
+# js/store.js (128 -> 129).
+SHARED_TOKEN = "129"
 
 
 def _image_size(path):

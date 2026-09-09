@@ -198,23 +198,33 @@ const JA = (() => {
 
   // One copy of every product, ever. The same piece can reach the browser
   // under two ids (a Supabase row re-created next to its seed row, or a
-  // locally queued edit next to the synced server copy), so products are
-  // keyed by id, then slug, then sku and the first copy seen wins. The list
-  // passed in is ordered so the preferred copy comes first.
+  // locally queued edit next to the synced server copy). Two rows are the
+  // SAME product when their ids match, or when they share a slug (or sku)
+  // AND the same name - that is how a re-created product still renders
+  // exactly once. A slug or sku clash alone NEVER hides another row: two
+  // DIFFERENT products that happen to share a slug or sku both stay
+  // visible. This mirrors catalog._dedupe_products on the server (see
+  // tests/test_dedupe_scope.py); the storefront used to collapse on
+  // slug/sku alone, which silently removed Supabase-visible products from
+  // the shop grid while /api/catalog still served them.
   function dedupeProducts(list) {
+    const norm = (v) => String(v || "").trim().toLowerCase();
     const byId = new Map(), bySlug = new Map(), bySku = new Map();
     const out = [];
     (Array.isArray(list) ? list : []).forEach((p) => {
       if (!p || !p.id) return;
       const id = String(p.id).trim();
-      const slug = String(p.slug || "").trim().toLowerCase();
-      const sku = String(p.sku || "").trim().toLowerCase();
+      const name = norm(p.name);
+      const slug = norm(p.slug);
+      const sku = norm(p.sku);
       if (byId.has(id)) return;
-      if (slug && bySlug.has(slug)) return;
-      if (sku && bySku.has(sku)) return;
+      // a slug/sku clash only collapses when the names agree too - a
+      // different product must never be hidden by a shared slug or sku
+      if (slug && bySlug.has(slug + "\u0000" + name)) return;
+      if (sku && bySku.has(sku + "\u0000" + name)) return;
       byId.set(id, p);
-      if (slug) bySlug.set(slug, p);
-      if (sku) bySku.set(sku, p);
+      if (slug) bySlug.set(slug + "\u0000" + name, p);
+      if (sku) bySku.set(sku + "\u0000" + name, p);
       out.push(p);
     });
     return out;
@@ -223,7 +233,16 @@ const JA = (() => {
   async function loadSeed() {
     if (seed.length) return seed;
     try {
-      const res = await fetch("api/catalog", { credentials: "same-origin" });
+      // The admin portal must see EXACTLY what is saved: every row,
+      // including hidden/offline ones, with the stock numbers and costs the
+      // public answer strips out. Admin pages therefore request the full
+      // catalogue (?all=1 - served only to a signed-in admin session; the
+      // server silently answers with the public list when the session has
+      // expired, so nothing ever breaks). The storefront keeps the plain
+      // public catalogue, so customers and every phone see the online rows.
+      const adminView = (document.body.dataset.page || "") === "admin";
+      const res = await fetch("api/catalog" + (adminView ? "?all=1" : ""),
+                               { credentials: "same-origin" });
       if (res.ok) {
         const d = await res.json();
         if (d && Array.isArray(d.products) && d.products.length) {
@@ -232,6 +251,26 @@ const JA = (() => {
           const pend = pendingMap();
           const stillPending = (read(KEYS.custom, []) || []).filter((p) => p && pend[p.id]);
           write(KEYS.custom, stillPending);
+          // The server catalogue is the source of truth, so a product the
+          // server serves again is BACK ON SALE: forget any locally
+          // remembered deletion for it. Without this, a device that ever
+          // deleted the product kept hiding it long after the row was
+          // restored in Supabase - the storefront showed fewer products
+          // than /api/catalog served, only on the devices where the old
+          // deletion happened. (A deletion whose queued server DELETE has
+          // not landed yet re-hides the row on the next catalogue load,
+          // so the offline delete flow still converges.)
+          try {
+            const served = new Set();
+            d.products.forEach((p) => { if (p && p.id) served.add(String(p.id)); });
+            const rememberedDeletes = read(KEYS.deleted, []) || [];
+            if (rememberedDeletes.length) {
+              const stillDeleted = rememberedDeletes.filter((id) => !served.has(String(id)));
+              if (stillDeleted.length !== rememberedDeletes.length) {
+                write(KEYS.deleted, stillDeleted);
+              }
+            }
+          } catch (e) { /* never block the catalogue on this */ }
           // The whole catalogue, one copy of each product: the server merges
           // seed + admin + Supabase rows, and any duplicate that survives
           // that merge (same product under two ids) is dropped here so the
@@ -1466,8 +1505,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=128";
-        const FLYER = "images/brand/logo-flyer.jpg?v=128";
+        const LOGO = "images/brand/logo.jpg?v=129";
+        const FLYER = "images/brand/logo-flyer.jpg?v=129";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -1591,7 +1630,7 @@ const JA = (() => {
           <a href="contact.html">${tx("nav.contact")}</a>
         </nav>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=128" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=129" alt="Jaura" />
         </a>
         <div class="nav-right">
           <div class="lang-switch" role="group" aria-label="${tx("lang.group")}">
@@ -1730,7 +1769,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=128" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=129" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -1814,7 +1853,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=128" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=129" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -1836,7 +1875,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=128";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=129";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -1848,7 +1887,7 @@ const JA = (() => {
   function logoPath() {
     let custom = "";
     try { custom = (settings() || {}).logoUrl || ""; } catch (e) { custom = ""; }
-    return custom || "images/brand/logo.jpg?v=128";
+    return custom || "images/brand/logo.jpg?v=129";
   }
   // FAQ answers Google can show as rich results. Kept in step with faq.html.
   const FAQ_LD = [
@@ -1881,7 +1920,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Jaura Store — fashion, beauty, household and lifestyle. Pay in Naira or F CFA. Lagos and Cotonou.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=128");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=129");
     document.title = title;
     [
       ["name", "description", description],
@@ -1927,7 +1966,7 @@ const JA = (() => {
       const ic = document.createElement("link");
       ic.rel = "icon";
       ic.type = "image/png";
-      ic.href = "images/brand/favicon.png?v=128";
+      ic.href = "images/brand/favicon.png?v=129";
       document.head.appendChild(ic);
     }
     let ld = document.getElementById("jaura-jsonld");

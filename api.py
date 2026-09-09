@@ -1181,14 +1181,23 @@ def admin_login():
             # several admin accounts -> the single-account convenience cannot
             # know which shared-password account to open
             return jsonify(ok=False, error="Enter the admin email address to sign in."), 400
+    # ADMIN_MASTER_PASSWORD is the primary credential: checked first inside
+    # auth.verify_login(), read live from the environment, so a new value
+    # saved in the Render dashboard works on the very next attempt - no
+    # restart, no database update. ADMIN_BOOTSTRAP_PASSWORD stays as the
+    # secondary/permanent credential, and only CONFIGURED admin accounts can
+    # ever be opened (no enumeration).
+    known = authmod.is_known_admin(email)
+    via_master = known and authmod.master_password_matches(pw)
     # identical response for unknown email vs wrong password (no enumeration)
-    ok = authmod.is_known_admin(email) and authmod.verify_login(email, pw)
+    ok = via_master or (known and authmod.verify_login(email, pw))
     if not ok:
         audit(email or "?", "admin.login_failed", "bad credentials", _ip())
         return jsonify(ok=False, error="Invalid email or password."), 401
     authmod.login(email)
     sec.clear_rate("admin-login", email)
-    audit(email, "admin.login", "success", _ip())
+    audit(email, "admin.login",
+          "master password" if via_master else "password", _ip())
     return jsonify(ok=True, email=email, csrf=sec.issue_csrf())
 
 @api.post("/admin/logout")
