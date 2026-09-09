@@ -128,6 +128,19 @@ def test_register_needs_csrf_and_strong_password(client):
     assert r.status_code == 409
 
 
+def test_new_account_sees_earlier_guest_orders_with_the_same_email(client):
+    email = _mail("past")
+    oid = _oid(8)
+    guest = appmod.create_app().test_client()
+    place_order(guest, oid, email, name="Past Shopper")
+    assert one("SELECT customer_user_id FROM orders WHERE id=?", (oid,))["customer_user_id"] is None
+
+    assert register(client, email, name="Past Shopper").status_code == 201
+    ids = {o["id"] for o in client.get("/api/account/orders").get_json()["orders"]}
+    assert oid in ids
+    assert one("SELECT customer_user_id FROM orders WHERE id=?", (oid,))["customer_user_id"]
+
+
 def test_profile_and_password_change(client):
     email = _mail("prof")
     assert register(client, email, name="Old Name").status_code == 201

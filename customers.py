@@ -128,6 +128,35 @@ def persist_customer(row):
         pass
 
 
+def link_guest_orders_to_account(customer_id, email):
+    """Link earlier guest checkouts to the account that owns the email.
+
+    The customer must first create and authenticate an account password; this
+    is not an email-reset or recovery route. Existing orders are linked only
+    when they have no account owner, and the same association is mirrored in
+    Supabase when production is configured.
+    """
+    if not customer_id or not email:
+        return 0
+    linked = 0
+    try:
+        cur = execute(
+            "UPDATE orders SET customer_user_id=? "
+            "WHERE customer_user_id IS NULL AND lower(email)=lower(?)",
+            (customer_id, email),
+        )
+        linked = int(getattr(cur, "rowcount", 0) or 0)
+    except Exception:
+        pass
+    try:
+        from supabase_store import enabled, link_guest_orders
+        if enabled():
+            linked = max(linked, int(link_guest_orders(customer_id, email) or 0))
+    except Exception:
+        pass
+    return linked
+
+
 _ROUTES_REGISTERED = False
 
 
@@ -180,6 +209,7 @@ def register_routes(bp):
         )
         row = one("SELECT * FROM customers WHERE id=?", (cid,))
         persist_customer(row)
+        link_guest_orders_to_account(cid, email)
         login_session(cid)
         audit(email, "customer.register", cid, _ip())
         return jsonify(ok=True, customer=public_customer(row), csrf=sec.issue_csrf()), 201
@@ -198,6 +228,7 @@ def register_routes(bp):
         if not row or not pw or not check_password_hash(row["password_hash"], str(pw)):
             audit(email or "?", "customer.login_failed", "bad credentials", _ip())
             return jsonify(ok=False, error="Invalid email or password."), 401
+        link_guest_orders_to_account(row["id"], email)
         login_session(row["id"])
         sec.clear_rate("cust-login", email)
         audit(email, "customer.login", "success", _ip())

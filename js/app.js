@@ -1744,6 +1744,7 @@ function paintAccountHome(root, me, orders) {
         <div class="field"><label>${t("ck.country")}</label><input name="country" value="${JA.escape(me.country || "")}" /></div>
         <div class="field"><label>${t("ck.city")}</label><input name="city" value="${JA.escape(me.city || "")}" /></div>
         <div class="field"><label>${t("ck.street")}</label><input name="delivery_address" value="${JA.escape(me.delivery_address || "")}" /></div>
+        <div class="field"><label>${t("account.currency")}</label><select name="preferred_currency"><option value="NGN" ${me.preferred_currency === "NGN" ? "selected" : ""}>NGN</option><option value="CFA" ${me.preferred_currency === "CFA" ? "selected" : ""}>F CFA</option></select></div>
         <p class="acct-msg" data-profile-msg hidden></p>
         <button class="btn" type="submit">${t("account.saveProfile")}</button>
       </form>

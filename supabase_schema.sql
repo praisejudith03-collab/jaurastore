@@ -390,7 +390,6 @@ alter table customers add column if not exists preferred_currency text default '
 alter table customers add column if not exists created_at timestamptz not null default now();
 alter table customers add column if not exists updated_at timestamptz not null default now();
 create index if not exists idx_customers_email on customers(email);
-
 -- SECTION: delivery_zones
 -- Delivery zones and their fare ranges. Admin-editable, served to the
 -- storefront by GET /api/site so checkout no longer hardcodes the list.
