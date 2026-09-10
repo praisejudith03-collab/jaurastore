@@ -95,7 +95,7 @@ const JA = (() => {
   // are the fallbacks categoryName() uses when the stored row has no nameFr.
   const DEFAULT_CATS = [
     { id: "clothing", name: "Clothings for men and women", nameFr: "Vêtements homme et femme", image: "images/categories/fashion.jpg" },
-    { id: "household", name: "Household items", nameFr: "Articles ménagers", image: "images/categories/household.jpg" },
+    { id: "household", name: "Household & Kitchen", nameFr: "Maison & cuisine", image: "images/categories/household.jpg" },
     { id: "ankara", name: "Ankara ready to wear", nameFr: "Ankara prêt-à-porter", image: "images/categories/fashion.jpg" },
     { id: "accessories", name: "Accessories", nameFr: "Accessoires", image: "images/categories/gadgets.jpg" },
     { id: "beauty", name: "Beauty & skincare", nameFr: "Beauté & soins", image: "images/categories/beauty.jpg" },
@@ -299,10 +299,10 @@ const JA = (() => {
     return out;
   }
 
-  async function loadSeed() {
-    if (seed.length) return seed;
+  async function loadSeed(strict = false) {
+    if (!strict && seed.length) return seed;
     try {
-      // The admin portal must see EXACTLY what is saved: every row,
+      // The store management must see EXACTLY what is saved: every row,
       // including hidden/offline ones, with the stock numbers and costs the
       // public answer strips out. Admin pages therefore request the full
       // catalogue (?all=1 - served only to a signed-in admin session; the
@@ -311,10 +311,10 @@ const JA = (() => {
       // public catalogue, so customers and every phone see the online rows.
       const adminView = (document.body.dataset.page || "") === "admin";
       const res = await fetch("api/catalog" + (adminView ? "?all=1" : ""),
-                               { credentials: "same-origin" });
+                               { credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(30000) });
       if (res.ok) {
         const d = await res.json();
-        if (d && Array.isArray(d.products) && d.products.length) {
+        if (d && Array.isArray(d.products) && (strict || d.products.length)) {
           catalogMeta = Object.assign({ server: true }, d.meta || {});
           // keep only edits that have not reached the server yet
           const pend = pendingMap();
@@ -349,7 +349,8 @@ const JA = (() => {
           return seed;
         }
       }
-    } catch (e) { /* offline or static hosting: fall back below */ }
+      if (strict) throw new Error("Could not reload the live catalogue. Please check your connection and sign-in.");
+    } catch (e) { if (strict) throw e; /* storefront can use its offline fallback */ }
     // The bundled catalogue (js/products-data.js) is loaded on every page and is
     // the static fallback; the server catalogue (api/catalog) is the source of
     // truth. We deliberately do not fetch data/seed.json in the browser: that
@@ -535,71 +536,28 @@ const JA = (() => {
         nameFr: mergedBeauty ? "Beauté & soins" : (c.nameFr || def.nameFr || ""),
         image: c.image || def.image || "",
         hidden: !!c.hidden,
+        order: c.order,
       });
     });
     return out;
   }
   function normalizeOrder(cats) {
-    # Ensure every category has an order; assign ascending indices starting at 1
-    # so "Household & Kitchen" can be set to 0 or 1 to float to the top.
-    let maxOrder = 0;
-    const known = new Set();
-    (cats || []).forEach((c) => {
-      if (c.order !== undefined && !isNaN(c.order)) {
-        known.add(c.order);
-        if (c.order > maxOrder) maxOrder = c.order;
-      }
-    });
-    let next = maxOrder + 1;
-    const result = [];
-    const used = new Set();
-    # First, preserve existing ordered entries in their original sequence.
-    (cats || []).forEach((c) => {
-      if (c.order !== undefined && !isNaN(c.order) && !used.has(c.order)) {
-        used.add(c.order);
-        result.push(c);
-      }
-    });
-    # Then fill in any missing slots with auto-assigned order.
-    const allIds = new Set((cats || []).map((c) => c.id));
-    const idToOrder = new Map();
-    (cats || []).forEach((c) => {
-      if (c.order !== undefined && !isNaN(c.order)) {
-        idToOrder.set(c.id, c.order);
-      }
-    });
-    # Assign default order 1, 2, 3... to any category without an explicit order,
-    # but allow order 0 to float to the top.
-    let defaultNum = 1;
-    while (result.length < (cats ? cats.length : 0)) {
-      const insertPos = result.length;
-      const candidateId = Object.keys(idToOrder).find(
-        id => !idToOrder.has(id) || (idToOrder.get(id) === 0 && !used.has(0))
-      ) || null;
-      # Assign ascending order to any category still without one.
-      const cat = (cats || []).find((c) => c.id && !(c.id in idToOrder) && c.id);
-      if (cat && !(cat.id in idToOrder)) {
-        idToOrder.set(cat.id, defaultNum++);
-      }
-      if (cat && cat.id && !used.has(cat.id)) {
-        used.add(cat.id);
-        result.push(cat);
-      }
-      if (insertPos >= result.length) break;
-    }
-    return result;
+    // Explicit order wins; otherwise Household & Kitchen leads the stable list.
+    const order = (c) => c.order != null && c.order !== "" && Number.isFinite(Number(c.order))
+      ? Number(c.order) : (c.id === "household" ? 0 : 1);
+    return [...(cats || [])].sort((a, b) => order(a) - order(b));
   }
 
   function categories() {
     const saved = read(KEYS.cats, null);
     const base = DEFAULT_CATS.map((c) => ({ ...c, nameFr: c.nameFr || "", hidden: false }));
     const all = Array.isArray(saved) && saved.length ? normalizeCatList(saved) : normalizeCatList(base);
-    if ((document.body.dataset.page || "") === "admin") return all;
-    return all.filter((c) => !c.hidden);
+    if ((document.body.dataset.page || "") === "admin") return normalizeOrder(all);
+    return normalizeOrder(all.filter((c) => !c.hidden));
   }
   async function loadServerCategories() {
     // Every page loads the owner's server-side category table (photos
-    // included), not just the admin portal — the public storefront is where
+    // included), not just the store management — the public storefront is where
     // shoppers see them.
   try {
       const r = await fetch("api/categories", { credentials: "same-origin", cache: "no-store" });
@@ -607,19 +565,19 @@ const JA = (() => {
       if (d && Array.isArray(d.categories) && d.categories.length) {
         write(KEYS.cats, d.categories.map((c) => ({
           id: c.id, name: c.name, nameFr: c.nameFr || "",
-          image: c.image || "", hidden: !!c.hidden,
+          image: c.image || "", hidden: !!c.hidden, order: c.order,
         })));
       } else {
-        # If server returned empty or error, still write current local state
-        # so the page never falls through to DEFAULT_CATS missing recent saves.
+        // If server returned empty or error, still write current local state
+        // so the page never falls through to DEFAULT_CATS missing recent saves.
         const saved = read(KEYS.cats, null);
         if (saved && Array.isArray(saved) && saved.length) {
           write(KEYS.cats, normalizeCatList(saved));
         }
       }
     } catch (e) {
-      # On failure, preserve whatever is already in localStorage
-      # so the UI never goes blank; the next boot will retry the server.
+      // On failure, preserve whatever is already in localStorage
+      // so the UI never goes blank; the next boot will retry the server.
     }
     return categories();
   }
@@ -630,9 +588,9 @@ const JA = (() => {
       nameFr: c.nameFr || "",
       image: c.image || "",
       hidden: !!c.hidden,
+      order: c.order,
     }));
-    write(KEYS.cats, cleaned);
-    // In the admin portal also persist to the server so every device and the
+    // In the store management also persist to the server so every device and the
     // live storefront see the same category table. The server (Supabase in
     // production) is the source of truth: this returns the confirmed result
     // so the portal never claims a category is live when PostgreSQL said no.
@@ -658,7 +616,7 @@ const JA = (() => {
           if (Array.isArray(d.categories) && d.categories.length) {
             write(KEYS.cats, d.categories.map((c) => ({
               id: c.id, name: c.name, nameFr: c.nameFr || "",
-              image: c.image || c.image_url || "", hidden: !!c.hidden,
+              image: c.image || c.image_url || "", hidden: !!c.hidden, order: c.order,
             })));
           }
           return { ok: true };
@@ -667,6 +625,7 @@ const JA = (() => {
         }
       })();
     }
+    write(KEYS.cats, cleaned);
     return Promise.resolve({ ok: true });
   }
   function moveCategoryProducts(fromId, toId) {
@@ -1398,16 +1357,18 @@ const JA = (() => {
   function retryStrandedProducts() {
     const list = strandedCustom();
     if (!list.length || !window.JA_NET) return Promise.resolve(0);
-    return Promise.all(list.map((p) => upsertProduct(p))).then(() => list.length);
+    return Promise.all(list.map((p) => upsertProduct(p))).then((results) => {
+      const failed = results.find((r) => !r || !r.ok || r.mirrored === false);
+      if (failed) throw new Error(failed.error || "Some products are not yet synced. Retry when connected.");
+      return list.length;
+    });
   }
   function syncPending() {
     const queued = window.JA_NET ? window.JA_NET.pending() : 0;
     return queued + strandedCustom().length;
   }
   async function reloadCatalog() {
-    seed = [];
-    catalogMeta = { server: false };
-    await loadSeed();
+    await loadSeed(true);
     return seed.length;
   }
 
@@ -1726,8 +1687,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=132";
-        const FLYER = "images/brand/logo-flyer.jpg?v=132";
+        const LOGO = "images/brand/logo.jpg?v=133";
+        const FLYER = "images/brand/logo-flyer.jpg?v=133";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -1879,7 +1840,7 @@ const JA = (() => {
           <a href="contact.html">${tx("nav.contact")}</a>
         </nav>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=132" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=133" alt="Jaura" />
         </a>
         <div class="nav-right">
           <div class="lang-switch" role="group" aria-label="${tx("lang.group")}">
@@ -2018,7 +1979,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=132" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=133" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2102,7 +2063,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=132" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=133" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -2124,7 +2085,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=132";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=133";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2169,7 +2130,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=132");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=133");
     document.title = title;
     [
       ["name", "description", description],
@@ -2364,6 +2325,10 @@ const JA = (() => {
   }
 
   function mountChrome() {
+    // These nodes live outside the footer for fixed positioning. Remove the
+    // previous set before a language switch mounts and binds fresh controls.
+    document.querySelectorAll("body > .dock, body > [data-search], body > .wa-float")
+      .forEach((node) => node.remove());
     const top = document.getElementById("site-header");
     const bot = document.getElementById("site-footer");
     if (top) top.innerHTML = headerHTML();

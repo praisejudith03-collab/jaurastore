@@ -693,7 +693,7 @@ window.I18N = (() => {
     "ck.accNo": "Numéro de compte",
     "ck.fareNote": "Les frais de transport ne sont pas fixes : ils varient selon votre localité et le poids des articles. Après paiement, ouvrez WhatsApp pour votre tarif précis.",
     "ck.uploadReceipt": "Télécharger le reçu de paiement",
-    "ck.legal": "Vos données servent à traiter la commande. Téléchargez votre reçu ici. JauraStore confirmera votre paiement, et votre reçu est enregistré dans le portail admin. Les frais de transport se discutent sur WhatsApp.",
+    "ck.legal": "Vos données servent à traiter la commande. Téléchargez votre reçu ici. JauraStore confirmera votre paiement. Les frais de transport se discutent sur WhatsApp.",
     "ck.fileTypes": "JPG, PNG ou PDF — jusqu’à 8 Mo. Nous gardons le fichier exactement tel que vous l’envoyez.",
     "ck.recaptcha": "Ce site est protégé par reCAPTCHA ; les <a href=\"https://policies.google.com/privacy\" target=\"_blank\" rel=\"noopener\">règles de confidentialité</a> et les <a href=\"https://policies.google.com/terms\" target=\"_blank\" rel=\"noopener\">conditions d’utilisation</a> de Google s’appliquent.",
     "ck.place": "Passer la commande",
@@ -705,7 +705,7 @@ window.I18N = (() => {
     "ck.date": "Date",
     "ck.payMethod": "Mode de paiement",
     "ck.waiting": "En attente de confirmation",
-    "ck.saveId": "Notez cet identifiant. JauraStore confirmera votre paiement. Votre reçu est enregistré dans le portail admin. Les frais de transport seront discutés sur WhatsApp.",
+    "ck.saveId": "Notez cet identifiant. JauraStore confirmera votre paiement. Les frais de transport seront discutés sur WhatsApp.",
     "ck.idHelp": "Donnez cet identifiant à JauraStore ou indiquez-le sur le virement.",
     "ck.track": "Suivre cette commande",
     "ck.fareRange": "Les frais de transport varient selon votre localité et le poids des produits. Appuyez ci-dessous pour WhatsApp avec votre n° de commande et votre adresse, afin de recevoir votre tarif.",
@@ -760,10 +760,10 @@ window.I18N = (() => {
     "order.paidIn": "Payé en",
     "order.prep": "Merci — nous préparons la livraison.",
     "order.declineMsg": "Contactez-nous sur WhatsApp avec ce n° de commande.",
-    "order.waitMsg": "Téléversez votre reçu de paiement ici ou envoyez-le sur WhatsApp. JauraStore confirmera votre paiement, et votre reçu est enregistré dans le portail admin.",
+    "order.waitMsg": "Téléversez votre reçu de paiement ici ou envoyez-le sur WhatsApp. JauraStore confirmera votre paiement.",
     "pay.kicker": "Paiement",
     "pay.title": "Envoyer votre capture",
-    "pay.lead": "Aucun envoi n’est nécessaire sur le site. Après le virement, envoyez-nous la capture du paiement sur WhatsApp. Votre reçu est enregistré dans le portail admin. JauraStore confirmera votre paiement.",
+    "pay.lead": "Aucun envoi n’est nécessaire sur le site. Après le virement, envoyez-nous la capture du paiement sur WhatsApp. JauraStore confirmera votre paiement.",
     "pay.id": "N° de commande *",
     "pay.file": "Capture du paiement",
     "pay.send": "Envoyer la capture sur WhatsApp",
@@ -785,7 +785,7 @@ window.I18N = (() => {
     "about.foundersP": "Une maison sœur bâtie sur le goût, la confiance et l’accès. Chaque pièce est choisie avec soin — sac et foulard, ménagère dorée ou essentiel de soin.",
     "contact.kicker": "Relation client",
     "contact.title": "Nous sommes sur WhatsApp",
-    "contact.lead": "Notre équipe vous accompagne. Terminez la commande, payez en CFA ou naira, puis envoyez-nous la capture du paiement sur WhatsApp. Votre reçu est enregistré dans le portail admin. JauraStore confirmera votre paiement.",
+    "contact.lead": "Notre équipe vous accompagne. Terminez la commande, payez en CFA ou naira, puis envoyez-nous la capture du paiement sur WhatsApp. JauraStore confirmera votre paiement.",
     "contact.phone": "Téléphone",
     "contact.email": "E-mail",
     "contact.houses": "Maisons",
@@ -793,7 +793,7 @@ window.I18N = (() => {
     "faq.kicker": "Aide",
     "faq.title": "Questions fréquentes",
     "faq.q1": "Comment commander ?",
-    "faq.a1": "01 Choisissez vos articles. 02 Vérifiez le panier. 03 Validez la commande. 04 Payez en F CFA ou ₦. 05 Envoyez-nous la capture du paiement sur WhatsApp. 06 JauraStore confirmera votre paiement et votre reçu est enregistré dans le portail admin.",
+    "faq.a1": "01 Choisissez vos articles. 02 Vérifiez le panier. 03 Validez la commande. 04 Payez en F CFA ou ₦. 05 Envoyez-nous la capture du paiement sur WhatsApp. 06 JauraStore confirmera votre paiement.",
     "faq.q2": "Puis-je payer en CFA et en naira ?",
     "faq.a2": "Oui. Le naira est le prix. Le F CFA sur le site est converti à 1 ₦ = 0,44. Touchez ₦ ou F CFA dans le menu pour choisir comment payer. À la caisse, choisissez virement F CFA ou virement ₦ naira.",
     "faq.q3": "Quel est le taux ?",
@@ -801,7 +801,7 @@ window.I18N = (() => {
     "faq.q4": "Où livrez-vous ?",
     "faq.a4": "Bénin (Cotonou, Calavi, Porto-Novo — 6 à 14 jours ouvrés), Lagos Mainland, Lagos Island, Lomé et pays voisins. Les frais sont confirmés selon la ville.",
     "faq.q5": "Comment payer ?",
-    "faq.a5": "Faites le virement avec les coordonnées de la devise choisie, puis téléchargez le reçu bancaire sur le formulaire de commande. Votre reçu est enregistré dans le portail admin. JauraStore confirmera votre paiement. Les frais de transport se discutent sur WhatsApp.",
+    "faq.a5": "Faites le virement avec les coordonnées de la devise choisie, puis téléchargez le reçu bancaire sur le formulaire de commande. JauraStore confirmera votre paiement. Les frais de transport se discutent sur WhatsApp.",
     "faq.q6": "Comment suivre ma commande ?",
     "faq.a6": "Écrivez-nous sur WhatsApp avec votre identifiant de commande (par exemple JA-M8K2Q1) et nous vous dirons si elle est en attente, confirmée ou refusée.",
     "faq.q7": "Comment vous joindre ?",
@@ -948,7 +948,7 @@ window.I18N = (() => {
 
   /* ------------------------------------------------------------------
    * JavaScript builds most of the wording: the payment form, the category
-   * names, the whole admin portal, every toast. Those strings cannot carry
+   * names, the whole store management, every toast. Those strings cannot carry
    * a data-i18n attribute, so once a page has rendered we read the text and
    * swap anything we know the French for. A whole string is replaced or
    * nothing is, which is why product names the owner typed are left alone.

@@ -4752,7 +4752,7 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   margin-bottom: 12px;
 }
 .au-cat-pic img { width: 88px; height: 88px; object-fit: cover; border-radius: 10px; background: #f3eee8; }
-.au-cat-up { display: block; font-size: 11px; margin-top: 6px; color: #8a6f52; }
+.au-cat-up, .au-cat-down { display: block; font-size: 11px; margin-top: 6px; color: #8a6f52; }
 .au-cat-fields label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #7a7066; }
 .au-cat-fields input[type=text], .au-cat-fields input:not([type=checkbox]):not([type=file]) {
   width: 100%; padding: 8px 10px; border: 1px solid #e6ddd2; border-radius: 8px; margin: 4px 0 8px;
@@ -6229,16 +6229,8 @@ select.ck-zone-select {
 
 /* =============================================================
    HEADER + ADMIN NAV v132 — 2026-09-10
-   1) Mobile header fit: at ≤640px a 150px logo plus the EN/FR /
-      currency / search / cart / hamburger controls could not fit
-      one row, so the language buttons crowded out the logo. The
-      buttons stay a good size (see the pinned switch block above);
-      the LOGO hides instead — and the search icon too, because the
-      search field lives inside the hamburger menu — so EN/FR and
-      the currency stay visible and nothing essential is clipped.
-      Between 641–700px the same controls still crowd the logo on
-      small phones in landscape, so the logo hides there too while
-      every control stays.
+   1) Keep the logo and search visible alongside the language/currency
+      controls. Use two columns, with a second row on the smallest phones.
    2) Mobile admin: the fixed dark-blue bottom tab bar used to ride
       up over the form fields the moment the keyboard opened while
       typing. It is now an in-flow, horizontally scrollable tab
@@ -6253,6 +6245,7 @@ select.ck-zone-select {
 body[data-page="admin"] #site-header { display: none !important; }
 
 @media (max-width: 640px) {
+  .header-inner { grid-template-columns: auto minmax(0, 1fr) !important; gap: 8px; }
   .header .logo { display: flex !important; }
   .nav-right [data-open-search] { display: grid !important; }
   .nav-right { gap: 6px !important; }
@@ -6281,3 +6274,21 @@ body[data-page="admin"] #site-header { display: none !important; }
     padding: 6px 10px;
   }
 }
+
+/* Small phones need two rows, not a logo overlapped by language controls. */
+@media (max-width: 380px) {
+  .header-inner { grid-template-columns: minmax(0, 1fr) !important; padding-block: 8px; }
+  .header .logo, .header .nav-right { justify-self: center !important; }
+  .header .nav-right { flex-wrap: wrap; justify-content: center; max-width: 100%; }
+}
+
+/* Shared desktop and mobile header: logo first, navigation then controls. */
+.header .logo { order: -1; }
+@media (min-width: 981px) {
+  .header-inner { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .header .nav-left { justify-content: center; flex-wrap: wrap; }
+}
+[data-cat-move] { margin: 6px 4px; min-width: 36px; min-height: 36px; cursor: pointer; }
+[data-cat-move]:disabled { opacity: .45; cursor: default; }
+
+.au-cat-moves { display: flex; gap: 6px; align-items: center; }

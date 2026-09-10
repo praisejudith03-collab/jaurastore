@@ -43,3 +43,9 @@ receipts_migration.json
 migration-dry-run.json
 migration-result.json
 migration-*.json
+
+# Editor backups must never ship
+*.bak
+
+# Local verification artifacts and temporary preview configuration
+.cache/

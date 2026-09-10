@@ -196,6 +196,8 @@ def test_lagos_orders_have_no_benin_minimum(client):
 
 
 def test_analytics_counts_and_dashboard_shape(client):
+    # Other tests/browser visits must not determine this fixture's top page.
+    execute("DELETE FROM page_views")
     tok = csrf(client)
     client.post("/api/track", json={"events": [
         {"type": "visit", "path": "/index.html", "page": "home", "sid": "s1"},

@@ -19,6 +19,7 @@ window.JA_NET = (function () {
 
   var online = typeof navigator === "undefined" ? true : navigator.onLine !== false;
   var flushing = false;
+  var flushPromise = null;
   var lastFlushAt = 0;
 
   function emit() {
@@ -114,7 +115,7 @@ window.JA_NET = (function () {
   // absolute path: a relative "api/config" resolves against the current
   // directory, so any page served from a sub-path lost the CSRF token and
   // with it the reCAPTCHA site key — the widget stayed empty.
-  inflight = fetch("/api/config", { credentials: "same-origin", cache: "no-store" })
+  inflight = fetch("/api/config", { credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(30000) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         token = (d && d.csrf) || "";
@@ -376,7 +377,7 @@ window.JA_NET = (function () {
 
 
   function flush(force) {
-    if (flushing) return Promise.resolve(jobs.length);
+    if (flushing) return flushPromise.then(function () { return force ? flush(true) : jobs.length; });
     if (!navigator.onLine && typeof navigator !== "undefined" && navigator.onLine === false) return Promise.resolve(jobs.length);
     flushing = true;
     var now = Date.now();
@@ -406,12 +407,13 @@ window.JA_NET = (function () {
         });
       });
     });
-    return chain.then(function () {
+    flushPromise = chain.then(function () {
       flushing = false;
       lastFlushAt = Date.now();
       emit();
       return jobs.length;
     }, function () { flushing = false; emit(); return jobs.length; });
+    return flushPromise;
   }
 
   /** Public request helper. */

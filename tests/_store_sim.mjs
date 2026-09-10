@@ -52,7 +52,7 @@ function makeSandbox(servedProducts, opts = {}) {
   const fetched = [];
   const sandbox = {
     console,
-    setTimeout, clearTimeout, setInterval, clearInterval,
+    setTimeout, clearTimeout, setInterval, clearInterval, AbortSignal,
     Date, Math, JSON, Number, String, Array, Object, Boolean, Set, Map, Promise,
     fetch: (url) => {
       fetched.push(String(url));
@@ -380,6 +380,27 @@ const offlineFixture = (id, name) => ({
   check("upsertProduct mirrors stock_quantity onto stock",
     !!row2 && Number(row2.stock) === 9 && Number(row2.stock_quantity) === 9,
     row2 ? JSON.stringify({ stock: row2.stock, stock_quantity: row2.stock_quantity }) : "missing");
+}
+
+{
+  const { JA, storage, sandbox } = makeSandbox(WIX.map(online));
+  await JA.ready;
+  check("Household leads default categories", JA.categories()[0].id === "household");
+  storage.set("jaura_categories", JSON.stringify([
+    {id: "beauty", name: "Beauty", order: 2},
+    {id: "household", name: "Household & Kitchen", order: 0},
+    {id: "shoes", name: "Shoes", order: 2},
+    {id: "perfume", name: "Perfume"},
+  ]));
+  check("category ordering preserves every category",
+    JA.categories().map(c => c.id).join(",") === "household,perfume,beauty,shoes");
+  const count = JA.products().length;
+  sandbox.fetch = async () => { throw new Error("offline"); };
+  let failed = false;
+  try { await JA.reloadCatalog(); } catch { failed = true; }
+  check("manual reload reports failure and preserves catalogue", failed && JA.products().length === count);
+  sandbox.fetch = async () => ({ok: true, json: async () => ({products: []})});
+  check("manual reload accepts an empty live catalogue", await JA.reloadCatalog() === 0);
 }
 
 console.log(failures ? `\n${failures} storefront check(s) FAILED` : "\nall storefront checks passed");
