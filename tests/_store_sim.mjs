@@ -340,5 +340,47 @@ const offlineFixture = (id, name) => ({
     JA.stockFor(stocked, "Light blue") === 0);
 }
 
+// ---------------- 9. the owner's moving banner follows EN/FR, stock aliases stay in sync
+{
+  const served = WIX.map(online);
+  const { JA, sandbox, storage } = makeSandbox(served, { phrases: true });
+  await JA.reloadCatalog();
+
+  // The banner ships as English + French fields on the site row; the
+  // storefront picks per language and falls back to English.
+  JA.setBanner("Back to school sale", "ends Sunday", "Soldes de rentrée");
+  sandbox.I18N = { lang: () => "en" };
+  const enBanner = JA.convBannerHTML();
+  check("the moving banner answers English in English",
+    enBanner.includes("Back to school sale") && !enBanner.includes("Soldes de rentrée"),
+    enBanner.slice(0, 80));
+  sandbox.I18N = { lang: () => "fr" };
+  const frBanner = JA.convBannerHTML();
+  check("the moving banner answers French in French",
+    frBanner.includes("Soldes de rentrée") && !frBanner.includes("Back to school sale"),
+    frBanner.slice(0, 80));
+  check("the bold highlight rides along in both languages",
+    enBanner.includes("ends Sunday") && frBanner.includes("ends Sunday"));
+  JA.setBanner("English only banner", "", "");
+  check("a French shopper falls back to the English banner when French is unwritten",
+    JA.convBannerHTML().includes("English only banner"));
+
+  // upsertProduct keeps the two stock aliases in lock-step (the server
+  // prefers stock_quantity), so a caller setting only one never ships the
+  // other as a stale value.
+  await JA.upsertProduct({ id: "jau-sim-stock", name: "Sim stock", priceNgn: 0, stock: 5 });
+  const custom = JSON.parse(storage.get("jaura_custom_products") || "[]");
+  const row = custom.find((p) => String(p.id) === "jau-sim-stock");
+  check("upsertProduct mirrors stock onto stock_quantity",
+    !!row && Number(row.stock) === 5 && Number(row.stock_quantity) === 5,
+    row ? JSON.stringify({ stock: row.stock, stock_quantity: row.stock_quantity }) : "missing");
+  await JA.upsertProduct({ id: "jau-sim-stock2", name: "Sim stock 2", priceNgn: 0, stock_quantity: 9 });
+  const custom2 = JSON.parse(storage.get("jaura_custom_products") || "[]");
+  const row2 = custom2.find((p) => String(p.id) === "jau-sim-stock2");
+  check("upsertProduct mirrors stock_quantity onto stock",
+    !!row2 && Number(row2.stock) === 9 && Number(row2.stock_quantity) === 9,
+    row2 ? JSON.stringify({ stock: row2.stock, stock_quantity: row2.stock_quantity }) : "missing");
+}
+
 console.log(failures ? `\n${failures} storefront check(s) FAILED` : "\nall storefront checks passed");
 process.exit(failures ? 1 : 0);

@@ -373,3 +373,147 @@ def test_merge_marker_is_written_to_supabase(monkeypatch, tmp_path):
     assert catmod.MERGE_MARKER in mirrored
     # Second call is a no-op via the local SQLite marker too.
     assert catmod.merge_categories() is False
+
+
+# ------------------------------------------- issue 6: the durable row itself
+class _ProductsQuery:
+    """Chainable stand-in for select/order/range on the products table."""
+
+    def __init__(self, rows, calls, count=None):
+        self._rows = rows
+        self._calls = calls
+        self._count = count
+        self._start = 0
+        self._end = -1
+
+    def order(self, _col, **_kw):
+        return self
+
+    def range(self, start, end):
+        self._start, self._end = start, end
+        return self
+
+    def execute(self):
+        self._calls.append((self._start, self._end))
+        window = self._rows[self._start:self._end + 1]
+        res = type("Res", (), {"data": window})()
+        if self._count == "exact":
+            res.count = len(self._rows)
+        return res
+
+
+class _ProductsTable:
+    def __init__(self, rows, calls):
+        self._rows = sorted(rows, key=lambda r: str(r.get("id") or ""))
+        self._calls = calls
+
+    def select(self, cols, count=None):
+        return _ProductsQuery(self._rows, self._calls, count)
+
+
+class _ProductsClient:
+    def __init__(self, rows):
+        self.calls = []
+        self._table = _ProductsTable(rows, self.calls)
+
+    def table(self, _name):
+        return self._table
+
+
+def test_merged_folds_dead_table_rows_when_the_tombstone_list_is_empty(
+        monkeypatch, tmp_path):
+    """The EXACT production case: a seed product's products-table row is
+    source="deleted" but the durable growth_settings tombstone write never
+    landed (legacy table). merged() unions the 258 bundled seed rows on
+    every read, so only the dead ROW can keep the product gone. The
+    tombstone list must not be required for suppression."""
+    pid = _seed_id()
+    live_row = {
+        "id": "jau-live-1", "source": "admin", "name": "Live admin piece",
+        "priceNgn": 1000, "priceCfa": 440, "stock": 3, "stock_quantity": 3,
+    }
+    dead_row = {
+        "id": pid, "source": "deleted", "name": "Deleted seed piece",
+        "priceNgn": 0, "priceCfa": 0, "stock": 0, "stock_quantity": 0,
+    }
+    client = _ProductsClient([live_row, dead_row])
+    monkeypatch.setattr(supabase_store, "client", lambda: client)
+    monkeypatch.setattr(supabase_store, "PAGE_SIZE", 50)
+    # EMPTY tombstone list - the growth_settings write failed in production.
+    mem = _MemGrowth([])
+    _wire(monkeypatch, mem)
+    monkeypatch.setattr(catmod, "CATALOG_FILE", str(tmp_path / "c.json"))
+    (tmp_path / "c.json").write_text(json.dumps({"products": [], "deleted": []}))
+
+    merged = catmod.merged(include_hidden=True)
+    ids = {str(p["id"]) for p in merged}
+    assert pid not in ids, "the deleted seed product came back from the dead"
+    assert "jau-live-1" in ids, "the live admin row must still be served"
+    assert len(ids) >= 200, "the rest of the seed catalogue must stay visible"
+
+    # the dead-row walk itself answers the tombstoned id
+    assert supabase_store.dead_product_ids_table() == {pid}
+
+
+def test_a_deleted_row_is_served_again_once_it_is_recreated(monkeypatch,
+                                                            tmp_path):
+    """A later save re-writes the row with source="admin" (and clears the
+    tombstone list). The dead-row fold must NOT keep hiding it - the row's
+    own source is the durable truth in both directions."""
+    pid = _seed_id()
+    client = _ProductsClient([{
+        "id": pid, "source": "admin", "name": "Recreated piece",
+        "priceNgn": 500, "priceCfa": 220, "stock": 1, "stock_quantity": 1,
+    }])
+    monkeypatch.setattr(supabase_store, "client", lambda: client)
+    monkeypatch.setattr(supabase_store, "PAGE_SIZE", 50)
+    mem = _MemGrowth([])
+    _wire(monkeypatch, mem)
+    monkeypatch.setattr(catmod, "CATALOG_FILE", str(tmp_path / "c.json"))
+    (tmp_path / "c.json").write_text(json.dumps({"products": [], "deleted": []}))
+
+    ids = {str(p["id"]) for p in catmod.merged(include_hidden=True)}
+    assert pid in ids, "a recreated row with source=admin must be live again"
+
+
+def test_admin_delete_surfaces_a_tombstone_write_failure(monkeypatch):
+    """The tombstone write used to be swallowed (try/except: pass): the
+    portal reported 'deleted' while the growth_settings write never landed,
+    and the product came back after the next deploy. A failed tombstone
+    must now surface an honest 503 so the admin retries."""
+    import app as appmod
+    from db import execute, init_db
+    from config import Config
+    from _pw import PW
+
+    os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = PW
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD", PW)
+
+    a = appmod.create_app()
+    a.config.update(TESTING=True)
+    init_db()
+    execute("DELETE FROM rate_limits")
+
+    monkeypatch.setattr(Config, "ENV", "production")
+    monkeypatch.setattr(Config, "SUPABASE_URL", "https://fake.supabase.co")
+    monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake")
+    monkeypatch.setattr(catmod, "_prod_source", lambda: True)
+    monkeypatch.setattr(catmod, "_sync_repo_async", lambda: None)
+    monkeypatch.setattr(supabase_store, "delete_products_strict",
+                        lambda ids: True)
+    mem = _MemGrowth(fail_save=True)
+    _wire(monkeypatch, mem)
+
+    email = "jaurastore@gmail.com"
+    with a.test_client() as c:
+        r = c.post("/api/admin/login",
+                   json={"email": email, "password": PW, "recaptcha": ""})
+        assert r.status_code == 200, r.data
+        tok = r.get_json()["csrf"]
+        r = c.delete("/api/admin/products/jau-tomb-2",
+                     headers={"X-CSRF-Token": tok})
+        assert r.status_code == 503, r.data
+        body = r.get_json()
+        assert body["ok"] is False
+        assert "tombstone" in body["error"].lower(), body
+    assert mem.saves >= 1, "the tombstone write must have been attempted"

@@ -890,6 +890,12 @@ const JA = (() => {
 
   function upsertProduct(p) {
     const next = { ...(p || {}) };
+    // Stock travels under two aliases (stock / stock_quantity) and the
+    // server prefers stock_quantity. Keep them in lock-step here, exactly
+    // like catalog.normalize, so a caller that only sets one can never let
+    // a stale copy of the other win on the server.
+    if (next.stock_quantity != null) next.stock = next.stock_quantity;
+    else if (next.stock != null) next.stock_quantity = next.stock;
     if (Number(next.priceNgn) > 0) {
       next.priceCfa = toCfa(next.priceNgn);
       next.compareCfa = Number(next.compareNgn) > 0 ? toCfa(next.compareNgn) : null;
@@ -946,6 +952,23 @@ const JA = (() => {
     // remove it from the in-memory catalogue so it disappears at once
     seed = seed.filter((p) => p.id !== id);
     if (Array.isArray(window.JA_SEED)) window.JA_SEED = window.JA_SEED.filter((p) => p.id !== id);
+    // A queued save for this id can land AFTER the delete (the phone's
+    // outbox retries every 45s) and resurrect the product, because every
+    // save clears the delete tombstone by design. Purge the id's queued
+    // saves BEFORE enqueuing the DELETE so the delete is always the last
+    // word to reach the server.
+    try {
+      if (window.JA_NET && window.JA_NET.discard) {
+        window.JA_NET.discard((job) => {
+          if (!job || job.method !== "POST") return false;
+          if (!/^api\/admin\/products\/?$/.test(String(job.url || ""))) return false;
+          try {
+            const body = typeof job.body === "string" ? JSON.parse(job.body) : null;
+            return !!(body && body.product && String(body.product.id || "") === String(id));
+          } catch (e) { return false; }
+        });
+      }
+    } catch (e) {}
     if (!window.JA_NET) return Promise.resolve({ ok: false });
     return window.JA_NET.api("api/admin/products/" + encodeURIComponent(id), {
       method: "DELETE", queue: true, label: "Delete",
@@ -1558,7 +1581,7 @@ const JA = (() => {
   let _bannerDates = { from: "2026-09-15", to: "2026-09-25" };
   // Owner-written banner (Admin → Settings). Empty = the default
   // delivery-window line built from _bannerDates.
-  let _bannerText = { conv: "", bold: "" };
+  let _bannerText = { conv: "", convFr: "", bold: "" };
   function currentLang() {
     try { return (window.I18N && I18N.lang()) || "en"; } catch (e) { return "en"; }
   }
@@ -1575,13 +1598,17 @@ const JA = (() => {
     }
   }
   function convBannerHTML() {
-    if (_bannerText.conv) {
-      const line = escape(_bannerText.conv);
+    // The owner's banner is two fields now (English + French). A French
+    // shopper reads the French line; when it is unwritten the English line
+    // is the fallback, never a blank bar.
+    const lang = currentLang();
+    const conv = (lang === "fr" && _bannerText.convFr) ? _bannerText.convFr : _bannerText.conv;
+    if (conv) {
+      const line = escape(conv);
       const tail = _bannerText.bold ? ` · <strong>${escape(_bannerText.bold)}</strong>` : "";
       const span = `<span>${line}${tail}</span>`;
       return span + span + span + span;
     }
-    const lang = currentLang();
     const from = formatBannerDay(_bannerDates.from, lang);
     const to = formatBannerDay(_bannerDates.to, lang);
     const line = tx("conv.banner", { from, to });
@@ -1590,13 +1617,19 @@ const JA = (() => {
     return span + span + span + span;
   }
   function paintConvBanner() {
-    const track = document.querySelector(".conv-track");
-    if (track) track.innerHTML = convBannerHTML();
+    try {
+      const track = document.querySelector(".conv-track");
+      if (track) track.innerHTML = convBannerHTML();
+    } catch (e) { /* no banner track on this page (e.g. admin) */ }
   }
   // Admin → Settings saves a custom moving-banner line; call this with the
   // values from api/site. Empty text restores the default delivery banner.
-  function setBanner(conv, bold) {
-    _bannerText = { conv: String(conv || "").trim(), bold: String(bold || "").trim() };
+  function setBanner(conv, bold, convFr) {
+    _bannerText = {
+      conv: String(conv || "").trim(),
+      convFr: String(convFr || "").trim(),
+      bold: String(bold || "").trim(),
+    };
     paintConvBanner();
   }
 
@@ -1632,8 +1665,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=131";
-        const FLYER = "images/brand/logo-flyer.jpg?v=131";
+        const LOGO = "images/brand/logo.jpg?v=132";
+        const FLYER = "images/brand/logo-flyer.jpg?v=132";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -1701,6 +1734,7 @@ const JA = (() => {
     // old `if (site.convBanner)` never cleared the previous text, so the
     // moving banner kept showing something other than what the owner typed.
     if ("convBanner" in site) _bannerText.conv = site.convBanner || "";
+    if ("convBannerFr" in site) _bannerText.convFr = site.convBannerFr || "";
     if ("convBold" in site) _bannerText.bold = site.convBold || "";
     // Mirror the canonical keys for the offline paint pass only. The payment
     // columns are mirrored too: a phone that opens the checkout offline must
@@ -1784,7 +1818,7 @@ const JA = (() => {
           <a href="contact.html">${tx("nav.contact")}</a>
         </nav>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=131" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=132" alt="Jaura" />
         </a>
         <div class="nav-right">
           <div class="lang-switch" role="group" aria-label="${tx("lang.group")}">
@@ -1923,7 +1957,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=131" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=132" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2007,7 +2041,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=131" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=132" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -2029,7 +2063,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=131";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=132";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2074,7 +2108,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=131");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=132");
     document.title = title;
     [
       ["name", "description", description],
@@ -2338,6 +2372,10 @@ const JA = (() => {
         try { sessionStorage.setItem("jaura_lang", next); } catch (err) {}
         try { document.cookie = "jaura_lang=" + next + ";path=/;max-age=31536000;SameSite=Lax"; } catch (err) {}
         if (window.I18N) window.I18N.setLang(next);
+        // The owner's banner is language-aware (English + French fields):
+        // repaint it at once so the moving line switches the moment the
+        // button is tapped, no reload needed.
+        try { paintConvBanner(); } catch (e) {}
         toast(next === "fr" ? tx("toast.langFr") : tx("toast.langEn"));
       });
     });
@@ -2527,7 +2565,7 @@ const JA = (() => {
   ready = loadSeed();
 
   return {
-    ready, CATEGORIES: DEFAULT_CATS, categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner,
+    ready, CATEGORIES: DEFAULT_CATS, categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,
     products, product, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, BULK_QTY,

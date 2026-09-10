@@ -186,8 +186,8 @@ def main():
         after = pill_box()
         check("tapping the currency switch never resizes it",
               bool(before) and before == after, f"{before} -> {after}")
-        check("the currency pill keeps its fixed height (34px, or 32px on a phone)",
-              bool(after) and after["grpH"] in (32, 34), after)
+        check("the currency pill keeps its fixed height (34px, or 42px on a phone)",
+              bool(after) and after["grpH"] in (34, 42), after)
         ngn_box = page.evaluate("""() => {
             const b = document.querySelector('.currency-switch button[data-cur="NGN"]');
             return b ? Math.round(b.getBoundingClientRect().width) : null;

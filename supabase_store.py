@@ -97,8 +97,8 @@ def _res_data(res):
     return (res or {}).get("data") or []
 
 
-def _fetch_product_pages(c):
-    """Yield every live product row from the products table, page by page.
+def _fetch_product_pages(c, include_dead=False):
+    """Yield product rows from the products table, page by page.
 
     Orders by id so a page boundary can never shift between requests (without
     a deterministic order, rows can repeat or vanish across .range() pages).
@@ -106,6 +106,10 @@ def _fetch_product_pages(c):
     a page comes back short but the count says rows remain, the server capped
     the response below our page size, so the window shrinks to what the
     server will actually send and the walk continues to the very last row.
+
+    Rows whose ``source`` marks a tombstone (soft delete / superseded import)
+    are skipped unless ``include_dead`` is set - the tombstone-id walker
+    needs them even though no live catalogue may contain them.
     """
     start = 0
     page_size = PAGE_SIZE
@@ -127,6 +131,8 @@ def _fetch_product_pages(c):
         for r in rows:
             source = str((r or {}).get("source") or "").strip().lower()
             if source in DEAD_SOURCES:
+                if include_dead:
+                    yield r
                 continue                     # a tombstone, not a live product
             yield r
         got = len(rows)
@@ -176,6 +182,38 @@ def products_table_rows():
         return [resolve_image(r) for r in rows]
     except Exception as exc:
         print(f"[supabase] products read failed: {exc}")
+        return None
+
+
+def dead_product_ids_table():
+    """Ids of products-table rows tombstoned (source in DEAD_SOURCES), or None.
+
+    A soft delete writes source="deleted" on the products-table row itself;
+    catalog.merged() folds these ids into the deleted set so a deleted seed
+    product stays gone even when the growth_settings tombstone write failed
+    (the legacy-table failure that used to resurrect products after every
+    redeploy). None means 'could not read', which callers treat as an empty
+    set so an outage neither resurrects a product nor empties the shop.
+    """
+    try:
+        c = client()
+    except Exception as exc:
+        print(f"[supabase] dead product ids read failed: {exc}")
+        return None
+    if c is None:
+        return None
+    try:
+        ids = set()
+        for r in _fetch_product_pages(c, include_dead=True):
+            source = str((r or {}).get("source") or "").strip().lower()
+            if source not in DEAD_SOURCES:
+                continue
+            pid = str((r or {}).get("id") or "").strip()
+            if pid:
+                ids.add(pid)
+        return ids
+    except Exception as exc:
+        print(f"[supabase] dead product ids read failed: {exc}")
         return None
 
 
@@ -453,11 +491,153 @@ def release_product_stock(product_id, qty):
 # mirror is kept only as a boot-time fallback for the test/dev local path.
 
 
+# --------------------------------------------------------------------------
+# The live categories table is legacy and NARROWER than the row the app
+# writes (sometimes with extra NOT NULL columns): a plain upsert used to die
+# with PGRST204 ("Could not find the 'name_fr' column ...") and every Admin
+# category save answered 503 - while the client had already written
+# localStorage, so the rename LOOKED saved and then "went back" on reload.
+# The write therefore repairs its own payload against the LIVE table, the
+# way delivery._upsert_zone_resilient does for delivery_zones:
+#   23502 "null value in column X"   -> fill X from the category being saved
+#   PGRST204/42703 unknown column X  -> drop X (id and name are never dropped)
+#   22P02 wrong type                 -> walk X through 0 -> False -> ""
+# The discovered columns AND the constant that finally satisfied a typed
+# column are cached per worker, so the next save starts from the repaired
+# shape and lands on its first attempt.
+# --------------------------------------------------------------------------
+
+_CAT_CRITICAL_COLUMNS = frozenset({"id", "name"})
+_CATS_SHAPE = {"fill": [], "drop": [], "values": {}}
+_NULL_VALUE_RE = re.compile(r'null value in column "([^"]+)"')
+_PG_MISSING_COLUMN_RE = re.compile(r'column "([^"]+)" of relation')
+_BOOL_HINT_RE = re.compile(
+    r"active|available|require|enabled|visible|flag|hidden|public|confirmed|"
+    r"^is_|^has_")
+_CAT_TYPED_FILL_CHAIN = (0, False, "")
+
+
+def _value_for_cat_column(column, cat):
+    """Best-guess value for a legacy NOT NULL column the app never writes."""
+    c = str(column or "").strip().lower()
+    if c in ("name_fr", "label_fr", "title_fr", "fr"):
+        return cat.get("name_fr") or cat["name"]
+    if c in ("image", "image_url", "photo", "picture", "icon", "thumbnail"):
+        return cat.get("image_url") or ""
+    if _BOOL_HINT_RE.search(c):
+        return bool(cat.get("hidden"))
+    if "time" in c or "date" in c:
+        return cat.get("updated_at") or _now()
+    if c in ("name", "label", "title", "slug", "category", "sort_key"):
+        return cat["name"]
+    # Unrecognised column: the category name is the least-wrong non-null
+    # filler, and a wrong type is corrected by the 22P02 repair below.
+    return cat["name"]
+
+
+def _cat_repair_statement(column, missing=False):
+    if missing:
+        return f"alter table categories add column if not exists {column} text"
+    return f"alter table categories alter column {column} drop not null"
+
+
+def _cats_unsatisfiable(column, original, missing=False):
+    return (f'categories still rejects the save at column "{column}" '
+            f"({str(original)[:160]}). One statement repairs the live table: "
+            f"{_cat_repair_statement(column, missing)}")
+
+
+def _remember_cat_shape(kind, column):
+    if column and column not in _CATS_SHAPE[kind]:
+        _CATS_SHAPE[kind].append(column)
+
+
+def _upsert_categories_resilient(c, rows):
+    """Upsert the category batch, repairing the payload against the live
+    table. One repair per attempt, bounded; the table shape is identical for
+    every row so each repair is applied to the whole batch. Raises
+    RuntimeError naming the offending column and the repair statement when
+    the table cannot be satisfied.
+    """
+    pending = [dict(r) for r in (rows or []) if r]
+    if not pending:
+        return False
+    for r in pending:
+        for col in _CATS_SHAPE["drop"]:
+            if col not in _CAT_CRITICAL_COLUMNS:
+                r.pop(col, None)
+        for col in _CATS_SHAPE["fill"]:
+            r.setdefault(col, _CATS_SHAPE["values"].get(
+                col, _value_for_cat_column(col, r)))
+
+    width0 = max(len(pending[0]), 1)
+    last_column = None
+    last_typed = None
+    typed_step = {}
+    for _attempt in range(2 * width0 + 8):
+        try:
+            c.table("categories").upsert(pending).execute()
+            if last_typed:
+                _CATS_SHAPE["values"][last_typed] = pending[0][last_typed]
+            if _CATS_SHAPE["drop"] or _CATS_SHAPE["fill"]:
+                print("[supabase] categories upsert: table shape "
+                      f"fill={sorted(_CATS_SHAPE['fill'])} "
+                      f"drop={sorted(_CATS_SHAPE['drop'])}")
+            return True
+        except Exception as exc:
+            text = str(exc)
+            m = _NULL_VALUE_RE.search(text)
+            if m and "23502" in text:
+                col = m.group(1)
+                for r in pending:
+                    value = _CATS_SHAPE["values"].get(
+                        col, _value_for_cat_column(col, r))
+                    r[col] = value
+                _remember_cat_shape("fill", col)
+                last_column = col
+                continue
+            m = _MISSING_COLUMN_RE.search(text)
+            if m is None and "42703" in text:
+                m = _PG_MISSING_COLUMN_RE.search(text)
+            if m:
+                col = m.group(1)
+                if col in _CAT_CRITICAL_COLUMNS or all(
+                        col not in r for r in pending):
+                    raise RuntimeError(
+                        _cats_unsatisfiable(
+                            col, text,
+                            missing=all(col not in r for r in pending))
+                    ) from exc
+                for r in pending:
+                    r.pop(col, None)
+                _remember_cat_shape("drop", col)
+                last_column = col
+                continue
+            if ("22P02" in text or "invalid input syntax" in text) and last_column:
+                col = last_column
+                step = typed_step.get(col, -1) + 1
+                if step >= len(_CAT_TYPED_FILL_CHAIN):
+                    raise RuntimeError(_cats_unsatisfiable(col, text)) from exc
+                for r in pending:
+                    r[col] = _CAT_TYPED_FILL_CHAIN[step]
+                typed_step[col] = step
+                last_typed = col
+                continue
+            raise
+    raise RuntimeError(
+        _cats_unsatisfiable(last_column or next(iter(pending[0])),
+                            "too many columns to repair"))
+
+
 def save_categories_table(categories):
     """Upsert the category table into Supabase (replacing the whole set).
 
-    Returns True on success. Removes ids that were deleted locally so a
-    removed category never comes back on the next boot.
+    The write self-heals against the legacy live table (see
+    _upsert_categories_resilient): columns the table lacks are dropped and
+    legacy NOT NULL columns are filled from the category being saved, so a
+    rename/add never dies with a schema error. Returns True on success.
+    Removes ids that were deleted locally so a removed category never comes
+    back on the next boot.
     """
     c = client()
     if c is None:
@@ -480,16 +660,16 @@ def save_categories_table(categories):
     if not rows:
         return False
     try:
-        c.table("categories").upsert(rows).execute()
-        keep = [r["id"] for r in rows]
-        try:
-            c.table("categories").delete().not_.in_("id", keep).execute()
-        except Exception as exc:
-            print(f"[supabase] categories prune failed: {exc}")
-        return True
-    except Exception as exc:
+        _upsert_categories_resilient(c, rows)
+    except RuntimeError as exc:
         print(f"[supabase] categories save failed: {exc}")
         return False
+    keep = [r["id"] for r in rows]
+    try:
+        c.table("categories").delete().not_.in_("id", keep).execute()
+    except Exception as exc:
+        print(f"[supabase] categories prune failed: {exc}")
+    return True
 
 
 def load_categories_table():
