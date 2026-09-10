@@ -17,7 +17,10 @@ Rules this module enforces:
   checkout (or vice versa) is a pricing bug, so `fare_for` returns a currency
   mismatch rather than silently converting.
 * Supabase is the source of truth when it is configured; SQLite mirrors it so
-  the app still starts locally and so tests are deterministic.
+  the app still starts locally and so tests are deterministic. When Supabase
+  is enabled there is NO long-lived multi-worker cache - zones() always
+  re-reads from Supabase, otherwise an edit on worker A would still read
+  stale from worker B's cache (the Lomé 1500-2500 bug).
 """
 import re
 
@@ -75,11 +78,11 @@ def _row_to_zone(row):
     }
 
 
-# Zone cache. Reading the table on every checkout was both slow and unsafe:
-# init_db() runs executescript(), and sqlite3's executescript() implicitly
-# COMMITS any transaction in flight - so calling it from inside checkout would
-# commit a half-finished order. The list is small and only changes when an
-# admin edits it, so it is cached and explicitly invalidated on every write.
+# Zone cache - only for the local SQLite path (tests / dev without Supabase).
+# When Supabase is enabled zones() must NOT use a long-lived cache: Render
+# runs multiple workers, and a cache per worker means worker A saves Lomé
+# 1500-2500, invalidates its own cache, but worker B still serves the old
+# 1000-3000 from its cache - the owner's edit looks like it never stuck.
 _CACHE = {"zones": None}
 
 
@@ -96,9 +99,13 @@ def _supabase_enabled():
 
 
 def _load_all():
-    """Every zone including inactive ones, in display order."""
-    if _CACHE["zones"] is not None:
-        return _CACHE["zones"]
+    """Every zone including inactive ones, in display order.
+
+    When Supabase is configured it is ALWAYS re-read (no cache) - Supabase
+    is the source of truth. SQLite is only a mirror for local boot and
+    deterministic tests. When Supabase is not configured the local SQLite
+    table is the source and a small in-process cache is safe.
+    """
     if _supabase_enabled():
         try:
             from supabase_store import client
@@ -107,14 +114,24 @@ def _load_all():
             if rows is not None:
                 out = [_row_to_zone(r) for r in rows]
                 out.sort(key=lambda z: (z["sort_order"], z["name"]))
-                _CACHE["zones"] = out
                 return out
         except Exception:
-            pass  # fall through to the local mirror
+            pass  # fall through to the local mirror when Supabase read fails
+        try:
+            rows = query("SELECT * FROM delivery_zones")
+        except Exception:
+            init_db()
+            rows = query("SELECT * FROM delivery_zones")
+        out = [_row_to_zone(r) for r in rows]
+        out.sort(key=lambda z: (z["sort_order"], z["name"]))
+        return out
+
+    # Local path (no Supabase) - cached
+    if _CACHE["zones"] is not None:
+        return _CACHE["zones"]
     try:
         rows = query("SELECT * FROM delivery_zones")
     except Exception:
-        # Table not created yet (a database older than this feature).
         init_db()
         rows = query("SELECT * FROM delivery_zones")
     out = [_row_to_zone(r) for r in rows]
@@ -181,15 +198,8 @@ def fare_for(zone_value, currency):
         payload["delivery_fee_min"] = 0
         payload["delivery_fee_max"] = 0
         payload["fare_status"] = "quote"
-        # A quote zone is still a valid choice: the fare is agreed afterwards.
         return True, payload
     if currency and currency != zone["currency"]:
-        # NOT a hard rejection. Currency and zone are chosen independently at
-        # checkout, so blocking here would turn away a naira customer ordering
-        # to Cotonou - a sale the shop has always taken. The fare is agreed
-        # with the customer after payment anyway, so the right move is to
-        # publish no range, flag the mismatch for the operator, and let the
-        # existing Benin/Togo minimum-order rule still apply.
         payload["delivery_fee_min"] = 0
         payload["delivery_fee_max"] = 0
         payload["fare_status"] = "currency_mismatch"
@@ -234,13 +244,72 @@ def validate_zone_payload(payload):
 
 
 def save_zone(zone_id, payload):
-    """Insert or update one zone. Idempotent on the id."""
+    """Insert or update one zone. Idempotent on the id.
+
+    When Supabase is enabled it is the source of truth:
+    - write to Supabase FIRST
+    - re-read from Supabase (what Supabase actually stored)
+    - mirror to SQLite only after Supabase confirmed
+    - on Supabase failure return an error and touch NOTHING locally
+
+    SQLite is a mirror only in that mode, so a failed Supabase write never
+    leaves a local-only row that looks saved but vanishes on the next worker
+    or deploy.
+    """
     clean, error = validate_zone_payload(payload)
     if error:
         return None, error
     clean["id"] = str(zone_id or "").strip().lower()
     if not re.match(r"^[a-z0-9][a-z0-9-]{0,63}$", clean["id"]):
         return None, "id must be a lowercase slug (letters, digits, hyphens)"
+
+    if _supabase_enabled():
+        try:
+            from supabase_store import client
+            c = client()
+            if c is None:
+                raise RuntimeError("Supabase client unavailable")
+            row = dict(clean)
+            # Let DB default fill updated_at; remove explicit None if present
+            row.pop("updated_at", None)
+            # Supabase FIRST
+            c.table("delivery_zones").upsert(row).execute()
+            # Re-read from Supabase - source of truth
+            try:
+                res = c.table("delivery_zones").select("*").eq("id", clean["id"]).limit(1).execute()
+                data = getattr(res, "data", None) or []
+                if data:
+                    saved_zone = _row_to_zone(data[0])
+                else:
+                    # Supabase upsert succeeded but row not returned; use clean
+                    saved_zone = _row_to_zone(clean)
+            except Exception:
+                saved_zone = _row_to_zone(clean)
+
+            # SQLite is mirror only - best effort after Supabase confirmed
+            try:
+                existing = query("SELECT id FROM delivery_zones WHERE id=?", (clean["id"],))
+                cols = ("name", "currency", "fare_min", "fare_max", "kind", "active",
+                        "sort_order", "note")
+                if existing:
+                    execute(
+                        "UPDATE delivery_zones SET name=?, currency=?, fare_min=?, "
+                        "fare_max=?, kind=?, active=?, sort_order=?, note=? WHERE id=?",
+                        tuple(clean[c_] for c_ in cols) + (clean["id"],))
+                else:
+                    execute(
+                        "INSERT INTO delivery_zones (id, name, currency, fare_min, "
+                        "fare_max, kind, active, sort_order, note) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (clean["id"],) + tuple(clean[c_] for c_ in cols))
+                _invalidate()
+            except Exception:
+                # Mirror failure does not fail the save - Supabase is truth
+                _invalidate()
+            return saved_zone, None
+        except Exception as exc:
+            return None, f"Supabase save failed: {exc}. No changes were made."
+
+    # Local path - SQLite is source of truth
     existing = query("SELECT id FROM delivery_zones WHERE id=?", (clean["id"],))
     cols = ("name", "currency", "fare_min", "fare_max", "kind", "active",
             "sort_order", "note")
@@ -255,30 +324,40 @@ def save_zone(zone_id, payload):
             "fare_max, kind, active, sort_order, note) VALUES (?,?,?,?,?,?,?,?,?)",
             (clean["id"],) + tuple(clean[c] for c in cols))
     _invalidate()
-    if _supabase_enabled():
-        try:
-            from supabase_store import client
-            row = dict(clean)
-            row["updated_at"] = None  # let the database default fill it
-            row.pop("updated_at", None)
-            client().table("delivery_zones").upsert(row).execute()
-        except Exception as exc:
-            return None, f"saved locally but Supabase rejected it: {exc}"
     return zone_for(clean["id"]), None
 
 
 def delete_zone(zone_id):
-    """Remove a zone. Never touches stored orders - they keep their snapshot."""
+    """Remove a zone. Never touches stored orders - they keep their snapshot.
+
+    When Supabase is enabled: delete from Supabase FIRST, then mirror to
+    SQLite. A failed Supabase delete returns an error and leaves SQLite
+    untouched, so the admin can retry instead of seeing a local-only delete
+    that reappears on the next worker.
+    """
     zone_id = str(zone_id or "").strip().lower()
+    if not zone_id:
+        return False, "No such zone."
+
+    if _supabase_enabled():
+        try:
+            from supabase_store import client
+            c = client()
+            if c is None:
+                raise RuntimeError("Supabase client unavailable")
+            c.table("delivery_zones").delete().eq("id", zone_id).execute()
+            try:
+                execute("DELETE FROM delivery_zones WHERE id=?", (zone_id,))
+                _invalidate()
+            except Exception:
+                _invalidate()
+            return True, None
+        except Exception as exc:
+            return False, f"Supabase delete failed: {exc}. No changes were made."
+
     rows = query("SELECT id FROM delivery_zones WHERE id=?", (zone_id,))
     if not rows:
         return False, "No such zone."
     execute("DELETE FROM delivery_zones WHERE id=?", (zone_id,))
     _invalidate()
-    if _supabase_enabled():
-        try:
-            from supabase_store import client
-            client().table("delivery_zones").delete().eq("id", zone_id).execute()
-        except Exception as exc:
-            return False, f"deleted locally but Supabase rejected it: {exc}"
     return True, None
