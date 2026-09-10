@@ -30,7 +30,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Bumped to 136 for the centred-header-logo lock + smaller fixed currency
 # pills + Perfume/Parfum default category: style.css, js/store.js and sw.js
 # all changed, so phones must fetch the new ones on the first visit.
-SHARED_TOKEN = "136"
+# Bumped to 138 for the one-row phone header (84px logo) + instant product
+# photo repaint release: sw.js was still on v136 while pages said v137 (a
+# stale-token drift); everything now ships v138 so no phone keeps a v136/v137
+# cache after the service worker swaps its VERSION.
+SHARED_TOKEN = "138"
 
 
 def _image_size(path):

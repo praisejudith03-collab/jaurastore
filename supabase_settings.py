@@ -13,21 +13,68 @@ DEFAULT_SETTINGS = {
     "shop_banner_url": "", "shipping_note": "", "banner_from": "",
     "banner_to": "", "conv_banner": "", "conv_banner_fr": "", "conv_bold": "",
     # Checkout payment details. Served by GET /api/site and edited from the
-    # Admin Portal; the storefront must not carry a hardcoded fallback.
-    "cfa_payment_provider": "", "cfa_payment_name": "",
-    "cfa_payment_account": "", "cfa_payment_instructions": "",
-    "togo_payment_provider": "", "togo_payment_name": "",
-    "togo_payment_account": "", "togo_payment_instructions": "",
-    "naira_payment_bank": "", "naira_payment_name": "",
-    "naira_payment_account": "", "naira_payment_instructions": "",
+    # Admin Portal. The identity fields (provider/holder/account) carry the
+    # owner's real destinations as the floor: an admin-saved value always
+    # wins, but a blank row can never leave the checkout bank sheet empty.
+    "cfa_payment_provider": "MTN MoMo Benin", "cfa_payment_name": "OKORAFOR GIFT",
+    "cfa_payment_account": "01 52 01 99 30", "cfa_payment_instructions": "",
+    "togo_payment_provider": "Moov Money Togo", "togo_payment_name": "OKORAFOR GOODNESS",
+    "togo_payment_account": "+229 01 68 95 31 10", "togo_payment_instructions": "",
+    "naira_payment_bank": "UBA", "naira_payment_name": "OKORAFOR PRAISE",
+    "naira_payment_account": "23474678931", "naira_payment_instructions": "",
 }
+
+# The payment identity floor: the same 9 values as DEFAULT_SETTINGS. When a
+# live site_settings row has a blank (or missing) payment identity column,
+# get_site_settings() serves this value AND writes it back to the row, so
+# "Our bank details" can never go empty again - not after a wiped row, not
+# after a stale-form save, not on a fresh deploy. An admin-saved value always
+# beats the floor; only blanks heal. The *_instructions columns are free text
+# the owner may legitimately leave empty, so they are NOT part of the floor.
+PAYMENT_FALLBACKS = {
+    "cfa_payment_provider": "MTN MoMo Benin",
+    "cfa_payment_name": "OKORAFOR GIFT",
+    "cfa_payment_account": "01 52 01 99 30",
+    "togo_payment_provider": "Moov Money Togo",
+    "togo_payment_name": "OKORAFOR GOODNESS",
+    "togo_payment_account": "+229 01 68 95 31 10",
+    "naira_payment_bank": "UBA",
+    "naira_payment_name": "OKORAFOR PRAISE",
+    "naira_payment_account": "23474678931",
+}
+
+# The heal writes each payment column back at most once per worker: repeated
+# rewrites on every read would be wasted Supabase calls for no benefit (every
+# read already serves the healed value from the merge below).
+_HEALED_COLUMNS = set()
+
 
 def get_site_settings():
     if not enabled() or client() is None:
         raise RuntimeError("Supabase is required for site settings")
     result = client().table("site_settings").select("*").eq("id", 1).limit(1).execute()
     rows = getattr(result, "data", None) or []
-    return {**DEFAULT_SETTINGS, **(rows[0] if rows else {})}
+    row = rows[0] if rows else {}
+    # Every payment identity column blank in the ROW is healed: served from
+    # the floor and (once per worker) written back into Supabase.
+    healed = {col: floor for col, floor in PAYMENT_FALLBACKS.items()
+              if not _stored_text(row.get(col))}
+    merged = {**DEFAULT_SETTINGS, **row}
+    for col, floor in PAYMENT_FALLBACKS.items():
+        if not _stored_text(merged.get(col)):
+            merged[col] = floor
+    fresh = {col: value for col, value in healed.items()
+             if col not in _HEALED_COLUMNS}
+    if fresh:
+        # One write attempt per worker per column, whatever happens: a failed
+        # write only prints (reads still serve the healed value), and a
+        # successful one never repeats until the next deploy.
+        _HEALED_COLUMNS.update(fresh)
+        try:
+            client().table("site_settings").update(fresh).eq("id", 1).execute()
+        except Exception as exc:
+            print(f"[supabase] site_settings payment heal not persisted: {exc}")
+    return merged
 
 
 # --------------------------------------------------------------------------

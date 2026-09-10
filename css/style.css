@@ -3470,10 +3470,11 @@ body[data-page="home"] .just-in-grid .card-media { border-radius: 14px !importan
   body[data-page="home"] .just-in-grid { gap: 8px 6px !important; }
   .lux-reel-copy h2 { font-size: 15px !important; }
   /* Keep the header row inside the viewport on narrow phones. */
-  .nav-right { gap: 4px; }
+  .nav-right { gap: 4px !important; }
+  .header-inner { gap: 6px; }
   .lang-switch button, .currency-switch button { padding: 6px 7px; }
   .icon-btn { width: 34px; }
-  .logo img { max-width: 96px; }
+  .logo img { max-width: 84px; }
   /* Let the shop filter row wrap instead of pushing off-screen. */
   .shop-meta { flex-wrap: wrap; gap: 8px 10px; }
 }
@@ -6269,10 +6270,15 @@ select.ck-zone-select {
 body[data-page="admin"] #site-header { display: none !important; }
 
 @media (max-width: 640px) {
-  .header-inner { grid-template-columns: auto minmax(0, 1fr) !important; gap: 8px; }
+  /* One row for every phone: logo first, then the switches. The gaps match
+     the <=480px phone budget block earlier in this file (84px logo cap +
+     4px switch gaps + 6px header gap) so the declared one-row budget is the
+     one the cascade actually applies - this block sits later in the file,
+     so its old 8px/6px values were overriding that budget. */
+  .header-inner { grid-template-columns: auto minmax(0, 1fr) !important; gap: 6px; }
   .header .logo { display: flex !important; }
   .nav-right [data-open-search] { display: grid !important; }
-  .nav-right { gap: 6px !important; }
+  .nav-right { gap: 4px !important; }
   .icon-btn { width: 34px !important; height: 34px !important; }
 }
 @media (min-width: 641px) and (max-width: 700px) {
@@ -6299,12 +6305,9 @@ body[data-page="admin"] #site-header { display: none !important; }
   }
 }
 
-/* Small phones need two rows — logo centred on its own line, controls
-   centred under it — otherwise the language/currency controls overlap the
-   logo or run off the right edge. Raised from 380px to 480px (2026-09-10):
-   with the EN/FR + ₦/F CFA pills, search, bag and hamburger, one row does
-   not fit beside the logo on any common phone. */
-@media (max-width: 480px) {
+/* Very narrow phones (≤380px) fold to two centred rows. NORMAL phones
+   (381–480px) stay on the single row: logo first, then the switches. */
+@media (max-width: 380px) {
   .header-inner { grid-template-columns: minmax(0, 1fr) !important; padding-block: 8px; }
   .header .logo, .header .nav-right { justify-self: center !important; }
   .header .nav-right { flex-wrap: wrap; justify-content: center; max-width: 100%; }
