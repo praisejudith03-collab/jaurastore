@@ -72,8 +72,16 @@ function makeSandbox(servedProducts, opts = {}) {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(storeSrc, sandbox, { filename: "js/store.js" });
+  if (opts.phrases) {
+    // The real French vocabulary (js/store.js displayOptionValue reads
+    // window.I18N_OPTION_VALUES from it), so a colour assertion below proves
+    // the shipped table, not a copy of it.
+    vm.runInContext(
+      readFileSync(path.join(root, "js", "i18n-phrases.js"), "utf8"),
+      sandbox, { filename: "js/i18n-phrases.js" });
+  }
   const JA = vm.runInContext("JA", sandbox);
-  return { JA, storage, fetched };
+  return { JA, storage, fetched, sandbox };
 }
 
 const online = (p) => ({ ...p, online: true });
@@ -249,6 +257,87 @@ const offlineFixture = (id, name) => ({
     id: "z", stock_status: "in", option_stock: { S: 0, M: 0 } });
   check("a product whose every variant is 0 is sold out",
     zero.stock === 0);
+}
+
+// ------------------------- 8. the French storefront actually reads French
+{
+  // Every assertion below runs against the REAL js/store.js and the REAL
+  // js/i18n-phrases.js vocabulary loaded into the same sandbox.
+  const served = WIX.map(online);
+  const { JA, sandbox } = makeSandbox(served, { phrases: true });
+  await JA.reloadCatalog();
+
+  const empty = JA.CATEGORIES.filter((c) => !String(c.nameFr || "").trim()).map((c) => c.id);
+  check("every default category carries a French name", empty.length === 0,
+    empty.length ? "missing nameFr: " + empty.join(", ") : "all " + JA.CATEGORIES.length + " filled");
+
+  // English first: with no I18N loaded at all the shop must answer English.
+  const p = JA.products().find((x) => x.id === "wix-001");
+  check("before switching, the catalogue answers English",
+    !JA.inFrench() && JA.displayName(p) === p.name, JA.displayName(p));
+
+  // The switch itself: same row, same catalogue, French answer.
+  sandbox.I18N = { lang: () => "fr" };
+  check("a French shopper reads the French product name",
+    JA.inFrench() && JA.displayName(p) === "10000 mah batterie externe", JA.displayName(p));
+  check("a French shopper reads the French category name",
+    JA.categoryName("beauty") === "Beauté & soins" && JA.categoryName("shoes") === "Chaussures",
+    JA.categoryName("beauty") + " / " + JA.categoryName("shoes"));
+  check("a product with no French name falls back to English, never blank",
+    JA.displayName({ ...p, nameFr: "" }) === p.name);
+
+  // Server rows may answer with either spelling of the French columns.
+  const snake = JA.normalizeServerProduct({
+    id: "jau-snake", name: "Snake Row", name_fr: "Ligne serpent",
+    description_fr: "Décrite en français", stock: 4 });
+  check("name_fr / description_fr fold onto nameFr / descriptionFr",
+    snake.nameFr === "Ligne serpent" && snake.descriptionFr === "Décrite en français",
+    snake.nameFr + " / " + snake.descriptionFr);
+  check("camelCase French wins over a stale snake_case column",
+    JA.normalizeServerProduct({ id: "jau-both", stock: 1,
+      nameFr: "Gagnant", name_fr: "Perdant" }).nameFr === "Gagnant");
+  check("a row with no French at all is returned unchanged (same object)",
+    (() => { const row = { id: "jau-none", stock: 1 };
+             return JA.normalizeServerProduct(row) === row; })());
+
+  const bilingual = { description: "English copy", descriptionFr: "Texte en français" };
+  check("displayDescription answers the French copy in French",
+    JA.displayDescription(bilingual) === "Texte en français");
+  sandbox.I18N = { lang: () => "en" };
+  check("displayDescription answers the English copy in English",
+    JA.displayDescription(bilingual) === "English copy");
+  sandbox.I18N = { lang: () => "fr" };
+  check("a missing French description falls back to English, not to blank",
+    JA.displayDescription({ description: "Only English" }) === "Only English");
+
+  // Option VALUES: the label translates, the identity does not.
+  const opt = { title: "Colour", type: "DROP_DOWN", values: ["Black", "Light blue"] };
+  check("a French shopper reads the colour in French",
+    JA.displayOptionValue(opt, "Black") === "Noir"
+    && JA.displayOptionValue(opt, "Light blue") === "Bleu clair",
+    JA.displayOptionValue(opt, "Black") + " / " + JA.displayOptionValue(opt, "Light blue"));
+  check("any capitalisation of a known colour translates",
+    JA.displayOptionValue(opt, "black") === "Noir");
+  check("displayOptionRaw keeps the untranslated variant identity",
+    JA.displayOptionRaw("Black") === "Black" && JA.displayOptionRaw(null) === "");
+  check("a hex swatch has no word to translate",
+    JA.displayOptionValue({ type: "COLOR" }, "#800080") === "");
+  check("an unknown option value is shown exactly as typed",
+    JA.displayOptionValue(opt, "Chartreuse") === "Chartreuse");
+  check("a per-product French value list wins over shared vocabulary",
+    JA.displayOptionValue({ title: "Colour", values: ["Black"],
+      valuesFr: ["Noir profond"] }, "Black") === "Noir profond");
+
+  // The regression that would actually cost money: if the French label ever
+  // reached the stock lookup, optionStock (keyed by the RAW value) would miss
+  // and the variant would sell from the product total instead.
+  const stocked = { id: "jau-fr-stock", name: "Stocked", nameFr: "En stock",
+                    options: [opt], stock: 9, optionStock: { Black: 3, "Light blue": 0 } };
+  check("stock is found by the raw value, not by the French label",
+    JA.stockFor(stocked, "Black") === 3 && JA.stockFor(stocked, "Noir") === 9,
+    "Black=" + JA.stockFor(stocked, "Black") + " Noir=" + JA.stockFor(stocked, "Noir"));
+  check("a sold-out variant is still sold out in French",
+    JA.stockFor(stocked, "Light blue") === 0);
 }
 
 console.log(failures ? `\n${failures} storefront check(s) FAILED` : "\nall storefront checks passed");

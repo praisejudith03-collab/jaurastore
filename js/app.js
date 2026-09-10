@@ -269,6 +269,27 @@ function productSizes(p) {
   });
   return [...new Set(out)];
 }
+/** The visible label for a variant (colour/size) value.
+ *
+ * Translation is for reading only: every data-* attribute, cart line and order
+ * row keeps the raw value, because that string is the variant's identity -
+ * optionStock is keyed by it and stock would silently read 0 if the French
+ * label ever reached it. */
+function variantLabel(p, value) {
+  const raw = String(value == null ? "" : value);
+  if (!raw) return "";
+  let prod = p;
+  // A stored order line is not a product row - it carries the id only, so look
+  // the variant table up from the catalogue. Missing product = shared
+  // vocabulary only, which is still a correct label.
+  if (!prod || !Array.isArray(prod.options)) {
+    const id = p && p.id;
+    prod = null;
+    if (id) { try { prod = JA.product(id) || null; } catch (e) { prod = null; } }
+  }
+  const list = (prod && Array.isArray(prod.options)) ? prod.options : [];
+  return JA.displayOptionValue(list.length ? list[0] : null, raw);
+}
 function translateOptionTitle(title) {
   const s = String(title || "").trim();
   if (window.I18N && I18N.lang() === "fr") {
@@ -280,6 +301,7 @@ function translateOptionTitle(title) {
     if (/scents?/.test(lower)) return "Parfum";
     if (/type/.test(lower)) return "Type";
     if (/number/.test(lower)) return "Nombre";
+    if (/quantity/.test(lower)) return "Quantité";
   }
   return s;
 }
@@ -339,7 +361,7 @@ function paintFilterDrawer(baseList) {
       <h3>${t("filt.color")}</h3>
       ${colors.length ? colors.map((c) => `
         <button type="button" class="filt-row ${shopFilter.color === c ? "is-on" : ""}" data-fcolor="${JA.escape(c)}">
-          <span>${JA.escape(c)}</span>
+          <span>${JA.escape(JA.displayOptionValue(null, c))}</span>
           <i>${colorCount[c]}</i>
         </button>`).join("") : `<p class="filt-empty">${t("filt.noColor")}</p>`}
     </section>
@@ -347,7 +369,7 @@ function paintFilterDrawer(baseList) {
       <h3>${t("filt.size")}</h3>
       ${sizes.length ? sizes.map((s) => `
         <button type="button" class="filt-row ${shopFilter.size === s ? "is-on" : ""}" data-fsize="${JA.escape(s)}">
-          <span>${JA.escape(s)}</span>
+          <span>${JA.escape(JA.displayOptionValue(null, s))}</span>
           <i>${sizeCount[s]}</i>
         </button>`).join("") : `<p class="filt-empty">${t("filt.noSize")}</p>`}
     </section>
@@ -631,7 +653,7 @@ function paintProduct(root, p) {
   try { JA.track("view", { id: p.id, name: p.name, page: "product" }); } catch (e) {}
   try {
     const name = JA.displayName(p);
-    const desc = String(p.description || "").trim() || (name + " at Jaura Store. Pay in ₦ or F CFA.");
+    const desc = String(JA.displayDescription(p) || "").trim() || (name + " at Jaura Store. Pay in ₦ or F CFA.");
     const url = (JA.SITE || "https://jaurastore.com.ng") + "/product.html?id=" + encodeURIComponent(p.id);
     const img = (p.images && p.images[0]) || p.image;
     const cur = Number(p.priceNgn) > 0 ? "NGN" : "XOF";
@@ -669,9 +691,13 @@ function paintProduct(root, p) {
     const btns = (opt.values || []).map((v) => {
       const hex = namedSwatch(v);
       const showDot = isColor && hex;
-      return `<button type="button" class="opt-chip${showDot ? " has-dot" : ""}" data-opt="${oi}" data-val="${JA.escape(v)}">
+      // data-val carries the RAW value - it is the variant's identity (the key
+      // of optionStock, the cart line, the order row). Only the visible <span>
+      // is translated, so a French shopper reads "Noir" while the shop still
+      // sells and stocks the variant stored as "Black".
+      return `<button type="button" class="opt-chip${showDot ? " has-dot" : ""}" data-opt="${oi}" data-val="${JA.escape(JA.displayOptionRaw(v))}">
         ${showDot ? `<i class="opt-dot" style="background:${hex}"></i>` : ""}
-        <span>${JA.escape(/^#/.test(v) ? "" : v) || ""}</span>
+        <span>${JA.escape(JA.displayOptionValue(opt, v))}</span>
       </button>`;
     }).join("");
     return `<div class="pdp-opt" data-opt-wrap="${oi}">
@@ -679,8 +705,10 @@ function paintProduct(root, p) {
       <div class="swatches">${btns}</div>
     </div>`;
   }).join("");
-  const desc = String(p.description || "").trim();
-  const showDesc = desc && desc.toLowerCase() !== String(p.name || "").toLowerCase();
+  const desc = String(JA.displayDescription(p) || "").trim();
+  // Compare against the name in the SAME language: a row whose French
+  // description merely repeats its French name is still an empty description.
+  const showDesc = desc && desc.toLowerCase() !== String(JA.displayName(p) || "").toLowerCase();
   const extra = (p.additionalInfo || []).map((sec) =>
     `<div class="pdp-info"><strong>${JA.escape(sec.title || t("pdp.details"))}</strong><p>${JA.escape(sec.description || "")}</p></div>`
   ).join("");
@@ -980,7 +1008,7 @@ function renderCart() {
         <td><a href="product.html?id=${i.id}"><img src="${JA.asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a></td>
         <td>
           <a href="product.html?id=${i.id}"><strong>${JA.escape(JA.displayName(i.product))}</strong></a>
-          ${i.color ? `<div class="card-cat">${JA.escape(i.color)}</div>` : ""}
+          ${i.color ? `<div class="card-cat">${JA.escape(variantLabel(i.product, i.color))}</div>` : ""}
         </td>
         <td>${i.bulk ? `<s>${JA.money(i.unit, i.cur)}</s> ${JA.money(i.payUnit, i.cur)}` : JA.priceHTML(i.product)}${i.bulk ? `<div class="bulk-tag">${t("cart.bulk")}</div>` : ""}</td>
         <td>
@@ -1104,7 +1132,7 @@ function showOrderDone(order) {
       ${((JA.getProof && JA.getProof(order.id, order.proof)) || (String(order.proof || "").startsWith("data:") ? order.proof : "")) ? `<p class="proof-label">${t("ck.uploadReceipt")}</p><img class="proof-preview" src="${(JA.getProof && JA.getProof(order.id, order.proof)) || order.proof}" alt="Payment screenshot" />` : ""}
       <table class="ck-table" style="margin-top:22px">
         <thead><tr><th>${t("ck.product")}</th><th>${t("ck.total")}</th></tr></thead>
-        <tbody>${order.items.map((i) => `<tr><td>${i.qty}× ${JA.escape(i.name)}${i.color ? " · " + JA.escape(i.color) : ""}</td><td>${JA.money(i.price * i.qty, order.currency)}</td></tr>`).join("")}</tbody>
+        <tbody>${order.items.map((i) => `<tr><td>${i.qty}× ${JA.escape(i.name)}${i.color ? " · " + JA.escape(variantLabel(i, i.color)) : ""}</td><td>${JA.money(i.price * i.qty, order.currency)}</td></tr>`).join("")}</tbody>
         <tfoot><tr class="ck-total"><th>${t("ck.total")}</th><td>${JA.money(order.total, order.currency)}</td></tr></tfoot>
       </table>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:22px">
@@ -1176,7 +1204,7 @@ function paintCheckoutTotals(form) {
         <td>
           <div class="ck-line">
             <img src="${JA.asset(i.product.image)}" alt="" onerror="fallbackImg(event)" />
-            <span>${JA.escape(JA.displayName(i.product))}${i.color ? " — " + JA.escape(i.color) : ""} <b>× ${i.qty}</b></span>
+            <span>${JA.escape(JA.displayName(i.product))}${i.color ? " — " + JA.escape(variantLabel(i.product, i.color)) : ""} <b>× ${i.qty}</b></span>
           </div>
         </td>
         <td>${JA.money(JA.priceOf(i.product, cur) * i.qty, cur)}</td>

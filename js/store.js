@@ -90,21 +90,24 @@ const JA = (() => {
     return s;
   };
 
+  // Every default carries BOTH names. A French shopper must never see an
+  // English category label just because the owner has not typed one yet: these
+  // are the fallbacks categoryName() uses when the stored row has no nameFr.
   const DEFAULT_CATS = [
-    { id: "clothing", name: "Clothings for men and women", image: "images/categories/fashion.jpg" },
-    { id: "household", name: "Household items", image: "images/categories/household.jpg" },
-    { id: "ankara", name: "Ankara ready to wear", image: "images/categories/fashion.jpg" },
-    { id: "accessories", name: "Accessories", image: "images/categories/gadgets.jpg" },
+    { id: "clothing", name: "Clothings for men and women", nameFr: "Vêtements homme et femme", image: "images/categories/fashion.jpg" },
+    { id: "household", name: "Household items", nameFr: "Articles ménagers", image: "images/categories/household.jpg" },
+    { id: "ankara", name: "Ankara ready to wear", nameFr: "Ankara prêt-à-porter", image: "images/categories/fashion.jpg" },
+    { id: "accessories", name: "Accessories", nameFr: "Accessoires", image: "images/categories/gadgets.jpg" },
     { id: "beauty", name: "Beauty & skincare", nameFr: "Beauté & soins", image: "images/categories/beauty.jpg" },
-    { id: "shoes", name: "Shoes", image: "images/categories/shoes.jpg" },
-    { id: "gadgets", name: "Gadgets / Electronics", image: "images/categories/gadgets.jpg" },
-    { id: "packaging", name: "Packaging", image: "images/categories/household.jpg" },
-    { id: "bags", name: "Bags", image: "images/categories/bags.jpg" },
-    { id: "hair-care", name: "Hair care", image: "images/categories/beauty.jpg" },
-    { id: "nails", name: "Nails", image: "images/categories/beauty.jpg" },
-    { id: "gift-set", name: "Gift set", image: "images/categories/household.jpg" },
-    { id: "children", name: "Children items", image: "images/categories/fashion.jpg" },
-    { id: "decor", name: "Decor", image: "images/categories/household.jpg" },
+    { id: "shoes", name: "Shoes", nameFr: "Chaussures", image: "images/categories/shoes.jpg" },
+    { id: "gadgets", name: "Gadgets / Electronics", nameFr: "Gadgets / Électronique", image: "images/categories/gadgets.jpg" },
+    { id: "packaging", name: "Packaging", nameFr: "Emballage", image: "images/categories/household.jpg" },
+    { id: "bags", name: "Bags", nameFr: "Sacs", image: "images/categories/bags.jpg" },
+    { id: "hair-care", name: "Hair care", nameFr: "Soins des cheveux", image: "images/categories/beauty.jpg" },
+    { id: "nails", name: "Nails", nameFr: "Ongles", image: "images/categories/beauty.jpg" },
+    { id: "gift-set", name: "Gift set", nameFr: "Coffret cadeau", image: "images/categories/household.jpg" },
+    { id: "children", name: "Children items", nameFr: "Articles pour enfants", image: "images/categories/fashion.jpg" },
+    { id: "decor", name: "Decor", nameFr: "Décoration", image: "images/categories/household.jpg" },
   ];
 
   // Static fallbacks only. The live values come from GET /api/site (whose
@@ -191,8 +194,34 @@ const JA = (() => {
   // whole shop rendered "Out of stock" with Add-to-cart dead. Translate the
   // public shape into the numeric one the UI expects, without ever inventing
   // a count for a product the server says is unavailable.
+  /** Fold the snake_case French aliases onto the camelCase keys the
+   * storefront reads.
+   *
+   * Two spellings of the same column reach the browser depending on which
+   * path served the row: the products table stores quoted camelCase
+   * ("nameFr"), while the categories table and a few older mirror paths use
+   * snake_case (name_fr). Without this the French name silently disappears on
+   * those rows - the shop renders English while everything around it is
+   * French, which reads as a bug to the shopper.
+   *
+   * camelCase always wins, and the input object is returned UNCHANGED (same
+   * identity) when there is nothing to fold, so rows that already use the
+   * canonical keys are not copied on every catalogue load. */
+  function foldFrenchAliases(p) {
+    if (!p || typeof p !== "object") return p;
+    const pick = (a, b) => (a != null && String(a).trim() ? a : b);
+    const nameFr = pick(p.nameFr, pick(p.name_fr, ""));
+    const descriptionFr = pick(p.descriptionFr, pick(p.description_fr, ""));
+    if (!nameFr && !descriptionFr) return p;
+    const out = { ...p };
+    if (nameFr) out.nameFr = String(nameFr);
+    if (descriptionFr) out.descriptionFr = String(descriptionFr);
+    return out;
+  }
+
   function normalizeServerProduct(p) {
     if (!p || typeof p !== "object") return p;
+    p = foldFrenchAliases(p);
     // An admin row (?all=1) already carries the real number: keep it exactly.
     if (typeof p.stock === "number") return p;
     const out = { ...p };
@@ -436,6 +465,58 @@ const JA = (() => {
       if (window.I18N && I18N.lang() === "fr" && p.nameFr) return p.nameFr;
     } catch (e) {}
     return p.name || "";
+  }
+
+  /** True only when the storefront is being read in French. */
+  function inFrench() {
+    try { return !!(window.I18N && I18N.lang() === "fr"); } catch (e) { return false; }
+  }
+
+  /** The product's description in the language being read.
+   *
+   * Falls back to English rather than to blank: a French shopper always sees
+   * some copy. An empty string is a real answer when the row has no
+   * description in either language - callers that invent a marketing sentence
+   * for that case must still do so themselves. */
+  function displayDescription(p) {
+    if (!p) return "";
+    if (inFrench() && p.descriptionFr) return p.descriptionFr;
+    return p.description || "";
+  }
+
+  /** An option VALUE in the language being read.
+   *
+   * This translates the LABEL only. The raw value stays the identity of the
+   * variant: it is what optionStock is keyed by, what the cart line stores and
+   * what the order writes to Postgres. Never put the return value of this
+   * function into data-val or an order payload - see displayOptionRaw(). */
+  function displayOptionValue(opt, value) {
+    const raw = String(value == null ? "" : value);
+    if (!raw) return "";
+    // Colour swatches are stored as hex: there is no word to translate, and
+    // the chip deliberately renders nothing next to the dot.
+    if (/^#[0-9a-fA-F]{3,8}$/.test(raw)) return "";
+    if (!inFrench()) return raw;
+    // A per-product French value list wins, matched positionally, so the owner
+    // can translate a bespoke option without touching shared vocabulary.
+    const fr = opt && Array.isArray(opt.valuesFr) ? opt.valuesFr : null;
+    const en = opt && Array.isArray(opt.values) ? opt.values : null;
+    if (fr && en) {
+      const at = en.findIndex((v) => String(v) === raw);
+      if (at >= 0 && fr[at]) return String(fr[at]);
+    }
+    const table = window.I18N_OPTION_VALUES || null;
+    if (table) {
+      const hit = table[raw] || table[raw.toLowerCase()];
+      if (hit) return String(hit);
+    }
+    return raw;
+  }
+
+  /** The untranslated option value - the variant's identity. Use this for
+   * data-val, the cart and order payloads, never the translated label. */
+  function displayOptionRaw(value) {
+    return String(value == null ? "" : value);
   }
 
   function normalizeCatList(list) {
@@ -2422,9 +2503,25 @@ const JA = (() => {
     document.dispatchEvent(new CustomEvent("ja:rerender"));
   });
   document.addEventListener("ja:lang", () => {
+    // Order matters, and the SECOND I18N.apply() is the important half.
+    //
+    // 1. mountChrome()  - rebuilds header/footer/menu in the new language.
+    // 2. I18N.apply()   - translates what mountChrome just wrote.
+    // 3. ja:rerender    - the page repaints (product grid, product page, cart)
+    //                     from the store, which now answers French names and
+    //                     descriptions through displayName/displayDescription.
+    // 4. I18N.apply()   - AGAIN. Step 3 replaced big parts of the document with
+    //                     freshly built English template strings (the phrases
+    //                     are baked into the markup as it is generated, after
+    //                     step 2 ran), so without a second sweep the newly
+    //                     painted controls stay English until you reload.
+    // 5. banner         - the moving line is text too, and it is owned by
+    //                     site config rather than by the rerender.
     mountChrome();
-    if (window.I18N) I18N.apply();
+    if (window.I18N) { try { I18N.apply(); } catch (e) {} }
     document.dispatchEvent(new CustomEvent("ja:rerender"));
+    if (window.I18N) { try { I18N.apply(); } catch (e) {} }
+    try { paintConvBanner(); } catch (e) {}
   });
 
   ready = loadSeed();
@@ -2432,6 +2529,7 @@ const JA = (() => {
   return {
     ready, CATEGORIES: DEFAULT_CATS, categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner,
     products, product, searchProducts, categoryName, displayName,
+    displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, BULK_QTY,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,

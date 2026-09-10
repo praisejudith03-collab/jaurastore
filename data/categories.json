@@ -3,21 +3,21 @@
     {
       "id": "household",
       "name": "Household items",
-      "nameFr": "",
+      "nameFr": "Articles ménagers",
       "image": "images/categories/household.jpg",
       "hidden": false
     },
     {
       "id": "ankara",
       "name": "Ankara ready to wear",
-      "nameFr": "",
+      "nameFr": "Ankara prêt-à-porter",
       "image": "images/categories/fashion.jpg",
       "hidden": false
     },
     {
       "id": "accessories",
       "name": "Accessories",
-      "nameFr": "",
+      "nameFr": "Accessoires",
       "image": "images/categories/gadgets.jpg",
       "hidden": false
     },
@@ -31,49 +31,49 @@
     {
       "id": "shoes",
       "name": "Shoes",
-      "nameFr": "",
+      "nameFr": "Chaussures",
       "image": "images/categories/shoes.jpg",
       "hidden": false
     },
     {
       "id": "gadgets",
       "name": "Gadgets / Electronics",
-      "nameFr": "",
+      "nameFr": "Gadgets / Électronique",
       "image": "images/categories/gadgets.jpg",
       "hidden": false
     },
     {
       "id": "bags",
       "name": "Bags",
-      "nameFr": "",
+      "nameFr": "Sacs",
       "image": "images/categories/bags.jpg",
       "hidden": false
     },
     {
       "id": "hair-care",
       "name": "Hair care",
-      "nameFr": "",
+      "nameFr": "Soins des cheveux",
       "image": "images/categories/beauty.jpg",
       "hidden": false
     },
     {
       "id": "gift-set",
       "name": "Gift Sets & Packaging",
-      "nameFr": "",
+      "nameFr": "Coffrets cadeaux & emballage",
       "image": "images/categories/household.jpg",
       "hidden": false
     },
     {
       "id": "children",
       "name": "Children items",
-      "nameFr": "",
+      "nameFr": "Articles pour enfants",
       "image": "images/categories/fashion.jpg",
       "hidden": false
     },
     {
       "id": "decor",
       "name": "Decor",
-      "nameFr": "",
+      "nameFr": "Décoration",
       "image": "images/categories/household.jpg",
       "hidden": false
     }

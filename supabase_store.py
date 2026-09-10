@@ -225,8 +225,31 @@ _PRODUCT_ALIASES = (
 )
 
 
+def _fold_french_aliases(p):
+    """Fold snake_case French copy onto the camelCase keys the app reads.
+
+    The production products table grew BOTH a quoted "nameFr" column and an
+    unquoted name_fr one - the schema comments call the latter dead legacy
+    junk and forbid dropping it, but live rows still carry it. Which spelling
+    a row answers with therefore depends on how it was written, and a French
+    description stored under description_fr would read back as missing, so the
+    shop would serve English while everything around it was French.
+
+    camelCase always wins; the snake_case value is only used when the
+    camelCase one is absent or blank, so an owner's translation is never
+    overwritten by a stale column.
+    """
+    for camel, snake in (("nameFr", "name_fr"), ("descriptionFr", "description_fr")):
+        have = p.get(camel)
+        if have is None or not str(have).strip():
+            fallback = p.get(snake)
+            if fallback is not None and str(fallback).strip():
+                p[camel] = fallback
+    return p
+
+
 def _canonicalize_product(row, _c=None):
-    p = dict(row or {})
+    p = _fold_french_aliases(dict(row or {}))
     if p.get("image_url") is None and p.get("image") is not None:
         p["image_url"] = p["image"]
     if p.get("image") is None and p.get("image_url") is not None:

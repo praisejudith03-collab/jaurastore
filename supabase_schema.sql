@@ -19,7 +19,7 @@
 -- ------------------------------------------------------------ products
 -- Canonical columns (source of truth): id, name, category, priceNgn,
 -- priceCfa, compareNgn, compareCfa, image_url, images, stock_quantity,
--- description, featured, online, updated_at. The legacy camelCase
+-- description, descriptionFr, featured, online, updated_at. The legacy camelCase
 -- columns below (image, stock, ...) are kept as compatibility aliases for
 -- the same-origin test/dev path and older rows; production writes both.
 -- camelCase keys MUST be quoted: Postgres folds unquoted identifiers to
@@ -32,6 +32,7 @@ create table if not exists products (
   slug             text,
   name             text not null,
   "nameFr"         text,
+  "descriptionFr"  text,
   category         text,
   "priceCfa"       numeric,
   "compareCfa"     numeric,
@@ -61,16 +62,14 @@ create table if not exists products (
 );
 
 -- Repair an EXISTING products table hand-built narrower than the row the app
--- writes. Only adds columns; never drops or rewrites data. Run it if the
--- Render log says "[supabase] products upsert: stored without columns [...]"
--- or "products upsert failed". It covers every column in
--- supabase_store._CRITICAL_PRODUCT_COLUMNS (a product cannot be sold without
--- them) - "priceCfa" and "priceNgn" were missing from this block while the
--- create-table above already had them, which is what left the production
--- table unable to hold the two price columns the app writes on every save.
--- ("id" is the primary key and cannot be added to an existing table.)
+-- writes. Add-only: never drops or rewrites data. Run it if the Render log
+-- says "[supabase] products upsert: stored without columns [...]" or
+-- "products upsert failed". It covers every column in
+-- supabase_store._CRITICAL_PRODUCT_COLUMNS - a product cannot be sold without
+-- them. ("id" is the primary key and cannot be added to an existing table.)
 alter table products add column if not exists name               text;
 alter table products add column if not exists "nameFr"           text;
+alter table products add column if not exists "descriptionFr"    text;
 alter table products add column if not exists "priceCfa"         numeric;
 alter table products add column if not exists "compareCfa"       numeric;
 alter table products add column if not exists "priceNgn"         numeric;

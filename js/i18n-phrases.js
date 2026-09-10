@@ -373,7 +373,126 @@ window.I18N_PHRASES = {
   "7. Governing law": "7. Droit applicable",
   "These terms are governed by the laws of the Federal Republic of Nigeria, without affecting your statutory rights as a consumer.":
     "Ces conditions sont régies par les lois de la République fédérale du Nigeria, sans affecter vos droits légaux de consommateur.",
+
+  /* ------------------------------------------------------------ availability
+   * Built in js/admin.js as literal strings, so they never pass through the
+   * pdp.* dictionary keys. */
+  "Sold out": "Épuisé",
+  "Out of stock": "Rupture de stock",
+  "Choose <strong>Out of stock</strong> to stop sales. Choose <strong>In stock</strong> and set a quantity so customers can add it to cart.":
+    "Choisissez <strong>Rupture de stock</strong> pour arrêter les ventes. Choisissez <strong>En stock</strong> et indiquez une quantité pour que les clients puissent l'ajouter au panier.",
+
+  /* ------------------------------------------------------- basket / product
+   * The dictionary already answers these for data-i18n text; the entries below
+   * catch the same words when JavaScript writes them directly. */
+  "Add to cart": "Ajouter au panier",
+  "Add to Cart": "Ajouter au panier",
+  "Colour": "Couleur",
+  "Color": "Couleur",
+  "Colors": "Couleurs",
+  "Shoe size": "Pointure",
+  "Size": "Taille",
+  "Length": "Longueur",
+  "Scents": "Parfum",
+  "Number": "Nombre",
+  "It's quantity": "Quantité",
+
+  /* ------------------------------------------------------------- categories
+   * Safety net for a category label the owner typed in English: the stored
+   * row's nameFr always wins, then js/store.js DEFAULT_CATS. These entries
+   * only catch a bare English name reaching the page some other way. */
+  "Clothings for men and women": "Vêtements homme et femme",
+  "Household items": "Articles ménagers",
+  "Ankara ready to wear": "Ankara prêt-à-porter",
+  "Accessories": "Accessoires",
+  "Beauty & skincare": "Beauté & soins",
+  "Shoes": "Chaussures",
+  "Gadgets / Electronics": "Gadgets / Électronique",
+  "Packaging": "Emballage",
+  "Bags": "Sacs",
+  "Hair care": "Soins des cheveux",
+  "Nails": "Ongles",
+  "Gift set": "Coffret cadeau",
+  "Children items": "Articles pour enfants",
+  "Decor": "Décoration",
 };
+
+/* ==========================================================================
+ * Option VALUE vocabulary (colours, scents, pack sizes).
+ *
+ * This is a LABEL map, nothing more. The catalogue stores one spelling per
+ * variant ("Black", "Light blue", "41") and that raw string is the variant's
+ * IDENTITY: js/store.js stockFor() reads optionStock by it, the cart line
+ * stores it and the order writes it to Postgres. js/store.js
+ * displayOptionValue() returns the French word for the visible <span> while
+ * every data-val attribute and every payload keeps the raw value - see
+ * displayOptionRaw(). Translating the identity instead would make stock read
+ * 0 for a French shopper and sell a variant that does not exist.
+ *
+ * A value with no entry here (a shoe size, a quantity, an option the owner
+ * invented) is shown exactly as typed.
+ * ========================================================================== */
+window.I18N_OPTION_VALUES = (function () {
+  var base = {
+    /* colours */
+    "Ash": "Gris cendré",
+    "Beige": "Beige",
+    "Black": "Noir",
+    "Black&Brown": "Noir & marron",
+    "Blue": "Bleu",
+    "Blue /purple": "Bleu / violet",
+    "Blue/ orange": "Bleu / orange",
+    "Brown": "Marron",
+    "Burgundy": "Bordeaux",
+    "Croc black": "Croco noir",
+    "Dark brown": "Marron foncé",
+    "Gold": "Doré",
+    "Gold black": "Doré noir",
+    "Gold white": "Doré blanc",
+    "Green": "Vert",
+    "Grey": "Gris",
+    "Light Pink": "Rose clair",
+    "Light blue": "Bleu clair",
+    "Lilac": "Lilas",
+    "Mint green": "Vert menthe",
+    "Multi color": "Multicolore",
+    "Mustard yellow": "Jaune moutarde",
+    "Nude": "Nude",
+    "Orange": "Orange",
+    "Peach": "Pêche",
+    "Pink": "Rose",
+    "Pink/blue": "Rose / bleu",
+    "Pink/orange": "Rose / orange",
+    "Purple": "Violet",
+    "Purple/blue": "Violet / bleu",
+    "Red": "Rouge",
+    "Silver": "Argenté",
+    "Silver black": "Argenté noir",
+    "Silver blue": "Argenté bleu",
+    "Silver green": "Argenté vert",
+    "Silver white": "Argenté blanc",
+    "White": "Blanc",
+    "Wine": "Lie-de-vin",
+    "Yellow": "Jaune",
+    /* scents */
+    "Berries scent": "Parfum fruits rouges",
+    "Cold ice": "Glace",
+    "Oud": "Oud",
+    "Strawberry": "Fraise",
+    "Vanilla": "Vanille",
+    /* pack sizes */
+    "1 pcs": "1 pièce",
+    "10 pcs": "10 pièces",
+    "12 pcs": "12 pièces"
+  };
+  /* The owner types freely in the admin portal, so accept any capitalisation
+     of a known value: "black" must translate as reliably as "Black". */
+  Object.keys(base).forEach(function (key) {
+    var lower = key.toLowerCase();
+    if (!(lower in base)) base[lower] = base[key];
+  });
+  return base;
+})();
 
 /* Counts are endless, so they are matched by shape instead of one by one.
  * "1 produit" stays singular, everything above one takes the plural. */

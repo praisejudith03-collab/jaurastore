@@ -6138,3 +6138,91 @@ select.ck-zone-select {
 @media (max-width: 700px) {
   .acct-grid { grid-template-columns: 1fr; }
 }
+
+/* ==========================================================================
+   Currency + language switches: FIXED SIZE, colour-only selection
+   ==========================================================================
+   These two pills used to visibly jump when tapped. The stylesheet already
+   carried six competing rules for `.currency-switch button` (base line ~146,
+   the 640px / 800px media queries, the `.lang-switch button` restore block and
+   the "no control under 34px" block) that each set a different padding or
+   font-size, and NOTHING ever set a width - so "₦" and "F CFA" rendered at
+   different widths and the pill resized as the highlight moved between them.
+
+   The rules below are last in the file and !important, so they are the ones
+   that win, and they pin every metric (box height, padding, font, weight,
+   letter-spacing, min-width). That leaves `.is-on` with colour as its only
+   remaining lever - which is exactly the point: selecting a currency or a
+   language must never move the layout. The per-label min-widths give ₦/NGN and
+   EN/FR the short box and "F CFA" the long one, so the *label* sets the width
+   and the *state* cannot.
+   ========================================================================== */
+.lang-switch,
+.currency-switch {
+  display: flex !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  max-height: 34px !important;
+  overflow: hidden !important;
+  border-radius: 99px !important;
+  flex-grow: 0 !important;
+  flex-shrink: 0 !important;   /* the nav row must never squeeze a switch */
+}
+
+/* The button carries the metrics; `.is-on` is listed alongside it so an
+   `.is-on` rule can only add colour, never a size. Vertical padding is 0
+   because the height is fixed - any vertical padding here would fight it. */
+.lang-switch button,
+.currency-switch button,
+.lang-switch button.is-on,
+.currency-switch button.is-on {
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 32px !important;        /* 34px switch minus its 1px border */
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 0 10px !important;
+  margin: 0 !important;
+  border: 0 !important;
+  font-family: inherit !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;    /* constant across both states */
+  letter-spacing: 0.06em !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  text-align: center !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+}
+
+/* Per-LABEL width. ₦/NGN and EN/FR share the short box; "F CFA" gets the long
+   one. Both states of a given button resolve to the same min-width. */
+.lang-switch button,
+.currency-switch button[data-cur="NGN"] { min-width: 40px !important; }
+.currency-switch button[data-cur="CFA"] { min-width: 64px !important; }
+
+@media (max-width: 640px) {
+  .lang-switch,
+  .currency-switch {
+    height: 32px !important;
+    min-height: 32px !important;
+    max-height: 32px !important;
+  }
+  .lang-switch button,
+  .currency-switch button,
+  .lang-switch button.is-on,
+  .currency-switch button.is-on {
+    height: 30px !important;      /* 32px switch minus its 1px border */
+    min-height: 30px !important;
+    max-height: 30px !important;
+    padding: 0 8px !important;
+    font-size: 11px !important;
+  }
+  .lang-switch button,
+  .currency-switch button[data-cur="NGN"] { min-width: 38px !important; }
+  .currency-switch button[data-cur="CFA"] { min-width: 60px !important; }
+}
