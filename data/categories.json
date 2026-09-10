@@ -3,14 +3,14 @@
     {
       "id": "household",
       "name": "Household items",
-      "nameFr": "Articles ménagers",
+      "nameFr": "Articles m\u00e9nagers",
       "image": "images/categories/household.jpg",
       "hidden": false
     },
     {
       "id": "ankara",
       "name": "Ankara ready to wear",
-      "nameFr": "Ankara prêt-à-porter",
+      "nameFr": "Ankara pr\u00eat-\u00e0-porter",
       "image": "images/categories/fashion.jpg",
       "hidden": false
     },
@@ -24,7 +24,7 @@
     {
       "id": "beauty",
       "name": "Beauty",
-      "nameFr": "Beauté & soins",
+      "nameFr": "Beaut\u00e9 & soins",
       "image": "images/categories/beauty.jpg",
       "hidden": false
     },
@@ -38,7 +38,7 @@
     {
       "id": "gadgets",
       "name": "Gadgets / Electronics",
-      "nameFr": "Gadgets / Électronique",
+      "nameFr": "Gadgets / \u00c9lectronique",
       "image": "images/categories/gadgets.jpg",
       "hidden": false
     },
@@ -73,11 +73,18 @@
     {
       "id": "decor",
       "name": "Decor",
-      "nameFr": "Décoration",
+      "nameFr": "D\u00e9coration",
       "image": "images/categories/household.jpg",
+      "hidden": false
+    },
+    {
+      "id": "perfume",
+      "name": "Perfume",
+      "nameFr": "Parfum",
+      "image": "images/categories/beauty.jpg",
       "hidden": false
     }
   ],
-  "updatedAt": "2026-09-07T17:41:04Z",
-  "updatedBy": "category_merge_v2"
+  "updatedAt": "2026-09-10T12:00:00Z",
+  "updatedBy": "test_admin"
 }
