@@ -728,6 +728,40 @@ def _fill_missing_fields(rows, local_rows):
     return out
 
 
+def _row_photos(row):
+    """Every photo path one product row carries, cover first."""
+    photos = [str((row or {}).get("image") or "").strip()]
+    photos += [str(g or "").strip() for g in ((row or {}).get("images") or [])]
+    return [p for p in photos if p]
+
+
+def _prefer_real_photos(rows, local_rows):
+    """Let a real photo beat a stale placeholder across the mirror split.
+
+    Supabase is the source of truth for every column its table holds, and the
+    local override only fills the columns the table could not store
+    (``_fill_missing_fields``). Photos are the one exception, and only in this
+    direction: if the mirrored row still carries the branded placeholder while
+    the admin's own row has a real photo, the photo wins.
+
+    Without this the owner's upload was live on the phone that made it (a local
+    override is unioned in) but the storefront served the placeholder from
+    Supabase - "I added an image and it is not there" - and because a redeploy
+    wipes the override file, waiting never fixed it.
+    """
+    by_id = {str((r or {}).get("id") or "").strip(): r for r in (local_rows or []) if r}
+    out = []
+    for r in rows or []:
+        src = by_id.get(str((r or {}).get("id") or "").strip())
+        if src and _real_photo(_row_photos(src)) and not _real_photo(_row_photos(r)):
+            r = dict(r or {})
+            for key in ("image", "images", "placeholderImage", "usesPlaceholder"):
+                if key in src:
+                    r[key] = src[key]
+        out.append(r)
+    return out
+
+
 def product_index(products=None, include_hidden=True):
     """Map every resolvable id -> the product row, canonical id first.
 
@@ -841,8 +875,9 @@ def merged(include_hidden=False):
         ov = overrides()
         deleted = set(ov.get("deleted") or []) | durable
         ov_products = ov.get("products") or []
-        products = _dedupe_products(_fill_missing_fields(sb, ov_products),
-                                    _seed_products())
+        products = _dedupe_products(
+            _prefer_real_photos(_fill_missing_fields(sb, ov_products), ov_products),
+            _seed_products())
         # local rows are unioned the same way: by id, or by a name-confirmed
         # slug/sku clash (a re-creation). A Supabase row of the same id has
         # just been enriched from them; two DIFFERENT pieces must never hide

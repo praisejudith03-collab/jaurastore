@@ -28,7 +28,7 @@ const OFFLINE_HTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>You are offline · J Aura Store</title>
 <style>
-body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#3a2f28;background:#f9f6f0;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#3a2f28;background:#fdf7ec;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px}
 .box{max-width:440px;text-align:center}
 h1{font:400 30px/1.2 Georgia,serif;margin:0 0 12px}
 p{color:#857059;margin:0 0 18px}
