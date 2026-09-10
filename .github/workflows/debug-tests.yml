@@ -25,6 +25,9 @@ jobs:
           set -o pipefail
           python -m pytest tests/ -q --tb=no -rf 2>&1 | tee /tmp/pytest.log
           test ${PIPESTATUS[0]} -eq 0
+      - name: Probe the real header geometry at 1440px
+        if: always()
+        run: python tools/debug_header_probe.py
       - name: Emit failing tests as annotations
         if: always()
         run: |
