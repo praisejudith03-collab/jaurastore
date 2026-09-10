@@ -2007,6 +2007,8 @@ function bindDeliveryZones() {
     e.preventDefault();
     zoneError("");
     const btn = $("#zone-save");
+    const isUpdate = !!(form.zone_id.value || "").trim();
+    const originalText = btn ? btn.textContent : "";
     const payload = {
       id: form.zone_id.value || "",
       name: form.zone_name.value.trim(),
@@ -2017,20 +2019,42 @@ function bindDeliveryZones() {
       sort_order: Number(form.zone_sort.value || 0),
       active: form.zone_active.value === "1",
     };
-    btn.disabled = true;
-    const res = window.JA_NET
-      ? await window.JA_NET.api("api/admin/delivery-zones", { method: "POST", json: payload })
-      : null;
-    btn.disabled = false;
-    // Success only after the server confirms, and the table is repainted from
-    // what the server sent back rather than from the form.
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Saving…";
+    }
+    let res = null;
+    try {
+      res = window.JA_NET
+        ? await window.JA_NET.api("api/admin/delivery-zones", { method: "POST", json: payload })
+        : null;
+    } catch (err) {
+      res = { ok: false, error: (err && err.message) || "Network error while saving the zone." };
+    }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText || (isUpdate ? "Update zone" : "Save zone");
+    }
     if (!res || !res.ok) {
-      zoneError((res && res.error) || "Could not save the zone. Nothing changed.");
+      const msg = (res && res.error) ? String(res.error) : "Could not save the zone. Nothing changed.";
+      zoneError(msg);
+      JA.toast(msg);
       return;
     }
+    // Keep cache from server response - source of truth, not form
     dzCache = res.zones || [];
     dzAuthoritative = true;
-    JA.toast("Zone saved.");
+    try { paintZoneTable(); } catch (_) {}
+    const z = res.zone || (dzCache.find((x) => x.id === (payload.id || "").toLowerCase()) || null);
+    if (z) {
+      let fareTxt = "";
+      if (z.kind === "pickup") fareTxt = "free pickup";
+      else if (z.kind === "quote") fareTxt = "quote";
+      else fareTxt = `${Number(z.fare_min || 0).toLocaleString()}–${Number(z.fare_max || 0).toLocaleString()} ${z.currency || payload.currency || ""}`.trim();
+      JA.toast(`${z.name}: ${fareTxt} saved — live now.`);
+    } else {
+      JA.toast("Zone saved — live now.");
+    }
     paintDesk("delivery");
   });
 }

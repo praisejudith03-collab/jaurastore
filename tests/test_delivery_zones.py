@@ -430,3 +430,252 @@ def test_the_admin_portal_has_a_zone_editor():
     assert "dzCache = res.zones" in admin_js
     # no duplicate submission while in flight
     assert "btn.disabled = true" in admin_js
+
+
+# --------------------------------------------------------------------------
+# Supabase-first regression: the owner reported Lomé 1500-2500 does not stick
+# after Update zone. That was a multi-worker cache bug: worker A saved to
+# Supabase, invalidated its own _CACHE, but worker B kept serving the old
+# cached 1000-3000. When Supabase is enabled there must be NO long-lived
+# cache and the save must write Supabase FIRST then re-read it.
+# --------------------------------------------------------------------------
+
+class _FakeResult:
+    def __init__(self, data):
+        self.data = data
+
+
+class _FakeDeliveryTable:
+    def __init__(self, store, fail_upsert=False, fail_delete=False):
+        self._store = store
+        self._op = None
+        self._filter_id = None
+        self._limit = None
+        self._upsert_row = None
+        self._fail_upsert = fail_upsert
+        self._fail_delete = fail_delete
+
+    def select(self, *_a, **_kw):
+        self._op = "select"
+        return self
+
+    def upsert(self, row, **_kw):
+        self._op = "upsert"
+        self._upsert_row = dict(row) if isinstance(row, dict) else row
+        return self
+
+    def delete(self, **_kw):
+        self._op = "delete"
+        return self
+
+    def eq(self, col, val):
+        if col == "id":
+            self._filter_id = str(val or "").strip().lower()
+        return self
+
+    def limit(self, n):
+        self._limit = n
+        return self
+
+    def execute(self):
+        if self._op == "upsert":
+            if self._fail_upsert:
+                raise RuntimeError("supabase down")
+            row = dict(self._upsert_row)
+            self._store[row["id"]] = row
+            return _FakeResult([row])
+        if self._op == "select":
+            if self._filter_id:
+                row = self._store.get(self._filter_id)
+                data = [row] if row else []
+                if self._limit:
+                    data = data[: self._limit]
+                return _FakeResult(data)
+            return _FakeResult(list(self._store.values()))
+        if self._op == "delete":
+            if self._fail_delete:
+                raise RuntimeError("supabase delete down")
+            if self._filter_id and self._filter_id in self._store:
+                del self._store[self._filter_id]
+            return _FakeResult([])
+        return _FakeResult([])
+
+
+class _FakeSupabaseClient:
+    def __init__(self, store, fail_upsert=False, fail_delete=False):
+        self._store = store
+        self._fail_upsert = fail_upsert
+        self._fail_delete = fail_delete
+
+    def table(self, name):
+        if name == "delivery_zones":
+            return _FakeDeliveryTable(
+                self._store, fail_upsert=self._fail_upsert, fail_delete=self._fail_delete
+            )
+        raise AssertionError(f"unexpected table {name!r} in fake")
+
+
+def test_supabase_save_is_source_of_truth_not_sqlite_cache(monkeypatch):
+    """When Supabase is enabled the save writes Supabase FIRST, re-reads it,
+    and zones() bypasses any long-lived cache.
+
+    This is the Lomé 1500-2500 regression: the admin edits a fare, it looks
+    saved, but a stale worker cache serves the old fare.
+    """
+    import supabase_store
+
+    supa_store = {
+        "lome": {
+            "id": "lome",
+            "name": "Lomé",
+            "currency": "CFA",
+            "fare_min": 1000,
+            "fare_max": 3000,
+            "kind": "delivery",
+            "active": True,
+            "sort_order": 5,
+            "note": "",
+        }
+    }
+
+    monkeypatch.setattr(supabase_store, "enabled", lambda: True)
+    monkeypatch.setattr(supabase_store, "client", lambda: _FakeSupabaseClient(supa_store))
+
+    delivery._invalidate()
+    delivery._CACHE["zones"] = None
+
+    zs = delivery.zones()
+    lome = next((z for z in zs if z["id"] == "lome"), None)
+    assert lome is not None
+    assert (lome["fare_min"], lome["fare_max"]) == (1000, 3000)
+
+    saved, err = delivery.save_zone(
+        "lome",
+        {
+            "name": "Lomé",
+            "currency": "CFA",
+            "kind": "delivery",
+            "fare_min": 1500,
+            "fare_max": 2500,
+            "sort_order": 5,
+        },
+    )
+    assert err is None, err
+    assert saved is not None
+    assert (saved["fare_min"], saved["fare_max"]) == (1500, 2500)
+    assert saved["name"] == "Lomé"
+
+    assert supa_store["lome"]["fare_min"] == 1500
+    assert supa_store["lome"]["fare_max"] == 2500
+
+    from db import query as db_query
+
+    row = db_query("SELECT fare_min, fare_max FROM delivery_zones WHERE id=?", ("lome",))
+    assert row and row[0]["fare_min"] == 1500 and row[0]["fare_max"] == 2500
+
+    execute("UPDATE delivery_zones SET fare_min=9999, fare_max=9999 WHERE id='lome'")
+    delivery._CACHE["zones"] = [
+        {
+            "id": "lome",
+            "name": "Lomé",
+            "currency": "CFA",
+            "fare_min": 1111,
+            "fare_max": 2222,
+            "kind": "delivery",
+            "active": True,
+            "sort_order": 5,
+            "note": "",
+        }
+    ]
+
+    zs2 = delivery.zones()
+    lome2 = next((z for z in zs2 if z["id"] == "lome"), None)
+    assert lome2 is not None, "Lomé must still come from Supabase"
+    assert (lome2["fare_min"], lome2["fare_max"]) == (1500, 2500), (
+        "zones() must bypass SQLite mirror and _CACHE when Supabase enabled - "
+        "otherwise Lomé 1500-2500 looks like it never stuck"
+    )
+
+    delivery._invalidate()
+
+
+def test_supabase_save_failure_does_not_touch_sqlite(monkeypatch):
+    """If Supabase upsert fails, save_zone must return an error and leave
+    SQLite untouched, so the admin can retry instead of seeing a local-only
+    row that vanishes on the next worker/deploy.
+    """
+    import supabase_store
+
+    supa_store = {}
+
+    monkeypatch.setattr(supabase_store, "enabled", lambda: True)
+    monkeypatch.setattr(
+        supabase_store, "client", lambda: _FakeSupabaseClient(supa_store, fail_upsert=True)
+    )
+
+    delivery._invalidate()
+
+    execute("DELETE FROM delivery_zones WHERE id='parakou'")
+    from db import query as db_query
+
+    assert not db_query("SELECT id FROM delivery_zones WHERE id='parakou'")
+
+    saved, err = delivery.save_zone(
+        "parakou",
+        {
+            "name": "Parakou",
+            "currency": "CFA",
+            "kind": "delivery",
+            "fare_min": 4000,
+            "fare_max": 7000,
+            "sort_order": 11,
+        },
+    )
+    assert saved is None
+    assert err is not None
+    assert "Supabase" in err
+
+    assert "parakou" not in supa_store
+
+    assert not db_query("SELECT id FROM delivery_zones WHERE id='parakou'"), (
+        "on Supabase failure SQLite must stay untouched"
+    )
+
+    monkeypatch.setattr(supabase_store, "client", lambda: _FakeSupabaseClient(supa_store))
+    saved_ok, err_ok = delivery.save_zone(
+        "parakou",
+        {
+            "name": "Parakou",
+            "currency": "CFA",
+            "kind": "delivery",
+            "fare_min": 4000,
+            "fare_max": 7000,
+            "sort_order": 11,
+        },
+    )
+    assert err_ok is None
+    assert supa_store["parakou"]["fare_min"] == 4000
+    row_before = db_query("SELECT fare_min, fare_max FROM delivery_zones WHERE id='parakou'")[0]
+    assert (row_before["fare_min"], row_before["fare_max"]) == (4000, 7000)
+
+    monkeypatch.setattr(
+        supabase_store, "client", lambda: _FakeSupabaseClient(supa_store, fail_upsert=True)
+    )
+    saved2, err2 = delivery.save_zone(
+        "parakou",
+        {
+            "name": "Parakou",
+            "currency": "CFA",
+            "kind": "delivery",
+            "fare_min": 9999,
+            "fare_max": 9999,
+            "sort_order": 11,
+        },
+    )
+    assert saved2 is None and err2 is not None
+    row_after = db_query("SELECT fare_min, fare_max FROM delivery_zones WHERE id='parakou'")[0]
+    assert (row_after["fare_min"], row_after["fare_max"]) == (4000, 7000)
+    assert supa_store["parakou"]["fare_min"] == 4000
+
+    delivery._invalidate()
+    execute("DELETE FROM delivery_zones WHERE id='parakou'")
