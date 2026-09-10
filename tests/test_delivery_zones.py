@@ -14,6 +14,7 @@ submitted zone against that table and records the fare it computed.
 Run with:  python3 -m pytest tests/test_delivery_zones.py -q
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -704,3 +705,248 @@ def test_supabase_save_failure_does_not_touch_sqlite(monkeypatch):
 
     delivery._invalidate()
     execute("DELETE FROM delivery_zones WHERE id='parakou'")
+
+
+# --------------------------------------------------------------------------
+# Legacy live-table regression: the PRODUCTION delivery_zones table predates
+# the zone editor and still has `zone_name text not null` with no default
+# (schema_sections/14_delivery_seeds.sql detects and populates it when it
+# seeds). save_zone used to upsert only the current columns, so Postgres
+# answered 23502 and EVERY admin save failed - and because Supabase is the
+# source of truth, SQLite was never written either (the Lomé edit that never
+# stuck). save_zone now repairs its payload against the live table: 23502 is
+# answered by filling the named column from the zone, an unknown column is
+# dropped, a wrong type is retried as 0/False - bounded, one repair per
+# attempt, the discovered shape cached per worker.
+#
+# The fakes below enforce `zone_name not null` and raise the REAL postgrest
+# APIError shapes; str(APIError(...)) is the exact dict the owner saw.
+# --------------------------------------------------------------------------
+
+from postgrest.exceptions import APIError  # noqa: E402
+
+
+def _api_error(code, message, details=None):
+    return APIError({"message": message, "code": code,
+                     "details": details, "hint": None})
+
+
+class _LegacyZoneTable(_FakeDeliveryTable):
+    """delivery_zones as the LIVE table behaves: a schema check first
+    (PGRST204 for columns the table lacks), then NOT NULL checks (23502 for
+    required columns absent from the payload), then value coercion (22P02).
+
+    `required` maps column -> a value checker: when the payload omits the
+    column the upsert raises 23502; when it includes the column the checker
+    receives the value and may raise 22P02 (a typed NOT NULL column the app
+    cannot fill correctly) or accept the row.
+    """
+
+    def __init__(self, store, required=None, missing=(), **kw):
+        super().__init__(store, **kw)
+        self.required = dict(required or {})
+        self.missing = tuple(missing)
+        self.attempts = []
+
+    def execute(self):
+        if self._op == "upsert":
+            self.attempts.append(dict(self._upsert_row or {}))
+            row = dict(self._upsert_row or {})
+            for col in self.missing:
+                if col in row:
+                    raise _api_error(
+                        "PGRST204",
+                        f"Could not find the '{col}' column of "
+                        "'delivery_zones' in the schema cache")
+            for col, accept in self.required.items():
+                if col not in row:
+                    raise _api_error(
+                        "23502",
+                        f'null value in column "{col}" of relation '
+                        '"delivery_zones" violates not-null constraint',
+                        details=f"Failing row contains ({row.get('id')}, ...)")
+                problem = accept(row[col])
+                if problem:
+                    raise _api_error(
+                        "22P02",
+                        f"invalid input syntax for type {problem}: "
+                        f"{row[col]!r}")
+            row = dict(row)
+            self._store[row["id"]] = row
+            return _FakeResult([row])
+        return super().execute()
+
+
+class _LegacySupabaseClient(_FakeSupabaseClient):
+    def __init__(self, store, table):
+        super().__init__(store)
+        self._table = table
+
+    def table(self, name):
+        if name == "delivery_zones":
+            return self._table
+        raise AssertionError(f"unexpected table {name!r} in fake")
+
+
+@pytest.fixture()
+def _blank_zone_shape():
+    """The discovered-table-shape cache is per worker; a test must not
+    inherit what an earlier test's fake table taught this worker. Tolerant
+    of pre-fix code so the regressions fail there with the production
+    23502 instead of an AttributeError."""
+    shape = getattr(delivery, "_ZONE_SHAPE", None)
+    if shape is not None:
+        shape["fill"].clear()
+        shape["drop"].clear()
+    yield
+    if shape is not None:
+        shape["fill"].clear()
+        shape["drop"].clear()
+
+
+_LIVE_LIKE = {"zone_name": lambda v: None}  # text NOT NULL: anything is fine
+
+
+def test_save_fills_the_legacy_zone_name_column(monkeypatch, _blank_zone_shape):
+    """The production 23502: the editor's row has no zone_name, the live
+    table requires it. The save must fill it from the zone and land."""
+    import supabase_store
+
+    supa_store = {}
+    table = _LegacyZoneTable(supa_store, required=_LIVE_LIKE)
+    monkeypatch.setattr(supabase_store, "enabled", lambda: True)
+    monkeypatch.setattr(supabase_store, "client", lambda: _LegacySupabaseClient(supa_store, table))
+
+    saved, err = delivery.save_zone(
+        "lagos-mainland",
+        {"name": "Lagos Mainland", "currency": "NGN", "kind": "delivery",
+         "fare_min": 2500, "fare_max": 5000, "sort_order": 1, "active": True},
+    )
+    assert err is None, err
+    assert saved is not None and saved["id"] == "lagos-mainland"
+    # the legacy column was filled from the zone name
+    assert supa_store["lagos-mainland"]["zone_name"] == "Lagos Mainland"
+    assert (supa_store["lagos-mainland"]["fare_min"],
+            supa_store["lagos-mainland"]["fare_max"]) == (2500, 5000)
+    # at least one repair attempt happened - the first was rejected
+    assert len(table.attempts) >= 2
+    assert "zone_name" not in table.attempts[0]
+    assert "zone_name" in table.attempts[1]
+    # Supabase confirmed, so the SQLite mirror is written too
+    from db import query as db_query
+    row = db_query("SELECT fare_min, fare_max FROM delivery_zones WHERE id=?",
+                   ("lagos-mainland",))
+    assert row and (row[0]["fare_min"], row[0]["fare_max"]) == (2500, 5000)
+
+
+def test_save_remembers_the_legacy_column_for_the_next_save(monkeypatch, _blank_zone_shape):
+    """The repaired shape is cached per worker: the next save lands on the
+    first attempt instead of rediscovering zone_name the hard way."""
+    import supabase_store
+
+    supa_store = {}
+    table = _LegacyZoneTable(supa_store, required=_LIVE_LIKE)
+    monkeypatch.setattr(supabase_store, "enabled", lambda: True)
+    monkeypatch.setattr(supabase_store, "client", lambda: _LegacySupabaseClient(supa_store, table))
+
+    first, err1 = delivery.save_zone(
+        "lome", {"name": "Lomé", "currency": "CFA", "kind": "delivery",
+                 "fare_min": 1500, "fare_max": 2500, "sort_order": 8})
+    assert err1 is None, err1
+    assert first["fare_min"] == 1500
+    assert len(table.attempts) >= 2, "the first save must have been repaired"
+
+    second, err2 = delivery.save_zone(
+        "lome", {"name": "Lomé", "currency": "CFA", "kind": "delivery",
+                 "fare_min": 1500, "fare_max": 2500, "sort_order": 8})
+    assert err2 is None, err2
+    assert len(table.attempts) == 3, (
+        "the second save must land on the first attempt - the discovered "
+        "zone_name column is cached per worker")
+    assert supa_store["lome"]["zone_name"] == "Lomé"
+    # the cache is per worker state on the module, not on the client
+    assert "zone_name" in delivery._ZONE_SHAPE["fill"]
+
+
+def test_save_drops_a_column_the_live_table_lacks(monkeypatch, _blank_zone_shape):
+    """A table narrower than the row (the products-table problem): the named
+    column is dropped and the save still lands, note or no note."""
+    import supabase_store
+
+    supa_store = {}
+    table = _LegacyZoneTable(supa_store, required=_LIVE_LIKE, missing=("note",))
+    monkeypatch.setattr(supabase_store, "enabled", lambda: True)
+    monkeypatch.setattr(supabase_store, "client", lambda: _LegacySupabaseClient(supa_store, table))
+
+    saved, err = delivery.save_zone(
+        "calavi", {"name": "Calavi", "currency": "CFA", "kind": "delivery",
+                   "fare_min": 1500, "fare_max": 3500, "sort_order": 5,
+                   "note": "shared taxi stop"})
+    assert err is None, err
+    assert saved is not None
+    assert "note" not in supa_store["calavi"], (
+        "the stored row must not contain the column the table lacks")
+    assert supa_store["calavi"]["zone_name"] == "Calavi"
+    assert "note" in delivery._ZONE_SHAPE["drop"]
+    # ...and the next save does not offer note again
+    table.attempts.clear()
+    _, err2 = delivery.save_zone(
+        "calavi", {"name": "Calavi", "currency": "CFA", "kind": "delivery",
+                   "fare_min": 1600, "fare_max": 3600, "sort_order": 5})
+    assert err2 is None, err2
+    assert "note" not in table.attempts[0]
+    assert "zone_name" in table.attempts[0], "both discoveries are pre-applied"
+
+
+def test_save_names_the_column_when_the_table_cannot_be_satisfied(monkeypatch, _blank_zone_shape):
+    """A legacy NOT NULL column no fill value can satisfy (a timestamp, say):
+    the error names the column and the one statement that repairs it, and
+    Supabase AND SQLite stay untouched. A required critical column (id) is
+    likewise never dropped away."""
+    import supabase_store
+    from db import query as db_query
+
+    supa_store = {}
+    # text NOT NULL is satisfiable (zone_name) - a timestamp is not: the
+    # name fill raises 22P02, the 0 retry raises 22P02 again.
+    required = dict(_LIVE_LIKE)
+    required["created_at"] = lambda v: (
+        None if isinstance(v, str) and _looks_timestamp(v) else "timestamp with time zone")
+    table = _LegacyZoneTable(supa_store, required=required)
+    monkeypatch.setattr(supabase_store, "enabled", lambda: True)
+    monkeypatch.setattr(supabase_store, "client", lambda: _LegacySupabaseClient(supa_store, table))
+
+    execute("DELETE FROM delivery_zones WHERE id='porto-novo'")
+    saved, err = delivery.save_zone(
+        "porto-novo", {"name": "Porto-Novo", "currency": "CFA",
+                       "kind": "delivery", "fare_min": 1500, "fare_max": 3500,
+                       "sort_order": 6})
+    assert saved is None and err is not None
+    assert '"created_at"' in err, err
+    assert ("alter table delivery_zones alter column created_at drop not null"
+            in err), err
+    assert "No changes were made" in err
+    assert supa_store == {}, "nothing may reach a table that cannot be satisfied"
+    assert not db_query("SELECT id FROM delivery_zones WHERE id='porto-novo'"), (
+        "on an unsatisfiable Supabase table SQLite must stay untouched")
+
+    # A table without a critical column cannot be fixed by dropping it.
+    supa_store2 = {}
+    table2 = _LegacyZoneTable(supa_store2, missing=("id",))
+    monkeypatch.setattr(
+        supabase_store, "client",
+        lambda: _LegacySupabaseClient(supa_store2, table2))
+    saved2, err2 = delivery.save_zone(
+        "porto-novo", {"name": "Porto-Novo", "currency": "CFA",
+                       "kind": "delivery", "fare_min": 1500, "fare_max": 3500,
+                       "sort_order": 6})
+    assert saved2 is None and err2 is not None
+    assert '"id"' in err2, err2
+    assert supa_store2 == {}
+    assert not db_query("SELECT id FROM delivery_zones WHERE id='porto-novo'")
+
+
+def _looks_timestamp(value):
+    """Only a genuine timestamp string would satisfy the fake's typed column."""
+    return bool(re.match(r"^\d{4}-\d{2}-\d{2}[T ]", str(value or "")))
+

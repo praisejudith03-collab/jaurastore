@@ -22,6 +22,43 @@ the earlier successful sections. Keep sections **15 and 16 on hold** pending
 separate approval. Do not run the image migration or set `dry_run=false`.
 The general sequence below is not approval to resume the paused deployment.
 
+## Legacy zone_name on the live delivery_zones table
+
+The live table predates the zone editor and still has
+`zone_name text not null` with no default — the same column section 14
+detects and populates when it seeds. That made the seeds work while every
+Admin → Delivery zone save failed with
+`null value in column "zone_name" … violates not-null constraint` (23502),
+and because Supabase is the source of truth the SQLite mirror was never
+written either.
+
+The application no longer requires a schema change to save:
+`delivery.save_zone()` repairs its payload against the live table (23502 is
+answered by filling the named column from the zone, an unknown column is
+dropped, a wrong type is retried as 0/false — bounded, and the discovered
+shape is cached per worker). If the table still cannot be satisfied the
+save fails loudly naming the column, and nothing is written anywhere.
+
+If you prefer to fix the live table instead (or in addition), run this one
+**non-destructive** statement in the Supabase SQL editor — no deploy
+needed, no data touched:
+
+```sql
+alter table delivery_zones alter column zone_name drop not null;
+```
+
+It only removes the NOT NULL requirement; existing rows, defaults and the
+rest of the schema are unchanged. The app fills `zone_name` for old readers
+when it must; it never reads it. Optionally confirm afterwards that no
+other legacy NOT NULL column is waiting behind `zone_name` (read-only):
+
+```sql
+select column_name, is_nullable, data_type
+from information_schema.columns
+where table_name = 'delivery_zones'
+order by ordinal_position;
+```
+
 ## Mobile steps
 
 1. Open this directory on GitHub on branch `arena/01a07fac-jaurastore` (after
