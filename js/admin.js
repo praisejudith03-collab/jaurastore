@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=131" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=132" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -664,6 +664,11 @@ async function handleProductSubmit(e, existing) {
       images,
       description: fd.get("description"),
       stock,
+      // The server prefers stock_quantity (catalog.normalize), so sending
+      // only the legacy `stock` key made every save keep the row's stale
+      // stock_quantity and the freshly typed quantity was silently discarded
+      // (seed products reverted to 24). Ship BOTH aliases, in sync.
+      stock_quantity: stock,
       badge: fd.get("badge"),
       featured: fd.get("featured") === "yes",
       online: !!fd.get("online"),
@@ -1317,7 +1322,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=131" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=132" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -1617,7 +1622,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=131", hidden: false }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=132", hidden: false }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -1652,8 +1657,9 @@ function settingsForm() {
   </div>
   <form id="banner-form" class="form-grid admin-card" style="margin-top:22px">
     <h3 class="admin-h full">Moving banner text</h3>
-    <p class="admin-note full">The moving line under the header on every page. Write your own message here — it replaces the default delivery-window banner for every visitor. The <strong>bold highlight</strong> shows in gold at the end of the line. Empty text brings the default banner back.</p>
+    <p class="admin-note full">The moving line under the header on every page. Write your own message here — it replaces the default delivery-window banner for every visitor. French shoppers see the French line when it is filled; leave it empty and they see the English one. The <strong>bold highlight</strong> shows in gold at the end of the line. Empty text brings the default banner back.</p>
     <div class="field full"><label>Banner text</label><input name="convBanner" id="conv-banner" maxlength="300" placeholder="e.g. Back-to-school sale: 10% off every bag" /></div>
+    <div class="field full"><label>Banner text (French)</label><input name="convBannerFr" id="conv-banner-fr" maxlength="300" placeholder="e.g. Soldes de rentrée : -10% sur tous les sacs" /></div>
     <div class="field full"><label>Bold highlight (optional)</label><input name="convBold" id="conv-bold" maxlength="300" placeholder="e.g. ends Sunday" /></div>
     <div class="field full"><button class="btn">Save banner</button></div>
   </form>
@@ -2119,28 +2125,30 @@ async function saveSiteConfig(patch) {
 function bindBanner() {
   const form = $("#banner-form"); if (!form) return;
   fetch("api/site", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((d) => {
-    const site = (d && d.site) || {}; const conv = $("#conv-banner"); const bold = $("#conv-bold");
-    if (conv) conv.value = site.convBanner || ""; if (bold) bold.value = site.convBold || "";
+    const site = (d && d.site) || {}; const conv = $("#conv-banner"); const fr = $("#conv-banner-fr"); const bold = $("#conv-bold");
+    if (conv) conv.value = site.convBanner || ""; if (fr) fr.value = site.convBannerFr || ""; if (bold) bold.value = site.convBold || "";
   }).catch(() => {});
   form.addEventListener("submit", async (e) => {
     e.preventDefault(); const fd = new FormData(form);
-    const conv = String(fd.get("convBanner") || "").trim(); const bold = String(fd.get("convBold") || "").trim();
-    const saved = await saveSiteConfig({ convBanner: conv, convBold: bold });
+    const conv = String(fd.get("convBanner") || "").trim(); const convFr = String(fd.get("convBannerFr") || "").trim(); const bold = String(fd.get("convBold") || "").trim();
+    const saved = await saveSiteConfig({ convBanner: conv, convBannerFr: convFr, convBold: bold });
     if (saved && saved.ok !== false) {
       // Repaint from the SERVER's answer (not the form), and re-fill both
       // inputs so what the admin sees is what Supabase stored. applySiteConfig
       // also fires ja:site so every open page (and the admin chrome) picks it up.
-      const site = (saved && saved.site) || { convBanner: conv, convBold: bold };
+      const site = (saved && saved.site) || { convBanner: conv, convBannerFr: convFr, convBold: bold };
       const liveConv = ("convBanner" in site) ? (site.convBanner || "") : conv;
+      const liveConvFr = ("convBannerFr" in site) ? (site.convBannerFr || "") : convFr;
       const liveBold = ("convBold" in site) ? (site.convBold || "") : bold;
-      const convEl = $("#conv-banner"); const boldEl = $("#conv-bold");
+      const convEl = $("#conv-banner"); const frEl = $("#conv-banner-fr"); const boldEl = $("#conv-bold");
       if (convEl) convEl.value = liveConv;
+      if (frEl) frEl.value = liveConvFr;
       if (boldEl) boldEl.value = liveBold;
       try {
         if (JA.applySiteConfig) JA.applySiteConfig(site);
-        else if (JA.setBanner) JA.setBanner(liveConv, liveBold);
+        else if (JA.setBanner) JA.setBanner(liveConv, liveBold, liveConvFr);
       } catch (err) {}
-      JA.toast(liveConv ? "Banner saved — it moves under the header on every page now." : "Banner cleared — default is back.");
+      JA.toast(liveConv || liveConvFr ? "Banner saved — it moves under the header on every page now." : "Banner cleared — default is back.");
     }
     else JA.toast((saved && saved.error) || "Could not save the banner.");
   });

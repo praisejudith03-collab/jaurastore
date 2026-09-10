@@ -370,6 +370,9 @@ def test_admin_product_delete_ok_when_supabase_confirms(client, monkeypatch):
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
     import supabase_store
     monkeypatch.setattr(supabase_store, "delete_products_strict", lambda ids: True)
+    # The durable tombstone write is now honest (not swallowed): the delete
+    # only reports success when BOTH Supabase writes landed.
+    monkeypatch.setattr(supabase_store, "add_deleted_id", lambda pid: True)
     tok = _login(client)
     r = client.delete("/api/admin/products/jau-001",
                       headers={"X-CSRF-Token": tok})

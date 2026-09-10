@@ -689,16 +689,41 @@ def _durable_deleted_ids():
     return {str(x).strip() for x in ids if str(x or "").strip()}
 
 
+def _supabase_dead_ids():
+    """Ids of products-table rows already tombstoned (source="deleted"/
+    "replaced"), or the empty set.
+
+    The durable growth_settings tombstone list can fail to write (legacy
+    table); the row's own ``source`` column cannot, because the soft delete
+    wrote it FIRST. Folding these ids into the deleted set is the durable
+    primary suppression: a deleted product stays deleted even when the
+    tombstone list write never landed, and it clears naturally when a later
+    save re-writes the row with source="admin".
+
+    Returns an empty set on any failure so an outage neither resurrects a
+    product the owner deleted nor empties the shop.
+    """
+    try:
+        from supabase_store import dead_product_ids_table
+        ids = dead_product_ids_table()
+    except Exception:
+        return set()
+    if ids is None:
+        return set()
+    return {str(x).strip() for x in ids if str(x or "").strip()}
+
+
 def merged(include_hidden=False):
     """Seed products + every admin edit, minus what was deleted.
 
     This is the live catalogue. When Supabase is configured it is the source
     of truth; otherwise the local override file supplies the edits.
     """
-    # Local override list UNION durable Supabase tombstones. The local list
-    # alone is wiped on every Render redeploy; the durable set alone is empty
-    # when Supabase is unreachable. Together they cover both cases.
-    durable = _durable_deleted_ids()
+    # Local override list UNION durable Supabase tombstones (growth_settings
+    # list + products-table rows whose source is a tombstone). The local list
+    # alone is wiped on every Render redeploy; the durable sets alone are
+    # empty when Supabase is unreachable. Together they cover both cases.
+    durable = _durable_deleted_ids() | _supabase_dead_ids()
     sb = _supabase_products()
     if sb is not None:
         # Supabase rows are the live catalogue; the seed only supplies

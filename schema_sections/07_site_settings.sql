@@ -20,6 +20,7 @@ create table if not exists site_settings (
   banner_from text not null default '',
   banner_to text not null default '',
   conv_banner text not null default '',
+  conv_banner_fr text not null default '',
   conv_bold text not null default '',
   updated_at timestamptz not null default now()
 );
@@ -43,6 +44,7 @@ alter table site_settings add column if not exists shipping_note text not null d
 alter table site_settings add column if not exists banner_from text not null default '';
 alter table site_settings add column if not exists banner_to text not null default '';
 alter table site_settings add column if not exists conv_banner text not null default '';
+alter table site_settings add column if not exists conv_banner_fr text not null default '';
 alter table site_settings add column if not exists conv_bold text not null default '';
 alter table site_settings add column if not exists updated_at timestamptz not null default now();
 

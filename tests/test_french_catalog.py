@@ -394,20 +394,46 @@ def test_every_label_gets_its_own_fixed_width():
 
 
 def test_small_screens_get_a_smaller_but_still_fixed_switch():
-    """32px on a phone is still a fixed size - the switch must never become
-    auto-sized just because the viewport is narrow."""
-    mobile = _media_blocks(_css(), "@media (max-width: 640px)")[-1]
+    """The phone keeps the same FIXED metrics as the desktop pill (the owner
+    needs a comfortable 40px tap target and 12px labels even on the smallest
+    screens) - the switch must never become auto-sized just because the
+    viewport is narrow. The last 640px block that still sizes the switch is
+    the cascade winner."""
 
-    container = _rule(mobile, ".lang-switch, .currency-switch")
-    assert container.get("height", "").startswith("32px")
+    def _maybe_rule(css, selector):
+        """Declarations of the last exact-selector match, or ''."""
+        wanted = re.sub(r"\s+", " ", selector).strip()
+        found = None
+        for sel, decl in _blocks(css):
+            if re.sub(r"\s+", " ", sel).strip() == wanted:
+                found = _props(decl)
+        return found or {}
 
-    button = _rule(mobile, ".lang-switch button, .currency-switch button, "
-                           ".lang-switch button.is-on, .currency-switch button.is-on")
-    assert button.get("height", "").startswith("30px")
+    css = _css()
+    container = {}
+    button = {}
+    short = {}
+    long = {}
+    for body in _media_blocks(css, "@media (max-width: 640px)"):
+        c = _maybe_rule(body, ".lang-switch, .currency-switch")
+        b = _maybe_rule(body, ".lang-switch button, .currency-switch button, "
+                              ".lang-switch button.is-on, "
+                              ".currency-switch button.is-on")
+        s = _maybe_rule(body, '.lang-switch button, '
+                              '.currency-switch button[data-cur="NGN"]')
+        l = _maybe_rule(body, '.currency-switch button[data-cur="CFA"]')
+        if c:
+            container = c
+        if b:
+            button = b
+        if s:
+            short = s
+        if l:
+            long = l
+
+    assert container.get("height", "").startswith("42px")
+    assert button.get("height", "").startswith("40px")
     assert button.get("padding", "").startswith("0 ")
-
-    assert _rule(mobile, '.lang-switch button, '
-                         '.currency-switch button[data-cur="NGN"]'
-                 ).get("min-width", "").startswith("38px")
-    assert _rule(mobile, '.currency-switch button[data-cur="CFA"]'
-                 ).get("min-width", "").startswith("60px")
+    assert button.get("font-size", "").startswith("12px")
+    assert short.get("min-width", "").startswith("40px")
+    assert long.get("min-width", "").startswith("64px")

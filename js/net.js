@@ -360,6 +360,21 @@ window.JA_NET = (function () {
     emit();
   }
 
+  /** Drop every queued job that matches ``predicate`` (job -> truthy).
+   *
+   *  The delete flow uses this to purge a product's queued saves before the
+   *  DELETE is enqueued: a stale save retried after the delete would land
+   *  later and resurrect the product (every save clears the delete
+   *  tombstone by design). Returns how many jobs were discarded. */
+  function discard(predicate) {
+    var doomed = jobs.filter(function (j) {
+      try { return !!predicate(j); } catch (e) { return false; }
+    });
+    doomed.forEach(drop);
+    return doomed.length;
+  }
+
+
   function flush(force) {
     if (flushing) return Promise.resolve(jobs.length);
     if (!navigator.onLine && typeof navigator !== "undefined" && navigator.onLine === false) return Promise.resolve(jobs.length);
@@ -478,7 +493,7 @@ window.JA_NET = (function () {
   return {
     api: api, csrf: csrf, flush: flush, boot: boot, recaptcha: recaptcha,
     mountRecaptcha: mountRecaptcha, resetRecaptcha: resetRecaptcha,
-    pending: pending, onStatus: onStatus, isOnline: isOnline,
+    pending: pending, onStatus: onStatus, isOnline: isOnline, discard: discard,
     _jobs: function () { return jobs.slice(); },
   };
 })();

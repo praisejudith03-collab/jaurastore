@@ -1616,10 +1616,16 @@ def admin_product_delete(pid):
                 "The product could not be deleted from Supabase. "
                 "No changes were made.")), 503
         # Durable tombstone so a seed product stays gone across redeploys.
-        try:
-            add_deleted_id(pid)
-        except Exception:
-            pass
+        # A swallowed failure here used to report "deleted" while the
+        # growth_settings write never landed - the product then came back
+        # after the next deploy. Surface the failure so the admin retries
+        # instead of believing the product is gone for good.
+        if not add_deleted_id(pid):
+            return jsonify(ok=False, error=(
+                "The product was removed from the catalogue, but its "
+                "deletion could not be recorded in the durable tombstone "
+                "list (Supabase growth_settings write failed). Tap Delete "
+                "again so it stays gone.")), 503
         catalog_mod._sync_repo_async()
     else:
         catalog_mod.remove(pid, authmod.current_admin())
@@ -1828,7 +1834,7 @@ def _load_site():
             with open(path, encoding="utf-8") as fh:
                 return json.load(fh)
         except (OSError, ValueError):
-            return {"heroVideo":"", "heroPoster":"", "heroDoc":"", "logoUrl":"", "shopBannerUrl":"", "bannerFrom":"2026-09-15", "bannerTo":"2026-09-25", "convBanner":"", "convBold":"", "shippingNote":""}
+            return {"heroVideo":"", "heroPoster":"", "heroDoc":"", "logoUrl":"", "shopBannerUrl":"", "bannerFrom":"2026-09-15", "bannerTo":"2026-09-25", "convBanner":"", "convBannerFr":"", "convBold":"", "shippingNote":""}
     from supabase_settings import get_site_settings
     return get_site_settings()
 
@@ -1851,6 +1857,7 @@ SITE_LEGACY_MAP = {
     "bannerFrom": "banner_from",
     "bannerTo": "banner_to",
     "convBanner": "conv_banner",
+    "convBannerFr": "conv_banner_fr",
     "convBold": "conv_bold",
 }
 
@@ -2001,7 +2008,8 @@ _SITE_URL_KEYS = frozenset(SITE_KEYS) | {
     "shop_banner_url", "logoUrl", "heroVideo", "heroPoster", "heroDoc",
     "shopBannerUrl",
 }
-_SITE_TEXT_KEYS = frozenset({"conv_banner", "conv_bold", "convBanner", "convBold",
+_SITE_TEXT_KEYS = frozenset({"conv_banner", "conv_banner_fr", "conv_bold",
+                             "convBanner", "convBannerFr", "convBold",
                              "shipping_note", "shippingNote"})
 
 
@@ -2039,13 +2047,15 @@ def admin_site_update():
     values = {k: v for k, v in values.items()
               if k in ("site_logo_url", "hero_video_url", "hero_poster_url",
                        "hero_doc_url", "shop_banner_url", "shipping_note",
-                       "banner_from", "banner_to", "conv_banner", "conv_bold")
+                       "banner_from", "banner_to", "conv_banner",
+                       "conv_banner_fr", "conv_bold")
               or k in SITE_KEYS}
     if Config.ENV == "testing":
         path = os.environ.get("SITE_CONFIG_PATH", "")
         current = _load_site()
         legacy = ("heroVideo", "heroPoster", "heroDoc", "logoUrl", "shopBannerUrl",
-                  "bannerFrom", "bannerTo", "convBanner", "convBold", "shippingNote")
+                  "bannerFrom", "bannerTo", "convBanner", "convBannerFr",
+                  "convBold", "shippingNote")
         colmap = {v: k for k, v in SITE_LEGACY_MAP.items()}
         for k in legacy:
             if k in d:
@@ -2054,7 +2064,7 @@ def admin_site_update():
                     value = sec.safe_url(value)
                 if k in ("bannerFrom", "bannerTo") and not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
                     continue
-                if k in ("convBanner", "convBold", "shippingNote"):
+                if k in ("convBanner", "convBannerFr", "convBold", "shippingNote"):
                     value = re.sub(r"<[^>]+>", "", value)
                 current[k] = value
         for k, v in values.items():

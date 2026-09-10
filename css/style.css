@@ -6208,21 +6208,76 @@ select.ck-zone-select {
 @media (max-width: 640px) {
   .lang-switch,
   .currency-switch {
-    height: 32px !important;
-    min-height: 32px !important;
-    max-height: 32px !important;
+    height: 42px !important;
+    min-height: 42px !important;
+    max-height: 42px !important;
   }
   .lang-switch button,
   .currency-switch button,
   .lang-switch button.is-on,
   .currency-switch button.is-on {
-    height: 30px !important;      /* 32px switch minus its 1px border */
-    min-height: 30px !important;
-    max-height: 30px !important;
-    padding: 0 8px !important;
-    font-size: 11px !important;
+    height: 40px !important;      /* 42px switch minus its 1px border */
+    min-height: 40px !important;
+    max-height: 40px !important;
+    padding: 0 10px !important;
+    font-size: 12px !important;
   }
   .lang-switch button,
-  .currency-switch button[data-cur="NGN"] { min-width: 38px !important; }
-  .currency-switch button[data-cur="CFA"] { min-width: 60px !important; }
+  .currency-switch button[data-cur="NGN"] { min-width: 40px !important; }
+  .currency-switch button[data-cur="CFA"] { min-width: 64px !important; }
+}
+
+/* =============================================================
+   HEADER + ADMIN NAV v132 — 2026-09-10
+   1) Mobile header fit: at ≤640px a 150px logo plus the EN/FR /
+      currency / search / cart / hamburger controls could not fit
+      one row, so the language buttons crowded out the logo. The
+      buttons stay a good size (see the pinned switch block above);
+      the LOGO hides instead — and the search icon too, because the
+      search field lives inside the hamburger menu — so EN/FR and
+      the currency stay visible and nothing essential is clipped.
+      Between 641–700px the same controls still crowd the logo on
+      small phones in landscape, so the logo hides there too while
+      every control stays.
+   2) Mobile admin: the fixed dark-blue bottom tab bar used to ride
+      up over the form fields the moment the keyboard opened while
+      typing. It is now an in-flow, horizontally scrollable tab
+      strip that can never cover an input; the shop header is hidden
+      on the admin page (the sidebar and the mobile strip navigate
+      instead); admin inputs are ≥16px so iOS never auto-zooms; the
+      safe-area inset is honoured on the strip.
+   ============================================================= */
+
+/* The admin page navigates with its own chrome; the shop header is
+   the customer's, not the owner's. */
+body[data-page="admin"] #site-header { display: none !important; }
+
+@media (max-width: 640px) {
+  .header .logo { display: none !important; }
+  .nav-right [data-open-search] { display: none !important; }
+  .nav-right { gap: 6px !important; }
+  .icon-btn { width: 34px !important; height: 34px !important; }
+}
+@media (min-width: 641px) and (max-width: 700px) {
+  .header .logo { display: none !important; }
+}
+@media (max-width: 920px) {
+  body[data-page="admin"] { padding-bottom: 24px !important; }
+  body[data-page="admin"] input,
+  body[data-page="admin"] select,
+  body[data-page="admin"] textarea { font-size: 16px !important; }
+  .adx { padding-bottom: 24px !important; }
+  .admin-app-nav {
+    position: static !important;
+    display: flex !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 4px;
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom)) !important;
+  }
+  .admin-app-nav button {
+    flex: 0 0 auto !important;
+    min-width: 68px;
+    padding: 6px 10px;
+  }
 }
