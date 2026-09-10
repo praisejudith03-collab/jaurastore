@@ -1843,10 +1843,10 @@ const JA = (() => {
 
   function goldFly() {
     return `<svg class="gold-bf" viewBox="0 0 64 48" aria-hidden="true">
-      <path fill="#dcb06b" d="M32 24C26 6 8 4 6 16c-2 10 14 14 26 10 6-18 24-20 26-8 2 10-14 14-26 10z"/>
-      <path fill="#c18130" d="M32 24c-3-8-12-12-16-6-3 5 6 9 16 7 3-8 12-12 16-6 3 5-6 9-16 7z"/>
-      <path fill="#edd1b2" d="M32 22c-2-6-8-8-11-4-2 3 4 6 11 5 2-6 8-8 11-4 2 3-4 6-11 5z"/>
-      <path stroke="#c18130" stroke-width="1.6" fill="none" d="M32 14v26"/>
+      <path fill="#c8ac7f" d="M32 24C26 6 8 4 6 16c-2 10 14 14 26 10 6-18 24-20 26-8 2 10-14 14-26 10z"/>
+      <path fill="#a97e48" d="M32 24c-3-8-12-12-16-6-3 5 6 9 16 7 3-8 12-12 16-6 3 5-6 9-16 7z"/>
+      <path fill="#e3d0bc" d="M32 22c-2-6-8-8-11-4-2 3 4 6 11 5 2-6 8-8 11-4 2 3-4 6-11 5z"/>
+      <path stroke="#a97e48" stroke-width="1.6" fill="none" d="M32 14v26"/>
     </svg>`;
   }
 
@@ -2046,9 +2046,9 @@ const JA = (() => {
       <p class="foot-copy">${tx("footer.copy", { year: new Date().getFullYear() })}</p>
       <div class="foot-wavez" aria-hidden="true">
         <svg viewBox="0 0 1440 130" preserveAspectRatio="none" focusable="false">
-          <path fill="#f2d5c7" d="M0,58 C180,24 400,20 620,44 C860,70 1080,78 1280,58 C1340,52 1400,44 1440,38 L1440,130 L0,130 Z"/>
-          <path fill="#e8b09c" opacity="0.9" d="M0,84 C220,52 460,48 700,68 C940,88 1180,94 1440,66 L1440,130 L0,130 Z"/>
-          <path fill="#d68d7a" d="M0,104 C260,80 540,76 820,92 C1060,105 1280,108 1440,96 L1440,130 L0,130 Z"/>
+          <path fill="#ebddd0" d="M0,58 C180,24 400,20 620,44 C860,70 1080,78 1280,58 C1340,52 1400,44 1440,38 L1440,130 L0,130 Z"/>
+          <path fill="#dab6a9" opacity="0.9" d="M0,84 C220,52 460,48 700,68 C940,88 1180,94 1440,66 L1440,130 L0,130 Z"/>
+          <path fill="#cd9889" d="M0,104 C260,80 540,76 820,92 C1060,105 1280,108 1440,96 L1440,130 L0,130 Z"/>
         </svg>
       </div>
     </footer>

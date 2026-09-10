@@ -40,6 +40,19 @@ import sys
 from collections import Counter
 
 HEX_RE = re.compile(r"#([0-9a-fA-F]{3,8})\b")
+
+# The owner's rule for the theme: the gold / nude / cream family never carries
+# more than 40% saturation. It was 35% before the "pale" fix, 62% after the
+# first pass, and 40% is the agreed middle - visibly warmer than the old
+# greige, nowhere near neon. Only the semantic ambers are exempt: they were
+# already vivid before any of this (warning chips, the medal icon), and
+# dulling them would weaken a message rather than a decoration.
+GOLD_BAND = (18.0, 52.0)        # hue degrees
+GOLD_SAT_CAP = 0.40
+GOLD_CAP_EXEMPT = {
+    "#feba02", "#eaa800", "#926000",   # warning / medal golds, vivid already
+    "#ffc411", "#fff7dc", "#6d5303",   # bootstrap amber alert triple
+}
 RGB_RE = re.compile(r"\brgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})"
                     r"(?:\s*,\s*([0-9.]+%?))?\s*\)")
 
@@ -76,6 +89,35 @@ def to_rgb(h, s, l):
 def to_hsl(r, g, b):
     h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
     return h, s, l
+
+
+def cap_gold(rgb, band=GOLD_BAND, cap=GOLD_SAT_CAP):
+    """Same colour, saturation pulled down to `cap` when it is gold-family."""
+    h, s, l = to_hsl(*rgb)
+    if band[0] <= h * 360 <= band[1] and s > cap:
+        return to_rgb(h, cap, l)
+    return rgb
+
+
+def cap_gold_text(text, band=GOLD_BAND, cap=GOLD_SAT_CAP, exempt=GOLD_CAP_EXEMPT):
+    """Rewrite every non-exempt gold-family colour down to `cap` saturation."""
+    def hex_cap(match):
+        digits = expand(match.group(1))
+        if len(digits) not in (6, 8) or "#" + digits[:6] in exempt:
+            return match.group(0)
+        rgb = tuple(int(digits[i:i + 2], 16) for i in (0, 2, 4))
+        alpha = digits[6:8] if len(digits) == 8 else ""
+        return shrink(cap_gold(rgb, band, cap), alpha)
+
+    def rgb_cap(match):
+        rgb = tuple(int(match.group(i)) for i in (1, 2, 3))
+        alpha = match.group(4)
+        out = cap_gold(rgb, band, cap)
+        if alpha is None:
+            return "rgb(%d, %d, %d)" % out
+        return "rgba(%d, %d, %d, %s)" % (out + (alpha,))
+
+    return RGB_RE.sub(rgb_cap, HEX_RE.sub(hex_cap, text))
 
 
 def boost_rgb(r, g, b):
@@ -142,13 +184,17 @@ def main(argv=None):
                     help="rewrite the files instead of printing a report")
     ap.add_argument("--map", action="store_true",
                     help="print every colour with its replacement")
+    ap.add_argument("--cap-gold", action="store_true",
+                    help="only apply the gold-family saturation cap (%d%%)"
+                         % round(GOLD_SAT_CAP * 100))
     args = ap.parse_args(argv)
 
     colors = Counter()
     for path in args.paths:
         with open(path, encoding="utf-8") as fh:
             original = fh.read()
-        updated = transform(original)
+        updated = (cap_gold_text(original) if args.cap_gold
+                   else transform(original))
         if args.map or not args.write:
             colors.update(m.group(1).lower() for m in HEX_RE.finditer(original))
             colors.update("%d,%d,%d" % tuple(int(m.group(i)) for i in (1, 2, 3))
