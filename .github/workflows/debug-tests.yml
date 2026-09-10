@@ -31,7 +31,7 @@ jobs:
           set -o pipefail
           python -m pytest tests/test_browser_smoke.py::test_desktop_logo_is_centred_and_currency_pills_stay_small \
             -q --tb=long -rA 2>&1 | tee /tmp/one.log || true
-          grep -A 60 "test_desktop_logo_is_centred" /tmp/one.log | head -c 4200 | fold -w 330 | \
+          { grep -A 28 "AssertionError: Locator expected" /tmp/one.log || true; } | head -c 5200 | fold -w 330 | \
             while IFS= read -r line; do echo "::error::$line"; done
       - name: Probe the real header geometry at 1440px
         if: always()
