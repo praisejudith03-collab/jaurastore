@@ -54,11 +54,13 @@ with sync_playwright() as pw:
                 # desktop (nav links | logo | controls). Fail the deploy check
                 # if any stylesheet ever drags it back to the edge again.
                 if width >= 1024:
+                    layout_centre = page.evaluate(
+                        "document.documentElement.clientWidth / 2")
                     box = logo.bounding_box()
                     centre = box["x"] + box["width"] / 2
-                    assert abs(centre - width / 2) <= 4, (
+                    assert abs(centre - layout_centre) <= 4, (
                         f"header logo not centred on {base + path}: "
-                        f"centre {centre} != {width / 2}")
+                        f"centre {centre} != {layout_centre}")
                     cfa = page.locator('#site-header .currency-switch [data-cur="CFA"]')
                     cbox = cfa.bounding_box()
                     assert cbox and 40 <= cbox["width"] <= 80, (

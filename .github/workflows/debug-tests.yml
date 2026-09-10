@@ -1,0 +1,34 @@
+# TEMPORARY diagnostic workflow (to be removed before merging): the sandbox
+# cannot download Actions logs, so failing test names are re-emitted as
+# ::error:: annotations, which ARE readable through the API.
+name: Debug tests
+on: push
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-test.txt
+      - name: Install browser for mobile smoke tests
+        run: python -m playwright install --with-deps chromium
+      - name: Run test suite
+        run: |
+          set -o pipefail
+          python -m pytest tests/ -q --tb=no -rf 2>&1 | tee /tmp/pytest.log
+          test ${PIPESTATUS[0]} -eq 0
+      - name: Emit failing tests as annotations
+        if: always()
+        run: |
+          { grep -E "^(FAILED|ERROR)" /tmp/pytest.log || true; } | head -30 | \
+            while IFS= read -r line; do
+              echo "::error::${line:0:350}"
+            done

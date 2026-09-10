@@ -161,9 +161,12 @@ def test_desktop_logo_is_centred_and_currency_pills_stay_small(mobile, live_shop
     logo = mobile.locator("#site-header .logo img")
     expect(logo).to_be_visible()
     box = logo.bounding_box()
+    # Centre of the LAYOUT viewport (clientWidth excludes the classic
+    # headless scrollbar, which would skew a raw viewport/2 by ~7px).
+    layout_centre = mobile.evaluate("document.documentElement.clientWidth / 2")
     centre = box["x"] + box["width"] / 2
-    assert abs(centre - width / 2) <= 3, (
-        f"header logo centre {centre} != viewport centre {width / 2} "
+    assert abs(centre - layout_centre) <= 3, (
+        f"header logo centre {centre} != layout centre {layout_centre} "
         "- the centred-logo lock regressed")
     for cur, low, high in (("NGN", 24, 46), ("CFA", 42, 76)):
         pill = mobile.locator(f'#site-header .currency-switch [data-cur="{cur}"]')
