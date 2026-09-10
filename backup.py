@@ -48,7 +48,13 @@ def dump_orders(path=None):
 
 def run(push=True, actor="scheduler"):
     """Local orders snapshot + product data committed and pushed to GitHub.
-    Customer orders stay on the server. Returns (ok, report). Never raises."""
+    Customer orders stay on the server. Returns (ok, report). Never raises.
+
+    The GitHub leg runs the same gate as every other publish path
+    (repo_sync.repo_sync_blocked_reason): on anything but a deployed
+    production/staging instance the orders snapshot is still taken but the
+    repository sync is skipped and the reason is reported.
+    """
     report = {}
     try:
         report["orders"] = dump_orders()
@@ -57,6 +63,14 @@ def run(push=True, actor="scheduler"):
         return False, {"error": f"order dump failed: {exc}"}
     try:
         import repo_sync
+        reason = repo_sync.repo_sync_blocked_reason()
+        if reason:
+            report["committed"] = False
+            report["pushed"] = False
+            report["repoSync"] = f"skipped: {reason}"
+            audit(actor, "backup.run",
+                  f"orders={report.get('orders')} repo_sync_skipped: {reason}"[:400], "")
+            return True, report
         ok, sync_report = repo_sync.regenerate(
             commit=True, push=push,
             message=f"Daily backup {datetime.date.today().isoformat()}: products")

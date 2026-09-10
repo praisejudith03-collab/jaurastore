@@ -841,6 +841,11 @@ def test_catalog_json_repo_copy_is_refreshed_from_overrides(tmp_path, monkeypatc
     """
     import catalog as catalog_mod, repo_sync
     monkeypatch.setattr(repo_sync, "REPO_ROOT", str(tmp_path))
+    # regenerate() is gated to deployed instances; this test exercises the
+    # regeneration itself, so it acts as one.
+    monkeypatch.setattr(repo_sync, "_running_under_pytest", lambda: False)
+    import config as config_mod
+    monkeypatch.setattr(config_mod.Config, "ENV", "production", raising=False)
     login(client)
     catalog_mod.upsert({"id": "jau-sync-bag", "name": "Sync Bag", "priceNgn": 5000}, "tester")
     catalog_mod.upsert({"id": "jau-sync-shoe", "name": "Sync Shoe", "priceNgn": 3000}, "tester")

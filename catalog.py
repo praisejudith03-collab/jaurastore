@@ -338,31 +338,22 @@ def _sync_repo_async():
     Runs after an admin product write so js/products-data.js (and the repo copy
     of data/catalog.json) reflects the new catalogue immediately. Never raises
     and never delays the product save - the shop must not be blocked by a git
-    operation. Only actually runs when REPO_SYNC_ON_WRITE is enabled and the
-    app is not running the test suite (which must never touch the git repo).
+    operation. The single gate in repo_sync.repo_sync_blocked_reason() decides
+    whether this instance may publish at all: only a deployed production or
+    staging instance with REPO_SYNC_ON_WRITE on, outside pytest, gets through -
+    a development preview or a test run is silently skipped here, the nightly
+    backup reports the same reason, and the manual "Sync to GitHub" button
+    answers 409 with it.
     """
-    if not getattr(Config, "REPO_SYNC_ON_WRITE", True):
-        return
-    if getattr(Config, "ENV", "development") == "testing":
-        return  # never touch the git repo from the test suite
-    # ENV alone is NOT a sufficient guard. A test may legitimately flip
-    # Config.ENV to "production" to exercise the production code path -
-    # test_admin_product_delete_ok_when_supabase_confirms does exactly that -
-    # and this function would then spawn a daemon thread running a real
-    # `repo_sync.regenerate(commit=True, push=True)` against the live
-    # checkout. That rewrote the tracked data/catalog.json and
-    # js/products-data.js mid-suite, and the CI harness then committed the
-    # test artefacts. Detect the test runner itself instead: pytest sets
-    # PYTEST_CURRENT_TEST and stays in sys.modules for the whole process,
-    # while no production process ever does either.
-    if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
-        return
-    # Import lazily so repo_sync (which imports catalog) is only loaded here,
-    # and to avoid a circular import at module load time.
     try:
         import repo_sync
     except Exception:
         return
+    reason = repo_sync.repo_sync_blocked_reason()
+    if reason:
+        return  # a dev preview / test run must never publish catalogue state
+    # Import lazily so repo_sync (which imports catalog) is only loaded here,
+    # and to avoid a circular import at module load time.
 
     def _run():
         try:

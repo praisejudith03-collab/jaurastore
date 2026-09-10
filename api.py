@@ -1023,6 +1023,14 @@ def create_order():
             pass
     _threading.Thread(target=_notify_whatsapp, args=(dict(order),), daemon=True).start()
 
+    # Email the shop about the new order too (fire-and-forget; mailer no-ops
+    # until MAIL_FROM / MAIL_TO / a provider key are configured).
+    try:
+        import mailer
+        mailer.notify_new_order_async(order)
+    except Exception:
+        pass
+
     # growth hooks: count the promo use and mint a referral code when the order qualifies
     referral_code = ""
     try:
@@ -1173,6 +1181,17 @@ def payment_proof():
             except Exception as exc:
                 print(f"[supabase] receipt mirror skipped: {exc}")
     audit("customer", "payment_proof", f"{order_id} {attach_name} stored", _ip())
+
+    # Email the shop the receipt WITH THE CUSTOMER'S OWN FILE ATTACHED - the
+    # exact bytes they uploaded. Fire-and-forget over HTTPS (Resend/Brevo)
+    # first because Render's free instances block outbound SMTP; the upload
+    # must never wait on a mail provider. No-op until MAIL_FROM, MAIL_TO and
+    # a provider key are configured (see ENVIRONMENT_VARIABLES.md).
+    try:
+        import mailer
+        mailer.notify_receipt_async(proof_row, attach_name, data, mime)
+    except Exception:
+        pass
 
     return jsonify(ok=True, stored=True, url=url,
                    fileName=attach_name, size=len(data),
@@ -1762,9 +1781,17 @@ def admin_sync_status():
             repo = repo_sync._resolve_repo()
         except Exception:
             repo = ""
+    # Surface the publish gate so the portal can explain WHY the repository
+    # copy cannot be updated from this instance.
+    try:
+        import repo_sync
+        blocked_reason = repo_sync.repo_sync_blocked_reason()
+    except Exception:
+        blocked_reason = "Repository sync availability could not be determined."
     return jsonify(ok=True, supabase=sb, supabaseHealth=health, gitToken=ght,
                    gitRepo=repo, gitBranch=Config.GITHUB_BRANCH,
-                   onWrite=bool(Config.REPO_SYNC_ON_WRITE))
+                   onWrite=bool(Config.REPO_SYNC_ON_WRITE),
+                   syncBlockedReason=blocked_reason)
 
 
 @api.post("/admin/sync/repo")
@@ -1775,13 +1802,19 @@ def admin_sync_repo():
 
     This is the manual "Sync to GitHub" button in the admin portal. It applies
     the same best-effort path as the automatic post-write sync but runs it
-    synchronously so the admin gets an immediate result.
+    synchronously so the admin gets an immediate result. It is gated by the
+    same rule as every publish path (repo_sync.repo_sync_blocked_reason): on
+    anything but a deployed production/staging instance it answers 409 with
+    the reason instead of publishing scratch catalogue state to the repo.
     """
     limited = sec.guard("repo-sync", limit=10, window=600)
     if limited:
         return limited
+    import repo_sync
+    reason = repo_sync.repo_sync_blocked_reason()
+    if reason:
+        return jsonify(ok=False, error=reason, blocked=True), 409
     try:
-        import repo_sync
         ok, report = repo_sync.regenerate(commit=True, push=True)
     except Exception as exc:
         return jsonify(ok=False, error=f"Sync failed: {exc}"), 500
@@ -1789,6 +1822,48 @@ def admin_sync_repo():
           f"ok={ok} committed={report.get('committed')} pushed={report.get('pushed')}",
           _ip())
     return jsonify(ok=bool(ok), **report)
+
+
+@api.get("/admin/mail/status")
+@authmod.require_admin
+def admin_mail_status():
+    """Which email transport is live for order/receipt mails (no secrets).
+
+    The Orders tab shows this above the receipts table: orders and customer
+    receipts are emailed to the shop, the receipt WITH the customer's own
+    file attached, over HTTPS (Resend/Brevo) first because Render's free
+    instances block outbound SMTP ports, with SMTP as a fallback.
+    """
+    import mailer
+    st = mailer.transport_status()
+    return jsonify(ok=True, **st)
+
+
+@api.post("/admin/mail/test")
+@authmod.require_admin
+@sec.require_csrf
+def admin_mail_test():
+    """The Orders tab's "Email a test" button: one probe email to MAIL_TO."""
+    limited = sec.guard("mail-test", limit=5, window=600)
+    if limited:
+        return limited
+    import mailer
+    if not mailer.configured():
+        st = mailer.transport_status()
+        return jsonify(ok=False, error=(
+            "Shop email is not configured yet. Set " + ", ".join(st["missing"])
+            + " in Render (see ENVIRONMENT_VARIABLES.md), then redeploy."),
+            missing=st["missing"]), 400
+    ok, detail = mailer.send_mail("Jaura Store test email",
+                                  mailer.test_email_html())
+    audit(authmod.current_admin(), "admin.mail_test",
+          f"ok={ok} provider={mailer.provider()} {detail}"[:400], _ip())
+    if not ok:
+        return jsonify(ok=False, error=f"Test email failed — {detail}",
+                       provider=mailer.provider()), 502
+    return jsonify(ok=True, provider=mailer.provider(),
+                   to=mailer.transport_status()["to"],
+                   message="Test email sent — check the inbox (and spam).")
 
 
 @api.post("/admin/uploads/image")
