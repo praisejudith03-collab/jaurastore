@@ -539,57 +539,6 @@ const JA = (() => {
     });
     return out;
   }
-  function normalizeOrder(cats) {
-    # Ensure every category has an order; assign ascending indices starting at 1
-    # so "Household & Kitchen" can be set to 0 or 1 to float to the top.
-    let maxOrder = 0;
-    const known = new Set();
-    (cats || []).forEach((c) => {
-      if (c.order !== undefined && !isNaN(c.order)) {
-        known.add(c.order);
-        if (c.order > maxOrder) maxOrder = c.order;
-      }
-    });
-    let next = maxOrder + 1;
-    const result = [];
-    const used = new Set();
-    # First, preserve existing ordered entries in their original sequence.
-    (cats || []).forEach((c) => {
-      if (c.order !== undefined && !isNaN(c.order) && !used.has(c.order)) {
-        used.add(c.order);
-        result.push(c);
-      }
-    });
-    # Then fill in any missing slots with auto-assigned order.
-    const allIds = new Set((cats || []).map((c) => c.id));
-    const idToOrder = new Map();
-    (cats || []).forEach((c) => {
-      if (c.order !== undefined && !isNaN(c.order)) {
-        idToOrder.set(c.id, c.order);
-      }
-    });
-    # Assign default order 1, 2, 3... to any category without an explicit order,
-    # but allow order 0 to float to the top.
-    let defaultNum = 1;
-    while (result.length < (cats ? cats.length : 0)) {
-      const insertPos = result.length;
-      const candidateId = Object.keys(idToOrder).find(
-        id => !idToOrder.has(id) || (idToOrder.get(id) === 0 && !used.has(0))
-      ) || null;
-      # Assign ascending order to any category still without one.
-      const cat = (cats || []).find((c) => c.id && !(c.id in idToOrder) && c.id);
-      if (cat && !(cat.id in idToOrder)) {
-        idToOrder.set(cat.id, defaultNum++);
-      }
-      if (cat && cat.id && !used.has(cat.id)) {
-        used.add(cat.id);
-        result.push(cat);
-      }
-      if (insertPos >= result.length) break;
-    }
-    return result;
-  }
-
   function categories() {
     const saved = read(KEYS.cats, null);
     const base = DEFAULT_CATS.map((c) => ({ ...c, nameFr: c.nameFr || "", hidden: false }));
@@ -601,7 +550,7 @@ const JA = (() => {
     // Every page loads the owner's server-side category table (photos
     // included), not just the admin portal — the public storefront is where
     // shoppers see them.
-  try {
+    try {
       const r = await fetch("api/categories", { credentials: "same-origin", cache: "no-store" });
       const d = await r.json();
       if (d && Array.isArray(d.categories) && d.categories.length) {
@@ -609,18 +558,8 @@ const JA = (() => {
           id: c.id, name: c.name, nameFr: c.nameFr || "",
           image: c.image || "", hidden: !!c.hidden,
         })));
-      } else {
-        # If server returned empty or error, still write current local state
-        # so the page never falls through to DEFAULT_CATS missing recent saves.
-        const saved = read(KEYS.cats, null);
-        if (saved && Array.isArray(saved) && saved.length) {
-          write(KEYS.cats, normalizeCatList(saved));
-        }
       }
-    } catch (e) {
-      # On failure, preserve whatever is already in localStorage
-      # so the UI never goes blank; the next boot will retry the server.
-    }
+    } catch (e) { /* fall back to local defaults */ }
     return categories();
   }
   function saveCategories(list) {

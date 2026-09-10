@@ -6253,13 +6253,13 @@ select.ck-zone-select {
 body[data-page="admin"] #site-header { display: none !important; }
 
 @media (max-width: 640px) {
-  .header .logo { display: flex !important; }
-  .nav-right [data-open-search] { display: grid !important; }
+  .header .logo { display: none !important; }
+  .nav-right [data-open-search] { display: none !important; }
   .nav-right { gap: 6px !important; }
   .icon-btn { width: 34px !important; height: 34px !important; }
 }
 @media (min-width: 641px) and (max-width: 700px) {
-  .header .logo { display: flex !important; }
+  .header .logo { display: none !important; }
 }
 @media (max-width: 920px) {
   body[data-page="admin"] { padding-bottom: 24px !important; }

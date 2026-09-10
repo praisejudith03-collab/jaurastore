@@ -14,8 +14,8 @@ window.I18N_PHRASES = {
   // ---------------------------------------------------------------- payment
   "Payment confirmation": "Confirmation de paiement",
   "Send your payment receipt": "Envoyez votre reçu de paiement",
-  "Upload the receipt or screenshot from your bank or MoMo. It is saved in the admin portal, then we confirm your payment.":
-    "Téléversez le reçu ou la capture de votre banque ou MoMo. Il est enregistré dans le portail admin, puis nous confirmons votre paiement.",
+  "Upload the receipt or screenshot from your bank or MoMo. We will confirm your payment.":
+    "Téléversez le reçu ou la capture de votre banque ou MoMo. Nous confirmons votre paiement.",
   "with your details, so nothing gets lost on WhatsApp.":
     "avec vos coordonnées, pour que rien ne se perde sur WhatsApp.",
   "Pay into": "Payez sur",
@@ -235,9 +235,9 @@ window.I18N_PHRASES = {
     "Pas d'internet pour le moment — votre commande et votre capture sont enregistrées sur ce téléphone et nous parviendront dès que vous serez de nouveau en ligne. Gardez votre numéro de commande.",
   "We could not read this order.": "Impossible de lire cette commande.",
   "Working…": "Traitement…",
-  "No connection. Try again, or confirm from the admin portal.":
+  "No connection. Try again, or confirm from us.":
     "Pas de connexion. Réessayez, ou confirmez depuis le portail admin.",
-  "That link did not work. Sign in to the admin portal instead.":
+  "That link did not work. Sign in to your account instead.":
     "Ce lien n'a pas fonctionné. Connectez-vous plutôt au portail admin.",
   "Confirm payment": "Confirmer le paiement",
   "Decline order": "Refuser la commande",

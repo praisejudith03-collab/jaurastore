@@ -1502,7 +1502,8 @@ function categoryManager() {
   const rows = cats.map((c, i) => {
     const n = JA.products().filter((p) => p.category === c.id).length;
     return `<article class="au-cat-card" data-cat-i="${i}" data-cat-id="${JA.escape(c.id)}">
-      <div class="au-cat-pic">${_catAssetHTML(c.image)}<label class="au-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf" data-cat-img="${i}" hidden /></label></div>
+      <div class="au-cat-pic">${_catAssetHTML(c.image)}
+        <button class="au-cat-up" title="Move up" ${i === 0 ? "disabled" : ""}>↑</button><button class="au-cat-down" title="Move down" ${i >= cats.length - 1 ? "disabled" : ""}>↓</button></div>
       <div class="au-cat-fields">
         <input name="cat-id-${i}" type="hidden" value="${JA.escape(c.id)}" />
         <label>Name (English)</label><input name="cat-name-${i}" value="${JA.escape(c.name || "")}" />
@@ -1544,7 +1545,7 @@ function collectCats() {
     // HTTPS URL the server must store; the DOM img is only the preview.
     const uploadUrl = row.querySelector("[data-cat-img]")?.dataset.catUrl || "";
     const asset = uploadUrl || row.querySelector(".au-cat-pic img")?.getAttribute("src") || row.querySelector(".au-cat-pic a.media-doc-chip")?.getAttribute("href") || "";
-    out.push({ id, name, nameFr: (row.querySelector(`[name="cat-fr-${i}"]`)?.value || "").trim(), image: asset, hidden: !row.querySelector(`[name="cat-on-${i}"]`)?.checked, });
+    out.push({ id, name, nameFr: (row.querySelector(`[name="cat-fr-${i}"]`)?.value || "").trim(), image: asset, hidden: !row.querySelector(`[name="cat-on-${i}"]`)?.checked, order: parseInt(row.getAttribute("data-cat-i") || "0"), });
   });
   return out;
 }
@@ -1597,6 +1598,46 @@ function bindCategories() {
     finally { input.value = ""; }
   });
   list.addEventListener("click", async (e) => {
+    const upBtn = e.target.closest(".au-cat-up");
+    if (upBtn) {
+      const card = upBtn.closest("[data-cat-id]");
+      const idx = card.getAttribute("data-cat-i");
+      const newIdx = parseInt(idx) - 1;
+      const cards = list.querySelectorAll("[data-cat-i]");
+      const temp = cards[idx].outerHTML;
+      cards[idx].outerHTML = cards[newIdx].outerHTML;
+      cards[newIdx].outerHTML = temp;
+      // Re-bind the data-cat-i attributes
+      cards.forEach((c, i) => c.setAttribute("data-cat-i", i));
+      // Re-enable/disable buttons
+      cards.forEach((c, i) => {
+        const up = c.querySelector(".au-cat-up");
+        const down = c.querySelector(".au-cat-down");
+        if (up) up.disabled = i === 0;
+        if (down) down.disabled = i >= cards.length - 1;
+      });
+      return;
+    }
+    const downBtn = e.target.closest(".au-cat-down");
+    if (downBtn) {
+      const card = downBtn.closest("[data-cat-id]");
+      const idx = card.getAttribute("data-cat-i");
+      const newIdx = parseInt(idx) + 1;
+      const cards = list.querySelectorAll("[data-cat-i]");
+      const temp = cards[idx].outerHTML;
+      cards[idx].outerHTML = cards[newIdx].outerHTML;
+      cards[newIdx].outerHTML = temp;
+      // Re-bind the data-cat-i attributes
+      cards.forEach((c, i) => c.setAttribute("data-cat-i", i));
+      // Re-enable/disable buttons
+      cards.forEach((c, i) => {
+        const up = c.querySelector(".au-cat-up");
+        const down = c.querySelector(".au-cat-down");
+        if (up) up.disabled = i === 0;
+        if (down) down.disabled = i >= cards.length - 1;
+      });
+      return;
+    }
     const viewBtn = e.target.closest("[data-view-cat]");
     if (viewBtn) { dashCat = viewBtn.getAttribute("data-view-cat"); prodCatSel = dashCat; prodPage = 1; editingId = null; paintDesk("products"); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
     const card = e.target.closest("[data-cat-id]");
