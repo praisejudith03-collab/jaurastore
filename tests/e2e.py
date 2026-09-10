@@ -163,6 +163,60 @@ def main():
         pv = db_rows("SELECT COUNT(*) n FROM page_views")
         check("page view recorded on the server", pv[0]["n"] > 0, pv[0])
 
+        # --------------------------------------- currency pill + French switch
+        # (a) The pill must not resize when tapped. Measure the rendered box,
+        #     switch currency, measure again: identical width AND height. This
+        #     is the visual bug the fixed-size block at the end of
+        #     css/style.css exists for, and it is the one thing the Python
+        #     cascade test cannot actually see.
+        def pill_box():
+            return page.evaluate("""() => {
+                const btn = document.querySelector('.currency-switch button[data-cur="CFA"]');
+                const grp = document.querySelector('.currency-switch');
+                if (!btn || !grp) return null;
+                const b = btn.getBoundingClientRect(), g = grp.getBoundingClientRect();
+                return { btnW: Math.round(b.width), btnH: Math.round(b.height),
+                         grpW: Math.round(g.width), grpH: Math.round(g.height) };
+            }""")
+
+        before = pill_box()
+        check("the currency switch renders", bool(before), before)
+        page.locator('.currency-switch button[data-cur="CFA"]').first.click()
+        page.wait_for_timeout(800)
+        after = pill_box()
+        check("tapping the currency switch never resizes it",
+              bool(before) and before == after, f"{before} -> {after}")
+        check("the currency pill keeps its fixed height (34px, or 32px on a phone)",
+              bool(after) and after["grpH"] in (32, 34), after)
+        ngn_box = page.evaluate("""() => {
+            const b = document.querySelector('.currency-switch button[data-cur="NGN"]');
+            return b ? Math.round(b.getBoundingClientRect().width) : null;
+        }""")
+        check("₦ and F CFA each hold their own fixed width",
+              bool(ngn_box) and bool(after) and ngn_box < after["btnW"],
+              f"NGN={ngn_box}px CFA={after and after['btnW']}px")
+
+        # (b) French has to reach the CATALOGUE, not just the chrome. Translating
+        #     the menus while product names stay English was the bug.
+        page.locator('.lang-switch button[data-lang="fr"]').first.click()
+        page.wait_for_timeout(1000)
+        check("the language switch marks French as selected",
+              page.locator('.lang-switch button[data-lang="fr"]').first
+              .evaluate("el => el.classList.contains('is-on')"))
+        fr_name = page.locator("h1").first.inner_text()
+        check("a French shopper reads the French product name",
+              "batterie externe" in fr_name, fr_name[:60])
+        page.goto(BASE + "/shop.html", wait_until="networkidle")
+        dismiss(page)
+        page.wait_for_timeout(900)
+        shop_fr = page.locator("body").inner_text()
+        check("French reaches the category labels on the shop",
+              any(w in shop_fr for w in ("Beauté", "Chaussures", "Électronique")),
+              [w for w in ("Beauté", "Chaussures", "Électronique") if w in shop_fr])
+        # put the browser back on the default language for the rest of the run
+        page.locator('.lang-switch button[data-lang="en"]').first.click()
+        page.wait_for_timeout(600)
+
         # ----------------------------------------------------- cart + checkout
         page.goto(BASE + "/cart.html", wait_until="networkidle")
         page.goto(BASE + "/shop.html", wait_until="networkidle")
@@ -317,10 +371,26 @@ def main():
         st = db_rows("SELECT status FROM orders WHERE id='%s'" % order_id)
         check("confirm sets the status on the server", st and st[0]["status"] == "confirmed", st[:1])
 
-        # account tab: change password from this device
+        # account tab: admin auth is ENV-ONLY. ADMIN_MASTER_PASSWORD is the
+        # primary password and ADMIN_BOOTSTRAP_PASSWORD the fallback, both set
+        # in Render. The in-portal change-password form (#pw-form) was purged
+        # together with the email/OTP flows: a password stored on Render's
+        # ephemeral disk would vanish on the next deploy and lock the owner
+        # out. So the tab must point at the environment variables, and it must
+        # NOT grow a form back.
         click_safe(page, "[data-tab=account]")
-        page.wait_for_selector("#pw-form", timeout=10000)
-        check("account tab has the change-password form", page.locator("#pw-form input[name=current]").count() == 1)
+        page.wait_for_selector("#acct-email", timeout=10000)
+        acct = page.locator("#panel-account").inner_text()
+        check("account tab names ADMIN_MASTER_PASSWORD as the way in",
+              "ADMIN_MASTER_PASSWORD" in acct)
+        check("account tab names ADMIN_BOOTSTRAP_PASSWORD as the fallback",
+              "ADMIN_BOOTSTRAP_PASSWORD" in acct)
+        check("no purged change-password form came back",
+              page.locator("#pw-form").count() == 0
+              and page.locator('#panel-account input[name=current]').count() == 0)
+        check("no OTP / email-code UI came back",
+              page.locator('#panel-account input[name=code], #panel-admin, #panel-account')
+              .filter(has_text="verification code").count() == 0)
         page.screenshot(path=os.path.join(SHOTS, "05-account.png"))
 
         # -------------------------------------------------- offline behaviour

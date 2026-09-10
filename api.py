@@ -24,20 +24,20 @@ CATEGORIES_FILE = _os.environ.get(
     "CATEGORIES_PATH",
     _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "categories.json"))
 DEFAULT_CATEGORIES = [
-    {"id": "clothing", "name": "Clothings for men and women", "nameFr": "", "image": "images/categories/fashion.jpg", "hidden": False},
-    {"id": "household", "name": "Household items", "nameFr": "", "image": "images/categories/household.jpg", "hidden": False},
-    {"id": "ankara", "name": "Ankara ready to wear", "nameFr": "", "image": "images/categories/fashion.jpg", "hidden": False},
-    {"id": "accessories", "name": "Accessories", "nameFr": "", "image": "images/categories/gadgets.jpg", "hidden": False},
+    {"id": "clothing", "name": "Clothings for men and women", "nameFr": "Vêtements homme et femme", "image": "images/categories/fashion.jpg", "hidden": False},
+    {"id": "household", "name": "Household items", "nameFr": "Articles ménagers", "image": "images/categories/household.jpg", "hidden": False},
+    {"id": "ankara", "name": "Ankara ready to wear", "nameFr": "Ankara prêt-à-porter", "image": "images/categories/fashion.jpg", "hidden": False},
+    {"id": "accessories", "name": "Accessories", "nameFr": "Accessoires", "image": "images/categories/gadgets.jpg", "hidden": False},
     {"id": "beauty", "name": "Beauty & skincare", "nameFr": "Beauté & soins", "image": "images/categories/beauty.jpg", "hidden": False},
-    {"id": "shoes", "name": "Shoes", "nameFr": "", "image": "images/categories/shoes.jpg", "hidden": False},
-    {"id": "gadgets", "name": "Gadgets / Electronics", "nameFr": "", "image": "images/categories/gadgets.jpg", "hidden": False},
-    {"id": "packaging", "name": "Packaging", "nameFr": "", "image": "images/categories/household.jpg", "hidden": False},
-    {"id": "bags", "name": "Bags", "nameFr": "", "image": "images/categories/bags.jpg", "hidden": False},
-    {"id": "hair-care", "name": "Hair care", "nameFr": "", "image": "images/categories/beauty.jpg", "hidden": False},
-    {"id": "nails", "name": "Nails", "nameFr": "", "image": "images/categories/beauty.jpg", "hidden": False},
-    {"id": "gift-set", "name": "Gift set", "nameFr": "", "image": "images/categories/household.jpg", "hidden": False},
-    {"id": "children", "name": "Children items", "nameFr": "", "image": "images/categories/fashion.jpg", "hidden": False},
-    {"id": "decor", "name": "Decor", "nameFr": "", "image": "images/categories/household.jpg", "hidden": False},
+    {"id": "shoes", "name": "Shoes", "nameFr": "Chaussures", "image": "images/categories/shoes.jpg", "hidden": False},
+    {"id": "gadgets", "name": "Gadgets / Electronics", "nameFr": "Gadgets / Électronique", "image": "images/categories/gadgets.jpg", "hidden": False},
+    {"id": "packaging", "name": "Packaging", "nameFr": "Emballage", "image": "images/categories/household.jpg", "hidden": False},
+    {"id": "bags", "name": "Bags", "nameFr": "Sacs", "image": "images/categories/bags.jpg", "hidden": False},
+    {"id": "hair-care", "name": "Hair care", "nameFr": "Soins des cheveux", "image": "images/categories/beauty.jpg", "hidden": False},
+    {"id": "nails", "name": "Nails", "nameFr": "Ongles", "image": "images/categories/beauty.jpg", "hidden": False},
+    {"id": "gift-set", "name": "Gift set", "nameFr": "Coffret cadeau", "image": "images/categories/household.jpg", "hidden": False},
+    {"id": "children", "name": "Children items", "nameFr": "Articles pour enfants", "image": "images/categories/fashion.jpg", "hidden": False},
+    {"id": "decor", "name": "Decor", "nameFr": "Décoration", "image": "images/categories/household.jpg", "hidden": False},
 ]
 
 

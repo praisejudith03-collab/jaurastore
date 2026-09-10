@@ -546,6 +546,7 @@ function productForm(p = {}) {
     </div>
     <p class="admin-note" id="cfa-preview">CFA on the website is converted from Naira at 1 ₦ = 0.44 F CFA. You only enter ₦.</p>
     <div class="field"><label>Add a description</label><textarea name="description" rows="3">${JA.escape(p.description || "")}</textarea></div>
+    <div class="field"><label>Description (French — shown when the site is in French)</label><textarea name="descriptionFr" rows="3" placeholder="Optional">${JA.escape(p.descriptionFr || "")}</textarea></div>
     <div class="field"><label>Ribbon</label>
       <select name="badge">
         <option value="">None</option>
@@ -670,6 +671,7 @@ async function handleProductSubmit(e, existing) {
       options,
       optionStock: hasOptionStock ? optionStock : (existing?.optionStock || {}),
       nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
+      descriptionFr: String(fd.get("descriptionFr") || "").trim() || existing?.descriptionFr || "",
   });
   if (window.__editReviews && JA.setReviews) JA.setReviews(id, window.__editReviews);
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = existing ? "Save" : "Add a Product"; }

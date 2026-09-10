@@ -44,8 +44,8 @@ NGN_TO_CFA = 0.44
 # Every field an admin-edited product may carry (with sensible defaults).
 BASE_FIELDS = (
     "id", "sku", "slug", "name", "nameFr", "category", "priceCfa", "compareCfa",
-    "priceNgn", "compareNgn", "image", "images", "description", "stock", "badge",
-    "featured", "online", "colors", "options",
+    "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
+    "stock", "badge", "featured", "online", "colors", "options",
 )
 
 
@@ -442,6 +442,11 @@ def normalize(product):
     updated_at) AND the legacy aliases (image, stock) so one row serves the
     schema, the local test/dev path and the storefront. Prices are
     non-negative; stock is a non-negative integer.
+
+    The French copy (nameFr, descriptionFr) is folded from either spelling -
+    the admin portal posts camelCase, mirror/import rows use name_fr and
+    description_fr - and stays "" when unwritten, which tells the storefront
+    to fall back to English rather than to blank.
     """
     import security as sec
     product = dict(product or {})
@@ -463,7 +468,7 @@ def normalize(product):
         "sku": sec.valid_sku(product.get("sku") or ""),
         "slug": sec.safe_url(product.get("slug") or "") or _slugify(name),
         "name": name,
-        "nameFr": sec.clean(product.get("nameFr"), 200),
+        "nameFr": sec.clean(product.get("nameFr") or product.get("name_fr"), 200),
         "category": sec.clean(product.get("category"), 40),
         "priceCfa": cfa if cfa is not None else 0,
         "compareCfa": compare_cfa,
@@ -473,6 +478,13 @@ def normalize(product):
         "image_url": image,
         "images": [sec.safe_url(i) for i in (product.get("images") or []) if sec.safe_url(i)],
         "description": sec.clean(product.get("description"), 2000),
+        # French copy is optional: an empty string means "show English", never
+        # "show nothing". Both spellings are accepted because the admin form
+        # posts camelCase while older mirror/import rows use snake_case, and a
+        # silently dropped French description looks like a translation bug to
+        # the shopper rather than an unwritten field.
+        "descriptionFr": sec.clean(
+            product.get("descriptionFr") or product.get("description_fr"), 2000),
         "stock": stock_qty,
         "stock_quantity": stock_qty,
         "badge": sec.clean(product.get("badge"), 20),
