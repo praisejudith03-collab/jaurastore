@@ -1949,69 +1949,118 @@ function zoneError(msg) {
   el.hidden = !msg;
 }
 
+// Puts the zone editor back to "add a new zone". Shared by Cancel edit, by a
+// successful save and by deleting the zone currently being edited, so the
+// button can never be left reading "Update zone" over an empty form - that
+// stale label is what made a saved zone look like it had not been saved.
+function resetZoneForm(form) {
+  const f = form || $("#zone-form");
+  if (!f) return;
+  f.reset();
+  if (f.zone_id) f.zone_id.value = "";
+  const cancel = $("#zone-cancel");
+  if (cancel) cancel.hidden = true;
+  const btn = $("#zone-save");
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "Save zone";
+  }
+  zoneError("");
+}
+
 function bindDeliveryZones() {
   const form = $("#zone-form");
   if (!form || form.dataset.bound === "1") return;
   form.dataset.bound = "1";
   const block = $("#delivery-zones");
+  if (!block) return;
 
   block.addEventListener("click", async (e) => {
     const del = e.target.closest("[data-zone-del]");
     if (del) {
       const id = del.getAttribute("data-zone-del");
       if (!window.confirm("Delete this delivery zone? Existing orders keep their saved snapshot.")) return;
+      const origLabel = del.textContent;
       del.disabled = true;
-      const res = window.JA_NET
-        ? await window.JA_NET.api("api/admin/delivery-zones/" + encodeURIComponent(id), { method: "DELETE" })
-        : null;
+      del.textContent = "Deleting…";
+      let res = null;
+      try {
+        res = window.JA_NET
+          ? await window.JA_NET.api("api/admin/delivery-zones/" + encodeURIComponent(id), { method: "DELETE" })
+          : null;
+      } catch (err) {
+        res = { ok: false, error: (err && err.message) || "Network error while deleting the zone." };
+      }
+      // The row is about to be re-rendered, so un-stick the button first.
+      del.disabled = false;
+      del.textContent = origLabel || "Delete";
       if (!res || !res.ok) {
-        del.disabled = false;
-        zoneError((res && res.error) || "Could not delete the zone.");
+        const msg = (res && res.error) ? String(res.error) : "Could not delete the zone.";
+        zoneError(msg);
+        JA.toast(msg);
         return;
       }
       dzCache = res.zones || [];
       dzAuthoritative = true;
-      JA.toast("Zone deleted.");
-      paintDesk("delivery");
+      // Repaint the table body only. A full desk repaint would rebuild the
+      // form above it and throw away whatever the owner was typing.
+      paintZoneTable();
+      if ((form.zone_id.value || "").trim() === String(id || "").trim()) resetZoneForm(form);
+      JA.toast("Zone deleted — live now.");
       return;
     }
     const edit = e.target.closest("[data-zone-edit]");
     if (edit) {
-      const z = dzCache.find((x) => x.id === edit.getAttribute("data-zone-edit"));
-      if (!z) return;
+      const zid = edit.getAttribute("data-zone-edit");
+      const z = dzCache.find((x) => String(x.id) === String(zid));
+      if (!z) {
+        // The row came from a stale cache - refetch, repaint, then the admin
+        // can click Edit again on the row the server actually has.
+        loadDeliveryZones().then(() => paintZoneTable()).catch(() => {});
+        return;
+      }
       form.zone_id.value = z.id;
-      form.zone_name.value = z.name;
-      form.zone_currency.value = z.currency;
-      form.zone_kind.value = z.kind;
+      form.zone_name.value = z.name || "";
+      form.zone_currency.value = z.currency || "CFA";
+      form.zone_kind.value = z.kind || "delivery";
       form.zone_fare_min.value = z.fare_min;
       form.zone_fare_max.value = z.fare_max;
       form.zone_sort.value = z.sort_order;
       form.zone_active.value = z.active ? "1" : "0";
-      $("#zone-cancel").hidden = false;
-      $("#zone-save").textContent = "Update zone";
+      const cancel = $("#zone-cancel");
+      if (cancel) cancel.hidden = false;
+      const btn = $("#zone-save");
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Update zone";
+      }
       zoneError("");
       form.zone_name.focus();
+      try {
+        if (typeof form.scrollIntoView === "function") form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      } catch (_) { /* scrolling is cosmetic only */ }
     }
   });
 
   const cancel = $("#zone-cancel");
-  if (cancel) cancel.addEventListener("click", () => {
-    form.reset();
-    form.zone_id.value = "";
-    cancel.hidden = true;
-    $("#zone-save").textContent = "Save zone";
-    zoneError("");
-  });
+  if (cancel) cancel.addEventListener("click", () => resetZoneForm(form));
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     zoneError("");
     const btn = $("#zone-save");
     const isUpdate = !!(form.zone_id.value || "").trim();
-    const originalText = btn ? btn.textContent : "";
+    const name = (form.zone_name.value || "").trim();
+    if (!name) {
+      const msg = "Give the zone a name, e.g. Lagos Mainland.";
+      zoneError(msg);
+      JA.toast(msg);
+      form.zone_name.focus();
+      return;
+    }
     const payload = {
       id: form.zone_id.value || "",
-      name: form.zone_name.value.trim(),
+      name: name,
       currency: form.zone_currency.value,
       kind: form.zone_kind.value,
       fare_min: Number(form.zone_fare_min.value || 0),
@@ -2031,9 +2080,12 @@ function bindDeliveryZones() {
     } catch (err) {
       res = { ok: false, error: (err && err.message) || "Network error while saving the zone." };
     }
+    // ALWAYS put the button back, on failure too. Left reading "Saving…" or
+    // "Update zone" it is a stale control: it looks busy, or it looks like the
+    // edit never landed.
     if (btn) {
       btn.disabled = false;
-      btn.textContent = originalText || (isUpdate ? "Update zone" : "Save zone");
+      btn.textContent = isUpdate ? "Update zone" : "Save zone";
     }
     if (!res || !res.ok) {
       const msg = (res && res.error) ? String(res.error) : "Could not save the zone. Nothing changed.";
@@ -2041,11 +2093,12 @@ function bindDeliveryZones() {
       JA.toast(msg);
       return;
     }
-    // Keep cache from server response - source of truth, not form
+    // The server's list is the truth. Repaint the table from it immediately,
+    // before anything else can repaint, so the new fare is on screen at once.
     dzCache = res.zones || [];
     dzAuthoritative = true;
-    try { paintZoneTable(); } catch (_) {}
-    const z = res.zone || (dzCache.find((x) => x.id === (payload.id || "").toLowerCase()) || null);
+    paintZoneTable();
+    const z = res.zone || (dzCache.find((x) => String(x.id) === String(payload.id || "").toLowerCase()) || null);
     if (z) {
       let fareTxt = "";
       if (z.kind === "pickup") fareTxt = "free pickup";
@@ -2055,7 +2108,9 @@ function bindDeliveryZones() {
     } else {
       JA.toast("Zone saved — live now.");
     }
-    paintDesk("delivery");
+    // Clear the editor WITHOUT paintDesk(): rebuilding the whole delivery desk
+    // is what used to swallow the repaint and leave a stale Update button.
+    resetZoneForm(form);
   });
 }
 async function saveSiteConfig(patch) {

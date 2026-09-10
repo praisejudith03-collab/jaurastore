@@ -431,6 +431,31 @@ def test_the_admin_portal_has_a_zone_editor():
     # no duplicate submission while in flight
     assert "btn.disabled = true" in admin_js
 
+    # Stale Update button regression. Saving a zone used to finish with a full
+    # paintDesk("delivery"): the whole desk was rebuilt, which swallowed the
+    # table repaint and left the button reading "Update zone" over an empty
+    # form, so the owner could not tell whether the fare had stuck. A save (or
+    # delete) now repaints the table body from the server's answer and clears
+    # the editor in place.
+    bind = admin_js[admin_js.index("function bindDeliveryZones("):]
+    bind = bind[: bind.index("\n}\n")]
+    assert 'paintDesk("delivery")' not in bind, (
+        "a zone save or delete must not repaint the whole delivery desk - "
+        "repaint the table body, or the Update button goes stale")
+    assert "paintZoneTable()" in bind, "the table must refresh from the server list"
+    assert "function resetZoneForm(" in admin_js, (
+        "one shared reset keeps the button, the hidden id and Cancel honest")
+    assert "resetZoneForm(form)" in bind
+    # the label comes from the mode, never from a label captured before the
+    # request, so a failed save cannot leave the button stuck on "Saving…"
+    assert 'btn.textContent = isUpdate ? "Update zone" : "Save zone"' in bind
+    # an edit fills the whole row, and a row the cache no longer has refetches
+    assert "form.zone_sort.value = z.sort_order" in bind
+    assert "loadDeliveryZones().then(() => paintZoneTable())" in bind
+    # a delete shows progress and puts the row button back if it fails
+    assert "Deleting…" in bind
+    assert "del.textContent = origLabel || \"Delete\"" in bind
+
 
 # --------------------------------------------------------------------------
 # Supabase-first regression: the owner reported Lomé 1500-2500 does not stick
