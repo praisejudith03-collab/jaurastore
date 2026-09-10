@@ -148,6 +148,9 @@ def test_header_controls_do_not_overlap(mobile, live_shop, width, language):
     for control in mobile.locator("#site-header .nav-right button").all():
         box = control.bounding_box()
         assert box and box["x"] >= 0 and box["x"] + box["width"] <= width
+    mobile.locator('#site-header [data-open-search]').click()
+    expect(mobile.locator('[data-search-input]')).to_be_visible()
+    expect(mobile.locator('[data-search]')).to_have_count(1)
 
 
 def test_owner_category_creation_product_and_reordering(mobile, live_shop):

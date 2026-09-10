@@ -2325,6 +2325,10 @@ const JA = (() => {
   }
 
   function mountChrome() {
+    // These nodes live outside the footer for fixed positioning. Remove the
+    // previous set before a language switch mounts and binds fresh controls.
+    document.querySelectorAll("body > .dock, body > [data-search], body > .wa-float")
+      .forEach((node) => node.remove());
     const top = document.getElementById("site-header");
     const bot = document.getElementById("site-footer");
     if (top) top.innerHTML = headerHTML();
