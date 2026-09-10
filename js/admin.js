@@ -1041,7 +1041,34 @@ function orderCardHTML(o) {
 }
 let orderFilter = "all";
 function ordersPanel() {
-  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}<a class="au-link-btn" href="api/admin/orders.csv" style="margin-left:auto">Download CSV</a></div><p class="admin-note">Tap an order to see everything — customer details, items, the payment receipt and the action buttons. Every checkout is kept forever.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><div id="proofs-box"><p class="empty">Loading receipts…</p></div>`;
+  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}<a class="au-link-btn" href="api/admin/orders.csv" style="margin-left:auto">Download CSV</a></div><p class="admin-note">Tap an order to see everything — customer details, items, the payment receipt and the action buttons. Every checkout is kept forever.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><p class="admin-note" id="mail-status" role="status" aria-live="polite" style="margin-bottom:10px">Checking receipt emails…</p><button type="button" class="btn btn-line" id="mail-test" hidden>Email a test</button><div id="proofs-box"><p class="empty">Loading receipts…</p></div>`;
+}
+async function refreshMailStatus() {
+  const note = $("#mail-status"); if (!note) return;
+  const btn = $("#mail-test");
+  let d = null;
+  try { const res = await fetch("api/admin/mail/status", { credentials: "same-origin", cache: "no-store" }); if (res.ok) d = await res.json(); } catch (e) { d = null; }
+  if (!d || d.ok === false) { note.textContent = "Receipt emails: status unavailable."; if (btn) btn.hidden = true; return; }
+  if (d.enabled) {
+    note.textContent = `Receipt emails: on via ${d.provider} to ${d.to}`;
+    if (btn) btn.hidden = false;
+  } else {
+    note.textContent = "Receipt emails: off — set " + (d.missing || []).join(", ") + " in Render (see ENVIRONMENT_VARIABLES.md). Every order and receipt still shows up here.";
+    if (btn) btn.hidden = true;
+  }
+}
+async function sendTestEmail() {
+  const note = $("#mail-status"); const btn = $("#mail-test");
+  if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+  if (note) note.textContent = "Sending a test email…";
+  let res = null;
+  try { res = await window.JA_NET.api("api/admin/mail/test", { method: "POST", json: {} }); } catch (e) { res = { ok: false, error: e.message }; }
+  if (btn) { btn.disabled = false; btn.textContent = "Email a test"; }
+  if (!res || res.ok === false) {
+    if (note) note.textContent = "Receipt emails: test failed — " + ((res && res.error) || "check the mail settings in Render.");
+    return;
+  }
+  if (note) note.textContent = `Receipt emails: on via ${res.provider} to ${res.to} — test email sent, check the inbox (and spam).`;
 }
 const PROOF_PAGE = 20;
 let proofsShown = PROOF_PAGE;
@@ -1426,7 +1453,7 @@ function paintDesk(tab = "analytics") {
   const logoutM = $("#logout-m"); if (logoutM) logoutM.onclick = signOut;
   document.querySelectorAll("[data-tab]").forEach((b) => { b.onclick = () => paintDesk(b.dataset.tab); });
   if (tab === "analytics") { fillAnalytics(); startDashTimer(); }
-  if (tab === "orders") { fillOrders(); fillProofs(); }
+  if (tab === "orders") { fillOrders(); fillProofs(); refreshMailStatus(); const mt = $("#mail-test"); if (mt) mt.onclick = sendTestEmail; }
   if (tab === "sales") fillSales();
   if (tab === "marketing") fillMarketing();
   if (tab === "account") bindAccount();

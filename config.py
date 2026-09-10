@@ -122,6 +122,24 @@ class Config:
     # (regenerate js/products-data.js + commit any changed data files).
     REPO_SYNC_ON_WRITE = (os.environ.get("REPO_SYNC_ON_WRITE", "1") or "1") == "1"
 
+    # ------------------------------------------------- shop email (orders/receipts)
+    # Every paid order and every customer-uploaded payment receipt is emailed
+    # to the shop; the receipt email carries THE CUSTOMER'S OWN FILE as an
+    # attachment. Render's free/starter instances block outbound SMTP ports
+    # (25/465/587), so mail goes over HTTPS first - Resend
+    # (RESEND_API_KEY), then Brevo (BREVO_API_KEY) - and only falls back to
+    # SMTP when no HTTPS provider is configured. MAIL_FROM must be a sender
+    # the provider has verified; MAIL_TO is the shop inbox that receives
+    # everything. See ENVIRONMENT_VARIABLES.md and mailer.py.
+    MAIL_FROM = os.environ.get("MAIL_FROM", "")
+    MAIL_TO = os.environ.get("MAIL_TO", "")
+    RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+    BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
+    SMTP_HOST = os.environ.get("SMTP_HOST", "")
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or 587)
+    SMTP_USER = os.environ.get("SMTP_USER", "")
+    SMTP_PASS = os.environ.get("SMTP_PASS", "")
+
     # --------------------------------------------------------- analytics
     ANALYTICS_RETENTION_DAYS = int(os.environ.get("ANALYTICS_RETENTION_DAYS", "400") or 400)
     LIVE_WINDOW_SECONDS = 120      # a visitor counts as "on the site" this long

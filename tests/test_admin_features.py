@@ -71,6 +71,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("GET", "/api/admin/session"), ("POST", "/api/admin/site"),
     ("GET", "/api/admin/stock"), ("PUT", "/api/admin/stock"),
     ("POST", "/api/admin/sync/repo"), ("GET", "/api/admin/sync/status"),
+    ("GET", "/api/admin/mail/status"), ("POST", "/api/admin/mail/test"),
     ("POST", "/api/admin/uploads/category"), ("POST", "/api/admin/uploads/hero"),
     ("POST", "/api/admin/uploads/image"), ("POST", "/api/admin/uploads/product"),
     ("POST", "/api/admin/uploads/video"),

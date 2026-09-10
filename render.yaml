@@ -85,6 +85,27 @@ services:
         sync: false
       - key: WHATSAPP_CALLMEBOT_KEY
         sync: false
+      # Shop email: every order + every customer receipt is emailed to the
+      # shop, the receipt WITH the customer's own file attached. HTTPS
+      # providers first (Resend, then Brevo) because Render's free/starter
+      # instances block outbound SMTP ports 25/465/587; SMTP_* is only a
+      # fallback for hosts with open SMTP. See ENVIRONMENT_VARIABLES.md.
+      - key: MAIL_FROM
+        sync: false
+      - key: MAIL_TO
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
     disk:
       name: jaura-staging-data
       mountPath: /var/data
@@ -171,6 +192,27 @@ services:
       - key: WHATSAPP_PHONE_ID
         sync: false
       - key: WHATSAPP_CALLMEBOT_KEY
+        sync: false
+      # Shop email: every order + every customer receipt is emailed to the
+      # shop, the receipt WITH the customer's own file attached. HTTPS
+      # providers first (Resend, then Brevo) because Render's free/starter
+      # instances block outbound SMTP ports 25/465/587; SMTP_* is only a
+      # fallback for hosts with open SMTP. See ENVIRONMENT_VARIABLES.md.
+      - key: MAIL_FROM
+        sync: false
+      - key: MAIL_TO
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
         sync: false
     disk:
       name: jaura-production-data

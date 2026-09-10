@@ -98,6 +98,61 @@ def _env(name, default=""):
     return (os.environ.get(name) or default).strip()
 
 
+def _running_under_pytest():
+    """True when this process is a pytest run (any module, any test phase).
+
+    pytest sets PYTEST_CURRENT_TEST and stays in sys.modules for the whole
+    process; no production process ever has either. (Config.ENV alone is NOT
+    a sufficient guard: a test may legitimately flip Config.ENV to
+    "production" to exercise the production code path.)
+    """
+    return bool(os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules)
+
+
+def repo_sync_blocked_reason():
+    """Why this process may NOT regenerate/commit/push the repository data
+    files — or None when it may.
+
+    Only a DEPLOYED instance may publish catalogue state back to the
+    repository: FLASK_ENV must be "production" or "staging", REPO_SYNC_ON_WRITE
+    must be on, and the process must not be pytest. Anything else — a
+    developer's ENV=development preview, a laptop checkout, a test run — is
+    blocked, so scratch catalogue state can never reach the repository's
+    main branch again (see the accidental-sync revert on this branch's
+    history: a local preview once rewrote wix-001's stock from 24 to 0).
+
+    Every publish path consults this one gate:
+      * catalog._sync_repo_async  — the automatic post-write sync;
+      * backup.run                — the nightly backup job;
+      * POST /admin/sync/repo     — the manual "Sync to GitHub" button,
+                                    which answers 409 with this reason.
+    """
+    if _running_under_pytest():
+        return ("Repository sync is blocked: this process is running the test "
+                "suite, which must never touch the git repository.")
+    env = ""
+    try:
+        import config as config_mod
+        env = (getattr(config_mod.Config, "ENV", "") or "").strip().lower()
+    except Exception:
+        env = _env("FLASK_ENV").lower()
+    if env not in ("production", "staging"):
+        return ("Repository sync is blocked: this instance's environment is "
+                f"'{env or 'unset'}'. Only a deployed production or staging "
+                "instance (FLASK_ENV=production|staging) may publish catalogue "
+                "state to the repository, so a development preview can never "
+                "push its scratch data to main.")
+    try:
+        import config as config_mod
+        on_write = getattr(config_mod.Config, "REPO_SYNC_ON_WRITE", True)
+    except Exception:
+        on_write = _env("REPO_SYNC_ON_WRITE", "1") == "1"
+    if not on_write:
+        return ("Repository sync is blocked: REPO_SYNC_ON_WRITE is off on "
+                "this instance.")
+    return None
+
+
 def _git(*args, timeout=120):
     """Run a git command in the repo root. Returns (ok, output)."""
     try:
@@ -192,8 +247,16 @@ def regenerate(overrides=None, commit=True, push=True, message=""):
     """Regenerate the repo data state, commit, and optionally push.
 
     Returns (ok, report). Never raises: any git/token problem is returned as
-    ok=False with a message, so the shop is never blocked by sync.
+    ok=False with a message, so the shop is never blocked by sync. Gated by
+    repo_sync_blocked_reason() so this module's own entry point (CLI or
+    imported) refuses to publish from anything but a deployed instance too -
+    every publish path meets the same rule, whichever way it is reached.
     """
+    reason = repo_sync_blocked_reason()
+    if reason:
+        return True, {"committed": False, "pushed": False,
+                      "note": f"blocked: {reason}"}
+
     report = {}
 
     # Load the canonical overrides (from disk / Supabase) if not passed in.
