@@ -1601,14 +1601,25 @@ def admin_product_upsert():
 def admin_product_delete(pid):
     """Soft-delete one product. In production the tombstone MUST land in
     Supabase first: a failed portal call never reports success, so the admin
-    can retry instead of believing a product is gone while it still sells."""
+    can retry instead of believing a product is gone while it still sells.
+
+    Soft-deleting the products-table row alone is not enough for a seed
+    product: catalog.merged() unions the 258 bundled seed rows on every
+    read, so the durable deleted-ids list in growth_settings must be
+    written too (see catalog.remove / supabase_store.add_deleted_id).
+    """
     pid = sec.clean(pid, 64)
     if catalog_mod._prod_source():
-        from supabase_store import delete_products_strict
+        from supabase_store import delete_products_strict, add_deleted_id
         if not delete_products_strict([pid]):
             return jsonify(ok=False, error=(
                 "The product could not be deleted from Supabase. "
                 "No changes were made.")), 503
+        # Durable tombstone so a seed product stays gone across redeploys.
+        try:
+            add_deleted_id(pid)
+        except Exception:
+            pass
         catalog_mod._sync_repo_async()
     else:
         catalog_mod.remove(pid, authmod.current_admin())

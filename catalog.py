@@ -655,12 +655,38 @@ def resolve_product_id(wanted, products=None, include_hidden=True):
     return str((prod or {}).get("id") or "").strip()
 
 
+def _durable_deleted_ids():
+    """Product ids the owner deleted, stored durably in Supabase.
+
+    Soft-deleting a seed product only marks its products-table row
+    ``source="deleted"``. ``merged()`` still unions the 258 bundled seed
+    rows, so without a durable suppression list a deleted seed product
+    reappears after every Render redeploy (the local ``data/catalog.json``
+    ``deleted`` list lives on the same wiped disk).
+
+    Returns an empty set on any failure so an outage neither resurrects a
+    product the owner deleted nor empties the shop.
+    """
+    try:
+        from supabase_store import load_deleted_ids
+        ids = load_deleted_ids()
+    except Exception:
+        return set()
+    if ids is None:
+        return set()
+    return {str(x).strip() for x in ids if str(x or "").strip()}
+
+
 def merged(include_hidden=False):
     """Seed products + every admin edit, minus what was deleted.
 
     This is the live catalogue. When Supabase is configured it is the source
     of truth; otherwise the local override file supplies the edits.
     """
+    # Local override list UNION durable Supabase tombstones. The local list
+    # alone is wiped on every Render redeploy; the durable set alone is empty
+    # when Supabase is unreachable. Together they cover both cases.
+    durable = _durable_deleted_ids()
     sb = _supabase_products()
     if sb is not None:
         # Supabase rows are the live catalogue; the seed only supplies
@@ -671,7 +697,7 @@ def merged(include_hidden=False):
         # confirmed by the SAME name (a re-created piece). A slug or sku
         # clash with a different product never hides it.
         ov = overrides()
-        deleted = set(ov.get("deleted") or [])
+        deleted = set(ov.get("deleted") or []) | durable
         ov_products = ov.get("products") or []
         products = _dedupe_products(_fill_missing_fields(sb, ov_products),
                                     _seed_products())
@@ -684,7 +710,7 @@ def merged(include_hidden=False):
     else:
         data, _p = _load_overrides()
         overrides_list = data.get("products") or []
-        deleted = set(data.get("deleted") or [])
+        deleted = set(data.get("deleted") or []) | durable
         by_id = {p["id"]: p for p in _seed_products()}
         for p in overrides_list:
             by_id[p["id"]] = p
@@ -894,12 +920,20 @@ def upsert(product, actor=None):
 
     if _prod_source():
         try:
-            from supabase_store import upsert_products
+            from supabase_store import upsert_products, clear_deleted_id
             ok = bool(upsert_products([clean]))
         except Exception:
             ok = False
+            clear_deleted_id = None
         if not ok:
             return None, "error", False
+        # A re-created / re-saved product must not stay filtered out by the
+        # durable tombstone list — clear it only AFTER the row lands.
+        try:
+            from supabase_store import clear_deleted_id as _clear_del
+            _clear_del(clean["id"])
+        except Exception:
+            pass
         row = _read_back_product(clean["id"])
         if row is None:
             return None, "error", False
@@ -920,6 +954,13 @@ def upsert(product, actor=None):
         data["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
         data["updatedBy"] = actor or ""
         _write_overrides(data, path)
+    # Durable tombstone must clear too, or a re-created product stays hidden
+    # after the next deploy even though the local deleted list was cleaned.
+    try:
+        from supabase_store import clear_deleted_id
+        clear_deleted_id(clean["id"])
+    except Exception:
+        pass
     mirrored = True
     try:
         from supabase_store import upsert_products, enabled
@@ -936,10 +977,27 @@ def upsert(product, actor=None):
 
 
 def remove(pid, actor=None):
-    """Soft-delete one product: it is dropped from the live catalogue."""
+    """Soft-delete one product: it is dropped from the live catalogue.
+
+    Always records the id in the durable Supabase tombstone list so a seed
+    product stays invisible across Render redeploys (the local override
+    ``deleted`` list alone is wiped with the disk).
+    """
+    pid = str(pid or "").strip()
+    if not pid:
+        return None
+
+    def _tombstone():
+        try:
+            from supabase_store import add_deleted_id
+            add_deleted_id(pid)
+        except Exception:
+            pass
+
     if _prod_source():
         from supabase_store import delete_products
         delete_products([pid])
+        _tombstone()
         _sync_repo_async()
         return None
 
@@ -956,6 +1014,7 @@ def remove(pid, actor=None):
     _mutate(actor, _apply)
     from supabase_store import delete_products
     delete_products([pid])
+    _tombstone()
     _sync_repo_async()
     return None
 
@@ -1070,20 +1129,68 @@ def _write_categories_file(data, path):
     _os.replace(tmp, path)
 
 
+def _merge_marker_get():
+    """Read the category-merge marker. Prefer Supabase (survives redeploys).
+
+    The marker used to live only in the local SQLite ``growth_settings``
+    table, which sits on Render's ephemeral disk — every redeploy re-ran
+    the merge and overwrote the owner's category renames. Supabase is the
+    durable home; SQLite is consulted as a same-process / offline fallback
+    so a just-written marker is visible even before the next Supabase read,
+    and so the test suite (no Supabase) stays idempotent between calls.
+    """
+    # 1. Durable source of truth.
+    try:
+        from supabase_store import load_growth_settings, enabled
+        if enabled():
+            gs = load_growth_settings()
+            if isinstance(gs, dict) and gs.get(MERGE_MARKER):
+                return gs.get(MERGE_MARKER)
+            # Key absent or load failed: fall through to SQLite. A wiped
+            # disk + present Supabase key is handled by the branch above; a
+            # first boot has neither and correctly runs the merge.
+    except Exception:
+        pass
+    # 2. Local SQLite fallback (tests / offline dev / same-process).
+    try:
+        from db import one
+        row = one("SELECT value FROM growth_settings WHERE key=?", (MERGE_MARKER,))
+        if row:
+            return row["value"] if isinstance(row, dict) else (
+                row[0] if isinstance(row, (tuple, list)) else row)
+    except Exception:
+        pass
+    return None
+
+
+def _merge_marker_set(value):
+    """Persist the category-merge marker to Supabase AND local SQLite."""
+    stamp = str(value or "")
+    # Durable write first — this is what stops the next deploy from re-running.
+    try:
+        from supabase_store import mirror_growth_settings, enabled
+        if enabled():
+            mirror_growth_settings({MERGE_MARKER: stamp})
+    except Exception:
+        pass
+    # Local write so the in-process / test path is idempotent too.
+    try:
+        from db import execute
+        execute("INSERT OR REPLACE INTO growth_settings (key, value) VALUES (?, ?)",
+                (MERGE_MARKER, stamp))
+    except Exception:
+        pass
+
+
 def merge_categories(actor=None):
     """Apply the category merge once (idempotent, marker `category_merge_v2`).
 
     Returns True when the merge ran on this boot, False when it had already
-    been applied (or the marker could not be read, in which case it still runs
-    so the migration can never be skipped by an unreadable marker).
+    been applied. The marker lives in Supabase growth_settings so a Render
+    redeploy cannot re-run the force-renames over the owner's category names.
     """
-    from db import one, execute
-    try:
-        marker = one("SELECT value FROM growth_settings WHERE key=?", (MERGE_MARKER,))
-        if marker:
-            return False
-    except Exception:
-        pass  # an unreadable marker must never skip the migration
+    if _merge_marker_get():
+        return False
 
     table, path = _read_categories_file()
     changed = False
@@ -1107,11 +1214,8 @@ def merge_categories(actor=None):
 
     _fold_product_categories(actor)
 
-    try:
-        execute("INSERT OR REPLACE INTO growth_settings (key, value) VALUES (?, ?)",
-                (MERGE_MARKER, datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"))
-    except Exception:
-        pass
+    _merge_marker_set(
+        datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z")
     return True
 
 

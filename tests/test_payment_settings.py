@@ -233,7 +233,10 @@ def test_writing_payment_details_requires_admin_and_csrf(client):
     assert r.status_code in (400, 403), r.status_code
 
 
-# The exact canonical field names the Admin Settings form must submit.
+# The exact canonical field names the Admin Settings form must submit AND
+# show as inputs. The five RETIRED fields below used to live on the form but
+# nothing on the storefront ever read them — they stay in SITE_KEYS (and
+# fillSiteForm) so a stored value is not wiped, but they are gone from the UI.
 CANONICAL_SETTINGS_FIELDS = (
     "bank_name", "account_number", "account_name",
     "cfa_payment_provider", "cfa_payment_name", "cfa_payment_account",
@@ -242,9 +245,13 @@ CANONICAL_SETTINGS_FIELDS = (
     "togo_payment_instructions",
     "naira_payment_bank", "naira_payment_name", "naira_payment_account",
     "naira_payment_instructions",
-    "shipping_note", "contact_email", "contact_phone",
-    "referral_commission_percentage", "hero_banner_title",
-    "hero_banner_subtitle", "site_logo_url",
+    "shipping_note",
+    "referral_commission_percentage",
+)
+
+RETIRED_SETTINGS_FIELDS = (
+    "hero_banner_title", "hero_banner_subtitle",
+    "contact_email", "contact_phone", "site_logo_url",
 )
 
 
@@ -258,6 +265,10 @@ def test_admin_form_submits_every_canonical_settings_field():
     sent |= set(PAYMENT_COLUMNS)          # added by PAYMENT_FIELDS.forEach
     missing = [f for f in CANONICAL_SETTINGS_FIELDS if f not in sent]
     assert not missing, f"the Admin form does not send: {missing}"
+    # Retired fields must NOT be in the submit payload (so a stale stored
+    # value is preserved rather than wiped to empty on every Save).
+    leaked = [f for f in RETIRED_SETTINGS_FIELDS if f in sent]
+    assert not leaked, f"retired fields must not be submitted: {leaked}"
 
 
 def test_every_canonical_field_has_a_form_input_and_is_repainted():
@@ -265,8 +276,14 @@ def test_every_canonical_field_has_a_form_input_and_is_repainted():
     no_input = [f for f in CANONICAL_SETTINGS_FIELDS
                 if f'name="{f}"' not in admin_js]
     assert not no_input, f"no form input named: {no_input}"
-    # fillSiteForm must paint each one back from the server response, or the
-    # admin sees their own typed value rather than what Supabase stored.
+    # Retired inputs must be gone from the Settings form UI.
+    still_there = [f for f in RETIRED_SETTINGS_FIELDS
+                   if f'name="{f}"' in admin_js]
+    assert not still_there, f"retired form inputs still present: {still_there}"
+    # fillSiteForm must paint each canonical one back from the server
+    # response, or the admin sees their own typed value rather than what
+    # Supabase stored. Retired columns stay in fillSiteForm so a stored
+    # value is not wiped if an input ever reappears.
     m = re.search(r"function fillSiteForm\(site\) \{(.*?)\n\}", admin_js, re.S)
     assert m, "fillSiteForm not found"
     body = m.group(1)
@@ -274,6 +291,8 @@ def test_every_canonical_field_has_a_form_input_and_is_repainted():
                      if f not in body and f not in PAYMENT_COLUMNS]
     assert not not_repainted, f"not repainted from the server: {not_repainted}"
     assert "PAYMENT_FIELDS.forEach" in body
+    for f in RETIRED_SETTINGS_FIELDS:
+        assert f in body, f"fillSiteForm must still carry retired column {f}"
 
 
 def test_server_accepts_and_returns_every_canonical_field(client):
@@ -301,6 +320,10 @@ def test_server_accepts_and_returns_every_canonical_field(client):
     served = client.get("/api/site").get_json()["site"]
     for key in CANONICAL_SETTINGS_FIELDS:
         assert key in served, f"GET /api/site does not serve {key}"
+    # Retired columns stay on the API so stored values survive; the form
+    # simply no longer edits them.
+    for key in RETIRED_SETTINGS_FIELDS:
+        assert key in served, f"GET /api/site dropped retired column {key}"
 
 
 def test_save_success_is_only_reported_after_the_server_confirms():

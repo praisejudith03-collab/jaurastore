@@ -837,6 +837,12 @@ const JA = (() => {
         toast((d && d.error) || "Could not save the product. No changes are live.");
         return { ok: false, error: d.error || "Could not save the product." };
       }
+      // A CONFIRMED save must drop its KEYS.custom entry immediately. onDone
+      // only fires for a later outbox flush, so a successful first-try save
+      // used to leave the id in jaura_custom_products forever — the Account
+      // tab then kept saying "N change(s) are waiting for a connection."
+      if (d && d.product) applyServerProduct(d.product);
+      else clearPending(next.id);
       if (d && d.mirrored === false) {
         toast("Saved on the server only — not yet on the cloud copy. Tap Retry now.");
       }
@@ -1609,8 +1615,12 @@ const JA = (() => {
     _siteConfig = site;
     if (site.bannerFrom) _bannerDates.from = site.bannerFrom;
     if (site.bannerTo) _bannerDates.to = site.bannerTo;
-    if (site.convBanner) _bannerText.conv = site.convBanner;
-    if (site.convBold) _bannerText.bold = site.convBold;
+    // Keyed on `"convBanner" in site` (not truthiness): an EMPTY save is a
+    // real value meaning "restore the default delivery-window banner". The
+    // old `if (site.convBanner)` never cleared the previous text, so the
+    // moving banner kept showing something other than what the owner typed.
+    if ("convBanner" in site) _bannerText.conv = site.convBanner || "";
+    if ("convBold" in site) _bannerText.bold = site.convBold || "";
     // Mirror the canonical keys for the offline paint pass only. The payment
     // columns are mirrored too: a phone that opens the checkout offline must
     // still see the bank details it was shown a minute ago, instead of an
@@ -2195,6 +2205,14 @@ const JA = (() => {
     try { startCardPlay(); } catch (e) {}
     refreshChrome();
     bindChrome();
+    // mountChrome paints the header BEFORE api/site resolves, so the banner
+    // track starts with the default delivery-window text. Repaint it whenever
+    // the live site row lands (or the owner saves a new banner) so the moving
+    // line always matches what was typed.
+    if (!document.documentElement.dataset.jaSiteBannerBound) {
+      document.documentElement.dataset.jaSiteBannerBound = "1";
+      document.addEventListener("ja:site", () => { try { paintConvBanner(); } catch (e) {} });
+    }
     try { if (window.I18N) window.I18N.apply(); } catch (e) {}
     showWelcome();
     try {
