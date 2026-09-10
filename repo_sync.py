@@ -422,6 +422,18 @@ def _commit_and_push(commit, push, message, report):
     clean and local reviewers see it). When the checkout has no git (deployed
     web service), fall back to the GitHub Contents API.
     """
+    # LAST LINE OF DEFENCE. regenerate() consults the gate before doing work,
+    # but it may run on a background thread spawned long before - after other
+    # tests' monkeypatches have been torn back down. Re-check here, at the
+    # exact moment a commit would be written, so a test run can never produce
+    # one no matter which path reached this point.
+    if _running_under_pytest():
+        report["committed"] = False
+        report["pushed"] = False
+        report["note"] = ("Repository sync is blocked: this process is running "
+                          "the test suite, which must never touch the git "
+                          "repository.")
+        return False, report
     repo = _resolve_repo()
     token = _env("GITHUB_TOKEN") or _env("GITHUB_API_TOKEN")
     branch = _env("GITHUB_BRANCH") or "main"

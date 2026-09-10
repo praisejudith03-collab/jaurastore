@@ -61,7 +61,7 @@ with sync_playwright() as pw:
                     assert abs(centre - layout_centre) <= 4, (
                         f"header logo not centred on {base + path}: "
                         f"centre {centre} != {layout_centre}")
-                    cfa = page.locator('#site-header .currency-switch [data-cur="CFA"]')
+                    cfa = page.locator('#site-header .header .currency-switch [data-cur="CFA"]')
                     cbox = cfa.bounding_box()
                     assert cbox and 40 <= cbox["width"] <= 80, (
                         f"currency pill wrong width: {cbox}")
