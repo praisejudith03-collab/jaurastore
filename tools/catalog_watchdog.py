@@ -15,8 +15,9 @@ and fails loudly when any of these invariants break:
     the public catalogue exactly once - in either direction (missing rows are
     the "storefront shows fewer products than Supabase" defect; extra rows
     are rows that should have been filtered out);
-  * the 258 approved customer rows (wix-001..wix-258) still exist in Supabase
-    and are online=true - the "products disappear" guard. If you
+  * the 255 approved customer rows (wix-001..wix-258 minus the three the
+    owner deleted on purpose: wix-006, wix-007, wix-108) still exist in
+    Supabase and are online=true - the "products disappear" guard. If you
     INTENTIONALLY unpublish or delete one of them, change EXPECTED_WIX_IDS
     (or disable the watchdog) in the same change - otherwise this alert is
     doing its job;
@@ -37,9 +38,13 @@ import urllib.request
 
 DEFAULT_BASE = "https://jaurastore.com.ng"
 
-# The approved customer catalogue: 258 wix-* rows, ids wix-001..wix-258
-# (CUSTOMER_CATALOG_IMPORT_REVIEW.md). Zero-padded to three digits.
-EXPECTED_WIX_IDS = tuple(f"wix-{i:03d}" for i in range(1, 259))
+# The approved customer catalogue: 255 wix-* rows - ids wix-001..wix-258
+# (CUSTOMER_CATALOG_IMPORT_REVIEW.md) minus the three the owner deleted on
+# purpose (2026-09-10), which must never trip this guard again.
+# Zero-padded to three digits.
+RETIRED_WIX_IDS = frozenset({"wix-006", "wix-007", "wix-108"})
+EXPECTED_WIX_IDS = tuple(f"wix-{i:03d}" for i in range(1, 259)
+                          if f"wix-{i:03d}" not in RETIRED_WIX_IDS)
 
 # Rows whose `source` marks a tombstone (a soft delete or a superseded bulk
 # import) are not live products - the app filters them too (supabase_store).
@@ -169,7 +174,7 @@ def check(db_rows, payload, expected_ids=EXPECTED_WIX_IDS):
             f"{len(extra)} product(s) are served that Supabase does not list "
             f"online: {', '.join(extra[:15])}")
 
-    # 3. the approved 258 customer rows never disappear and never go offline
+    # 3. the approved 255 customer rows never disappear and never go offline
     gone = [pid for pid in expected_ids if pid not in live]
     offline = [pid for pid in expected_ids if pid in live
                and live[pid].get("online") is not True]
