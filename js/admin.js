@@ -1127,14 +1127,20 @@ function bindAccount() {
     if (!statusBox) return;
     try {
       const res = await fetch("api/admin/sync/status", { credentials: "same-origin", cache: "no-store" });
-      if (!res.ok) { statusBox.textContent = "Could not read the sync status."; return; }
+      if (!res.ok) {
+        statusBox.textContent = "Could not read the sync status.";
+        const ghBtn = $("#sync-github");
+        if (ghBtn) ghBtn.hidden = true;
+        return;
+      }
       const d = await res.json();
       const health = d.supabaseHealth || "";
       const label = health === "ok" ? "OK"
         : health === "unreachable" ? "UNREACHABLE"
         : "not configured";
-      // Only offer "Sync to GitHub" when a token is actually configured -
-      // the button used to sit there permanently and always fail.
+      // Only offer "Sync to GitHub" when a token is actually configured —
+      // the button used to sit there permanently and always fail. Hidden on
+      // error/timeout too (d.gitToken must be positively true).
       const ghBtn = $("#sync-github");
       if (ghBtn) ghBtn.hidden = !d.gitToken;
       const bits = [];
@@ -1149,7 +1155,12 @@ function bindAccount() {
           : "GitHub backup is available — use the Sync button.");
       }
       statusBox.innerHTML = bits.map((b) => JA.escape(b)).join("<br>");
-    } catch (e) { statusBox.textContent = "Sync status unavailable."; }
+    } catch (e) {
+      // Hide the button on a status-call failure too: we cannot confirm a token.
+      const ghBtn = $("#sync-github");
+      if (ghBtn) ghBtn.hidden = true;
+      statusBox.textContent = "Sync status unavailable.";
+    }
   }
   refreshSyncStatus();
   $("#sync-github")?.addEventListener("click", async () => {
@@ -1157,11 +1168,23 @@ function bindAccount() {
     try {
       const res = await fetch("api/admin/sync/repo", { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "X-CSRF-Token": JA.csrf() || "" }, });
       const d = await res.json();
-      if (!res.ok || d.ok === false) { JA.toast((d && d.error) || "Sync failed."); if (statusBox) statusBox.textContent = (d && d.error) || "Sync failed."; return; }
+      // This button is a CODE backup only — shop data (orders, products,
+      // settings) lives in Supabase and is never touched by a GitHub sync.
+      if (!res.ok || d.ok === false) {
+        const msg = ((d && d.error) || "Code backup failed.") +
+          " This only backs up the site code — your shop data is unaffected.";
+        JA.toast(msg);
+        if (statusBox) statusBox.textContent = msg;
+        return;
+      }
       JA.toast(d.pushed ? "Synced, committed and pushed to GitHub." : "Committed to the repo." + (d.note ? " " + d.note : ""));
       if (statusBox) statusBox.textContent = [d.committed ? "Committed to the repository." : "Nothing to sync.", d.pushed ? "Pushed to " + (d.branch || "main") + "." : (d.note || "Not pushed — no GitHub token configured.")].filter(Boolean).join(" ");
       refreshSyncStatus();
-    } catch (e) { JA.toast("Could not reach the sync endpoint."); if (statusBox) statusBox.textContent = "Sync request failed."; }
+    } catch (e) {
+      const msg = "Code backup failed. This only backs up the site code — your shop data is unaffected.";
+      JA.toast(msg);
+      if (statusBox) statusBox.textContent = msg;
+    }
     finally { if (b) { b.disabled = false; b.textContent = "Sync to GitHub"; } }
   });
 }
@@ -1403,11 +1426,12 @@ const PAYMENT_FIELDS = [
       account_number: String(fd.get("account_number") || "").trim(),
       account_name: String(fd.get("account_name") || "").trim(),
       referral_commission_percentage: String(fd.get("referral_commission_percentage") || "0").trim(),
-      hero_banner_title: String(fd.get("hero_banner_title") || "").trim(),
-      hero_banner_subtitle: String(fd.get("hero_banner_subtitle") || "").trim(),
-      contact_email: String(fd.get("contact_email") || "").trim(),
-      contact_phone: String(fd.get("contact_phone") || "").trim(),
-      site_logo_url: String(fd.get("site_logo_url") || "").trim(),
+      // hero_banner_title / hero_banner_subtitle / contact_email /
+      // contact_phone / site_logo_url are RETIRED from the Settings form
+      // (nothing on the storefront ever read them). The submit handler
+      // deliberately does not send them, so a stale stored value is
+      // preserved rather than wiped. fillSiteForm still carries the
+      // columns for the same reason.
       bannerFrom: String(fd.get("bannerFrom") || "").trim(),
       bannerTo: String(fd.get("bannerTo") || "").trim(),
       // Canonical column name. The server also still accepts the legacy
@@ -1638,11 +1662,6 @@ function settingsForm() {
     <div class="field"><label>Account number</label><input name="account_number" maxlength="60" value="${JA.escape(s.account_number || "")}" /></div>
     <div class="field"><label>Account name</label><input name="account_name" maxlength="120" value="${JA.escape(s.account_name || "")}" /></div>
     <div class="field"><label>Referral commission % (0–100)</label><input name="referral_commission_percentage" id="referral-pct" type="number" min="0" max="100" step="0.01" value="${Number(s.referral_commission_percentage ?? 0)}" /><p class="admin-note">The % an order's referral code pays out. Saved straight into site_settings.</p></div>
-    <div class="field full"><label>Hero banner title</label><input name="hero_banner_title" maxlength="200" value="${JA.escape(s.hero_banner_title || "")}" /></div>
-    <div class="field full"><label>Hero banner subtitle</label><input name="hero_banner_subtitle" maxlength="300" value="${JA.escape(s.hero_banner_subtitle || "")}" /></div>
-    <div class="field"><label>Contact email</label><input name="contact_email" type="email" maxlength="200" value="${JA.escape(s.contact_email || "")}" /></div>
-    <div class="field"><label>Contact phone</label><input name="contact_phone" maxlength="80" value="${JA.escape(s.contact_phone || "")}" /></div>
-    <div class="field full"><label>Site logo URL</label><input name="site_logo_url" maxlength="500" value="${JA.escape(s.site_logo_url || "")}" placeholder="https://… or /uploads/…" /></div>
     <h3 class="admin-h full">Checkout payment details</h3>
     <p class="admin-note full">Shown to the customer at checkout. These live in Supabase and the storefront carries <strong>no hardcoded fallback</strong> — an empty field hides that line, it never invents an account number. Changing an account here is live immediately, with no redeploy.</p>
     <div class="field"><label>Naira — bank</label><input name="naira_payment_bank" maxlength="120" value="${JA.escape(s.naira_payment_bank || "")}" /></div>
@@ -1904,10 +1923,20 @@ function deliveryZonesPanel() {
 }
 
 let dzCache = [];
+// Once a zone save (or delete) has confirmed, paintDesk("delivery") must NOT
+// let a late/failed zones GET wipe the table back to the pre-save list — that
+// is exactly what made a successful zone edit look like it never saved.
+let dzAuthoritative = false;
 
 async function loadDeliveryZones() {
   const res = window.JA_NET ? await window.JA_NET.api("api/admin/delivery-zones") : null;
-  dzCache = (res && res.ok && Array.isArray(res.zones)) ? res.zones : [];
+  if (res && res.ok && Array.isArray(res.zones)) {
+    dzCache = res.zones;
+    return dzCache;
+  }
+  // A failed or empty refetch must never blank a cache the owner just wrote.
+  if (dzAuthoritative) return dzCache;
+  dzCache = [];
   return dzCache;
 }
 
@@ -1939,6 +1968,8 @@ function bindDeliveryZones() {
         return;
       }
       dzCache = res.zones || [];
+      dzAuthoritative = true;
+      JA.toast("Zone deleted.");
       paintDesk("delivery");
       return;
     }
@@ -1996,6 +2027,8 @@ function bindDeliveryZones() {
       return;
     }
     dzCache = res.zones || [];
+    dzAuthoritative = true;
+    JA.toast("Zone saved.");
     paintDesk("delivery");
   });
 }
@@ -2012,7 +2045,22 @@ function bindBanner() {
     e.preventDefault(); const fd = new FormData(form);
     const conv = String(fd.get("convBanner") || "").trim(); const bold = String(fd.get("convBold") || "").trim();
     const saved = await saveSiteConfig({ convBanner: conv, convBold: bold });
-    if (saved && saved.ok !== false) { JA.toast(conv ? "Banner saved — it moves under the header on every page now." : "Banner cleared — default is back."); try { if (JA.setBanner) JA.setBanner(conv, bold); } catch (err) {} }
+    if (saved && saved.ok !== false) {
+      // Repaint from the SERVER's answer (not the form), and re-fill both
+      // inputs so what the admin sees is what Supabase stored. applySiteConfig
+      // also fires ja:site so every open page (and the admin chrome) picks it up.
+      const site = (saved && saved.site) || { convBanner: conv, convBold: bold };
+      const liveConv = ("convBanner" in site) ? (site.convBanner || "") : conv;
+      const liveBold = ("convBold" in site) ? (site.convBold || "") : bold;
+      const convEl = $("#conv-banner"); const boldEl = $("#conv-bold");
+      if (convEl) convEl.value = liveConv;
+      if (boldEl) boldEl.value = liveBold;
+      try {
+        if (JA.applySiteConfig) JA.applySiteConfig(site);
+        else if (JA.setBanner) JA.setBanner(liveConv, liveBold);
+      } catch (err) {}
+      JA.toast(liveConv ? "Banner saved — it moves under the header on every page now." : "Banner cleared — default is back.");
+    }
     else JA.toast((saved && saved.error) || "Could not save the banner.");
   });
 }

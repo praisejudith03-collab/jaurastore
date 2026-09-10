@@ -932,6 +932,122 @@ def mirror_growth_settings(settings_dict):
         print(f"[supabase] growth settings upsert failed: {exc}")
 
 
+# Durable product-delete tombstones. Soft-deleting a seed product (source=
+# "deleted" on its products-table row) only hides rows that live in the
+# products table. catalog.merged() still unions the 258 bundled seed rows on
+# every read, so a deleted seed id came back after every Render redeploy —
+# the local data/catalog.json "deleted" list lives on the same ephemeral
+# disk and is wiped with it. Keep the id list in growth_settings so a delete
+# survives deploys the same way categories and the Delivery page do.
+DELETED_IDS_KEY = "deleted_product_ids_json"
+
+
+def load_deleted_ids():
+    """Return the durable deleted-product id set, or None when unavailable.
+
+    None means 'could not read' (not configured / unreachable / parse error).
+    Callers must treat that as an empty set so an outage neither resurrects a
+    product nor empties the shop. An empty list means the key is present and
+    genuinely empty.
+    """
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("growth_settings")
+               .select("value")
+               .eq("key", DELETED_IDS_KEY)
+               .limit(1)
+               .execute())
+        rows = _res_data(res)
+        if not rows:
+            return []
+        raw = (rows[0] or {}).get("value")
+        if raw is None or raw == "":
+            return []
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(data, list):
+            return []
+        out = []
+        seen = set()
+        for item in data:
+            pid = str(item or "").strip()
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            out.append(pid)
+        return out
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] deleted ids load failed: {exc}")
+        return None
+
+
+def save_deleted_ids(ids):
+    """Persist the durable deleted-product id list. Never raises.
+
+    Returns True only when Supabase accepted the write. Deduplicates and
+    drops blanks so a bad caller cannot bloat the row.
+    """
+    c = client()
+    if c is None:
+        return False
+    clean = []
+    seen = set()
+    for item in (ids or []):
+        pid = str(item or "").strip()
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        clean.append(pid)
+    try:
+        payload = json.dumps(clean, ensure_ascii=False)
+        c.table("growth_settings").upsert(
+            [{"key": DELETED_IDS_KEY, "value": payload}]
+        ).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] deleted ids save failed: {exc}")
+        return False
+
+
+def add_deleted_id(pid):
+    """Add one product id to the durable tombstone list. Never raises.
+
+    Returns True when the id is recorded (or already was). A failed read
+    still attempts a write of just this id so a momentary blip cannot leave
+    a delete with no tombstone at all.
+    """
+    pid = str(pid or "").strip()
+    if not pid:
+        return False
+    current = load_deleted_ids()
+    if current is None:
+        # Best-effort single-id write: better a partial list than none.
+        return save_deleted_ids([pid])
+    if pid in current:
+        return True
+    return save_deleted_ids(list(current) + [pid])
+
+
+def clear_deleted_id(pid):
+    """Drop one product id from the durable tombstone list. Never raises.
+
+    Called when a product is re-created / re-saved under the same id so the
+    durable filter does not hide the new row. Returns True when the id is
+    gone (or was never there). A failed read is a no-op: we must not wipe
+    the whole list on a blip.
+    """
+    pid = str(pid or "").strip()
+    if not pid:
+        return False
+    current = load_deleted_ids()
+    if current is None:
+        return False
+    if pid not in current:
+        return True
+    return save_deleted_ids([x for x in current if x != pid])
+
+
 # The category table lives in data/categories.json on disk. A Render redeploy
 # wipes that file, so we also keep a JSON copy in growth_settings (no new
 # schema). CATEGORIES_KEY / save_categories / load_categories are the only
