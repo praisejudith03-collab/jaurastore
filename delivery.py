@@ -243,11 +243,155 @@ def validate_zone_payload(payload):
     return clean, None
 
 
+# --------------------------------------------------------------------------
+# The live delivery_zones table predates the zone editor: it still carries a
+# legacy `zone_name text not null` column with no default (the same column
+# schema_sections/14_delivery_seeds.sql detects and populates when it seeds),
+# so the seeds worked while every Admin save died with
+#
+#   null value in column "zone_name" ... violates not-null constraint (23502)
+#
+# The editor writes only the current columns (id, name, currency, kind,
+# fare_min, fare_max, active, sort_order, note); Postgres rejects the row,
+# and because Supabase is the source of truth the SQLite mirror was never
+# written either - the edit "never stuck".
+#
+# save_zone therefore repairs its own payload against the LIVE table, the
+# way supabase_store._upsert_products_resilient already drops columns the
+# narrower products table lacks: try the row, and on a survivable engine
+# error apply ONE repair and retry, bounded:
+#   23502 "null value in column X"   -> fill X from the zone being saved
+#   PGRST204/42703 unknown column X  -> drop X (id and name are never dropped)
+#   22P02 wrong type                 -> retry that column as 0/False
+# Columns discovered this way are cached per worker so the next save starts
+# from the repaired shape. If the table genuinely cannot be satisfied the
+# error names the column and the one statement that repairs it, and SQLite
+# is not touched - the delivery_zones schema section keeps its add-only
+# guarantee because no schema change is required for saves to work.
+# --------------------------------------------------------------------------
+
+_ZONE_CRITICAL_COLUMNS = frozenset({"id", "name"})
+
+# What this worker has learned about the live delivery_zones table: legacy
+# columns it must be given ("fill") and columns it lacks ("drop").
+_ZONE_SHAPE = {"fill": [], "drop": []}
+
+_NULL_VALUE_RE = re.compile(r'null value in column "([^"]+)"')
+_MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
+_PG_MISSING_COLUMN_RE = re.compile(r'column "([^"]+)" of relation')
+_BOOL_HINT_RE = re.compile(
+    r"active|enabled|visible|flag|^is_|^has_|public|confirmed")
+
+
+def _looks_boolean(column):
+    return bool(_BOOL_HINT_RE.search(str(column or "").lower()))
+
+
+def _value_for_zone_column(column, zone):
+    """Best-guess value for a legacy NOT NULL column the editor never writes."""
+    c = str(column or "").strip().lower()
+    if c in ("zone_name", "name", "zone", "title", "label", "display_name"):
+        return zone["name"]
+    if "min" in c:
+        return zone["fare_min"]
+    if "max" in c:
+        return zone["fare_max"]
+    if "currency" in c:
+        return zone["currency"]
+    if "kind" in c or "type" in c or "mode" in c:
+        return zone["kind"]
+    if "sort" in c or "rank" in c or "position" in c or "order" in c:
+        return zone["sort_order"]
+    if "note" in c or "comment" in c or "description" in c or "remark" in c:
+        return zone["note"]
+    if _looks_boolean(c):
+        return zone["active"]
+    # Unrecognised column: the zone name is the least-wrong non-null filler,
+    # and a wrong type is corrected by the 22P02 repair below.
+    return zone["name"]
+
+
+def _zone_repair_statement(column, missing=False):
+    if missing:
+        return (f"alter table delivery_zones add column {column} text")
+    return f"alter table delivery_zones alter column {column} drop not null"
+
+
+def _unsatisfiable(column, original, missing=False):
+    """The live table rejects every repair: name the column and the fix."""
+    return (f'delivery_zones still rejects the zone row at column "{column}" '
+            f"({str(original)[:160]}). One statement repairs the live table: "
+            f"{_zone_repair_statement(column, missing)}")
+
+
+def _remember_shape(kind, column):
+    if column and column not in _ZONE_SHAPE[kind]:
+        _ZONE_SHAPE[kind].append(column)
+
+
+def _upsert_zone_resilient(c, row):
+    """Upsert one zone row, repairing the payload against the live table.
+
+    Returns the row that finally stuck. Raises RuntimeError naming the
+    offending column and the repair statement when the table cannot be
+    satisfied - save_zone turns that into an error and touches nothing.
+    """
+    pending = dict(row)
+    # Start from what an earlier save in this worker already discovered.
+    for col in _ZONE_SHAPE["drop"]:
+        if col not in _ZONE_CRITICAL_COLUMNS:
+            pending.pop(col, None)
+    for col in _ZONE_SHAPE["fill"]:
+        pending.setdefault(col, _value_for_zone_column(col, row))
+
+    width0 = max(len(pending), 1)
+    last_column = None
+    for _attempt in range(2 * width0 + 8):
+        try:
+            c.table("delivery_zones").upsert(pending).execute()
+            return pending
+        except Exception as exc:
+            text = str(exc)
+            m = _NULL_VALUE_RE.search(text)
+            if m and "23502" in text:
+                col = m.group(1)
+                value = _value_for_zone_column(col, row)
+                if pending.get(col) == value:
+                    raise RuntimeError(_unsatisfiable(col, text)) from exc
+                pending[col] = value
+                _remember_shape("fill", col)
+                last_column = col
+                continue
+            m = _MISSING_COLUMN_RE.search(text)
+            if m is None and "42703" in text:
+                m = _PG_MISSING_COLUMN_RE.search(text)
+            if m:
+                col = m.group(1)
+                if col in _ZONE_CRITICAL_COLUMNS or col not in pending:
+                    raise RuntimeError(
+                        _unsatisfiable(col, text, missing=col not in pending)
+                    ) from exc
+                pending.pop(col, None)
+                _remember_shape("drop", col)
+                last_column = col
+                continue
+            if ("22P02" in text or "invalid input syntax" in text) and last_column:
+                value = False if _looks_boolean(last_column) else 0
+                if pending.get(last_column) == value:
+                    raise RuntimeError(
+                        _unsatisfiable(last_column, text)) from exc
+                pending[last_column] = value
+                continue
+            raise
+    raise RuntimeError(_unsatisfiable(last_column or next(iter(pending)),
+                                      "too many columns to repair"))
+
+
 def save_zone(zone_id, payload):
     """Insert or update one zone. Idempotent on the id.
 
     When Supabase is enabled it is the source of truth:
-    - write to Supabase FIRST
+    - write to Supabase FIRST (payload repaired against the live table)
     - re-read from Supabase (what Supabase actually stored)
     - mirror to SQLite only after Supabase confirmed
     - on Supabase failure return an error and touch NOTHING locally
@@ -272,8 +416,8 @@ def save_zone(zone_id, payload):
             row = dict(clean)
             # Let DB default fill updated_at; remove explicit None if present
             row.pop("updated_at", None)
-            # Supabase FIRST
-            c.table("delivery_zones").upsert(row).execute()
+            # Supabase FIRST - repaired against the live table if needed
+            _upsert_zone_resilient(c, row)
             # Re-read from Supabase - source of truth
             try:
                 res = c.table("delivery_zones").select("*").eq("id", clean["id"]).limit(1).execute()
