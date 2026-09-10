@@ -42,6 +42,11 @@ os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = PW
 
 EMAIL = "jaurastore@gmail.com"
 
+# conftest's autouse _tracked_repo_is_read_only swaps repo_sync._commit_and_push
+# for a no-op around EVERY test. The last-line-of-defence test below needs the
+# real function, which is still unpatched at collection time.
+_REAL_COMMIT_AND_PUSH = repo_sync._commit_and_push
+
 
 @pytest.fixture(scope="module")
 def app():
@@ -135,6 +140,25 @@ class TestGate:
         ok, report = repo_sync.regenerate(commit=True, push=True)
         assert ok and called["n"] == 0
         assert report.get("pushed") is False and "blocked" in (report.get("note") or "")
+
+    def test_commit_and_push_itself_refuses_under_pytest(self, monkeypatch):
+        """Last line of defence: a sync may reach _commit_and_push from a
+        background thread spawned before other tests' monkeypatches were torn
+        back down. The commit step re-checks at execution time, so no path
+        through the module can ever produce a git commit during a test run."""
+        monkeypatch.setattr(repo_sync, "_resolve_repo", lambda: "/nonexistent")
+        git_calls = {"n": 0}
+
+        def _no_git(*a, **k):
+            git_calls["n"] += 1
+            return True, ""
+
+        monkeypatch.setattr(repo_sync, "_git", _no_git)
+        ok, report = _REAL_COMMIT_AND_PUSH(True, True, "attempted", {})
+        assert ok is False
+        assert git_calls["n"] == 0
+        assert report["committed"] is False and report["pushed"] is False
+        assert "test suite" in report["note"]
 
 
 # ------------------------------------------- automatic post-write sync path

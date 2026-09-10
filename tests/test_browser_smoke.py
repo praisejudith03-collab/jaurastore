@@ -77,6 +77,12 @@ def test_mobile_headers_and_shop(mobile, live_shop, path):
 def test_advanced_actions(mobile, live_shop, monkeypatch):
     import repo_sync
     monkeypatch.setattr(Config, "GITHUB_TOKEN", "test-configured-not-a-real-token")
+    # The button is only usable on a deployed production/staging instance
+    # (repo_sync.repo_sync_blocked_reason always refuses under pytest, since
+    # tests must never touch the git repository). Simulate the deployed case:
+    # this test exercises the BUTTON (it calls regenerate and reports the
+    # real result honestly), not the gate itself.
+    monkeypatch.setattr(repo_sync, "repo_sync_blocked_reason", lambda: None)
     calls = []
 
     def sync(**kwargs):
@@ -161,12 +167,17 @@ def test_desktop_logo_is_centred_and_currency_pills_stay_small(mobile, live_shop
     logo = mobile.locator("#site-header .logo img")
     expect(logo).to_be_visible()
     box = logo.bounding_box()
+    # Centre of the LAYOUT viewport (clientWidth excludes the classic
+    # headless scrollbar, which would skew a raw viewport/2 by ~7px).
+    layout_centre = mobile.evaluate("document.documentElement.clientWidth / 2")
     centre = box["x"] + box["width"] / 2
-    assert abs(centre - width / 2) <= 3, (
-        f"header logo centre {centre} != viewport centre {width / 2} "
+    assert abs(centre - layout_centre) <= 3, (
+        f"header logo centre {centre} != layout centre {layout_centre} "
         "- the centred-logo lock regressed")
     for cur, low, high in (("NGN", 24, 46), ("CFA", 42, 76)):
-        pill = mobile.locator(f'#site-header .currency-switch [data-cur="{cur}"]')
+        # .header scopes to the visible header bar - the closed mobile menu
+        # (.mobile-nav inside #site-header) carries a second copy.
+        pill = mobile.locator(f'#site-header .header .currency-switch [data-cur="{cur}"]')
         expect(pill).to_be_visible()
         pbox = pill.bounding_box()
         assert low <= pbox["width"] <= high, (cur, pbox)
