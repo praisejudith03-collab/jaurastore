@@ -138,18 +138,33 @@ def test_header_template_keeps_the_logo_between_links_and_controls():
 
 
 def test_small_phones_get_the_two_row_centred_fallback():
-    """<=480px: one row cannot hold logo + EN/FR + ₦/F CFA + search + bag +
+    """<=380px: one row cannot hold logo + EN/FR + ₦/F CFA + search + bag +
     menu, so the header folds to two centred rows instead of overlapping."""
-    blocks = _media_blocks(_css(), "@media (max-width: 480px)")
-    assert blocks, "the <=480px two-row phone fallback is missing"
+    blocks = _media_blocks(_css(), "@media (max-width: 380px)")
+    assert blocks, "the <=380px two-row phone fallback is missing"
     grid = None
     for body in blocks:
         for selector, decl in _blocks(body):
             if selector.strip() == ".header-inner":
                 grid = _props(decl)
-    assert grid, "<=480px .header-inner rule is missing"
+    assert grid, "<=380px .header-inner rule is missing"
     assert grid.get("grid-template-columns", "").startswith("minmax(0, 1fr)"), (
-        "<=480px must fold to a single centred column (two rows)")
+        "<=380px must fold to a single centred column (two rows)")
+
+
+def test_normal_phones_keep_the_single_row_logo_first():
+    """381–480px phones stay on ONE row: logo first, then the switches.
+    84px logo + 4px gap (both !important where needed) is what lets
+    logo + EN/FR + ₦/F CFA + search + bag + menu fit one row on 390–430px
+    phones."""
+    blocks = _media_blocks(_css(), "@media (max-width: 480px)")
+    logo = None; gap = None
+    for body in blocks:
+        for selector, decl in _blocks(body):
+            if selector.strip() == ".logo img": logo = _props(decl)
+            if selector.strip() == ".nav-right": gap = decl
+    assert logo and logo.get("max-width") == "84px"
+    assert gap and "!important" in gap and "4px" in gap
 
 
 # ------------------------------------------------------------------ pills

@@ -463,3 +463,95 @@ def test_boot_applies_the_site_row_before_the_first_draw():
     draw_at = boot.index("draw();")
     assert apply_at < draw_at, "applySiteConfig must run before the first draw()"
     assert "await fetch(\"api/site\"" in boot
+
+
+# ============================================== the payment identity floor
+# "Our bank details" kept going blank because the values lived only in the
+# Supabase site_settings row: a wiped row (or a blank column) served an empty
+# checkout bank sheet. supabase_settings now carries the 9 payment identity
+# values as a floor - a blank row serves them AND heals itself back into
+# Supabase, while an admin-saved value always wins.
+
+class _TinySettingsTable:
+    """Just the PostgREST ops get_site_settings() uses, against one row."""
+
+    def __init__(self, rows):
+        self.rows = rows            # the live site_settings rows
+        self.updates = []           # every .update({...}) payload written
+
+    def table(self, name):
+        return self
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def update(self, payload):
+        payload = dict(payload or {})
+        self.updates.append(payload)
+        for row in self.rows:
+            row.update(payload)
+        return self
+
+    def execute(self):
+        class _Resp:
+            data = list(self.rows)
+        return _Resp()
+
+
+def _floor_client(monkeypatch, rows):
+    fake = _TinySettingsTable(rows)
+    monkeypatch.setattr(supabase_settings, "client", lambda: fake)
+    monkeypatch.setattr(supabase_settings, "enabled", lambda: True)
+    # each test starts with a clean per-worker heal ledger
+    monkeypatch.setattr(supabase_settings, "_HEALED_COLUMNS", set())
+    return fake
+
+
+def test_a_fully_wiped_row_serves_and_rewrites_all_nine_payment_values(monkeypatch):
+    """The row exists but every payment column is gone: the checkout must
+    still serve all 9 real destinations, and the read must write them back
+    into Supabase (the heal) so the row itself is repaired."""
+    fake = _floor_client(monkeypatch, rows=[{"id": 1}])
+    site = supabase_settings.get_site_settings()
+    for col, want in supabase_settings.PAYMENT_FALLBACKS.items():
+        assert site[col] == want, f"{col} did not fall back to the floor"
+    assert fake.updates, "a wiped row must be healed back via .update()"
+    written = fake.updates[0]
+    for col, want in supabase_settings.PAYMENT_FALLBACKS.items():
+        assert written.get(col) == want, f"heal write is missing {col}"
+    # and the row in the (faked) table now carries the real values too
+    for col, want in supabase_settings.PAYMENT_FALLBACKS.items():
+        assert fake.rows[0][col] == want
+
+
+def test_an_admin_saved_value_wins_while_a_whitespace_field_heals(monkeypatch):
+    """GTB saved by the owner is served verbatim (an admin value always beats
+    the floor); a whitespace-only column is blank, so it heals to the floor
+    and the heal write never touches the admin-saved column."""
+    fake = _floor_client(monkeypatch, rows=[{
+        "id": 1,
+        "naira_payment_bank": "GTB",
+        "naira_payment_name": "OKORAFOR PRAISE",
+        "naira_payment_account": "23474678931",
+        "cfa_payment_provider": "MTN MoMo Benin",
+        "cfa_payment_name": "OKORAFOR GIFT",
+        "cfa_payment_account": "   ",          # whitespace = blank
+        "togo_payment_provider": "Moov Money Togo",
+        "togo_payment_name": "OKORAFOR GOODNESS",
+        "togo_payment_account": "+229 01 68 95 31 10",
+    }])
+    site = supabase_settings.get_site_settings()
+    assert site["naira_payment_bank"] == "GTB", \
+        "an admin-saved value must never be overwritten by the floor"
+    assert site["cfa_payment_account"] == "01 52 01 99 30", \
+        "a whitespace-only column is blank and must heal to the floor"
+    assert fake.updates, "the blank column must be healed back via .update()"
+    assert fake.updates[0].get("cfa_payment_account") == "01 52 01 99 30"
+    assert "naira_payment_bank" not in fake.updates[0], \
+        "the heal write must not touch the admin-saved column"
