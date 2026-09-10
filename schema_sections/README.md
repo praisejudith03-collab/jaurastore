@@ -1,6 +1,6 @@
 # Apply the schema from a phone
 
-These 16 numbered SQL files are generated from the `-- SECTION:` banners in
+These 17 numbered SQL files are generated from the `-- SECTION:` banners in
 `supabase_schema.sql`. Concatenating **only the numbered `.sql` files**, in
 numeric order, reproduces the source byte-for-byte. Each is a complete SQL
 batch (no split statements or function bodies), under 6 KB, and idempotent.

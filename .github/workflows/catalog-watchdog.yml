@@ -7,7 +7,8 @@
 #   - an online Supabase row is missing from the public catalogue (the
 #     "258 in Supabase, 241 in the browser" defect class),
 #   - a served row is not online in Supabase,
-#   - any of the approved wix-001..wix-258 rows disappears or goes offline,
+#   - any of the 255 approved wix-* rows (wix-001..wix-258 minus owner-retired
+#     wix-006, wix-007, wix-108) disappears or goes offline,
 #   - the response looks like the bundled js/products-data.js fallback rather
 #     than Supabase.
 #
@@ -18,7 +19,7 @@
 #   * Scheduled workflows run only on the default branch. GitHub disables a
 #     cron workflow after 60 days with no repository activity - any commit,
 #     including a README touch, re-enables it.
-#   * If you INTENTIONALLY unpublish or delete one of the 258 approved wix-*
+#   * If you INTENTIONALLY unpublish or delete one of the 255 approved wix-*
 #     rows, update tools/catalog_watchdog.py EXPECTED_WIX_IDS in the same
 #     change (or disable this workflow) - otherwise the alert is correct.
 #   * Needs the repository secrets SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY

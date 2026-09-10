@@ -4,7 +4,7 @@ The watchdog is the "it must never happen again" layer: hourly, in CI, it
 compares the live storefront against the Supabase products table read
 directly over PostgREST. These tests pin its logic offline:
 
-  * the healthy production shape (276 rows, 258 online wix-*) passes;
+  * the healthy production shape (273 rows, 255 online wix-*) passes;
   * every defect class it exists to catch fails it: an online row missing
     from the public catalogue, a served row Supabase does not list, an
     approved wix row gone/offline in Supabase, a duplicated id, and a
@@ -53,13 +53,17 @@ OFFLINE_NON_WIX = [
 
 
 def _production_shape():
-    """(db_rows, api_payload) exactly like production: 276 table rows
-    (258 online wix-* + 18 offline non-wix), 258 served products."""
+    """(db_rows, api_payload) exactly like production: 273 table rows
+    (255 online wix-* + 18 offline non-wix), 255 served products.
+
+    The owner deleted wix-006, wix-007 and wix-108 on purpose, so they are
+    in neither measurement - the retired ids must stay silent (see
+    test_watchdog_passes_on_the_healthy_production_shape)."""
     seed = json.load(open(os.path.join(ROOT, "data", "seed.json"), encoding="utf-8"))
     db_rows, api_products = [], []
     for p in seed:
         pid = str(p.get("id", ""))
-        if pid.startswith("wix-"):
+        if pid.startswith("wix-") and pid not in wd.RETIRED_WIX_IDS:
             db_rows.append({"id": pid, "online": True, "source": "admin"})
             api_products.append({          # public shape, table columns included
                 "id": pid, "sku": p.get("sku"), "slug": p.get("slug"),
@@ -70,20 +74,29 @@ def _production_shape():
     for pid, _name in OFFLINE_NON_WIX:
         db_rows.append({"id": pid, "online": False, "source": "admin"})
     payload = {"ok": True, "products": api_products,
-               "meta": {"count": 276, "updatedAt": "2026-09-09T07:57:14+00:00"}}
+               "meta": {"count": 273, "updatedAt": "2026-09-10T12:00:00+00:00"}}
     return db_rows, payload
 
 
 # ------------------------------------------------------------- check() logic
 def test_watchdog_passes_on_the_healthy_production_shape():
+    # The approved set is 255: wix-001..wix-258 minus the three rows the
+    # owner deleted on purpose. Their absence from Supabase is expected and
+    # must never raise the "products disappear" alarm (the scheduled run was
+    # red until they were retired here).
+    assert len(wd.EXPECTED_WIX_IDS) == 255, len(wd.EXPECTED_WIX_IDS)
+    assert wd.RETIRED_WIX_IDS == frozenset({"wix-006", "wix-007", "wix-108"})
+    assert not (set(wd.EXPECTED_WIX_IDS) & wd.RETIRED_WIX_IDS)
     db_rows, payload = _production_shape()
+    assert len(payload["products"]) == 255
+    assert len(db_rows) == 255 + len(OFFLINE_NON_WIX)
     failures, summary = wd.check(db_rows, payload)
     assert failures == [], "healthy production shape must pass: " + "; ".join(failures)
-    assert any("276 rows" in s for s in summary)
+    assert any("273 rows" in s for s in summary)
 
 
 def test_watchdog_fails_when_an_online_row_is_missing_from_the_api():
-    """The original defect class: Supabase says 258, the storefront serves
+    """The original defect class: Supabase says 255, the storefront serves
     fewer. Even ONE missing online row must trip the watchdog."""
     db_rows, payload = _production_shape()
     payload["products"] = [p for p in payload["products"] if p["id"] != "wix-100"]
@@ -100,13 +113,15 @@ def test_watchdog_fails_when_the_api_serves_a_row_supabase_does_not_list():
 
 
 def test_watchdog_fails_when_an_approved_wix_row_disappears_from_supabase():
+    # wix-009 is still approved (wix-006/007/108 were retired: their absence
+    # is expected and covered by test_watchdog_passes_on_the_healthy_...).
     db_rows, payload = _production_shape()
-    db_rows = [r for r in db_rows if r["id"] != "wix-007"]
+    db_rows = [r for r in db_rows if r["id"] != "wix-009"]
     failures, _summary = wd.check(db_rows, payload)
-    assert any("wix-007" in f and "no longer exist" in f for f in failures), failures
+    assert any("wix-009" in f and "no longer exist" in f for f in failures), failures
     # and the row is still being served by the API even though Supabase no
     # longer lists it (the set-equality side of the same alarm)
-    assert any("wix-007" in f and "does not list" in f for f in failures), failures
+    assert any("wix-009" in f and "does not list" in f for f in failures), failures
 
 
 def test_watchdog_fails_when_an_approved_wix_row_goes_offline():
@@ -127,7 +142,7 @@ def test_watchdog_fails_on_a_duplicated_product_id():
 
 
 def test_watchdog_detects_the_local_products_data_fallback():
-    """The bundled snapshot carries the same 258 ids but none of the
+    """The bundled snapshot carries the same wix ids but none of the
     products-table columns - the canary must flag it even at full count."""
     db_rows, payload = _production_shape()
     payload["products"] = [{k: v for k, v in p.items()

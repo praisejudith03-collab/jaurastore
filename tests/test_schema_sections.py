@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_sections_round_trip():
     source = (ROOT / 'supabase_schema.sql').read_text()
     generated = split_schema.sections(source)
-    assert len(generated) == 16
+    assert len(generated) == 17
     assert ''.join(generated.values()) == source
     assert split_schema.main(['--check']) == 0
 
