@@ -716,11 +716,13 @@ def test_supabase_save_failure_does_not_touch_sqlite(monkeypatch):
 # source of truth, SQLite was never written either (the Lomé edit that never
 # stuck). save_zone now repairs its payload against the live table: 23502 is
 # answered by filling the named column from the zone, an unknown column is
-# dropped, a wrong type is retried as 0/False - bounded, one repair per
-# attempt, the discovered shape cached per worker.
+# dropped, a wrong type is walked through 0/False/"" - bounded, one repair
+# per attempt, the discovered columns and the fill values that finally
+# satisfied them cached per worker.
 #
-# The fakes below enforce `zone_name not null` and raise the REAL postgrest
-# APIError shapes; str(APIError(...)) is the exact dict the owner saw.
+# The fakes below enforce the legacy NOT NULL columns and raise the REAL
+# postgrest APIError shapes; str(APIError(...)) is the exact dict the owner
+# saw.
 # --------------------------------------------------------------------------
 
 from postgrest.exceptions import APIError  # noqa: E402
@@ -798,10 +800,12 @@ def _blank_zone_shape():
     if shape is not None:
         shape["fill"].clear()
         shape["drop"].clear()
+        shape.get("values", {}).clear()
     yield
     if shape is not None:
         shape["fill"].clear()
         shape["drop"].clear()
+        shape.get("values", {}).clear()
 
 
 _LIVE_LIKE = {"zone_name": lambda v: None}  # text NOT NULL: anything is fine
@@ -866,6 +870,68 @@ def test_save_remembers_the_legacy_column_for_the_next_save(monkeypatch, _blank_
     assert supa_store["lome"]["zone_name"] == "Lomé"
     # the cache is per worker state on the module, not on the client
     assert "zone_name" in delivery._ZONE_SHAPE["fill"]
+
+
+def test_save_repairs_the_confirmed_live_row_then_lands_first_try(monkeypatch, _blank_zone_shape):
+    """Mirror of the CONFIRMED production row: behind zone_name the live
+    table still carries fee numeric, pickup_available boolean and
+    pickup_address text, all NOT NULL (checked from information_schema -
+    plain types only). The first save repairs the whole row - a real bool
+    for the flag, 0 for the numeric, the name for the text - and the
+    constant that satisfied the typed column is cached next to the column
+    list, so the next save (the owner's 1500-2500 edit) lands first try."""
+    import supabase_store
+
+    supa_store = {}
+    required = {
+        "zone_name": lambda v: None,          # text NOT NULL: anything
+        "fee": lambda v: (None
+                          if isinstance(v, (int, float))
+                          and not isinstance(v, bool)
+                          else "numeric"),    # numeric NOT NULL
+        "pickup_available": lambda v: (
+            None if isinstance(v, bool) else "boolean"),
+        "pickup_address": lambda v: None,     # text NOT NULL: anything
+    }
+    table = _LegacyZoneTable(supa_store, required=required)
+    monkeypatch.setattr(supabase_store, "enabled", lambda: True)
+    monkeypatch.setattr(supabase_store, "client", lambda: _LegacySupabaseClient(supa_store, table))
+
+    first, err1 = delivery.save_zone(
+        "lome", {"name": "Lomé", "currency": "CFA", "kind": "delivery",
+                 "fare_min": 1000, "fare_max": 3000, "sort_order": 8,
+                 "active": True})
+    assert err1 is None, err1
+    assert (first["fare_min"], first["fare_max"]) == (1000, 3000)
+    # the whole legacy row was repaired with a value each column accepts
+    live = supa_store["lome"]
+    assert live["zone_name"] == "Lomé"
+    assert live["fee"] == 0, "the numeric is satisfied by 0"
+    assert live["pickup_available"] is True, (
+        "the boolean must be filled with a real bool on the first try, "
+        "not a string or 0")
+    assert live["pickup_address"] == "Lomé"
+    repaired_attempts = len(table.attempts)
+    assert repaired_attempts >= 2, "the first save must have been repaired"
+
+    # the constant that satisfied the typed column is cached per worker
+    # next to the column list
+    assert delivery._ZONE_SHAPE["values"]["fee"] == 0
+    assert "pickup_available" in delivery._ZONE_SHAPE["fill"]
+
+    # the owner's edit: 1500-2500. The cached fill values pre-apply the
+    # repaired shape, so this save must land on the first attempt.
+    second, err2 = delivery.save_zone(
+        "lome", {"name": "Lomé", "currency": "CFA", "kind": "delivery",
+                 "fare_min": 1500, "fare_max": 2500, "sort_order": 8,
+                 "active": True})
+    assert err2 is None, err2
+    assert len(table.attempts) == repaired_attempts + 1, (
+        "the next save must land first try - the cached values keep the "
+        "repaired row instead of re-running the round trips")
+    assert (supa_store["lome"]["fare_min"], supa_store["lome"]["fare_max"]) == (1500, 2500)
+    assert supa_store["lome"]["pickup_available"] is True
+    assert supa_store["lome"]["fee"] == 0
 
 
 def test_save_drops_a_column_the_live_table_lacks(monkeypatch, _blank_zone_shape):

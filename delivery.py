@@ -262,9 +262,15 @@ def validate_zone_payload(payload):
 # error apply ONE repair and retry, bounded:
 #   23502 "null value in column X"   -> fill X from the zone being saved
 #   PGRST204/42703 unknown column X  -> drop X (id and name are never dropped)
-#   22P02 wrong type                 -> retry that column as 0/False
-# Columns discovered this way are cached per worker so the next save starts
-# from the repaired shape. If the table genuinely cannot be satisfied the
+#   22P02 wrong type                 -> walk X through 0 -> False -> "";
+#                                       every plain column kind the live
+#                                       table can still carry (numeric,
+#                                       boolean, text) is satisfied by one
+#                                       of the three
+# The columns AND the constant that finally satisfied a typed column are
+# cached per worker, so the next save starts from the repaired shape with
+# working values and lands on its first attempt. If the table genuinely
+# cannot be satisfied the
 # error names the column and the one statement that repairs it, and SQLite
 # is not touched - the delivery_zones schema section keeps its add-only
 # guarantee because no schema change is required for saves to work.
@@ -273,14 +279,23 @@ def validate_zone_payload(payload):
 _ZONE_CRITICAL_COLUMNS = frozenset({"id", "name"})
 
 # What this worker has learned about the live delivery_zones table: legacy
-# columns it must be given ("fill") and columns it lacks ("drop").
-_ZONE_SHAPE = {"fill": [], "drop": []}
+# columns it must be given ("fill"), columns it lacks ("drop"), and - for a
+# typed column the best guess could not fill - the constant that finally
+# satisfied it ("values": 0 lands a numeric, False a boolean, "" the text).
+_ZONE_SHAPE = {"fill": [], "drop": [], "values": {}}
 
 _NULL_VALUE_RE = re.compile(r'null value in column "([^"]+)"')
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
 _PG_MISSING_COLUMN_RE = re.compile(r'column "([^"]+)" of relation')
 _BOOL_HINT_RE = re.compile(
-    r"active|enabled|visible|flag|^is_|^has_|public|confirmed")
+    r"active|available|require|enabled|visible|flag|^is_|^has_|"
+    r"public|confirmed")
+
+# The wrong-type retry chain, in order: 0 lands a numeric, False a boolean,
+# "" the text. Every plain column kind the live table can still carry is
+# satisfied by one of the three, so the walk always finishes instead of
+# guessing a second value at random.
+_TYPED_FILL_CHAIN = (0, False, "")
 
 
 def _looks_boolean(column):
@@ -342,20 +357,30 @@ def _upsert_zone_resilient(c, row):
         if col not in _ZONE_CRITICAL_COLUMNS:
             pending.pop(col, None)
     for col in _ZONE_SHAPE["fill"]:
-        pending.setdefault(col, _value_for_zone_column(col, row))
+        # A constant an earlier repair proved to satisfy the column beats
+        # the best guess, so the repaired row lands on its first attempt.
+        pending.setdefault(col, _ZONE_SHAPE["values"].get(
+            col, _value_for_zone_column(col, row)))
 
     width0 = max(len(pending), 1)
     last_column = None
+    last_typed = None
+    typed_step = {}  # column -> how many chain constants it already rejected
     for _attempt in range(2 * width0 + 8):
         try:
             c.table("delivery_zones").upsert(pending).execute()
+            if last_typed:
+                # This constant is what the column finally accepted; the
+                # next save pre-fills it instead of re-walking the chain.
+                _ZONE_SHAPE["values"][last_typed] = pending[last_typed]
             return pending
         except Exception as exc:
             text = str(exc)
             m = _NULL_VALUE_RE.search(text)
             if m and "23502" in text:
                 col = m.group(1)
-                value = _value_for_zone_column(col, row)
+                value = _ZONE_SHAPE["values"].get(
+                    col, _value_for_zone_column(col, row))
                 if pending.get(col) == value:
                     raise RuntimeError(_unsatisfiable(col, text)) from exc
                 pending[col] = value
@@ -376,11 +401,14 @@ def _upsert_zone_resilient(c, row):
                 last_column = col
                 continue
             if ("22P02" in text or "invalid input syntax" in text) and last_column:
-                value = False if _looks_boolean(last_column) else 0
-                if pending.get(last_column) == value:
+                col = last_column
+                step = typed_step.get(col, -1) + 1
+                if step >= len(_TYPED_FILL_CHAIN):
                     raise RuntimeError(
-                        _unsatisfiable(last_column, text)) from exc
-                pending[last_column] = value
+                        _unsatisfiable(col, text)) from exc
+                pending[col] = _TYPED_FILL_CHAIN[step]
+                typed_step[col] = step
+                last_typed = col
                 continue
             raise
     raise RuntimeError(_unsatisfiable(last_column or next(iter(pending)),
