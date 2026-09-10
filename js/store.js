@@ -1382,6 +1382,29 @@ const JA = (() => {
   // the browser's broken-image icon. Every product now ships a working
   // `image` (a committed repo path or a legacy CDN URL) plus a
   // `placeholderImage` repo path to fall back to, so nothing ever 404s.
+  // Product photos we already told the server about this page load, so a grid
+  // of the same broken photo is one report, not thirty.
+  const _reportedPhotos = new Set();
+  function reportMissingPhoto(src) {
+    // Only OUR uploads can be healed server-side (a committed repo photo or a
+    // foreign host has nothing to re-point). One report per URL per page.
+    const s = String(src || "");
+    if (!s || s.indexOf("_placeholder") >= 0) return;
+    // Our own stored photo, in either shape a row can carry: the same-origin
+    // /uploads/<key> link or the full Supabase bucket URL.
+    const isOurs = s.indexOf("/uploads/") === 0 || s.indexOf("/storage/v1/object/") > 0;
+    if (!isOurs) return;
+    if (_reportedPhotos.has(s)) return;
+    _reportedPhotos.add(s);
+    try {
+      fetch("api/photo-missing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: s }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (e) { /* reporting is best-effort, never a shopper-visible error */ }
+  }
   function fallbackImg(ev) {
     const el = ev && ev.currentTarget;
     if (!el) return;
@@ -1389,6 +1412,11 @@ const JA = (() => {
     if (src.indexOf("_placeholder") >= 0) return;
     if (el.getAttribute("data-fb") === "1") return;
     el.setAttribute("data-fb", "1");
+    // The shop already looks right (branded card, never a broken icon); tell
+    // the server the photo really 404ed so the product row can be re-pointed
+    // at a photo that exists - otherwise the piece says "PHOTO COMING SOON"
+    // for good, however often it is re-uploaded.
+    reportMissingPhoto(src);
     // Use the product-specific placeholder path when known.
     const ph = el.getAttribute("data-ph") || "images/products/_placeholder.jpg";
     clearMediaSources(el);
@@ -1396,6 +1424,7 @@ const JA = (() => {
     el.classList.add("is-placeholder");
   }
   window.fallbackImg = fallbackImg;
+  window.reportMissingPhoto = reportMissingPhoto;
 
   // A <picture> keeps choosing its <source> no matter what the inner <img>
   // src says, so swapping in the placeholder would change nothing on screen:
@@ -1687,8 +1716,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=133";
-        const FLYER = "images/brand/logo-flyer.jpg?v=133";
+        const LOGO = "images/brand/logo.jpg?v=134";
+        const FLYER = "images/brand/logo-flyer.jpg?v=134";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -1814,10 +1843,10 @@ const JA = (() => {
 
   function goldFly() {
     return `<svg class="gold-bf" viewBox="0 0 64 48" aria-hidden="true">
-      <path fill="#c4a574" d="M32 24C26 6 8 4 6 16c-2 10 14 14 26 10 6-18 24-20 26-8 2 10-14 14-26 10z"/>
-      <path fill="#9a784d" d="M32 24c-3-8-12-12-16-6-3 5 6 9 16 7 3-8 12-12 16-6 3 5-6 9-16 7z"/>
-      <path fill="#e8c9a8" d="M32 22c-2-6-8-8-11-4-2 3 4 6 11 5 2-6 8-8 11-4 2 3-4 6-11 5z"/>
-      <path stroke="#9a784d" stroke-width="1.6" fill="none" d="M32 14v26"/>
+      <path fill="#dcb06b" d="M32 24C26 6 8 4 6 16c-2 10 14 14 26 10 6-18 24-20 26-8 2 10-14 14-26 10z"/>
+      <path fill="#c18130" d="M32 24c-3-8-12-12-16-6-3 5 6 9 16 7 3-8 12-12 16-6 3 5-6 9-16 7z"/>
+      <path fill="#edd1b2" d="M32 22c-2-6-8-8-11-4-2 3 4 6 11 5 2-6 8-8 11-4 2 3-4 6-11 5z"/>
+      <path stroke="#c18130" stroke-width="1.6" fill="none" d="M32 14v26"/>
     </svg>`;
   }
 
@@ -1840,7 +1869,7 @@ const JA = (() => {
           <a href="contact.html">${tx("nav.contact")}</a>
         </nav>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=133" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=134" alt="Jaura" />
         </a>
         <div class="nav-right">
           <div class="lang-switch" role="group" aria-label="${tx("lang.group")}">
@@ -1979,7 +2008,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=133" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=134" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2017,9 +2046,9 @@ const JA = (() => {
       <p class="foot-copy">${tx("footer.copy", { year: new Date().getFullYear() })}</p>
       <div class="foot-wavez" aria-hidden="true">
         <svg viewBox="0 0 1440 130" preserveAspectRatio="none" focusable="false">
-          <path fill="#e6cfc3" d="M0,58 C180,24 400,20 620,44 C860,70 1080,78 1280,58 C1340,52 1400,44 1440,38 L1440,130 L0,130 Z"/>
-          <path fill="#d3afa2" opacity="0.9" d="M0,84 C220,52 460,48 700,68 C940,88 1180,94 1440,66 L1440,130 L0,130 Z"/>
-          <path fill="#bb9186" d="M0,104 C260,80 540,76 820,92 C1060,105 1280,108 1440,96 L1440,130 L0,130 Z"/>
+          <path fill="#f2d5c7" d="M0,58 C180,24 400,20 620,44 C860,70 1080,78 1280,58 C1340,52 1400,44 1440,38 L1440,130 L0,130 Z"/>
+          <path fill="#e8b09c" opacity="0.9" d="M0,84 C220,52 460,48 700,68 C940,88 1180,94 1440,66 L1440,130 L0,130 Z"/>
+          <path fill="#d68d7a" d="M0,104 C260,80 540,76 820,92 C1060,105 1280,108 1440,96 L1440,130 L0,130 Z"/>
         </svg>
       </div>
     </footer>
@@ -2063,7 +2092,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=133" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=134" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -2085,7 +2114,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=133";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=134";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2130,7 +2159,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=133");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=134");
     document.title = title;
     [
       ["name", "description", description],

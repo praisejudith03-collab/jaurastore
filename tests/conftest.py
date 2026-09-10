@@ -39,6 +39,22 @@ os.environ.setdefault("ADMIN_BOOTSTRAP_PASSWORD", "TestAdmin2026x")
 # data/categories.json (it wiped all 11 real categories the first time).
 _SCRATCH_CATEGORIES = "/tmp/jaura_test_categories.json"
 os.environ.setdefault("CATEGORIES_PATH", _SCRATCH_CATEGORIES)
+
+# The scratch database outlives the process too, and the suite is not
+# idempotent against it: several tests post orders with fixed ids
+# (JA-RATE01, JA-GRM001, ...), so a second run over yesterday's rows gets the
+# app's duplicate-order short circuit - an order response without
+# referralCode - and the growth tests fail for a reason that has nothing to do
+# with the code under test. Start from an empty file, unless the operator
+# pinned DB_PATH somewhere else.
+_TEST_DB = "/tmp/jaura_test.db"
+if os.environ.get("DB_PATH", _TEST_DB) == _TEST_DB:
+    for _sidecar in ("", "-wal", "-shm", "-journal"):
+        try:
+            os.remove(_TEST_DB + _sidecar)
+        except OSError:
+            pass
+
 if not os.path.exists(_SCRATCH_CATEGORIES):
     import shutil
     shutil.copyfile(os.path.join(ROOT, "data", "categories.json"),

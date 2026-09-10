@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=133" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=134" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -108,10 +108,22 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   });
 }
 let editingId = null;
+function isPlaceholderPhoto(entry) {
+  const s = String(imgSrc(entry) || (typeof entry === "string" ? entry : "") || "");
+  return s.indexOf("_placeholder") >= 0;
+}
 function productImages(p) {
-  if (p && p.images && p.images.length) return p.images.slice(0, 20);
-  if (p && p.image) return [p.image];
-  return [];
+  // The branded "PHOTO COMING SOON" card is not a photo. A product that has
+  // none showed it as tile #1 / "Main", so the owner's freshly added photo
+  // became tile #2 and the SAVE kept the placeholder as the cover - the piece
+  // still read "PHOTO COMING SOON" on the shop after every save. Real photos
+  // now come first and the placeholder is only shown when there is nothing
+  // else to show.
+  const list = (p && p.images && p.images.length) ? p.images.slice(0, 20)
+    : (p && p.image ? [p.image] : []);
+  const real = list.filter((s) => s && !isPlaceholderPhoto(s));
+  const placeholders = list.filter((s) => s && isPlaceholderPhoto(s));
+  return real.concat(placeholders).slice(0, 20);
 }
 function imgSrc(entry) {
   if (!entry) return "";
@@ -145,9 +157,9 @@ function mediaTileHTML(src, i, poster) {
     body = `<img src="${url}" alt="" />`;
   }
   return `
-    <div class="au-tile${main}${pendingCls}" data-img-i="${i}">
+    <div class="au-tile${main}${pendingCls}" data-img-i="${i}"${i === 0 ? "" : ` title="Tap to make this the main photo"`}>
       ${body}
-      ${i === 0 ? `<span>Main</span>` : `<span>${i + 1}</span>`}
+      ${i === 0 ? `<span>Main</span>` : `<span>${isPlaceholderPhoto(src) ? "Placeholder" : "Tap to use"}</span>`}
       <button type="button" class="au-tile-x" data-del-img="${i}" aria-label="Remove">×</button>
     </div>`;
 }
@@ -341,6 +353,21 @@ function bindMedia() {
       if (!window.__editImages) window.__editImages = [];
       window.__editImages.splice(i, 1);
       paintMedia(box); return;
+    }
+    const tile = e.target.closest(".au-tile");
+    if (tile) {
+      // Tap a photo to make it the product's main photo (the one the shop
+      // card and the product page show). Before this the only way to change
+      // the cover was to delete every photo ahead of the wanted one.
+      const i = Number(tile.getAttribute("data-img-i"));
+      const arr = window.__editImages || [];
+      if (Number.isFinite(i) && i > 0 && arr[i] != null) {
+        const picked = arr.splice(i, 1)[0];
+        arr.unshift(picked);
+        paintMedia(box);
+        JA.toast("That photo is now the main one for this product.");
+      }
+      return;
     }
     if (e.target.closest("#view-media")) {
       // It used to answer with a toast and nothing else, so the owner could
@@ -618,6 +645,12 @@ async function handleProductSubmit(e, existing) {
   if (!images.length && existing) {
     images = (existing.images && existing.images.length) ? existing.images.slice(0, 20) : (existing.image ? [existing.image] : []);
   }
+  // Photos first, the branded placeholder last: only a product with no real
+  // photo at all keeps the placeholder, and then it is the only entry (so it
+  // can never be saved as the cover of a product that HAS a photo).
+  const realPhotos = images.filter((s) => !isPlaceholderPhoto(s));
+  const placeholderPhotos = images.filter((s) => isPlaceholderPhoto(s));
+  images = realPhotos.length ? realPhotos.slice(0, 20) : placeholderPhotos.slice(0, 1);
   if (!images.length) {
     JA.toast(stillUploading.length ? "Your photo is still uploading. Wait a moment, then press Save again." : "Please add a photo from your gallery.");
     return;
@@ -1112,7 +1145,7 @@ function bindOrderButtons() {
   });
 }
 function accountPanel() {
-  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. You sign in with <strong>ADMIN_MASTER_PASSWORD</strong> — that is your main admin password. <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> is the backup one, and it still works if the master password is ever unset. Both are managed in Render (Environment → Environment Variables), not in this portal: change one there and the new password works at your next sign-in.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn" id="sync-github" hidden>Sync to GitHub</button></div><div id="sync-status" role="status" aria-live="polite" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Everything you save goes straight to the live store. If your Wi-Fi drops, the change waits on this device and sends itself as soon as you are back online.</p></div></details>`;
+  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. You sign in with <strong>ADMIN_MASTER_PASSWORD</strong> — that is your main admin password. <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> is the backup one, and it still works if the master password is ever unset. Both are managed in Render (Environment → Environment Variables), not in this portal: change one there and the new password works at your next sign-in.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn btn-line" id="repair-photos">Repair missing photos</button><button class="btn" id="sync-github" hidden>Sync to GitHub</button></div><div id="sync-status" role="status" aria-live="polite" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Everything you save goes straight to the live store. If your Wi-Fi drops, the change waits on this device and sends itself as soon as you are back online.</p></div></details>`;
 }
 function bindAccount() {
   const email = $("#acct-email");
@@ -1206,6 +1239,23 @@ function bindAccount() {
     }
   }
   refreshSyncStatus();
+  bindAction("#repair-photos", "Checking every product photo…", async () => {
+    // A product whose uploaded photo no longer exists in Supabase Storage
+    // shows "PHOTO COMING SOON" however often it is saved with a new one -
+    // the row keeps pointing at the dead URL. This asks the server to swap
+    // each dead link for a photo that does exist and save it.
+    if (!window.JA_NET || !window.JA_NET.csrf) throw new Error("Repair is unavailable. Reload this page.");
+    const token = await window.JA_NET.csrf();
+    const d = await syncFetch("api/admin/photos/repair", {
+      method: "POST", headers: { "X-CSRF-Token": token || "" },
+    });
+    const fixed = (d.repaired || []).length;
+    const stuck = (d.unrecoverable || []).length;
+    if (!fixed && !stuck) return "Every product photo is there. Nothing to repair.";
+    return fixed + " product photo(s) restored"
+      + (stuck ? " · " + stuck + " product(s) have no photo left to use — open them and add one." : ".")
+      + (fixed ? " The shop shows them now." : "");
+  });
   bindAction("#sync-github", "Syncing the catalogue backup to GitHub…", async () => {
     if (!window.JA_NET || !window.JA_NET.csrf) throw new Error("Sync is unavailable. Reload this page.");
     const token = await window.JA_NET.csrf();
@@ -1343,7 +1393,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=133" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=134" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -1440,6 +1490,44 @@ const PAYMENT_FIELDS = [
   "togo_payment_instructions",
 ];
 
+// The row the server last confirmed (GET /api/site, or the answer to a save).
+// The Settings form only ever sends:
+//   * fields whose value the admin actually changed, and
+//   * `_clear: [...]` for a field that HAD a value here and was emptied.
+// An empty input that was never loaded (slow fetch, a cached bundle from
+// before a deploy, a tab left open) is therefore never sent, and can no
+// longer blank the bank details it could not display. That failure is what
+// made an account number "disappear again" after an unrelated save.
+let loadedSiteRow = null;
+function loadedSiteValue(site, key) {
+  if (!site) return null;
+  if (site[key] !== undefined && site[key] !== null) return String(site[key]).trim();
+  // legacy aliases served alongside the canonical columns
+  const alias = { shipping_note: "shippingNote", banner_from: "bannerFrom",
+                  banner_to: "bannerTo" }[key];
+  if (alias && site[alias] !== undefined && site[alias] !== null) {
+    return String(site[alias]).trim();
+  }
+  return null;
+}
+function siteFieldPatch(candidate, site) {
+  const payload = {};
+  const clear = [];
+  Object.keys(candidate).forEach((key) => {
+    const before = loadedSiteValue(site, key);
+    const now = String(candidate[key] == null ? "" : candidate[key]).trim();
+    if (before === null) {           // nothing loaded: only ever add a value
+      if (now) payload[key] = now;
+      return;
+    }
+    if (now === before) return;      // untouched by the admin
+    if (!now) { clear.push(key); return; }
+    payload[key] = now;
+  });
+  if (clear.length) payload._clear = clear;
+  return payload;
+}
+
   $("#set-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -1448,8 +1536,13 @@ const PAYMENT_FIELDS = [
     if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
     if (errBox) { errBox.hidden = true; errBox.textContent = ""; }
     // EXACT canonical fields; the server validates referral 0-100 and writes
-    // the whole row into Supabase site_settings (id=1) atomically.
-    const payload = {
+    // the row into Supabase site_settings (id=1).
+    //
+    // Only what the admin changed is sent, and an emptied field is sent as a
+    // `_clear` instruction - never as a bare "". A form that has not loaded
+    // the live row must not be able to blank the payment details it is not
+    // showing (the bug behind "the bank details disappeared again").
+    const candidate = {
       bank_name: String(fd.get("bank_name") || "").trim(),
       account_number: String(fd.get("account_number") || "").trim(),
       account_name: String(fd.get("account_name") || "").trim(),
@@ -1466,15 +1559,26 @@ const PAYMENT_FIELDS = [
       // shippingNote alias, but the Admin form sends the real column.
       shipping_note: String(fd.get("shipping_note") || "").trim(),
     };
-    // Checkout payment details: same canonical columns, no client-side
-    // fallback. An empty field is saved empty and the storefront hides it.
-    PAYMENT_FIELDS.forEach((k) => { payload[k] = String(fd.get(k) || "").trim(); });
+    PAYMENT_FIELDS.forEach((k) => { candidate[k] = String(fd.get(k) || "").trim(); });
+    const payload = siteFieldPatch(candidate, loadedSiteRow);
     // include logo/banner if already uploaded (legacy aliases still map to
     // the same Supabase columns)
     const logoUrl = e.target.dataset.logoUrl || "";
     const shopBannerUrl = e.target.dataset.shopBannerUrl || "";
     if (logoUrl) payload.logoUrl = logoUrl;
     if (shopBannerUrl) payload.shopBannerUrl = shopBannerUrl;
+    if (!Object.keys(payload).length) {
+      // Nothing changed: re-read instead of writing an identical row (and
+      // never write the empty fields the form happened to be showing).
+      try {
+        const r = await fetch("api/site", { cache: "no-store" });
+        const d = r.ok ? await r.json() : null;
+        if (d && d.site) fillSiteForm(d.site);
+      } catch (err) {}
+      if (btn) { btn.disabled = false; btn.textContent = "Save settings"; }
+      JA.toast("Nothing changed.");
+      return;
+    }
     let saved = null;
     try { saved = await saveSiteConfig(payload); } catch (err) { saved = null; }
     if (btn) { btn.disabled = false; btn.textContent = "Save settings"; }
@@ -1495,6 +1599,9 @@ const PAYMENT_FIELDS = [
 // Paint the exact site_settings fields back into the settings form.
 function fillSiteForm(site) {
   if (!site) return;
+  // Remember what the server confirmed: the next save only sends fields that
+  // differ from this row (see siteFieldPatch).
+  loadedSiteRow = site;
   const set = {
     bank_name: site.bank_name, account_number: site.account_number,
     account_name: site.account_name,
@@ -1669,7 +1776,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=133", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=134", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -1712,10 +1819,10 @@ function settingsForm() {
   </form>
   <form id="set-form" class="form-grid admin-card" style="margin-top:22px">
     <h3 class="admin-h full">Site settings — live from Supabase</h3>
-    <p class="admin-note full">These fields are stored in the Supabase <code>site_settings</code> row (id=1) and shown on the site immediately after saving.</p>
-    <div class="field"><label>Bank name</label><input name="bank_name" maxlength="120" value="${JA.escape(s.bank_name || "")}" /></div>
-    <div class="field"><label>Account number</label><input name="account_number" maxlength="60" value="${JA.escape(s.account_number || "")}" /></div>
-    <div class="field"><label>Account name</label><input name="account_name" maxlength="120" value="${JA.escape(s.account_name || "")}" /></div>
+    <p class="admin-note full">These fields are stored in the Supabase <code>site_settings</code> row (id=1) and shown on the site immediately after saving. Only the fields you change are sent, so a field that has not loaded yet can never blank what is stored.</p>
+    <div class="field"><label>Bank name (fallback)</label><input name="bank_name" maxlength="120" value="${JA.escape(s.bank_name || "")}" /><p class="admin-note">Used only when the Naira bank below is empty — the checkout prefers the Naira section.</p></div>
+    <div class="field"><label>Account number (fallback)</label><input name="account_number" maxlength="60" value="${JA.escape(s.account_number || "")}" /></div>
+    <div class="field"><label>Account name (fallback)</label><input name="account_name" maxlength="120" value="${JA.escape(s.account_name || "")}" /></div>
     <div class="field"><label>Referral commission % (0–100)</label><input name="referral_commission_percentage" id="referral-pct" type="number" min="0" max="100" step="0.01" value="${Number(s.referral_commission_percentage ?? 0)}" /><p class="admin-note">The % an order's referral code pays out. Saved straight into site_settings.</p></div>
     <h3 class="admin-h full">Checkout payment details</h3>
     <p class="admin-note full">Shown to the customer at checkout. These live in Supabase and the storefront carries <strong>no hardcoded fallback</strong> — an empty field hides that line, it never invents an account number. Changing an account here is live immediately, with no redeploy.</p>
@@ -2171,14 +2278,18 @@ async function saveSiteConfig(patch) {
 }
 function bindBanner() {
   const form = $("#banner-form"); if (!form) return;
+  // The row this form was painted from; an empty box can only clear a line
+  // that actually had one (same rule as the Settings form).
+  let bannerLoaded = null;
   fetch("api/site", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((d) => {
-    const site = (d && d.site) || {}; const conv = $("#conv-banner"); const fr = $("#conv-banner-fr"); const bold = $("#conv-bold");
+    const site = (d && d.site) || {}; bannerLoaded = site; const conv = $("#conv-banner"); const fr = $("#conv-banner-fr"); const bold = $("#conv-bold");
     if (conv) conv.value = site.convBanner || ""; if (fr) fr.value = site.convBannerFr || ""; if (bold) bold.value = site.convBold || "";
   }).catch(() => {});
   form.addEventListener("submit", async (e) => {
     e.preventDefault(); const fd = new FormData(form);
     const conv = String(fd.get("convBanner") || "").trim(); const convFr = String(fd.get("convBannerFr") || "").trim(); const bold = String(fd.get("convBold") || "").trim();
-    const saved = await saveSiteConfig({ convBanner: conv, convBannerFr: convFr, convBold: bold });
+    const saved = await saveSiteConfig(siteFieldPatch(
+      { convBanner: conv, convBannerFr: convFr, convBold: bold }, bannerLoaded));
     if (saved && saved.ok !== false) {
       // Repaint from the SERVER's answer (not the form), and re-fill both
       // inputs so what the admin sees is what Supabase stored. applySiteConfig
@@ -2238,7 +2349,8 @@ function bindHeroVideo() {
   });
   $("#hero-video-remove")?.addEventListener("click", async () => {
     if (!confirm("Remove the hero asset? Homepage goes back to default.")) return;
-    const saved = await saveSiteConfig({ heroVideo: "", heroDoc: "", heroPoster: "" });
+    // Explicit clear: an empty value alone means "leave what is stored".
+    const saved = await saveSiteConfig({ _clear: ["heroVideo", "heroDoc", "heroPoster"] });
     if (saved && saved.ok !== false) { JA.toast("Hero removed."); paintHeroVideoNow({}); if (msg) msg.textContent = ""; } else JA.toast((saved && saved.error) || "Could not remove.");
   });
 }
@@ -2330,13 +2442,13 @@ function bindSiteBranding() {
   }
   $("#logo-remove")?.addEventListener("click", async () => {
     if (!confirm("Remove custom logo? Default returns.")) return;
-    const saved = await saveSiteConfig({ logoUrl: "" });
+    const saved = await saveSiteConfig({ _clear: ["logoUrl"] });
     if (saved && saved.ok !== false) { JA.toast("Logo removed."); paintBrandingNow(saved.site || {}); if (form) form.dataset.logoUrl = ""; if (form && form.elements && form.elements.site_logo_url) form.elements.site_logo_url.value = ""; }
     else JA.toast((saved && saved.error) || "Could not remove the logo. No changes were made.");
   });
   $("#shop-banner-remove")?.addEventListener("click", async () => {
     if (!confirm("Remove custom shop banner? Default returns.")) return;
-    const saved = await saveSiteConfig({ shopBannerUrl: "" });
+    const saved = await saveSiteConfig({ _clear: ["shopBannerUrl"] });
     if (saved && saved.ok !== false) { JA.toast("Shop banner removed."); paintBrandingNow(saved.site || {}); if (form) form.dataset.shopBannerUrl = ""; }
     else JA.toast((saved && saved.error) || "Could not remove the banner. No changes were made.");
   });

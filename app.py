@@ -264,6 +264,20 @@ def create_app():
                     app.logger.info("category merge applied on boot (category_merge_v2)")
             except Exception as exc:
                 app.logger.warning("category merge skipped: %s", exc)
+            # Test-suite products (jau-stock-*, jau-mirror-*, "Stock Test …")
+            # are never shop pieces, but a test run pointed at the live site
+            # (or a bulk catalog push) can leave them in Supabase, and the
+            # suite recreates them on every run. Tombstone whatever is there
+            # on boot; merged() filters them on every read regardless, so they
+            # cannot reach the storefront even if this write fails.
+            try:
+                fixtures = _catalog_mod.purge_test_fixtures()
+                if fixtures.get("found"):
+                    app.logger.info(
+                        "test products tombstoned on boot: %s",
+                        ", ".join(str(x) for x in fixtures["found"]))
+            except Exception as exc:
+                app.logger.warning("test-product purge skipped: %s", exc)
     except Exception as exc:           # never let housekeeping stop the boot
         app.logger.warning("startup maintenance skipped: %s", exc)
     # midnight products/orders backup

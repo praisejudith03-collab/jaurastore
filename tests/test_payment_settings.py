@@ -258,8 +258,8 @@ RETIRED_SETTINGS_FIELDS = (
 def test_admin_form_submits_every_canonical_settings_field():
     """Parses the real submit handler, so a dropped field fails here."""
     admin_js = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
-    m = re.search(r"const payload = \{(.*?)\n    \};", admin_js, re.S)
-    assert m, "could not find the settings payload in js/admin.js"
+    m = re.search(r"const candidate = \{(.*?)\n    \};", admin_js, re.S)
+    assert m, "could not find the settings candidate map in js/admin.js"
     block = m.group(1)
     sent = set(re.findall(r"^\s*([a-z_]+):", block, re.M))
     sent |= set(PAYMENT_COLUMNS)          # added by PAYMENT_FIELDS.forEach
@@ -269,6 +269,10 @@ def test_admin_form_submits_every_canonical_settings_field():
     # value is preserved rather than wiped to empty on every Save).
     leaked = [f for f in RETIRED_SETTINGS_FIELDS if f in sent]
     assert not leaked, f"retired fields must not be submitted: {leaked}"
+    # ... and the payload is the diff against the server-confirmed row, never
+    # the raw form: that is what stops an unloaded form blanking the row.
+    assert "siteFieldPatch(candidate, loadedSiteRow)" in admin_js
+    assert "loadedSiteRow" in admin_js and "_clear" in admin_js
 
 
 def test_every_canonical_field_has_a_form_input_and_is_repainted():
@@ -351,10 +355,67 @@ def test_an_empty_payment_row_is_saved_empty_not_defaulted(client):
     client.post("/api/admin/site", headers={"X-CSRF-Token": tok},
                 json={"naira_payment_account": "0123456789"})
     r = client.post("/api/admin/site", headers={"X-CSRF-Token": tok},
-                    json={"naira_payment_account": ""})
+                    json={"_clear": ["naira_payment_account"]})
     assert r.status_code == 200
     assert r.get_json()["site"]["naira_payment_account"] == ""
     assert client.get("/api/site").get_json()["site"]["naira_payment_account"] == ""
+
+
+def test_a_stale_form_cannot_blank_stored_payment_details(client):
+    """"The bank details disappeared again": the Admin form always posted
+    every payment field, so a Save from a form that had not loaded the live
+    row (slow or failed GET /api/site, a bundle cached before the deploy, a
+    tab left open) wrote empty strings over the account details it could not
+    show. An empty value is now ignored unless the client names the column in
+    _clear, so a blank form is harmless.
+    """
+    tok = _login(client)
+    stored = {
+        "naira_payment_bank": "UBA(United Bank of Africa)",
+        "naira_payment_name": "Okorafor Praise",
+        "naira_payment_account": "23474678931",
+        "cfa_payment_provider": "MTN MOMO Benin",
+        "cfa_payment_account": "01 52 01 99",
+    }
+    assert client.post("/api/admin/site", headers={"X-CSRF-Token": tok},
+                       json=stored).status_code == 200
+    # the stale form: every payment field present, every one of them empty
+    stale = {k: "" for k in stored}
+    stale["bank_name"] = ""
+    stale["shipping_note"] = ""
+    r = client.post("/api/admin/site", headers={"X-CSRF-Token": tok}, json=stale)
+    assert r.status_code == 200, r.data
+    site = client.get("/api/site").get_json()["site"]
+    for key, want in stored.items():
+        assert site[key] == want, f"{key} was blanked by an unloaded form"
+    # and the server's answer says the same, so the form repaints correctly
+    for key, want in stored.items():
+        assert r.get_json()["site"][key] == want
+
+
+def test_a_partial_save_touches_only_the_fields_it_sends(client):
+    """Changing the banner must not disturb the bank details next to it."""
+    tok = _login(client)
+    client.post("/api/admin/site", headers={"X-CSRF-Token": tok},
+                json={"naira_payment_bank": "Ecobank",
+                      "naira_payment_account": "999"})
+    r = client.post("/api/admin/site", headers={"X-CSRF-Token": tok},
+                    json={"shipping_note": "Cotonou 1000-3000 CFA"})
+    assert r.status_code == 200
+    site = r.get_json()["site"]
+    assert site["naira_payment_bank"] == "Ecobank"
+    assert site["naira_payment_account"] == "999"
+    assert site["shipping_note"] == "Cotonou 1000-3000 CFA"
+
+
+def test_clear_accepts_the_legacy_alias_names(client):
+    tok = _login(client)
+    client.post("/api/admin/site", headers={"X-CSRF-Token": tok},
+                json={"convBanner": "Sale ends Sunday"})
+    r = client.post("/api/admin/site", headers={"X-CSRF-Token": tok},
+                    json={"_clear": ["convBanner"]})
+    assert r.status_code == 200
+    assert r.get_json()["site"]["convBanner"] == ""
 
 
 def test_pay_intro_is_the_short_currency_wording():

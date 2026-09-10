@@ -2,7 +2,7 @@
    Pages are network-first so a visitor with a connection always sees the
    newest store; when the connection drops, the last copy is served instead of
    an error. Saving is handled separately by js/net.js (outbox + retry). */
-const VERSION = "jaura-v133";
+const VERSION = "jaura-v134";
 const CORE = [
   "./",
   "./index.html",
@@ -10,16 +10,16 @@ const CORE = [
   "./product.html",
   "./cart.html",
   "./checkout.html",
-  "./css/style.css?v=133",
-  "./js/products-data.js?v=133",
-  "./js/i18n.js?v=133",
-  "./js/net.js?v=133",
-  "./js/store.js?v=133",
-  "./js/app.js?v=133",
-  "./images/brand/logo.jpg?v=133",
-  "./images/brand/favicon.png?v=133",
-  "./images/brand/apple-touch.png?v=133",
-  "./images/brand/og-cover.jpg?v=133",
+  "./css/style.css?v=134",
+  "./js/products-data.js?v=134",
+  "./js/i18n.js?v=134",
+  "./js/net.js?v=134",
+  "./js/store.js?v=134",
+  "./js/app.js?v=134",
+  "./images/brand/logo.jpg?v=134",
+  "./images/brand/favicon.png?v=134",
+  "./images/brand/apple-touch.png?v=134",
+  "./images/brand/og-cover.jpg?v=134",
   "./static/logo.png",
 ];
 const MAX_ASSETS = 140;
@@ -28,11 +28,11 @@ const OFFLINE_HTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>You are offline · J Aura Store</title>
 <style>
-body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#3a332c;background:#fdfaf5;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#3a2f28;background:#fdf7ec;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px}
 .box{max-width:440px;text-align:center}
 h1{font:400 30px/1.2 Georgia,serif;margin:0 0 12px}
-p{color:#7a7066;margin:0 0 18px}
-a{display:inline-block;background:#3a332c;color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px}
+p{color:#857059;margin:0 0 18px}
+a{display:inline-block;background:#342922;color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px}
 </style></head><body><div class="box">
 <h1>You are offline</h1>
 <p>J Aura Store cannot reach the internet right now. Anything you already saved is safe — it will send itself the moment you are back online.</p>

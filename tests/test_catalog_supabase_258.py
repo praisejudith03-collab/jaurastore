@@ -12,6 +12,11 @@ row) served through the REAL deployed read path
 prove the public catalogue returns all 258 wix-* ids with every id, slug and
 sku preserved.
 
+The 17 ``jau-*`` rows are the suite's own products. The owner deleted them
+from the shop and they came back, so they are now excluded on every read -
+the public answer is 258 and the admin answer is 259 (the online wix-* rows
+plus the one offline review row), even though the table still lists them.
+
 Run with:  python3 -m pytest tests/test_catalog_supabase_258.py -q
 """
 import json
@@ -32,8 +37,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The 17 pytest fixtures that live in the production table (PUBLICATION_AUDIT.md
 # section 4) plus the one offline/review row (section 3). All online=false:
-# they must never leak into the public catalogue, but they DO count towards
-# the admin/hidden catalogue total (meta.count).
+# they must never leak into the public catalogue - and, since the owner deleted
+# them and they came back, they must not reach the admin answer either. The
+# one non-fixture offline row (jau-mtot3318) still counts there.
 EMAIL = "jaurastore@gmail.com"
 
 OFFLINE_NON_WIX_ROWS = [
@@ -215,9 +221,14 @@ def test_api_catalog_returns_all_258_online_wix_products(monkeypatch, client):
     assert not (set(ids) & offline), "an offline fixture/review row leaked into the public catalogue"
     assert all(p.get("online") is not False for p in products), \
         "an online wix-* row reached the browser with online=false"
-    # the hidden catalogue still counts them (admin sees 276, public sees 258)
-    assert body["meta"]["count"] == 276, \
-        f"meta.count must reflect the whole live table (276), got {body['meta']['count']}"
+    # meta.count reflects the live catalogue: the 258 online wix-* rows plus
+    # the one offline non-fixture row. The 17 test fixtures the table still
+    # lists are not part of it any more.
+    assert body["meta"]["count"] == 259, \
+        f"meta.count must reflect the live catalogue (259), got {body['meta']['count']}"
+    fixture_ids = {pid for pid, _name in OFFLINE_NON_WIX_ROWS if pid.startswith("jau-") and pid != "jau-mtot3318"}
+    assert not (set(ids) & fixture_ids), \
+        "a deleted test product is back in the public catalogue"
     # slug + sku survive the trip: dedupe must never need them to drop a row
     by_id = {p["id"]: p for p in products}
     for wix_id, src in zip(wix_ids, [p for p in json.load(
@@ -313,17 +324,24 @@ def test_admin_catalog_all_returns_exactly_what_is_saved(client, monkeypatch):
     assert "stock" not in pub_row and "stock_quantity" not in pub_row
     assert all(p["id"] not in offline for p in pub["products"])
 
-    # then, signed in as the admin: ?all=1 lists EVERY saved row (276)
+    # then, signed in as the admin: ?all=1 lists every LIVE row - the 258
+    # online wix-* rows plus the offline review row = 259. The 17 test
+    # fixtures stay out of the admin answer too: the owner deleted them for
+    # good, and a delete that only hides a row from the storefront while the
+    # portal still lists it is how they kept coming back.
     _login_admin(client, monkeypatch)
     body = client.get("/api/catalog?all=1").get_json()
     ids = [str(p["id"]) for p in body["products"]]
-    assert len(ids) == 276, \
-        f"the admin catalogue must list every saved row (276), got {len(ids)}"
+    fixtures = {pid for pid, _name in OFFLINE_NON_WIX_ROWS
+                if pid.startswith("jau-") and pid != "jau-mtot3318"}
+    assert len(ids) == 259, \
+        f"the admin catalogue must list the live rows (259), got {len(ids)}"
     assert len(ids) == len(set(ids))
-    assert set(ids) == set(wix_ids) | offline
+    assert set(ids) == (set(wix_ids) | offline) - fixtures
+    assert not (set(ids) & fixtures), "a deleted test product came back"
     assert any(p["id"] in offline and p.get("online") is False
                for p in body["products"]), "offline rows must be visible to the admin"
     wix_row = next(p for p in body["products"] if p["id"] == "wix-001")
     assert "stock" in wix_row or "stock_quantity" in wix_row, \
         "the admin answer must keep the stock numbers (the public one strips them)"
-    assert body["meta"]["count"] == 276
+    assert body["meta"]["count"] == 259

@@ -38,6 +38,21 @@ SEED_PATH = os.environ.get(
 # real committed path, so no card ever 404s or shows a broken-image icon.
 PLACEHOLDER_IMG = "images/products/_placeholder.jpg"
 
+# ------------------------------------------------------------ test fixtures
+# The pytest suite (and e2e runs) create products for itself: ids jau-stock-*,
+# jau-mirror-*, skus JAUSTOCK*, names "Stock Test <id>". They are not shop
+# pieces. They kept coming back to the live storefront after the owner deleted
+# them because
+#   * the suite had been pointed at the production site once (see the guard in
+#     tests/e2e.py), so the rows exist in the production products table, and
+#   * re-saving a product deliberately clears its durable tombstone
+#     (catalog.upsert -> clear_deleted_id), so the next run resurrected them.
+# From now on the live environments refuse to save or serve one, and the boot
+# pass tombstones whatever is already there.
+FIXTURE_ID_PREFIXES = ("jau-stock", "jau-mirror")
+FIXTURE_SKU_PREFIX = "JAUSTOCK"
+FIXTURE_NAME_PREFIX = "stock test"
+
 # Prices the shop shows are entered in Naira and converted at the house rate.
 NGN_TO_CFA = 0.44
 
@@ -91,6 +106,75 @@ def _file_exists(path):
     return os.path.isfile(candidate)
 
 
+def _is_placeholder_path(path):
+    """True for the branded 'PHOTO COMING SOON' card, whatever folder it is in.
+
+    The placeholder is a legitimate final fallback, but it must never outrank a
+    real photo: rows saved before the admin editor dropped placeholder tiles
+    kept the placeholder in the cover slot, so a freshly added photo sat in the
+    gallery while the card still said "PHOTO COMING SOON" (and stayed that way
+    after every save).
+    """
+    return "_placeholder" in os.path.basename(str(path or "")).lower()
+
+
+def _real_photo(entries):
+    """The first entry of ``entries`` that is a real photo path (not the
+    branded placeholder, not a foreign host, not empty)."""
+    try:
+        import storage as _storage
+    except Exception:                                   # pragma: no cover
+        _storage = None
+    for entry in entries or []:
+        s = str(entry or "").strip()
+        if not s or _is_placeholder_path(s):
+            continue
+        if s.startswith(("http://", "https://", "data:", "blob:")):
+            # only OUR bucket URL counts as ours; any other host is dropped
+            if _storage is not None and _storage.own_upload_path(s):
+                return s
+            continue
+        return s
+    return ""
+
+
+def is_test_fixture(product):
+    """True for a product the test suite created for itself.
+
+    Matched on the id (jau-stock-*, jau-mirror-*), the sku (JAUSTOCK*) or the
+    auto-generated name ("Stock Test <id>") - whichever the row carries. Never
+    a merchandising decision: no shop piece is named or numbered this way.
+    """
+    p = dict(product or {})
+    pid = str(p.get("id") or "").strip().lower()
+    if any(pid.startswith(prefix) for prefix in FIXTURE_ID_PREFIXES):
+        return True
+    sku = str(p.get("sku") or "").strip().upper()
+    if sku.startswith(FIXTURE_SKU_PREFIX):
+        return True
+    return str(p.get("name") or "").strip().lower().startswith(FIXTURE_NAME_PREFIX)
+
+
+def _fixture_guard_active():
+    """The fixture guard protects the live shop, not the suite that makes them.
+
+    Under FLASK_ENV=testing the fixtures are the suite's own data (filters,
+    dedupe, stock and catalogue simulators rely on them), so the guard is off
+    there; every other environment - production, staging, local dev - must
+    never serve or re-create one.
+    """
+    return str(getattr(Config, "ENV", "") or "") != "testing"
+
+
+def _own_upload_path(path):
+    """The same-origin /uploads/<key> for one of our stored photos, or ""."""
+    try:
+        import storage as _storage
+        return _storage.own_upload_path(path)
+    except Exception:                                   # pragma: no cover
+        return ""
+
+
 def resolve_image(product):
     """Guarantee a renderable image for one product.
 
@@ -107,6 +191,16 @@ def resolve_image(product):
     """
     p = dict(product or {})
     img = p.get("image") or ""
+    # A branded placeholder must never outrank a real photo this row already
+    # holds (see _is_placeholder_path): promote the gallery's first real photo
+    # into the cover slot and drop the placeholder from the gallery.
+    if not str(img).strip() or _is_placeholder_path(img):
+        better = _real_photo(p.get("images") or [])
+        if better:
+            img = better
+            p["image"] = better
+    if _is_placeholder_path(img):
+        p["images"] = [g for g in (p.get("images") or []) if not _is_placeholder_path(g)]
     try:
         import storage as _storage
         own = _storage.own_upload_path(img)
@@ -461,6 +555,17 @@ def normalize(product):
     compare_cfa = max(0, compare_cfa) if compare_cfa is not None else None
     compare_ngn = max(0, compare_ngn) if compare_ngn is not None else None
     image = sec.safe_url(product.get("image_url") or product.get("image") or "")
+    images = [sec.safe_url(i) for i in (product.get("images") or []) if sec.safe_url(i)]
+    # The branded placeholder is a fallback, never a photo: a row that carries
+    # one in the cover slot while holding a real photo in its gallery (exactly
+    # what the old admin editor produced when the owner added a photo to a
+    # "photo coming soon" product) is normalised to the real photo here, so it
+    # survives the save, the deploy and every device.
+    real_photos = [i for i in images if not _is_placeholder_path(i)]
+    if real_photos:
+        images = real_photos
+        if not image or _is_placeholder_path(image):
+            image = real_photos[0]
     stock_qty = sec.clean_int(product.get("stock_quantity"),
                               sec.clean_int(product.get("stock"), 24), 0, 10**7)
     out = {
@@ -476,7 +581,7 @@ def normalize(product):
         "compareNgn": compare_ngn,
         "image": image,
         "image_url": image,
-        "images": [sec.safe_url(i) for i in (product.get("images") or []) if sec.safe_url(i)],
+        "images": images,
         "description": sec.clean(product.get("description"), 2000),
         # French copy is optional: an empty string means "show English", never
         # "show nothing". Both spellings are accepted because the admin form
@@ -753,6 +858,15 @@ def merged(include_hidden=False):
             by_id[p["id"]] = p
         products = [p for pid, p in by_id.items() if pid not in deleted]
 
+    # The test suite's own products (jau-stock-*, jau-mirror-*, "Stock Test …")
+    # are never shop pieces. Filtering them here - on every read, whatever
+    # source the row came from - is what makes a deleted test product stay
+    # gone even when a stray save re-created it or the durable tombstone write
+    # failed. Under FLASK_ENV=testing the guard is off: there the fixtures are
+    # the suite's own data.
+    if _fixture_guard_active():
+        products = [p for p in products if not is_test_fixture(p)]
+
     if not include_hidden:
         products = [p for p in products if p.get("online") is not False]
 
@@ -860,7 +974,16 @@ def apply_stock_delta(pid, qty_delta, option_key=None, actor=None):
 
 
 def local_only_products():
-    """Admin overrides that are not yet in the live Supabase table."""
+    """Admin overrides that are not yet in the live Supabase table.
+
+    A row the owner deleted is NEVER one of these. Soft-deleting a product
+    tombstones its products-table row (``source="deleted"``), and a tombstoned
+    row is not a live row - so without this check the id looked "local only"
+    and the scheduler's remirror pass pushed the disk copy straight back into
+    Supabase as a live product. That is how a deleted product came back a few
+    minutes after it was deleted. The fixture guard is the same story for the
+    test suite's products.
+    """
     sb = _supabase_products()
     if sb is None:
         return []
@@ -868,13 +991,17 @@ def local_only_products():
     def _key(v):
         return str(v or "").strip().lower()
 
+    ov = overrides()
+    deleted = {str(x or "").strip() for x in (ov.get("deleted") or [])} | _durable_deleted_ids()
     seen_ids = {str(p.get("id") or "") for p in sb}
     seen_slugs = {_key(p.get("slug")) for p in sb if p.get("slug")}
     seen_skus = {_key(p.get("sku")) for p in sb if p.get("sku")}
     out = []
-    for p in (overrides().get("products") or []):
+    for p in (ov.get("products") or []):
         pid = str(p.get("id") or "")
-        if not pid or pid in seen_ids:
+        if not pid or pid in seen_ids or pid in deleted:
+            continue
+        if is_test_fixture(p) and _fixture_guard_active():
             continue
         slug = _key(p.get("slug"))
         sku = _key(p.get("sku"))
@@ -893,6 +1020,197 @@ def _prod_source():
         return bool(enabled()) and Config.ENV != "testing"
     except Exception:
         return False
+
+
+def purge_test_fixtures(actor="fixture_guard"):
+    """Remove every test-suite product from the live shop, durably.
+
+    Called on boot (production/staging). Finds the fixture rows wherever they
+    are (Supabase products table, local overrides, the bundled seed) and
+
+      * tombstones the Supabase row (``source="deleted"``),
+      * records the id in the durable deleted-ids list, and
+      * adds it to the local override ``deleted`` list,
+
+    so the guard at the top of merged() is backed by real tombstones and a
+    later ``push_catalog_to_supabase`` / remirror pass cannot re-publish one.
+    Idempotent: a second run finds nothing to do.
+    """
+    try:
+        import supabase_store
+    except Exception:                                   # pragma: no cover
+        supabase_store = None
+
+    ids, local_ids = set(), set()
+    for row in (_supabase_products() or []):
+        if is_test_fixture(row):
+            ids.add(str(row.get("id") or "").strip())
+    for row in (overrides().get("products") or []):
+        if is_test_fixture(row):
+            pid = str(row.get("id") or "").strip()
+            local_ids.add(pid)
+            ids.add(pid)
+    for row in _seed_products():
+        if is_test_fixture(row):
+            ids.add(str(row.get("id") or "").strip())
+    ids.discard("")
+    local_ids.discard("")
+
+    report = {"found": sorted(ids), "tombstoned": [], "recorded": [], "local": []}
+    if supabase_store is not None and _prod_source():
+        for pid in sorted(ids):
+            try:
+                if supabase_store.delete_products_strict([pid]):
+                    report["tombstoned"].append(pid)
+            except Exception:
+                pass
+            try:
+                if supabase_store.add_deleted_id(pid):
+                    report["recorded"].append(pid)
+            except Exception:
+                pass
+    if local_ids or ids:
+        def _apply(data, _path):
+            data["products"] = [p for p in (data.get("products") or [])
+                                if not is_test_fixture(p)]
+            deleted = list(data.get("deleted") or [])
+            for pid in sorted(set(local_ids) | ids):
+                if pid not in deleted:
+                    deleted.append(pid)
+            data["deleted"] = deleted
+            data["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            data["updatedBy"] = actor
+            return data
+        try:
+            _mutate(actor, _apply)
+            report["local"] = sorted(set(local_ids) | ids)
+        except Exception:
+            pass
+    return report
+
+
+def _own_photo_ref(value):
+    """A normalised reference for one of OUR stored photos, or "".
+
+    Both shapes a row can carry resolve to the same thing: a same-origin
+    ``/uploads/<key>`` link and one of our bucket URLs are the same object.
+    Foreign hosts (and data:/blob: values) return "" and are never touched.
+    """
+    return _own_upload_path(value)
+
+
+def repair_dead_photos(limit=60, actor="photo_repair", dry_run=False):
+    """Re-point products whose stored photo is missing from the bucket.
+
+    Supabase Storage keeps the bytes across a redeploy, but an object can be
+    gone (deleted by an old cleanup, an interrupted upload, a bucket that was
+    recreated). The product row then points at a URL that 404s, the browser
+    swaps in the branded placeholder and the card reads "PHOTO COMING SOON"
+    forever - even though the row may still hold the same photo under another
+    entry, or a committed copy under images/products/.
+
+    For every product whose cover is one of OUR uploads that no longer exists
+    this picks the first replacement that does exist - a sibling gallery photo,
+    otherwise a committed repo photo for the slug - and saves it, so the fix
+    reaches every device and survives the next deploy. Products with a working
+    cover are never touched, and a product with nothing to fall back to is
+    reported (``unrecoverable``) instead of being changed.
+    """
+    try:
+        import storage as _storage
+    except Exception:                                   # pragma: no cover
+        return {"checked": 0, "missing": [], "repaired": [], "unrecoverable": [],
+                "skipped": "storage unavailable"}
+    report = {"checked": 0, "missing": [], "repaired": [], "unrecoverable": []}
+
+    def _exists(ref):
+        return _storage.object_exists(ref) is not False      # True or unknown
+
+    for p in merged(include_hidden=True):
+        if report["checked"] >= limit:
+            break
+        cover = str(p.get("image") or "")
+        key = _own_photo_ref(cover)
+        if not key:
+            continue                      # committed repo path / not ours
+        report["checked"] += 1
+        if _storage.object_exists(cover) is not False:
+            continue
+        report["missing"].append(str(p.get("id") or ""))
+        alt = ""
+        for entry in (p.get("images") or []):
+            entry = str(entry or "")
+            if not entry or entry == cover or _is_placeholder_path(entry):
+                continue
+            if _own_photo_ref(entry) and _exists(entry):
+                alt = entry
+                break
+            if not _own_photo_ref(entry) and _is_local(entry) and _file_exists(entry):
+                alt = entry
+                break
+        if not alt:
+            for cand in photo_repair_candidates(p):
+                if _file_exists(cand):
+                    alt = cand
+                    break
+        if not alt:
+            report["unrecoverable"].append(str(p.get("id") or ""))
+            continue
+        entry = {"id": str(p.get("id") or ""), "image": alt}
+        report["repaired"].append(entry)
+        if dry_run:
+            continue
+        row = dict(p)
+        row["image"] = alt
+        row["image_url"] = alt
+        row["images"] = [alt] + [str(g) for g in (p.get("images") or [])
+                                 if str(g) and str(g) != alt and not _is_placeholder_path(g)]
+        try:
+            upsert(row, actor)
+        except Exception:
+            pass
+    return report
+
+
+def repair_product_photo(pid, actor="photo_report"):
+    """Repair one product's dead photo. Returns the new image path or ""."""
+    pid = str(pid or "").strip()
+    if not pid:
+        return ""
+    for p in merged(include_hidden=True):
+        if str(p.get("id") or "") != pid:
+            continue
+        try:
+            import storage as _storage
+        except Exception:                               # pragma: no cover
+            return ""
+        cover = str(p.get("image") or "")
+        if not _own_photo_ref(cover) or _storage.object_exists(cover) is not False:
+            return ""
+        alt = ""
+        for g in (p.get("images") or []):
+            g = str(g or "")
+            if g and g != cover and not _is_placeholder_path(g) and _storage.object_exists(g) is not False:
+                alt = g
+                break
+        if not alt:
+            for cand in photo_repair_candidates(p):
+                if _file_exists(cand):
+                    alt = cand
+                    break
+        if not alt:
+            return ""
+        row = dict(p)
+        row["image"] = alt
+        row["image_url"] = alt
+        row["images"] = [alt] + [str(x) for x in (p.get("images") or [])
+                                 if str(x) and str(x) != alt and not _is_placeholder_path(x)]
+        try:
+            saved, _action, _mirrored = upsert(row, actor)
+        except Exception:
+            return ""
+        return alt if saved else ""
+    return ""
 
 
 def _read_back_product(pid):
@@ -931,6 +1249,12 @@ def upsert(product, actor=None):
     clean = normalize(product)
     if clean is None:
         return None, "rejected", True
+    # A test-fixture product may not be created or re-saved on a live shop:
+    # doing so cleared its durable tombstone (below) and put it back on the
+    # storefront - the "stock test products came back" complaint. Deleting one
+    # still works, so the owner can clear anything already there.
+    if _fixture_guard_active() and is_test_fixture(clean):
+        return None, "test-fixture", True
 
     live = []
     try:

@@ -104,6 +104,32 @@ def test_watchdog_fails_when_an_online_row_is_missing_from_the_api():
     assert any("wix-100" in f and "MISSING" in f for f in failures), failures
 
 
+def test_watchdog_does_not_call_a_filtered_test_product_missing():
+    """The app never serves a test-suite product, so an online fixture row in
+    Supabase is the app's policy - not the "products disappear" defect. It is
+    reported in the summary (it still needs its tombstone), not as a failure.
+    """
+    db_rows, payload = _production_shape()
+    db_rows.append({"id": "jau-stock-live", "online": True, "source": "admin",
+                    "sku": "JAUSTOCKLIVE", "name": "Stock Test jau-stock-live"})
+    failures, summary = wd.check(db_rows, payload)
+    assert failures == [], failures
+    assert any("test-suite row" in s for s in summary), summary
+
+
+def test_watchdog_fails_when_a_test_product_is_live_on_the_storefront():
+    """"I deleted the stock test products and they are back" - a fixture that
+    reaches the public catalogue must trip the alarm."""
+    db_rows, payload = _production_shape()
+    fixture = {"id": "jau-stock-em2", "online": True, "source": "admin",
+               "sku": "JAUSTOCKEM2", "name": "Stock Test jau-stock-em2"}
+    db_rows.append(fixture)
+    payload["products"].append({"id": "jau-stock-em2", "name": fixture["name"],
+                                "online": True, "source": "admin"})
+    failures, _summary = wd.check(db_rows, payload)
+    assert any("jau-stock-em2" in f and "test-suite" in f for f in failures), failures
+
+
 def test_watchdog_fails_when_the_api_serves_a_row_supabase_does_not_list():
     db_rows, payload = _production_shape()
     payload["products"].append({"id": "jau-ghost", "name": "Ghost",

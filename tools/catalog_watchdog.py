@@ -50,6 +50,27 @@ EXPECTED_WIX_IDS = tuple(f"wix-{i:03d}" for i in range(1, 259)
 # import) are not live products - the app filters them too (supabase_store).
 TOMBSTONE_SOURCES = ("deleted", "replaced")
 
+# Test-suite products are never shop pieces. The app refuses to serve or save
+# one (catalog.is_test_fixture / merged()) and tombstones what it finds on
+# boot; this guard mirrors that rule so the watchdog does not report the
+# app's own policy as a defect - and so a fixture that DOES reach the public
+# catalogue is caught. Keep the two implementations in step.
+FIXTURE_ID_PREFIXES = ("jau-stock", "jau-mirror")
+FIXTURE_SKU_PREFIX = "JAUSTOCK"
+FIXTURE_NAME_PREFIX = "stock test"
+
+
+def is_test_fixture(row):
+    """True for a product the test suite created for itself."""
+    row = row or {}
+    pid = str(row.get("id") or "").strip().lower()
+    if any(pid.startswith(prefix) for prefix in FIXTURE_ID_PREFIXES):
+        return True
+    sku = str(row.get("sku") or "").strip().upper()
+    if sku.startswith(FIXTURE_SKU_PREFIX):
+        return True
+    return str(row.get("name") or "").strip().lower().startswith(FIXTURE_NAME_PREFIX)
+
 # PostgREST page size for the independent table read.
 DB_PAGE = 500
 DB_ROW_CEILING = 100_000        # a sane stop against a runaway pagination loop
@@ -92,7 +113,7 @@ def fetch_db_rows(supabase_url, service_key):
     read path ever loses rows, this measurement still sees the whole table.
     """
     url = (supabase_url.rstrip("/") +
-           "/rest/v1/products?select=id,online,source&order=id.asc")
+           "/rest/v1/products?select=id,online,source,sku,name&order=id.asc")
     base_headers = {
         "apikey": service_key,
         "Authorization": "Bearer " + service_key,
@@ -162,8 +183,20 @@ def check(db_rows, payload, expected_ids=EXPECTED_WIX_IDS):
             live[pid] = row
     visible = {pid for pid, row in live.items() if row.get("online") is not False}
 
+    # 2b. test-suite products: the app never serves one, so a live fixture row
+    # must not be reported as "missing from the storefront" - and a fixture
+    # that IS served is the defect the owner reported ("they are back").
+    fixture_ids = {pid for pid, row in live.items() if is_test_fixture(row)}
+    visible = {pid for pid in visible if pid not in fixture_ids}
+    served_fixtures = sorted(pid for pid in seen if pid in fixture_ids)
+    if served_fixtures:
+        failures.append(
+            f"{len(served_fixtures)} test-suite product(s) are LIVE on the "
+            f"storefront: {', '.join(served_fixtures[:15])}"
+            + (" …" if len(served_fixtures) > 15 else ""))
+
     missing = sorted(visible - seen)
-    extra = sorted(seen - visible)
+    extra = sorted(pid for pid in (seen - visible) if pid not in fixture_ids)
     if missing:
         failures.append(
             f"{len(missing)} online Supabase product(s) are MISSING from the "
@@ -212,7 +245,9 @@ def check(db_rows, payload, expected_ids=EXPECTED_WIX_IDS):
     summary.append(
         f"public catalogue: {len(products)} products "
         f"({len(wix_rows)} wix-*) · Supabase: {len(db_rows or [])} rows, "
-        f"{len(live)} live, {len(visible)} online")
+        f"{len(live)} live, {len(visible)} online"
+        + (f", {len(fixture_ids)} test-suite row(s) still untombstoned"
+           if fixture_ids else ""))
     return failures, summary
 
 

@@ -3,10 +3,38 @@
     python3 tests/e2e.py            (needs the app running on :8080)
 
 Every check prints PASS/FAIL and the run exits non-zero if anything fails.
+
+THIS SCRIPT CREATES AND DELETES PRODUCTS, so it must only ever run against a
+local/test instance. It was once pointed at https://jaurastore.com.ng (the
+release notes showed `BASE='https://jaurastore.com.ng' python tests/e2e.py`),
+which is how "Stock Test jau-stock-*" products ended up in the production
+Supabase table - and how they kept coming back to the shop afterwards, since
+every run re-created them and a re-save clears a product's durable tombstone.
+A non-local BASE is therefore refused unless ALLOW_PROD_TESTS=1 says the run
+is intentional.
 """
 import json, os, re, sys, time, urllib.request
 
 BASE = os.environ.get("BASE", "http://127.0.0.1:8080")
+
+
+def _guard_non_local_base(base):
+    """Refuse to run this destructive suite against a live shop."""
+    host = base.split("://", 1)[-1].split("/", 1)[0].split(":")[0].lower()
+    local = (host in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+             or host.endswith(".local") or host.endswith(".localhost"))
+    if local or os.environ.get("ALLOW_PROD_TESTS") == "1":
+        return
+    sys.exit(
+        f"REFUSING to run the destructive e2e suite against {base}.\n"
+        "It creates and deletes products (jau-stock-*, jau-mirror-*), so a\n"
+        "run against the live shop pollutes the real catalogue.\n"
+        "Run it against a local instance, or set ALLOW_PROD_TESTS=1 if you\n"
+        "really mean it.")
+
+
+_guard_non_local_base(BASE)
+
 SHOTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shots")
 os.makedirs(SHOTS, exist_ok=True)
 

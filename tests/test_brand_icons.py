@@ -24,7 +24,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # js/store.js (128 -> 129). Bumped to 132 for the six-production-fix release
 # (stock/categories persistence, deleted products, FR banner, mobile admin +
 # header): every asset reference carries ?v=132.
-SHARED_TOKEN = "133"
+# Bumped to 134 for the brighter, more saturated theme: every asset reference
+# carries ?v=134 so a phone holding the v133 stylesheet in its service-worker
+# cache downloads the new palette on the first visit instead of the second.
+SHARED_TOKEN = "134"
 
 
 def _image_size(path):

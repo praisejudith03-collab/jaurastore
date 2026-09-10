@@ -93,10 +93,11 @@ def test_banner_french_round_trip(admin):
 
 
 def test_banner_french_marks_an_empty_save(admin):
-    """An empty French field is a real value (fall back to English), not a
-    stale copy of an earlier save."""
+    """Emptying the French field is a real value (fall back to English), not a
+    stale copy of an earlier save - and it is sent as an explicit clear, so a
+    form that has not loaded the row can never blank the text by itself."""
     admin.post("/api/admin/site", json={
-        "convBanner": "English only", "convBannerFr": "", "convBold": ""})
+        "convBanner": "English only", "_clear": ["convBannerFr", "convBold"]})
     site = admin.get("/api/site").get_json()["site"]
     assert site["convBanner"] == "English only"
     assert site["convBannerFr"] == ""
@@ -227,7 +228,10 @@ def test_admin_js_form_and_save_carry_the_french_banner_field():
         "the admin banner form must have a convBannerFr input"
     assert re.search(r'Banner text \(French\)', src), \
         "the admin form must label the French field"
-    m = re.search(r"saveSiteConfig\(\{ convBanner: conv, (.*?) \}\)", src, re.S)
+    # The banner save goes through siteFieldPatch (only changed fields, with
+    # an explicit _clear for an emptied line) rather than posting the raw form.
+    m = re.search(r"siteFieldPatch\(\s*\{ convBanner: conv, (.*?)\}, bannerLoaded\)",
+                  src, re.S)
     assert m, "could not find the banner save call in js/admin.js"
     assert "convBannerFr" in m.group(1), "the save must post convBannerFr"
 

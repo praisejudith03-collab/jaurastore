@@ -446,6 +446,60 @@ def _object_in_bucket(client, bucket: str, path: str) -> bool:
         return False
 
 
+# key -> (exists, epoch when the answer expires). A product photo that has
+# gone missing must be verified against the bucket, but doing that on every
+# catalogue read would put one network call per product in the request path -
+# so the answer is cached and only consulted by the repair paths
+# (catalog.repair_dead_photos / catalog.repair_product_photo and the
+# photo-missing route), never by resolve_image().
+_object_exists_cache = {}
+OBJECT_EXISTS_TTL_SECONDS = 300
+
+
+def object_exists(value: str, ttl: int = OBJECT_EXISTS_TTL_SECONDS):
+    """True/False when one of OUR stored objects is known to be there, else None.
+
+    Only references this app hands out are checked: a same-origin
+    ``/uploads/<key>`` link, one of our Supabase bucket URLs, or an S3/R2 key.
+    Anything else - a committed repo photo, a foreign CDN - returns None
+    ("nothing to check"), and so does an unreachable bucket, so a network
+    hiccup can never make the app treat a healthy photo as missing.
+    """
+    raw = clean(value, 500)
+    if not raw or _is_repo_asset(raw):
+        return None
+    key = _key_from_url(raw)
+    if not key or ".." in key:
+        return None
+    if Config.UPLOAD_MODE != "supabase" and "/storage/v1/object/" not in raw:
+        return None
+    cached = _object_exists_cache.get(key)
+    if cached and cached[1] > time.time():
+        return cached[0]
+    try:
+        import supabase_store
+        if not (Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY):
+            return None
+        client = supabase_store.client()
+        if client is None:
+            return None
+        found = _object_in_bucket(client, supabase_store._bucket(), key)
+    except Exception:
+        return None
+    if len(_object_exists_cache) > 2048:
+        _object_exists_cache.clear()
+    _object_exists_cache[key] = (found, time.time() + ttl)
+    return found
+
+
+def _is_repo_asset(value: str) -> bool:
+    """True for a committed repository asset (never a stored object)."""
+    raw = str(value or "").strip()
+    if raw.startswith("/") or raw.startswith(("http://", "https://", "data:", "blob:")):
+        return False
+    return os.path.isfile(os.path.join(ROOT, raw))
+
+
 def signed_url_for(value: str) -> str:
     """A fresh signed URL for a proof / receipt stored in Supabase Storage.
 
@@ -608,6 +662,29 @@ def _delete_s3(key: str) -> bool:
         return False
 
 
+def _referenced_by_a_product(key: str) -> bool:
+    """True when a live product row still shows this stored object.
+
+    Product photos live in the same bucket as payment proofs, and the deletes
+    that run from the orders/receipts screens take objects out of it by URL.
+    Without this check one wrong URL (or a key reused across features) could
+    delete the only copy of a shop photo, and the card fell back to "PHOTO
+    COMING SOON" for good. Only the public asset folders are guarded (proofs
+    are private and are never product photos).
+    """
+    if key.split("/", 1)[0].lower() not in ("products", "categories", "videos"):
+        return False
+    try:
+        import catalog
+        for p in catalog.merged(include_hidden=True):
+            for ref in [p.get("image")] + list(p.get("images") or []):
+                if _key_from_url(str(ref or "")) == key:
+                    return True
+    except Exception:
+        return False
+    return False
+
+
 def delete_upload(value: str) -> bool:
     """Remove a file we stored earlier. True when something was deleted.
 
@@ -617,6 +694,10 @@ def delete_upload(value: str) -> bool:
     """
     key = _key_from_url(value)
     if not key or ".." in key:
+        return False
+    if _referenced_by_a_product(key):
+        # A product still shows this photo; deleting it would blank the shop
+        # card. The row has to be edited first.
         return False
     removed = False
     if Config.UPLOAD_MODE == "supabase" or "/storage/v1/object/" in (value or ""):

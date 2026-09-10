@@ -620,11 +620,18 @@ def test_a_row_not_flagged_online_produces_no_conflict(monkeypatch):
 
 
 def test_the_policy_never_publishes_everything():
-    """The headline failure mode this whole section exists to prevent."""
+    """The headline failure mode this whole section exists to prevent.
+
+    The committed catalogue no longer carries test fixtures - the shop purges
+    them (catalog.purge_test_fixtures) and refuses to serve or save one - so a
+    fixture-shaped row is added here on purpose: the policy must exclude it
+    whatever the repo happens to ship.
+    """
     products, _seed, overrides, _deleted = mi.load_local_catalogue()
-    rep = mi.live_set_report(list(products.values()), overrides)
+    rows = list(products.values()) + [_row("jau-stock-policy-probe")]
+    rep = mi.live_set_report(rows, overrides)
     total = sum(rep["counts"].values())
-    assert total == len(products), "every row must be classified"
+    assert total == len(rows), "every row must be classified"
     assert rep["counts"]["approved_live"] < total, (
         "the policy published every row - it is not filtering anything")
     assert rep["counts"]["test_fixtures_excluded"] >= 1

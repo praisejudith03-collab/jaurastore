@@ -62,7 +62,8 @@ EXPECTED_ADMIN_ROUTES = {
     ("DELETE", "/api/admin/payment-proofs/<pid>"),
 
     ("POST", "/api/admin/products"), ("PUT", "/api/admin/products"),
-    ("DELETE", "/api/admin/products/<pid>"), ("GET", "/api/admin/referrals"),
+    ("DELETE", "/api/admin/products/<pid>"), ("POST", "/api/admin/photos/repair"),
+    ("GET", "/api/admin/referrals"),
     ("GET", "/api/admin/coupon-uses"), ("POST", "/api/admin/reviews/migrate"),
     ("GET", "/api/admin/reviews"), ("PATCH", "/api/admin/reviews"),
     ("DELETE", "/api/admin/reviews"),

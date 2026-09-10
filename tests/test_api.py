@@ -908,8 +908,13 @@ def test_site_config_public_read_and_admin_write(client):
                     headers={"X-CSRF-Token": tok})
     assert r.status_code == 200
     assert client.get("/api/site").get_json()["site"]["heroVideo"] == "/uploads/videos/x.mp4"
-    # dangerous schemes are stripped, and clearing works
+    # dangerous schemes are stripped (and, having sanitised to nothing, do not
+    # touch what is stored - an empty value is not a write)
     client.post("/api/admin/site", json={"heroVideo": "javascript:alert(1)"},
+                headers={"X-CSRF-Token": tok})
+    assert client.get("/api/site").get_json()["site"]["heroVideo"] == "/uploads/videos/x.mp4"
+    # clearing is explicit: the client names the column it is emptying
+    client.post("/api/admin/site", json={"_clear": ["heroVideo"]},
                 headers={"X-CSRF-Token": tok})
     assert client.get("/api/site").get_json()["site"]["heroVideo"] == ""
 
@@ -1921,10 +1926,17 @@ def test_banner_text_round_trip_strips_html_and_needs_an_admin(client):
     pub = client.get("/api/site").get_json()["site"]
     assert pub["convBanner"] == site["convBanner"]
     assert pub["convBold"] == "ends Sunday"
-    # clearing restores the default banner
-    r = client.post("/api/admin/site", json={"convBanner": "", "convBold": ""},
+    # clearing restores the default banner (empty only counts as a change
+    # when the client says which columns it is emptying)
+    r = client.post("/api/admin/site", json={"_clear": ["convBanner", "convBold"]},
                     headers={"X-CSRF-Token": tok})
     assert r.get_json()["site"]["convBanner"] == ""
+    # ... and a bare empty value never blanks what is stored
+    client.post("/api/admin/site", json={"convBanner": "Back soon"},
+                headers={"X-CSRF-Token": tok})
+    r = client.post("/api/admin/site", json={"convBanner": ""},
+                    headers={"X-CSRF-Token": tok})
+    assert r.get_json()["site"]["convBanner"] == "Back soon"
 
 
 def test_moving_banner_editor_is_wired_in_admin_and_storefront():

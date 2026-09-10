@@ -2,11 +2,13 @@
 
 One daemon thread, one tick every 5 minutes:
   * backup.run() — the first tick on or after midnight backs up all
-    products and orders to GitHub (once per calendar day).
+    products and orders to GitHub (once per calendar day);
+  * catalog.repair_dead_photos() — once a day, re-point a product whose
+    uploaded photo is missing from the bucket at one that still exists.
 
 Started from create_app(); never started twice, never under pytest.
 """
-import os, threading, time
+import datetime, os, threading, time
 
 TICK_SECONDS = 300
 _started = threading.Event()
@@ -40,6 +42,31 @@ def _keep_alive(logger=None):
         if logger: logger.warning("keep-alive skipped: %s", exc)
 
 
+# Photo repair runs at most once a day: it walks the live catalogue and asks
+# the storage bucket whether each product's own uploaded photo still exists,
+# so a photo that went missing is swapped for one that works (and saved) long
+# before it can annoy a shopper for weeks. Voluntarily bounded - never a
+# catalogue-wide scan on every tick.
+_PHOTO_REPAIR_PER_RUN = 60
+_last_photo_repair = ""
+
+
+def _repair_photos(logger=None):
+    """Once a day: re-point products whose stored photo is missing."""
+    global _last_photo_repair
+    today = datetime.date.today().isoformat()
+    if _last_photo_repair == today:
+        return
+    import catalog as catalog_mod
+    report = catalog_mod.repair_dead_photos(limit=_PHOTO_REPAIR_PER_RUN,
+                                            actor="scheduler")
+    _last_photo_repair = today
+    if logger:
+        logger.info("photo repair: checked=%s missing=%s repaired=%s",
+                    report.get("checked"), len(report.get("missing") or []),
+                    len(report.get("repaired") or []))
+
+
 def _tick(logger=None):
     try:
         _keep_alive(logger)
@@ -60,6 +87,10 @@ def _tick(logger=None):
             logger.info("remirrored %d local-only product(s) to Supabase", n)
     except Exception as exc:                      # pragma: no cover
         if logger: logger.warning("stray remirror skipped: %s", exc)
+    try:
+        _repair_photos(logger)
+    except Exception as exc:                      # pragma: no cover
+        if logger: logger.warning("photo repair skipped: %s", exc)
 
 
 def _loop(logger=None):

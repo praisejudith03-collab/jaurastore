@@ -1618,6 +1618,10 @@ def admin_product_upsert():
     product, action = result[0], result[1]
     mirrored = result[2] if len(result) > 2 else True
     if not product:
+        if action == "test-fixture":
+            return jsonify(ok=False, error=(
+                "That is a test product from the test suite, not a shop piece. "
+                "It cannot be added to the storefront. Delete it instead.")), 400
         if action == "error" or (mirrored is False and catalog_mod._prod_source()):
             return jsonify(ok=False, error=(
                 "The product could not be saved to Supabase. No changes were made.")), 503
@@ -1675,6 +1679,70 @@ def admin_products_replace():
     return jsonify(ok=True, saved=len(kept), rejected=rejected, meta=catalog_mod.meta())
 
 # ---------------------------------------------------- admin: repo / dual sync
+@api.post("/admin/photos/repair")
+@authmod.require_admin
+@sec.require_csrf
+def admin_photos_repair():
+    """Re-point products whose stored photo is missing from the bucket.
+
+    A product whose uploaded photo no longer exists in Supabase Storage shows
+    the branded "PHOTO COMING SOON" card forever, however often it is saved
+    with a new photo - the row keeps pointing at the dead URL. This walks the
+    live catalogue, finds covers that are really missing, swaps in a photo
+    that does exist (a sibling gallery entry, otherwise a committed repo photo
+    for the slug) and saves, so the fix survives the next deploy.
+    """
+    limit = sec.clean_int(request.args.get("limit"), 80, 1, 200)
+    report = catalog_mod.repair_dead_photos(limit=limit,
+                                            actor=authmod.current_admin())
+    audit(authmod.current_admin(), "product.photos_repair",
+          f"checked={report.get('checked')} missing={len(report.get('missing') or [])} "
+          f"repaired={len(report.get('repaired') or [])}", _ip())
+    return jsonify(ok=True, **report)
+
+
+@api.post("/photo-missing")
+def photo_missing():
+    """A browser tells us one of our product photos 404ed; heal the row.
+
+    The storefront's image `onerror` handler already swaps in the placeholder
+    (nothing ever shows a broken icon); this is the other half - the shop
+    learns WHICH photo is really gone and, when the product still has a usable
+    one, re-points the row so every device and every later deploy shows the
+    real photo again. Only a same-origin /uploads reference that a live
+    product row actually carries may be reported; anything else is ignored.
+    """
+    limited = sec.guard("photo-missing", limit=60, window=600)
+    if limited:
+        return limited
+    d = request.get_json(silent=True) or {}
+    url = sec.safe_url(d.get("url") or "", 500)
+    if not url:
+        return jsonify(ok=False, error="url required"), 400
+    try:
+        import storage as _storage
+        key = _storage.own_upload_path(url)
+    except Exception:
+        key = ""
+    if not key:
+        return jsonify(ok=False, error="Not one of our uploads."), 400
+    hit = None
+    for p in catalog_mod.merged(include_hidden=True):
+        refs = [p.get("image")] + list(p.get("images") or [])
+        if any(_storage.own_upload_path(str(r or "")) == key for r in refs):
+            hit = p
+            break
+    if hit is None:
+        return jsonify(ok=True, repaired=False, reason="no product uses that photo")
+    try:
+        if _storage.object_exists(hit.get("image")) is not False:
+            return jsonify(ok=True, repaired=False, reason="the object is there")
+    except Exception:
+        return jsonify(ok=True, repaired=False, reason="could not check")
+    image = catalog_mod.repair_product_photo(hit.get("id"))
+    return jsonify(ok=True, repaired=bool(image), image=image or "")
+
+
 @api.get("/admin/sync/status")
 @authmod.require_admin
 def admin_sync_status():
@@ -1871,7 +1939,12 @@ def _load_site():
 @api.get("/site")
 def site_config():
     try:
-        return jsonify(ok=True, site=_site_payload(_load_site()))
+        resp = jsonify(ok=True, site=_site_payload(_load_site()))
+        # Never cacheable: the bank details on the checkout come from this
+        # answer, and a CDN (or a bfcache) holding yesterday's row after an
+        # Admin edit is indistinguishable from "my edit disappeared".
+        resp.headers["Cache-Control"] = "private, no-store"
+        return resp
     except Exception:
         return jsonify(ok=False, error="Site settings are temporarily unavailable."), 503
 
@@ -2043,11 +2116,32 @@ _SITE_TEXT_KEYS = frozenset({"conv_banner", "conv_banner_fr", "conv_bold",
                              "shipping_note", "shippingNote"})
 
 
+def _site_clear_list(d):
+    """Columns the client says it is deliberately emptying.
+
+    An empty field on its own means "leave what is stored alone": a form that
+    has not loaded the live row yet (slow/failed GET /api/site, a cached bundle
+    from before the deploy, a half-painted tab) must never be able to blank the
+    account details it cannot show. Clearing is therefore explicit.
+    """
+    raw = d.get("_clear")
+    if isinstance(raw, str):
+        names = {raw}
+    elif isinstance(raw, (list, tuple, set)):
+        names = {str(x) for x in raw if isinstance(x, (str, bytes))}
+    else:
+        names = set()
+    # Accept either spelling of every field (the canonical column, or the
+    # legacy front-end alias it is stored under).
+    return names | {SITE_LEGACY_MAP.get(n, n) for n in names}
+
+
 @api.post("/admin/site")
 @authmod.require_admin
 @sec.require_csrf
 def admin_site_update():
     d = request.get_json(silent=True) or {}
+    clear = _site_clear_list(d)
     values = {}
     for k in SITE_KEYS:
         if k in d:
@@ -2055,6 +2149,12 @@ def admin_site_update():
     for legacy, column in SITE_LEGACY_MAP.items():
         if legacy in d:
             values.setdefault(column, d[legacy])
+    # A clear can arrive without the field itself ({_clear: ["convBanner"]}):
+    # it still has to reach the write as an empty value.
+    for name in clear:
+        column = SITE_LEGACY_MAP.get(name, name)
+        if column in SITE_KEYS or column in SITE_LEGACY_MAP.values():
+            values.setdefault(column, "")
     for k in list(values):
         if k == "referral_commission_percentage":
             try: values[k] = max(0, min(100, float(values[k])))
@@ -2080,6 +2180,12 @@ def admin_site_update():
                        "banner_from", "banner_to", "conv_banner",
                        "conv_banner_fr", "conv_bold")
               or k in SITE_KEYS}
+    # An empty value only counts as a change when the client asked for that
+    # column to be cleared (see _site_clear_list). Without this, one Save from
+    # a form that never received the live row blanked every field it could not
+    # show - the bank details included.
+    values = {k: v for k, v in values.items()
+              if str(v if v is not None else "").strip() or k in clear}
     if Config.ENV == "testing":
         path = os.environ.get("SITE_CONFIG_PATH", "")
         current = _load_site()
@@ -2096,6 +2202,10 @@ def admin_site_update():
                     continue
                 if k in ("convBanner", "convBannerFr", "convBold", "shippingNote"):
                     value = re.sub(r"<[^>]+>", "", value)
+                # Same rule as the canonical columns above: empty means "leave
+                # it" unless this column was explicitly cleared.
+                if not value.strip() and k not in clear and SITE_LEGACY_MAP.get(k, k) not in clear:
+                    continue
                 current[k] = value
         for k, v in values.items():
             current[colmap.get(k, k)] = v
@@ -2111,7 +2221,16 @@ def admin_site_update():
         site = __import__("supabase_settings", fromlist=["update_site_settings"]).update_site_settings(values)
     except Exception as exc:
         print(f"[supabase] site settings update failed: {exc}")
-        return jsonify(ok=False, error="Could not update Supabase site settings. No changes were made."), 503
+        # The detail names the column and the one ALTER statement that repairs
+        # the live table - without it the owner sees "could not save" with no
+        # way forward, and the Render log is the only copy.
+        detail = " ".join(str(exc).split())
+        if len(detail) > 300:
+            detail = detail[:300] + "…"
+        return jsonify(
+            ok=False,
+            error=("Could not update Supabase site settings. No changes were "
+                   "made." + (f" {detail}" if detail else ""))), 503
     audit(authmod.current_admin(), "site.update", json.dumps(values)[:200], _ip())
     return jsonify(ok=True, site=_site_payload(site))
 
