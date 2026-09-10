@@ -9,12 +9,8 @@ Two phone regressions, fixed in CSS:
    admin inputs are >=16px so iOS never auto-zooms; the safe-area inset is
    honoured.
 
-4. Mobile header: at <=640px a 150px logo plus the EN/FR / currency /
-   search / cart / hamburger controls no longer fit one row. The buttons
-   keep a good size (>=12px font, 8-12px padding, 40px tap height - pinned
-   in the same fixed-size block at the end of the file); the LOGO hides
-   instead (and the search icon, which also lives in the hamburger menu),
-   so EN/FR always stays visible and nothing essential is clipped.
+4. #68 restores the mobile logo and search button. Keep those visible
+   while preserving the comfortable language/currency switch sizes.
 
 These are source assertions: they pin the shipped stylesheet, because a
 phone is the only place the bugs actually show.
@@ -134,30 +130,18 @@ def test_admin_mobile_body_no_longer_reserves_a_fixed_bar():
 
 
 # ------------------------------------------------------------- issue 4: header
-def test_mobile_header_hides_the_logo_not_the_buttons():
-    """At <=640px the logo hides while EN/FR stays; the search icon joins
-    it (the hamburger menu carries a search field)."""
-    css = _css()
-    blocks = _media_blocks(css, "@media (max-width: 640px)")
-    assert blocks, "expected a 640px media block"
-    hit = None
-    for body in blocks:
-        rule = _rule(body, ".header .logo")
-        if _prop(rule, "display") == "none":
-            hit = rule
-    assert hit is not None, "the logo must hide at <=640px"
-    search = any(
-        _prop(_rule(body, ".nav-right [data-open-search]"), "display") == "none"
-        for body in blocks)
-    assert search, "the search icon must hide at <=640px (it lives in the menu)"
+def test_mobile_header_keeps_logo_and_search_visible():
+    blocks = _media_blocks(_css(), "@media (max-width: 640px)")
+    assert any(_prop(_rule(body, ".header .logo"), "display") == "flex"
+               for body in blocks), "#68 requires the mobile logo"
+    assert any(_prop(_rule(body, ".nav-right [data-open-search]"), "display") == "grid"
+               for body in blocks), "#68 requires a visible mobile search button"
 
 
-def test_between_641_and_700_the_logo_hides_too():
-    css = _css()
-    blocks = _media_blocks(css, "@media (min-width: 641px) and (max-width: 700px)")
-    assert any(
-        _prop(_rule(body, ".header .logo"), "display") == "none"
-        for body in blocks), "the logo must hide on small landscape phones too"
+def test_between_641_and_700_logo_stays_visible():
+    blocks = _media_blocks(_css(), "@media (min-width: 641px) and (max-width: 700px)")
+    assert any(_prop(_rule(body, ".header .logo"), "display") == "flex"
+               for body in blocks)
 
 
 def test_mobile_switch_buttons_keep_a_comfortable_tap_size():

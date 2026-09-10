@@ -24,7 +24,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # js/store.js (128 -> 129). Bumped to 132 for the six-production-fix release
 # (stock/categories persistence, deleted products, FR banner, mobile admin +
 # header): every asset reference carries ?v=132.
-SHARED_TOKEN = "132"
+SHARED_TOKEN = "133"
 
 
 def _image_size(path):

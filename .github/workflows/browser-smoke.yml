@@ -1,0 +1,33 @@
+name: Deployed mobile browser check
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Shop or preview URL (read-only verification)
+        required: true
+        default: https://jaurastore.com.ng
+      wait_seconds:
+        description: Time to wait for this checkout's store.js to deploy
+        required: true
+        default: "900"
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install playwright==1.62.0
+      - run: python -m playwright install --with-deps chromium
+      - name: Verify deployed scripts and mobile storefront
+        env:
+          SHOP_URL: ${{ inputs.url }}
+          WAIT_SECONDS: ${{ inputs.wait_seconds }}
+        run: python tools/browser_smoke.py "$SHOP_URL" --wait "$WAIT_SECONDS"

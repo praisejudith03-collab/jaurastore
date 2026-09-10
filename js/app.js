@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=132";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=132";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=133";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=133";
 }
 
 function renderCategories() {
@@ -1945,13 +1945,6 @@ async function boot() {
   // The owner's category table lives on the server — every page (not just
   // admin) renders it, so pull it in before the first draw.
   try { await JA.loadServerCategories(); } catch (e) {}
-  # Set initial category order so "Household & Kitchen" appears first.
-  const ordered = normalizeOrder(categories());
-  write(KEYS.cats, ordered.map((c) => ({
-    id: c.id, name: c.name, nameFr: c.nameFr || "",
-    image: c.image || "", hidden: !!c.hidden,
-    order: c.order !== undefined ? c.order : 0,
-  }));
   // Custom moving-banner text (owner-editable in Admin → Settings): paint it
   // over the default delivery-window line on every page.
   // The live site row (banner text, branding, bank details, delivery zones,

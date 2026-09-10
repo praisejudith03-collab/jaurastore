@@ -1,0 +1,56 @@
+"""Read-only mobile verification of a deployed shop (never signs in or writes data).
+
+Usage: python tools/browser_smoke.py https://jaurastore.com.ng --wait 900
+Waits for this checkout's store.js before checking the actual browser DOM.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import time
+
+from playwright.sync_api import sync_playwright, expect
+
+parser = argparse.ArgumentParser()
+parser.add_argument("url")
+parser.add_argument("--wait", type=int, default=0)
+args = parser.parse_args()
+root = Path(__file__).resolve().parents[1]
+expected = hashlib.sha256((root / "js/store.js").read_bytes()).hexdigest()
+base = args.url.rstrip("/")
+deadline = time.monotonic() + args.wait
+
+with sync_playwright() as pw:
+    browser = pw.chromium.launch(executable_path=os.environ.get("CHROMIUM_EXECUTABLE"),
+                                args=["--no-sandbox", "--disable-dev-shm-usage"])
+    context = browser.new_context(viewport={"width": 390, "height": 844},
+                                  is_mobile=True, has_touch=True)
+    while True:
+        try:
+            response = context.request.get(base + "/js/store.js?verify=" + str(time.time_ns()), timeout=90000)
+            if response.ok and hashlib.sha256(response.body()).hexdigest() == expected:
+                break
+            reason = f"Expected store.js not deployed yet (HTTP {response.status})"
+        except Exception as exc:
+            reason = str(exc)
+        if time.monotonic() >= deadline:
+            raise RuntimeError(reason)
+        print(reason, flush=True)
+        time.sleep(20)
+    context.add_init_script("sessionStorage.setItem('jaura_welcome_seen', '1')")
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    for path in ("/shop.html", "/categories.html"):
+        page.goto(base + path, wait_until="domcontentloaded", timeout=90000)
+        selector = "[data-shop-grid] > *" if path == "/shop.html" else "[data-cat-list] > *"
+        expect(page.locator(selector).first).to_be_visible(timeout=90000)
+        expect(page.locator("#site-header .logo img")).to_be_visible()
+        assert page.locator("#site-header .logo img").evaluate("img => img.complete && img.naturalWidth > 0")
+        page.locator("#site-header [data-open-search]").click()
+        expect(page.locator("[data-search-input]")).to_be_visible()
+        print(json.dumps({"url": base + path, "cards": page.locator(selector).count(),
+                          "products": page.evaluate("JA.products().length"), "jsErrors": errors}), flush=True)
+    assert not errors, errors
+    browser.close()

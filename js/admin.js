@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=132" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=133" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1112,7 +1112,7 @@ function bindOrderButtons() {
   });
 }
 function accountPanel() {
-  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. You sign in with <strong>ADMIN_MASTER_PASSWORD</strong> — that is your main admin password. <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> is the backup one, and it still works if the master password is ever unset. Both are managed in Render (Environment → Environment Variables), not in this portal: change one there and the new password works at your next sign-in.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn" id="sync-github" hidden>Sync to GitHub</button></div><div id="sync-status" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Everything you save goes straight to the live store. If your Wi-Fi drops, the change waits on this device and sends itself as soon as you are back online.</p></div></details>`;
+  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. You sign in with <strong>ADMIN_MASTER_PASSWORD</strong> — that is your main admin password. <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> is the backup one, and it still works if the master password is ever unset. Both are managed in Render (Environment → Environment Variables), not in this portal: change one there and the new password works at your next sign-in.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn" id="sync-github" hidden>Sync to GitHub</button></div><div id="sync-status" role="status" aria-live="polite" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Everything you save goes straight to the live store. If your Wi-Fi drops, the change waits on this device and sends itself as soon as you are back online.</p></div></details>`;
 }
 function bindAccount() {
   const email = $("#acct-email");
@@ -1120,20 +1120,54 @@ function bindAccount() {
   const note = $("#sync-note");
   const paintSync = () => { if (!note) return; const n = JA.syncPending ? JA.syncPending() : 0; note.textContent = n ? `${n} change(s) are waiting for a connection.` : "Everything you save goes straight to the live store."; };
   paintSync(); if (window.JA_NET) window.JA_NET.onStatus(paintSync);
-  // Retry Now: flush the outbox AND re-POST stranded KEYS.custom
-  // (jaura_custom_products) so a save that never left this phone still ships.
-  $("#retry-sync")?.addEventListener("click", async () => {
-    JA.toast("Retrying…");
-    if (window.JA_NET) window.JA_NET.flush();
-    if (JA.retryStrandedProducts) await JA.retryStrandedProducts();
-    paintSync();
-  });
-  $("#reload-cat")?.addEventListener("click", async () => { if (JA.reloadCatalog) { JA.toast("Reloading…"); await JA.reloadCatalog(); paintDesk("products"); } });
   const statusBox = $("#sync-status");
+  let actionStarted = false;
+  const buttons = [$("#retry-sync"), $("#reload-cat"), $("#sync-github")].filter(Boolean);
+  // Keep this panel mounted so the completion message stays visible.
+  function bindAction(selector, progress, action) {
+    $(selector)?.addEventListener("click", async () => {
+      if (buttons.some((b) => b.disabled)) return;
+      actionStarted = true;
+      buttons.forEach((b) => { b.disabled = true; });
+      if (statusBox) statusBox.textContent = progress;
+      try {
+        const message = await action();
+        if (statusBox) statusBox.textContent = message;
+      } catch (e) {
+        if (statusBox) statusBox.textContent = "Failed: " + (e.message || "Check your connection and try again.");
+      } finally {
+        buttons.forEach((b) => { b.disabled = false; });
+        paintSync();
+      }
+    });
+  }
+  bindAction("#retry-sync", "Retrying unsaved changes…", async () => {
+    if (!window.JA_NET || !JA.retryStrandedProducts) throw new Error("Sync is unavailable. Reload this page.");
+    await window.JA_NET.flush(true);
+    await JA.retryStrandedProducts();
+    const pending = JA.syncPending();
+    if (pending) throw new Error(`${pending} change(s) still waiting. Check your connection or sign in again, then retry.`);
+    return "Retry complete. All changes are synced; no pending changes.";
+  });
+  bindAction("#reload-cat", "Reloading the live catalogue…", async () => {
+    if (!JA.reloadCatalog) throw new Error("Catalogue loading is unavailable. Reload this page.");
+    const count = await JA.reloadCatalog();
+    return `Catalogue reloaded from the server: ${count} products. Open Products to view them.`;
+  });
+  async function syncFetch(url, options = {}) {
+    const res = await fetch(url, {
+      credentials: "same-origin", cache: "no-store", ...options,
+      signal: AbortSignal.timeout(60000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) throw new Error(data.error || `Request failed (${res.status}). Please sign in again or retry.`);
+    return data;
+  }
   async function refreshSyncStatus() {
     if (!statusBox) return;
     try {
-      const res = await fetch("api/admin/sync/status", { credentials: "same-origin", cache: "no-store" });
+      const res = await fetch("api/admin/sync/status", { credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(30000) });
+      if (actionStarted) return;
       if (!res.ok) {
         statusBox.textContent = "Could not read the sync status.";
         const ghBtn = $("#sync-github");
@@ -1141,6 +1175,7 @@ function bindAccount() {
         return;
       }
       const d = await res.json();
+      if (actionStarted) return;
       const health = d.supabaseHealth || "";
       const label = health === "ok" ? "OK"
         : health === "unreachable" ? "UNREACHABLE"
@@ -1163,6 +1198,7 @@ function bindAccount() {
       }
       statusBox.innerHTML = bits.map((b) => JA.escape(b)).join("<br>");
     } catch (e) {
+      if (actionStarted) return;
       // Hide the button on a status-call failure too: we cannot confirm a token.
       const ghBtn = $("#sync-github");
       if (ghBtn) ghBtn.hidden = true;
@@ -1170,29 +1206,14 @@ function bindAccount() {
     }
   }
   refreshSyncStatus();
-  $("#sync-github")?.addEventListener("click", async () => {
-    const b = $("#sync-github"); if (b) { b.disabled = true; b.textContent = "Syncing…"; }
-    try {
-      const res = await fetch("api/admin/sync/repo", { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "X-CSRF-Token": JA.csrf() || "" }, });
-      const d = await res.json();
-      // This button is a CODE backup only — shop data (orders, products,
-      // settings) lives in Supabase and is never touched by a GitHub sync.
-      if (!res.ok || d.ok === false) {
-        const msg = ((d && d.error) || "Code backup failed.") +
-          " This only backs up the site code — your shop data is unaffected.";
-        JA.toast(msg);
-        if (statusBox) statusBox.textContent = msg;
-        return;
-      }
-      JA.toast(d.pushed ? "Synced, committed and pushed to GitHub." : "Committed to the repo." + (d.note ? " " + d.note : ""));
-      if (statusBox) statusBox.textContent = [d.committed ? "Committed to the repository." : "Nothing to sync.", d.pushed ? "Pushed to " + (d.branch || "main") + "." : (d.note || "Not pushed — no GitHub token configured.")].filter(Boolean).join(" ");
-      refreshSyncStatus();
-    } catch (e) {
-      const msg = "Code backup failed. This only backs up the site code — your shop data is unaffected.";
-      JA.toast(msg);
-      if (statusBox) statusBox.textContent = msg;
-    }
-    finally { if (b) { b.disabled = false; b.textContent = "Sync to GitHub"; } }
+  bindAction("#sync-github", "Syncing the catalogue backup to GitHub…", async () => {
+    if (!window.JA_NET || !window.JA_NET.csrf) throw new Error("Sync is unavailable. Reload this page.");
+    const token = await window.JA_NET.csrf();
+    const d = await syncFetch("api/admin/sync/repo", {
+      method: "POST", headers: { "X-CSRF-Token": token || "" },
+    });
+    if (d.pushed) return "Synced and pushed to GitHub" + (d.branch ? ` (${d.branch})` : "") + ".";
+    return d.note || (d.committed ? "Committed locally, but not pushed to GitHub." : "Sync complete. No repository changes to push.");
   });
 }
 function marketingPanel() {
@@ -1322,7 +1343,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=132" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=133" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -1663,7 +1684,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=132", hidden: false }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=133", hidden: false }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
