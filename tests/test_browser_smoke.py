@@ -148,6 +148,30 @@ def test_header_controls_do_not_overlap(mobile, live_shop, width, language):
     for control in mobile.locator("#site-header .nav-right button").all():
         box = control.bounding_box()
         assert box and box["x"] >= 0 and box["x"] + box["width"] <= width
+
+
+def test_desktop_logo_is_centred_and_currency_pills_stay_small(mobile, live_shop):
+    """The locked header: the logo is pixel-centred on desktop (nav links |
+    CENTRED LOGO | controls) and the ₦/F CFA pills keep their small fixed
+    boxes. Fails if anything ever drags the logo back to the left edge or
+    inflates the currency switch again."""
+    width = 1440
+    mobile.set_viewport_size({"width": width, "height": 900})
+    mobile.goto(live_shop + "/")
+    logo = mobile.locator("#site-header .logo img")
+    expect(logo).to_be_visible()
+    box = logo.bounding_box()
+    centre = box["x"] + box["width"] / 2
+    assert abs(centre - width / 2) <= 3, (
+        f"header logo centre {centre} != viewport centre {width / 2} "
+        "- the centred-logo lock regressed")
+    for cur, low, high in (("NGN", 24, 46), ("CFA", 42, 76)):
+        pill = mobile.locator(f'#site-header .currency-switch [data-cur="{cur}"]')
+        expect(pill).to_be_visible()
+        pbox = pill.bounding_box()
+        assert low <= pbox["width"] <= high, (cur, pbox)
+    # And the two golden butterflies still fly, exactly as the owner left them.
+    assert mobile.locator("#site-header .header-flies .hfly").count() == 2
     mobile.locator('#site-header [data-open-search]').click()
     expect(mobile.locator('[data-search-input]')).to_be_visible()
     expect(mobile.locator('[data-search]')).to_have_count(1)

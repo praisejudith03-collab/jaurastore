@@ -50,6 +50,21 @@ with sync_playwright() as pw:
                 page.goto(base + path, wait_until="domcontentloaded", timeout=90000)
                 logo = page.locator("#site-header .logo img")
                 expect(logo).to_be_visible(timeout=90000)
+                # The header logo is LOCKED to the centre of the page on
+                # desktop (nav links | logo | controls). Fail the deploy check
+                # if any stylesheet ever drags it back to the edge again.
+                if width >= 1024:
+                    box = logo.bounding_box()
+                    centre = box["x"] + box["width"] / 2
+                    assert abs(centre - width / 2) <= 4, (
+                        f"header logo not centred on {base + path}: "
+                        f"centre {centre} != {width / 2}")
+                    cfa = page.locator('#site-header .currency-switch [data-cur="CFA"]')
+                    cbox = cfa.bounding_box()
+                    assert cbox and 40 <= cbox["width"] <= 80, (
+                        f"currency pill wrong width: {cbox}")
+                # The two golden butterflies stay in the header, untouched.
+                assert page.locator("#site-header .header-flies .hfly").count() == 2
                 page.locator(f'#site-header .nav-right [data-lang="{language}"]').click()
                 assert logo.evaluate("img => img.complete && img.naturalWidth > 0")
                 selector = "[data-shop-grid] > *" if path == "/shop.html" else "[data-cat-list] > *"

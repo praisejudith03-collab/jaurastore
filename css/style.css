@@ -6214,31 +6214,41 @@ select.ck-zone-select {
 }
 
 /* Per-LABEL width. ₦/NGN and EN/FR share the short box; "F CFA" gets the long
-   one. Both states of a given button resolve to the same min-width. */
-.lang-switch button,
-.currency-switch button[data-cur="NGN"] { min-width: 40px !important; }
-.currency-switch button[data-cur="CFA"] { min-width: 64px !important; }
+   one. Both states of a given button resolve to the same min-width.
+   Owner request (2026-09-10): the currency pills were wider than the header
+   had room for, so they now run smaller — still constant-width per label, so
+   selecting a currency still cannot shift the layout. Labels keep the
+   constant 12px/600 metrics from the block above. */
+.lang-switch button { min-width: 40px !important; }
+.currency-switch button[data-cur="NGN"] {
+  min-width: 30px !important;
+  padding: 0 7px !important;
+}
+.currency-switch button[data-cur="CFA"] {
+  min-width: 50px !important;
+  padding: 0 8px !important;
+}
 
 @media (max-width: 640px) {
   .lang-switch,
   .currency-switch {
-    height: 42px !important;
-    min-height: 42px !important;
-    max-height: 42px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    max-height: 38px !important;
   }
   .lang-switch button,
   .currency-switch button,
   .lang-switch button.is-on,
   .currency-switch button.is-on {
-    height: 40px !important;      /* 42px switch minus its 1px border */
-    min-height: 40px !important;
-    max-height: 40px !important;
-    padding: 0 10px !important;
+    height: 36px !important;      /* 38px switch minus its 1px border */
+    min-height: 36px !important;
+    max-height: 36px !important;
+    padding: 0 8px !important;
     font-size: 12px !important;
   }
-  .lang-switch button,
-  .currency-switch button[data-cur="NGN"] { min-width: 40px !important; }
-  .currency-switch button[data-cur="CFA"] { min-width: 64px !important; }
+  .lang-switch button { min-width: 36px !important; }
+  .currency-switch button[data-cur="NGN"] { min-width: 30px !important; }
+  .currency-switch button[data-cur="CFA"] { min-width: 50px !important; }
 }
 
 /* =============================================================
@@ -6289,18 +6299,41 @@ body[data-page="admin"] #site-header { display: none !important; }
   }
 }
 
-/* Small phones need two rows, not a logo overlapped by language controls. */
-@media (max-width: 380px) {
+/* Small phones need two rows — logo centred on its own line, controls
+   centred under it — otherwise the language/currency controls overlap the
+   logo or run off the right edge. Raised from 380px to 480px (2026-09-10):
+   with the EN/FR + ₦/F CFA pills, search, bag and hamburger, one row does
+   not fit beside the logo on any common phone. */
+@media (max-width: 480px) {
   .header-inner { grid-template-columns: minmax(0, 1fr) !important; padding-block: 8px; }
   .header .logo, .header .nav-right { justify-self: center !important; }
   .header .nav-right { flex-wrap: wrap; justify-content: center; max-width: 100%; }
 }
 
-/* Shared desktop and mobile header: logo first, navigation then controls. */
-.header .logo { order: -1; }
+/* =============================================================
+   HEADER LOGO POSITION — LOCKED (restored 2026-09-10, owner request)
+   The header is:  nav links | CENTRED LOGO | controls.
+   That is the base grid near the top of this file (1fr auto 1fr, with the
+   logo in the middle column). The "v132" override that dragged the logo to
+   the far-left edge on desktop was wrong and is reverted here.
+   This position is guarded so it cannot quietly change back again:
+     - tests/test_header_layout_lock.py fails if any stylesheet rule ever
+       puts `order: -1` back on .header .logo or changes the ≥981px grid,
+     - tests/test_browser_smoke.py measures the logo in real Chromium and
+       fails if it is not pixel-centred at desktop widths,
+     - tools/browser_smoke.py re-checks the deployed site after every push.
+   Do NOT reintroduce `order` on .header .logo or a ≥981px
+   grid-template-columns change on .header-inner.
+   On phones the links live behind the hamburger menu: 481–980px keeps the
+   logo left with the controls right; ≤480px folds to two centred rows (see
+   the block above) so nothing overlaps.
+   The butterfly animation (.header-flies) is untouched.
+   ============================================================= */
 @media (min-width: 981px) {
-  .header-inner { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .header .nav-left { justify-content: center; flex-wrap: wrap; }
+  .header-inner { grid-template-columns: 1fr auto 1fr !important; }
+  .header .logo { order: 0 !important; justify-self: center !important; }
+  .header .nav-left { min-width: 0; flex-wrap: wrap; }
+  .header .nav-right { min-width: 0; flex-wrap: nowrap; }
 }
 [data-cat-move] { margin: 6px 4px; min-width: 36px; min-height: 36px; cursor: pointer; }
 [data-cat-move]:disabled { opacity: .45; cursor: default; }

@@ -147,7 +147,8 @@ def test_between_641_and_700_logo_stays_visible():
 def test_mobile_switch_buttons_keep_a_comfortable_tap_size():
     """The owner's requirement: >=12px font, 8-12px padding, 36-44px tap
     height on the language/currency switches - the last 640px rule for them
-    pins those metrics (later rules win the cascade)."""
+    pins those metrics (later rules win the cascade). The 2026-09-10 size
+    reduction keeps every band: 12px labels, 36px tap height, 0 8px padding."""
     css = _css()
     rule = ""
     for body in _media_blocks(css, "@media (max-width: 640px)"):
@@ -157,7 +158,7 @@ def test_mobile_switch_buttons_keep_a_comfortable_tap_size():
         if _prop(candidate, "height"):
             rule = candidate          # keep the LAST one: the cascade winner
     assert _prop(rule, "font-size").startswith("12px")
-    assert _prop(rule, "height").startswith("40px"), \
-        "40px tap height is within the 36-44px requirement"
-    assert re.match(r"0\s+10px", _prop(rule, "padding")), \
+    assert _prop(rule, "height").startswith("36px"), \
+        "36px tap height is within the 36-44px requirement"
+    assert re.match(r"0\s+8px", _prop(rule, "padding")), \
         "8-12px horizontal padding on a fixed-height button"

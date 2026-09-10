@@ -27,7 +27,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Bumped to 134 for the brighter, more saturated theme: every asset reference
 # carries ?v=134 so a phone holding the v133 stylesheet in its service-worker
 # cache downloads the new palette on the first visit instead of the second.
-SHARED_TOKEN = "135"
+# Bumped to 136 for the centred-header-logo lock + smaller fixed currency
+# pills + Perfume/Parfum default category: style.css, js/store.js and sw.js
+# all changed, so phones must fetch the new ones on the first visit.
+SHARED_TOKEN = "136"
 
 
 def _image_size(path):
