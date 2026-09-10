@@ -192,6 +192,15 @@ def create_app():
                 app.logger.info("restored %d receipts from Supabase", saved_r)
         except Exception as exc:
             app.logger.warning("orders/receipts restore skipped: %s", exc)
+        # Restore store insights from Supabase so a redeploy that wiped the
+        # disk still has the retention window. A no-op when the local window
+        # is intact; never blocks boot on failure.
+        try:
+            restored = analytics_mod.restore_from_supabase()
+            if restored:
+                app.logger.info("restored %d analytics rows from Supabase", restored)
+        except Exception as exc:
+            app.logger.warning("analytics restore skipped: %s", exc)
         # Restore the local variant-stock cache for compatibility with local
         # admin tooling after an ephemeral-disk deploy. Production request
         # reads still use the strict Supabase path in api.py.

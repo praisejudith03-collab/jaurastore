@@ -77,6 +77,7 @@ def record(items, vid, is_new):
     ua = (request.headers.get("User-Agent") or "")[:200]
 
     stored = 0
+    mirror_batch = []
     for raw in items[:40]:
         if not isinstance(raw, dict):
             continue
@@ -100,6 +101,12 @@ def record(items, vid, is_new):
                 "VALUES (?,?,?,?,?,?,?,?,?)",
                 (vid, sid, path, page, ref, city, country, day, iso),
             )
+            mirror_batch.append({
+                "kind": "page_view", "vid": vid, "sid": sid, "path": path,
+                "page": page, "ref": ref, "product_id": "", "product_name": "",
+                "value": 0, "currency": "", "city": city, "region": region,
+                "country": country, "day": day, "at": iso,
+            })
             stored += 1
         elif kind != "heartbeat":
             execute(
@@ -107,7 +114,24 @@ def record(items, vid, is_new):
                 "value, currency, city, country, day, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (kind, vid, sid, pid, pname, page, path, value, currency, city, country, day, iso),
             )
+            mirror_batch.append({
+                "kind": kind, "vid": vid, "sid": sid, "path": path,
+                "page": page, "ref": "", "product_id": pid,
+                "product_name": pname, "value": value, "currency": currency,
+                "city": city, "region": region, "country": country,
+                "day": day, "at": iso,
+            })
             stored += 1
+
+    if mirror_batch:
+        # The durable copy (Supabase analytics_events). Best-effort and out
+        # of the counting path: when the mirror is down the shop keeps
+        # counting locally and only durability has a gap for this batch.
+        try:
+            from supabase_store import mirror_analytics_events
+            mirror_analytics_events(mirror_batch)
+        except Exception:
+            pass
 
     if sid and not one("SELECT 1 FROM page_views WHERE vid=? AND sid=? LIMIT 1", (vid, sid)):
         execute("UPDATE visitors SET sessions=sessions+1 WHERE vid=?", (vid,))
@@ -461,3 +485,106 @@ def prune(retention_days=None):
             (_iso(_now() - datetime.timedelta(days=2)),))
     execute("DELETE FROM visitors WHERE last_at < ?", (cutoff_iso,))
     return True
+
+
+# ------------------------------------------------------- durable insights
+def _retention_cutoff_day():
+    """Oldest day kept locally - the same window prune() enforces."""
+    return _days_ago(max(1, int(Config.ANALYTICS_RETENTION_DAYS)))
+
+
+def _clean_restored_at(value, day, fallback):
+    """Supabase returns timestamptz as ISO text with an offset
+    ("2026-09-10T12:00:00+00:00"); local `at` is naive YYYY-MM-DDTHH:MM:SS.
+    Normalise so restored rows sort and prune exactly like local ones."""
+    s = str(value or "").strip().replace(" ", "T")
+    if (len(s) >= 19 and s[4:5] == "-" and s[7:8] == "-" and s[10:11] == "T"
+            and s[13:14] == ":" and s[16:17] == ":"):
+        return s[:19]
+    if len(str(day or "")) == 10:
+        return f"{day}T12:00:00"
+    return fallback
+
+
+def _rebuild_visitors(cutoff):
+    """Re-derive the visitors table from restored page views.
+
+    Visitors carry no mirrored rows of their own (they are an aggregate of
+    the same traffic), so a wipe loses them; without this the restored
+    window would show page views but zero new visitors and no locations.
+    """
+    execute(
+        "INSERT INTO visitors (vid, first_at, last_at, sessions, city, region, country, referrer, ua) "
+        "SELECT vid, MIN(at), MAX(at), COUNT(DISTINCT sid), MAX(city), '', MAX(country), '', '' "
+        "FROM page_views WHERE day >= ? AND vid IS NOT NULL AND vid != '' GROUP BY vid "
+        "ON CONFLICT(vid) DO NOTHING",
+        (cutoff,))
+
+
+def restore_from_supabase(rows=None):
+    """Copy the retention window back from Supabase after a disk wipe.
+
+    A no-op unless the local window is empty: SQLite is a single file, so a
+    wipe takes every analytics row and an intact disk needs nothing - which
+    also makes the restore idempotent across boots. Pass `rows` to restore
+    from an explicit list (tests); otherwise the window is read from the
+    Supabase analytics_events table. Returns the number of rows restored.
+    Never raises: a failed restore must not stop the boot or the sale.
+    """
+    try:
+        cutoff = _retention_cutoff_day()
+        local = one(
+            "SELECT (SELECT COUNT(*) FROM page_views WHERE day >= ?) + "
+            "(SELECT COUNT(*) FROM events WHERE day >= ?) n",
+            (cutoff, cutoff))
+        if local is None or (local["n"] or 0) > 0:
+            return 0
+        if rows is None:
+            from supabase_store import load_analytics_events
+            rows = load_analytics_events(cutoff)
+        if not rows:
+            return 0
+        now_iso = _iso()
+        restored = 0
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            day = str(r.get("day") or "")[:10]
+            if len(day) != 10 or day < cutoff:
+                continue                        # outside the window (or junk)
+            at = _clean_restored_at(r.get("at"), day, now_iso)
+            kind = str(r.get("kind") or "")
+
+            def _get(key, n):
+                return str(r.get(key) or "")[:n]
+
+            if kind == "page_view":
+                execute(
+                    "INSERT INTO page_views (vid, sid, path, page, ref, city, country, day, at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (_get("vid", 64), _get("sid", 48), _get("path", 200),
+                     _get("page", 40), _get("ref", 300), _get("city", 80),
+                     _get("country", 80), day, at),
+                )
+                restored += 1
+            elif kind in ("view", "cart", "checkout_start", "purchase"):
+                try:
+                    value = float(r.get("value") or 0)
+                except (TypeError, ValueError):
+                    value = 0
+                execute(
+                    "INSERT INTO events (type, vid, sid, product_id, product_name, page, path, "
+                    "value, currency, city, country, day, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (kind, _get("vid", 64), _get("sid", 48),
+                     _get("product_id", 64), _get("product_name", 160),
+                     _get("page", 40), _get("path", 200), value,
+                     _get("currency", 3).upper(), _get("city", 80),
+                     _get("country", 80), day, at),
+                )
+                restored += 1
+        if restored:
+            _rebuild_visitors(cutoff)
+        return restored
+    except Exception as exc:                       # never stop the boot
+        print(f"[analytics] restore failed: {exc}")
+        return 0

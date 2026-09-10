@@ -1399,6 +1399,60 @@ def load_receipt(receipt_id):
         return None
 
 
+# ------------------------------------------------------- durable analytics
+# Store insights used to live only in the SQLite file on the Render disk, so
+# every redeploy wiped the dashboard. Each page view and engagement event is
+# now mirrored into the analytics_events table (schema_sections/
+# 17_analytics.sql), and create_app() copies the retention window back into
+# the local tables on boot. Writes are best-effort: when Supabase is
+# unreachable the shop keeps counting locally and the mirror simply has a
+# gap for that batch.
+ANALYTICS_EVENTS_TABLE = "analytics_events"
+
+
+def mirror_analytics_events(rows):
+    """Insert analytics rows into Supabase in one call. Never raises.
+
+    `rows` is a list of dicts shaped like the analytics_events table (see
+    analytics.record). Returns True only when Supabase accepted the write;
+    an empty batch is trivially mirrored without touching the client.
+    """
+    rows = [dict(r) for r in (rows or []) if isinstance(r, dict)]
+    if not rows:
+        return True
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table(ANALYTICS_EVENTS_TABLE).insert(rows).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] analytics mirror failed: {exc}")
+        return False
+
+
+def load_analytics_events(since_day, limit=5000):
+    """Rows mirrored on/after `since_day` (YYYY-MM-DD), oldest first.
+
+    Returns [] when Supabase is unconfigured or the read fails - the caller
+    treats that as "nothing to restore", never as an error. Never raises.
+    """
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = (c.table(ANALYTICS_EVENTS_TABLE)
+               .select("*")
+               .gte("day", str(since_day))
+               .order("at")
+               .limit(limit)
+               .execute())
+        return _res_data(res) or []
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] load_analytics_events failed: {exc}")
+        return []
+
+
 # Per-variant stock is kept in Supabase PostgreSQL as one JSON value. This
 # avoids a local-first write in production while preserving the existing
 # growth_settings schema.
