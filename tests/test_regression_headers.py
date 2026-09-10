@@ -54,3 +54,52 @@ def test_household_and_explicit_category_order_in_real_store():
                             capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "category ordering preserves every category" in result.stdout
+
+
+# ------------------------------------------------- cache freshness (no-store)
+@pytest.mark.parametrize("path", [
+    "/healthz",
+    "/api/site",
+    "/api/catalog",
+    "/api/products",
+    "/api/categories",
+    "/api/config",
+    "/api/csrf",
+    "/api/stock",
+    "/api/most-viewed",
+    "/api/payment-methods",
+])
+def test_dynamic_routes_are_never_served_from_a_cache(client, path):
+    """Every dynamic page/API answer carries no-store: a CDN (or the browser
+    disk cache) holding a stale copy after an admin save is exactly the
+    "saved product / new photo not visible on my phone" complaint. Static
+    assets are exempt - they carry the ?v= shared token instead."""
+    response = client.get(path)
+    assert response.status_code == 200, f"{path} -> {response.status_code}"
+    cache_control = response.headers.get("Cache-Control", "")
+    assert "no-store" in cache_control, \
+        f"{path} serves Cache-Control={cache_control!r}; dynamic answers must be no-store"
+
+
+def test_html_asset_refs_carry_the_shared_token_and_sw_evicts_old_caches():
+    """Every page references the versioned assets, and the service worker is
+    network-first for pages and deletes every cache that is not the current
+    VERSION on activate - so no phone keeps serving the previous storefront
+    after the token is bumped."""
+    import re
+    sw = (ROOT / "sw.js").read_text(encoding="utf-8")
+    m = re.search(r'const VERSION = "jaura-v(\d+)";', sw)
+    assert m, "sw.js VERSION constant"
+    ver = m.group(1)
+    # network-first for navigations, old caches evicted on activate
+    assert "networkFirst(req, true)" in sw
+    assert 'req.mode === "navigate"' in sw
+    assert "k !== VERSION" in sw and "caches.delete(k)" in sw
+    # every HTML page stamps its asset refs with the same token
+    for page in sorted(ROOT.glob("*.html")):
+        html = page.read_text(encoding="utf-8")
+        versions = set(re.findall(r"\?v=(\d+)", html))
+        assert versions <= {ver}, f"{page.name} still references {versions - {ver}}"
+        for asset in ("css/style.css", "js/store.js", "js/app.js"):
+            assert f"{asset}?v={ver}" in html or f"{asset}?v=" not in html, \
+                f"{page.name} references {asset} without the shared token"
