@@ -1524,7 +1524,9 @@ function categoryManager() {
     const n = JA.products().filter((p) => p.category === c.id).length;
     return `<article class="au-cat-card" data-cat-i="${i}" data-cat-id="${JA.escape(c.id)}">
       <div class="au-cat-pic">${_catAssetHTML(c.image)}
-        <button class="au-cat-up" title="Move up" ${i === 0 ? "disabled" : ""}>↑</button><button class="au-cat-down" title="Move down" ${i >= cats.length - 1 ? "disabled" : ""}>↓</button></div>
+        <label class="au-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx" data-cat-img="${i}" hidden /></label>
+      </div><div class="au-cat-moves">
+        <button type="button" data-cat-move="-1" aria-label="Move category up" title="Move up" ${i === 0 ? "disabled" : ""}>↑</button><button type="button" data-cat-move="1" aria-label="Move category down" title="Move down" ${i >= cats.length - 1 ? "disabled" : ""}>↓</button></div>
       <div class="au-cat-fields">
         <input name="cat-id-${i}" type="hidden" value="${JA.escape(c.id)}" />
         <label>Name (English)</label><input name="cat-name-${i}" value="${JA.escape(c.name || "")}" />
@@ -1557,7 +1559,7 @@ function _catAssetHTML(image) {
 }
 function collectCats() {
   const out = [];
-  document.querySelectorAll("[data-cat-i]").forEach((row) => {
+  document.querySelectorAll("[data-cat-i]").forEach((row, position) => {
     const i = row.getAttribute("data-cat-i");
     const id = (row.querySelector(`[name="cat-id-${i}"]`)?.value || "").trim();
     const name = (row.querySelector(`[name="cat-name-${i}"]`)?.value || "").trim();
@@ -1566,7 +1568,7 @@ function collectCats() {
     // HTTPS URL the server must store; the DOM img is only the preview.
     const uploadUrl = row.querySelector("[data-cat-img]")?.dataset.catUrl || "";
     const asset = uploadUrl || row.querySelector(".au-cat-pic img")?.getAttribute("src") || row.querySelector(".au-cat-pic a.media-doc-chip")?.getAttribute("href") || "";
-    out.push({ id, name, nameFr: (row.querySelector(`[name="cat-fr-${i}"]`)?.value || "").trim(), image: asset, hidden: !row.querySelector(`[name="cat-on-${i}"]`)?.checked, order: parseInt(row.getAttribute("data-cat-i") || "0"), });
+    out.push({ id, name, nameFr: (row.querySelector(`[name="cat-fr-${i}"]`)?.value || "").trim(), image: asset, hidden: !row.querySelector(`[name="cat-on-${i}"]`)?.checked, order: position, });
   });
   return out;
 }
@@ -1619,43 +1621,26 @@ function bindCategories() {
     finally { input.value = ""; }
   });
   list.addEventListener("click", async (e) => {
-    const upBtn = e.target.closest(".au-cat-up");
-    if (upBtn) {
-      const card = upBtn.closest("[data-cat-id]");
-      const idx = card.getAttribute("data-cat-i");
-      const newIdx = parseInt(idx) - 1;
-      const cards = list.querySelectorAll("[data-cat-i]");
-      const temp = cards[idx].outerHTML;
-      cards[idx].outerHTML = cards[newIdx].outerHTML;
-      cards[newIdx].outerHTML = temp;
-      // Re-bind the data-cat-i attributes
-      cards.forEach((c, i) => c.setAttribute("data-cat-i", i));
-      // Re-enable/disable buttons
-      cards.forEach((c, i) => {
-        const up = c.querySelector(".au-cat-up");
-        const down = c.querySelector(".au-cat-down");
-        if (up) up.disabled = i === 0;
-        if (down) down.disabled = i >= cards.length - 1;
-      });
-      return;
-    }
-    const downBtn = e.target.closest(".au-cat-down");
-    if (downBtn) {
-      const card = downBtn.closest("[data-cat-id]");
-      const idx = card.getAttribute("data-cat-i");
-      const newIdx = parseInt(idx) + 1;
-      const cards = list.querySelectorAll("[data-cat-i]");
-      const temp = cards[idx].outerHTML;
-      cards[idx].outerHTML = cards[newIdx].outerHTML;
-      cards[newIdx].outerHTML = temp;
-      // Re-bind the data-cat-i attributes
-      cards.forEach((c, i) => c.setAttribute("data-cat-i", i));
-      // Re-enable/disable buttons
-      cards.forEach((c, i) => {
-        const up = c.querySelector(".au-cat-up");
-        const down = c.querySelector(".au-cat-down");
-        if (up) up.disabled = i === 0;
-        if (down) down.disabled = i >= cards.length - 1;
+    const move = e.target.closest("[data-cat-move]");
+    if (move) {
+      const card = move.closest("[data-cat-id]");
+      const delta = Number(move.dataset.catMove);
+      const sibling = delta < 0 ? card.previousElementSibling : card.nextElementSibling;
+      if (!sibling) return;
+      // Move live DOM nodes: swapping outerHTML lost edits and upload handlers.
+      if (delta < 0) list.insertBefore(card, sibling);
+      else list.insertBefore(sibling, card);
+      list.querySelectorAll("[data-cat-move]").forEach(b => { b.disabled = true; });
+      const ok = await persist("Category order saved. The storefront now uses this order.");
+      if (!ok) {
+        // Roll back the visual move; failed saves must not look published.
+        if (delta < 0) list.insertBefore(sibling, card);
+        else list.insertBefore(card, sibling);
+      }
+      const cards = [...list.querySelectorAll("[data-cat-i]")];
+      cards.forEach((row, i) => {
+        row.querySelector('[data-cat-move="-1"]').disabled = i === 0;
+        row.querySelector('[data-cat-move="1"]').disabled = i === cards.length - 1;
       });
       return;
     }
@@ -1684,7 +1669,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=133", hidden: false }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=133", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

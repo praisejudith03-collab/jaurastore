@@ -2,7 +2,7 @@
  *
  * The pages use data-i18n attributes for the text written in HTML, but a lot
  * of what you read is built by JavaScript: the payment form, the category
- * names, the whole admin portal, and every toast. Those strings are below.
+ * names, the whole store management, and every toast. Those strings are below.
  *
  * How it works: after a page renders, I18N sweeps the text and swaps any
  * string that matches one of these entries. Only a whole string is replaced,
@@ -236,9 +236,9 @@ window.I18N_PHRASES = {
   "We could not read this order.": "Impossible de lire cette commande.",
   "Working…": "Traitement…",
   "No connection. Try again, or confirm from us.":
-    "Pas de connexion. Réessayez, ou confirmez depuis le portail admin.",
+    "Pas de connexion. Réessayez ou contactez-nous sur WhatsApp.",
   "That link did not work. Sign in to your account instead.":
-    "Ce lien n'a pas fonctionné. Connectez-vous plutôt au portail admin.",
+    "Ce lien n'a pas fonctionné. Connectez-vous plutôt à votre compte.",
   "Confirm payment": "Confirmer le paiement",
   "Decline order": "Refuser la commande",
   "Yes — payment received": "Oui — paiement reçu",
@@ -485,7 +485,7 @@ window.I18N_OPTION_VALUES = (function () {
     "10 pcs": "10 pièces",
     "12 pcs": "12 pièces"
   };
-  /* The owner types freely in the admin portal, so accept any capitalisation
+  /* The owner types freely in the store management, so accept any capitalisation
      of a known value: "black" must translate as reliably as "Black". */
   Object.keys(base).forEach(function (key) {
     var lower = key.toLowerCase();

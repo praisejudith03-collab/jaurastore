@@ -42,15 +42,23 @@ with sync_playwright() as pw:
     page = context.new_page()
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
-    for path in ("/shop.html", "/categories.html"):
-        page.goto(base + path, wait_until="domcontentloaded", timeout=90000)
-        selector = "[data-shop-grid] > *" if path == "/shop.html" else "[data-cat-list] > *"
-        expect(page.locator(selector).first).to_be_visible(timeout=90000)
-        expect(page.locator("#site-header .logo img")).to_be_visible()
-        assert page.locator("#site-header .logo img").evaluate("img => img.complete && img.naturalWidth > 0")
-        page.locator("#site-header [data-open-search]").click()
-        expect(page.locator("[data-search-input]")).to_be_visible()
-        print(json.dumps({"url": base + path, "cards": page.locator(selector).count(),
-                          "products": page.evaluate("JA.products().length"), "jsErrors": errors}), flush=True)
+    import re
+    for width in (360, 1440):
+        page.set_viewport_size({"width": width, "height": 900})
+        for language in ("en", "fr"):
+            for path in ("/shop.html", "/categories.html", "/faq.html"):
+                page.goto(base + path, wait_until="domcontentloaded", timeout=90000)
+                logo = page.locator("#site-header .logo img")
+                expect(logo).to_be_visible(timeout=90000)
+                page.locator(f'#site-header .nav-right [data-lang="{language}"]').click()
+                assert logo.evaluate("img => img.complete && img.naturalWidth > 0")
+                selector = "[data-shop-grid] > *" if path == "/shop.html" else "[data-cat-list] > *"
+                if path != "/faq.html":
+                    expect(page.locator(selector).first).to_be_visible(timeout=90000)
+                assert not re.search(r"admin[\s_-]*portal|portail\s+admin", page.locator("body").inner_text(), re.I)
+                page.locator("#site-header [data-open-search]").click()
+                expect(page.locator("[data-search-input]")).to_be_visible()
+                print(json.dumps({"url": base + path, "width": width, "language": language,
+                                  "products": page.evaluate("JA.products().length"), "jsErrors": errors}), flush=True)
     assert not errors, errors
     browser.close()

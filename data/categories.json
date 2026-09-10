@@ -2,8 +2,8 @@
   "categories": [
     {
       "id": "household",
-      "name": "Household items",
-      "nameFr": "Articles m\u00e9nagers",
+      "name": "Household & Kitchen",
+      "nameFr": "Maison & cuisine",
       "image": "images/categories/household.jpg",
       "hidden": false
     },

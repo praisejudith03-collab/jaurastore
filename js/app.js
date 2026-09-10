@@ -510,8 +510,9 @@ function renderShop() {
   const page = Math.min(Math.max(1, parseInt(param("page") || "1", 10) || 1), pages);
   const slice = list.slice((page - 1) * per, page * per);
 
-  const title = document.querySelector("[data-shop-title]");
-  if (title) title.textContent = q ? t("shop.resultsFor", { q }) : (cat === "all" ? t("shop.all") : JA.categoryName(cat));
+  document.querySelectorAll("[data-shop-title]").forEach((title) => {
+    title.textContent = q ? t("shop.resultsFor", { q }) : (cat === "all" ? t("shop.all") : JA.categoryName(cat));
+  });
   const count = document.querySelector("[data-shop-count]");
   if (count) count.textContent = list.length + " products";
   if (live && param("q") && !live.dataset.filled) {

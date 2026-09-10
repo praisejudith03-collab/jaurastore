@@ -25,7 +25,7 @@ CATEGORIES_FILE = _os.environ.get(
     _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "categories.json"))
 DEFAULT_CATEGORIES = [
     {"id": "clothing", "name": "Clothings for men and women", "nameFr": "Vêtements homme et femme", "image": "images/categories/fashion.jpg", "hidden": False},
-    {"id": "household", "name": "Household items", "nameFr": "Articles ménagers", "image": "images/categories/household.jpg", "hidden": False},
+    {"id": "household", "name": "Household & Kitchen", "nameFr": "Maison & cuisine", "image": "images/categories/household.jpg", "hidden": False},
     {"id": "ankara", "name": "Ankara ready to wear", "nameFr": "Ankara prêt-à-porter", "image": "images/categories/fashion.jpg", "hidden": False},
     {"id": "accessories", "name": "Accessories", "nameFr": "Accessoires", "image": "images/categories/gadgets.jpg", "hidden": False},
     {"id": "beauty", "name": "Beauty & skincare", "nameFr": "Beauté & soins", "image": "images/categories/beauty.jpg", "hidden": False},
@@ -41,6 +41,22 @@ DEFAULT_CATEGORIES = [
 ]
 
 
+def _ordered_categories(categories):
+    categories = [dict(c) for c in categories]
+    for c in categories:
+        # Rename only the old shipped default, not an owner's custom label.
+        if c.get("id") == "household" and c.get("name") == "Household items":
+            c["name"] = "Household & Kitchen"
+            if c.get("nameFr") in (None, "", "Articles ménagers"):
+                c["nameFr"] = "Maison & cuisine"
+    def key(c):
+        try:
+            return int(c["order"])
+        except (KeyError, TypeError, ValueError):
+            return 0 if c.get("id") == "household" else 1
+    return sorted(categories, key=key)
+
+
 def _categories_data():
     """Read categories from Supabase (production), disk (test/dev) or defaults.
 
@@ -54,6 +70,18 @@ def _categories_data():
             from supabase_store import load_categories_table
             if _sb_enabled():
                 rows = load_categories_table()
+                from supabase_store import load_categories
+                details = load_categories()
+                if rows is not None and details:
+                    by_id = {str(c.get("id")): c for c in details}
+                    if not rows:
+                        rows = details
+                    else:
+                        for row in rows:
+                            extra = by_id.get(str(row.get("id")), {})
+                            for key in ("nameFr", "image", "image_url", "hidden", "order"):
+                                if key in extra:
+                                    row[key] = extra[key]
                 if rows is None:
                     raise RuntimeError("Supabase categories unavailable")
                 # A reachable but EMPTY table is not "the shop has no
@@ -70,7 +98,7 @@ def _categories_data():
         except RuntimeError:
             raise
         except Exception as exc:
-            print(f"[supabase] categories read failed: {exc}")
+            raise RuntimeError("Supabase categories unavailable") from exc
     try:
         with open(CATEGORIES_FILE, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -96,16 +124,17 @@ def _save_categories(categories, actor=None):
                 from supabase_store import save_categories_table
                 if not save_categories_table(categories):
                     raise RuntimeError("Supabase categories write failed")
-                from supabase_store import save_categories   # legacy JSON mirror
-                try:
-                    save_categories(categories)
-                except Exception:
-                    pass
+                # The legacy table may lack French/image/hidden/order columns.
+                # Its durable JSON companion preserves those fields without a
+                # manual schema migration. Never acknowledge a lost order.
+                from supabase_store import save_categories
+                if not save_categories(categories):
+                    raise RuntimeError("Category details could not be saved; please retry")
                 return payload
         except RuntimeError:
             raise
         except Exception as exc:
-            print(f"[supabase] categories write failed: {exc}")
+            raise RuntimeError("Supabase category save unavailable") from exc
     tmp = CATEGORIES_FILE + ".tmp"
     _os.makedirs(_os.path.dirname(CATEGORIES_FILE) or ".", exist_ok=True)
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -191,7 +220,7 @@ def catalog():
 def categories_public():
     """The category list used by the shop, filters and admin manager."""
     try:
-        return jsonify(ok=True, categories=_categories_data().get("categories") or [])
+        return jsonify(ok=True, categories=_ordered_categories(_categories_data().get("categories") or []))
     except Exception as exc:
         print(f"[supabase] categories serve failed: {exc}")
         return jsonify(ok=False, error="Categories are temporarily unavailable. Please refresh in a moment."), 503
@@ -208,7 +237,7 @@ def categories_admin_set():
         return jsonify(ok=False, error="Send {categories: [...]}."), 400
     clean = []
     seen = set()
-    for c in cats[:200]:
+    for index, c in enumerate(cats):
         if not isinstance(c, dict):
             continue
         cid = sec.clean(c.get("id"), 40)
@@ -223,12 +252,13 @@ def categories_admin_set():
             "image": sec.safe_url(c.get("image_url") or c.get("image") or ""),
             "image_url": sec.safe_url(c.get("image_url") or c.get("image") or ""),
             "hidden": bool(c.get("hidden")),
+            "order": sec.clean_int(c.get("order"), index, 0, 10**9),
         })
     try:
         payload = _save_categories(clean, authmod.current_admin())
     except Exception as exc:
         print(f"[supabase] categories save failed: {exc}")
-        return jsonify(ok=False, error="Could not save categories to Supabase. No changes were made."), 503
+        return jsonify(ok=False, error="Could not confirm all category details in Supabase. Please retry the save."), 503
     audit(authmod.current_admin(), "categories.update", f"saved={len(clean)}", _ip())
     return jsonify(ok=True, count=len(clean), **payload)
 

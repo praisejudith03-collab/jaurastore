@@ -95,7 +95,7 @@ const JA = (() => {
   // are the fallbacks categoryName() uses when the stored row has no nameFr.
   const DEFAULT_CATS = [
     { id: "clothing", name: "Clothings for men and women", nameFr: "Vêtements homme et femme", image: "images/categories/fashion.jpg" },
-    { id: "household", name: "Household items", nameFr: "Articles ménagers", image: "images/categories/household.jpg" },
+    { id: "household", name: "Household & Kitchen", nameFr: "Maison & cuisine", image: "images/categories/household.jpg" },
     { id: "ankara", name: "Ankara ready to wear", nameFr: "Ankara prêt-à-porter", image: "images/categories/fashion.jpg" },
     { id: "accessories", name: "Accessories", nameFr: "Accessoires", image: "images/categories/gadgets.jpg" },
     { id: "beauty", name: "Beauty & skincare", nameFr: "Beauté & soins", image: "images/categories/beauty.jpg" },
@@ -302,7 +302,7 @@ const JA = (() => {
   async function loadSeed(strict = false) {
     if (!strict && seed.length) return seed;
     try {
-      // The admin portal must see EXACTLY what is saved: every row,
+      // The store management must see EXACTLY what is saved: every row,
       // including hidden/offline ones, with the stock numbers and costs the
       // public answer strips out. Admin pages therefore request the full
       // catalogue (?all=1 - served only to a signed-in admin session; the
@@ -557,7 +557,7 @@ const JA = (() => {
   }
   async function loadServerCategories() {
     // Every page loads the owner's server-side category table (photos
-    // included), not just the admin portal — the public storefront is where
+    // included), not just the store management — the public storefront is where
     // shoppers see them.
   try {
       const r = await fetch("api/categories", { credentials: "same-origin", cache: "no-store" });
@@ -590,8 +590,7 @@ const JA = (() => {
       hidden: !!c.hidden,
       order: c.order,
     }));
-    write(KEYS.cats, cleaned);
-    // In the admin portal also persist to the server so every device and the
+    // In the store management also persist to the server so every device and the
     // live storefront see the same category table. The server (Supabase in
     // production) is the source of truth: this returns the confirmed result
     // so the portal never claims a category is live when PostgreSQL said no.
@@ -617,7 +616,7 @@ const JA = (() => {
           if (Array.isArray(d.categories) && d.categories.length) {
             write(KEYS.cats, d.categories.map((c) => ({
               id: c.id, name: c.name, nameFr: c.nameFr || "",
-              image: c.image || c.image_url || "", hidden: !!c.hidden,
+              image: c.image || c.image_url || "", hidden: !!c.hidden, order: c.order,
             })));
           }
           return { ok: true };
@@ -626,6 +625,7 @@ const JA = (() => {
         }
       })();
     }
+    write(KEYS.cats, cleaned);
     return Promise.resolve({ ok: true });
   }
   function moveCategoryProducts(fromId, toId) {

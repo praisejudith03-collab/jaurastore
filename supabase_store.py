@@ -678,9 +678,18 @@ def load_categories_table():
     if c is None:
         return None
     try:
-        res = (c.table("categories").select("*")
-               .order("name").limit(500).execute())
-        rows = _res_data(res)
+        rows = []
+        # PostgREST caps each response. Page by a stable unique key rather
+        # than silently hiding categories beyond an arbitrary 500-row limit.
+        start = 0
+        while True:
+            res = (c.table("categories").select("*").order("id")
+                   .range(start, start + 499).execute())
+            batch = _res_data(res)
+            rows.extend(batch)
+            if len(batch) < 500:
+                break
+            start += len(batch)
         if not rows:
             return []
         out = []

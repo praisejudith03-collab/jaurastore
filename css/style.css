@@ -6281,3 +6281,14 @@ body[data-page="admin"] #site-header { display: none !important; }
   .header .logo, .header .nav-right { justify-self: center !important; }
   .header .nav-right { flex-wrap: wrap; justify-content: center; max-width: 100%; }
 }
+
+/* Shared desktop and mobile header: logo first, navigation then controls. */
+.header .logo { order: -1; }
+@media (min-width: 981px) {
+  .header-inner { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .header .nav-left { justify-content: center; flex-wrap: wrap; }
+}
+[data-cat-move] { margin: 6px 4px; min-width: 36px; min-height: 36px; cursor: pointer; }
+[data-cat-move]:disabled { opacity: .45; cursor: default; }
+
+.au-cat-moves { display: flex; gap: 6px; align-items: center; }
