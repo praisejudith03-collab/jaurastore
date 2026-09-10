@@ -2046,9 +2046,9 @@ const JA = (() => {
       <p class="foot-copy">${tx("footer.copy", { year: new Date().getFullYear() })}</p>
       <div class="foot-wavez" aria-hidden="true">
         <svg viewBox="0 0 1440 130" preserveAspectRatio="none" focusable="false">
-          <path fill="#ebddd0" d="M0,58 C180,24 400,20 620,44 C860,70 1080,78 1280,58 C1340,52 1400,44 1440,38 L1440,130 L0,130 Z"/>
-          <path fill="#dab6a9" opacity="0.9" d="M0,84 C220,52 460,48 700,68 C940,88 1180,94 1440,66 L1440,130 L0,130 Z"/>
-          <path fill="#cd9889" d="M0,104 C260,80 540,76 820,92 C1060,105 1280,108 1440,96 L1440,130 L0,130 Z"/>
+          <path fill="#f2d5c7" d="M0,58 C180,24 400,20 620,44 C860,70 1080,78 1280,58 C1340,52 1400,44 1440,38 L1440,130 L0,130 Z"/>
+          <path fill="#e8b09c" opacity="0.9" d="M0,84 C220,52 460,48 700,68 C940,88 1180,94 1440,66 L1440,130 L0,130 Z"/>
+          <path fill="#d68d7a" d="M0,104 C260,80 540,76 820,92 C1060,105 1280,108 1440,96 L1440,130 L0,130 Z"/>
         </svg>
       </div>
     </footer>

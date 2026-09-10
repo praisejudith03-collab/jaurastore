@@ -1,21 +1,22 @@
-"""The owner's rule for the theme: the gold family never goes past 40%.
+"""The owner's rule for the theme: only the GOLD is capped, at 40% saturation.
 
-The storefront started as a greige palette - ``--gold: #b8956a`` carried only
-35% saturation and the surfaces 28-31%, which read pale and washed out on a
-phone. The first fix pass took the accent to 62%; the owner rejected that and
-asked for 40%. That number is the middle ground: clearly warmer than the old
-greige, nowhere near neon.
+The storefront started as a greige palette - ``--gold: #b8956a`` carried 35%
+saturation and the surfaces 28-31%, which read pale and washed out on a phone.
+The bright pass fixed that; a first attempt then capped the whole gold / nude /
+cream hue family at 40%, and the owner's correction was "not everything is 40%,
+just the gold".
 
-``tools/vivid_palette.py`` owns the policy (the hue band, the cap, the list of
-semantic ambers that must stay vivid), so these tests lock the same rule into
-the shipped files:
+So the rule these tests lock in is about ROLES, not hues:
 
-  * no gold / nude / cream colour in the stylesheet sits above the cap - a
-    tolerance covers 8-bit rounding, because HSL saturation is hypersensitive
-    near white, where one channel step is worth several points;
-  * the accent is still gold: ``--gold`` did not drift back towards grey;
-  * the decorative gold SVGs in js/store.js follow the same cap;
-  * the exemption list is justified - every exempt colour really is vivid.
+  * the gold accent - buttons, badges, links, stars, the gold hairlines, the
+    gold motif - stays at or under the 40% ceiling and still reads as gold;
+  * the surfaces that merely share the accent's hue (page, sections, cards,
+    borders, blush panels, footer waves) are NOT capped: they stay bright and
+    colourful, which is the whole point of the "it looks pale" fix.
+
+``tools/vivid_palette.py`` owns the policy (``GOLD_ACCENT_BEFORE`` lists the
+role colours and ``--cap-gold-accents`` applies it), so these tests hold the
+shipped files to the same rule.
 
 Run with:  python3 -m pytest tests/test_theme_palette.py -q
 """
@@ -30,8 +31,16 @@ import vivid_palette as vp  # noqa: E402
 
 HEX6 = re.compile(r"#[0-9a-fA-F]{6}\b")
 
-# 8-bit rounding: the cap is hit to within a few points, never exactly.
+# 8-bit rounding: the ceiling is met to within a few points, never exactly.
 TOLERANCE = 0.05
+
+# The accent roles, as shipped (see GOLD_ACCENT_BEFORE for what they replaced).
+GOLD_ACCENT_TOKENS = ("--gold", "--gold-deep", "--champagne", "--mauve")
+
+# Surfaces that share the accent's hue and must stay brighter than a 40% cap
+# would allow - the owner's "not everything is 40%" correction.
+SURFACE_TOKENS = ("--ivory", "--cream", "--paper", "--line", "--blush",
+                  "--blush-deep")
 
 
 def _hsl(hex6):
@@ -47,55 +56,91 @@ def _stylesheet():
         return re.sub(r"/\*.*?\*/", "", fh.read(), flags=re.S)
 
 
-def test_no_gold_family_colour_exceeds_the_cap():
+def _token(css, name):
+    m = re.search(re.escape(name) + r":\s*(#[0-9a-fA-F]{6})", css)
+    assert m, "%s is missing from :root" % name
+    return m.group(1)
+
+
+def test_the_gold_accents_are_capped_at_forty_percent():
     css = _stylesheet()
-    checked = 0
-    offenders = []
-    for hex6 in {m.group(0).lower() for m in HEX6.finditer(css)}:
-        if hex6 in vp.GOLD_CAP_EXEMPT:
-            continue
+    for token in GOLD_ACCENT_TOKENS:
+        hex6 = _token(css, token)
         hue, sat, _ = _hsl(hex6)
-        if not (vp.GOLD_BAND[0] <= hue <= vp.GOLD_BAND[1]):
-            continue
-        checked += 1
-        if sat > vp.GOLD_SAT_CAP + TOLERANCE:
-            offenders.append("%s at %.0f%% saturation" % (hex6, sat * 100))
-    assert checked > 50, "the palette scan went blind: only %d colours" % checked
-    assert not offenders, (
-        "gold-family colours above the %.0f%% cap: %s"
-        % (vp.GOLD_SAT_CAP * 100, ", ".join(sorted(offenders))))
-
-
-def test_the_accent_stayed_gold_and_did_not_slip_back_to_greige():
-    css = _stylesheet()
-    for token in ("--gold", "--gold-deep", "--champagne"):
-        m = re.search(re.escape(token) + r":\s*(#[0-9a-fA-F]{6})", css)
-        assert m, "%s is missing from :root" % token
-        hue, sat, _ = _hsl(m.group(1))
+        assert 0.35 <= sat <= vp.GOLD_SAT_CAP + TOLERANCE, \
+            "%s (%s) is %.0f%% saturated; the gold accent is held at ~40%%" \
+            % (token, hex6, sat * 100)
         assert vp.GOLD_BAND[0] <= hue <= vp.GOLD_BAND[1], \
             "%s is no longer a warm gold (hue %.0f)" % (token, hue)
-        assert sat >= 0.35, \
-            "%s fell back to grey (%.0f%% saturation)" % (token, sat * 100)
-        assert sat <= vp.GOLD_SAT_CAP + TOLERANCE, \
-            "%s is above the cap (%.0f%%)" % (token, sat * 100)
 
 
-def test_the_decorative_gold_svgs_follow_the_same_cap():
+def test_the_surfaces_were_not_capped():
+    """Brightening the shop was the original request - the cap must not undo it.
+
+    A cream surface one channel step from white reports a very high HSL
+    saturation, so the bar is generous: anything at or under the gold ceiling
+    means somebody capped the surfaces again.
+    """
+    css = _stylesheet()
+    for token in SURFACE_TOKENS:
+        hex6 = _token(css, token)
+        _, sat, light = _hsl(hex6)
+        assert sat > vp.GOLD_SAT_CAP + TOLERANCE, \
+            "%s (%s) is only %.0f%% saturated - the surfaces were capped again" \
+            % (token, hex6, sat * 100)
+        assert light >= 0.75, \
+            "%s (%s) is not bright (L %.0f%%)" % (token, hex6, light * 100)
+
+
+def test_the_accent_roles_are_the_capped_ones_and_the_rest_kept_the_bright_pass():
+    """Every colour the accent policy rewrites really is in the stylesheet, and
+    its replacement - not the uncapped original - is what ships."""
+    css = _stylesheet()
+    with open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8") as fh:
+        shipped = css + fh.read()
+    missing, uncapped = [], []
+    for before, role in vp.GOLD_ACCENT_BEFORE.items():
+        rgb = tuple(int(before[i:i + 2], 16) for i in (1, 3, 5))
+        after = "#%02x%02x%02x" % vp.cap_gold(rgb, vp.GOLD_BAND, vp.GOLD_SAT_CAP)
+        if after not in shipped:
+            missing.append("%s (%s) is not in the stylesheet" % (after, role))
+        if before in shipped:
+            uncapped.append("%s (%s) is still there next to its capped value"
+                            % (before, role))
+    assert not missing, "; ".join(missing)
+    assert not uncapped, "; ".join(uncapped)
+
+
+def test_the_footer_waves_kept_their_colour():
+    """Rose, not gold: these were restored to the bright pass by the owner's
+    correction, so a future family-wide cap must not catch them again."""
     with open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8") as fh:
         js = fh.read()
-    checked = 0
-    for block in ("gold-bf", "foot-wavez"):
-        start = js.index(block)
-        chunk = js[start:js.index("</svg>", start)]
-        for hex6 in set(HEX6.findall(chunk.lower())):
-            hue, sat, _ = _hsl(hex6)
-            # the waves are rose rather than gold, so the band starts at 0 here
-            if not (0 <= hue <= vp.GOLD_BAND[1]):
-                continue
-            checked += 1
-            assert sat <= vp.GOLD_SAT_CAP + TOLERANCE, \
-                "%s in js/store.js %s is %.0f%% saturated" % (hex6, block, sat * 100)
-    assert checked >= 5, "no decorative SVG colours were checked"
+    start = js.index("foot-wavez")
+    chunk = js[start:js.index("</svg>", start)]
+    shades = set(HEX6.findall(chunk))
+    assert len(shades) == 3, shades
+    for hex6 in shades:
+        _, sat, light = _hsl(hex6)
+        assert sat > vp.GOLD_SAT_CAP + TOLERANCE, \
+            "%s in the footer waves is only %.0f%% saturated" % (hex6, sat * 100)
+        assert light > 0.60, "%s is too dark for the footer waves" % hex6
+
+
+def test_the_gold_motif_is_capped():
+    """The decorative butterfly is a gold accent, so it follows the ceiling."""
+    with open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8") as fh:
+        js = fh.read()
+    start = js.index("gold-bf")
+    chunk = js[start:js.index("</svg>", start)]
+    shades = set(HEX6.findall(chunk))
+    assert len(shades) >= 3, shades
+    for hex6 in shades:
+        hue, sat, _ = _hsl(hex6)
+        assert vp.GOLD_BAND[0] <= hue <= vp.GOLD_BAND[1], \
+            "%s in the gold motif is not a gold hue" % hex6
+        assert sat <= vp.GOLD_SAT_CAP + TOLERANCE, \
+            "%s in the gold motif is %.0f%% saturated" % (hex6, sat * 100)
 
 
 def test_the_exempt_ambers_really_are_vivid():
