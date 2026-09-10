@@ -130,6 +130,19 @@ function imgSrc(entry) {
   if (typeof entry === "string") return entry;
   return entry.preview || entry.url || "";
 }
+
+// Fresh media on every phone: append a per-upload cache-buster to every URL
+// the server hands back after an upload (product photos, category assets,
+// hero, logo, banner). The browser HTTP cache and the service worker's media
+// cache are keyed by the FULL url, so ?v=<upload-time> guarantees no device
+// keeps painting the previous picture once a new one is uploaded - and the
+// same busted URL is what the DOM shows and what the form saves, so the
+// saved row and every screen always agree.
+function bustMediaCache(url) {
+  const s = String(url || "");
+  if (!s || /^(data:|blob:)/i.test(s)) return s;
+  return s + (s.includes("?") ? "&" : "?") + "v=" + Date.now().toString(36);
+}
 const _VIDEO_EXT = /(\.mp4|\.webm|\.mov)(\?.*)?$/i;
 const _DOC_EXT = /(\.pdf|\.doc|\.docx)(\?.*)?$/i;
 function mediaKind(entry) {
@@ -335,7 +348,7 @@ function bindMedia() {
       queue: true, timeout: isVideo ? 300000 : 45000, label: isVideo ? "Video" : "Photo",
     }));
     if (res && res.url) {
-      window.__editImages[idx] = res.url;
+      window.__editImages[idx] = bustMediaCache(res.url);
       JA.toast(isVideo ? "Video uploaded." : "Photo uploaded.");
     } else if (res && res.queued) {
       window.__jaPendingPhoto = (window.__jaPendingPhoto || 0) + 1;
@@ -1730,12 +1743,14 @@ function bindCategories() {
       if (window.JA_NET) {
         const res = await window.JA_NET.api("api/admin/uploads/category", { method: "POST", blob: f, field: "file", filename: f.name || "category.jpg", timeout: 300000, label: "Category asset", });
         if (res && res.url) {
-          // complete HTTPS Storage URL: repaint the preview, then persist
-          // the real URL into categories.image_url through the server
-          input.dataset.catUrl = res.url;
+          // complete HTTPS Storage URL with a cache-buster: repaint the
+          // preview from it, then persist the same URL into
+          // categories.image_url through the server
+          const freshUrl = bustMediaCache(res.url);
+          input.dataset.catUrl = freshUrl;
           if (pic) {
             const upLabel = pic.querySelector(".au-cat-up");
-            pic.innerHTML = _catAssetHTML(res.url);
+            pic.innerHTML = _catAssetHTML(freshUrl);
             if (upLabel) pic.appendChild(upLabel);
             else pic.innerHTML += `<label class="au-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf" data-cat-img="${card.getAttribute("data-cat-i")}" hidden /></label>`;
           }
@@ -2369,7 +2384,8 @@ function bindHeroVideo() {
     const res = await window.JA_NET.api("api/admin/uploads/hero", { method: "POST", blob: f, field: "file", filename: f.name || "hero.mp4", timeout: 180000, });
     file.value = "";
     if (!res || !res.url) { if (msg) msg.textContent = (res && res.error) || "Upload failed."; JA.toast((res && res.error) || "Could not upload."); return; }
-    const patch = res.kind === "video" ? { heroVideo: res.url, heroDoc: "", heroPoster: "" } : res.kind === "document" ? { heroVideo: "", heroDoc: res.url, heroPoster: "" } : { heroVideo: "", heroPoster: res.url, heroDoc: "" };
+    const freshUrl = bustMediaCache(res.url);
+    const patch = res.kind === "video" ? { heroVideo: freshUrl, heroDoc: "", heroPoster: "" } : res.kind === "document" ? { heroVideo: "", heroDoc: freshUrl, heroPoster: "" } : { heroVideo: "", heroPoster: freshUrl, heroDoc: "" };
     const saved = await saveSiteConfig(patch);
     if (saved && saved.ok !== false) { if (msg) msg.textContent = res.kind === "video" ? "Done — homepage hero now plays your video." : res.kind === "document" ? "Done — homepage hero links to your document." : "Done — homepage hero uses your photo."; JA.toast("Hero asset is on the homepage."); paintHeroVideoNow(patch); }
     else { if (msg) msg.textContent = (saved && saved.error) || "Uploaded, but saving failed."; }
@@ -2426,13 +2442,14 @@ function bindSiteBranding() {
       try {
         const res = await window.JA_NET.api("api/admin/uploads/image", { method: "POST", blob: f, field: "file", filename: f.name || "logo.jpg", timeout: 60000 });
         if (res && res.url) {
-          const saved = await saveSiteConfig({ logoUrl: res.url });
+          const freshUrl = bustMediaCache(res.url);
+          const saved = await saveSiteConfig({ logoUrl: freshUrl });
           if (saved && saved.ok !== false) {
             JA.toast("Logo saved — live sitewide now.");
             if (msg) msg.textContent = "Logo live now.";
-            if (form) form.dataset.logoUrl = res.url;
+            if (form) form.dataset.logoUrl = freshUrl;
             // repaint from the server-confirmed row (canonical site_logo_url)
-            paintBrandingNow(saved.site || { logoUrl: res.url });
+            paintBrandingNow(saved.site || { logoUrl: freshUrl });
           } else {
             const m = (saved && saved.error) || "Uploaded, but the logo could not be saved. No changes were made.";
             if (msg) msg.textContent = m; JA.toast(m);
@@ -2451,13 +2468,14 @@ function bindSiteBranding() {
       try {
         const res = await window.JA_NET.api("api/admin/uploads/image", { method: "POST", blob: f, field: "file", filename: f.name || "banner.jpg", timeout: 60000 });
         if (res && res.url) {
-          const saved = await saveSiteConfig({ shopBannerUrl: res.url });
+          const freshUrl = bustMediaCache(res.url);
+          const saved = await saveSiteConfig({ shopBannerUrl: freshUrl });
           if (saved && saved.ok !== false) {
             JA.toast("Shop banner saved — live sitewide now.");
             if (msg) msg.textContent = "Shop banner live now.";
-            if (form) form.dataset.shopBannerUrl = res.url;
+            if (form) form.dataset.shopBannerUrl = freshUrl;
             // repaint from the server-confirmed row (canonical shop_banner_url)
-            paintBrandingNow(saved.site || { shopBannerUrl: res.url });
+            paintBrandingNow(saved.site || { shopBannerUrl: freshUrl });
           } else {
             const m = (saved && saved.error) || "Uploaded, but the banner could not be saved. No changes were made.";
             if (msg) msg.textContent = m; JA.toast(m);

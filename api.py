@@ -12,6 +12,18 @@ import delivery
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
+
+# Every /api/* answer is dynamic (live catalogue, stock, orders, settings), so
+# none of them may be served from a shared cache: a CDN holding a stale copy
+# after an admin save is exactly the "saved product not visible on my phone"
+# complaint. Routes that want their own policy set it explicitly; everything
+# else lands here with no-store.
+@api.after_request
+def _api_no_store(resp):
+    if "Cache-Control" not in resp.headers:
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
+
 ORDER_ID = re.compile(r"^JA-[A-Z0-9]{4,16}$")
 
 def _ip():
@@ -172,7 +184,7 @@ def products():
     """
     body = jsonify(ok=True, products=[_public_product(p)
                                       for p in catalog_mod.base_products()])
-    body.headers["Cache-Control"] = "public, max-age=300"
+    body.headers["Cache-Control"] = "no-store"
     return body
 
 # ============================================================ public: catalog
@@ -213,7 +225,11 @@ def catalog():
         resp = make_response(body, 200)
     resp.headers["Content-Type"] = "application/json; charset=utf-8"
     resp.headers["ETag"] = etag
-    resp.headers["Cache-Control"] = "public, max-age=30, must-revalidate"
+    # The live catalogue is never served from a cache: a shared/CDN copy held
+    # for even 30s is a product the owner just saved (or just took offline)
+    # that some phones still show. The browser and the service worker each
+    # refetch with cache:no-store, and the ETag keeps revalidation cheap.
+    resp.headers["Cache-Control"] = "no-store"
     return resp
 
 # ========================================================== public: categories
