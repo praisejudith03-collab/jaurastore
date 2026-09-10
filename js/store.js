@@ -108,6 +108,7 @@ const JA = (() => {
     { id: "gift-set", name: "Gift set", nameFr: "Coffret cadeau", image: "images/categories/household.jpg" },
     { id: "children", name: "Children items", nameFr: "Articles pour enfants", image: "images/categories/fashion.jpg" },
     { id: "decor", name: "Decor", nameFr: "Décoration", image: "images/categories/household.jpg" },
+    { id: "perfume", name: "Perfume", nameFr: "Parfum", image: "images/categories/beauty.jpg" },
   ];
 
   // Static fallbacks only. The live values come from GET /api/site (whose

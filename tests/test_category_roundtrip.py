@@ -114,6 +114,36 @@ def test_metadata_failure_is_not_acknowledged_as_a_saved_order(durable, monkeypa
         api._save_categories([{'id':'perfume','name':'Perfume','nameFr':'Parfum','order':0}])
 
 
+def test_owner_adds_category_and_shoppers_see_it_immediately(durable, monkeypatch):
+    """The owner's story: add a brand-new category (English + French name) in
+    Admin -> Categories, and the public website shows it on the next request -
+    with no redeploy, no cache and no second save."""
+    monkeypatch.setattr(Config, 'ENV', 'production')
+    app = appmod.create_app()
+    app.config.update(TESTING=True)
+    with app.test_client() as admin:
+        login = admin.post('/api/admin/login', json={'email':'jaurastore@gmail.com', 'password':PW})
+        assert login.status_code == 200
+        headers = {'X-CSRF-Token':login.json['csrf']}
+        current = admin.get('/api/categories').json['categories']
+        assert not any(c['id'] == 'jewellery' for c in current)
+        # The admin panel's "Add a category" flow saves the WHOLE table with
+        # the new row appended (js/store.js saveCategories -> PUT below).
+        nxt = [{'id':c['id'], 'name':c['name'], 'nameFr':c.get('nameFr',''),
+                'image':c.get('image',''), 'hidden':bool(c.get('hidden')),
+                'order':i} for i, c in enumerate(current)]
+        nxt.append({'id':'jewellery', 'name':'Jewellery', 'nameFr':'Bijoux'})
+        saved = admin.put('/api/admin/categories', headers=headers, json={'categories':nxt})
+        assert saved.status_code == 200, saved.json
+    # A shopper on another device sees it at once - fresh app, no local state.
+    monkeypatch.setattr(sb, '_CATS_SHAPE', {'fill':{}, 'drop':[], 'values':{}})
+    with appmod.create_app().test_client() as shopper:
+        rows = shopper.get('/api/categories').json['categories']
+        row = next(c for c in rows if c['id'] == 'jewellery')
+        assert row['name'] == 'Jewellery'
+        assert row['nameFr'] == 'Bijoux'
+
+
 def test_initial_household_first_without_overriding_owner_order():
     rows = [{'id':'beauty','name':'Beauty'}, {'id':'household','name':'Household items'}]
     initial = api._ordered_categories(rows)

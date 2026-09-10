@@ -161,7 +161,7 @@ def test_every_default_category_has_a_french_name_on_the_server():
 
 def test_every_default_category_has_a_french_name_in_the_storefront():
     cats = _js_default_cats()
-    assert len(cats) == 14, f"expected 14 default categories, parsed {len(cats)}"
+    assert len(cats) == 15, f"expected 15 default categories, parsed {len(cats)}"
     missing = [cid for cid, c in cats.items() if not c["nameFr"].strip()]
     assert not missing, f"js/store.js DEFAULT_CATS missing nameFr: {missing}"
 
@@ -385,12 +385,18 @@ def test_final_block_pins_the_switch_box():
 def test_every_label_gets_its_own_fixed_width():
     """₦ and "F CFA" are different strings; without a per-label min-width the
     pill changes width as the highlight moves between them. The width belongs
-    to the LABEL, so both states of a button resolve to the same box."""
+    to the LABEL, so both states of a button resolve to the same box.
+    Owner request (2026-09-10): the pills run smaller so the header has room -
+    ₦ shrank to 30px and "F CFA" to 50px, still fixed per label."""
     top = _strip_media(_css())
-    short = _rule(top, '.lang-switch button, .currency-switch button[data-cur="NGN"]')
+    lang = _rule(top, ".lang-switch button")
+    short = _rule(top, '.currency-switch button[data-cur="NGN"]')
     long = _rule(top, '.currency-switch button[data-cur="CFA"]')
-    assert short.get("min-width", "").startswith("40px")
-    assert long.get("min-width", "").startswith("64px")
+    assert lang.get("min-width", "").startswith("40px")
+    assert short.get("min-width", "").startswith("30px")
+    assert long.get("min-width", "").startswith("50px")
+    # The 12px/600 label metrics stay pinned on the shared button block
+    # (test_final_block_pins_the_switch_box); the width alone shrinks.
 
 
 def test_small_screens_get_a_smaller_but_still_fixed_switch():
@@ -419,8 +425,7 @@ def test_small_screens_get_a_smaller_but_still_fixed_switch():
         b = _maybe_rule(body, ".lang-switch button, .currency-switch button, "
                               ".lang-switch button.is-on, "
                               ".currency-switch button.is-on")
-        s = _maybe_rule(body, '.lang-switch button, '
-                              '.currency-switch button[data-cur="NGN"]')
+        s = _maybe_rule(body, '.currency-switch button[data-cur="NGN"]')
         l = _maybe_rule(body, '.currency-switch button[data-cur="CFA"]')
         if c:
             container = c
@@ -431,9 +436,9 @@ def test_small_screens_get_a_smaller_but_still_fixed_switch():
         if l:
             long = l
 
-    assert container.get("height", "").startswith("42px")
-    assert button.get("height", "").startswith("40px")
+    assert container.get("height", "").startswith("38px")
+    assert button.get("height", "").startswith("36px")
     assert button.get("padding", "").startswith("0 ")
     assert button.get("font-size", "").startswith("12px")
-    assert short.get("min-width", "").startswith("40px")
-    assert long.get("min-width", "").startswith("64px")
+    assert short.get("min-width", "").startswith("30px")
+    assert long.get("min-width", "").startswith("50px")

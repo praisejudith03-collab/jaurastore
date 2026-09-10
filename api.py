@@ -38,6 +38,7 @@ DEFAULT_CATEGORIES = [
     {"id": "gift-set", "name": "Gift set", "nameFr": "Coffret cadeau", "image": "images/categories/household.jpg", "hidden": False},
     {"id": "children", "name": "Children items", "nameFr": "Articles pour enfants", "image": "images/categories/fashion.jpg", "hidden": False},
     {"id": "decor", "name": "Decor", "nameFr": "Décoration", "image": "images/categories/household.jpg", "hidden": False},
+    {"id": "perfume", "name": "Perfume", "nameFr": "Parfum", "image": "images/categories/beauty.jpg", "hidden": False},
 ]
 
 
