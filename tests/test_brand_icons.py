@@ -34,7 +34,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # photo repaint release: sw.js was still on v136 while pages said v137 (a
 # stale-token drift); everything now ships v138 so no phone keeps a v136/v137
 # cache after the service worker swaps its VERSION.
-SHARED_TOKEN = "138"
+# Bumped to 139 for the left-logo one-row header restore (owner request
+# 2026-09-11): the header flex-row fix in css/style.css and the logo-first
+# markup in js/store.js must reach every phone on the first visit, so all
+# pages, scripts and the service worker ship v139 together.
+SHARED_TOKEN = "139"
 
 
 def _image_size(path):

@@ -83,14 +83,16 @@ ul { list-style: none; }
   border-bottom: 1px solid var(--line);
 }
 .header-inner {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
+  flex-direction: row;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: nowrap;
   min-height: 78px;
   gap: 16px;
 }
 .nav-left, .nav-right { display: flex; align-items: center; gap: 22px; }
-.nav-right { justify-content: flex-end; }
+.nav-right { justify-content: flex-end; flex-shrink: 0; }
 .nav-left a, .nav-link {
   font-size: 12px;
   letter-spacing: 0.16em;
@@ -103,6 +105,7 @@ ul { list-style: none; }
   flex-direction: column;
   align-items: center;
   gap: 0;
+  flex-shrink: 0;
 }
 .logo img {
   height: 56px;
@@ -810,7 +813,6 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #f8f0e2; }
 @media (max-width: 980px) {
   .nav-left { display: none; }
   .menu-toggle { display: grid; }
-  .header-inner { grid-template-columns: auto 1fr auto; }
   .logo { align-items: flex-start; }
   .product-grid { grid-template-columns: repeat(2, 1fr); }
   .cat-grid, .lux-grid, .zones, .vision, .split, .pdp, .shop-layout,
@@ -4267,13 +4269,6 @@ body[data-page="home"] .cat-slide {
 
 /* Screenshot header: logo, EN/FR, ₦, search, cart, hamburger */
 .menu-toggle { display: grid !important; place-items: center; }
-@media (max-width: 980px) {
-  .header-inner {
-    grid-template-columns: auto 1fr !important;
-  }
-  .logo { justify-self: start !important; }
-  .nav-right { justify-self: end !important; }
-}
 .lang-switch button.is-on,
 .currency-switch button.is-on {
   background: #ccb1ed !important;
@@ -6072,7 +6067,6 @@ body[data-page="admin"] { background: #f8f9fc !important; }
   .cat-grid, .lux-grid, .zones {
     grid-template-columns: minmax(0, 1fr) !important;
   }
-  .header-inner { grid-template-columns: auto minmax(0, 1fr) auto !important; }
   .form-grid > *, .ck-grid > *, .pay-form > *, .cart-layout > *,
   .check-layout > *, .contact-grid > *, .footer-grid > *, .stats > *,
   .woo-meta > *, .cat-grid > *, .lux-grid > *, .zones > *,
@@ -6274,8 +6268,9 @@ body[data-page="admin"] #site-header { display: none !important; }
      the <=480px phone budget block earlier in this file (84px logo cap +
      4px switch gaps + 6px header gap) so the declared one-row budget is the
      one the cascade actually applies - this block sits later in the file,
-     so its old 8px/6px values were overriding that budget. */
-  .header-inner { grid-template-columns: auto minmax(0, 1fr) !important; gap: 6px; }
+     so its old 8px/6px values were overriding that budget. The row itself
+     is the .header-inner flex row (logo | controls) - no grid columns. */
+  .header-inner { gap: 6px; }
   .header .logo { display: flex !important; }
   .nav-right [data-open-search] { display: grid !important; }
   .nav-right { gap: 4px !important; }
@@ -6305,38 +6300,57 @@ body[data-page="admin"] #site-header { display: none !important; }
   }
 }
 
-/* Very narrow phones (≤380px) fold to two centred rows. NORMAL phones
-   (381–480px) stay on the single row: logo first, then the switches. */
+/* Very narrow phones (≤380px) keep the SAME single row as every other
+   width: logo left, then the switches and icons. The two-row centred fold
+   scattered the header (owner report 2026-09-10), so instead the controls
+   shrink a touch to keep logo + EN/FR + ₦/F CFA + search + bag + menu on
+   one line down to a 320px viewport (wrap budget 300px:
+   60px logo + 4px gap + (60px EN/FR + 80px ₦/F CFA + 3×28px icons + 8px
+   gaps) = 296px). NORMAL phones (381–480px) already fit the one-row budget
+   from the ≤480px block earlier in this file. */
 @media (max-width: 380px) {
-  .header-inner { grid-template-columns: minmax(0, 1fr) !important; padding-block: 8px; }
-  .header .logo, .header .nav-right { justify-self: center !important; }
-  .header .nav-right { flex-wrap: wrap; justify-content: center; max-width: 100%; }
+  .header-inner { gap: 4px; }
+  .logo img { max-width: 60px; }
+  .nav-right { gap: 2px !important; }
+  .icon-btn { width: 28px !important; height: 28px !important; }
+  .lang-switch button { min-width: 30px !important; }
+  .lang-switch button, .currency-switch button {
+    padding: 0 6px !important;
+    font-size: 11px !important;
+    letter-spacing: 0.06em !important;
+  }
 }
 
 /* =============================================================
-   HEADER LOGO POSITION — LOCKED (restored 2026-09-10, owner request)
-   The header is:  nav links | CENTRED LOGO | controls.
-   That is the base grid near the top of this file (1fr auto 1fr, with the
-   logo in the middle column). The "v132" override that dragged the logo to
-   the far-left edge on desktop was wrong and is reverted here.
+   HEADER LOGO POSITION — LOCKED (restored 2026-09-11, owner request)
+   The header is ONE flex row:  LOGO LEFT | nav links | controls  — exactly
+   like the owner's reference screenshot: the store logo on the left, then
+   (desktop) the nav links, then EN/FR, ₦/F CFA, search, bag and menu
+   buttons, all evenly spaced on the same horizontal line.
+   .header-inner is `display: flex; flex-direction: row; align-items:
+   center; justify-content: space-between` at every width; the ≤980px
+   hamburger range hides .nav-left, leaving logo-left / controls-right.
    This position is guarded so it cannot quietly change back again:
      - tests/test_header_layout_lock.py fails if any stylesheet rule ever
-       puts `order: -1` back on .header .logo or changes the ≥981px grid,
+       moves the logo off the left edge or off the single flex row,
      - tests/test_browser_smoke.py measures the logo in real Chromium and
-       fails if it is not pixel-centred at desktop widths,
+       fails if it is not at the left edge on desktop,
      - tools/browser_smoke.py re-checks the deployed site after every push.
-   Do NOT reintroduce `order` on .header .logo or a ≥981px
+   Do NOT reintroduce a centred logo, `order` on .header .logo, or a
    grid-template-columns change on .header-inner.
-   On phones the links live behind the hamburger menu: 481–980px keeps the
-   logo left with the controls right; ≤480px folds to two centred rows (see
-   the block above) so nothing overlaps.
    The butterfly animation (.header-flies) is untouched.
    ============================================================= */
 @media (min-width: 981px) {
-  .header-inner { grid-template-columns: 1fr auto 1fr !important; }
-  .header .logo { order: 0 !important; justify-self: center !important; }
+  .header-inner {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    flex-wrap: nowrap !important;
+  }
+  .header .logo { order: 0 !important; flex-shrink: 0 !important; }
   .header .nav-left { min-width: 0; flex-wrap: wrap; }
-  .header .nav-right { min-width: 0; flex-wrap: nowrap; }
+  .header .nav-right { min-width: 0; flex-wrap: nowrap; flex-shrink: 0 !important; }
 }
 [data-cat-move] { margin: 6px 4px; min-width: 36px; min-height: 36px; cursor: pointer; }
 [data-cat-move]:disabled { opacity: .45; cursor: default; }
