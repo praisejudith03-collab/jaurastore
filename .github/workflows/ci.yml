@@ -27,29 +27,5 @@ jobs:
       - name: Install browser for mobile smoke tests
         run: python -m playwright install --with-deps chromium
 
-      # TEMP-DEBUG (removed before merge): capture the failure summary and
-      # post it to the PR so sandboxed environments without log access can
-      # see which test failed.
       - name: Run test suite
-        id: tests
-        continue-on-error: true
-        run: python -m pytest tests/ -q -rf --tb=line 2>&1 | tee /tmp/pytest.out
-
-      - name: Report test failure summary to the PR
-        if: always() && steps.tests.outcome == 'failure' && github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          tail -n 30 /tmp/pytest.out > /tmp/pytest.tail || true
-          {
-            printf 'CI test failure summary (debug step):\n```\n'
-            cat /tmp/pytest.tail
-            printf '\n```'
-          } > /tmp/comment.md
-          gh pr comment "${{ github.event.pull_request.number }}" \
-            --repo "$GH_REPO" --body-file /tmp/comment.md || true
-
-      - name: Gate on the test suite
-        if: steps.tests.outcome == 'failure'
-        run: exit 1
+        run: python -m pytest tests/ -q
