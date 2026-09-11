@@ -6356,3 +6356,20 @@ body[data-page="admin"] #site-header { display: none !important; }
 [data-cat-move]:disabled { opacity: .45; cursor: default; }
 
 .au-cat-moves { display: flex; gap: 6px; align-items: center; }
+
+/* SHOP BANNER - bigger box, wordmark anchored to the BOTTOM (owner request) */
+body.au-shop .shop-banner,
+.shop-banner { position: relative !important; min-height: 200px;
+  width: 100% !important; max-width: none !important; }
+body.au-shop .shop-banner img,
+.shop-banner img { display: block !important; width: 100% !important;
+  height: clamp(220px, 34vw, 320px) !important; max-height: none !important;
+  object-fit: cover !important; object-position: center center !important; }
+.shop-banner::after { content: ""; position: absolute; left: 0; right: 0;
+  bottom: 0; height: 52%; pointer-events: none; z-index: 1;
+  background: linear-gradient(to top, rgba(24,15,9,.58), rgba(24,15,9,0)); }
+.shop-script { align-items: flex-end !important; justify-content: flex-start !important;
+  padding: 0 22px 18px !important; font-family: "Great Vibes", cursive !important;
+  font-weight: 700 !important; font-size: clamp(44px, 11vw, 88px) !important;
+  color: #ffffff !important; text-shadow: 0 2px 16px rgba(24,15,9,.55) !important;
+  z-index: 2 !important; }

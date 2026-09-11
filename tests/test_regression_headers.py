@@ -103,3 +103,61 @@ def test_html_asset_refs_carry_the_shared_token_and_sw_evicts_old_caches():
         for asset in ("css/style.css", "js/store.js", "js/app.js"):
             assert f"{asset}?v={ver}" in html or f"{asset}?v=" not in html, \
                 f"{page.name} references {asset} without the shared token"
+
+
+def test_tokened_static_assets_are_immutable_untokened_ones_revalidate(client):
+    """The shared ?v= token is an immutability promise, and only that.
+
+    A URL like /css/style.css?v=140 serves exactly one build of the file, so
+    it must answer `public, max-age=31536000, immutable`: on a 4G phone the
+    stylesheet, the scripts and the logo then come straight from the local
+    cache instead of a conditional round-trip per asset (the ~5s repeat
+    visit). Everything a visitor must see fresh - HTML pages, the service
+    worker itself, and any asset link WITHOUT a numeric token - keeps
+    no-cache. The token is derived from sw.js so this test fails if the
+    pages, the worker and the header ever drift apart."""
+    import re
+    sw = (ROOT / "sw.js").read_text(encoding="utf-8")
+    m = re.search(r'const VERSION = "jaura-v(\d+)";', sw)
+    assert m, "sw.js VERSION constant"
+    ver = m.group(1)
+
+    # the worker serves tokened subresources cache-first (never revalidating
+    # an immutable URL against the network)
+    assert "async function cachedVersioned(request)" in sw, \
+        "sw.js must define cachedVersioned()"
+    assert 'url.searchParams.get("v")' in sw, \
+        "sw.js fetch handler must branch on the ?v= token"
+    assert 'event.respondWith(cachedVersioned(req))' in sw, \
+        "sw.js must serve tokened requests with cachedVersioned()"
+
+    tokened = (
+        f"/css/style.css?v={ver}",
+        f"/js/store.js?v={ver}",
+        f"/js/app.js?v={ver}",
+        f"/images/brand/logo.jpg?v={ver}",
+    )
+    for path in tokened:
+        response = client.get(path)
+        assert response.status_code == 200, f"{path} -> {response.status_code}"
+        cache_control = response.headers.get("Cache-Control", "")
+        assert "max-age=31536000" in cache_control and "immutable" in cache_control, \
+            f"{path} serves Cache-Control={cache_control!r}; tokened assets " \
+            "are immutable for the life of the token"
+        assert "no-cache" not in cache_control
+
+    untokened = ("/", "/shop.html", "/sw.js", "/css/style.css")
+    for path in untokened:
+        response = client.get(path)
+        assert response.status_code == 200, f"{path} -> {response.status_code}"
+        cache_control = response.headers.get("Cache-Control", "")
+        assert "no-cache" in cache_control, \
+            f"{path} serves Cache-Control={cache_control!r}; every page, " \
+            "sw.js and untokened asset links must revalidate"
+
+    # only a fully numeric token unlocks immutability: a word token (?v=prod)
+    # is not a build stamp and must stay revalidating.
+    response = client.get("/css/style.css?v=prod")
+    assert response.status_code == 200
+    assert "no-cache" in response.headers.get("Cache-Control", ""), \
+        "a non-numeric ?v= value is not a cache token and must stay no-cache"

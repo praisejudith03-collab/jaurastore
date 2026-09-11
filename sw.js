@@ -2,7 +2,7 @@
    Pages are network-first so a visitor with a connection always sees the
    newest store; when the connection drops, the last copy is served instead of
    an error. Saving is handled separately by js/net.js (outbox + retry). */
-const VERSION = "jaura-v139";
+const VERSION = "jaura-v140";
 const CORE = [
   "./",
   "./index.html",
@@ -10,16 +10,16 @@ const CORE = [
   "./product.html",
   "./cart.html",
   "./checkout.html",
-  "./css/style.css?v=139",
-  "./js/products-data.js?v=139",
-  "./js/i18n.js?v=139",
-  "./js/net.js?v=139",
-  "./js/store.js?v=139",
-  "./js/app.js?v=139",
-  "./images/brand/logo.jpg?v=139",
-  "./images/brand/favicon.png?v=139",
-  "./images/brand/apple-touch.png?v=139",
-  "./images/brand/og-cover.jpg?v=139",
+  "./css/style.css?v=140",
+  "./js/products-data.js?v=140",
+  "./js/i18n.js?v=140",
+  "./js/net.js?v=140",
+  "./js/store.js?v=140",
+  "./js/app.js?v=140",
+  "./images/brand/logo.jpg?v=140",
+  "./images/brand/favicon.png?v=140",
+  "./images/brand/apple-touch.png?v=140",
+  "./images/brand/og-cover.jpg?v=140",
   "./static/logo.png",
 ];
 const MAX_ASSETS = 140;
@@ -91,6 +91,20 @@ async function networkFirst(request, fallbackHTML) {
   }
 }
 
+// A tokened subresource (?v=NNN): the token is the immutability promise - that
+// exact URL serves one build of the file forever, so the cached copy is always
+// the right copy. Cache-first (with the HTTP Cache-Control: immutable header
+// the server now sends, the browser disk cache usually answers before this
+// worker is even asked), network only on the first miss.
+async function cachedVersioned(request) {
+  const cache = await caches.open(VERSION);
+  const hit = await cache.match(request);
+  if (hit) return hit;
+  const res = await fetch(request);
+  if (res && res.ok) cache.put(request, res.clone()).then(() => trim(cache));
+  return res;
+}
+
 // A media subresource: anything the browser fetched as an image or a video,
 // plus the same-origin /uploads/<key> links that proxy the Supabase bucket
 // (the server 302s those to the public object URL, which is why a worker
@@ -133,6 +147,16 @@ self.addEventListener("fetch", async (event) => {
     // a photo that would have loaded into a permanent broken icon.
     const hit = await cachedMedia(req);
     if (hit) event.respondWith(hit);
+    return;
+  }
+  // Tokened subresources (css/style.css?v=NNN, js/store.js?v=NNN, the brand
+  // icons, ...) are immutable for the life of the token: serve them from the
+  // cache without a network round-trip. The HTML pages that reference them
+  // are network-first and carry the fresh token on every release, so a
+  // bumped token is fetched once and the old build is evicted with its cache
+  // on activate.
+  if (url.searchParams.get("v")) {
+    event.respondWith(cachedVersioned(req));
     return;
   }
   event.respondWith(staleWhileRevalidate(req));
