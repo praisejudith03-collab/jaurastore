@@ -156,24 +156,33 @@ def test_header_controls_do_not_overlap(mobile, live_shop, width, language):
         assert box and box["x"] >= 0 and box["x"] + box["width"] <= width
 
 
-def test_desktop_logo_is_centred_and_currency_pills_stay_small(mobile, live_shop):
-    """The locked header: the logo is pixel-centred on desktop (nav links |
-    CENTRED LOGO | controls) and the ₦/F CFA pills keep their small fixed
-    boxes. Fails if anything ever drags the logo back to the left edge or
-    inflates the currency switch again."""
+def test_desktop_logo_sits_left_on_one_row_and_currency_pills_stay_small(mobile, live_shop):
+    """The locked header (owner request 2026-09-11): the logo sits flush at
+    the LEFT edge of the header row on desktop, on the SAME horizontal line
+    as the language/currency switches and icons (one flex row,
+    space-between), and the ₦/F CFA pills keep their small fixed boxes.
+    Fails if anything ever drags the logo back to the centre, scatters the
+    controls onto a second row, or inflates the currency switch again."""
     width = 1440
     mobile.set_viewport_size({"width": width, "height": 900})
     mobile.goto(live_shop + "/")
     logo = mobile.locator("#site-header .logo img")
     expect(logo).to_be_visible()
     box = logo.bounding_box()
-    # Centre of the LAYOUT viewport (clientWidth excludes the classic
-    # headless scrollbar, which would skew a raw viewport/2 by ~7px).
-    layout_centre = mobile.evaluate("document.documentElement.clientWidth / 2")
-    centre = box["x"] + box["width"] / 2
-    assert abs(centre - layout_centre) <= 3, (
-        f"header logo centre {centre} != layout centre {layout_centre} "
-        "- the centred-logo lock regressed")
+    # The logo's left edge must be the header row's left edge (within 3px),
+    # and its vertical centre must match the controls' - i.e. one row.
+    row_left = mobile.evaluate(
+        "document.querySelector('#site-header .header .header-inner')"
+        ".getBoundingClientRect().left")
+    assert abs(box["x"] - row_left) <= 3, (
+        f"header logo x {box['x']} != header row left edge {row_left} "
+        "- the left-logo lock regressed")
+    right_box = mobile.locator("#site-header .header .nav-right").bounding_box()
+    logo_mid = box["y"] + box["height"] / 2
+    right_mid = right_box["y"] + right_box["height"] / 2
+    assert abs(logo_mid - right_mid) <= 2, (
+        f"logo mid {logo_mid} != controls mid {right_mid} "
+        "- the header stopped being a single row")
     for cur, low, high in (("NGN", 24, 46), ("CFA", 42, 76)):
         # .header scopes to the visible header bar - the closed mobile menu
         # (.mobile-nav inside #site-header) carries a second copy.

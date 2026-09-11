@@ -50,17 +50,28 @@ with sync_playwright() as pw:
                 page.goto(base + path, wait_until="domcontentloaded", timeout=90000)
                 logo = page.locator("#site-header .logo img")
                 expect(logo).to_be_visible(timeout=90000)
-                # The header logo is LOCKED to the centre of the page on
-                # desktop (nav links | logo | controls). Fail the deploy check
-                # if any stylesheet ever drags it back to the edge again.
+                # The header logo is LOCKED to the LEFT edge of the header
+                # row (logo | links | controls, one flex row, space-between).
+                # Fail the deploy check if any stylesheet ever drags it back
+                # to the centre or scatters it onto a second row.
+                box = logo.bounding_box()
+                nav_right = page.locator("#site-header .header .nav-right")
+                rbox = nav_right.bounding_box()
+                assert box and rbox, "header logo/controls missing"
+                logo_mid = box["y"] + box["height"] / 2
+                right_mid = rbox["y"] + rbox["height"] / 2
+                assert abs(logo_mid - right_mid) <= 2, (
+                    f"logo and controls not on one row on {base + path}: "
+                    f"logo mid {logo_mid} != controls mid {right_mid}")
+                assert box["x"] + box["width"] <= rbox["x"] + 1, (
+                    f"logo overlaps controls on {base + path}")
                 if width >= 1024:
-                    layout_centre = page.evaluate(
-                        "document.documentElement.clientWidth / 2")
-                    box = logo.bounding_box()
-                    centre = box["x"] + box["width"] / 2
-                    assert abs(centre - layout_centre) <= 4, (
-                        f"header logo not centred on {base + path}: "
-                        f"centre {centre} != {layout_centre}")
+                    row_left = page.evaluate(
+                        "document.querySelector('#site-header .header .header-inner')"
+                        ".getBoundingClientRect().left")
+                    assert abs(box["x"] - row_left) <= 4, (
+                        f"header logo not at the left edge on {base + path}: "
+                        f"logo x {box['x']} != row left {row_left}")
                     cfa = page.locator('#site-header .header .currency-switch [data-cur="CFA"]')
                     cbox = cfa.bounding_box()
                     assert cbox and 40 <= cbox["width"] <= 80, (
