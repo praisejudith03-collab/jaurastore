@@ -86,14 +86,18 @@ services:
       - key: WHATSAPP_CALLMEBOT_KEY
         sync: false
       # Shop email: every order + every customer receipt is emailed to the
-      # shop, the receipt WITH the customer's own file attached. HTTPS
-      # providers first (Resend, then Brevo) because Render's free/starter
-      # instances block outbound SMTP ports 25/465/587; SMTP_* is only a
-      # fallback for hosts with open SMTP. See ENVIRONMENT_VARIABLES.md.
+      # shop, the receipt WITH the customer's own file attached, and the
+      # customer gets a confirmation email when an order is confirmed in the
+      # admin portal. HTTPS providers first (Resend, then Brevo) because
+      # Render's free/starter instances block outbound SMTP ports 25/465/587;
+      # SMTP_* is only a fallback for hosts with open SMTP. MAIL_TO is not a
+      # secret - pinning it means order alerts reach the owner's inbox even
+      # when the variable is missing from the dashboard. See
+      # ENVIRONMENT_VARIABLES.md.
       - key: MAIL_FROM
         sync: false
       - key: MAIL_TO
-        sync: false
+        value: jaurastore@gmail.com
       - key: RESEND_API_KEY
         sync: false
       - key: BREVO_API_KEY
@@ -194,14 +198,18 @@ services:
       - key: WHATSAPP_CALLMEBOT_KEY
         sync: false
       # Shop email: every order + every customer receipt is emailed to the
-      # shop, the receipt WITH the customer's own file attached. HTTPS
-      # providers first (Resend, then Brevo) because Render's free/starter
-      # instances block outbound SMTP ports 25/465/587; SMTP_* is only a
-      # fallback for hosts with open SMTP. See ENVIRONMENT_VARIABLES.md.
+      # shop, the receipt WITH the customer's own file attached, and the
+      # customer gets a confirmation email when an order is confirmed in the
+      # admin portal. HTTPS providers first (Resend, then Brevo) because
+      # Render's free/starter instances block outbound SMTP ports 25/465/587;
+      # SMTP_* is only a fallback for hosts with open SMTP. MAIL_TO is not a
+      # secret - pinning it means order alerts reach the owner's inbox even
+      # when the variable is missing from the dashboard. See
+      # ENVIRONMENT_VARIABLES.md.
       - key: MAIL_FROM
         sync: false
       - key: MAIL_TO
-        sync: false
+        value: jaurastore@gmail.com
       - key: RESEND_API_KEY
         sync: false
       - key: BREVO_API_KEY

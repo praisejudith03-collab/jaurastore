@@ -8,13 +8,18 @@ Set them privately in the deployment host and never commit or paste their values
 into code. `ADMIN_EMAILS` still controls which configured admin email identities
 may sign in.
 
-## Shop email — orders + payment receipts (set on BOTH Render services)
+## Shop email — orders, receipts + customer confirmations (set on BOTH Render services)
 
 Every paid order and every customer-uploaded payment receipt is emailed to the
 shop; the receipt email carries **the customer's own file as an attachment**
-(the exact bytes they uploaded). Render's free/starter instances block outbound
-SMTP ports (25/465/587), so the app sends over HTTPS first and only falls back
-to SMTP — see `mailer.py`. The transport used, in order:
+(the exact bytes they uploaded). When an admin marks an order **CONFIRMED** in
+the portal, the customer automatically receives a confirmation email at the
+address they checked out with. All dispatch runs on background daemon threads,
+so a slow or dead provider can never block a checkout, a receipt upload or an
+admin action — failed attempts only log one quiet `[mailer]` line.
+Render's free/starter instances block outbound SMTP ports (25/465/587), so the
+app sends over HTTPS first and only falls back to SMTP — see `mailer.py`. The
+transport used, in order:
 
 1. **Resend** (preferred) — `RESEND_API_KEY` → `POST https://api.resend.com/emails`
 2. **Brevo** — `BREVO_API_KEY` → `POST https://api.brevo.com/v3/smtp/email`
@@ -30,6 +35,8 @@ git):
 - `MAIL_FROM` — the sender, e.g. `Jaura Store <orders@yourdomain>`. Must be a
   sender the provider has verified, or the provider rejects the send.
 - `MAIL_TO` — the shop inbox that receives every order + receipt email.
+  Optional: when unset it defaults to the primary `ADMIN_EMAILS` address
+  (`jaurastore@gmail.com`), which is also the value pinned in render.yaml.
 - `RESEND_API_KEY` — create an API key at resend.com and verify your sending
   domain there.
 - `BREVO_API_KEY` — alternative HTTPS provider, used when `RESEND_API_KEY` is
@@ -38,10 +45,13 @@ git):
 
 **Verify after the deploy:** sign in to the admin portal → **Orders** — the
 status line above the receipts table must read
-`Receipt emails: on via resend to …` (or brevo/smtp). Press **"Email a test"**
-to send a probe email to `MAIL_TO` and confirm delivery. When the variables are
-missing the line reads `Receipt emails: off — set …` and orders/receipts still
-appear in the portal as usual; email is an extra channel, not a dependency.
+`Shop emails: on via resend to …` (or brevo/smtp). Press **"Email a test"**
+to send a probe email to the shop inbox and confirm delivery (the probe itself
+runs on a background thread with a bounded wait, so it cannot time the worker
+out). When the variables are missing the line reads
+`Shop emails: off — set …` and orders/receipts still appear in the portal as
+usual; email is an extra channel, not a dependency. Confirming an order whose
+customer has no valid email simply skips the customer email (logged quietly).
 
 > Note: an earlier revision of this file listed `MAIL_FROM`, `RESEND_API_KEY`
 > and the `SMTP_*` variables as obsolete. That is no longer true — the app

@@ -1061,12 +1061,12 @@ async function refreshMailStatus() {
   const btn = $("#mail-test");
   let d = null;
   try { const res = await fetch("api/admin/mail/status", { credentials: "same-origin", cache: "no-store" }); if (res.ok) d = await res.json(); } catch (e) { d = null; }
-  if (!d || d.ok === false) { note.textContent = "Receipt emails: status unavailable."; if (btn) btn.hidden = true; return; }
+  if (!d || d.ok === false) { note.textContent = "Shop emails: status unavailable."; if (btn) btn.hidden = true; return; }
   if (d.enabled) {
-    note.textContent = `Receipt emails: on via ${d.provider} to ${d.to}`;
+    note.textContent = `Shop emails: on via ${d.provider} to ${d.to}`;
     if (btn) btn.hidden = false;
   } else {
-    note.textContent = "Receipt emails: off — set " + (d.missing || []).join(", ") + " in Render (see ENVIRONMENT_VARIABLES.md). Every order and receipt still shows up here.";
+    note.textContent = "Shop emails: off — set " + (d.missing || []).join(", ") + " in Render (see ENVIRONMENT_VARIABLES.md). Every order and receipt still shows up here.";
     if (btn) btn.hidden = true;
   }
 }
@@ -1078,10 +1078,10 @@ async function sendTestEmail() {
   try { res = await window.JA_NET.api("api/admin/mail/test", { method: "POST", json: {} }); } catch (e) { res = { ok: false, error: e.message }; }
   if (btn) { btn.disabled = false; btn.textContent = "Email a test"; }
   if (!res || res.ok === false) {
-    if (note) note.textContent = "Receipt emails: test failed — " + ((res && res.error) || "check the mail settings in Render.");
+    if (note) note.textContent = "Shop emails: test failed — " + ((res && res.error) || "check the mail settings in Render.");
     return;
   }
-  if (note) note.textContent = `Receipt emails: on via ${res.provider} to ${res.to} — test email sent, check the inbox (and spam).`;
+  if (note) note.textContent = `Shop emails: on via ${res.provider} to ${res.to} — test email sent, check the inbox (and spam).`;
 }
 const PROOF_PAGE = 20;
 let proofsShown = PROOF_PAGE;

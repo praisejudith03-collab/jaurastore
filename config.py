@@ -125,12 +125,16 @@ class Config:
     # ------------------------------------------------- shop email (orders/receipts)
     # Every paid order and every customer-uploaded payment receipt is emailed
     # to the shop; the receipt email carries THE CUSTOMER'S OWN FILE as an
-    # attachment. Render's free/starter instances block outbound SMTP ports
-    # (25/465/587), so mail goes over HTTPS first - Resend
-    # (RESEND_API_KEY), then Brevo (BREVO_API_KEY) - and only falls back to
-    # SMTP when no HTTPS provider is configured. MAIL_FROM must be a sender
-    # the provider has verified; MAIL_TO is the shop inbox that receives
-    # everything. See ENVIRONMENT_VARIABLES.md and mailer.py.
+    # attachment. When an admin confirms an order the CUSTOMER gets a
+    # confirmation email at their checkout address. Render's free/starter
+    # instances block outbound SMTP ports (25/465/587), so mail goes over
+    # HTTPS first - Resend (RESEND_API_KEY), then Brevo (BREVO_API_KEY) -
+    # and only falls back to SMTP when no HTTPS provider is configured.
+    # MAIL_FROM must be a sender the provider has verified. MAIL_TO is the
+    # shop inbox; when it is unset the mailer falls back to the primary
+    # ADMIN_EMAILS address (jaurastore@gmail.com) so order alerts always
+    # reach the owner. All dispatch runs on daemon threads - see mailer.py
+    # and ENVIRONMENT_VARIABLES.md.
     MAIL_FROM = os.environ.get("MAIL_FROM", "")
     MAIL_TO = os.environ.get("MAIL_TO", "")
     RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
