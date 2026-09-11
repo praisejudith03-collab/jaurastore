@@ -1547,7 +1547,7 @@ def admin_order_update(oid):
     status = sec.clean(d.get("status"), 20)
     if status not in STATUSES:
         return jsonify(ok=False, error="status must be pending, confirmed or declined"), 400
-    row = one("SELECT id, payload, status FROM orders WHERE id=?", (oid,))
+    row = one("SELECT id, payload, status, email FROM orders WHERE id=?", (oid,))
     if not row:
         return jsonify(ok=False, error="Order not found."), 404
     try:
@@ -1572,6 +1572,24 @@ def admin_order_update(oid):
             _sb_update_order(oid, status=status, payload=payload)
         except Exception:
             pass
+
+    # Customer confirmation email: fired only when an order MOVES to
+    # confirmed (a re-save of the same status must not spam the shopper).
+    # Runs on a daemon thread inside the mailer - the admin action returns
+    # immediately and a mail outage can never fail the status update.
+    if status == "confirmed" and old_status != "confirmed":
+        try:
+            import mailer
+            note = dict(payload)
+            note["id"] = note.get("id") or oid
+            cust = dict(note.get("customer") or {})
+            # the payload's customer email wins; legacy orders fall back to
+            # the orders.email column (sqlite3.Row has no .get())
+            cust["email"] = cust.get("email") or row["email"] or ""
+            note["customer"] = cust
+            mailer.notify_order_confirmed_async(note)
+        except Exception:
+            pass  # mail is an extra channel, never a dependency
 
     return jsonify(ok=True, id=oid, status=status)
 
@@ -1860,7 +1878,15 @@ def admin_mail_status():
 @authmod.require_admin
 @sec.require_csrf
 def admin_mail_test():
-    """The Orders tab's "Email a test" button: one probe email to MAIL_TO."""
+    """The Orders tab's "Email a test" button: one probe email to the shop
+    inbox.
+
+    The send itself runs on a background thread like every other dispatch -
+    the request only waits a bounded PROBE_JOIN_SECONDS (well under the
+    gunicorn --timeout) so even a hung provider cannot time the worker out.
+    If the probe is still in flight past that cap the request returns
+    immediately and the outcome lands in the audit log.
+    """
     limited = sec.guard("mail-test", limit=5, window=600)
     if limited:
         return limited
@@ -1871,8 +1897,28 @@ def admin_mail_test():
             "Shop email is not configured yet. Set " + ", ".join(st["missing"])
             + " in Render (see ENVIRONMENT_VARIABLES.md), then redeploy."),
             missing=st["missing"]), 400
-    ok, detail = mailer.send_mail("Jaura Store test email",
-                                  mailer.test_email_html())
+
+    import threading
+    result = {}
+
+    def _probe():
+        try:
+            result["out"] = mailer.send_mail("Jaura Store test email",
+                                             mailer.test_email_html())
+        except Exception as exc:                    # pragma: no cover
+            result["out"] = (False, "mailer error: " + str(exc)[:300])
+
+    t = threading.Thread(target=_probe, daemon=True)
+    t.start()
+    t.join(mailer.PROBE_JOIN_SECONDS)
+    if "out" not in result:
+        audit(authmod.current_admin(), "admin.mail_test",
+              f"provider={mailer.provider()} probe still in flight", _ip())
+        return jsonify(ok=True, provider=mailer.provider(),
+                       to=mailer.transport_status()["to"],
+                       message=("Test email is still sending — check the "
+                                "inbox in a minute (and the Render log)."))
+    ok, detail = result["out"]
     audit(authmod.current_admin(), "admin.mail_test",
           f"ok={ok} provider={mailer.provider()} {detail}"[:400], _ip())
     if not ok:

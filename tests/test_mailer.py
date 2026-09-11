@@ -16,6 +16,7 @@ Run with:  python3 -m pytest tests/test_mailer.py -q
 """
 import base64
 import io
+import json
 import os
 import sys
 
@@ -31,7 +32,7 @@ import pytest  # noqa: E402
 import app as appmod  # noqa: E402
 import auth as authmod  # noqa: E402
 import mailer  # noqa: E402
-from db import execute, init_db  # noqa: E402
+from db import execute, init_db, one  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _pw import PW  # noqa: E402
@@ -152,8 +153,28 @@ class TestTransportSelection:
     def test_status_reports_missing_pieces(self, unconfigured):
         st = mailer.transport_status()
         assert st["enabled"] is False and st["provider"] == ""
-        assert set(st["missing"]) == {"MAIL_TO", "MAIL_FROM",
+        # MAIL_TO is no longer required: the inbox defaults to the primary
+        # admin address, so only the sender + a provider can be missing.
+        assert set(st["missing"]) == {"MAIL_FROM",
                                       "RESEND_API_KEY (or BREVO_API_KEY / SMTP_HOST)"}
+        assert st["to"] == EMAIL  # ADMIN_EMAILS[0] fallback
+
+    def test_settings_read_from_config_class(self, monkeypatch):
+        """Regression: _cfg used to read only module-level attributes, which
+        never exist at runtime - so a fully configured Render deploy still
+        sent nothing. It must fall through to config.Config."""
+        import config as config_mod
+        monkeypatch.setattr(config_mod, "MAIL_TO", "", raising=False)
+        monkeypatch.setattr(config_mod, "RESEND_API_KEY", "", raising=False)
+        monkeypatch.setattr(config_mod.Config, "RESEND_API_KEY", "re_from_class",
+                            raising=False)
+        assert mailer._cfg("RESEND_API_KEY") == "re_from_class"
+
+    def test_shop_inbox_defaults_to_primary_admin(self, unconfigured):
+        assert mailer._shop_inbox() == EMAIL
+        assert mailer.send_mail("s", "<p>b</p>") == (
+            False, "not configured: MAIL_FROM, "
+                   "RESEND_API_KEY (or BREVO_API_KEY / SMTP_HOST)")
 
     def test_status_exposes_no_secret(self, resend_env):
         st = mailer.transport_status()
@@ -263,7 +284,7 @@ class TestSendBehaviour:
 
         monkeypatch.setattr(mailer, "_http_post_json", _boom)
         ok, detail = mailer.send_mail("s", "<p>body</p>")
-        assert ok is False and "MAIL_TO" in detail
+        assert ok is False and "MAIL_FROM" in detail
 
     def test_provider_failure_never_raises(self, resend_env, monkeypatch):
         def _fail(url, headers, payload):
@@ -440,3 +461,220 @@ class TestAsyncWrappers:
         monkeypatch.setattr(mailer, "notify_new_order",
                             lambda order: (_ for _ in ()).throw(RuntimeError("x")))
         mailer.notify_new_order_async({"id": "B"})  # must not raise
+
+
+# ========================================== order emails: admin + customer
+def _store_order(oid="JA-MAILTEST-1", email="praisejudith03@gmail.com",
+                 status="pending", proof=""):
+    """Insert an order the way a completed checkout does; return its id."""
+    execute("DELETE FROM orders WHERE id=?", (oid,))
+    payload = {"id": oid, "total": 12000, "currency": "NGN", "status": status,
+               "payment": "UBA bank transfer (₦ Naira)", "proofUrl": proof,
+               "customer": {"name": "Praise Judith", "email": email,
+                            "phone": "+2290168953101", "city": "Cotonou"},
+               "items": [{"id": "wix-001", "name": "Shea butter", "qty": 2,
+                          "price": 6000}]}
+    execute(
+        "INSERT INTO orders (id, payload, email, customer_name, phone, country, "
+        "city, zone, address, note, payment, proof_url, items_count, total, "
+        "currency, source, status, at, updated_at) VALUES "
+        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (oid, json.dumps(payload), email, "Praise Judith", "", "",
+         "", "Cotonou", "", "", "UBA bank transfer (₦ Naira)", proof, 1,
+         12000, "NGN", "web", status,
+         "2026-01-01T00:00:00", "2026-01-01T00:00:00"))
+    return oid
+
+
+class TestAdminNewOrderEmail:
+    def test_order_email_carries_the_receipt_link(self, resend_env):
+        ok, detail = mailer.notify_new_order(
+            {"id": "JA-WI2OSD", "total": 12000, "currency": "NGN",
+             "payment": "UBA bank transfer (₦ Naira)",
+             "proofUrl": "https://example.supabase.co/storage/v1/object/public/proofs/r.png",
+             "customer": {"name": "Praise Judith", "phone": "+229...",
+                          "email": "praisejudith03@gmail.com",
+                          "city": "Cotonou"},
+             "items": [{"name": "Shea butter", "qty": 2}]})
+        assert ok, detail
+        payload = resend_env[0]["payload"]
+        assert payload["to"] == [EMAIL]            # the shop inbox
+        html_body = payload["html"]
+        assert "JA-WI2OSD" in html_body            # order id
+        assert "Praise Judith" in html_body        # customer details
+        assert "Shea butter" in html_body          # items
+        assert "UBA" in html_body                  # payment method
+        assert "12000 NGN" in html_body            # total
+        assert ("https://example.supabase.co/storage/v1/object/public/proofs/r.png"
+                in html_body)                      # receipt link
+
+    def test_relative_receipt_url_becomes_absolute(self, resend_env):
+        import config as config_mod
+        monkeypatch_target = config_mod
+        # SITE_ORIGIN comes from Config in production
+        monkeypatch_target.Config.SITE_ORIGIN = "https://jaurastore.com.ng"
+        try:
+            ok, _ = mailer.notify_new_order(
+                {"id": "JA-REL", "proofUrl": "/uploads/proofs/r.png",
+                 "customer": {}, "items": []})
+            assert ok
+            assert "https://jaurastore.com.ng/uploads/proofs/r.png" \
+                in resend_env[0]["payload"]["html"]
+        finally:
+            monkeypatch_target.Config.SITE_ORIGIN = "http://localhost:8080"
+
+    def test_item_quantities_use_qty_field(self, resend_env):
+        """Checkout items store 'qty' - the email used to read only
+        'quantity' and always showed 1."""
+        ok, _ = mailer.notify_new_order(
+            {"id": "JA-QTY", "items": [{"name": "Soap", "qty": 3}]})
+        assert ok
+        assert ">3</td>" in resend_env[0]["payload"]["html"]
+
+
+class TestCustomerConfirmationEmail:
+    def test_confirmation_goes_to_the_customer(self, resend_env):
+        ok, detail = mailer.notify_order_confirmed(
+            {"id": "JA-WI2OSD", "total": 12000, "currency": "NGN",
+             "payment": "UBA bank transfer (₦ Naira)",
+             "customer": {"name": "Praise Judith",
+                          "email": "praisejudith03@gmail.com"},
+             "items": [{"name": "Shea butter", "qty": 2}]})
+        assert ok, detail
+        payload = resend_env[0]["payload"]
+        assert payload["to"] == ["praisejudith03@gmail.com"]  # the CUSTOMER
+        assert "JA-WI2OSD" in payload["subject"]
+        html_body = payload["html"]
+        assert "confirmed" in html_body.lower()
+        assert "Praise Judith" in html_body and "Shea butter" in html_body
+        assert "12000 NGN" in html_body
+
+    def test_no_valid_customer_email_is_a_quiet_no_op(self, resend_env):
+        ok, detail = mailer.notify_order_confirmed({"id": "JA-NOEMAIL",
+                                                    "customer": {}})
+        assert ok is False and "customer email" in detail
+        assert resend_env == []                    # nothing went out
+
+    def test_confirmation_async_runs_off_thread(self, resend_env,
+                                                monkeypatch):
+        import threading
+        started = []
+
+        class _InlineThread:
+            def __init__(self, target=None, daemon=None, **k):
+                started.append(1)
+                self._t = target
+
+            def start(self):
+                self._t()
+
+        monkeypatch.setattr(threading, "Thread", _InlineThread)
+        mailer.notify_order_confirmed_async(
+            {"id": "JA-ASYNC", "customer": {"email": "x@example.com"}})
+        assert started == [1]
+        assert len(resend_env) == 1
+
+    def test_confirmation_async_swallows_exceptions(self, monkeypatch):
+        monkeypatch.setattr(mailer, "notify_order_confirmed",
+                            lambda order: (_ for _ in ()).throw(RuntimeError("x")))
+        mailer.notify_order_confirmed_async({"id": "JA-BOOM"})  # must not raise
+
+
+class TestConfirmStatusTriggersCustomerEmail:
+    """PATCH /admin/orders/<oid> -> confirmed must email the customer without
+    ever blocking or failing the admin action."""
+
+    def _patch(self, client, tok, oid, status):
+        return client.patch(f"/api/admin/orders/{oid}", json={"status": status},
+                            headers={"X-CSRF-Token": tok})
+
+    def test_confirm_sends_customer_email(self, client, resend_env, monkeypatch):
+        captured = {}
+
+        def _capture(order):
+            captured.update(order)
+            return True, "resend: accepted"
+
+        monkeypatch.setattr(mailer, "notify_order_confirmed", _capture)
+        monkeypatch.setattr(mailer, "_fire", lambda fn, *a: fn(*a))  # inline
+        tok = login(client)
+        oid = _store_order()
+        r = self._patch(client, tok, oid, "confirmed")
+        assert r.status_code == 200, r.data
+        assert r.get_json()["status"] == "confirmed"
+        assert captured["id"] == oid
+        assert captured["customer"]["email"] == "praisejudith03@gmail.com"
+        # the DB update happened too - mail is not a dependency
+        row = one("SELECT status FROM orders WHERE id=?", (oid,))
+        assert row["status"] == "confirmed"
+
+    def test_decline_and_reopen_send_nothing(self, client, resend_env,
+                                             monkeypatch):
+        fired = []
+
+        def _capture(order):
+            fired.append(order.get("id"))
+            return True, "sent"
+
+        monkeypatch.setattr(mailer, "notify_order_confirmed", _capture)
+        monkeypatch.setattr(mailer, "_fire", lambda fn, *a: fn(*a))  # inline
+        tok = login(client)
+        oid = _store_order("JA-MAILTEST-2")
+        for status in ("declined", "pending"):
+            r = self._patch(client, tok, oid, status)
+            assert r.status_code == 200, r.data
+        assert fired == []
+
+    def test_resaving_confirmed_does_not_resend(self, client, resend_env,
+                                                 monkeypatch):
+        fired = []
+
+        def _capture(order):
+            fired.append(order.get("id"))
+            return True, "sent"
+
+        monkeypatch.setattr(mailer, "notify_order_confirmed", _capture)
+        monkeypatch.setattr(mailer, "_fire", lambda fn, *a: fn(*a))  # inline
+        tok = login(client)
+        oid = _store_order("JA-MAILTEST-3")
+        assert self._patch(client, tok, oid, "confirmed").status_code == 200
+        assert self._patch(client, tok, oid, "confirmed").status_code == 200
+        assert fired == [oid]                     # exactly one email
+
+    def test_mail_failure_never_breaks_the_status_update(self, client,
+                                                         resend_env,
+                                                         monkeypatch):
+        def _boom(order):
+            raise RuntimeError("provider down")
+
+        monkeypatch.setattr(mailer, "notify_order_confirmed", _boom)
+        monkeypatch.setattr(mailer, "_fire", lambda fn, *a: fn(*a))  # inline
+        tok = login(client)
+        oid = _store_order("JA-MAILTEST-4")
+        r = self._patch(client, tok, oid, "confirmed")
+        assert r.status_code == 200, r.data
+        assert r.get_json()["ok"] is True
+        row = one("SELECT status FROM orders WHERE id=?", (oid,))
+        assert row["status"] == "confirmed"
+
+    def test_customer_email_falls_back_to_the_order_row(self, client,
+                                                        resend_env,
+                                                        monkeypatch):
+        """Legacy orders whose payload has no customer dict still confirm:
+        the email comes from the orders.email column."""
+        captured = {}
+
+        def _capture(order):
+            captured.update(order)
+            return True, "sent"
+
+        monkeypatch.setattr(mailer, "notify_order_confirmed", _capture)
+        monkeypatch.setattr(mailer, "_fire", lambda fn, *a: fn(*a))  # inline
+        tok = login(client)
+        oid = _store_order("JA-MAILTEST-5")          # row email is set
+        execute("UPDATE orders SET payload=? WHERE id=?",
+                (json.dumps({"id": oid, "total": 5000, "currency": "NGN",
+                             "items": []}), oid))
+        r = self._patch(client, tok, oid, "confirmed")
+        assert r.status_code == 200, r.data
+        assert captured["customer"]["email"] == "praisejudith03@gmail.com"
