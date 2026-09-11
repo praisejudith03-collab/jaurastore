@@ -278,6 +278,24 @@ def create_app():
                         ", ".join(str(x) for x in fixtures["found"]))
             except Exception as exc:
                 app.logger.warning("test-product purge skipped: %s", exc)
+            # One-shot seed: re-insert a shipped default category the live
+            # categories table lost (perfume vanished from the shop pills,
+            # the categories page and the menu; no product carried it, so a
+            # table rewrite dropped it). Marker-guarded in Supabase
+            # growth_settings - it runs once, and if the owner later deletes
+            # the category on purpose it stays deleted.
+            try:
+                import category_seed
+                status, ids = category_seed.seed_missing_default_categories()
+                if status == "seeded":
+                    app.logger.info(
+                        "default categories restored to the live table: %s",
+                        ", ".join(ids))
+                elif status in ("unavailable", "failed"):
+                    app.logger.warning(
+                        "default category seed %s (retries on the next boot)", status)
+            except Exception as exc:
+                app.logger.warning("default category seed skipped: %s", exc)
     except Exception as exc:           # never let housekeeping stop the boot
         app.logger.warning("startup maintenance skipped: %s", exc)
     # midnight products/orders backup
@@ -326,7 +344,18 @@ def create_app():
             full = os.path.normpath(os.path.join(ROOT, rel))
         if not os.path.isfile(full):
             return None
-        return send_from_directory(os.path.dirname(full), os.path.basename(full))
+        resp = send_from_directory(os.path.dirname(full), os.path.basename(full))
+        # The shared ?v=<digits> token is an immutability promise: that exact
+        # URL is only ever handed out for one build of the file, so browsers
+        # (and any CDN in front of the dyno) may keep it for a year without
+        # revalidating - on a 4G phone that is the difference between a
+        # ~5s first paint and an instant repeat visit. Every asset whose
+        # content changes ships a new token instead. Anything else - HTML
+        # pages, sw.js, untokened links - keeps Flask's default no-cache so
+        # a visitor always fetches fresh markup on every navigation.
+        if re.fullmatch(r"\d+", request.args.get("v", "")):
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
 
     @app.after_request
     def _headers(resp):

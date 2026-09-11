@@ -38,7 +38,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 2026-09-11): the header flex-row fix in css/style.css and the logo-first
 # markup in js/store.js must reach every phone on the first visit, so all
 # pages, scripts and the service worker ship v139 together.
-SHARED_TOKEN = "139"
+# Bumped to 140 for the speed + shop-banner release (owner request
+# 2026-09-11): immutable Cache-Control for tokened assets + the service
+# worker's cache-first branch in sw.js, and the bigger full-width shop
+# banner with the wordmark anchored to the bottom in css/style.css. All
+# pages, scripts and the service worker ship v140 together.
+SHARED_TOKEN = "140"
 
 
 def _image_size(path):
