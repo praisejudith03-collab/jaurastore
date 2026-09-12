@@ -47,8 +47,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # (owner request 2026-09-12): the three Google Fonts families now ship from
 # /static/fonts as latin-subset woff2 (css/fonts.css), the CSP/`_headers`
 # font-src/ style-src are self-only, and the banner wordmark swaps to Allura.
-# All pages, scripts and the service worker ship v141 together.
-SHARED_TOKEN = "141"
+# Bumped to 142 for the pinned admin bottom dock + dual-WhatsApp release
+# (owner directive 2026-09-12): the admin portal navigation is fixed to the
+# bottom of the screen at every width, and the checkout / thank-you screens
+# carry the Nigeria vs Benin-Togo WhatsApp line chooser.
+# All pages, scripts and the service worker ship v142 together.
+SHARED_TOKEN = "142"
 
 
 def _image_size(path):

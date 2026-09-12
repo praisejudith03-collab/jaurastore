@@ -392,6 +392,16 @@ def _sync_repo_async():
 
     def _run():
         try:
+            # Re-ask the gate at EXECUTION time, not just at spawn time. The
+            # daemon thread can be scheduled long after the request (or the
+            # test) that spawned it returned, and the guards may since have
+            # come back - a pytest run that temporarily lifted the blockers,
+            # a preview that flipped to production for one write. When the
+            # thread actually runs, the CURRENT process state decides; a late
+            # thread must never regenerate the repository files against
+            # guards that are back in place.
+            if repo_sync.repo_sync_blocked_reason():
+                return
             repo_sync.regenerate(commit=True, push=True)
         except Exception:
             pass  # sync is best-effort; a failure must never break a save

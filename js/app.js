@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=141";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=141";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=142";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=142";
 }
 
 function renderCategories() {
@@ -1075,19 +1075,26 @@ function orderSummaryLines(order) {
   }).join("\n");
 }
 
-/** The exact message the customer sends to confirm payment + transport fare. */
+/** The exact message the customer sends to confirm payment + transport fare.
+ * Order-completion channel ONLY (owner directive 2026-09-12): it compiles the
+ * customer name, Order ID, items, total price (NGN or F CFA), delivery
+ * location and the transport-fare question in one message. General product
+ * questions stay on the floating widget's own pre-filled message. */
 function fareWaText(order) {
   const c = (order && order.customer) || {};
   const loc = [c.city, c.zone, c.address].filter(Boolean).join(" / ");
   return [
-    "Hello Jaura Store, here is my Order ID: " + (order.id || "") + ".",
-    "I would like to confirm my payment and transport fare for delivery.",
+    "Hello Jaura Store, my name is " + (c.name || [c.firstName, c.lastName].filter(Boolean).join(" ") || "your customer") + ".",
+    "Order ID: " + (order.id || ""),
+    "I have completed my order and would like to confirm my payment.",
     "",
     "Items:",
     orderSummaryLines(order),
     "",
     "Total: " + JA.money(order.total, order.currency),
     "Delivery location: " + (loc || "not stated"),
+    "",
+    "Please confirm my transport fare for delivery. Thank you!",
   ].join("\n");
 }
 
@@ -1116,6 +1123,34 @@ function bindFareWaToggle(order, root) {
     });
   });
   paintFareWaButtons(order, scope);
+}
+
+/* ---------------------------------------------- WhatsApp line at checkout
+ * Country routing (owner directive 2026-09-12): the checkout page itself
+ * carries the Nigeria / Benin-Togo chooser so buyers pick their WhatsApp
+ * line BEFORE placing the order. The choice is remembered (JA.setWaCountry),
+ * the floating inquiry widget follows it, and the thank-you screen's
+ * order-completion button opens that same line.
+ */
+function paintWaLineChooser(scope) {
+  (scope || document).querySelectorAll("[data-wa-toggle]").forEach((btn) => {
+    const on = btn.dataset.waToggle === JA.waCountry();
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+function bindWaLineChooser(scope) {
+  const buttons = (scope || document).querySelectorAll("[data-wa-toggle]");
+  if (!buttons.length) return;
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      JA.setWaCountry(btn.dataset.waToggle);
+      paintWaLineChooser(scope);
+    });
+  });
+  // Start from the market the visitor is already on (IP guess / earlier pick).
+  paintWaLineChooser(scope);
 }
 
 // Payment details come ONLY from GET /api/site, whose source of truth is the
@@ -1572,10 +1607,15 @@ function renderCheckout() {
     // The Country field is also what routes the WhatsApp buttons: Nigeria ->
     // the Nigeria line, Benin / Togo -> the Benin-Togo line.
     try { if (JA.waRegionFor(countryField.value)) JA.setWaCountry(countryField.value); } catch (e) {}
-    countryField.addEventListener("change", (e) => { try { JA.setWaCountry(e.target.value); } catch (err) {} });
+    countryField.addEventListener("change", (e) => {
+      try { JA.setWaCountry(e.target.value); } catch (err) {}
+      paintWaLineChooser(form);
+    });
     countryField.addEventListener("change", (e) => promptCurrencyForBeninTogo(e.target.value));
     countryField.addEventListener("blur", (e) => promptCurrencyForBeninTogo(e.target.value));
   }
+  // Explicit Nigeria / Benin-Togo WhatsApp chooser on the checkout page.
+  bindWaLineChooser(form);
 
   form.addEventListener("change", (e) => {
     if (e.target.name === "currency") {

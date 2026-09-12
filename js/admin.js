@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=141" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=142" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1416,6 +1416,12 @@ async function fillSales() {
   });
 }
 const TAB_TITLES = { analytics: "Dashboard", products: "Products", orders: "Orders", sales: "Sales", marketing: "Marketing", categories: "Categories", delivery: "Delivery", settings: "Settings", account: "Account", };
+// The pinned bottom dock carries the five primary sections (owner directive
+// 2026-09-12: Dashboard, Products, Orders, Sales, Marketing — the storefront
+// dock shape). Every other section stays one tap away behind the "More"
+// button, so no admin capability is lost.
+const ADMIN_DOCK_TABS = ["analytics", "products", "orders", "sales", "marketing"];
+const ADMIN_MORE_TABS = ["categories", "delivery", "settings", "account"];
 const ADX_ICONS = {
   analytics: `<svg viewBox="0 0 24 24"><path d="M4 19V9h3v10H4zm6.5 0V5h3v14h-3zm6.5 0v-7h3v7h-3z"/></svg>`,
   products: `<svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v9l-8 4-8-4V8zm8 4l8-4M12 12v9M12 12L4 8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
@@ -1426,6 +1432,7 @@ const ADX_ICONS = {
   delivery: `<svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="18" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="17.5" cy="18" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   settings: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1m0-12.8l-2.1 2.1M7.7 16.3l-2.1 2.1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   account: `<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
+  more: `<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.9" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.9" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.9" fill="currentColor" stroke="none"/></svg>`,
 };
 function paintDesk(tab = "analytics") {
   const pending = serverOrders.filter((o) => (o.status || "pending") === "pending").length;
@@ -1433,7 +1440,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=141" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=142" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -1450,21 +1457,37 @@ function paintDesk(tab = "analytics") {
         <section class="panel ${tab === "account" ? "is-on" : ""}" id="panel-account">${tab === "account" ? accountPanel() : ""}</section>
       </main>
     </div>
-    <nav class="admin-app-nav">
+    <nav class="admin-app-nav" aria-label="Admin sections">
       <button type="button" data-tab="analytics" class="${tab === "analytics" ? "is-on" : ""}">${ADX_ICONS.analytics}<span>Dashboard</span></button>
       <button type="button" data-tab="products" class="${tab === "products" ? "is-on" : ""}">${ADX_ICONS.products}<span>Products</span></button>
       <button type="button" data-tab="orders" class="${tab === "orders" ? "is-on" : ""}">${ADX_ICONS.orders}<span>Orders</span>${pending ? `<em class="adx-badge">${pending}</em>` : ""}</button>
       <button type="button" data-tab="sales" class="${tab === "sales" ? "is-on" : ""}">${ADX_ICONS.sales}<span>Sales</span></button>
       <button type="button" data-tab="marketing" class="${tab === "marketing" ? "is-on" : ""}">${ADX_ICONS.marketing}<span>Marketing</span></button>
+      <button type="button" data-admin-more aria-expanded="false" aria-controls="admin-more-sheet" class="${ADMIN_MORE_TABS.indexOf(tab) >= 0 ? "is-on" : ""}">${ADX_ICONS.more}<span>More</span></button>
+    </nav>
+    <div class="admin-more-sheet" id="admin-more-sheet" role="group" aria-label="More sections" hidden>
       <button type="button" data-tab="categories" class="${tab === "categories" ? "is-on" : ""}">${ADX_ICONS.categories}<span>Categories</span></button>
       <button type="button" data-tab="delivery" class="${tab === "delivery" ? "is-on" : ""}">${ADX_ICONS.delivery}<span>Delivery</span></button>
       <button type="button" data-tab="settings" class="${tab === "settings" ? "is-on" : ""}">${ADX_ICONS.settings}<span>Settings</span></button>
       <button type="button" data-tab="account" class="${tab === "account" ? "is-on" : ""}">${ADX_ICONS.account}<span>Account</span></button>
-    </nav>`;
+    </div>`;
   const signOut = async () => { await JA.logoutAdmin(); paintLogin("Signed out."); };
   $("#logout").onclick = signOut;
   const logoutM = $("#logout-m"); if (logoutM) logoutM.onclick = signOut;
   document.querySelectorAll("[data-tab]").forEach((b) => { b.onclick = () => paintDesk(b.dataset.tab); });
+  // "More" opens the secondary-sections sheet that sits just above the dock.
+  // paintDesk() re-renders the sheet hidden, so tapping any section (or
+  // anywhere outside) closes it again.
+  const moreBtn = document.querySelector("[data-admin-more]");
+  const moreSheet = document.getElementById("admin-more-sheet");
+  if (moreBtn && moreSheet) {
+    moreBtn.onclick = (ev) => {
+      ev.stopPropagation();
+      const opening = moreSheet.hidden;
+      moreSheet.hidden = !opening;
+      moreBtn.setAttribute("aria-expanded", opening ? "true" : "false");
+    };
+  }
   if (tab === "analytics") { fillAnalytics(); startDashTimer(); }
   if (tab === "orders") { fillOrders(); fillProofs(); refreshMailStatus(); const mt = $("#mail-test"); if (mt) mt.onclick = sendTestEmail; }
   if (tab === "sales") fillSales();
@@ -1818,7 +1841,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=141", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=142", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -2507,6 +2530,42 @@ function bindShippingNote() {
     paintBrandingNow(site);
   }).catch(()=>{});
 }
+
+// ---- Pinned bottom dock helpers (owner directive 2026-09-12) --------------
+// The dock stays position:fixed at every width. Two behaviours keep it from
+// ever getting in the way: tapping outside the dock/sheet closes the "More"
+// sheet, and while the phone keyboard is open (focus inside a field) both the
+// dock and the sheet slide out of view so they can never cover the input
+// being typed in - the regression that originally forced the bar in-flow.
+(function () {
+  // Tapping anywhere outside the dock / sheet closes the "More" sheet.
+  document.addEventListener("click", (e) => {
+    if (!e.target || !e.target.closest) return;
+    if (e.target.closest(".admin-app-nav") || e.target.closest(".admin-more-sheet")) return;
+    const sheet = document.getElementById("admin-more-sheet");
+    const btn = document.querySelector("[data-admin-more]");
+    if (sheet && !sheet.hidden) {
+      sheet.hidden = true;
+      if (btn) btn.setAttribute("aria-expanded", "false");
+    }
+  });
+
+  const KB = "admin-kb-open";
+  const isField = (el) => !!el && /^(input|select|textarea)$/i.test(el.tagName || "");
+  document.addEventListener("focusin", (e) => {
+    if ((document.body.dataset.page || "") !== "admin") return;
+    if (isField(e.target)) document.body.classList.add(KB);
+  });
+  document.addEventListener("focusout", (e) => {
+    if ((document.body.dataset.page || "") !== "admin") return;
+    if (!isField(e.target)) return;
+    // Wait for the next tick: moving focus between two fields keeps the dock
+    // tucked away instead of flashing it back for a single frame.
+    setTimeout(() => {
+      if (!isField(document.activeElement)) document.body.classList.remove(KB);
+    }, 80);
+  });
+})();
 
 async function bootAdmin() {
   await JA.ready;

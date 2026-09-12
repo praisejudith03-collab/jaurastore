@@ -168,9 +168,17 @@ def test_phone_nav_tabs_and_padding():
     nav_at = js.find("admin-app-nav")
     assert nav_at != -1
     nav_block = js[nav_at:nav_at + 4000]
-    for tab in ("analytics", "products", "orders", "sales", "marketing",
-                "categories", "settings", "account"):
+    # The pinned dock carries the five primary sections (owner directive
+    # 2026-09-12); Categories / Delivery / Settings / Account live in the
+    # "More" sheet directly above it. Every section must stay reachable.
+    for tab in ("analytics", "products", "orders", "sales", "marketing"):
         assert f'data-tab="{tab}"' in nav_block, tab
+    assert "data-admin-more" in nav_block, "the dock needs the More button"
+    sheet_at = js.find("admin-more-sheet")
+    assert sheet_at != -1, "the secondary sections need the More sheet"
+    sheet_block = js[sheet_at:sheet_at + 2500]
+    for tab in ("categories", "delivery", "settings", "account"):
+        assert f'data-tab="{tab}"' in sheet_block, tab
 
     with open(os.path.join(root, "css", "style.css")) as fh:
         css = fh.read()
@@ -181,8 +189,12 @@ def test_phone_nav_tabs_and_padding():
     ):
         if int(match.group(1)) > 920:
             continue
-        for pad in re.finditer(r"padding-bottom\s*:\s*(\d+)px",
-                               match.group(2)):
-            if int(pad.group(1)) >= 130:
+        # The dock is position:fixed, so the body reserves its height:
+        # padding-bottom: calc(NNpx + env(safe-area-inset-bottom)) with
+        # NN >= 70 keeps every control clear of the pinned bar.
+        for pad in re.finditer(
+            r"padding-bottom\s*:\s*calc\((\d+)px", match.group(2)
+        ):
+            if int(pad.group(1)) >= 70:
                 found = True
-    assert found, "no >=130px bottom padding inside <=920px media query"
+    assert found, "no >=70px (+safe-area) bottom padding inside <=920px media query"

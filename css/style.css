@@ -3961,20 +3961,57 @@ body[data-page="admin"] { padding-bottom: 24px !important; }
 .proof-label { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #887562; margin-top: 10px; }
 
 .ck-fare-help { font-size: 14px; color: #665748; margin: 12px 0 8px; line-height: 1.5; max-width: 520px; }
+/* Admin bottom dock — pinned at every viewport width (owner directive
+   2026-09-12) and styled with the storefront dock's exact tokens: fixed to
+   the bottom, equal-width icon-over-label targets, cream card, purple ink,
+   safe-area aware. The five primary sections sit in the dock; Categories,
+   Delivery, Settings and Account live one tap away in the "More" sheet
+   directly above it. While the phone keyboard is open the dock and sheet
+   slide out of view (body.admin-kb-open, js/admin.js) so a fixed bar can
+   never cover the field being typed in. */
 .admin-app-nav {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
-  display: grid; grid-template-columns: repeat(4, 1fr);
-  background: #17273c;
-  padding: 8px 4px calc(8px + env(safe-area-inset-bottom));
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 90;
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+  background: #fcf8f4;
+  border-top: 1px solid #f2e5d5;
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+  transition: transform .2s ease;
 }
 .admin-app-nav button {
-  background: none; border: 0; color: #99aac2;
+  background: none; border: 0; color: #9b8aa6;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  font-size: 10px; letter-spacing: 0.04em;
+  min-height: 44px; justify-content: center;
+}
+.admin-app-nav button.is-on { color: #6f518d; font-weight: 700; }
+.admin-app-nav svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+body.admin-kb-open .admin-app-nav,
+body.admin-kb-open .admin-more-sheet { transform: translateY(130%); }
+/* "More" sheet: the four secondary sections, anchored just above the dock. */
+.admin-more-sheet {
+  position: fixed; left: 10px; right: 10px;
+  bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  z-index: 89;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px;
+  background: #fcf8f4;
+  border: 1px solid #f2e5d5;
+  border-radius: 14px;
+  box-shadow: 0 10px 28px rgba(35, 24, 16, 0.16);
+  padding: 10px 8px;
+  transition: transform .2s ease;
+}
+.admin-more-sheet[hidden] { display: none; }
+.admin-more-sheet button {
+  background: none; border: 0; color: #6f518d;
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   font-size: 10px; letter-spacing: 0.04em;
+  min-height: 44px; justify-content: center;
 }
-.admin-app-nav button.is-on { color: #7bbeff; }
-.admin-app-nav svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.7; }
+.admin-more-sheet button.is-on { color: #6f518d; font-weight: 700; }
+.admin-more-sheet svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.6; }
 body[data-page="admin"] { padding-bottom: 100px !important; }
+/* Toasts must stay readable above the pinned dock on the admin page. */
+body[data-page="admin"] .toast { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
 body[data-page="admin"] .dock { display: none !important; }
 
 /* Dark admin theme */
@@ -5534,8 +5571,10 @@ body[data-page="admin"] { background: #f8f9fc !important; }
 
 /* ---------- responsive ---------- */
 @media (max-width: 920px) {
-  body[data-page="admin"] { padding-bottom: 148px !important; }
-  .adx { grid-template-columns: 1fr; padding: 16px 14px 130px; }
+  /* The dock is pinned (fixed) at every width, so the page reserves room
+     for it: ~56px bar + breathing room + the safe-area inset. */
+  body[data-page="admin"] { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important; }
+  .adx { grid-template-columns: 1fr; padding: 16px 14px 24px; }
   .adx-side { display: none; }
   .adx-head-actions { display: flex; }
   .adx-periods { grid-template-columns: 1fr; }
@@ -5546,9 +5585,9 @@ body[data-page="admin"] { background: #f8f9fc !important; }
   .adx-order-row { flex-wrap: wrap; row-gap: 4px; }
   .adx-order-total { margin-left: auto; }
 }
-@media (min-width: 921px) {
-  .admin-app-nav { display: none; }
-}
+/* The admin dock is permanently pinned - it is NOT hidden on wide screens
+   (owner directive 2026-09-12). The desktop sidebar (.adx-side) stays as
+   the full secondary navigation. */
 .admin-app-nav button { position: relative; }
 .admin-app-nav .adx-badge { position: absolute; top: 2px; right: calc(50% - 22px); }
 .admin-app-nav svg { fill: none; }
@@ -6280,24 +6319,23 @@ body[data-page="admin"] #site-header { display: none !important; }
   .header .logo { display: flex !important; }
 }
 @media (max-width: 920px) {
-  body[data-page="admin"] { padding-bottom: 24px !important; }
+  /* The admin dock stays position:fixed here too - it is never in-flow.
+     The page body (rule above) reserves its space; the keyboard-open case
+     is handled by body.admin-kb-open sliding the dock out of view. */
   body[data-page="admin"] input,
   body[data-page="admin"] select,
   body[data-page="admin"] textarea { font-size: 16px !important; }
-  .adx { padding-bottom: 24px !important; }
-  .admin-app-nav {
-    position: static !important;
-    display: flex !important;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    gap: 4px;
-    padding: 8px 8px calc(8px + env(safe-area-inset-bottom)) !important;
-  }
-  .admin-app-nav button {
-    flex: 0 0 auto !important;
-    min-width: 68px;
-    padding: 6px 10px;
-  }
+  .adx { padding-bottom: 18px !important; }
+  .admin-app-nav button { min-height: 44px; }
+}
+/* Narrow phones: the admin dock adopts the storefront dock's compact
+   metrics (9.5px labels, 21px icons) so six targets fit down to 320px. */
+@media (max-width: 640px) {
+  .admin-app-nav button { font-size: 9.5px; gap: 1px; }
+  .admin-app-nav svg { width: 21px; height: 21px; }
+  .admin-more-sheet { left: 6px; right: 6px; }
+  .admin-more-sheet button { font-size: 9.5px; }
+  .admin-more-sheet svg { width: 21px; height: 21px; }
 }
 
 /* Very narrow phones (≤380px) keep the SAME single row as every other

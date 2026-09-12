@@ -406,6 +406,10 @@ def main():
         # ephemeral disk would vanish on the next deploy and lock the owner
         # out. So the tab must point at the environment variables, and it must
         # NOT grow a form back.
+        # Categories / Delivery / Settings / Account live behind the pinned
+        # dock's "More" sheet (2026-09-12) - open it first, then the tab.
+        if page.locator("[data-admin-more]").count():
+            page.locator("[data-admin-more]").first.click()
         click_safe(page, "[data-tab=account]")
         page.wait_for_selector("#acct-email", timeout=10000)
         acct = page.locator("#panel-account").inner_text()

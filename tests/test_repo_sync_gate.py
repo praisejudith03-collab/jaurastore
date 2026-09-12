@@ -18,6 +18,8 @@ Run with:  python3 -m pytest tests/test_repo_sync_gate.py -q
 """
 import os
 import sys
+import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DB_PATH", "/tmp/jaura_test.db")
@@ -212,6 +214,48 @@ class TestPostWriteSyncPath:
                         headers={"X-CSRF-Token": tok})
         assert r.status_code == 200, r.data
         assert ran["regenerate"] == 1
+
+    def test_a_late_sync_thread_rechecks_the_gate_when_it_runs(self, monkeypatch):
+        """A daemon thread can outlive the request (or the test) that spawned
+        it. The gate is therefore asked again AT EXECUTION TIME: a thread
+        spawned inside a temporarily-lifted window - a test that patched the
+        pytest detector off with ENV=production - must refuse the moment the
+        real guards are back, so a late thread can never regenerate the real
+        js/products-data.js / data/catalog.json. This is the 2026-09-12 race:
+        a lingering thread from test_api's repo-copy test rewrote the tracked
+        snapshot after the suite had finished."""
+        real_gate = repo_sync._running_under_pytest
+        monkeypatch.setattr(repo_sync, "_running_under_pytest", lambda: False)
+        import config as config_mod
+        monkeypatch.setattr(config_mod.Config, "ENV", "production", raising=False)
+
+        ran = {"regenerate": 0}
+        monkeypatch.setattr(repo_sync, "regenerate",
+                            lambda **kw: ran.__setitem__(
+                                "regenerate", ran["regenerate"] + 1) or (True, {}))
+
+        # The "daemon" only runs once the holder releases it - exactly the
+        # scheduling delay that let the real late thread escape.
+        release = threading.Event()
+        real_thread = threading.Thread
+
+        class _LateThread:
+            def __init__(self, target=None, daemon=None, **k):
+                self._target = target
+
+            def start(self):
+                real_thread(target=lambda: (release.wait(5), self._target()),
+                            daemon=True).start()
+
+        monkeypatch.setattr(catalog_mod, "threading",
+                            type("T", (), {"Thread": _LateThread}))
+        catalog_mod._sync_repo_async()      # gate is lifted: the thread spawns
+        # ... and now the window closes. The real pytest detector is back.
+        monkeypatch.setattr(repo_sync, "_running_under_pytest", real_gate)
+        release.set()                       # the daemon finally runs - late
+        time.sleep(0.3)
+        assert ran["regenerate"] == 0, \
+            "a late sync thread must refuse once the repo-sync gate is back"
 
 
 # ------------------------------------------------------- nightly backup path
