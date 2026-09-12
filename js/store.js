@@ -160,13 +160,12 @@ const JA = (() => {
   const DEFAULT_SETTINGS = {
     storeName: "J Aura Store",
     rate: 0.44,
-    whatsapp: "2290168953101",
-    // Dual-country shop lines. The live values come from GET /api/site
-    // (site_settings.whatsapp_number_ng / _bj, which fall back to the
-    // WHATSAPP_NUMBER_NG / WHATSAPP_NUMBER_BJ environment variables).
+    whatsapp: "22968953110",
+    // Canonical shop lines. They are pinned here as an offline-safe fallback
+    // and pinned again by /api/site so a stale saved setting cannot break chat.
     whatsapp_number_ng: "2349161670236",
-    whatsapp_number_bj: "2290168953101",
-    phoneBj: "+229 01 68 95 31 01",
+    whatsapp_number_bj: "22968953110",
+    phoneBj: "+229 68 95 31 10",
     phoneNg: "+234 916 167 0236",
     email: "jaurastore@gmail.com",
     tiktok: "https://www.tiktok.com/@j_aura_store",
@@ -177,7 +176,7 @@ const JA = (() => {
     account_number: "",
     account_name: "",
     contact_email: "jaurastore@gmail.com",
-    contact_phone: "+229 01 68 95 31 01",
+    contact_phone: "+229 68 95 31 10",
     hero_banner_title: "",
     hero_banner_subtitle: "",
     site_logo_url: "",
@@ -228,8 +227,8 @@ const JA = (() => {
    * The shop answers on two lines, one per market, and every customer-facing
    * WhatsApp button routes to the right one:
    *
-   *   Nigeria           -> settings().whatsapp_number_ng
-   *   Benin  /  Togo    -> settings().whatsapp_number_bj
+   *   Nigeria           -> canonical whatsapp_number_ng
+   *   Benin  /  Togo    -> canonical whatsapp_number_bj
    *
    * The chosen market is remembered (localStorage) so the floating button,
    * the footer button and the checkout fare buttons all agree. It is set
@@ -266,15 +265,16 @@ const JA = (() => {
     return region;
   }
 
-  /** Digits-only WhatsApp number for a market. */
+  /** Digits-only WhatsApp number for a market.
+   * These exact destinations are deliberately not read from localStorage: an
+   * old cached setting with Benin's invalid 01 prefix was why apparently valid
+   * WhatsApp buttons failed to open a chat. */
   function waNumber(country) {
-    const s = settings();
     const region = country === WA_NG || country === WA_BJ
       ? country : (waRegionFor(country) || waCountry());
-    const digits = (v) => String(v == null ? "" : v).replace(/\D/g, "");
-    const ng = digits(s.whatsapp_number_ng) || digits(DEFAULT_SETTINGS.whatsapp_number_ng);
-    const bj = digits(s.whatsapp_number_bj) || digits(s.whatsapp) || digits(DEFAULT_SETTINGS.whatsapp_number_bj);
-    return region === WA_NG ? (ng || bj) : (bj || ng);
+    return region === WA_NG
+      ? DEFAULT_SETTINGS.whatsapp_number_ng
+      : DEFAULT_SETTINGS.whatsapp_number_bj;
   }
 
   function waLink(text, country) {
@@ -1267,30 +1267,31 @@ const JA = (() => {
     };
     if (order.promoCode) payload.promoCode = order.promoCode;
 
+    let submission = Promise.resolve({ ok: true, localOnly: true });
     if (window.JA_NET) {
+      const onSaved = (data) => {
+        if (data && data.proofUrl) saveProof(order.id, data.proofUrl);
+        const all = orders().map((o) => o.id === order.id
+          ? { ...o, synced: true, proofUrl: (data && data.proofUrl) || "" } : o);
+        write(KEYS.orders, all);
+        // The server mints a referral code for qualifying orders; the
+        // confirmation screen listens for it to show the share block.
+        if (data && data.referralCode) {
+          try {
+            localStorage.setItem("ja_referral_last",
+              JSON.stringify({ orderId: order.id, code: data.referralCode }));
+          } catch (e) {}
+          try {
+            document.dispatchEvent(new CustomEvent("ja:referral", {
+              detail: { orderId: order.id, code: data.referralCode },
+            }));
+          } catch (e) {}
+        }
+      };
       const opts = {
         method: "POST",
         queue: true,
         label: "Order " + order.id,
-        onDone: (data) => {
-          if (data && data.proofUrl) saveProof(order.id, data.proofUrl);
-          const all = orders().map((o) => o.id === order.id
-            ? { ...o, synced: true, proofUrl: (data && data.proofUrl) || "" } : o);
-          write(KEYS.orders, all);
-          // The server mints a referral code for qualifying orders; the
-          // confirmation screen listens for it to show the share block.
-          if (data && data.referralCode) {
-            try {
-              localStorage.setItem("ja_referral_last",
-                JSON.stringify({ orderId: order.id, code: data.referralCode }));
-            } catch (e) {}
-            try {
-              document.dispatchEvent(new CustomEvent("ja:referral", {
-                detail: { orderId: order.id, code: data.referralCode },
-              }));
-            } catch (e) {}
-          }
-        },
       };
       if (blob) {
         opts.blob = blob;
@@ -1300,9 +1301,23 @@ const JA = (() => {
       } else {
         opts.json = payload;
       }
-      window.JA_NET.api("api/orders", opts).catch(() => {});
+      submission = window.JA_NET.api("api/orders", opts).then((data) => {
+        // A live response marks the local copy as synced. Offline results stay
+        // in JA_NET's outbox and continue automatically while the instant
+        // completed-order view remains open.
+        if (!(data && data.queued)) onSaved(data || {});
+        return data || {};
+      });
     }
 
+    // Preserve the long-standing saveOrder() return value while giving the
+    // checkout button a real completion signal to await. Non-enumerable means
+    // this Promise can never leak into localStorage or the JSON API payload.
+    try {
+      Object.defineProperty(order, "submission", {
+        value: submission, enumerable: false, configurable: false,
+      });
+    } catch (e) { order.submission = submission; }
     return order;
   }
 
@@ -1498,10 +1513,10 @@ const JA = (() => {
     const d = await res.json();
     return (d && d.orders) || [];
   }
-  async function setOrderStatus(id, status) {
+  async function setOrderStatus(id, status, details) {
     if (!window.JA_NET) return { ok: false };
     return window.JA_NET.api("api/admin/orders/" + encodeURIComponent(id), {
-      method: "PATCH", json: { status }, label: "Order " + id, queue: false,
+      method: "PATCH", json: { status, ...(details || {}) }, label: "Order " + id, queue: false,
     }).catch((e) => ({ ok: false, error: e.message }));
   }
   async function deleteOrder(id) {
@@ -1882,8 +1897,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=142";
-        const FLYER = "images/brand/logo-flyer.jpg?v=142";
+        const LOGO = "images/brand/logo.jpg?v=143";
+        const FLYER = "images/brand/logo-flyer.jpg?v=143";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2030,7 +2045,7 @@ const JA = (() => {
       </div>
       <div class="wrap header-inner">
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=142" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=143" alt="Jaura" />
         </a>
         <nav class="nav-left">
           <a href="index.html">${tx("nav.home")}</a>
@@ -2177,13 +2192,13 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=142" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=143" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
         <div>
           <h4>${tx("footer.client")}</h4>
-          <p><a href="tel:+2290168953101">+229 01 68 95 31 01</a></p>
+          <p><a href="tel:+22968953110">+229 68 95 31 10</a></p>
           <p><a href="tel:+2349161670236">+234 916 167 0236</a></p>
           <p><a href="mailto:${emailText()}">${emailText()}</a></p>
           <p>Lagos, Nigeria</p>
@@ -2236,7 +2251,7 @@ const JA = (() => {
         <div class="search-results" data-search-results></div>
       </div>
     </div>
-    <a class="wa-float" data-wa-inquiry href="${waInquiryUrl()}" target="_blank" rel="noopener" aria-label="WhatsApp">
+    <a class="wa-float" data-wa-inquiry data-wa-country="benin" href="${waInquiryUrl(WA_BJ)}" target="_blank" rel="noopener" aria-label="WhatsApp">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M12.04 2C6.58 2 2.15 6.4 2.15 11.84c0 1.74.46 3.44 1.33 4.94L2 22l5.36-1.4a10 10 0 0 0 4.68 1.19h.01c5.46 0 9.89-4.4 9.89-9.85C21.94 6.4 17.5 2 12.04 2zm5.72 14.13c-.24.68-1.4 1.3-1.95 1.38-.5.07-1.12.1-1.81-.11-.42-.13-.95-.31-1.64-.6-2.89-1.25-4.77-4.16-4.92-4.35-.14-.2-1.18-1.57-1.18-3 0-1.42.75-2.12 1.01-2.41.27-.29.58-.36.78-.36h.56c.18 0 .42-.07.66.5.24.58.82 2 .89 2.15.07.15.12.32.02.52-.1.2-.14.32-.29.5-.14.17-.3.38-.43.51-.14.14-.29.29-.12.56.16.27.73 1.2 1.56 1.95 1.08.96 1.98 1.26 2.26 1.4.27.14.43.12.59-.07.16-.2.68-.79.86-1.06.18-.27.36-.22.6-.13.25.08 1.57.74 1.84.87.27.14.45.2.52.31.06.11.06.64-.18 1.32z"/></svg>
     </a>`;
   }
@@ -2261,7 +2276,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=142" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=143" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -2283,7 +2298,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=142";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=143";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2305,7 +2320,7 @@ const JA = (() => {
     ["Where do you deliver?", "Benin (Cotonou, Calavi, Porto-Novo — 6 to 14 business days), Lagos Mainland, Lagos Island, Lome and neighbouring West African states. Shipment rates are confirmed at checkout by city."],
     ["How do I send payment?", "Transfer using the details shown for your chosen currency, then send a screenshot of your payment to us on WhatsApp. You do not need to upload a receipt on the site. Your receipt is saved."],
     ["How do I track my order?", "Message us on WhatsApp with your order ID (for example JA-M8K2Q1) and we will tell you if it is waiting, confirmed, or declined."],
-    ["How can I reach you?", "WhatsApp +229 01 68 95 31 01, phone +229 01 68 95 31 01 or +234 916 167 0236, email jaurastore@gmail.com. Lagos, Nigeria and Cotonou, Benin."],
+    ["How can I reach you?", "WhatsApp +229 68 95 31 10, phone +229 68 95 31 10 or +234 916 167 0236, email jaurastore@gmail.com. Lagos, Nigeria and Cotonou, Benin."],
   ];
   // Crumb trail per page so the result shows "jaurastore.com.ng › Shop"
   // instead of a bare URL.
@@ -2323,12 +2338,12 @@ const JA = (() => {
   }
   function setSeo(opts = {}) {
     const page = (document.body && document.body.dataset.page) || "home";
-    const noindex = /^(admin|account|order|pay)$/.test(page);
+    const noindex = /^(admin|account|order|order-complete|pay)$/.test(page);
     const file = (location.pathname.split("/").pop() || "index.html");
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=142");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=143");
     document.title = title;
     [
       ["name", "description", description],
@@ -2514,6 +2529,7 @@ const JA = (() => {
       delivery: { title: "Delivery · Jaura Store", description: "Jaura Store delivery: Benin 6–14 days, Lagos Mainland and Island, Lomé and West Africa. Fare on WhatsApp." },
       contact: { title: "Contact · Jaura Store", description: "WhatsApp Jaura Store +229 68 95 31 10. Email jaurastore@gmail.com. Lagos and Cotonou." },
       checkout: { title: "Checkout · Jaura Store", description: "Jaura Store checkout — pay by UBA Naira, MTN MoMo CFA or Moov Togo, then upload your receipt." },
+      "order-complete": { title: "Order Completed · Jaura Store", description: "Your Jaura Store order has been received." },
       cart: { title: "Bag · Jaura Store", description: "Your Jaura Store bag." },
       wishlist: { title: "Wishlist · Jaura Store", description: "Saved pieces at Jaura Store." },
     };

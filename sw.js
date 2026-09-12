@@ -2,7 +2,7 @@
    Pages are network-first so a visitor with a connection always sees the
    newest store; when the connection drops, the last copy is served instead of
    an error. Saving is handled separately by js/net.js (outbox + retry). */
-const VERSION = "jaura-v142";
+const VERSION = "jaura-v143";
 const CORE = [
   "./",
   "./index.html",
@@ -10,27 +10,28 @@ const CORE = [
   "./product.html",
   "./cart.html",
   "./checkout.html",
-  "./css/style.css?v=142",
-  "./js/products-data.js?v=142",
-  "./js/i18n.js?v=142",
-  "./js/net.js?v=142",
-  "./js/store.js?v=142",
-  "./js/app.js?v=142",
-  "./images/brand/logo.jpg?v=142",
-  "./images/brand/favicon.png?v=142",
-  "./images/brand/apple-touch.png?v=142",
-  "./images/brand/og-cover.jpg?v=142",
+  "./order-complete.html",
+  "./css/style.css?v=143",
+  "./js/products-data.js?v=143",
+  "./js/i18n.js?v=143",
+  "./js/net.js?v=143",
+  "./js/store.js?v=143",
+  "./js/app.js?v=143",
+  "./images/brand/logo.jpg?v=143",
+  "./images/brand/favicon.png?v=143",
+  "./images/brand/apple-touch.png?v=143",
+  "./images/brand/og-cover.jpg?v=143",
   "./static/logo.png",
-  "./static/fonts/allura-latin-400-normal.woff2?v=142",
-  "./static/fonts/cormorant-garamond-latin-400-normal.woff2?v=142",
-  "./static/fonts/cormorant-garamond-latin-500-normal.woff2?v=142",
-  "./static/fonts/cormorant-garamond-latin-600-normal.woff2?v=142",
-  "./static/fonts/cormorant-garamond-latin-700-normal.woff2?v=142",
-  "./static/fonts/cormorant-garamond-latin-400-italic.woff2?v=142",
-  "./static/fonts/outfit-latin-300-normal.woff2?v=142",
-  "./static/fonts/outfit-latin-400-normal.woff2?v=142",
-  "./static/fonts/outfit-latin-500-normal.woff2?v=142",
-  "./static/fonts/outfit-latin-600-normal.woff2?v=142",
+  "./static/fonts/allura-latin-400-normal.woff2?v=143",
+  "./static/fonts/cormorant-garamond-latin-400-normal.woff2?v=143",
+  "./static/fonts/cormorant-garamond-latin-500-normal.woff2?v=143",
+  "./static/fonts/cormorant-garamond-latin-600-normal.woff2?v=143",
+  "./static/fonts/cormorant-garamond-latin-700-normal.woff2?v=143",
+  "./static/fonts/cormorant-garamond-latin-400-italic.woff2?v=143",
+  "./static/fonts/outfit-latin-300-normal.woff2?v=143",
+  "./static/fonts/outfit-latin-400-normal.woff2?v=143",
+  "./static/fonts/outfit-latin-500-normal.woff2?v=143",
+  "./static/fonts/outfit-latin-600-normal.woff2?v=143",
 ];
 const MAX_ASSETS = 140;
 

@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=142" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=143" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1044,13 +1044,20 @@ function receiptViewer(url, label, name) {
 function orderActionsHTML(o) {
   const s = o.status || "pending";
   const del = `<button type="button" class="btn btn-line btn-danger" data-del-order="${esc(o.id)}">Delete</button>`;
-  if (s === "pending") return `<button class="btn" data-confirm="${esc(o.id)}">Confirm payment</button><button class="btn btn-line" data-decline="${esc(o.id)}">Decline</button>${del}`;
-  if (s === "confirmed") return `<button class="btn btn-line" data-reopen="${esc(o.id)}">Back to pending</button>${del}`;
-  return `<button class="btn btn-line" data-reopen="${esc(o.id)}">Reopen (back to pending)</button>${del}`;
+  if (s === "pending") return `<button type="button" class="btn" data-confirm="${esc(o.id)}">Confirm payment</button><button type="button" class="btn btn-line" data-partial="${esc(o.id)}">Record partial payment</button><button type="button" class="btn btn-line btn-danger" data-decline="${esc(o.id)}">Decline invalid receipt</button>${del}`;
+  if (s === "confirmed") return `<button type="button" class="btn btn-line" data-reopen="${esc(o.id)}">Back to pending</button>${del}`;
+  return `<button type="button" class="btn btn-line" data-reopen="${esc(o.id)}">Reopen (back to pending)</button>${del}`;
+}
+function orderReviewHTML(o) {
+  const review = o.payment_review || {};
+  const notice = o.customer_notice || {};
+  const reviewBox = review && review.paid != null ? `<div class="admin-payment-review"><strong>Payment review</strong><span>Received: ${esc(JA.money(review.paid, review.currency || o.currency))}</span><span>Pending balance: ${esc(JA.money(review.balance, review.currency || o.currency))}</span></div>` : "";
+  const noticeBox = notice && notice.message ? `<p class="admin-customer-notice"><strong>Customer notification:</strong> ${esc(notice.message)}</p>` : "";
+  return reviewBox + noticeBox;
 }
 function orderCardHTML(o) {
   const c = o.customer || {}; const shot = o.proofUrl || (JA.getProof && JA.getProof(o.id, o.proof)) || ""; const when = o.at ? new Date(o.at).toLocaleString() : ""; const s = o.status || "pending"; const nItems = (o.items || []).reduce((n, i) => n + (Number(i.qty) || 0), 0);
-  return `<details class="adx-order" data-order="${esc(o.id)}"><summary class="adx-order-row"><span class="adx-order-id">${esc(o.id)}</span><span class="adx-order-who"><strong>${esc(c.name || "Customer")}</strong><small>${esc(when)} · ${nItems} item(s)</small></span><span class="adx-order-total">${esc(JA.money(o.total, o.currency))}</span><span class="status-pill ${esc(s)}">${esc(orderStatusLabel(s))}</span></summary><div class="adx-order-body"><div class="order-card-top"><div><p><strong>${esc(c.name || "Customer")}</strong></p><p>${esc(c.email || "")}</p><p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p><p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}<p>${esc(when)}</p></div><div><p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p><p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p></div></div><ul class="order-items">${(o.items || []).map((i) => `<li>${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}</li>`).join("")}</ul>${shot ? receiptViewer(shot, `Payment receipt for ${o.id}`, `${o.id}-receipt`) : `<p class="empty">No receipt attached.</p>`}<div class="order-actions">${orderActionsHTML(o)}</div></div></details>`;
+  return `<details class="adx-order" data-order="${esc(o.id)}"><summary class="adx-order-row"><span class="adx-order-id">${esc(o.id)}</span><span class="adx-order-who"><strong>${esc(c.name || "Customer")}</strong><small>${esc(when)} · ${nItems} item(s)</small></span><span class="adx-order-total">${esc(JA.money(o.total, o.currency))}</span><span class="status-pill ${esc(s)}">${esc(orderStatusLabel(s))}</span></summary><div class="adx-order-body"><div class="order-card-top"><div><p><strong>${esc(c.name || "Customer")}</strong></p><p>${esc(c.email || "")}</p><p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p><p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}<p>${esc(when)}</p></div><div><p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p><p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p></div></div><ul class="order-items">${(o.items || []).map((i) => `<li>${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}</li>`).join("")}</ul>${orderReviewHTML(o)}${shot ? receiptViewer(shot, `Payment receipt for ${o.id}`, `${o.id}-receipt`) : `<p class="empty">No receipt attached.</p>`}<div class="order-actions">${orderActionsHTML(o)}</div></div></details>`;
 }
 let orderFilter = "all";
 function ordersPanel() {
@@ -1157,12 +1164,30 @@ function bindOrderButtons() {
       JA.toast("Confirmed · " + id); fillOrders();
     };
   });
+  box.querySelectorAll("[data-partial]").forEach((b) => {
+    b.onclick = async () => {
+      const id = b.dataset.partial;
+      const order = serverOrders.find((o) => o.id === id) || {};
+      const symbol = order.currency === "NGN" ? "₦" : "F CFA";
+      const raw = window.prompt(`Enter the amount received in ${symbol}. The order total is ${JA.money(order.total, order.currency)}.`, "");
+      if (raw == null) return;
+      const paidAmount = Number(String(raw).replace(/[^0-9]/g, ""));
+      if (!paidAmount) { JA.toast("Enter the amount the customer paid."); return; }
+      if (paidAmount >= Number(order.total || 0)) { JA.toast("That is not a partial payment. Confirm the order if the exact total was received."); return; }
+      b.disabled = true;
+      const res = await JA.setOrderStatus(id, "pending", { action: "partial_payment", paidAmount });
+      if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not record the partial payment."); b.disabled = false; return; }
+      JA.toast("Pending balance notification sent · " + id); fillOrders();
+    };
+  });
   box.querySelectorAll("[data-decline]").forEach((b) => {
     b.onclick = async () => {
+      const id = b.dataset.decline;
+      if (!window.confirm("Decline " + id + " because its payment image is invalid? The customer will be notified automatically.")) return;
       b.disabled = true;
-      const res = await JA.setOrderStatus(b.dataset.decline, "declined");
+      const res = await JA.setOrderStatus(id, "declined", { reason: "Invalid payment image uploaded" });
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not update the order."); b.disabled = false; return; }
-      JA.toast("Declined · " + b.dataset.decline); fillOrders();
+      JA.toast("Declined and customer notified · " + id); fillOrders();
     };
   });
   box.querySelectorAll("[data-reopen]").forEach((b) => {
@@ -1440,7 +1465,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=142" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=143" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -1841,7 +1866,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=142", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=143", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

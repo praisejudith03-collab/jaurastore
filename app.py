@@ -368,6 +368,16 @@ def create_app():
         # a visitor always fetches fresh markup on every navigation.
         if re.fullmatch(r"\d+", request.args.get("v", "")):
             resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif os.path.relpath(full, ROOT).replace(os.sep, "/") == "index.html":
+            # The homepage is static release markup. Let the browser keep it
+            # briefly and let the public edge serve it for an hour (including
+            # stale-while-revalidate/stale-if-error) so a Google-result click
+            # does not wait on an application round-trip or a cold instance.
+            # Versioned CSS/JS remain immutable and live catalogue/site data
+            # still refresh through their uncached APIs after first paint.
+            resp.headers["Cache-Control"] = (
+                "public, max-age=300, s-maxage=3600, "
+                "stale-while-revalidate=86400, stale-if-error=604800")
         return resp
 
     @app.after_request

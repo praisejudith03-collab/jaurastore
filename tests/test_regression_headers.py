@@ -108,14 +108,14 @@ def test_html_asset_refs_carry_the_shared_token_and_sw_evicts_old_caches():
 def test_tokened_static_assets_are_immutable_untokened_ones_revalidate(client):
     """The shared ?v= token is an immutability promise, and only that.
 
-    A URL like /css/style.css?v=140 serves exactly one build of the file, so
+    A URL like /css/style.css?v=143 serves exactly one build of the file, so
     it must answer `public, max-age=31536000, immutable`: on a 4G phone the
     stylesheet, the scripts and the logo then come straight from the local
-    cache instead of a conditional round-trip per asset (the ~5s repeat
-    visit). Everything a visitor must see fresh - HTML pages, the service
-    worker itself, and any asset link WITHOUT a numeric token - keeps
-    no-cache. The token is derived from sw.js so this test fails if the
-    pages, the worker and the header ever drift apart."""
+    cache instead of a conditional round-trip per asset. The public homepage
+    has a deliberately short shared-cache lifetime plus stale revalidation to
+    improve Google-entry TTFB; other HTML pages, the service worker itself,
+    and assets WITHOUT a numeric token keep no-cache. The token is derived
+    from sw.js so this test fails if the pages, worker and header drift apart."""
     import re
     sw = (ROOT / "sw.js").read_text(encoding="utf-8")
     m = re.search(r'const VERSION = "jaura-v(\d+)";', sw)
@@ -146,13 +146,20 @@ def test_tokened_static_assets_are_immutable_untokened_ones_revalidate(client):
             "are immutable for the life of the token"
         assert "no-cache" not in cache_control
 
-    untokened = ("/", "/shop.html", "/sw.js", "/css/style.css")
+    home = client.get("/")
+    home_cache = home.headers.get("Cache-Control", "")
+    for directive in ("public", "max-age=300", "s-maxage=3600",
+                      "stale-while-revalidate=86400", "stale-if-error=604800"):
+        assert directive in home_cache, \
+            f"homepage serves Cache-Control={home_cache!r}; missing {directive}"
+
+    untokened = ("/shop.html", "/sw.js", "/css/style.css")
     for path in untokened:
         response = client.get(path)
         assert response.status_code == 200, f"{path} -> {response.status_code}"
         cache_control = response.headers.get("Cache-Control", "")
         assert "no-cache" in cache_control, \
-            f"{path} serves Cache-Control={cache_control!r}; every page, " \
+            f"{path} serves Cache-Control={cache_control!r}; non-home pages, " \
             "sw.js and untokened asset links must revalidate"
 
     # only a fully numeric token unlocks immutability: a word token (?v=prod)

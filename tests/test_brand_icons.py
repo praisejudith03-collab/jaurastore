@@ -49,10 +49,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # font-src/ style-src are self-only, and the banner wordmark swaps to Allura.
 # Bumped to 142 for the pinned admin bottom dock + dual-WhatsApp release
 # (owner directive 2026-09-12): the admin portal navigation is fixed to the
-# bottom of the screen at every width, and the checkout / thank-you screens
-# carry the Nigeria vs Benin-Togo WhatsApp line chooser.
-# All pages, scripts and the service worker ship v142 together.
-SHARED_TOKEN = "142"
+# bottom of the screen at every width, and the completed-order screen carries
+# the Nigeria vs Benin-Togo WhatsApp line chooser (checkout itself does not).
+# Bumped to 143 for checkout completion/notification fixes, canonical WhatsApp
+# links, and the non-render-blocking homepage release. All assets ship together.
+SHARED_TOKEN = "143"
 
 
 def _image_size(path):

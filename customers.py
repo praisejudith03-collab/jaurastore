@@ -117,6 +117,11 @@ def customer_order_view(row):
         "currency": d.get("currency") or payload.get("currency") or "",
         "delivery": delivery,
         "payment": d.get("payment") or payload.get("payment") or "",
+        # Current admin review notices are safe customer-facing text. Exposing
+        # them here makes decline/partial-payment messages visible in My Account
+        # even when an email provider is delayed or unavailable.
+        "customer_notice": payload.get("customer_notice") or None,
+        "payment_review": payload.get("payment_review") or None,
     }
 
 

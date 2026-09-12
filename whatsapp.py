@@ -8,8 +8,8 @@ Sends automatically when either provider is configured (environment):
   CallMeBot (zero-setup fallback, one-time activation on the owner phone):
       WHATSAPP_CALLMEBOT_KEY
 
-  WHATSAPP_NOTIFY_NUMBER - recipient, digits only (default 2290168953101,
-                           i.e. +229 01 68 95 31 01).
+  WHATSAPP_NOTIFY_NUMBER - recipient, digits only (default 22968953110,
+                           i.e. +229 68 95 31 10).
 
 Never raises and never blocks a sale: any failure is reported back as
 (False, reason) and written to the audit log by the caller.

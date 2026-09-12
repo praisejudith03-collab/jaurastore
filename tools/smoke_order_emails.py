@@ -61,7 +61,7 @@ tok = c.get("/api/csrf").get_json()["token"]
 t0 = time.time()
 r = c.post("/api/orders", json={
     "id": "JA-WI2OSD",
-    "customer": {"name": "Praise Judith", "phone": "+2290168953101",
+    "customer": {"name": "Praise Judith", "phone": "+22968953110",
                  "email": "praisejudith03@gmail.com", "city": "Cotonou",
                  "country": "Benin", "zone": "Cotonou"},
     "items": [{"id": "wix-001", "name": "Bag", "qty": 2, "price": 9000}],

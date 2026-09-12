@@ -8,9 +8,11 @@ Two separate channels, never mixed:
     name, Order ID, items, total price (NGN or F CFA), delivery location
     and the transport-fare question.
 
-Country routing: buyers pick the Nigeria line or the Benin/Togo line —
-at checkout (before ordering) and again on the thank-you screen. Both
-lines come from site settings / the environment, never hardcoded.
+Country routing: the checkout's delivery-country field selects the correct
+line without showing static WhatsApp buttons in the form. The dedicated
+completed-order page offers an explicit market switch. Both browser and server
+boundaries pin the approved canonical destinations so stale settings cannot
+restore an obsolete number.
 
 Run with:  python3 -m pytest tests/test_dual_whatsapp_flows.py -q
 """
@@ -111,26 +113,27 @@ def test_two_markets_route_to_two_whatsapp_numbers():
     for token in ("benin", "togo"):
         assert token in region, f"{token} maps to the Benin/Togo line"
     wa_number = _fn_body(store, "waNumber")
-    assert "whatsapp_number_ng" in wa_number, "Nigeria line comes from settings"
-    assert "whatsapp_number_bj" in wa_number, "Benin/Togo line comes from settings"
+    assert "whatsapp_number_ng" in wa_number, "Nigeria line uses the pinned setting"
+    assert "whatsapp_number_bj" in wa_number, "Benin/Togo line uses the pinned setting"
     wa_link = _fn_body(store, "waLink")
     assert "https://wa.me/" in wa_link, "links are wa.me deep links"
-    # Defaults: two distinct numbers, digits only.
-    assert re.search(r'whatsapp_number_ng:\s*"\d+"', store)
-    assert re.search(r'whatsapp_number_bj:\s*"\d+"', store)
+    # Owner-approved destinations are canonical at the browser boundary.
+    assert re.search(r'whatsapp_number_ng:\s*"2349161670236"', store)
+    assert re.search(r'whatsapp_number_bj:\s*"22968953110"', store)
+    assert "2290168953110" not in store
 
 
-def test_checkout_page_lets_buyers_choose_their_line():
+def test_checkout_keeps_whatsapp_chooser_off_the_form():
+    """The two static market buttons belong on the completed-order screen,
+    not in the middle of the checkout form."""
     html = _read("checkout.html")
-    assert 'data-wa-toggle="nigeria"' in html, "checkout offers the Nigeria line"
-    assert 'data-wa-toggle="benin"' in html, "checkout offers the Benin/Togo line"
-    assert "ck.waPickCheckout" in html, "the chooser carries its own label"
+    assert 'data-wa-toggle="nigeria"' not in html
+    assert 'data-wa-toggle="benin"' not in html
+    assert "Nigeria WhatsApp" not in html
+    assert "Benin / Togo WhatsApp" not in html
     app = _read("js", "app.js")
-    assert "bindWaLineChooser(form)" in app, \
-        "the checkout form binds the line chooser before the order is placed"
-    # Choosing a country in the form follows the buyer onto the line.
-    assert re.search(r"paintWaLineChooser\(form\)", app), \
-        "changing the Country field repaints the chosen line"
+    assert "JA.setWaCountry(e.target.value)" in app, \
+        "the Country field still routes the completed-order WhatsApp action"
 
 
 def test_line_labels_read_like_the_owner_words_them():
