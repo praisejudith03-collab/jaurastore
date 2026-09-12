@@ -43,8 +43,13 @@ def test_place_order_immediately_shows_the_dedicated_success_view():
     assert app.index("const submission = order.submission") < app.index("showOrderDone(order);")
     # Refreshing the dedicated page can still recover the server copy.
     assert 'window.JA_NET.api("api/orders/" + encodeURIComponent(id))' in app
-    # The success view includes the form information the customer entered.
+    # The success view includes the form information the customer entered and
+    # tells them where the later payment confirmation will arrive.
     assert 'class="order-customer-info"' in app
+    assert 'class="ck-email-confirmation"' in app
+    i18n = _read("js/i18n.js")
+    assert ("A confirmation message will be sent to your email once your order "
+            "and payment are confirmed.") in i18n
     for field in ('customer.name', 'customer.phone', 'customer.email',
                   'customer.address', 'customer.city', 'customer.zone',
                   'customer.country', 'customer.note'):

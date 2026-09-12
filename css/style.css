@@ -1423,6 +1423,16 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #f8f0e2; }
 .order-customer-info dl > div:last-child { border-bottom: 0; }
 .order-customer-info dt { color: var(--muted); font-size: 12px; }
 .order-customer-info dd { margin: 0; overflow-wrap: anywhere; }
+.ck-email-confirmation {
+  margin: 14px 0;
+  padding: 13px 15px;
+  border-left: 4px solid var(--purple, #965fb0);
+  border-radius: 7px;
+  background: #fbf4fc;
+  color: #3c2b42;
+  font-weight: 600;
+  line-height: 1.5;
+}
 .ck-place { width: 100%; }
 .woo-meta {
   display: grid;

@@ -1242,6 +1242,7 @@ function showOrderDone(order) {
       ${customerInfo}
       <p class="status-pill ${order.status}">${t("ck.waiting")}</p>
       <p>${t("ck.saveId")}</p>
+      <p class="ck-email-confirmation" role="note">${t("ck.emailConfirmation")}</p>
       <p class="ck-fare-help">${t("ck.fareRange")}</p>
       <div class="wa-country-toggle" role="group" aria-label="${t("ck.waPick")}">
         <span class="wa-country-label">${t("ck.waPick")}</span>
