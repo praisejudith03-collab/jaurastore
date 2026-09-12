@@ -161,6 +161,13 @@ def _real_photo(entries):
             # only OUR bucket URL counts as ours; any other host is dropped
             if _storage is not None and _storage.own_upload_path(s):
                 return s
+            # Supabase Storage URLs are authoritative product assets. Keep an
+            # absolute URL when it belongs to the configured project; older
+            # rows may be readable even when the local upload adapter is not
+            # configured (for example during a rolling deploy).
+            base = (getattr(Config, "SUPABASE_URL", "") or "").rstrip("/")
+            if base and s.startswith(base + "/storage/v1/object/public/"):
+                return s
             continue
         return s
     return ""

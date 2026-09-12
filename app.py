@@ -422,6 +422,7 @@ def create_app():
     def _headers(resp):
         return sec.apply_headers(resp)
 
+    @app.route("/health")
     @app.route("/healthz")
     def healthz():
         # no-store: a CDN (Cloudflare in front of the custom domain, and the

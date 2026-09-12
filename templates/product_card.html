@@ -1,5 +1,5 @@
 <article class="product-card">
-  <img src="{{ product.image_url }}" alt="{{ product.name|e }}" loading="lazy">
+  <img src="{{ product.image_url }}" alt="{{ product.name|e }}" width="400" height="400" loading="lazy" decoding="async">
   <h3>{{ product.name }}</h3>
   <p class="stock-status">{% if product.stock_quantity|int > 0 %}In Stock{% else %}Out of Stock{% endif %}</p>
   {% if product.stock_quantity|int > 0 %}
