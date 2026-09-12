@@ -1,0 +1,92 @@
+/* Self-hosted webfonts — was: Google Fonts CDN.
+   Allura (the shop-banner wordmark script), Cormorant Garamond and Outfit
+   ship from /static/fonts as latin-subset woff2, so a cold visit on 4G no
+   longer opens two extra third-party connections (fonts.googleapis.com for
+   the CSS, then fonts.gstatic.com for the files) before the store can
+   paint its type. The latin subset covers English and French (accents,
+   ligatures, the euro sign).
+
+   Every URL carries the shared ?v= token, so fonts behave like every other
+   versioned asset: the server answers them with
+   Cache-Control: public, max-age=31536000, immutable and the service
+   worker serves them cache-first (and precaches them in CORE). A font file
+   never changes under its token — swap a family by shipping a new file and
+   bumping the token everywhere (all *.html, js/*.js, sw.js VERSION,
+   SHARED_TOKEN in tests/test_brand_icons.py).
+
+   Weights mirror the exact Google Fonts request the pages used to make:
+   Allura 400 (banner wordmark); Cormorant Garamond 400/500/600/700 +
+   italic 400; Outfit 300/400/500/600. */
+
+@font-face {
+  font-family: "Allura";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/allura-latin-400-normal.woff2?v=141") format("woff2");
+}
+
+@font-face {
+  font-family: "Cormorant Garamond";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/cormorant-garamond-latin-400-normal.woff2?v=141") format("woff2");
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/static/fonts/cormorant-garamond-latin-500-normal.woff2?v=141") format("woff2");
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/static/fonts/cormorant-garamond-latin-600-normal.woff2?v=141") format("woff2");
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/static/fonts/cormorant-garamond-latin-700-normal.woff2?v=141") format("woff2");
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/cormorant-garamond-latin-400-italic.woff2?v=141") format("woff2");
+}
+
+@font-face {
+  font-family: "Outfit";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url("/static/fonts/outfit-latin-300-normal.woff2?v=141") format("woff2");
+}
+@font-face {
+  font-family: "Outfit";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/outfit-latin-400-normal.woff2?v=141") format("woff2");
+}
+@font-face {
+  font-family: "Outfit";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/static/fonts/outfit-latin-500-normal.woff2?v=141") format("woff2");
+}
+@font-face {
+  font-family: "Outfit";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/static/fonts/outfit-latin-600-normal.woff2?v=141") format("woff2");
+}

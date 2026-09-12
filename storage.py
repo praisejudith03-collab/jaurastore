@@ -39,6 +39,16 @@ MAX_BYTES = 6 * 1024 * 1024              # 6 MB: product photos
 MAX_RECEIPT_BYTES = 8 * 1024 * 1024      # 8 MB: payment receipts / PDFs / docs
 MAX_VIDEO_BYTES = 40 * 1024 * 1024       # 40 MB: product + homepage hero video
 
+# Upload-time image optimisation (see optimize_image_bytes). A phone original
+# can be several megabytes of 4000px pixels; the shop only ever displays it a
+# few hundred pixels wide, so anything bigger than this is downscaled to
+# OPTIMIZE_MAX_DIMENSION and re-encoded before it is stored - a 4G shopper
+# never downloads the full original. Small files stay byte-identical.
+OPTIMIZE_MAX_DIMENSION = 1600     # px, longest side kept
+OPTIMIZE_MIN_BYTES = 300 * 1024   # smaller uploads stay byte-identical
+OPTIMIZE_JPEG_QUALITY = 84
+OPTIMIZE_WEBP_QUALITY = 86
+
 # Proofs receive signed links, but the shared uploads bucket is public.
 # Random paths prevent guessing; they are not access control.
 SENSITIVE_FOLDERS = ("proofs",)
@@ -246,6 +256,55 @@ def _folder_name(folder: str) -> str:
     return "".join(c for c in (folder or "misc").lower() if c.isalnum() or c in "-_")[:24] or "misc"
 
 
+def optimize_image_bytes(data: bytes, ext: str) -> tuple:
+    """(bytes, ext) for a still image, downscaled + re-encoded when large.
+
+    Leaves the file untouched when it is already small, when it is a GIF
+    (animation), when Pillow is unavailable, when the bytes do not decode, or
+    when the re-encode would not shrink it. Transparency is preserved by
+    re-encoding to WebP; opaque photos become progressive JPEG. The extension
+    travels with the bytes, so the storage key (sha256 + ext) always matches
+    what is actually stored. EXIF rotation is applied first - a phone photo
+    must not come out sideways after its pixels are resized.
+    """
+    try:
+        from PIL import Image, ImageOps
+    except Exception:
+        return data, ext
+    if not data or len(data) < OPTIMIZE_MIN_BYTES:
+        return data, ext
+    if (ext or "").lower() == "gif":
+        return data, ext
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img.load()
+            img = ImageOps.exif_transpose(img)
+            w, h = img.size
+            scale = OPTIMIZE_MAX_DIMENSION / float(max(w, h))
+            if scale < 1.0:
+                resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+                img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))),
+                                 resample)
+            has_alpha = (img.mode in ("RGBA", "LA", "PA")
+                         or (img.mode == "P" and "transparency" in img.info))
+            buf = io.BytesIO()
+            if has_alpha:
+                img.save(buf, "WEBP", quality=OPTIMIZE_WEBP_QUALITY, method=6)
+                out_ext = "webp"
+            else:
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(buf, "JPEG", quality=OPTIMIZE_JPEG_QUALITY,
+                         optimize=True, progressive=True)
+                out_ext = "jpg"
+            out = buf.getvalue()
+    except Exception:
+        return data, ext
+    if not out or len(out) >= len(data):
+        return data, ext
+    return out, out_ext
+
+
 def _is_sensitive(folder: str) -> bool:
     """True when the folder holds private material (payment proofs/receipts)."""
     return _folder_name(folder) in SENSITIVE_FOLDERS
@@ -290,6 +349,8 @@ def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf:
                                    max_bytes=max_bytes, kind="media")
     if not ok:
         return False, msg, ""
+    if kind_for(ext) == "image" and not _is_sensitive(folder):
+        data, ext = optimize_image_bytes(data, ext)
     return _save(data, folder, ext)
 
 
@@ -298,6 +359,8 @@ def save_asset(data: bytes, folder: str = "misc", filename: str = "", max_bytes:
     ok, msg, ext = validate_asset(data, filename, max_bytes=max_bytes)
     if not ok:
         return False, msg, ""
+    if kind_for(ext) == "image" and not _is_sensitive(folder):
+        data, ext = optimize_image_bytes(data, ext)
     return _save(data, folder, ext)
 
 
