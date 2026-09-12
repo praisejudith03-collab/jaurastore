@@ -2,12 +2,14 @@
 
 Two phone regressions, fixed in CSS:
 
-3. Mobile admin: a fixed dark-blue bottom tab bar (.admin-app-nav) used to
-   ride up over the form fields the moment the keyboard opened while typing.
-   The bar is now an in-flow, horizontally scrollable tab strip that can
-   never cover an input; the shop #site-header is hidden on the admin page;
-   admin inputs are >=16px so iOS never auto-zooms; the safe-area inset is
-   honoured.
+3. Mobile admin: the bottom tab bar (.admin-app-nav) is PINNED to the
+   bottom of the screen at every width (owner directive 2026-09-12) and
+   styled with the storefront dock's tokens. Two behaviours keep a fixed
+   bar safe on a phone: while the keyboard is open (focus inside a field)
+   the dock and the "More" sheet slide out of view (body.admin-kb-open),
+   and the page body reserves the dock's height so no control sits under
+   it. The shop #site-header stays hidden on the admin page; admin inputs
+   are >=16px so iOS never auto-zooms; the safe-area inset is honoured.
 
 4. #68 restores the mobile logo and search button. Keep those visible
    while preserving the comfortable language/currency switch sizes.
@@ -63,6 +65,16 @@ def _rule(text, selector):
     return (found or "").lower()
 
 
+def _first_rule(text, selector):
+    """Declarations of the FIRST rule whose selector matches exactly (the
+    base token rule, before later cascade overrides specialise it)."""
+    css = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        if re.sub(r"\s+", " ", match.group(1)).strip() == selector:
+            return match.group(2).lower()
+    return ""
+
+
 def _prop(decl, name):
     m = re.search(re.escape(name) + r"\s*:\s*([^;]+);", decl)
     return (m.group(1) or "").strip().replace("!important", "").strip() if m else ""
@@ -76,30 +88,92 @@ def test_admin_page_hides_the_shop_header():
         css), "the shop #site-header must be hidden on the admin page"
 
 
-def test_admin_mobile_tab_bar_is_in_flow_and_scrollable():
-    """The bottom tab strip must be in the document flow (position: static)
-    with horizontal scrolling - a fixed bar overlays the inputs while the
-    keyboard is open."""
+def test_admin_dock_is_pinned_to_the_bottom_of_the_screen():
+    """Owner directive 2026-09-12: the admin dock is position: fixed at the
+    bottom of the screen — the storefront dock's thumb-friendly shape."""
+    css = _css()
+    rule = _rule(css, ".admin-app-nav")
+    assert _prop(rule, "position") == "fixed", \
+        "the admin dock must be pinned with position: fixed"
+    assert _prop(rule, "bottom") == "0"
+    assert _prop(rule, "left") == "0" and _prop(rule, "right") == "0"
+    assert _prop(rule, "z-index"), "the dock needs a z-index above content"
+
+
+def test_no_media_query_unpins_or_hides_the_admin_dock():
+    """The dock is pinned at EVERY width: no media block may set it back to
+    static/absolute or hide it (the pre-2026-09-12 build hid it >=921px)."""
+    css = _css()
+    assert not re.search(r"\.admin-app-nav\s*\{[^}]*display\s*:\s*none", css), \
+        "the admin dock must never be display: none"
+    for query in ("@media (max-width: 920px)", "@media (min-width: 921px)",
+                  "@media (max-width: 640px)"):
+        for body in _media_blocks(css, query):
+            rule = _rule(body, ".admin-app-nav")
+            assert _prop(rule, "position") in ("", "fixed"), \
+                f"{query} must not unpin the admin dock"
+            assert _prop(rule, "display") != "none"
+
+
+def test_admin_dock_adopts_the_storefront_dock_tokens():
+    """Pinned AND identical to the storefront bottom dock: cream card, warm
+    border, equal-width icon-over-label targets."""
+    css = _css()
+    rule = _rule(css, ".admin-app-nav")
+    assert _prop(rule, "background") == "#fcf8f4"
+    assert "border-top" in rule
+    assert _prop(rule, "grid-template-columns").startswith("repeat(6")
+    btn = _first_rule(css, ".admin-app-nav button")
+    assert _prop(btn, "display") == "flex"
+    assert _prop(btn, "flex-direction") == "column"
+    assert int(_prop(btn, "min-height").rstrip("px") or 0) >= 44, \
+        "dock targets must stay thumb-friendly (>=44px)"
+
+
+def test_admin_dock_honours_the_safe_area():
+    css = _css()
+    rule = _rule(css, ".admin-app-nav")
+    assert "env(safe-area-inset-bottom)" in rule, \
+        "the pinned dock must keep the safe-area inset padding"
+
+
+def test_admin_keyboard_open_slides_the_dock_away():
+    """A pinned bar must never cover the field being typed in: while the
+    keyboard is open (body.admin-kb-open, set by js/admin.js on focusin)
+    both the dock and the More sheet slide out of view."""
+    css = re.sub(r"/\*.*?\*/", " ", _css(), flags=re.S)
+    m = re.search(r"body\.admin-kb-open[^{;]*\.admin-app-nav[^{]*\{([^}]*)\}", css)
+    assert m and "translatey" in m.group(1).lower(), \
+        "the dock must slide away while the phone keyboard is open"
+    m = re.search(r"body\.admin-kb-open[^{;]*\.admin-more-sheet[^{]*\{([^}]*)\}", css)
+    assert m and "translatey" in m.group(1).lower(), \
+        "the More sheet must slide away too"
+
+
+def test_admin_more_sheet_starts_hidden_and_sits_above_the_dock():
+    css = _css()
+    assert re.search(r"\.admin-more-sheet\[hidden\]\s*\{\s*display:\s*none", css), \
+        "the sheet ships hidden and display:none keeps it that way"
+    rule = _first_rule(css, ".admin-more-sheet")
+    assert _prop(rule, "position") == "fixed"
+    assert _prop(rule, "bottom").startswith("calc("), \
+        "the sheet anchors just above the dock"
+
+
+def test_admin_mobile_body_reserves_the_pinned_dock_space():
+    """The dock is fixed, so the page body must reserve its height inside
+    every <=920px block — no control may sit underneath it."""
     css = _css()
     blocks = _media_blocks(css, "@media (max-width: 920px)")
     assert blocks, "expected an admin mobile media block"
-    hit = None
+    ok = False
     for body in blocks:
-        rule = _rule(body, ".admin-app-nav")
-        if _prop(rule, "position") == "static":
-            hit = rule
-    assert hit is not None, "no admin-app-nav rule sets position: static"
-    assert _prop(hit, "overflow-x") == "auto", \
-        "the strip must scroll horizontally, not wrap or overlay"
-
-
-def test_admin_mobile_tab_bar_honours_the_safe_area():
-    css = _css()
-    blocks = _media_blocks(css, "@media (max-width: 920px)")
-    ok = any(
-        "env(safe-area-inset-bottom)" in _rule(body, ".admin-app-nav")
-        for body in blocks)
-    assert ok, "the admin tab strip must keep the safe-area inset padding"
+        rule = _rule(body, 'body[data-page="admin"]')
+        pad = _prop(rule, "padding-bottom")
+        m = re.match(r"calc\((\d+)px", pad)
+        if pad and (m and int(m.group(1)) >= 70):
+            ok = True
+    assert ok, "the mobile admin body must reserve >=70px (+safe-area) for the dock"
 
 
 def test_admin_inputs_are_sixteen_pixels_to_stop_ios_zoom():
@@ -113,20 +187,6 @@ def test_admin_inputs_are_sixteen_pixels_to_stop_ios_zoom():
         if _prop(rule, "font-size").startswith("16px"):
             ok = True
     assert ok, "admin inputs/selects/textareas must be >=16px on mobile"
-
-
-def test_admin_mobile_body_no_longer_reserves_a_fixed_bar():
-    """The 148px bottom padding only existed to clear the fixed bar; with
-    the in-flow strip the content is padded normally again."""
-    css = _css()
-    blocks = _media_blocks(css, "@media (max-width: 920px)")
-    hit = None
-    for body in blocks:
-        rule = _rule(body, 'body[data-page="admin"]')
-        if _prop(rule, "padding-bottom").startswith("24px"):
-            hit = rule
-    assert hit is not None, \
-        "body[data-page=admin] mobile padding must no longer reserve 148px"
 
 
 # ------------------------------------------------------------- issue 4: header

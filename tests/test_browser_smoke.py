@@ -56,6 +56,19 @@ def mobile():
         assert not errors, errors
 
 
+def open_admin_tab(page, tab):
+    """Click an admin section through the pinned bottom dock (2026-09-12).
+
+    The five primary sections sit in the dock itself; Categories, Delivery,
+    Settings and Account live behind its "More" sheet, so open the sheet
+    first when the tab is not visible yet.
+    """
+    btn = page.locator(f'[data-tab="{tab}"]:visible').first
+    if btn.count() == 0:
+        page.locator("[data-admin-more]").click()
+    page.locator(f'[data-tab="{tab}"]:visible').first.click()
+
+
 @pytest.mark.parametrize("path", ["/", "/shop.html", "/categories.html", "/faq.html",
                                   "/cart.html", "/checkout.html", "/product.html"])
 def test_mobile_headers_and_shop(mobile, live_shop, path):
@@ -94,7 +107,7 @@ def test_advanced_actions(mobile, live_shop, monkeypatch):
                                    data={"email": "jaurastore@gmail.com", "password": PW})
     assert response.ok, response.text()
     mobile.goto(live_shop + "/admin.html")
-    mobile.locator('[data-tab="account"]:visible').first.click()
+    open_admin_tab(mobile, "account")
     mobile.get_by_text("Advanced settings", exact=True).click()
     expect(mobile.locator("#sync-github")).to_be_visible()
     status = mobile.locator("#sync-status")
@@ -209,7 +222,7 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     assert mobile.request.put(live_shop + '/api/admin/categories', data={'categories':baseline},
                               headers={'X-CSRF-Token':token}).ok
     mobile.goto(live_shop + '/admin.html')
-    mobile.locator('[data-tab="categories"]:visible').first.click()
+    open_admin_tab(mobile, "categories")
     mobile.locator('#new-cat-name').fill('Perfume')
     mobile.locator('#new-cat-fr').fill('Parfum')
     mobile.locator('#add-cat').click()
@@ -225,7 +238,7 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
         assert saved.value.ok
     expect(mobile.locator('#cat-list > article').first).to_have_attribute('data-cat-id', 'perfume')
     mobile.reload()
-    mobile.locator('[data-tab="categories"]:visible').first.click()
+    open_admin_tab(mobile, "categories")
     expect(mobile.locator('#cat-list > article').first).to_have_attribute('data-cat-id', 'perfume')
     # Reordered controls still allow editing; live nodes and input IDs survive.
     expect(mobile.locator('[data-cat-id="perfume"] input[name^="cat-fr-"]')).to_have_value('Parfum')

@@ -841,6 +841,14 @@ def test_catalog_json_repo_copy_is_refreshed_from_overrides(tmp_path, monkeypatc
     """
     import catalog as catalog_mod, repo_sync
     monkeypatch.setattr(repo_sync, "REPO_ROOT", str(tmp_path))
+    # The upserts below would each schedule the async repo mirror
+    # (_sync_repo_async -> repo_sync.regenerate). Its daemon thread re-checks
+    # the repo-sync gate when it happens to run, which can land inside
+    # ANOTHER test's monkeypatched window (pytest gate off, ENV=production)
+    # and regenerate the REAL js/products-data.js / data/catalog.json with
+    # the shared test catalogue. No test thread may ever do that - this test
+    # exercises repo_sync.regenerate directly instead.
+    monkeypatch.setattr(catalog_mod, "_sync_repo_async", lambda: None)
     # regenerate() is gated to deployed instances; this test exercises the
     # regeneration itself, so it acts as one.
     monkeypatch.setattr(repo_sync, "_running_under_pytest", lambda: False)

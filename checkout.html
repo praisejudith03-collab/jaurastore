@@ -12,19 +12,19 @@
   <meta property="og:title" content="Checkout · Jaura Store" />
   <meta property="og:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
   <meta property="og:url" content="https://jaurastore.com.ng/checkout.html" />
-  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=141" />
+  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=142" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Checkout · Jaura Store" />
   <meta name="twitter:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
-  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=141" />
+  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=142" />
   <link rel="icon" type="image/png" href="/static/logo.png" />
   <link rel="apple-touch-icon" href="/static/logo.png" />
-  <link rel="stylesheet" href="css/fonts.css?v=141" />
+  <link rel="stylesheet" href="css/fonts.css?v=142" />
   <!-- product photos live in the shop's Supabase storage bucket:
        open that connection while the HTML is still parsing so the
        first photo starts the moment the grid renders -->
   <link rel="preconnect" href="https://rvkweyipqgsggcnimhxf.supabase.co" />
-  <link rel="stylesheet" href="css/style.css?v=141" />
+  <link rel="stylesheet" href="css/style.css?v=142" />
 </head>
 <body data-page="checkout">
   <div id="site-header"></div>
@@ -150,6 +150,17 @@
 
           <p class="ck-ship-wa" data-i18n="ck.fareNote">Your transport fare will be discussed with you on WhatsApp after you place the order.</p>
 
+          <!-- WhatsApp country routing: buyers pick the line (Nigeria vs
+               Benin/Togo) BEFORE placing the order. The choice is remembered,
+               and the order-completion button on the thank-you screen opens
+               this same line. General product questions stay on the floating
+               WhatsApp widget - this chooser is for order completion only. -->
+          <div class="wa-country-toggle ck-wa-lines" role="group" aria-label="WhatsApp line for your order">
+            <span class="wa-country-label" data-i18n="ck.waPickCheckout">WhatsApp line for your order:</span>
+            <button type="button" class="btn btn-line" data-wa-toggle="nigeria" data-i18n="ck.waNg">Nigeria WhatsApp</button>
+            <button type="button" class="btn btn-line" data-wa-toggle="benin" data-i18n="ck.waBj">Benin / Togo WhatsApp</button>
+          </div>
+
           <div class="ck-upload">
             <label class="proof-label" data-i18n="ck.uploadReceipt">Upload the bank payment receipt</label>
             <input type="file" name="proof" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword" />
@@ -170,11 +181,11 @@
   </div>
 
   <div id="site-footer"></div>
-  <script src="js/products-data.js?v=141"></script>
-  <script src="js/i18n-phrases.js?v=141"></script>
-  <script src="js/i18n.js?v=141"></script>
-  <script src="js/net.js?v=141"></script>
-  <script src="js/store.js?v=141"></script>
-  <script src="js/app.js?v=141"></script>
+  <script src="js/products-data.js?v=142"></script>
+  <script src="js/i18n-phrases.js?v=142"></script>
+  <script src="js/i18n.js?v=142"></script>
+  <script src="js/net.js?v=142"></script>
+  <script src="js/store.js?v=142"></script>
+  <script src="js/app.js?v=142"></script>
 </body>
 </html>
