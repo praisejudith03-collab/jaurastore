@@ -1670,7 +1670,7 @@ const JA = (() => {
     const lazy = opts.eager
       ? ' loading="eager" fetchpriority="high"'
       : ' loading="lazy" fetchpriority="low"';
-    const img = `<img src="${escape(assetSrc)}" alt="${escape(opts.alt || "")}"${cls} data-ph="${ph}"${onErr}${lazy} decoding="async"${attrs} />`;
+    const img = `<img src="${escape(assetSrc)}" alt="${escape(opts.alt || "")}"${cls} data-ph="${ph}" width="400" height="400"${onErr}${lazy} decoding="async"${attrs} />`;
     if (opts.full) return img;
     const thumb = thumbFor(assetSrc);
     if (!thumb) return img;
