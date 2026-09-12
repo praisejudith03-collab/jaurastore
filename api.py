@@ -379,6 +379,9 @@ def log_activity():
 CUSTOMER_FIELDS = ("firstName", "lastName", "name", "phone", "email", "country",
                    "city", "zone", "address", "note")
 STATUSES = ("pending", "confirmed", "declined")
+INVALID_RECEIPT_NOTICE = "Order declined: Invalid payment image uploaded"
+PENDING_BALANCE_NOTICE = ("You have a pending balance. Please contact us on WhatsApp "
+                          "to balance up your payment before your order is confirmed.")
 
 
 @api.post("/uploads/proof")
@@ -1243,6 +1246,8 @@ def public_order(oid):
     out["items"] = [{"name": i.get("name", ""), "qty": i.get("qty", 1),
                      "price": i.get("price", 0), "color": i.get("color", "")}
                     for i in (payload.get("items") or [])]
+    out["customer_notice"] = payload.get("customer_notice") or None
+    out["payment_review"] = payload.get("payment_review") or None
     return jsonify(ok=True, order=out)
 
 # =================================================================== admin
@@ -1430,6 +1435,11 @@ def _order_row(r):
     out["customer"] = payload.get("customer") or {}
     out["items"] = payload.get("items") or []
     out["proofUrl"] = r["proof_url"] or payload.get("proofUrl") or ""
+    # Payment-review metadata is intentionally visible to the admin list; it
+    # lives in payload so no schema migration is needed for existing orders.
+    out["customer_notice"] = payload.get("customer_notice") or None
+    out["payment_review"] = payload.get("payment_review") or None
+    out["decline_reason"] = payload.get("decline_reason") or ""
     return out
 
 @api.get("/admin/orders")
@@ -1546,31 +1556,118 @@ def admin_payment_proof_delete(pid):
 @authmod.require_admin
 @sec.require_csrf
 def admin_order_update(oid):
-    """Confirm / decline / reopen an order. Nothing is ever deleted here."""
+    """Confirm, decline, reopen, or record a partial payment.
+
+    Customer-facing notices are persisted in the order payload (so they appear
+    in My Account/status lookups) and also emailed asynchronously. A mail outage
+    can never roll back the admin decision.
+    """
     oid = sec.clean(oid, 24).upper()
     d = request.get_json(silent=True) or {}
     status = sec.clean(d.get("status"), 20)
+    action = sec.clean(d.get("action"), 30)
     if status not in STATUSES:
         return jsonify(ok=False, error="status must be pending, confirmed or declined"), 400
-    row = one("SELECT id, payload, status, email FROM orders WHERE id=?", (oid,))
+    if action not in ("", "partial_payment"):
+        return jsonify(ok=False, error="Unknown order action."), 400
+    if action == "partial_payment" and status != "pending":
+        return jsonify(ok=False, error="A partial payment must remain pending."), 400
+
+    row = one("SELECT id, payload, status, email, total, currency FROM orders WHERE id=?", (oid,))
     if not row:
         return jsonify(ok=False, error="Order not found."), 404
     try:
         payload = json.loads(row["payload"] or "{}")
-    except ValueError:
+    except (TypeError, ValueError):
         payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
     old_status = row["status"] or payload.get("status") or "pending"
+    now = _utcnow()
+    previous_notice = payload.get("customer_notice")
+    notice = ""
+    notice_type = ""
+    paid_amount = None
+    balance = None
+
+    if action == "partial_payment":
+        # JSON numbers are preferred; tolerate commas/currency punctuation from
+        # an admin typing "14,500" into the browser prompt.
+        raw_paid = str(d.get("paidAmount") if d.get("paidAmount") is not None else "")
+        paid_digits = re.sub(r"[^0-9]", "", raw_paid)
+        paid_amount = int(paid_digits or 0)
+        total = int(round(float(row["total"] or payload.get("total") or 0)))
+        if total <= 0:
+            return jsonify(ok=False, error="This order has no valid total."), 400
+        if paid_amount <= 0:
+            return jsonify(ok=False, error="Enter the amount the customer paid."), 400
+        if paid_amount >= total:
+            return jsonify(ok=False, error=(
+                "The amount paid is not partial. Confirm the order if the exact total was received.")), 400
+        balance = total - paid_amount
+        notice = PENDING_BALANCE_NOTICE
+        notice_type = "partial_payment"
+        payload["payment_review"] = {
+            "paid": paid_amount,
+            "total": total,
+            "balance": balance,
+            "currency": row["currency"] or payload.get("currency") or "",
+            "status": "pending_balance",
+            "at": now,
+        }
+    elif status == "declined":
+        reason = sec.clean(d.get("reason") or d.get("declineReason"), 180,
+                           allow_newlines=False)
+        reason_key = re.sub(r"[^a-z]", "", reason.lower())
+        if reason_key in ("invalidreceipt", "invalidpaymentreceipt",
+                          "invalidpaymentimage", "invalidpaymentimageuploaded",
+                          "wrongreceipt", "wrongpaymentimage"):
+            reason = "Invalid payment image uploaded"
+            notice = INVALID_RECEIPT_NOTICE
+        elif reason:
+            notice = (reason if reason.lower().startswith("order declined:")
+                      else "Order declined: " + reason)
+        if notice:
+            notice_type = "declined"
+            payload["decline_reason"] = reason
+    elif status == "confirmed":
+        review = payload.get("payment_review")
+        if isinstance(review, dict):
+            review["status"] = "resolved"
+            review["resolvedAt"] = now
+        payload.pop("customer_notice", None)
+    elif status == "pending" and old_status == "declined":
+        # A deliberate reopen clears the old decline banner. A partial-payment
+        # action is handled above and installs its own current notice instead.
+        payload.pop("decline_reason", None)
+        payload.pop("customer_notice", None)
+
+    should_notify = False
+    if notice:
+        current_notice = {
+            "type": notice_type,
+            "message": notice,
+            "at": now,
+        }
+        payload["customer_notice"] = current_notice
+        should_notify = (action == "partial_payment" or
+                         not isinstance(previous_notice, dict) or
+                         previous_notice.get("message") != notice or
+                         old_status != status)
+
     payload["status"] = status
-    payload["updatedAt"] = _utcnow()
+    payload["updatedAt"] = now
     payload["updatedBy"] = authmod.current_admin()
     if old_status != status:
         _sync_order_stock(payload, old_status, status, actor=authmod.current_admin())
     execute("UPDATE orders SET status=?, payload=?, updated_at=? WHERE id=?",
-            (status, json.dumps(payload, ensure_ascii=False), _utcnow(), oid))
-    audit(authmod.current_admin(), f"order.{status}", oid, _ip())
+            (status, json.dumps(payload, ensure_ascii=False), now, oid))
+    detail = oid + (f" paid={paid_amount} balance={balance}" if paid_amount is not None else "")
+    audit(authmod.current_admin(), f"order.{action or status}", detail, _ip())
 
-    # mirror the new status so the Supabase copy (used by the boot restore)
-    # cannot put a stale pending order back
+    # Mirror both status and notice/payment metadata so a restart cannot put an
+    # old pending payload back or make a customer notification disappear.
     if Config.SUPABASE_ENABLED:
         try:
             from supabase_store import update_order as _sb_update_order
@@ -1578,25 +1675,32 @@ def admin_order_update(oid):
         except Exception:
             pass
 
-    # Customer confirmation email: fired only when an order MOVES to
-    # confirmed (a re-save of the same status must not spam the shopper).
-    # Runs on a daemon thread inside the mailer - the admin action returns
-    # immediately and a mail outage can never fail the status update.
+    # Build one complete customer copy, with a fallback for legacy rows whose
+    # payload predates the nested customer email field.
+    customer_order = dict(payload)
+    customer_order["id"] = customer_order.get("id") or oid
+    cust = dict(customer_order.get("customer") or {})
+    cust["email"] = cust.get("email") or row["email"] or ""
+    customer_order["customer"] = cust
+
+    # Confirmation and review notices are all fire-and-forget. The status write
+    # above is already durable before any transport is attempted.
     if status == "confirmed" and old_status != "confirmed":
         try:
             import mailer
-            note = dict(payload)
-            note["id"] = note.get("id") or oid
-            cust = dict(note.get("customer") or {})
-            # the payload's customer email wins; legacy orders fall back to
-            # the orders.email column (sqlite3.Row has no .get())
-            cust["email"] = cust.get("email") or row["email"] or ""
-            note["customer"] = cust
-            mailer.notify_order_confirmed_async(note)
+            mailer.notify_order_confirmed_async(customer_order)
         except Exception:
-            pass  # mail is an extra channel, never a dependency
+            pass
+    elif should_notify:
+        try:
+            import mailer
+            mailer.notify_order_notice_async(customer_order)
+        except Exception:
+            pass
 
-    return jsonify(ok=True, id=oid, status=status)
+    return jsonify(ok=True, id=oid, status=status, notice=notice or None,
+                   paidAmount=paid_amount, balance=balance,
+                   notificationTriggered=bool(should_notify))
 
 
 @api.delete("/admin/orders/<oid>")
@@ -2240,19 +2344,16 @@ def admin_delivery_page_save():
 def _site_payload(site):
     """Canonical site_settings row + the legacy front-end aliases."""
     out = dict(site or {})
-    # Dual-country WhatsApp lines: the admin row wins, the environment is the
-    # floor. Always served as digits only, which is what wa.me links need, so
-    # the storefront never has to sanitise a number the owner typed with
-    # spaces or a leading "+".
-    def _digits(value):
-        return "".join(c for c in str(value or "") if c.isdigit())
-    ng = _digits(out.get("whatsapp_number_ng")) or _digits(Config.WHATSAPP_NUMBER_NG)
-    bj = _digits(out.get("whatsapp_number_bj")) or _digits(Config.WHATSAPP_NUMBER_BJ)
+    # Dual-country WhatsApp lines are pinned in Config. Do not let an older
+    # site_settings row reintroduce the invalid Benin "01" prefix: /api/site is
+    # consumed by both fresh and cached browser bundles, so it must always
+    # return these exact, wa.me-safe digits.
+    ng = Config.WHATSAPP_NUMBER_NG
+    bj = Config.WHATSAPP_NUMBER_BJ
     out["whatsapp_number_ng"] = ng
     out["whatsapp_number_bj"] = bj
     # Legacy alias read by older bundles (JA.settings().whatsapp).
-    if not _digits(out.get("whatsapp")):
-        out["whatsapp"] = bj or ng
+    out["whatsapp"] = bj
     for col, alias in SITE_LEGACY_ALIASES.items():
         if col in out and alias not in out:
             out[alias] = out[col]

@@ -76,7 +76,7 @@ services:
         value: jaurastore@gmail.com
       - key: GITHUB_TOKEN
         sync: false
-      # WhatsApp order alerts to the shop owner (+229 01 68 95 31 01).
+      # WhatsApp order alerts to the shop owner (+229 68 95 31 10).
       # Use EITHER the Meta Cloud API pair (WHATSAPP_TOKEN + WHATSAPP_PHONE_ID)
       # OR the simpler CallMeBot key — set whichever you have in the dashboard.
       - key: WHATSAPP_TOKEN
@@ -188,7 +188,7 @@ services:
         value: jaurastore@gmail.com
       - key: GITHUB_TOKEN
         sync: false
-      # WhatsApp order alerts to the shop owner (+229 01 68 95 31 01).
+      # WhatsApp order alerts to the shop owner (+229 68 95 31 10).
       # Use EITHER the Meta Cloud API pair (WHATSAPP_TOKEN + WHATSAPP_PHONE_ID)
       # OR the simpler CallMeBot key — set whichever you have in the dashboard.
       - key: WHATSAPP_TOKEN

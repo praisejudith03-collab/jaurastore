@@ -23,7 +23,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("/static/fonts/allura-latin-400-normal.woff2?v=142") format("woff2");
+  src: url("/static/fonts/allura-latin-400-normal.woff2?v=143") format("woff2");
 }
 
 @font-face {
@@ -31,35 +31,35 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("/static/fonts/cormorant-garamond-latin-400-normal.woff2?v=142") format("woff2");
+  src: url("/static/fonts/cormorant-garamond-latin-400-normal.woff2?v=143") format("woff2");
 }
 @font-face {
   font-family: "Cormorant Garamond";
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url("/static/fonts/cormorant-garamond-latin-500-normal.woff2?v=142") format("woff2");
+  src: url("/static/fonts/cormorant-garamond-latin-500-normal.woff2?v=143") format("woff2");
 }
 @font-face {
   font-family: "Cormorant Garamond";
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url("/static/fonts/cormorant-garamond-latin-600-normal.woff2?v=142") format("woff2");
+  src: url("/static/fonts/cormorant-garamond-latin-600-normal.woff2?v=143") format("woff2");
 }
 @font-face {
   font-family: "Cormorant Garamond";
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url("/static/fonts/cormorant-garamond-latin-700-normal.woff2?v=142") format("woff2");
+  src: url("/static/fonts/cormorant-garamond-latin-700-normal.woff2?v=143") format("woff2");
 }
 @font-face {
   font-family: "Cormorant Garamond";
   font-style: italic;
   font-weight: 400;
   font-display: swap;
-  src: url("/static/fonts/cormorant-garamond-latin-400-italic.woff2?v=142") format("woff2");
+  src: url("/static/fonts/cormorant-garamond-latin-400-italic.woff2?v=143") format("woff2");
 }
 
 @font-face {
@@ -67,26 +67,26 @@
   font-style: normal;
   font-weight: 300;
   font-display: swap;
-  src: url("/static/fonts/outfit-latin-300-normal.woff2?v=142") format("woff2");
+  src: url("/static/fonts/outfit-latin-300-normal.woff2?v=143") format("woff2");
 }
 @font-face {
   font-family: "Outfit";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("/static/fonts/outfit-latin-400-normal.woff2?v=142") format("woff2");
+  src: url("/static/fonts/outfit-latin-400-normal.woff2?v=143") format("woff2");
 }
 @font-face {
   font-family: "Outfit";
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url("/static/fonts/outfit-latin-500-normal.woff2?v=142") format("woff2");
+  src: url("/static/fonts/outfit-latin-500-normal.woff2?v=143") format("woff2");
 }
 @font-face {
   font-family: "Outfit";
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url("/static/fonts/outfit-latin-600-normal.woff2?v=142") format("woff2");
+  src: url("/static/fonts/outfit-latin-600-normal.woff2?v=143") format("woff2");
 }

@@ -599,6 +599,45 @@ def order_confirmed_email_html(order):
         intro + _order_body(order, include_receipt=False) + account)
 
 
+def order_notice_email_html(order):
+    """Customer-facing decline or pending-balance notification."""
+    order = dict(order or {})
+    notice = order.get("customer_notice") or {}
+    if not isinstance(notice, dict):
+        notice = {"message": str(notice or "")}
+    message = str(notice.get("message") or "").strip()
+    kind = str(notice.get("type") or "").strip()
+    name = _customer_name(order)
+    greeting = (f'<p style="margin:0 0 12px">Hi {_esc(name)},</p>' if name else "")
+    review = order.get("payment_review") or {}
+    figures = ""
+    if kind == "partial_payment" and isinstance(review, dict):
+        figures = _detail_rows([
+            ("Order total", _money(review.get("total"), review.get("currency") or order.get("currency"))),
+            ("Amount received", _money(review.get("paid"), review.get("currency") or order.get("currency"))),
+            ("Pending balance", _money(review.get("balance"), review.get("currency") or order.get("currency"))),
+        ])
+    customer = order.get("customer") or {}
+    country = str(customer.get("country") or order.get("country") or "").lower()
+    # Email buttons follow the same canonical country routing as the site:
+    # Nigeria has its own line; Benin, Togo and the global fallback use BJ.
+    wa_number = ("2349161670236" if "nigeria" in country else "22968953110")
+    whatsapp = (f'<p style="margin:18px 0 0"><a href="https://wa.me/{wa_number}" '
+                'style="display:inline-block;padding:10px 16px;border-radius:6px;'
+                'background:#25d366;color:#fff;text-decoration:none;font-weight:700">'
+                'Contact us on WhatsApp</a></p>')
+    title = ("Payment balance pending" if kind == "partial_payment"
+             else "Order payment declined")
+    body = (greeting
+            + f'<p style="margin:0 0 14px;font-size:16px;font-weight:700;color:#762b22">'
+              f'{_esc(message)}</p>'
+            + figures + whatsapp)
+    return _shell(
+        f"{title}: {_esc(str(order.get('id') or ''))}",
+        "",
+        body + _order_body(order, include_receipt=False))
+
+
 def order_received_email_html(order):
     """The customer-facing 'we have received your order' email."""
     order = dict(order or {})
@@ -672,6 +711,20 @@ def notify_order_confirmed(order):
     return send_mail_to(to, subject, order_confirmed_email_html(order))
 
 
+def notify_order_notice(order):
+    """Email a persisted decline/pending-balance notice to the CUSTOMER."""
+    order = dict(order or {})
+    cust = order.get("customer") or {}
+    to = str(cust.get("email") or order.get("email") or "").strip()
+    if not _ADDRESS.fullmatch(to):
+        return False, "no valid customer email on the order"
+    notice = order.get("customer_notice") or {}
+    kind = notice.get("type") if isinstance(notice, dict) else ""
+    label = "pending balance" if kind == "partial_payment" else "payment declined"
+    subject = f"Jaura Store order {order.get('id', '')}: {label}"
+    return send_mail_to(to, subject, order_notice_email_html(order))
+
+
 # ------------------------------------------------------------------ dispatch
 def _log(message):
     """One quiet line per mail event - stdout is Render's log console."""
@@ -722,3 +775,8 @@ def notify_order_received_async(order):
 def notify_order_confirmed_async(order):
     """notify_order_confirmed off the request path (fire-and-forget)."""
     _fire(notify_order_confirmed, dict(order or {}))
+
+
+def notify_order_notice_async(order):
+    """notify_order_notice off the request path (fire-and-forget)."""
+    _fire(notify_order_notice, dict(order or {}))

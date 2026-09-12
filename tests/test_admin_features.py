@@ -406,6 +406,44 @@ def test_order_confirm_decline_reopen(admin):
         assert one("SELECT status FROM orders WHERE id=?", (oid,))["status"] == status
 
 
+def test_invalid_receipt_decline_persists_and_triggers_customer_notice(admin, monkeypatch):
+    import mailer
+    sent = []
+    monkeypatch.setattr(mailer, "notify_order_notice_async", lambda order: sent.append(order))
+    oid = _make_order("JA-BADPROOF")
+    r = admin.patch(f"/api/admin/orders/{oid}", json={
+        "status": "declined", "reason": "Invalid payment image uploaded",
+    })
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["notice"] == "Order declined: Invalid payment image uploaded"
+    assert body["notificationTriggered"] is True
+    stored = json.loads(one("SELECT payload FROM orders WHERE id=?", (oid,))["payload"])
+    assert stored["customer_notice"]["message"] == body["notice"]
+    assert sent and sent[0]["customer"]["email"] == "a@example.com"
+
+
+def test_partial_payment_keeps_order_pending_and_notifies_balance(admin, monkeypatch):
+    import mailer
+    sent = []
+    monkeypatch.setattr(mailer, "notify_order_notice_async", lambda order: sent.append(order))
+    oid = _make_order("JA-PARTPAY")
+    r = admin.patch(f"/api/admin/orders/{oid}", json={
+        "status": "pending", "action": "partial_payment", "paidAmount": 4500,
+    })
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    expected = ("You have a pending balance. Please contact us on WhatsApp to "
+                "balance up your payment before your order is confirmed.")
+    assert body["status"] == "pending" and body["balance"] == 500
+    assert body["notice"] == expected
+    stored = json.loads(one("SELECT payload FROM orders WHERE id=?", (oid,))["payload"])
+    assert stored["payment_review"]["paid"] == 4500
+    assert stored["payment_review"]["balance"] == 500
+    assert stored["customer_notice"]["message"] == expected
+    assert sent and sent[0]["customer"]["email"] == "a@example.com"
+
+
 def test_order_rejects_an_unknown_status(admin):
     oid = _make_order()
     r = admin.patch(f"/api/admin/orders/{oid}", json={"status": "shipped"})

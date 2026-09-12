@@ -471,7 +471,7 @@ def _store_order(oid="JA-MAILTEST-1", email="praisejudith03@gmail.com",
     payload = {"id": oid, "total": 12000, "currency": "NGN", "status": status,
                "payment": "UBA bank transfer (₦ Naira)", "proofUrl": proof,
                "customer": {"name": "Praise Judith", "email": email,
-                            "phone": "+2290168953101", "city": "Cotonou"},
+                            "phone": "+22968953110", "city": "Cotonou"},
                "items": [{"id": "wix-001", "name": "Shea butter", "qty": 2,
                           "price": 6000}]}
     execute(
@@ -578,6 +578,37 @@ class TestCustomerConfirmationEmail:
         monkeypatch.setattr(mailer, "notify_order_confirmed",
                             lambda order: (_ for _ in ()).throw(RuntimeError("x")))
         mailer.notify_order_confirmed_async({"id": "JA-BOOM"})  # must not raise
+
+
+class TestCustomerOrderNoticeEmail:
+    def _order(self, country="Benin", kind="partial_payment"):
+        message = ("You have a pending balance. Please contact us on WhatsApp to "
+                   "balance up your payment before your order is confirmed.")
+        return {
+            "id": "JA-NOTICE", "total": 12000, "currency": "NGN",
+            "customer": {"name": "Customer", "email": "buyer@example.com",
+                         "country": country},
+            "customer_notice": {"type": kind, "message": message},
+            "payment_review": {"total": 12000, "paid": 5000,
+                               "balance": 7000, "currency": "NGN"},
+            "items": [{"name": "Bag", "qty": 1, "price": 12000}],
+        }
+
+    def test_pending_balance_copy_and_benin_whatsapp_are_in_email(self, resend_env):
+        order = self._order()
+        ok, detail = mailer.notify_order_notice(order)
+        assert ok, detail
+        body = resend_env[0]["payload"]["html"]
+        assert order["customer_notice"]["message"] in body
+        assert "Pending balance" in body and "\u20a67,000" in body
+        assert "https://wa.me/22968953110" in body
+        assert "2290168953110" not in body
+
+    def test_nigerian_notice_routes_to_nigeria_whatsapp(self, resend_env):
+        ok, detail = mailer.notify_order_notice(self._order(country="Nigeria"))
+        assert ok, detail
+        body = resend_env[0]["payload"]["html"]
+        assert "https://wa.me/2349161670236" in body
 
 
 class TestConfirmStatusTriggersCustomerEmail:

@@ -12,19 +12,19 @@
   <meta property="og:title" content="Checkout · Jaura Store" />
   <meta property="og:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
   <meta property="og:url" content="https://jaurastore.com.ng/checkout.html" />
-  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=142" />
+  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=143" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Checkout · Jaura Store" />
   <meta name="twitter:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
-  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=142" />
+  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=143" />
   <link rel="icon" type="image/png" href="/static/logo.png" />
   <link rel="apple-touch-icon" href="/static/logo.png" />
-  <link rel="stylesheet" href="css/fonts.css?v=142" />
+  <link rel="stylesheet" href="css/fonts.css?v=143" />
   <!-- product photos live in the shop's Supabase storage bucket:
        open that connection while the HTML is still parsing so the
        first photo starts the moment the grid renders -->
   <link rel="preconnect" href="https://rvkweyipqgsggcnimhxf.supabase.co" />
-  <link rel="stylesheet" href="css/style.css?v=142" />
+  <link rel="stylesheet" href="css/style.css?v=143" />
 </head>
 <body data-page="checkout">
   <div id="site-header"></div>
@@ -34,7 +34,6 @@
       <ol class="ck-steps">
         <li><a href="cart.html" data-i18n="cart.stepCart">Shopping cart</a></li>
         <li class="is-on" data-i18n="cart.stepCheck">Checkout</li>
-        <li data-i18n="cart.stepDone">Order complete</li>
       </ol>
       <h1 data-i18n="ck.title">Checkout</h1>
     </div>
@@ -43,6 +42,7 @@
   <div class="wrap" data-checkout-root>
     <p class="empty" data-empty hidden><span data-i18n="ck.empty">Your cart is currently empty. Add products before checkout.</span> <a href="shop.html" data-i18n="ck.return">Return to shop</a></p>
 
+    <p class="ck-form-instruction" data-form-instruction data-i18n="ck.formInstruction">Please fill this form before checking out.</p>
     <form class="ck-grid" data-checkout>
       <div class="ck-main">
         <h2 data-i18n="ck.billing">Billing details</h2>
@@ -148,18 +148,8 @@
             <p class="bank-sub" data-togo-name></p>
           </div>
 
+          <p class="ck-exact-payment" role="note" data-i18n="ck.exactPayment">Please send the exact amount for your order to be confirmed.</p>
           <p class="ck-ship-wa" data-i18n="ck.fareNote">Your transport fare will be discussed with you on WhatsApp after you place the order.</p>
-
-          <!-- WhatsApp country routing: buyers pick the line (Nigeria vs
-               Benin/Togo) BEFORE placing the order. The choice is remembered,
-               and the order-completion button on the thank-you screen opens
-               this same line. General product questions stay on the floating
-               WhatsApp widget - this chooser is for order completion only. -->
-          <div class="wa-country-toggle ck-wa-lines" role="group" aria-label="WhatsApp line for your order">
-            <span class="wa-country-label" data-i18n="ck.waPickCheckout">WhatsApp line for your order:</span>
-            <button type="button" class="btn btn-line" data-wa-toggle="nigeria" data-i18n="ck.waNg">Nigeria WhatsApp</button>
-            <button type="button" class="btn btn-line" data-wa-toggle="benin" data-i18n="ck.waBj">Benin / Togo WhatsApp</button>
-          </div>
 
           <div class="ck-upload">
             <label class="proof-label" data-i18n="ck.uploadReceipt">Upload the bank payment receipt</label>
@@ -170,7 +160,7 @@
           </div>
         </div>
 
-        <p class="ck-legal" data-i18n="ck.legal">Your personal data is used to process your order. Upload your payment receipt here. JauraStore will confirm your payment. Transport fare is discussed on WhatsApp.</p>
+        <p class="ck-legal" data-i18n="ck.legal">By placing your order, you are providing your Name, Address, Phone Number, Order ID, and Ordered Items. Your order will be confirmed soon.</p>
         <div class="ck-recaptcha-anchor" aria-hidden="true">
           <div class="g-recaptcha" data-recaptcha-widget></div>
         </div>
@@ -181,11 +171,11 @@
   </div>
 
   <div id="site-footer"></div>
-  <script src="js/products-data.js?v=142"></script>
-  <script src="js/i18n-phrases.js?v=142"></script>
-  <script src="js/i18n.js?v=142"></script>
-  <script src="js/net.js?v=142"></script>
-  <script src="js/store.js?v=142"></script>
-  <script src="js/app.js?v=142"></script>
+  <script src="js/products-data.js?v=143"></script>
+  <script src="js/i18n-phrases.js?v=143"></script>
+  <script src="js/i18n.js?v=143"></script>
+  <script src="js/net.js?v=143"></script>
+  <script src="js/store.js?v=143"></script>
+  <script src="js/app.js?v=143"></script>
 </body>
 </html>

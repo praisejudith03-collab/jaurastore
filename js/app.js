@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=142";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=142";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=143";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=143";
 }
 
 function renderCategories() {
@@ -1206,11 +1206,6 @@ function showOrderDone(order) {
     ? [pay.provider, pay.account, pay.name].filter(Boolean).join(" · ")
     : "";
   root.innerHTML = `
-    <ol class="ck-steps" style="margin-bottom:28px">
-      <li><a href="cart.html">${t("cart.stepCart")}</a></li>
-      <li><a href="checkout.html">${t("cart.stepCheck")}</a></li>
-      <li class="is-on">${t("cart.stepDone")}</li>
-    </ol>
     <div class="order-done">
       <p class="kicker">${t("ck.doneKicker")}</p>
       <h2 class="serif-title">${t("ck.thanks")}</h2>
@@ -1278,7 +1273,7 @@ function paintReferralSlot(orderId) {
         <p class="referral-blurb">${t("ref.blurb")}</p>
         <div class="referral-actions">
           <button type="button" class="btn" data-ref-share>${t("ref.share")}</button>
-          <a class="btn btn-line" data-ref-wa href="https://wa.me/?text=${encodeURIComponent(shareText)}" target="_blank" rel="noopener">WhatsApp</a>
+          <a class="btn btn-line" data-ref-wa href="${JA.waLink(shareText)}" target="_blank" rel="noopener">WhatsApp</a>
           <button type="button" class="btn btn-line" data-ref-copy>${t("ref.copy")}</button>
         </div>
       </div>`;
@@ -1498,16 +1493,19 @@ function renderDeliveryPage() {
 function renderCheckout() {
   const form = document.querySelector("[data-checkout]");
   const empty = document.querySelector("[data-empty]");
+  const instruction = document.querySelector("[data-form-instruction]");
   if (!form) return;
   if (form.dataset.done === "1") return;
 
   const items = JA.cartDetailed();
   if (!items.length) {
     if (empty) empty.hidden = false;
+    if (instruction) instruction.hidden = true;
     form.hidden = true;
     return;
   }
   if (empty) empty.hidden = true;
+  if (instruction) instruction.hidden = false;
   form.hidden = false;
 
   const curNow = JA.currency();
@@ -1604,18 +1602,16 @@ function renderCheckout() {
     zoneField.addEventListener("blur", (e) => promptCurrencyForBeninTogo(e.target.value));
   }
   if (countryField) {
-    // The Country field is also what routes the WhatsApp buttons: Nigeria ->
-    // the Nigeria line, Benin / Togo -> the Benin-Togo line.
+    // Remember the checkout country so the order-completed page can route its
+    // single WhatsApp action correctly. The old two-button chooser was removed
+    // from the form to keep checkout focused.
     try { if (JA.waRegionFor(countryField.value)) JA.setWaCountry(countryField.value); } catch (e) {}
     countryField.addEventListener("change", (e) => {
       try { JA.setWaCountry(e.target.value); } catch (err) {}
-      paintWaLineChooser(form);
     });
     countryField.addEventListener("change", (e) => promptCurrencyForBeninTogo(e.target.value));
     countryField.addEventListener("blur", (e) => promptCurrencyForBeninTogo(e.target.value));
   }
-  // Explicit Nigeria / Benin-Togo WhatsApp chooser on the checkout page.
-  bindWaLineChooser(form);
 
   form.addEventListener("change", (e) => {
     if (e.target.name === "currency") {
@@ -1845,27 +1841,83 @@ function renderCheckout() {
         price: JA.priceOf(i.product, cur),
       })),
     });
+
+    let submitted = null;
+    try {
+      submitted = order.submission ? await order.submission : { ok: true, localOnly: true };
+    } catch (err) {
+      const message = (err && err.data && err.data.error) || (err && err.message)
+        || "We could not place your order. Please check your connection and try again.";
+      let errorBox = form.querySelector("[data-order-submit-error]");
+      if (!errorBox) {
+        errorBox = document.createElement("p");
+        errorBox.className = "ck-submit-error";
+        errorBox.setAttribute("data-order-submit-error", "");
+        errorBox.setAttribute("role", "alert");
+        btn?.insertAdjacentElement("beforebegin", errorBox);
+      }
+      errorBox.textContent = message;
+      errorBox.hidden = false;
+      JA.toast(message);
+      if (btn) { btn.disabled = false; btn.textContent = t("ck.place"); }
+      errorBox.scrollIntoView({ block: "center", behavior: "smooth" });
+      return;
+    }
+
+    // Only clear the cart after the server has accepted the order, or after
+    // the offline outbox confirms that it has safely persisted the submission.
+    // Then navigate to the dedicated final step: ORDER COMPLETE appears there,
+    // never in the checkout breadcrumb.
     JA.clearCart();
     ckPromo = null;
     form.dataset.done = "1";
-    showOrderDone(order);
-    const waiting = JA.syncPending ? JA.syncPending() : 0;
-    if (waiting) {
-      const root2 = document.querySelector("[data-checkout-root]");
-      if (root2) {
-        const note = document.createElement("p");
-        note.className = "ck-queued";
-        note.textContent = "No internet right now — your order and screenshot are saved on this phone and will reach us the moment you are back online. Keep your order ID.";
-        root2.insertBefore(note, root2.firstChild);
-      }
-    }
-    if (btn) { btn.disabled = false; btn.textContent = t("ck.place"); }
-    document.querySelector("[data-copy-id]")?.addEventListener("click", (ev) => {
-      const id = ev.currentTarget.getAttribute("data-copy-id");
-      navigator.clipboard?.writeText(id).then(() => JA.toast("Order ID copied: " + id));
-    });
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    const queued = !!(submitted && submitted.queued);
+    const target = "order-complete.html?order=" + encodeURIComponent(order.id)
+      + (queued ? "&queued=1" : "");
+    window.location.assign(target);
   });
+}
+
+function bindOrderDoneCopy() {
+  document.querySelector("[data-copy-id]")?.addEventListener("click", (ev) => {
+    const id = ev.currentTarget.getAttribute("data-copy-id");
+    navigator.clipboard?.writeText(id).then(() => JA.toast("Order ID copied: " + id));
+  });
+}
+
+async function renderOrderComplete() {
+  const root = document.querySelector("[data-checkout-root]");
+  if (!root) return;
+  const params = new URLSearchParams(location.search);
+  const id = String(params.get("order") || "").trim().toUpperCase();
+  let order = id && JA.getOrder ? JA.getOrder(id) : null;
+  // The accepted order normally comes from localStorage. If storage was full,
+  // disabled, or cleared between checkout and this page, recover the canonical
+  // server copy by order ID rather than showing a false completion failure.
+  if (!order && id && window.JA_NET) {
+    try {
+      const response = await window.JA_NET.api("api/orders/" + encodeURIComponent(id));
+      order = response && response.order;
+    } catch (e) {}
+  }
+  if (!order) {
+    root.innerHTML = `<div class="order-done">
+      <h2 class="serif-title">${t("ck.completedTitle")}</h2>
+      <p>We could not load this order on this device.</p>
+      <a class="btn" href="shop.html">${t("ck.return")}</a>
+    </div>`;
+    return;
+  }
+  showOrderDone(order);
+  if (params.get("queued") === "1") {
+    const note = document.createElement("p");
+    note.className = "ck-queued";
+    note.setAttribute("role", "status");
+    note.textContent = "No internet right now — your order and receipt are safely saved on this phone and will reach us automatically when you are back online. Keep your order ID.";
+    root.insertBefore(note, root.firstChild);
+  }
+  bindOrderDoneCopy();
+  window.scrollTo({ top: 0, behavior: "auto" });
 }
 
 function renderWishlist() {
@@ -1962,7 +2014,7 @@ function paintAccountHome(root, me, orders) {
     <p class="ck-confirm-note">${t("account.hello", { email: me.email })}</p>
     <p class="acct-actions">
       <button type="button" class="btn btn-line" data-account-out>${t("account.logout")}</button>
-      <a class="btn btn-line" href="https://wa.me/${JA.settings().whatsapp}" target="_blank" rel="noopener">${t("footer.contactUs")}</a>
+      <a class="btn btn-line" data-wa-inquiry data-wa-country="${JA.waRegionFor(me.country) || "benin"}" href="${JA.waInquiryUrl(me.country || "benin")}" target="_blank" rel="noopener">${t("footer.contactUs")}</a>
     </p>
     <div class="acct-grid">
       <form class="acct-card" data-account-profile>
@@ -1997,6 +2049,7 @@ function paintAccountHome(root, me, orders) {
           <p>${JA.money(o.total, o.currency)}</p>
           <p style="font-size:12px;color:var(--muted)">${o.at ? new Date(o.at).toLocaleString() : ""}</p>
           ${(o.items || []).length ? `<p class="acct-items">${(o.items || []).map((i) => JA.escape((i.qty || 1) + "× " + (i.name || ""))).join(" · ")}</p>` : ""}
+          ${o.customer_notice && o.customer_notice.message ? `<p class="acct-order-notice" role="status">${JA.escape(o.customer_notice.message)}</p>` : ""}
         </article>`).join("") : `<p class="empty">${t("account.empty")}</p>`}
     </section>`;
   root.querySelector("[data-account-out]")?.addEventListener("click", () => {
@@ -2112,7 +2165,7 @@ async function boot() {
    * wait is capped so a dead network can never hang the page.
    */
   const page = document.body.dataset.page;
-  const needsSiteFirst = page === "checkout";
+  const needsSiteFirst = page === "checkout" || page === "order-complete";
 
   try { JA.hydrateFromCache && JA.hydrateFromCache(); } catch (e) {}
 
@@ -2201,6 +2254,7 @@ async function boot() {
     try { JA.startCardPlay && JA.startCardPlay(); } catch (e) {}
     if (page === "cart") renderCart();
     if (page === "checkout") renderCheckout();
+    if (page === "order-complete") renderOrderComplete();
     if (page === "delivery") renderDeliveryPage();
     if (page === "wishlist") renderWishlist();
     if (page === "account") renderAccount();

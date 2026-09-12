@@ -1376,7 +1376,44 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #f8f0e2; }
 .pay-card span { font-size: 12px; color: var(--muted); line-height: 1.45; }
 .pay-box { border: 1px dashed var(--line); padding: 14px; margin: 10px 0 16px; background: #fdfbf7; }
 .proof-label { display: block; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--taupe); margin: 10px 0 6px; }
-.ck-legal { font-size: 12px; color: var(--muted); margin: 8px 0 16px; }
+.ck-legal {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 14px 0 16px;
+}
+.ck-form-instruction {
+  margin: 22px 0 0;
+  padding: 13px 16px;
+  border-left: 4px solid var(--purple, #965fb0);
+  border-radius: 8px;
+  background: #fbf4fc;
+  color: #3c2b42;
+  font-size: 15px;
+  font-weight: 600;
+}
+.ck-exact-payment {
+  margin: 16px 0 12px;
+  padding: 14px 15px;
+  border: 2px solid #9b5caf;
+  border-radius: 9px;
+  background: #fff4cf;
+  color: #3a243e;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.order-complete-page { padding-top: 30px; padding-bottom: 54px; }
+.ck-submit-error {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid #cf5548;
+  border-radius: 8px;
+  background: #fff1ef;
+  color: #8b2118;
+  font-size: 13px;
+  line-height: 1.5;
+}
 .ck-place { width: 100%; }
 .woo-meta {
   display: grid;
@@ -6183,6 +6220,30 @@ select.ck-zone-select {
 .acct-msg.is-good { background: #f8fcf8; color: #376837; }
 .acct-orders { margin-top: 10px; }
 .acct-items { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.acct-order-notice,
+.admin-customer-notice {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border-left: 4px solid #d05b4e;
+  border-radius: 6px;
+  background: #fff1ef;
+  color: #73251d;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.admin-payment-review {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 14px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid #e2b84d;
+  border-radius: 8px;
+  background: #fff8dc;
+  color: #59430d;
+  font-size: 13px;
+}
+.admin-payment-review strong { width: 100%; }
 @media (max-width: 700px) {
   .acct-grid { grid-template-columns: 1fr; }
 }

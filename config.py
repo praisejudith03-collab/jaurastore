@@ -28,19 +28,18 @@ class Config:
     WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
     WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID", "")
     WHATSAPP_CALLMEBOT_KEY = os.environ.get("WHATSAPP_CALLMEBOT_KEY", "")
-    WHATSAPP_NOTIFY_NUMBER = "".join(
-        c for c in os.environ.get("WHATSAPP_NOTIFY_NUMBER", "2290168953101") if c.isdigit())
+
+    # Canonical WhatsApp destinations (digits only, as required by wa.me and
+    # provider APIs). These are intentionally pinned rather than editable via
+    # an old environment/Supabase value: stale settings previously reintroduced
+    # the invalid Benin "01" prefix and made chat buttons fail.
+    WHATSAPP_NOTIFY_NUMBER = "22968953110"
 
     # ------------------------------------------ customer-facing WhatsApp lines
-    # Two shop lines, one per market. The storefront routes every inquiry /
-    # transport-fare button to the right one from the customer's country:
-    #   Nigeria            -> WHATSAPP_NUMBER_NG
-    #   Benin  /  Togo     -> WHATSAPP_NUMBER_BJ
-    # Digits only (no "+", no spaces): that is what wa.me expects.
-    WHATSAPP_NUMBER_NG = "".join(
-        c for c in os.environ.get("WHATSAPP_NUMBER_NG", "2349161670236") if c.isdigit())
-    WHATSAPP_NUMBER_BJ = "".join(
-        c for c in os.environ.get("WHATSAPP_NUMBER_BJ", "2290168953101") if c.isdigit())
+    #   Nigeria            -> +234 916 167 0236
+    #   Benin  /  Togo     -> +229 68 95 31 10
+    WHATSAPP_NUMBER_NG = "2349161670236"
+    WHATSAPP_NUMBER_BJ = "22968953110"
 
     # In-process scheduler (keep-alive, maintenance + midnight backup)
     SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "1") != "0"
