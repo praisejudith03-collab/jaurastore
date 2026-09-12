@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=140";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=140";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=141";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=141";
 }
 
 function renderCategories() {
@@ -211,7 +211,7 @@ function renderHome() {
         const img = (p.images && p.images[0]) || p.image || "";
         const id = p.id || "";
         const name = p.name || "";
-        return `<article class="card"><a class="card-media" href="product.html?id=${encodeURIComponent(id)}"><img src="${img}" alt="" onerror="fallbackImg(event)"></a><div class="card-body"><h3><a href="product.html?id=${encodeURIComponent(id)}">${name}</a></h3></div></article>`;
+        return `<article class="card"><a class="card-media" href="product.html?id=${encodeURIComponent(id)}"><img src="${img}" alt="" loading="lazy" decoding="async" onerror="fallbackImg(event)"></a><div class="card-body"><h3><a href="product.html?id=${encodeURIComponent(id)}">${name}</a></h3></div></article>`;
       }).join("");
     }
   }

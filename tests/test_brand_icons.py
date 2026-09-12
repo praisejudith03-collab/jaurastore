@@ -43,7 +43,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # worker's cache-first branch in sw.js, and the bigger full-width shop
 # banner with the wordmark anchored to the bottom in css/style.css. All
 # pages, scripts and the service worker ship v140 together.
-SHARED_TOKEN = "140"
+# Bumped to 141 for the self-hosted fonts + Allura banner wordmark release
+# (owner request 2026-09-12): the three Google Fonts families now ship from
+# /static/fonts as latin-subset woff2 (css/fonts.css), the CSP/`_headers`
+# font-src/ style-src are self-only, and the banner wordmark swaps to Allura.
+# All pages, scripts and the service worker ship v141 together.
+SHARED_TOKEN = "141"
 
 
 def _image_size(path):

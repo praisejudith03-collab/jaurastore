@@ -3,3 +3,7 @@ python-dotenv==1.0.1
 gunicorn==22.0.0
 pytest==8.2.2
 supabase==2.31.0
+# Product/category photos are downscaled + re-encoded at upload time
+# (storage.optimize_image_bytes) so a 4G shopper never downloads a 6 MB
+# phone original. Falls back to storing the original bytes if unavailable.
+pillow>=10.0.0

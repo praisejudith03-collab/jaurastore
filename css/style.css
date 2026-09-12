@@ -4390,7 +4390,7 @@ body[data-page="admin"] .wa-float { display: none !important; }
   margin: 0 !important;
   align-items: center !important;
   justify-content: center !important;
-  font-family: "Great Vibes", cursive !important;
+  font-family: "Allura", cursive !important;
   font-weight: 700 !important;
   font-size: clamp(48px, 13vw, 92px) !important;
   line-height: 1 !important;
@@ -6369,7 +6369,7 @@ body.au-shop .shop-banner img,
   bottom: 0; height: 52%; pointer-events: none; z-index: 1;
   background: linear-gradient(to top, rgba(24,15,9,.58), rgba(24,15,9,0)); }
 .shop-script { align-items: flex-end !important; justify-content: flex-start !important;
-  padding: 0 22px 18px !important; font-family: "Great Vibes", cursive !important;
-  font-weight: 700 !important; font-size: clamp(44px, 11vw, 88px) !important;
+  padding: 0 22px 18px !important; font-family: "Allura", cursive !important;
+  font-weight: 700 !important; font-size: clamp(64px, 16vw, 128px) !important;
   color: #ffffff !important; text-shadow: 0 2px 16px rgba(24,15,9,.55) !important;
   z-index: 2 !important; }
