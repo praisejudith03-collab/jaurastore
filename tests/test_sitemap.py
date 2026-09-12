@@ -208,7 +208,7 @@ def test_deleted_product_never_appears_in_sitemap(client, monkeypatch, tmp_path)
 
     body = _sitemap_body(client)
     assert "/product.html?id=wix-001" not in body
-    assert "/product.html?id=wix-002" in body
+    assert "/product.html?id=wix-003" in body
     # one fewer URL than before the deletion
     assert body.count("<url>") == len(appmod.SITEMAP_STATIC_PAGES) \
         + len(api_mod._categories_data()["categories"]) + (len(catalog_mod.merged()))

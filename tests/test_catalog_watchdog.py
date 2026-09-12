@@ -4,7 +4,7 @@ The watchdog is the "it must never happen again" layer: hourly, in CI, it
 compares the live storefront against the Supabase products table read
 directly over PostgREST. These tests pin its logic offline:
 
-  * the healthy production shape (273 rows, 255 online wix-*) passes;
+  * the healthy production shape (272 rows, 254 online wix-*) passes;
   * every defect class it exists to catch fails it: an online row missing
     from the public catalogue, a served row Supabase does not list, an
     approved wix row gone/offline in Supabase, a duplicated id, and a
@@ -54,7 +54,7 @@ OFFLINE_NON_WIX = [
 
 def _production_shape():
     """(db_rows, api_payload) exactly like production: 273 table rows
-    (255 online wix-* + 18 offline non-wix), 255 served products.
+    (254 online wix-* + 18 offline non-wix), 254 served products.
 
     The owner deleted wix-006, wix-007 and wix-108 on purpose, so they are
     in neither measurement - the retired ids must stay silent (see
@@ -80,23 +80,23 @@ def _production_shape():
 
 # ------------------------------------------------------------- check() logic
 def test_watchdog_passes_on_the_healthy_production_shape():
-    # The approved set is 255: wix-001..wix-258 minus the three rows the
+    # The approved set is 254: wix-001..wix-258 minus the rows the
     # owner deleted on purpose. Their absence from Supabase is expected and
     # must never raise the "products disappear" alarm (the scheduled run was
     # red until they were retired here).
-    assert len(wd.EXPECTED_WIX_IDS) == 255, len(wd.EXPECTED_WIX_IDS)
-    assert wd.RETIRED_WIX_IDS == frozenset({"wix-006", "wix-007", "wix-108"})
+    assert len(wd.EXPECTED_WIX_IDS) == 254, len(wd.EXPECTED_WIX_IDS)
+    assert wd.RETIRED_WIX_IDS == frozenset({"wix-002", "wix-006", "wix-007", "wix-108"})
     assert not (set(wd.EXPECTED_WIX_IDS) & wd.RETIRED_WIX_IDS)
     db_rows, payload = _production_shape()
-    assert len(payload["products"]) == 255
-    assert len(db_rows) == 255 + len(OFFLINE_NON_WIX)
+    assert len(payload["products"]) == 254
+    assert len(db_rows) == 254 + len(OFFLINE_NON_WIX)
     failures, summary = wd.check(db_rows, payload)
     assert failures == [], "healthy production shape must pass: " + "; ".join(failures)
-    assert any("273 rows" in s for s in summary)
+    assert any("272 rows" in s for s in summary)
 
 
 def test_watchdog_fails_when_an_online_row_is_missing_from_the_api():
-    """The original defect class: Supabase says 255, the storefront serves
+    """The original defect class: Supabase says 254, the storefront serves
     fewer. Even ONE missing online row must trip the watchdog."""
     db_rows, payload = _production_shape()
     payload["products"] = [p for p in payload["products"] if p["id"] != "wix-100"]

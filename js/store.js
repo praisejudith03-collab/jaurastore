@@ -16,7 +16,49 @@ const JA = (() => {
     reviews: "jaura_reviews",
     pending: "jaura_pending_products",
     events: "jaura_pending_events",
+    waCountry: "jaura_wa_country",
+    catalogCache: "jaura_catalog_cache",
   };
+
+  /* --------------------------------------------------- catalogue cache (speed)
+   * Tapping a product used to wait on a full api/catalog roundtrip before the
+   * page could paint - a second or more on a slow mobile network, and a blank
+   * screen the whole time. The last good catalogue is therefore persisted in
+   * localStorage and used for the FIRST paint on every page, while a fresh
+   * copy is fetched in the background and swapped in when it lands.
+   *
+   * The cache is a render accelerator, never a source of truth: the server
+   * answer always wins, and stock / prices are re-validated server-side at
+   * checkout regardless of what the browser held.
+   */
+  const CATALOG_CACHE_TTL = 10 * 60 * 1000;      // 10 minutes
+
+  function readCatalogCache() {
+    try {
+      const raw = localStorage.getItem(KEYS.catalogCache);
+      if (!raw) return null;
+      const box = JSON.parse(raw);
+      if (!box || !Array.isArray(box.products) || !box.products.length) return null;
+      if (box.view !== catalogView()) return null;
+      return box;
+    } catch (e) { return null; }
+  }
+
+  function writeCatalogCache(products) {
+    try {
+      localStorage.setItem(KEYS.catalogCache, JSON.stringify({
+        at: Date.now(), view: catalogView(), products,
+      }));
+    } catch (e) { /* quota: the cache is optional */ }
+  }
+
+  function catalogView() {
+    return (document.body && document.body.dataset.page) === "admin" ? "admin" : "public";
+  }
+
+  function catalogCacheFresh(box) {
+    return !!(box && (Date.now() - Number(box.at || 0)) < CATALOG_CACHE_TTL);
+  }
 
   const FALLBACK = {
     "nav.home": "Home",
@@ -119,6 +161,11 @@ const JA = (() => {
     storeName: "J Aura Store",
     rate: 0.44,
     whatsapp: "2290168953101",
+    // Dual-country shop lines. The live values come from GET /api/site
+    // (site_settings.whatsapp_number_ng / _bj, which fall back to the
+    // WHATSAPP_NUMBER_NG / WHATSAPP_NUMBER_BJ environment variables).
+    whatsapp_number_ng: "2349161670236",
+    whatsapp_number_bj: "2290168953101",
     phoneBj: "+229 01 68 95 31 01",
     phoneNg: "+234 916 167 0236",
     email: "jaurastore@gmail.com",
@@ -176,6 +223,82 @@ const JA = (() => {
     return s;
   };
   const saveSettings = (s) => write(KEYS.settings, { ...settings(), ...s });
+
+  /* ------------------------------------------------- WhatsApp: two markets
+   * The shop answers on two lines, one per market, and every customer-facing
+   * WhatsApp button routes to the right one:
+   *
+   *   Nigeria           -> settings().whatsapp_number_ng
+   *   Benin  /  Togo    -> settings().whatsapp_number_bj
+   *
+   * The chosen market is remembered (localStorage) so the floating button,
+   * the footer button and the checkout fare buttons all agree. It is set
+   * from the checkout Country field, from an explicit toggle, and - only as
+   * a first guess - from the visitor's IP country.
+   */
+  const WA_NG = "nigeria";
+  const WA_BJ = "benin";
+
+  function waRegionFor(country) {
+    const c = String(country || "").trim().toLowerCase();
+    if (!c) return "";
+    if (/nigeria|^ng$|naija/.test(c)) return WA_NG;
+    if (/benin|b[ée]nin|^bj$|togo|^tg$|cotonou|calavi|porto|lom[ée]/.test(c)) return WA_BJ;
+    return "";
+  }
+
+  /** The market currently in effect (defaults to Benin/Togo, the shop base). */
+  function waCountry() {
+    const stored = read(KEYS.waCountry, "");
+    if (stored === WA_NG || stored === WA_BJ) return stored;
+    const geo = window.__jaGeo || {};
+    return waRegionFor(geo.country || geo.country_code) || WA_BJ;
+  }
+
+  /** Remember the market. Accepts a region key or any country label
+   *  ("Nigeria", "Togo", "Benin"...). Unknown labels leave it unchanged. */
+  function setWaCountry(value) {
+    const region = value === WA_NG || value === WA_BJ ? value : waRegionFor(value);
+    if (!region) return waCountry();
+    write(KEYS.waCountry, region);
+    try { document.dispatchEvent(new CustomEvent("ja:wa-country", { detail: { region } })); } catch (e) {}
+    try { refreshWaLinks(); } catch (e) {}
+    return region;
+  }
+
+  /** Digits-only WhatsApp number for a market. */
+  function waNumber(country) {
+    const s = settings();
+    const region = country === WA_NG || country === WA_BJ
+      ? country : (waRegionFor(country) || waCountry());
+    const digits = (v) => String(v == null ? "" : v).replace(/\D/g, "");
+    const ng = digits(s.whatsapp_number_ng) || digits(DEFAULT_SETTINGS.whatsapp_number_ng);
+    const bj = digits(s.whatsapp_number_bj) || digits(s.whatsapp) || digits(DEFAULT_SETTINGS.whatsapp_number_bj);
+    return region === WA_NG ? (ng || bj) : (bj || ng);
+  }
+
+  function waLink(text, country) {
+    const num = waNumber(country);
+    const msg = String(text || "");
+    return "https://wa.me/" + num + (msg ? "?text=" + encodeURIComponent(msg) : "");
+  }
+
+  /** The general inquiry message used by every floating / footer button. */
+  function waInquiryText() {
+    return "Hello Jaura Store, I would like to make an inquiry about your products.";
+  }
+  function waInquiryUrl(country) {
+    return waLink(waInquiryText(), country);
+  }
+
+  /** Re-point every inquiry button at the number for the current market. */
+  function refreshWaLinks() {
+    try {
+      document.querySelectorAll("[data-wa-inquiry]").forEach((el) => {
+        el.setAttribute("href", waInquiryUrl(el.dataset.waCountry || undefined));
+      });
+    } catch (e) {}
+  }
 
   // ------------------------------------------------------------ the catalogue
   // The server catalogue is the single source of truth. Local edits are kept
@@ -300,8 +423,28 @@ const JA = (() => {
     return out;
   }
 
+  /** Paint-ready catalogue with NO network wait.
+   *
+   * Returns the cached rows synchronously when there are any, so the first
+   * paint of every page happens immediately; loadSeed() then refreshes in
+   * the background and fires "ja:rerender" if anything actually changed. */
+  function hydrateFromCache() {
+    if (seed.length) return seed;
+    const box = readCatalogCache();
+    if (box) {
+      seed = dedupeProducts(box.products.map(normalizeServerProduct));
+      window.JA_SEED = seed;
+      return seed;
+    }
+    if (Array.isArray(window.JA_SEED) && window.JA_SEED.length) {
+      seed = dedupeProducts(window.JA_SEED);
+      return seed;
+    }
+    return seed;
+  }
+
   async function loadSeed(strict = false) {
-    if (!strict && seed.length) return seed;
+    if (!strict && seed.length && catalogCacheFresh(readCatalogCache())) return seed;
     try {
       // The store management must see EXACTLY what is saved: every row,
       // including hidden/offline ones, with the stock numbers and costs the
@@ -345,8 +488,17 @@ const JA = (() => {
           // seed + admin + Supabase rows, and any duplicate that survives
           // that merge (same product under two ids) is dropped here so the
           // shop can never render the same piece twice.
-          seed = dedupeProducts(d.products.map(normalizeServerProduct));
+          const next = dedupeProducts(d.products.map(normalizeServerProduct));
+          const changed = next.length !== seed.length
+            || JSON.stringify(next.map((x) => x.id)) !== JSON.stringify(seed.map((x) => x.id));
+          seed = next;
           window.JA_SEED = seed;
+          writeCatalogCache(d.products);
+          // A background refresh that actually changed something repaints the
+          // page; an identical answer never causes a flicker.
+          if (changed) {
+            try { document.dispatchEvent(new CustomEvent("ja:catalog")); } catch (e) {}
+          }
           return seed;
         }
       }
@@ -803,7 +955,14 @@ const JA = (() => {
     if (!list) list = stockProblems();
     if (!list.length) return "";
     const p = list[0];
-    return "This item does not have enough stock for your requested quantity.";
+    const name = String(p.name || "This item");
+    const left = Math.max(0, Number(p.available != null ? p.available : p.left) || 0);
+    const asked = Math.max(0, Number(p.requested != null ? p.requested : p.asked) || 0);
+    if (left <= 0) return `${name} is out of stock.`;
+    if (asked > left) {
+      return `Only ${left} unit${left === 1 ? "" : "s"} of ${name} ${left === 1 ? "is" : "are"} in stock — you asked for ${asked}.`;
+    }
+    return `Only ${left} unit${left === 1 ? "" : "s"} of ${name} ${left === 1 ? "is" : "are"} in stock.`;
   }
   function bulkUnit(p, qty, cur) {
     const unit = priceOf(p, cur);
@@ -1504,8 +1663,14 @@ const JA = (() => {
     }
     const ph = opts.ph || "images/products/_placeholder.jpg";
     const onErr = typeof window.fallbackImg === "function" ? ' onerror="fallbackImg(event)"' : "";
-    const lazy = opts.eager ? "" : ' loading="lazy"';
-    const img = `<img src="${escape(assetSrc)}" alt="${escape(opts.alt || "")}"${cls} data-ph="${ph}"${onErr}${lazy}${attrs} />`;
+    // Progressive loading: below-the-fold photos are lazy + low priority so
+    // they never compete with the one image the shopper is actually looking
+    // at; the hero image of a product page is eager + high priority so it
+    // starts downloading in the same tick the page paints.
+    const lazy = opts.eager
+      ? ' loading="eager" fetchpriority="high"'
+      : ' loading="lazy" fetchpriority="low"';
+    const img = `<img src="${escape(assetSrc)}" alt="${escape(opts.alt || "")}"${cls} data-ph="${ph}"${onErr}${lazy} decoding="async"${attrs} />`;
     if (opts.full) return img;
     const thumb = thumbFor(assetSrc);
     if (!thumb) return img;
@@ -1776,6 +1941,9 @@ const JA = (() => {
    *  It is also what the ja:site listeners repaint from. */
   function applySiteConfig(site) {
     site = site || {};
+    // The live row carries the two WhatsApp lines; re-point the buttons that
+    // were painted before this answer arrived.
+    setTimeout(() => { try { refreshWaLinks(); } catch (e) {} }, 0);
     // Server row (Supabase site_settings) is the truth; the copy used by
     // settings() and the checkout keeps ALL canonical fields live.
     _siteConfig = site;
@@ -2034,7 +2202,7 @@ const JA = (() => {
             <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M14.5 3c.4 2.6 1.8 4.4 4.5 4.7v2.4c-1.5 0-2.9-.5-4.1-1.4v6.6c0 3.4-2.7 6.1-6.2 6.1S2.6 18.7 2.6 15.3c0-3.3 2.6-6 5.9-6.1v2.5c-1.8.1-3.2 1.6-3.2 3.5 0 2 1.6 3.6 3.6 3.6s3.6-1.6 3.6-3.6V3h2z"/></svg>
             ${tx("footer.tiktok")}
           </a>
-          <a class="btn foot-wa" href="https://wa.me/22968953110" target="_blank" rel="noopener">${tx("footer.contactUs")}</a>
+          <a class="btn foot-wa" data-wa-inquiry href="${waInquiryUrl()}" target="_blank" rel="noopener">${tx("footer.contactUs")}</a>
           <a class="wa-channel" href="https://whatsapp.com/channel/0029Vb7qNQs4yltRRkChu01k" target="_blank" rel="noopener">${tx("footer.channel")}</a>
           <div class="foot-flies" aria-hidden="true">
             <span class="ffly ffly1">${goldFly()}</span>
@@ -2068,7 +2236,7 @@ const JA = (() => {
         <div class="search-results" data-search-results></div>
       </div>
     </div>
-    <a class="wa-float" href="https://wa.me/22968953110" target="_blank" rel="noopener" aria-label="WhatsApp">
+    <a class="wa-float" data-wa-inquiry href="${waInquiryUrl()}" target="_blank" rel="noopener" aria-label="WhatsApp">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M12.04 2C6.58 2 2.15 6.4 2.15 11.84c0 1.74.46 3.44 1.33 4.94L2 22l5.36-1.4a10 10 0 0 0 4.68 1.19h.01c5.46 0 9.89-4.4 9.89-9.85C21.94 6.4 17.5 2 12.04 2zm5.72 14.13c-.24.68-1.4 1.3-1.95 1.38-.5.07-1.12.1-1.81-.11-.42-.13-.95-.31-1.64-.6-2.89-1.25-4.77-4.16-4.92-4.35-.14-.2-1.18-1.57-1.18-3 0-1.42.75-2.12 1.01-2.41.27-.29.58-.36.78-.36h.56c.18 0 .42-.07.66.5.24.58.82 2 .89 2.15.07.15.12.32.02.52-.1.2-.14.32-.29.5-.14.17-.3.38-.43.51-.14.14-.29.29-.12.56.16.27.73 1.2 1.56 1.95 1.08.96 1.98 1.26 2.26 1.4.27.14.43.12.59-.07.16-.2.68-.79.86-1.06.18-.27.36-.22.6-.13.25.08 1.57.74 1.84.87.27.14.45.2.52.31.06.11.06.64-.18 1.32z"/></svg>
     </a>`;
   }
@@ -2376,6 +2544,7 @@ const JA = (() => {
     try { startCardPlay(); } catch (e) {}
     refreshChrome();
     bindChrome();
+    try { refreshWaLinks(); } catch (e) {}
     // mountChrome paints the header BEFORE api/site resolves, so the banner
     // track starts with the default delivery-window text. Repaint it whenever
     // the live site row lands (or the owner saves a new banner) so the moving
@@ -2618,7 +2787,11 @@ const JA = (() => {
     try { paintConvBanner(); } catch (e) {}
   });
 
-  ready = loadSeed();
+  // Paint from the cache immediately; refresh over the network in the
+  // background. This is what makes a product tap feel instant.
+  hydrateFromCache();
+  ready = Promise.resolve(seed.length ? seed : loadSeed());
+  if (seed.length) { setTimeout(() => { loadSeed().catch(() => {}); }, 0); }
 
   return {
     ready, CATEGORIES: DEFAULT_CATS, categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,
@@ -2635,6 +2808,9 @@ const JA = (() => {
     customer, setCustomer, logoutCustomer, ordersForEmail, getProof, dataUrlToBlob,
     cardHTML, asset, escape, mountChrome, track, getStats, setSeo, absUrl, SITE,
     galleryOf, startCardPlay, reviews, addReview, removeReview, setReviews, reviewStats, starsHTML,
+    waCountry, setWaCountry, waRegionFor, waNumber, waLink, waInquiryUrl,
+    waInquiryText, refreshWaLinks, WA_NG, WA_BJ,
+    hydrateFromCache, readCatalogCache,
     mediaHTML, mediaKind, getSiteConfig, applySiteBranding, applySiteConfig, normalizeServerProduct,
   };
 })();

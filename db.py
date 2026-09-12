@@ -301,6 +301,16 @@ def connect():
         cx = sqlite3.connect(Config.DB_PATH, timeout=15, check_same_thread=False)
         cx.row_factory = sqlite3.Row
         cx.execute("PRAGMA foreign_keys=ON")
+        # Set per connection, not just in SCHEMA: the web workers serve
+        # requests on several threads (gunicorn gthread), so a connection is
+        # often opened by a thread that never ran init_db(). busy_timeout
+        # makes a thread that meets a held write lock wait for it instead of
+        # raising "database is locked" in front of a shopper at checkout.
+        # journal_mode is deliberately NOT set here - WAL is persisted in the
+        # database file by SCHEMA, and re-issuing it per connection leaves
+        # -wal/-shm sidecars that outlive a test's temporary database.
+        cx.execute("PRAGMA busy_timeout=15000")
+        cx.execute("PRAGMA synchronous=NORMAL")
         _local.conn = cx
     return cx
 

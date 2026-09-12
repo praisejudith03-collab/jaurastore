@@ -133,11 +133,23 @@ def _db_row(p, online=True):
     }
 
 
-def _production_table():
-    """276 rows: 258 online wix-* customer rows + 18 offline non-wix rows."""
+# The bundled seed is the owner's live catalogue: products are added to it and
+# occasionally deleted for good (catalog.PERMANENTLY_REMOVED_IDS - the "100L
+# storage bag"). These tests are about rows never being LOST between Supabase
+# and the browser, not about one frozen number, so every count below is
+# derived from the seed instead of hardcoded.
+def _seed_wix_rows():
     seed = json.load(open(os.path.join(ROOT, "data", "seed.json"), encoding="utf-8"))
-    wix = [p for p in seed if str(p.get("id", "")).startswith("wix-")]
-    assert len(wix) == 258, f"the approved customer catalogue must hold 258 wix-* rows, found {len(wix)}"
+    import catalog as catalog_mod
+    return [p for p in seed
+            if str(p.get("id", "")).startswith("wix-")
+            and not catalog_mod.is_permanently_removed(p)]
+
+
+def _production_table():
+    """Every online wix-* customer row + 18 offline non-wix rows."""
+    wix = _seed_wix_rows()
+    assert wix, "the seed catalogue must hold wix-* rows"
     rows = [_db_row(p, online=True) for p in wix]
     for pid, name in OFFLINE_NON_WIX_ROWS:
         rows.append(_db_row({"id": pid, "sku": f"FIXTURE-{pid}", "slug": pid,
@@ -145,7 +157,7 @@ def _production_table():
                              "priceNgn": 1000, "priceCfa": 440,
                              "image": "images/products/_placeholder.jpg",
                              "stock": 3}, online=False))
-    assert len(rows) == 276
+    assert len(rows) == len(wix) + len(OFFLINE_NON_WIX_ROWS)
     return rows, [p["id"] for p in wix]
 
 
@@ -206,8 +218,8 @@ def test_api_catalog_returns_all_258_online_wix_products(monkeypatch, client):
     assert body["ok"] is True
 
     products = body["products"]
-    assert len(products) == 258, \
-        f"the public catalogue must serve all 258 online wix-* products, got {len(products)}"
+    assert len(products) == len(wix_ids), \
+        f"the public catalogue must serve every online wix-* product, got {len(products)}"
     ids = [str(p.get("id")) for p in products]
     assert len(ids) == len(set(ids)), "a product id appears twice in /api/catalog"
     assert set(ids) == set(wix_ids), (
@@ -224,8 +236,9 @@ def test_api_catalog_returns_all_258_online_wix_products(monkeypatch, client):
     # meta.count reflects the live catalogue: the 258 online wix-* rows plus
     # the one offline non-fixture row. The 17 test fixtures the table still
     # lists are not part of it any more.
-    assert body["meta"]["count"] == 259, \
-        f"meta.count must reflect the live catalogue (259), got {body['meta']['count']}"
+    expected_count = len(wix_ids) + 1   # + the one offline non-fixture row
+    assert body["meta"]["count"] == expected_count, \
+        f"meta.count must reflect the live catalogue ({expected_count}), got {body['meta']['count']}"
     fixture_ids = {pid for pid, _name in OFFLINE_NON_WIX_ROWS if pid.startswith("jau-") and pid != "jau-mtot3318"}
     assert not (set(ids) & fixture_ids), \
         "a deleted test product is back in the public catalogue"
@@ -252,7 +265,8 @@ def test_api_catalog_never_drops_products_over_a_shared_slug_or_sku(monkeypatch,
     rows, wix_ids = _production_table()
     by_id = {r["id"]: r for r in rows}
     # two DIFFERENT products that happen to share a slug ...
-    by_id["wix-002"]["slug"] = by_id["wix-001"]["slug"]
+    other_id = wix_ids[1]
+    by_id[other_id]["slug"] = by_id["wix-001"]["slug"]
     # ... and two that happen to share a sku
     by_id["wix-004"]["sku"] = by_id["wix-003"]["sku"]
     # a re-created product: fresh id, SAME name + slug + sku -> renders once
@@ -265,14 +279,16 @@ def test_api_catalog_never_drops_products_over_a_shared_slug_or_sku(monkeypatch,
     body = client.get("/api/catalog").get_json()
     ids = [str(p.get("id")) for p in body["products"]]
 
-    assert "wix-001" in ids and "wix-002" in ids, \
+    assert "wix-001" in ids and other_id in ids, \
         "a shared slug hid a DIFFERENT product on /api/catalog"
     assert "wix-003" in ids and "wix-004" in ids, \
         "a shared sku hid a DIFFERENT product on /api/catalog"
     assert "wix-005-recreated" not in ids, "a re-created product rendered twice"
     assert "wix-005" in ids, "the original copy of a re-created product vanished"
-    # 258 originals + 1 re-creation collapsing to one copy = still 258 unique
-    assert len(ids) == 258, f"expected the 258 online products intact, got {len(ids)}"
+    # every original + 1 re-creation collapsing to one copy = still the same
+    # number of unique products
+    assert len(ids) == len(wix_ids), \
+        f"expected the {len(wix_ids)} online products intact, got {len(ids)}"
 
 
 def test_storefront_fallback_seed_is_not_served_when_supabase_answers(client, monkeypatch):
@@ -291,7 +307,7 @@ def test_storefront_fallback_seed_is_not_served_when_supabase_answers(client, mo
     first = next(p for p in body["products"] if p["id"] == "wix-001")
     assert "live Supabase copy" in first["name"], \
         "the Supabase row did not win over the local seed copy"
-    assert len(body["products"]) == 258
+    assert len(body["products"]) == len(wix_ids)
 
 
 def _login_admin(client, monkeypatch):
@@ -319,7 +335,7 @@ def test_admin_catalog_all_returns_exactly_what_is_saved(client, monkeypatch):
     # first, as an anonymous visitor: the public answer is the online-only
     # projection - 258 products, no stock keys, no offline rows
     pub = client.get("/api/catalog").get_json()
-    assert len(pub["products"]) == 258
+    assert len(pub["products"]) == len(wix_ids)
     pub_row = next(p for p in pub["products"] if p["id"] == "wix-001")
     assert "stock" not in pub_row and "stock_quantity" not in pub_row
     assert all(p["id"] not in offline for p in pub["products"])
@@ -334,8 +350,9 @@ def test_admin_catalog_all_returns_exactly_what_is_saved(client, monkeypatch):
     ids = [str(p["id"]) for p in body["products"]]
     fixtures = {pid for pid, _name in OFFLINE_NON_WIX_ROWS
                 if pid.startswith("jau-") and pid != "jau-mtot3318"}
-    assert len(ids) == 259, \
-        f"the admin catalogue must list the live rows (259), got {len(ids)}"
+    expected_live = len(wix_ids) + 1    # + the offline review row
+    assert len(ids) == expected_live, \
+        f"the admin catalogue must list the live rows ({expected_live}), got {len(ids)}"
     assert len(ids) == len(set(ids))
     assert set(ids) == (set(wix_ids) | offline) - fixtures
     assert not (set(ids) & fixtures), "a deleted test product came back"
@@ -344,4 +361,4 @@ def test_admin_catalog_all_returns_exactly_what_is_saved(client, monkeypatch):
     wix_row = next(p for p in body["products"] if p["id"] == "wix-001")
     assert "stock" in wix_row or "stock_quantity" in wix_row, \
         "the admin answer must keep the stock numbers (the public one strips them)"
-    assert body["meta"]["count"] == 259
+    assert body["meta"]["count"] == expected_live

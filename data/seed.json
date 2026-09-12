@@ -21,40 +21,6 @@
     "usesPlaceholder": true
   },
   {
-    "id": "wix-002",
-    "sku": "JAU002",
-    "slug": "100l-storage-bag",
-    "name": "100L storage bag",
-    "category": "household",
-    "priceCfa": 6000,
-    "compareCfa": 6000,
-    "priceNgn": 10300,
-    "compareNgn": 14700,
-    "image": "images/products/_placeholder.jpg",
-    "description": "A storage bag for storing clothes and other items",
-    "stock": 24,
-    "badge": "sale",
-    "featured": true,
-    "colors": [],
-    "nameFr": "100l sac de rangement",
-    "options": [
-      {
-        "title": "Number",
-        "type": "DROP_DOWN",
-        "values": [
-          "1",
-          "2",
-          "6",
-          "5",
-          "4",
-          "3"
-        ]
-      }
-    ],
-    "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
-  },
-  {
     "id": "wix-003",
     "sku": "JAU003",
     "slug": "10in1-raf-sandwich-maker",

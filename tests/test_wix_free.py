@@ -78,12 +78,18 @@ def test_every_au_class_used_in_markup_has_a_css_rule():
 
 
 def test_legacy_product_ids_are_preserved():
-    """The rename must not have touched the wix-* primary keys."""
+    """The rename must not have touched the wix-* primary keys.
+
+    257, not 258: the "100L storage bag" (wix-002) was permanently deleted
+    by the owner, so it is gone from the seed and the bundled snapshot too
+    (see catalog.PERMANENTLY_REMOVED_IDS).
+    """
     seed = open(os.path.join(ROOT, "data", "seed.json"), encoding="utf-8").read()
     snapshot = open(os.path.join(ROOT, "js", "products-data.js"),
                     encoding="utf-8").read()
-    assert len(set(re.findall(r'"wix-\d{3}"', seed))) == 258
-    assert len(set(re.findall(r"wix-\d{3}", snapshot))) == 258
+    assert len(set(re.findall(r'"wix-\d{3}"', seed))) == 257
+    assert len(set(re.findall(r"wix-\d{3}", snapshot))) == 257
+    assert "wix-002" not in seed and "wix-002" not in snapshot
 
 
 def test_e2e_selectors_followed_the_rename():

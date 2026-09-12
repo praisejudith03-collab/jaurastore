@@ -750,7 +750,7 @@ function paintProduct(root, p) {
       <div class="kicker">${t("pdp.qty")}</div>
       <div class="qty">
         <button type="button" data-q="-">−</button>
-        <input type="number" min="1" value="1" data-qty />
+        <input type="number" min="1" step="1" value="1" data-qty />
         <button type="button" data-q="+">+</button>
       </div>
       <div class="pdp-actions">
@@ -895,7 +895,24 @@ function paintProduct(root, p) {
       }
     }
     const variant = variantFull();
-    JA.addToCart(p.id, parseInt(qty.value, 10) || 1, variant);
+    // Hard stock gate: never let the shopper ask for more units than are
+    // actually available (what is in stock, minus what is already in the
+    // cart). The server re-checks this on /api/orders, but blocking here
+    // means the customer is told before they reach checkout.
+    const want = Math.max(1, parseInt(qty.value, 10) || 1);
+    const room = JA.stockLeft ? JA.stockLeft(p, variant) : want;
+    if (room <= 0) {
+      JA.toast(JA.stockProblemLine([{ name: JA.displayName(p) || p.name, available: JA.stockFor(p, variant), requested: want }]));
+      updateStockUI();
+      return;
+    }
+    if (want > room) {
+      JA.toast(JA.stockProblemLine([{ name: JA.displayName(p) || p.name, available: JA.stockFor(p, variant), requested: JA.cartQtyFor(p.id, variant) + want }]));
+      qty.value = String(room);
+      updateStockUI();
+      return;
+    }
+    JA.addToCart(p.id, want, variant);
     setTimeout(updateStockUI, 50);
   });
   const frame = root.querySelector(".pdp-img");
@@ -1040,12 +1057,65 @@ function renderCart() {
   }
 }
 
-function fareWaUrl(order) {
-  const num = "22968953110";
+/* ---------------------------------------------------------- WhatsApp fares
+ * After checkout the customer confirms payment and agrees the transport fare
+ * on WhatsApp. The shop answers on two lines, so the thank-you screen carries
+ * a Nigeria / Benin-Togo toggle: the buttons always open the line for the
+ * market currently selected (pre-selected from the Country field the customer
+ * filled in at checkout).
+ */
+function orderSummaryLines(order) {
+  const items = (order && order.items) || [];
+  return items.map((i) => {
+    const qty = Number(i.qty) || 0;
+    const name = i.name || "";
+    const variant = i.color ? " (" + variantLabel(i, i.color) + ")" : "";
+    const line = JA.money((Number(i.price) || 0) * qty, order.currency);
+    return "- " + qty + " x " + name + variant + " = " + line;
+  }).join("\n");
+}
+
+/** The exact message the customer sends to confirm payment + transport fare. */
+function fareWaText(order) {
   const c = (order && order.customer) || {};
   const loc = [c.city, c.zone, c.address].filter(Boolean).join(" / ");
-  const text = "Hello Jaura Store,\n\nI have paid for my order.\nOrder ID: " + (order.id || "") + "\n\nI would like to know my specific transport fare.\n\nMy delivery location (from my checkout form): " + (loc || "not stated") + "\n\nI understand that transportation fare ranges depending on location and the weight of the products.\n\nThank you.";
-  return "https://wa.me/" + num + "?text=" + encodeURIComponent(text);
+  return [
+    "Hello Jaura Store, here is my Order ID: " + (order.id || "") + ".",
+    "I would like to confirm my payment and transport fare for delivery.",
+    "",
+    "Items:",
+    orderSummaryLines(order),
+    "",
+    "Total: " + JA.money(order.total, order.currency),
+    "Delivery location: " + (loc || "not stated"),
+  ].join("\n");
+}
+
+function fareWaUrl(order, country) {
+  return JA.waLink(fareWaText(order), country);
+}
+
+/** Keep every fare button on the thank-you screen pointed at one market. */
+function paintFareWaButtons(order, root) {
+  const scope = root || document;
+  scope.querySelectorAll("[data-fare-wa]").forEach((el) => {
+    el.setAttribute("href", fareWaUrl(order));
+  });
+  scope.querySelectorAll("[data-wa-toggle]").forEach((btn) => {
+    btn.classList.toggle("is-on", btn.dataset.waToggle === JA.waCountry());
+    btn.setAttribute("aria-pressed", btn.dataset.waToggle === JA.waCountry() ? "true" : "false");
+  });
+}
+
+function bindFareWaToggle(order, root) {
+  const scope = root || document;
+  scope.querySelectorAll("[data-wa-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      JA.setWaCountry(btn.dataset.waToggle);
+      paintFareWaButtons(order, scope);
+    });
+  });
+  paintFareWaButtons(order, scope);
 }
 
 // Payment details come ONLY from GET /api/site, whose source of truth is the
@@ -1114,7 +1184,7 @@ function showOrderDone(order) {
       <p class="ck-id-help">${t("ck.idHelp")}</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 18px">
         <button type="button" class="btn" data-copy-id="${JA.escape(order.id)}">${t("ck.copyId")}</button>
-        <a class="btn btn-line" href="${fareWaUrl(order)}" target="_blank" rel="noopener">${t("ck.waId")}</a>
+        <a class="btn btn-line" data-fare-wa href="${fareWaUrl(order)}" target="_blank" rel="noopener">${t("ck.waId")}</a>
       </div>
       <div data-referral-slot></div>
       <ul class="woo-meta">
@@ -1126,6 +1196,11 @@ function showOrderDone(order) {
       <p class="status-pill ${order.status}">${t("ck.waiting")}</p>
       <p>${t("ck.saveId")}</p>
       <p class="ck-fare-help">${t("ck.fareRange")}</p>
+      <div class="wa-country-toggle" role="group" aria-label="${t("ck.waPick")}">
+        <span class="wa-country-label">${t("ck.waPick")}</span>
+        <button type="button" class="btn btn-line" data-wa-toggle="nigeria">${t("ck.waNg")}</button>
+        <button type="button" class="btn btn-line" data-wa-toggle="benin">${t("ck.waBj")}</button>
+      </div>
       ${note ? `<div class="pay-box" style="margin-top:16px">
         <p class="proof-label">${t("ck.account")}</p>
         <p class="pay-note">${JA.escape(note)}</p>
@@ -1137,11 +1212,18 @@ function showOrderDone(order) {
         <tfoot><tr class="ck-total"><th>${t("ck.total")}</th><td>${JA.money(order.total, order.currency)}</td></tr></tfoot>
       </table>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:22px">
-        <a class="btn" href="https://wa.me/${JA.settings().whatsapp}?text=${encodeURIComponent("Hello JauraStore, my order ID is " + order.id + ". Here is my payment screenshot.")}" target="_blank" rel="noopener">${t("ck.uploadNow")}</a>
+        <a class="btn" data-fare-wa href="${fareWaUrl(order)}" target="_blank" rel="noopener">${t("ck.uploadNow")}</a>
         <a class="btn btn-line" href="shop.html">${t("ck.return")}</a>
       </div>
     </div>`;
   paintReferralSlot(order.id);
+  // The customer's checkout country pre-selects the WhatsApp line, then the
+  // toggle above lets them switch markets before tapping through.
+  try {
+    const country = (order.customer && order.customer.country) || "";
+    if (JA.waRegionFor(country)) JA.setWaCountry(country);
+  } catch (e) {}
+  bindFareWaToggle(order, root);
 }
 
 /* The server mints a referral code for qualifying orders. It arrives in the
@@ -1487,6 +1569,10 @@ function renderCheckout() {
     zoneField.addEventListener("blur", (e) => promptCurrencyForBeninTogo(e.target.value));
   }
   if (countryField) {
+    // The Country field is also what routes the WhatsApp buttons: Nigeria ->
+    // the Nigeria line, Benin / Togo -> the Benin-Togo line.
+    try { if (JA.waRegionFor(countryField.value)) JA.setWaCountry(countryField.value); } catch (e) {}
+    countryField.addEventListener("change", (e) => { try { JA.setWaCountry(e.target.value); } catch (err) {} });
     countryField.addEventListener("change", (e) => promptCurrencyForBeninTogo(e.target.value));
     countryField.addEventListener("blur", (e) => promptCurrencyForBeninTogo(e.target.value));
   }
@@ -1940,26 +2026,88 @@ function watchReveal() {
   document.querySelectorAll(".reveal, .reveal-left, .reveal-right").forEach((el) => io.observe(el));
 }
 
-async function boot() {
-  try { await (JA && JA.ready); } catch (e) {}
-  try { JA.mountChrome(); } catch (e) { console.error(e); }
-  // The owner's category table lives on the server — every page (not just
-  // admin) renders it, so pull it in before the first draw.
-  try { await JA.loadServerCategories(); } catch (e) {}
-  // Custom moving-banner text (owner-editable in Admin → Settings): paint it
-  // over the default delivery-window line on every page.
-  // The live site row (banner text, branding, bank details, delivery zones,
-  // the editable Delivery page) must be in JA BEFORE the first draw: the
-  // checkout builds its bank box and its zone <select> straight out of it,
-  // and painting first meant the customer saw an empty bank sheet until the
-  // fetch happened to land.
+/** Warm a product's hero image before the shopper lands on its page. */
+const _warmed = new Set();
+function warmProduct(id) {
+  if (!id || _warmed.has(id)) return;
+  _warmed.add(id);
   try {
-    const r = await fetch("api/site", { cache: "no-store" });
-    const d = r.ok ? await r.json() : null;
-    const site = (d && d.site) || {};
-    if (JA.applySiteConfig) JA.applySiteConfig(site);
-    else if (JA.setBanner) JA.setBanner(site.convBanner || "", site.convBold || "");
+    const p = JA.product(id);
+    if (!p) return;
+    const gallery = (JA.galleryOf && JA.galleryOf(p)) || [p.image];
+    const src = JA.asset(gallery[0] || p.image);
+    if (!src) return;
+    const img = new Image();
+    img.decoding = "async";
+    img.src = src;
   } catch (e) {}
+}
+
+/** Bind the prefetch to every product link, once per page. */
+function installProductPrefetch() {
+  if (document.documentElement.dataset.jaPrefetchBound) return;
+  document.documentElement.dataset.jaPrefetchBound = "1";
+  const idFrom = (el) => {
+    const a = el && el.closest && el.closest('a[href*="product.html?id="]');
+    if (!a) return "";
+    try {
+      return new URL(a.getAttribute("href"), location.href).searchParams.get("id") || "";
+    } catch (e) { return ""; }
+  };
+  const warm = (e) => { const id = idFrom(e.target); if (id) warmProduct(id); };
+  document.addEventListener("pointerdown", warm, { passive: true });
+  document.addEventListener("touchstart", warm, { passive: true });
+  document.addEventListener("mouseover", warm, { passive: true });
+}
+
+async function boot() {
+  /* Boot used to await THREE network roundtrips (catalogue, categories,
+   * site config) before a single pixel was drawn - on a slow mobile network
+   * that is a blank screen for seconds, and tapping a product felt broken.
+   *
+   * Now: the cached catalogue paints immediately, and the three fetches run
+   * CONCURRENTLY in the background, repainting when they land. The only
+   * page that still waits is the checkout, whose bank details and delivery
+   * zones must be correct before the form is usable - and even there the
+   * wait is capped so a dead network can never hang the page.
+   */
+  const page = document.body.dataset.page;
+  const needsSiteFirst = page === "checkout";
+
+  try { JA.hydrateFromCache && JA.hydrateFromCache(); } catch (e) {}
+
+  // Catalogue: only block when there is nothing cached to paint yet.
+  let catalogReady = null;
+  try {
+    catalogReady = JA.ready;
+    if (!(JA.products && JA.products().length)) await catalogReady;
+  } catch (e) {}
+
+  try { JA.mountChrome(); } catch (e) { console.error(e); }
+
+  // The owner's category table and the live site row (banner text, branding,
+  // bank details, delivery zones, the editable Delivery page). Both are
+  // started NOW, in parallel, and repaint the page when they resolve.
+  const categoriesReady = (async () => {
+    try { await JA.loadServerCategories(); } catch (e) {}
+  })();
+
+  const siteReady = (async () => {
+    try {
+      const r = await fetch("api/site", { cache: "no-store" });
+      const d = r.ok ? await r.json() : null;
+      const site = (d && d.site) || {};
+      if (JA.applySiteConfig) JA.applySiteConfig(site);
+      else if (JA.setBanner) JA.setBanner(site.convBanner || "", site.convBold || "");
+    } catch (e) {}
+  })();
+
+  if (needsSiteFirst) {
+    // Cap the wait: a dead network must degrade to the offline fallback,
+    // never to a page that never finishes loading.
+    const cap = new Promise((res) => setTimeout(res, 4000));
+    await Promise.race([Promise.all([siteReady, categoriesReady]), cap]);
+  }
   document.querySelectorAll(".lux-reel video").forEach((v) => {
     v.muted = true;
     v.setAttribute("playsinline", "");
@@ -2003,7 +2151,6 @@ async function boot() {
     window.addEventListener("pageshow", play);
     window.addEventListener("focus", play);
   });
-  const page = document.body.dataset.page;
   if (page === "home") mountHeroVideo();
   const draw = () => {
     if (page === "home") renderHome();
@@ -2022,7 +2169,24 @@ async function boot() {
     watchReveal();
   };
   draw();
+  // Instant product transitions: the moment a shopper touches (or hovers) a
+  // product card we warm its hero image, so by the time product.html paints
+  // the photo is already in the browser cache. Costs nothing when the tap
+  // never happens - and needs no backend roundtrip at all, because the
+  // catalogue the card came from already holds the image URL.
+  installProductPrefetch();
   document.addEventListener("ja:rerender", draw);
+  // A background catalogue refresh that actually changed something repaints
+  // the page; an identical answer never causes a flicker.
+  document.addEventListener("ja:catalog", draw);
+  // The category table and the site row land after the first paint on every
+  // page except the checkout: repaint once each, so the shopper sees the
+  // instant render first and the live data a moment later.
+  if (!needsSiteFirst) {
+    categoriesReady.then(draw).catch(() => {});
+    siteReady.then(draw).catch(() => {});
+  }
+  if (catalogReady) { catalogReady.then(() => {}).catch(() => {}); }
   document.addEventListener("ja:cart", () => {
     if (page === "cart") draw();
   });
