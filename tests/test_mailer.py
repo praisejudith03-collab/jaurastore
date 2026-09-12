@@ -504,7 +504,7 @@ class TestAdminNewOrderEmail:
         assert "Praise Judith" in html_body        # customer details
         assert "Shea butter" in html_body          # items
         assert "UBA" in html_body                  # payment method
-        assert "12000 NGN" in html_body            # total
+        assert "\u20a612,000" in html_body        # total, formatted
         assert ("https://example.supabase.co/storage/v1/object/public/proofs/r.png"
                 in html_body)                      # receipt link
 
@@ -547,7 +547,7 @@ class TestCustomerConfirmationEmail:
         html_body = payload["html"]
         assert "confirmed" in html_body.lower()
         assert "Praise Judith" in html_body and "Shea butter" in html_body
-        assert "12000 NGN" in html_body
+        assert "\u20a612,000" in html_body
 
     def test_no_valid_customer_email_is_a_quiet_no_op(self, resend_env):
         ok, detail = mailer.notify_order_confirmed({"id": "JA-NOEMAIL",

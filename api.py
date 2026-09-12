@@ -1045,6 +1045,11 @@ def create_order():
     try:
         import mailer
         mailer.notify_new_order_async(order)
+        # ... and send the customer their own structured order summary. Both
+        # calls hand the work to a daemon thread inside the mailer, so a slow
+        # or dead mail provider can never delay this response or time the
+        # Render worker out.
+        mailer.notify_order_received_async(order)
     except Exception:
         pass
 
@@ -1672,6 +1677,10 @@ def admin_product_upsert():
     product, action = result[0], result[1]
     mirrored = result[2] if len(result) > 2 else True
     if not product:
+        if action == "permanently-removed":
+            return jsonify(ok=False, error=(
+                "That product was permanently deleted from the shop and "
+                "cannot be re-created.")), 400
         if action == "test-fixture":
             return jsonify(ok=False, error=(
                 "That is a test product from the test suite, not a shop piece. "
@@ -2058,6 +2067,10 @@ SITE_KEYS = ("bank_name", "account_number", "account_name",
              "togo_payment_account", "togo_payment_instructions",
              "naira_payment_bank", "naira_payment_name",
              "naira_payment_account", "naira_payment_instructions",
+             # Dual-country WhatsApp lines (digits only). Nigeria customers
+             # are routed to whatsapp_number_ng; Benin / Togo customers to
+             # whatsapp_number_bj. Admin-editable; env vars are the floor.
+             "whatsapp_number_ng", "whatsapp_number_bj",
              # Canonical shipping-note column. It was only reachable through
              # the legacy `shippingNote` alias, so an admin form posting the
              # real column name had it silently dropped.
@@ -2227,6 +2240,19 @@ def admin_delivery_page_save():
 def _site_payload(site):
     """Canonical site_settings row + the legacy front-end aliases."""
     out = dict(site or {})
+    # Dual-country WhatsApp lines: the admin row wins, the environment is the
+    # floor. Always served as digits only, which is what wa.me links need, so
+    # the storefront never has to sanitise a number the owner typed with
+    # spaces or a leading "+".
+    def _digits(value):
+        return "".join(c for c in str(value or "") if c.isdigit())
+    ng = _digits(out.get("whatsapp_number_ng")) or _digits(Config.WHATSAPP_NUMBER_NG)
+    bj = _digits(out.get("whatsapp_number_bj")) or _digits(Config.WHATSAPP_NUMBER_BJ)
+    out["whatsapp_number_ng"] = ng
+    out["whatsapp_number_bj"] = bj
+    # Legacy alias read by older bundles (JA.settings().whatsapp).
+    if not _digits(out.get("whatsapp")):
+        out["whatsapp"] = bj or ng
     for col, alias in SITE_LEGACY_ALIASES.items():
         if col in out and alias not in out:
             out[alias] = out[col]

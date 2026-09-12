@@ -414,6 +414,94 @@ def delete_products_strict(ids):
         return False
 
 
+def _product_media_urls(row):
+    """Every stored file a product row points at (photos + videos)."""
+    out = []
+    row = dict(row or {})
+    for key in ("image", "image_url", "imageUrl", "video", "video_url"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            out.append(value.strip())
+    images = row.get("images")
+    if isinstance(images, str):
+        try:
+            images = json.loads(images)
+        except Exception:
+            images = []
+    if isinstance(images, (list, tuple)):
+        for value in images:
+            if isinstance(value, str) and value.strip():
+                out.append(value.strip())
+            elif isinstance(value, dict):
+                for k in ("url", "src", "image"):
+                    if isinstance(value.get(k), str) and value[k].strip():
+                        out.append(value[k].strip())
+    seen, unique = set(), []
+    for value in out:
+        if value not in seen:
+            seen.add(value)
+            unique.append(value)
+    return unique
+
+
+def hard_delete_products(ids):
+    """PERMANENTLY delete product rows from PostgreSQL and purge their files.
+
+    Unlike ``delete_products`` (which only tombstones ``source="deleted"``)
+    this removes the row itself, and every file it referenced in Supabase
+    Storage, so the product cannot be resurrected by a mirror pass, a bulk
+    re-import or a redeploy. The id is also recorded in the durable
+    deleted-ids list, which is what stops the bundled seed copy from being
+    served again.
+
+    Returns {"deleted": [ids], "files": n, "errors": [str]}. Never raises.
+    """
+    report = {"deleted": [], "files": 0, "errors": []}
+    ids = [str(i or "").strip() for i in (ids or []) if str(i or "").strip()]
+    if not ids:
+        return report
+    c = client()
+    if c is None:
+        report["errors"].append("supabase not configured")
+        return report
+
+    # 1. purge the Storage objects the rows point at, while we can still read
+    #    them (once the row is gone the URLs are lost).
+    for pid in ids:
+        try:
+            res = c.table("products").select("*").eq("id", pid).execute()
+            for row in (getattr(res, "data", None) or []):
+                for url in _product_media_urls(row):
+                    try:
+                        if _delete_storage_object_from_url(url):
+                            report["files"] += 1
+                    except Exception as exc:
+                        report["errors"].append(f"storage {pid}: {exc}")
+        except Exception as exc:
+            report["errors"].append(f"read {pid}: {exc}")
+
+    # 2. delete the rows themselves.
+    try:
+        c.table("products").delete().in_("id", ids).execute()
+        report["deleted"] = list(ids)
+    except Exception as exc:
+        report["errors"].append(f"delete: {exc}")
+
+    # 3. durable tombstone, so the bundled seed copy stays suppressed too.
+    for pid in ids:
+        try:
+            add_deleted_id(pid)
+        except Exception as exc:
+            report["errors"].append(f"tombstone {pid}: {exc}")
+
+    # 4. drop any per-variant stock rows left behind.
+    try:
+        c.table("variant_stock").delete().in_("product_id", ids).execute()
+    except Exception:
+        pass
+    return report
+
+
 def replace_all_products(products):
     """Replace the admin product set in Supabase (bulk import).
 

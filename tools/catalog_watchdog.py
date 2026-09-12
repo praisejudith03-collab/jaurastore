@@ -15,7 +15,7 @@ and fails loudly when any of these invariants break:
     the public catalogue exactly once - in either direction (missing rows are
     the "storefront shows fewer products than Supabase" defect; extra rows
     are rows that should have been filtered out);
-  * the 255 approved customer rows (wix-001..wix-258 minus the three the
+  * the 254 approved customer rows (wix-001..wix-258 minus the rows the
     owner deleted on purpose: wix-006, wix-007, wix-108) still exist in
     Supabase and are online=true - the "products disappear" guard. If you
     INTENTIONALLY unpublish or delete one of them, change EXPECTED_WIX_IDS
@@ -38,11 +38,14 @@ import urllib.request
 
 DEFAULT_BASE = "https://jaurastore.com.ng"
 
-# The approved customer catalogue: 255 wix-* rows - ids wix-001..wix-258
-# (CUSTOMER_CATALOG_IMPORT_REVIEW.md) minus the three the owner deleted on
-# purpose (2026-09-10), which must never trip this guard again.
+# The approved customer catalogue: 254 wix-* rows - ids wix-001..wix-258
+# (CUSTOMER_CATALOG_IMPORT_REVIEW.md) minus the rows the owner deleted on
+# purpose, which must never trip this guard again:
+#   wix-006 / wix-007 / wix-108  (2026-09-10)
+#   wix-002  "100L storage bag"  (permanently purged - see
+#            catalog.PERMANENTLY_REMOVED_IDS and tools/purge_product.py)
 # Zero-padded to three digits.
-RETIRED_WIX_IDS = frozenset({"wix-006", "wix-007", "wix-108"})
+RETIRED_WIX_IDS = frozenset({"wix-002", "wix-006", "wix-007", "wix-108"})
 EXPECTED_WIX_IDS = tuple(f"wix-{i:03d}" for i in range(1, 259)
                           if f"wix-{i:03d}" not in RETIRED_WIX_IDS)
 
@@ -207,7 +210,7 @@ def check(db_rows, payload, expected_ids=EXPECTED_WIX_IDS):
             f"{len(extra)} product(s) are served that Supabase does not list "
             f"online: {', '.join(extra[:15])}")
 
-    # 3. the approved 255 customer rows never disappear and never go offline
+    # 3. the approved 254 customer rows never disappear and never go offline
     gone = [pid for pid in expected_ids if pid not in live]
     offline = [pid for pid in expected_ids if pid in live
                and live[pid].get("online") is not True]

@@ -50,6 +50,34 @@ PLACEHOLDER_IMG = "images/products/_placeholder.jpg"
 # From now on the live environments refuse to save or serve one, and the boot
 # pass tombstones whatever is already there.
 FIXTURE_ID_PREFIXES = ("jau-stock", "jau-mirror")
+
+# ------------------------------------------------------- permanent removals
+# Products the owner deleted for good. They are hard-deleted from Supabase
+# (see supabase_store.hard_delete_products and tools/purge_product.py) AND
+# removed from the bundled seed, but a stale mirror, an old CSV re-import or
+# a restored backup could still put a row back. Matching on id AND slug AND
+# folded name here is the last line of defence: merged() drops them on every
+# read, and upsert() refuses to save one, so they can never return - across
+# redeploys, restarts or re-imports.
+PERMANENTLY_REMOVED_IDS = {"wix-002"}
+PERMANENTLY_REMOVED_SLUGS = {"100l-storage-bag"}
+PERMANENTLY_REMOVED_NAMES = {"100lstoragebag"}
+
+
+def _fold_name(value):
+    return "".join(c for c in str(value or "").lower() if c.isalnum())
+
+
+def is_permanently_removed(product):
+    """True for a product the owner deleted for good (never re-servable)."""
+    p = dict(product or {})
+    if str(p.get("id") or "").strip() in PERMANENTLY_REMOVED_IDS:
+        return True
+    if str(p.get("legacyId") or "").strip() in PERMANENTLY_REMOVED_IDS:
+        return True
+    if str(p.get("slug") or "").strip().lower() in PERMANENTLY_REMOVED_SLUGS:
+        return True
+    return _fold_name(p.get("name")) in PERMANENTLY_REMOVED_NAMES
 FIXTURE_SKU_PREFIX = "JAUSTOCK"
 FIXTURE_NAME_PREFIX = "stock test"
 
@@ -893,6 +921,10 @@ def merged(include_hidden=False):
     if _fixture_guard_active():
         products = [p for p in products if not is_test_fixture(p)]
 
+    # Permanently removed products never come back - not from a stale mirror,
+    # not from a restored backup, not from a bulk re-import.
+    products = [p for p in products if not is_permanently_removed(p)]
+
     if not include_hidden:
         products = [p for p in products if p.get("online") is not False]
 
@@ -1115,6 +1147,64 @@ def purge_test_fixtures(actor="fixture_guard"):
     return report
 
 
+def purge_permanently_removed(actor="purge_guard"):
+    """Hard-delete every PERMANENTLY_REMOVED product from the live shop.
+
+    Called on boot (production/staging) and by tools/purge_product.py:
+
+      * deletes the products-table ROW in Supabase PostgreSQL (not a
+        tombstone - the row is gone),
+      * purges the files it referenced from Supabase Storage,
+      * records the id in the durable deleted-ids list, and
+      * drops it from the local override file.
+
+    Idempotent, never raises: a second run finds nothing to do. Together
+    with the read-time filter in merged() this is what makes an "absolute
+    deletion" survive deploys, restarts and re-imports.
+    """
+    report = {"ids": sorted(PERMANENTLY_REMOVED_IDS), "deleted": [],
+              "files": 0, "errors": []}
+    ids = set(PERMANENTLY_REMOVED_IDS)
+    # Pick up re-created copies that carry a new id but the same slug/name.
+    for row in (_supabase_products() or []):
+        if is_permanently_removed(row):
+            ids.add(str(row.get("id") or "").strip())
+    for row in (overrides().get("products") or []):
+        if is_permanently_removed(row):
+            ids.add(str(row.get("id") or "").strip())
+    ids.discard("")
+    if not ids:
+        return report
+
+    if _prod_source():
+        try:
+            import supabase_store
+            result = supabase_store.hard_delete_products(sorted(ids))
+            report["deleted"] = result.get("deleted") or []
+            report["files"] = result.get("files") or 0
+            report["errors"] = result.get("errors") or []
+        except Exception as exc:                        # pragma: no cover
+            report["errors"].append(str(exc))
+
+    def _apply(data, _path):
+        data["products"] = [p for p in (data.get("products") or [])
+                            if not is_permanently_removed(p)]
+        deleted = list(data.get("deleted") or [])
+        for pid in sorted(ids):
+            if pid not in deleted:
+                deleted.append(pid)
+        data["deleted"] = deleted
+        data["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        data["updatedBy"] = actor
+        return data
+
+    try:
+        _mutate(actor, _apply)
+    except Exception as exc:
+        report["errors"].append(str(exc))
+    return report
+
+
 def _own_photo_ref(value):
     """A normalised reference for one of OUR stored photos, or "".
 
@@ -1281,6 +1371,10 @@ def upsert(product, actor=None):
     # still works, so the owner can clear anything already there.
     if _fixture_guard_active() and is_test_fixture(clean):
         return None, "test-fixture", True
+    # A permanently removed product (the owner deleted it for good) can never
+    # be re-created - by an admin save, a CSV import or a mirror pass.
+    if is_permanently_removed(clean):
+        return None, "permanently-removed", True
 
     live = []
     try:

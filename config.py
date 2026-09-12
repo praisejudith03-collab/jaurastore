@@ -31,6 +31,17 @@ class Config:
     WHATSAPP_NOTIFY_NUMBER = "".join(
         c for c in os.environ.get("WHATSAPP_NOTIFY_NUMBER", "2290168953101") if c.isdigit())
 
+    # ------------------------------------------ customer-facing WhatsApp lines
+    # Two shop lines, one per market. The storefront routes every inquiry /
+    # transport-fare button to the right one from the customer's country:
+    #   Nigeria            -> WHATSAPP_NUMBER_NG
+    #   Benin  /  Togo     -> WHATSAPP_NUMBER_BJ
+    # Digits only (no "+", no spaces): that is what wa.me expects.
+    WHATSAPP_NUMBER_NG = "".join(
+        c for c in os.environ.get("WHATSAPP_NUMBER_NG", "2349161670236") if c.isdigit())
+    WHATSAPP_NUMBER_BJ = "".join(
+        c for c in os.environ.get("WHATSAPP_NUMBER_BJ", "2290168953101") if c.isdigit())
+
     # In-process scheduler (keep-alive, maintenance + midnight backup)
     SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "1") != "0"
 

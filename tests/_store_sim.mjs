@@ -29,8 +29,8 @@ const root = path.join(here, "..");
 const storeSrc = readFileSync(path.join(root, "js", "store.js"), "utf8");
 const seedRows = JSON.parse(readFileSync(path.join(root, "data", "seed.json"), "utf8"));
 const WIX = seedRows.filter((p) => String(p.id || "").startsWith("wix-"));
-if (WIX.length !== 258) {
-  console.error(`FAIL  the approved customer catalogue must hold 258 wix-* rows, found ${WIX.length}`);
+if (WIX.length !== 257) {
+  console.error(`FAIL  the approved customer catalogue must hold 257 wix-* rows, found ${WIX.length}`);
   process.exit(1);
 }
 
@@ -106,11 +106,11 @@ const offlineFixture = (id, name) => ({
       ["jau-stock-pay", "Stock Test jau-stock-pay"], ["jau-stock-rop", "Stock Test jau-stock-rop"],
       ["jau-mtot3318", "Tote bag"],
     ].map(([id, name]) => offlineFixture(id, name)),
-  ]; // the production shape: 276 served, 258 online
+  ]; // the production shape: 275 served, 257 online
   const { JA } = makeSandbox(served);
   await JA.reloadCatalog();
   const products = JA.products();
-  check("all 258 online wix-* products reach the storefront", products.length === 258,
+  check("all 257 online wix-* products reach the storefront", products.length === 257,
     `JA.products() returned ${products.length}`);
   const ids = new Set(products.map((p) => String(p.id)));
   const expected = new Set(WIX.map((p) => String(p.id)));
@@ -124,16 +124,16 @@ const offlineFixture = (id, name) => ({
 {
   const served = WIX.map(online);
   const byId = Object.fromEntries(served.map((p) => [p.id, p]));
-  byId["wix-002"].slug = byId["wix-001"].slug;   // same slug, DIFFERENT names
+  byId["wix-003"].slug = byId["wix-001"].slug;   // same slug, DIFFERENT names
   byId["wix-004"].sku = byId["wix-003"].sku;     // same sku, DIFFERENT names
   const { JA } = makeSandbox(served);
   await JA.reloadCatalog();
   const ids = new Set(JA.products().map((p) => String(p.id)));
   check("a shared slug never hides a different product",
-    ids.has("wix-001") && ids.has("wix-002"), [...ids].length + " products rendered");
+    ids.has("wix-001") && ids.has("wix-003"), [...ids].length + " products rendered");
   check("a shared sku never hides a different product",
     ids.has("wix-003") && ids.has("wix-004"));
-  check("the storefront still shows all 258", ids.size === 258, `got ${ids.size}`);
+  check("the storefront still shows all 257", ids.size === 257, `got ${ids.size}`);
 }
 
 // --------------------------------------- 3. a re-created product renders exactly once
@@ -146,7 +146,7 @@ const offlineFixture = (id, name) => ({
   await JA.reloadCatalog();
   const ids = new Set(JA.products().map((p) => String(p.id)));
   check("a re-created product renders exactly once",
-    ids.has("wix-005") && !ids.has("wix-005-recreated") && ids.size === 258,
+    ids.has("wix-005") && !ids.has("wix-005-recreated") && ids.size === 257,
     `got ${ids.size}`);
 }
 

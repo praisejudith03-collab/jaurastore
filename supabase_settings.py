@@ -22,6 +22,10 @@ DEFAULT_SETTINGS = {
     "togo_payment_account": "+229 01 68 95 31 10", "togo_payment_instructions": "",
     "naira_payment_bank": "UBA", "naira_payment_name": "OKORAFOR PRAISE",
     "naira_payment_account": "23474678931", "naira_payment_instructions": "",
+    # Dual-country WhatsApp lines (digits only). Admin-editable; the env
+    # variables WHATSAPP_NUMBER_NG / WHATSAPP_NUMBER_BJ supply the default
+    # when the row carries nothing (see api._site_payload).
+    "whatsapp_number_ng": "", "whatsapp_number_bj": "",
 }
 
 # The payment identity floor: the same 9 values as DEFAULT_SETTINGS. When a

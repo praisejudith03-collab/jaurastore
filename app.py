@@ -278,6 +278,19 @@ def create_app():
                         ", ".join(str(x) for x in fixtures["found"]))
             except Exception as exc:
                 app.logger.warning("test-product purge skipped: %s", exc)
+            # Products the owner deleted for good (catalog.PERMANENTLY_REMOVED_*)
+            # are hard-deleted from PostgreSQL and purged from Storage on every
+            # boot, so a stale mirror or a restored backup can never put one
+            # back on the storefront. merged() also filters them on every read.
+            try:
+                purged = _catalog_mod.purge_permanently_removed()
+                if purged.get("deleted") or purged.get("files"):
+                    app.logger.info(
+                        "permanently removed products purged: %s (%d file(s))",
+                        ", ".join(str(x) for x in purged.get("deleted") or []),
+                        purged.get("files") or 0)
+            except Exception as exc:
+                app.logger.warning("permanent-removal purge skipped: %s", exc)
             # One-shot seed: re-insert a shipped default category the live
             # categories table lost (perfume vanished from the shop pills,
             # the categories page and the menu; no product carried it, so a

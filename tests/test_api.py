@@ -139,7 +139,7 @@ def test_replaying_an_order_never_duplicates_it(client):
     body = {
         "id": "JA-UNIT02", "currency": "NGN", "total": 5000,
         "customer": {"name": "Re", "email": "re@example.com", "zone": "Lagos Mainland"},
-        "items": [{"id": "wix-002", "name": "Cup", "qty": 1, "price": 5000}],
+        "items": [{"id": "wix-003", "name": "Cup", "qty": 1, "price": 5000}],
     }
     first = client.post("/api/orders", json=body, headers={"X-CSRF-Token": tok})
     again = client.post("/api/orders", json=body, headers={"X-CSRF-Token": tok})

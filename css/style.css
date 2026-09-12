@@ -6373,3 +6373,21 @@ body.au-shop .shop-banner img,
   font-weight: 700 !important; font-size: clamp(64px, 16vw, 128px) !important;
   color: #ffffff !important; text-shadow: 0 2px 16px rgba(24,15,9,.55) !important;
   z-index: 2 !important; }
+
+/* Nigeria vs Benin/Togo WhatsApp line picker on the thank-you screen */
+.wa-country-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 14px 0 4px;
+}
+.wa-country-toggle .wa-country-label {
+  font-size: 13px;
+  color: var(--taupe, #8a7a68);
+}
+.wa-country-toggle .btn.is-on {
+  background: #25d366;
+  border-color: #25d366;
+  color: #fff;
+}
