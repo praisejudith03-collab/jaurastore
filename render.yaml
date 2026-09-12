@@ -9,7 +9,7 @@ services:
     region: frankfurt
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn "app:create_app()" --workers 2 --timeout 90
+    startCommand: gunicorn "app:create_app()" --workers 2 --threads 8 --worker-class gthread --timeout 90 --graceful-timeout 30 --keep-alive 5
     healthCheckPath: /healthz
     envVars:
       - key: FLASK_ENV
@@ -123,7 +123,7 @@ services:
     region: frankfurt
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn "app:create_app()" --workers 2 --timeout 90
+    startCommand: gunicorn "app:create_app()" --workers 2 --threads 8 --worker-class gthread --timeout 90 --graceful-timeout 30 --keep-alive 5
     healthCheckPath: /healthz
     envVars:
       - key: FLASK_ENV

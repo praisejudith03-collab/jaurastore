@@ -1,5 +1,5 @@
 """J Aura Store - Flask app: serves the storefront plus a JSON API."""
-import os, re, html, datetime
+import os, re, html, gzip, datetime
 from urllib.parse import quote
 from flask import (Flask, send_from_directory, jsonify, request, redirect,
                    Response, abort, session, make_response as _make_response)
@@ -368,6 +368,54 @@ def create_app():
         # a visitor always fetches fresh markup on every navigation.
         if re.fullmatch(r"\d+", request.args.get("v", "")):
             resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
+
+    @app.after_request
+    def _compress(resp):
+        """gzip text responses (stdlib only, no extra dependency).
+
+        The catalogue answer is ~125 KB of JSON and every visitor fetches it.
+        On a 3G phone that is most of the wait before the first product is
+        visible; gzipped it is roughly a tenth of that. Skipped when the
+        client did not offer gzip, when the body is small enough that
+        compressing costs more than it saves, for already-compressed media,
+        for streamed/direct-passthrough responses, and for 304s (which carry
+        no body). Vary: Accept-Encoding is set so a shared cache can never
+        hand a gzipped body to a client that cannot read it.
+        """
+        try:
+            resp.headers.add("Vary", "Accept-Encoding")
+            if "gzip" not in (request.headers.get("Accept-Encoding") or "").lower():
+                return resp
+            if resp.status_code < 200 or resp.status_code >= 300:
+                return resp
+            if resp.headers.get("Content-Encoding"):
+                return resp
+            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            ok_type = (ctype.startswith("text/")
+                       or ctype in ("application/json", "application/javascript",
+                                    "application/xml", "image/svg+xml")
+                       or ctype.endswith("+json") or ctype.endswith("+xml"))
+            if not ok_type:
+                return resp
+            # Static files (CSS/JS) are sent as a streamed file wrapper. The
+            # stylesheet alone is ~190 KB and it blocks the first paint, so
+            # they are exactly the responses worth compressing: read the body
+            # in and turn passthrough off before replacing it.
+            if resp.direct_passthrough:
+                resp.direct_passthrough = False
+            body = resp.get_data()
+            if len(body) < 1024:
+                return resp
+            packed = gzip.compress(body, 6)
+            if len(packed) >= len(body):
+                return resp
+            resp.set_data(packed)
+            resp.headers["Content-Encoding"] = "gzip"
+            resp.headers["Content-Length"] = str(len(packed))
+        except Exception:
+            # Compression is an optimisation: never let it break a response.
+            return resp
         return resp
 
     @app.after_request
