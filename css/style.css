@@ -1404,16 +1404,25 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #f8f0e2; }
   line-height: 1.45;
 }
 .order-complete-page { padding-top: 30px; padding-bottom: 54px; }
-.ck-submit-error {
-  margin: 12px 0;
-  padding: 12px 14px;
-  border: 1px solid #cf5548;
-  border-radius: 8px;
-  background: #fff1ef;
-  color: #8b2118;
-  font-size: 13px;
-  line-height: 1.5;
+.order-customer-info {
+  margin: 20px 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fdfbf7;
 }
+.order-customer-info h3 { margin: 0 0 12px; }
+.order-customer-info dl { margin: 0; }
+.order-customer-info dl > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.38fr) 1fr;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(120, 93, 65, 0.14);
+}
+.order-customer-info dl > div:last-child { border-bottom: 0; }
+.order-customer-info dt { color: var(--muted); font-size: 12px; }
+.order-customer-info dd { margin: 0; overflow-wrap: anywhere; }
 .ck-place { width: 100%; }
 .woo-meta {
   display: grid;

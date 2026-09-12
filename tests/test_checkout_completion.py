@@ -32,20 +32,26 @@ def test_order_complete_step_exists_only_on_dedicated_success_page():
     assert 'data-page="order-complete"' not in checkout
 
 
-def test_place_order_awaits_submission_before_success_redirect():
+def test_place_order_immediately_shows_the_dedicated_success_view():
     app = _read("js/app.js")
-    await_submission = "order.submission ? await order.submission"
-    redirect = 'window.location.assign(target)'
-    assert await_submission in app
+    assert "order.submission ? await order.submission" not in app
+    assert "const submission = order.submission" in app
     assert 'const target = "order-complete.html?order="' in app
-    assert redirect in app
-    assert app.index(await_submission) < app.index(redirect)
+    assert "window.history.replaceState({ orderId: order.id }, \"\", target)" in app
+    assert "paintOrderCompleteChrome();" in app
+    assert "showOrderDone(order);" in app
+    assert app.index("const submission = order.submission") < app.index("showOrderDone(order);")
+    # Refreshing the dedicated page can still recover the server copy.
     assert 'window.JA_NET.api("api/orders/" + encodeURIComponent(id))' in app
+    # The success view includes the form information the customer entered.
+    assert 'class="order-customer-info"' in app
+    for field in ('customer.name', 'customer.phone', 'customer.email',
+                  'customer.address', 'customer.city', 'customer.zone',
+                  'customer.country', 'customer.note'):
+        assert field in app
     store = _read("js/store.js")
     assert 'Object.defineProperty(order, "submission"' in store
     assert "enumerable: false" in store
-    assert "data.queued && data.persisted !== true" in store
-    assert "A memory-only queue" in store
 
 
 def test_homepage_prioritizes_hero_and_defers_external_scripts():

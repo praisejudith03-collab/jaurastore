@@ -1302,26 +1302,11 @@ const JA = (() => {
         opts.json = payload;
       }
       submission = window.JA_NET.api("api/orders", opts).then((data) => {
-        // A live response means the order is durably stored. An offline result
-        // may proceed only after IndexedDB/localStorage has accepted the outbox
-        // job. A memory-only queue would disappear on navigation and must never
-        // produce a false Order Completed screen.
-        if (data && data.queued && data.persisted !== true) {
-          try {
-            window.JA_NET.discard((job) => job && job.id === data.id);
-          } catch (e) {}
-          const err = new Error("Your order could not be saved offline. Please reconnect and try again.");
-          err.data = { error: err.message };
-          throw err;
-        }
+        // A live response marks the local copy as synced. Offline results stay
+        // in JA_NET's outbox and continue automatically while the instant
+        // completed-order view remains open.
         if (!(data && data.queued)) onSaved(data || {});
         return data || {};
-      }).catch((err) => {
-        // A permanent 4xx (invalid zone, changed stock, bad receipt, etc.) is
-        // not an order. Roll back the optimistic local copy and let checkout
-        // show the server's exact reason instead of displaying false success.
-        try { write(KEYS.orders, orders().filter((o) => o.id !== order.id)); } catch (e) {}
-        throw err;
       });
     }
 

@@ -1205,6 +1205,22 @@ function showOrderDone(order) {
   const note = payConfigured(pay)
     ? [pay.provider, pay.account, pay.name].filter(Boolean).join(" · ")
     : "";
+  const customer = order.customer || {};
+  const customerRows = [
+    [t("ck.name"), customer.name],
+    [t("ck.phone"), customer.phone],
+    [t("ck.email"), customer.email],
+    [t("ck.street"), customer.address],
+    [t("ck.city"), customer.city],
+    [t("ck.zone"), customer.zone],
+    [t("ck.country"), customer.country],
+    [t("ck.notes"), customer.note],
+  ].filter((row) => String(row[1] || "").trim());
+  const customerInfo = customerRows.length ? `
+    <section class="order-customer-info">
+      <h3>${t("ck.customerInfo")}</h3>
+      <dl>${customerRows.map((row) => `<div><dt>${JA.escape(String(row[0]).replace(/\s*\*$/, ""))}</dt><dd>${JA.escape(row[1])}</dd></div>`).join("")}</dl>
+    </section>` : "";
   root.innerHTML = `
     <div class="order-done">
       <p class="kicker">${t("ck.doneKicker")}</p>
@@ -1223,6 +1239,7 @@ function showOrderDone(order) {
         <li><span>${t("ck.total")}</span><strong>${JA.money(order.total, order.currency)}</strong></li>
         <li><span>${t("ck.payMethod")}</span><strong>${payName}</strong></li>
       </ul>
+      ${customerInfo}
       <p class="status-pill ${order.status}">${t("ck.waiting")}</p>
       <p>${t("ck.saveId")}</p>
       <p class="ck-fare-help">${t("ck.fareRange")}</p>
@@ -1842,40 +1859,62 @@ function renderCheckout() {
       })),
     });
 
-    let submitted = null;
-    try {
-      submitted = order.submission ? await order.submission : { ok: true, localOnly: true };
-    } catch (err) {
-      const message = (err && err.data && err.data.error) || (err && err.message)
-        || "We could not place your order. Please check your connection and try again.";
-      let errorBox = form.querySelector("[data-order-submit-error]");
-      if (!errorBox) {
-        errorBox = document.createElement("p");
-        errorBox.className = "ck-submit-error";
-        errorBox.setAttribute("data-order-submit-error", "");
-        errorBox.setAttribute("role", "alert");
-        btn?.insertAdjacentElement("beforebegin", errorBox);
-      }
-      errorBox.textContent = message;
-      errorBox.hidden = false;
-      JA.toast(message);
-      if (btn) { btn.disabled = false; btn.textContent = t("ck.place"); }
-      errorBox.scrollIntoView({ block: "center", behavior: "smooth" });
-      return;
+    // Restore the instant checkout experience: the locally saved order is
+    // painted as soon as the shopper taps Place order. Keep this document alive
+    // while the server request continues in the background so a page navigation
+    // cannot abort a receipt upload. The address bar still becomes the dedicated
+    // completion URL, and refreshing it loads order-complete.html normally.
+    const submission = order.submission;
+    if (submission && typeof submission.then === "function") {
+      submission.then((result) => {
+        if (!(result && result.queued)) return;
+        try { JA.updateOrder(order.id, { queued: true }); } catch (e) {}
+        const queuedTarget = "order-complete.html?order=" + encodeURIComponent(order.id) + "&queued=1";
+        try { window.history.replaceState({ orderId: order.id }, "", queuedTarget); } catch (e) {}
+        paintQueuedOrderNote(result.persisted === true);
+      }).catch(() => {
+        // This is deliberately background work, matching the original instant
+        // checkout. JA_NET displays pending retries; the completed order remains
+        // available on this device with its ID and entered information.
+      });
     }
 
-    // Only clear the cart after the server has accepted the order, or after
-    // the offline outbox confirms that it has safely persisted the submission.
-    // Then navigate to the dedicated final step: ORDER COMPLETE appears there,
-    // never in the checkout breadcrumb.
     JA.clearCart();
     ckPromo = null;
     form.dataset.done = "1";
-    const queued = !!(submitted && submitted.queued);
-    const target = "order-complete.html?order=" + encodeURIComponent(order.id)
-      + (queued ? "&queued=1" : "");
-    window.location.assign(target);
+    const target = "order-complete.html?order=" + encodeURIComponent(order.id);
+    try { window.history.replaceState({ orderId: order.id }, "", target); } catch (e) {}
+    paintOrderCompleteChrome();
+    showOrderDone(order);
+    bindOrderDoneCopy();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
+}
+
+function paintOrderCompleteChrome() {
+  document.body.dataset.page = "order-complete";
+  const steps = document.querySelector(".ck-steps");
+  if (steps) {
+    steps.innerHTML = `
+      <li><a href="cart.html">${t("cart.stepCart")}</a></li>
+      <li><a href="checkout.html">${t("cart.stepCheck")}</a></li>
+      <li class="is-on">${t("ck.doneKicker")}</li>`;
+  }
+  const heading = document.querySelector(".ck-hero h1");
+  if (heading) heading.textContent = t("ck.completedTitle");
+}
+
+function paintQueuedOrderNote(persisted) {
+  const root = document.querySelector("[data-checkout-root]");
+  if (!root || root.querySelector("[data-order-queued]")) return;
+  const note = document.createElement("p");
+  note.className = "ck-queued";
+  note.setAttribute("data-order-queued", "");
+  note.setAttribute("role", "status");
+  note.textContent = persisted
+    ? "No internet right now — your order and receipt are saved on this phone and will be sent automatically when you are back online. Keep your order ID."
+    : "No internet right now — keep this page open while your order is waiting to send. Keep your order ID.";
+  root.insertBefore(note, root.firstChild);
 }
 
 function bindOrderDoneCopy() {
@@ -1909,13 +1948,7 @@ async function renderOrderComplete() {
     return;
   }
   showOrderDone(order);
-  if (params.get("queued") === "1") {
-    const note = document.createElement("p");
-    note.className = "ck-queued";
-    note.setAttribute("role", "status");
-    note.textContent = "No internet right now — your order and receipt are safely saved on this phone and will reach us automatically when you are back online. Keep your order ID.";
-    root.insertBefore(note, root.firstChild);
-  }
+  if (params.get("queued") === "1" || order.queued) paintQueuedOrderNote(true);
   bindOrderDoneCopy();
   window.scrollTo({ top: 0, behavior: "auto" });
 }
