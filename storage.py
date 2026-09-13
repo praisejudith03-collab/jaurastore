@@ -231,10 +231,13 @@ def validate_image(data: bytes, filename: str = ""):
     return ok, msg, ext
 
 
-def validate_asset(data: bytes, filename: str = "", max_bytes: int = MAX_BYTES):
+def validate_asset(data: bytes, filename: str = "", max_bytes: int = None):
     """Category / hero assets: the broad allowlist, documents included."""
+    ext = _ext_from_bytes(data[:32]) if data else ""
+    k = kind_for(ext)
+    limit = max_bytes if max_bytes is not None else (MAX_VIDEO_BYTES if k == "video" else max(MAX_BYTES, 15 * 1024 * 1024 if k == "document" else MAX_BYTES))
     return validate_upload(data, filename, allow_documents=True,
-                           max_bytes=max_bytes, kind="asset")
+                           max_bytes=limit, kind="asset")
 
 
 def validate_video(data: bytes, filename: str = ""):
@@ -354,7 +357,7 @@ def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf:
     return _save(data, folder, ext)
 
 
-def save_asset(data: bytes, folder: str = "misc", filename: str = "", max_bytes: int = MAX_BYTES):
+def save_asset(data: bytes, folder: str = "misc", filename: str = "", max_bytes: int = None):
     """Validate and upload a general site asset through Supabase Storage."""
     ok, msg, ext = validate_asset(data, filename, max_bytes=max_bytes)
     if not ok:

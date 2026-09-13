@@ -1877,7 +1877,7 @@ function settingsForm() {
   return `
   <div class="admin-card adx-hero-card">
     <h3 class="admin-h">Homepage hero video</h3>
-    <p class="admin-note">Upload a video (MP4/WebM/MOV, up to 40 MB) and it plays silently on a loop at the top of the homepage. You can also attach a PDF or document (up to 8 MB). A photo sets the hero poster.</p>
+    <p class="admin-note">Upload a video (MP4/WebM/MOV, up to 40 MB) and it plays silently on a loop at the top of the homepage. You can also attach a PDF or document (up to 15 MB). A photo sets the hero poster.</p>
     <div id="hero-video-now"><p class="empty">Checking the current hero…</p></div>
     <div class="adx-hero-actions"><label class="btn adx-upload-btn">Upload video / document<input type="file" id="hero-video-file" accept="image/*,video/*,.pdf,.doc,.docx,application/pdf" hidden /></label><button type="button" class="btn btn-line" id="hero-video-remove" hidden>Remove hero asset</button></div>
     <p class="admin-note" id="hero-video-msg"></p>
@@ -2426,7 +2426,7 @@ function bindHeroVideo() {
     const f = file.files && file.files[0]; if (!f) return;
     if (!window.JA_NET) { JA.toast("Hero upload needs the live server."); return; }
     const isVideo = /^video\//.test(f.type || "") || _VIDEO_EXT.test(String(f.name || ""));
-    const cap = isVideo ? 40 * 1024 * 1024 : 8 * 1024 * 1024;
+    const cap = isVideo ? 40 * 1024 * 1024 : 15 * 1024 * 1024;
     if (f.size > cap) { if (msg) msg.textContent = "That file is " + (f.size / 1048576).toFixed(1) + " MB. Limit is " + (cap / (1024 * 1024)) + " MB."; JA.toast("Too big."); file.value = ""; return; }
     if (msg) msg.textContent = "Uploading " + (f.name || "asset") + "… keep this tab open.";
     const res = await window.JA_NET.api("api/admin/uploads/hero", { method: "POST", blob: f, field: "file", filename: f.name || "hero.mp4", timeout: 180000, });

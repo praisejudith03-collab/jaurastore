@@ -61,22 +61,27 @@ def _categories_data():
                 rows = load_categories_table()
                 from supabase_store import load_categories
                 details = load_categories()
-                if rows is not None and details:
-                    # The categories table is authoritative. Details may add
-                    # presentation fields to rows that actually exist, but
-                    # must never repopulate an empty table from an old mirror.
-                    by_id = {str(c.get("id")): c for c in details}
-                    for row in rows:
-                        extra = by_id.get(str(row.get("id")), {})
-                        for key in ("nameFr", "image", "image_url", "hidden", "order"):
-                            if key in extra:
-                                row[key] = extra[key]
-                if rows is None:
+                if rows is None and details is None:
                     raise RuntimeError("Supabase categories unavailable")
-                # An empty live table is a valid empty result. Never replace
-                # the database with a compiled-in category list: the database
-                # is the sole source of truth for the storefront.
-                return {"categories": rows, "updatedAt": "", "updatedBy": ""}
+                by_id = {}
+                if details:
+                    for c in details:
+                        if isinstance(c, dict) and c.get("id"):
+                            by_id[str(c["id"]).strip()] = dict(c)
+                if rows is not None:
+                    for row in rows:
+                        cid = str(row.get("id") or "").strip()
+                        if not cid:
+                            continue
+                        if cid in by_id:
+                            for k, v in row.items():
+                                if v is not None and v != "":
+                                    by_id[cid][k] = v
+                        else:
+                            by_id[cid] = dict(row)
+                if rows is None and not by_id:
+                    raise RuntimeError("Supabase categories unavailable")
+                return {"categories": list(by_id.values()), "updatedAt": "", "updatedBy": ""}
         except RuntimeError:
             raise
         except Exception as exc:
