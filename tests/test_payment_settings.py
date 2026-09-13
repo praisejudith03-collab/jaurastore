@@ -234,7 +234,9 @@ def test_writing_payment_details_requires_admin_and_csrf(client):
 
 
 # The exact canonical field names the Admin Settings form must submit AND
-# show as inputs. The five RETIRED fields below used to live on the form but
+# show as inputs. The obsolete delivery-window and shipping-note fields are
+# intentionally absent from this UI.
+# The five RETIRED fields below used to live on the form but
 # nothing on the storefront ever read them — they stay in SITE_KEYS (and
 # fillSiteForm) so a stored value is not wiped, but they are gone from the UI.
 CANONICAL_SETTINGS_FIELDS = (
@@ -245,7 +247,6 @@ CANONICAL_SETTINGS_FIELDS = (
     "togo_payment_instructions",
     "naira_payment_bank", "naira_payment_name", "naira_payment_account",
     "naira_payment_instructions",
-    "shipping_note",
     "referral_commission_percentage",
 )
 

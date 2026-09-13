@@ -399,7 +399,7 @@ window.I18N_PHRASES = {
 
   /* ------------------------------------------------------------- categories
    * Safety net for a category label the owner typed in English: the stored
-   * row's nameFr always wins, then js/store.js DEFAULT_CATS. These entries
+   * row's nameFr always wins; categories come from the live category table. These entries
    * only catch a bare English name reaching the page some other way. */
   "Clothings for men and women": "Vêtements homme et femme",
   "Household items": "Articles ménagers",

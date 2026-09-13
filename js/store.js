@@ -132,27 +132,9 @@ const JA = (() => {
     return s;
   };
 
-  // Every default carries BOTH names. A French shopper must never see an
-  // English category label just because the owner has not typed one yet: these
-  // are the fallbacks categoryName() uses when the stored row has no nameFr.
-  const DEFAULT_CATS = [
-    { id: "clothing", name: "Clothings for men and women", nameFr: "Vêtements homme et femme", image: "images/categories/fashion.jpg" },
-    { id: "household", name: "Household & Kitchen", nameFr: "Maison & cuisine", image: "images/categories/household.jpg" },
-    { id: "ankara", name: "Ankara ready to wear", nameFr: "Ankara prêt-à-porter", image: "images/categories/fashion.jpg" },
-    { id: "accessories", name: "Accessories", nameFr: "Accessoires", image: "images/categories/gadgets.jpg" },
-    { id: "beauty", name: "Beauty & skincare", nameFr: "Beauté & soins", image: "images/categories/beauty.jpg" },
-    { id: "shoes", name: "Shoes", nameFr: "Chaussures", image: "images/categories/shoes.jpg" },
-    { id: "gadgets", name: "Gadgets / Electronics", nameFr: "Gadgets / Électronique", image: "images/categories/gadgets.jpg" },
-    { id: "packaging", name: "Packaging", nameFr: "Emballage", image: "images/categories/household.jpg" },
-    { id: "bags", name: "Bags", nameFr: "Sacs", image: "images/categories/bags.jpg" },
-    { id: "hair-care", name: "Hair care", nameFr: "Soins des cheveux", image: "images/categories/beauty.jpg" },
-    { id: "nails", name: "Nails", nameFr: "Ongles", image: "images/categories/beauty.jpg" },
-    { id: "gift-set", name: "Gift set", nameFr: "Coffret cadeau", image: "images/categories/household.jpg" },
-    { id: "children", name: "Children items", nameFr: "Articles pour enfants", image: "images/categories/fashion.jpg" },
-    { id: "decor", name: "Decor", nameFr: "Décoration", image: "images/categories/household.jpg" },
-    { id: "perfume", name: "Perfume", nameFr: "Parfum", image: "images/categories/beauty.jpg" },
-  ];
-
+  // Category labels are read from the live category rows. A French shopper
+  // uses the row's nameFr when the database provides it; no category is
+  // invented by this bundle.
   // Static fallbacks only. The live values come from GET /api/site (whose
   // source of truth is the Supabase site_settings row) - this is never a
   // runtime source of truth, and the legacy bankCfa/bankNgn free-text flow
@@ -681,13 +663,11 @@ const JA = (() => {
       const id = c.id === "skincare" ? "beauty" : c.id;
       if (seen.has(id)) return;
       seen.add(id);
-      const def = DEFAULT_CATS.find((x) => x.id === id) || {};
-      const mergedBeauty = id === "beauty" && (!c.name || c.name === "Beauty" || c.name === "Skincare");
       out.push({
         id,
-        name: mergedBeauty ? "Beauty & skincare" : (c.name || def.name || id),
-        nameFr: mergedBeauty ? "Beauté & soins" : (c.nameFr || def.nameFr || ""),
-        image: c.image || def.image || "",
+        name: c.name || id,
+        nameFr: c.nameFr || "",
+        image: c.image || "",
         hidden: !!c.hidden,
         order: c.order,
       });
@@ -703,8 +683,9 @@ const JA = (() => {
 
   function categories() {
     const saved = read(KEYS.cats, null);
-    const base = DEFAULT_CATS.map((c) => ({ ...c, nameFr: c.nameFr || "", hidden: false }));
-    const all = Array.isArray(saved) && saved.length ? normalizeCatList(saved) : normalizeCatList(base);
+    // Categories are database data, not application defaults. An empty array
+    // is intentional and must not resurrect a removed category.
+    const all = Array.isArray(saved) ? normalizeCatList(saved) : [];
     if ((document.body.dataset.page || "") === "admin") return normalizeOrder(all);
     return normalizeOrder(all.filter((c) => !c.hidden));
   }
@@ -715,14 +696,14 @@ const JA = (() => {
   try {
       const r = await fetch("api/categories", { credentials: "same-origin", cache: "no-store" });
       const d = await r.json();
-      if (d && Array.isArray(d.categories) && d.categories.length) {
+      if (d && Array.isArray(d.categories)) {
         write(KEYS.cats, d.categories.map((c) => ({
           id: c.id, name: c.name, nameFr: c.nameFr || "",
           image: c.image || "", hidden: !!c.hidden, order: c.order,
         })));
       } else {
-        // If server returned empty or error, still write current local state
-        // so the page never falls through to DEFAULT_CATS missing recent saves.
+        // A server empty result is authoritative. Keep the last cache only
+        // when the request itself failed, handled by the catch below.
         const saved = read(KEYS.cats, null);
         if (saved && Array.isArray(saved) && saved.length) {
           write(KEYS.cats, normalizeCatList(saved));
@@ -801,7 +782,7 @@ const JA = (() => {
     return saveCategories(categories().filter((c) => c.id !== id && c.id !== "skincare"));
   }
   function categoryName(id) {
-    const c = categories().find((x) => x.id === id) || DEFAULT_CATS.find((x) => x.id === id);
+    const c = categories().find((x) => x.id === id);
     if (!c) return id;
     try {
       if (window.I18N && I18N.lang() === "fr" && c.nameFr) return c.nameFr;
@@ -2403,7 +2384,6 @@ const JA = (() => {
     // the sitelinks and the knowledge panel can show what the shop sells.
     let cats = [];
     try { cats = (typeof categories === "function" ? categories() : []) || []; } catch (e) { cats = []; }
-    if (!cats.length) cats = DEFAULT_CATS;
     const offerCatalog = {
       "@type": "OfferCatalog",
       name: "Jaura Store catalogue",
@@ -2810,7 +2790,7 @@ const JA = (() => {
   if (seed.length) { setTimeout(() => { loadSeed().catch(() => {}); }, 0); }
 
   return {
-    ready, CATEGORIES: DEFAULT_CATS, categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,
+    ready, CATEGORIES: [], categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,
     products, product, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, BULK_QTY,

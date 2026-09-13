@@ -264,12 +264,16 @@ const offlineFixture = (id, name) => ({
   // Every assertion below runs against the REAL js/store.js and the REAL
   // js/i18n-phrases.js vocabulary loaded into the same sandbox.
   const served = WIX.map(online);
-  const { JA, sandbox } = makeSandbox(served, { phrases: true });
+  const { JA, sandbox, storage } = makeSandbox(served, { phrases: true });
+  storage.set("jaura_categories", JSON.stringify([
+    {id: "beauty", name: "Beauty", nameFr: "Beauté & soins", order: 0},
+    {id: "shoes", name: "Shoes", nameFr: "Chaussures", order: 1},
+  ]));
   await JA.reloadCatalog();
 
-  const empty = JA.CATEGORIES.filter((c) => !String(c.nameFr || "").trim()).map((c) => c.id);
-  check("every default category carries a French name", empty.length === 0,
-    empty.length ? "missing nameFr: " + empty.join(", ") : "all " + JA.CATEGORIES.length + " filled");
+  check("server category rows carry their French names",
+    JA.categories().every((c) => String(c.nameFr || "").trim()),
+    "all " + JA.categories().length + " live rows filled");
 
   // English first: with no I18N loaded at all the shop must answer English.
   const p = JA.products().find((x) => x.id === "wix-001");
@@ -384,8 +388,14 @@ const offlineFixture = (id, name) => ({
 
 {
   const { JA, storage, sandbox } = makeSandbox(WIX.map(online));
+  // Categories are server-owned; seed the fake API/cache for this isolated
+  // storefront simulation instead of relying on a compiled-in list.
+  storage.set("jaura_categories", JSON.stringify([
+    {id: "household", name: "Household & Kitchen", order: 0},
+    {id: "beauty", name: "Beauty", order: 1},
+  ]));
   await JA.ready;
-  check("Household leads default categories", JA.categories()[0].id === "household");
+  check("server categories render dynamically", JA.categories()[0].id === "household");
   storage.set("jaura_categories", JSON.stringify([
     {id: "beauty", name: "Beauty", order: 2},
     {id: "household", name: "Household & Kitchen", order: 0},

@@ -35,38 +35,14 @@ import os as _os
 CATEGORIES_FILE = _os.environ.get(
     "CATEGORIES_PATH",
     _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "categories.json"))
-DEFAULT_CATEGORIES = [
-    {"id": "clothing", "name": "Clothings for men and women", "nameFr": "Vêtements homme et femme", "image": "images/categories/fashion.jpg", "hidden": False},
-    {"id": "household", "name": "Household & Kitchen", "nameFr": "Maison & cuisine", "image": "images/categories/household.jpg", "hidden": False},
-    {"id": "ankara", "name": "Ankara ready to wear", "nameFr": "Ankara prêt-à-porter", "image": "images/categories/fashion.jpg", "hidden": False},
-    {"id": "accessories", "name": "Accessories", "nameFr": "Accessoires", "image": "images/categories/gadgets.jpg", "hidden": False},
-    {"id": "beauty", "name": "Beauty & skincare", "nameFr": "Beauté & soins", "image": "images/categories/beauty.jpg", "hidden": False},
-    {"id": "shoes", "name": "Shoes", "nameFr": "Chaussures", "image": "images/categories/shoes.jpg", "hidden": False},
-    {"id": "gadgets", "name": "Gadgets / Electronics", "nameFr": "Gadgets / Électronique", "image": "images/categories/gadgets.jpg", "hidden": False},
-    {"id": "packaging", "name": "Packaging", "nameFr": "Emballage", "image": "images/categories/household.jpg", "hidden": False},
-    {"id": "bags", "name": "Bags", "nameFr": "Sacs", "image": "images/categories/bags.jpg", "hidden": False},
-    {"id": "hair-care", "name": "Hair care", "nameFr": "Soins des cheveux", "image": "images/categories/beauty.jpg", "hidden": False},
-    {"id": "nails", "name": "Nails", "nameFr": "Ongles", "image": "images/categories/beauty.jpg", "hidden": False},
-    {"id": "gift-set", "name": "Gift set", "nameFr": "Coffret cadeau", "image": "images/categories/household.jpg", "hidden": False},
-    {"id": "children", "name": "Children items", "nameFr": "Articles pour enfants", "image": "images/categories/fashion.jpg", "hidden": False},
-    {"id": "decor", "name": "Decor", "nameFr": "Décoration", "image": "images/categories/household.jpg", "hidden": False},
-    {"id": "perfume", "name": "Perfume", "nameFr": "Parfum", "image": "images/categories/beauty.jpg", "hidden": False},
-]
-
 
 def _ordered_categories(categories):
     categories = [dict(c) for c in categories]
-    for c in categories:
-        # Rename only the old shipped default, not an owner's custom label.
-        if c.get("id") == "household" and c.get("name") == "Household items":
-            c["name"] = "Household & Kitchen"
-            if c.get("nameFr") in (None, "", "Articles ménagers"):
-                c["nameFr"] = "Maison & cuisine"
     def key(c):
         try:
             return int(c["order"])
         except (KeyError, TypeError, ValueError):
-            return 0 if c.get("id") == "household" else 1
+            return 0
     return sorted(categories, key=key)
 
 
@@ -86,27 +62,20 @@ def _categories_data():
                 from supabase_store import load_categories
                 details = load_categories()
                 if rows is not None and details:
+                    # The categories table is authoritative. Details may add
+                    # presentation fields to rows that actually exist, but
+                    # must never repopulate an empty table from an old mirror.
                     by_id = {str(c.get("id")): c for c in details}
-                    if not rows:
-                        rows = details
-                    else:
-                        for row in rows:
-                            extra = by_id.get(str(row.get("id")), {})
-                            for key in ("nameFr", "image", "image_url", "hidden", "order"):
-                                if key in extra:
-                                    row[key] = extra[key]
+                    for row in rows:
+                        extra = by_id.get(str(row.get("id")), {})
+                        for key in ("nameFr", "image", "image_url", "hidden", "order"):
+                            if key in extra:
+                                row[key] = extra[key]
                 if rows is None:
                     raise RuntimeError("Supabase categories unavailable")
-                # A reachable but EMPTY table is not "the shop has no
-                # categories", it is a table that was never seeded (or was
-                # wiped). Serving [] left every phone with an empty category
-                # strip and no way back. Self-heal to the built-in defaults,
-                # photos included, so the storefront always has something to
-                # show; the owner's own rows replace these the moment they
-                # save any category.
-                if not rows:
-                    return {"categories": [dict(c) for c in DEFAULT_CATEGORIES],
-                            "updatedAt": "", "updatedBy": ""}
+                # An empty live table is a valid empty result. Never replace
+                # the database with a compiled-in category list: the database
+                # is the sole source of truth for the storefront.
                 return {"categories": rows, "updatedAt": "", "updatedBy": ""}
         except RuntimeError:
             raise
@@ -115,13 +84,13 @@ def _categories_data():
     try:
         with open(CATEGORIES_FILE, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        if isinstance(data, list) and data:
+        if isinstance(data, list):
             return {"categories": data, "updatedAt": "", "updatedBy": ""}
         if isinstance(data, dict) and isinstance(data.get("categories"), list):
             return data
     except (OSError, ValueError):
         pass
-    return {"categories": [dict(c) for c in DEFAULT_CATEGORIES], "updatedAt": "", "updatedBy": ""}
+    return {"categories": [], "updatedAt": "", "updatedBy": ""}
 
 
 def _save_categories(categories, actor=None):
@@ -2485,6 +2454,11 @@ def admin_site_update():
     try:
         site = __import__("supabase_settings", fromlist=["update_site_settings"]).update_site_settings(values)
     except Exception as exc:
+        # Keep the complete PostgreSQL/PostgREST/Flask exception (including
+        # traceback) in the server log; the client receives a safe but useful
+        # one-line copy below. This makes failed banner saves diagnosable in
+        # production instead of looking like a silent no-op.
+        current_app.logger.exception("[supabase] site settings update failed")
         print(f"[supabase] site settings update failed: {exc}")
         # The detail names the column and the one ALTER statement that repairs
         # the live table - without it the owner sees "could not save" with no

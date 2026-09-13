@@ -144,11 +144,11 @@ def test_owner_adds_category_and_shoppers_see_it_immediately(durable, monkeypatc
         assert row['nameFr'] == 'Bijoux'
 
 
-def test_initial_household_first_without_overriding_owner_order():
+def test_category_order_preserves_database_rows_without_inventing_defaults():
     rows = [{'id':'beauty','name':'Beauty'}, {'id':'household','name':'Household items'}]
     initial = api._ordered_categories(rows)
-    assert initial[0]['id'] == 'household'
-    assert initial[0]['name'] == 'Household & Kitchen'
-    rows[0]['order'] = 0
-    rows[1]['order'] = 1
-    assert api._ordered_categories(rows)[0]['id'] == 'beauty'
+    assert [c['id'] for c in initial] == ['beauty', 'household']
+    assert initial[1]['name'] == 'Household items'
+    rows[0]['order'] = 1
+    rows[1]['order'] = 0
+    assert api._ordered_categories(rows)[0]['id'] == 'household'
