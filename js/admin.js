@@ -1519,7 +1519,7 @@ function paintDesk(tab = "analytics") {
   if (tab === "marketing") fillMarketing();
   if (tab === "account") bindAccount();
   if (tab === "settings") {
-    bindHeroVideo(); bindBanner(); bindSiteBranding(); bindShippingNote();
+    bindHeroVideo(); bindBanner(); bindSiteBranding();
   }
   if (tab === "delivery") {
     bindDeliveryPage();
@@ -1641,11 +1641,6 @@ function siteFieldPatch(candidate, site) {
       // deliberately does not send them, so a stale stored value is
       // preserved rather than wiped. fillSiteForm still carries the
       // columns for the same reason.
-      bannerFrom: String(fd.get("bannerFrom") || "").trim(),
-      bannerTo: String(fd.get("bannerTo") || "").trim(),
-      // Canonical column name. The server also still accepts the legacy
-      // shippingNote alias, but the Admin form sends the real column.
-      shipping_note: String(fd.get("shipping_note") || "").trim(),
     };
     PAYMENT_FIELDS.forEach((k) => { candidate[k] = String(fd.get(k) || "").trim(); });
     const payload = siteFieldPatch(candidate, loadedSiteRow);
@@ -1698,9 +1693,6 @@ function fillSiteForm(site) {
     hero_banner_subtitle: site.hero_banner_subtitle,
     contact_email: site.contact_email, contact_phone: site.contact_phone,
     site_logo_url: site.site_logo_url,
-    shipping_note: site.shipping_note != null ? site.shipping_note : site.shippingNote,
-    bannerFrom: site.banner_from != null ? site.banner_from : site.bannerFrom,
-    bannerTo: site.banner_to != null ? site.banner_to : site.bannerTo,
   };
   // Repaint the payment columns from the saved server row too, so what the
   // admin sees after Save is what Supabase actually stored.
@@ -1905,7 +1897,7 @@ function settingsForm() {
     <div class="field full"><label>Banner text</label><input name="convBanner" id="conv-banner" maxlength="300" placeholder="e.g. Back-to-school sale: 10% off every bag" /></div>
     <div class="field full"><label>Banner text (French)</label><input name="convBannerFr" id="conv-banner-fr" maxlength="300" placeholder="e.g. Soldes de rentrée : -10% sur tous les sacs" /></div>
     <div class="field full"><label>Bold highlight (optional)</label><input name="convBold" id="conv-bold" maxlength="300" placeholder="e.g. ends Sunday" /></div>
-    <div class="field full"><button class="btn">Save banner</button></div>
+    <div class="field full"><p class="admin-err" id="banner-form-error" hidden></p><button class="btn">Save banner</button></div>
   </form>
   <form id="set-form" class="form-grid admin-card" style="margin-top:22px">
     <h3 class="admin-h full">Site settings — live from Supabase</h3>
@@ -1928,11 +1920,6 @@ function settingsForm() {
     <div class="field"><label>Togo — account name</label><input name="togo_payment_name" maxlength="120" value="${JA.escape(s.togo_payment_name || "")}" /></div>
     <div class="field"><label>Togo — account number</label><input name="togo_payment_account" maxlength="60" value="${JA.escape(s.togo_payment_account || "")}" /></div>
     <div class="field"><label>Togo — instructions</label><input name="togo_payment_instructions" maxlength="300" value="${JA.escape(s.togo_payment_instructions || "")}" /></div>
-    <h3 class="admin-h full">Benin delivery window</h3>
-    <p class="admin-note full">These dates appear on the moving banner under the header. Shoppers in Benin are told they will receive their order between these two days.</p>
-    <div class="field"><label>Delivery window starts</label><input type="date" name="bannerFrom" id="banner-from" value="2026-09-15" /></div>
-    <div class="field"><label>Delivery window ends</label><input type="date" name="bannerTo" id="banner-to" value="2026-09-25" /></div>
-    <div class="field full"><label>Delivery fee / shipping note (shown at checkout)</label><textarea name="shipping_note" id="shipping-note" rows="3" maxlength="800" placeholder="e.g. Delivery fee: Lagos ₦2000-₦5000, Cotonou 1000-3000 CFA. Pickup in Cotonou is free for lighter products.">${JA.escape(s.shipping_note != null ? s.shipping_note : (s.shippingNote || ""))}</textarea><p class="admin-note">This note appears dynamically at checkout under the order totals. Leave empty to hide.</p></div>
     <div class="field full"><p class="admin-err" id="set-form-error" hidden></p><button class="btn" id="set-form-save">Save settings</button></div>
   </form>`;
 }
@@ -2377,9 +2364,21 @@ function bindBanner() {
   }).catch(() => {});
   form.addEventListener("submit", async (e) => {
     e.preventDefault(); const fd = new FormData(form);
+    const errorBox = $("#banner-form-error");
+    if (errorBox) { errorBox.hidden = true; errorBox.textContent = ""; }
     const conv = String(fd.get("convBanner") || "").trim(); const convFr = String(fd.get("convBannerFr") || "").trim(); const bold = String(fd.get("convBold") || "").trim();
-    const saved = await saveSiteConfig(siteFieldPatch(
-      { convBanner: conv, convBannerFr: convFr, convBold: bold }, bannerLoaded));
+    let saved = null;
+    try {
+      saved = await saveSiteConfig(siteFieldPatch(
+        { convBanner: conv, convBannerFr: convFr, convBold: bold }, bannerLoaded));
+    } catch (err) {
+      // JA_NET normally returns the JSON error body; retain the thrown
+      // network/Flask error as well so the admin gets an actionable message.
+      const message = err && err.message ? err.message : String(err || "Unknown error");
+      if (errorBox) { errorBox.textContent = "Could not save the banner: " + message; errorBox.hidden = false; }
+      JA.toast("Could not save the banner: " + message);
+      return;
+    }
     if (saved && saved.ok !== false) {
       // Repaint from the SERVER's answer (not the form), and re-fill both
       // inputs so what the admin sees is what Supabase stored. applySiteConfig
@@ -2398,7 +2397,11 @@ function bindBanner() {
       } catch (err) {}
       JA.toast(liveConv || liveConvFr ? "Banner saved — it moves under the header on every page now." : "Banner cleared — default is back.");
     }
-    else JA.toast((saved && saved.error) || "Could not save the banner.");
+    else {
+      const message = (saved && saved.error) || "Could not save the banner. No changes were made.";
+      if (errorBox) { errorBox.textContent = message; errorBox.hidden = false; }
+      JA.toast(message);
+    }
   });
 }
 function paintHeroVideoNow(site) {
@@ -2416,9 +2419,6 @@ function bindHeroVideo() {
     // server (Supabase) values are the source of truth for every field
     paintHeroVideoNow(site);
     try { fillSiteForm(site); } catch (e) {}
-    const from = $("#banner-from"); const to = $("#banner-to"); if (from && site.bannerFrom) from.value = site.bannerFrom; if (to && site.bannerTo) to.value = site.bannerTo;
-    const ship = $("#shipping-note");
-    if (ship) ship.value = site.shipping_note != null ? site.shipping_note : (site.shippingNote || "");
     // also fill logo/banner preview
     paintBrandingNow(site);
   }).catch(() => paintHeroVideoNow({}));
@@ -2546,15 +2546,7 @@ function bindSiteBranding() {
     else JA.toast((saved && saved.error) || "Could not remove the banner. No changes were made.");
   });
 }
-function bindShippingNote() {
-  // Load existing shipping note into textarea
-  fetch("api/site", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((d) => {
-    const site = (d && d.site) || {};
-    const el = $("#shipping-note");
-    if (el) el.value = site.shipping_note != null ? site.shipping_note : (site.shippingNote || "");
-    paintBrandingNow(site);
-  }).catch(()=>{});
-}
+
 
 // ---- Pinned bottom dock helpers (owner directive 2026-09-12) --------------
 // The dock stays position:fixed at every width. Two behaviours keep it from

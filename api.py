@@ -2485,6 +2485,11 @@ def admin_site_update():
     try:
         site = __import__("supabase_settings", fromlist=["update_site_settings"]).update_site_settings(values)
     except Exception as exc:
+        # Keep the complete PostgreSQL/PostgREST/Flask exception (including
+        # traceback) in the server log; the client receives a safe but useful
+        # one-line copy below. This makes failed banner saves diagnosable in
+        # production instead of looking like a silent no-op.
+        current_app.logger.exception("[supabase] site settings update failed")
         print(f"[supabase] site settings update failed: {exc}")
         # The detail names the column and the one ALTER statement that repairs
         # the live table - without it the owner sees "could not save" with no
