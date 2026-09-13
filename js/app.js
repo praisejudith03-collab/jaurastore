@@ -2304,6 +2304,7 @@ async function boot() {
   // catalogue the card came from already holds the image URL.
   installProductPrefetch();
   document.addEventListener("ja:rerender", draw);
+  document.addEventListener("ja:categories", draw);
   // A background catalogue refresh that actually changed something repaints
   // the page; an identical answer never causes a flicker.
   document.addEventListener("ja:catalog", draw);

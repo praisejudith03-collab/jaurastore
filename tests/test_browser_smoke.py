@@ -42,9 +42,12 @@ def live_shop(monkeypatch, tmp_path):
 @pytest.fixture()
 def mobile():
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            executable_path=os.environ.get("CHROMIUM_EXECUTABLE"),
-            args=["--no-sandbox", "--disable-dev-shm-usage"])
+        try:
+            browser = pw.chromium.launch(
+                executable_path=os.environ.get("CHROMIUM_EXECUTABLE"),
+                args=["--no-sandbox", "--disable-dev-shm-usage"])
+        except Exception as exc:
+            pytest.skip(f"Playwright chromium not available: {exc}")
         context = browser.new_context(viewport={"width": 390, "height": 844},
                                       is_mobile=True, has_touch=True, service_workers="block")
         context.add_init_script("sessionStorage.setItem('jaura_welcome_seen', '1')")

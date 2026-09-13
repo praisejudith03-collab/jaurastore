@@ -426,7 +426,6 @@ const JA = (() => {
   }
 
   async function loadSeed(strict = false) {
-    if (!strict && seed.length && catalogCacheFresh(readCatalogCache())) return seed;
     try {
       // The store management must see EXACTLY what is saved: every row,
       // including hidden/offline ones, with the stock numbers and costs the
@@ -655,6 +654,21 @@ const JA = (() => {
     return String(value == null ? "" : value);
   }
 
+  const DEFAULT_CATEGORIES = [
+    { id: "household", name: "Household & Kitchen", nameFr: "Maison & cuisine", image: "images/categories/household.jpg", hidden: false },
+    { id: "ankara", name: "Ankara ready to wear", nameFr: "Ankara prêt-à-porter", image: "images/categories/fashion.jpg", hidden: false },
+    { id: "accessories", name: "Accessories", nameFr: "Accessoires", image: "images/categories/gadgets.jpg", hidden: false },
+    { id: "beauty", name: "Beauty", nameFr: "Beauté & soins", image: "images/categories/beauty.jpg", hidden: false },
+    { id: "shoes", name: "Shoes", nameFr: "Chaussures", image: "images/categories/shoes.jpg", hidden: false },
+    { id: "gadgets", name: "Gadgets / Electronics", nameFr: "Gadgets / Électronique", image: "images/categories/gadgets.jpg", hidden: false },
+    { id: "bags", name: "Bags", nameFr: "Sacs", image: "images/categories/bags.jpg", hidden: false },
+    { id: "hair-care", name: "Hair care", nameFr: "Soins des cheveux", image: "images/categories/beauty.jpg", hidden: false },
+    { id: "gift-set", name: "Gift Sets & Packaging", nameFr: "Coffrets cadeaux & emballage", image: "images/categories/household.jpg", hidden: false },
+    { id: "children", name: "Children items", nameFr: "Articles pour enfants", image: "images/categories/fashion.jpg", hidden: false },
+    { id: "decor", name: "Decor", nameFr: "Décoration", image: "images/categories/household.jpg", hidden: false },
+    { id: "perfume", name: "Perfume", nameFr: "Parfum", image: "images/categories/beauty.jpg", hidden: false },
+  ];
+
   function normalizeCatList(list) {
     const out = [];
     const seen = new Set();
@@ -667,7 +681,7 @@ const JA = (() => {
         id,
         name: c.name || id,
         nameFr: c.nameFr || "",
-        image: c.image || "",
+        image: c.image || c.image_url || "",
         hidden: !!c.hidden,
         order: c.order,
       });
@@ -683,24 +697,24 @@ const JA = (() => {
 
   function categories() {
     const saved = read(KEYS.cats, null);
-    // Categories are database data, not application defaults. An empty array
-    // is intentional and must not resurrect a removed category.
-    const all = Array.isArray(saved) ? normalizeCatList(saved) : [];
-    if ((document.body.dataset.page || "") === "admin") return normalizeOrder(all);
+    const all = Array.isArray(saved) ? normalizeCatList(saved) : DEFAULT_CATEGORIES.map((c) => ({ ...c }));
+    if ((document.body && document.body.dataset.page || "") === "admin") return normalizeOrder(all);
     return normalizeOrder(all.filter((c) => !c.hidden));
   }
   async function loadServerCategories() {
     // Every page loads the owner's server-side category table (photos
     // included), not just the store management — the public storefront is where
     // shoppers see them.
-  try {
+    try {
       const r = await fetch("api/categories", { credentials: "same-origin", cache: "no-store" });
       const d = await r.json();
       if (d && Array.isArray(d.categories)) {
         write(KEYS.cats, d.categories.map((c) => ({
           id: c.id, name: c.name, nameFr: c.nameFr || "",
-          image: c.image || "", hidden: !!c.hidden, order: c.order,
+          image: c.image || c.image_url || "", hidden: !!c.hidden, order: c.order,
         })));
+        try { document.dispatchEvent(new CustomEvent("ja:categories")); } catch (e) {}
+        try { document.dispatchEvent(new CustomEvent("ja:rerender")); } catch (e) {}
       } else {
         // A server empty result is authoritative. Keep the last cache only
         // when the request itself failed, handled by the catch below.
@@ -782,16 +796,29 @@ const JA = (() => {
     return saveCategories(categories().filter((c) => c.id !== id && c.id !== "skincare"));
   }
   function categoryName(id) {
-    const c = categories().find((x) => x.id === id);
-    if (!c) return id;
+    if (!id) return "";
+    const list = read(KEYS.cats, null);
+    const c = (Array.isArray(list) ? list : DEFAULT_CATEGORIES).find((x) => x && x.id === id);
+    if (!c) {
+      if (id === "perfume") {
+        try {
+          if (window.I18N && typeof window.I18N.lang === "function" && window.I18N.lang() === "fr") return "Parfum";
+        } catch (e) {}
+        return "Perfume";
+      }
+      const key = "cat." + id;
+      const translated = tx(key);
+      if (translated && translated !== key) return translated;
+      return id.charAt(0).toUpperCase() + id.slice(1).replace(/-/g, " ");
+    }
     try {
-      if (window.I18N && I18N.lang() === "fr" && c.nameFr) return c.nameFr;
+      if (window.I18N && typeof window.I18N.lang === "function" && window.I18N.lang() === "fr" && c.nameFr) return c.nameFr;
     } catch (e) {}
     if (c.name) return c.name;
     const key = "cat." + id;
     const translated = tx(key);
     if (translated && translated !== key) return translated;
-    return id;
+    return id.charAt(0).toUpperCase() + id.slice(1).replace(/-/g, " ");
   }
 
   function currency() {
@@ -2625,21 +2652,28 @@ const JA = (() => {
         : `<a class="search-more" href="shop.html">${tx("search.browse")}</a>`);
     };
     const chips = document.querySelector("[data-search-chips]");
-    if (chips && !chips.dataset.ready) {
-      chips.dataset.ready = "1";
-      chips.innerHTML = `<button type="button" data-schip="all" class="is-on">${tx("search.all")}</button>` +
-        categories().map((c) => `<button type="button" data-schip="${c.id}">${categoryName(c.id)}</button>`).join("");
-      chips.addEventListener("click", (e) => {
-        const b = e.target.closest("[data-schip]");
-        if (!b) return;
-        activeCat = b.dataset.schip;
-        chips.querySelectorAll("button").forEach((x) => x.classList.toggle("is-on", x === b));
-        paintSearch();
-      });
-    }
+    const paintSearchChips = () => {
+      const cBox = document.querySelector("[data-search-chips]");
+      if (!cBox) return;
+      cBox.innerHTML = `<button type="button" data-schip="all" class="${activeCat === "all" ? "is-on" : ""}">${tx("search.all")}</button>` +
+        categories().map((c) => `<button type="button" data-schip="${c.id}" class="${activeCat === c.id ? "is-on" : ""}">${categoryName(c.id)}</button>`).join("");
+      if (!cBox.dataset.bound) {
+        cBox.dataset.bound = "1";
+        cBox.addEventListener("click", (e) => {
+          const b = e.target.closest("[data-schip]");
+          if (!b) return;
+          activeCat = b.dataset.schip;
+          cBox.querySelectorAll("button").forEach((x) => x.classList.toggle("is-on", x === b));
+          paintSearch();
+        });
+      }
+    };
+    paintSearchChips();
+    document.addEventListener("ja:categories", paintSearchChips);
     const openSearch = () => {
       document.querySelector("[data-mobile]")?.classList.remove("open");
       overlay?.classList.add("open");
+      paintSearchChips();
       paintSearch();
       setTimeout(() => input?.focus(), 40);
     };

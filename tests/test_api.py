@@ -1954,3 +1954,39 @@ def test_moving_banner_editor_is_wired_in_admin_and_storefront():
     assert "bindBanner" in admin and "banner-form" in admin and "convBanner" in admin
     assert "function setBanner" in store and "setBanner," in store
     assert "JA.setBanner" in app_js
+
+
+def test_hero_video_upload_allows_15mb(client):
+    tok = login(client)
+    header = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2mp41"
+    video_data = header + b"\x00" * (15 * 1024 * 1024 - len(header))
+    r = client.post("/api/admin/uploads/hero",
+                    data={"file": (io.BytesIO(video_data), "hero.mp4")},
+                    headers={"X-CSRF-Token": tok},
+                    content_type="multipart/form-data")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    d = r.get_json()
+    assert d["ok"] is True
+    assert d["kind"] == "video"
+
+
+def test_perfume_category_in_public_categories_and_defaults(client):
+    tok = login(client)
+    cats = [{"id": "perfume", "name": "Perfume", "nameFr": "Parfum", "image": "images/categories/beauty.jpg", "hidden": False}]
+    client.put("/api/admin/categories", json={"categories": cats},
+               headers={"X-CSRF-Token": tok})
+    res = client.get("/api/categories")
+    assert res.status_code == 200
+    cats = res.get_json()["categories"]
+    perfume = next((c for c in cats if c["id"] == "perfume"), None)
+    assert perfume is not None
+    assert perfume["name"] == "Perfume"
+    assert perfume["nameFr"] == "Parfum"
+
+
+def test_100l_storage_bag_is_permanently_filtered(client):
+    res = client.get("/api/catalog?all=1")
+    assert res.status_code == 200
+    prods = res.get_json()["products"]
+    assert not any(p["id"] == "wix-002" or "100l" in str(p.get("slug") or "") for p in prods)
+

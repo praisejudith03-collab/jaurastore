@@ -83,6 +83,7 @@ window.I18N_PHRASES = {
   "Decor": "Décoration",
   "Gift set": "Coffret cadeau",
   "Children items": "Articles pour enfants",
+  "Perfume": "Parfum",
   "All Products": "Tous les produits",
 
   // ------------------------------------------------------------------ toasts
@@ -415,6 +416,7 @@ window.I18N_PHRASES = {
   "Gift set": "Coffret cadeau",
   "Children items": "Articles pour enfants",
   "Decor": "Décoration",
+  "Perfume": "Parfum",
 };
 
 /* ==========================================================================
