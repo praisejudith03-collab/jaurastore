@@ -139,46 +139,20 @@ def test_products_section_stays_mobile_pasteable():
 
 
 # ============================================================ category labels
-_JS_CAT_RE = re.compile(
-    r'\{\s*id:\s*"(?P<id>[a-z-]+)"\s*,\s*name:\s*"(?P<name>[^"]*)"\s*,'
-    r'\s*nameFr:\s*"(?P<nameFr>[^"]*)"')
+
+def test_categories_are_not_compiled_into_the_storefront():
+    """The storefront must render the server response, including new rows."""
+    src = open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8").read()
+    assert "const DEFAULT_CATS" not in src
+    assert "fetch(\"api/categories\"" in src
+    assert "write(KEYS.cats, d.categories.map" in src
 
 
-def _js_default_cats() -> dict:
-    with open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8") as fh:
-        src = fh.read()
-    block = src[src.index("const DEFAULT_CATS = ["):]
-    block = block[:block.index("];")]
-    return {m.group("id"): m.groupdict() for m in _JS_CAT_RE.finditer(block)}
-
-
-def test_every_default_category_has_a_french_name_on_the_server():
+def test_server_category_reader_does_not_invent_rows():
     import api
-    missing = [c["id"] for c in api.DEFAULT_CATEGORIES
-               if not str(c.get("nameFr") or "").strip()]
-    assert not missing, f"api.DEFAULT_CATEGORIES missing nameFr: {missing}"
-
-
-def test_every_default_category_has_a_french_name_in_the_storefront():
-    cats = _js_default_cats()
-    assert len(cats) == 15, f"expected 15 default categories, parsed {len(cats)}"
-    missing = [cid for cid, c in cats.items() if not c["nameFr"].strip()]
-    assert not missing, f"js/store.js DEFAULT_CATS missing nameFr: {missing}"
-
-
-def test_server_and_storefront_agree_on_the_french_category_names():
-    """Two hard-coded copies of the same table drift apart silently; a shopper
-    would see one label in the nav and another on the category page."""
-    import api
-    js = _js_default_cats()
-    server = {c["id"]: c for c in api.DEFAULT_CATEGORIES}
-    assert set(js) == set(server), (
-        f"id sets differ: only-js={sorted(set(js) - set(server))} "
-        f"only-server={sorted(set(server) - set(js))}")
-    for cid, row in js.items():
-        assert row["nameFr"] == server[cid]["nameFr"], (
-            f"{cid}: js={row['nameFr']!r} server={server[cid]['nameFr']!r}")
-
+    src = open(os.path.join(ROOT, "api.py"), encoding="utf-8").read()
+    assert "DEFAULT_CATEGORIES" not in src
+    assert api._categories_data()["categories"]
 
 def test_committed_category_file_has_no_untranslated_label():
     with open(os.path.join(ROOT, "data", "categories.json"), encoding="utf-8") as fh:

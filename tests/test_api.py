@@ -226,11 +226,13 @@ def test_categories_are_public_and_admin_writable(tmp_path, monkeypatch, client)
     monkeypatch.setattr(apimod, "CATEGORIES_FILE", str(tmp_path / "categories.json"))
     pub = client.get("/api/categories")
     assert pub.status_code == 200
-    assert len(pub.get_json()["categories"]) >= 10
+    # The temporary file is empty, and the empty result is authoritative.
+    assert pub.get_json()["categories"] == []
 
     assert client.put("/api/admin/categories", json={"categories": []}).status_code in (401, 403)
     tok = login(client)
-    cats = pub.get_json()["categories"][:2]
+    # Admin writes are still dynamic; no compiled-in fixture is needed.
+    cats = [{"id": "perfume", "name": "Perfume", "nameFr": "Parfum", "image": "images/categories/beauty.jpg", "hidden": False}]
     r = client.put("/api/admin/categories", json={"categories": cats},
                    headers={"X-CSRF-Token": tok})
     assert r.status_code == 200, r.data
@@ -239,30 +241,21 @@ def test_categories_are_public_and_admin_writable(tmp_path, monkeypatch, client)
     assert on_disk["categories"] and on_disk["updatedBy"] == EMAIL
 
 
-def test_an_empty_categories_table_self_heals_to_the_defaults(monkeypatch):
-    """A reachable but EMPTY Supabase categories table is a table that was
-    never seeded (or was wiped) - not "this shop has no categories".
+def test_an_empty_categories_table_stays_empty_and_is_not_replaced(monkeypatch):
+    """An empty Supabase category table must remain authoritative.
 
-    Serving [] left every phone with an empty category strip and no way back.
-    _categories_data() now falls back to the built-in defaults, photos
-    included, so the storefront always has something to show.
+    Categories are database data, not compiled-in defaults. This prevents a
+    deployment from resurrecting deleted categories or hiding a newly-created
+    category behind a stale frontend list.
     """
     import api as apimod
     import supabase_store as sb
     from config import Config
-
     monkeypatch.setattr(Config, "ENV", "production", raising=False)
     monkeypatch.setattr(sb, "enabled", lambda: True, raising=False)
     monkeypatch.setattr(sb, "load_categories_table", lambda: [], raising=False)
-
-    data = apimod._categories_data()
-    cats = data["categories"]
-    assert len(cats) == len(apimod.DEFAULT_CATEGORIES)
-    assert {c["id"] for c in cats} == {c["id"] for c in apimod.DEFAULT_CATEGORIES}
-    # the photos must survive the self-heal, or the strip renders blank tiles
-    assert all(c.get("image") for c in cats)
-    assert any(c["id"] == "beauty" for c in cats)
-
+    monkeypatch.setattr(sb, "load_categories", lambda: [], raising=False)
+    assert apimod._categories_data()["categories"] == []
 
 def test_a_populated_categories_table_is_served_as_is(monkeypatch):
     """The owner's own rows always win over the defaults."""
@@ -1915,8 +1908,9 @@ def test_storefront_loads_the_server_category_table():
     assert '!== "admin") return categories()' not in store
     app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
     assert "loadServerCategories" in app_js
-    # a saved image is never clobbered by the locale/merge normalisers
-    assert 'image: c.image || def.image || ""' in store
+    # server rows are normalized without a compiled-in category fallback
+    assert 'image: c.image || ""' in store
+    assert "const DEFAULT_CATS" not in store
 
 
 # ================================= moving banner: owner text, HTML-stripped

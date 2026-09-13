@@ -5074,7 +5074,8 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   min-height: clamp(320px, 42vw, 680px);
   background: #241913;
 }
-.home-promo video {
+.home-promo video,
+#hero-video {
   position: absolute;
   inset: 0;
   width: 100%;
