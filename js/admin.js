@@ -2387,6 +2387,7 @@ function bindBanner() {
       // inputs so what the admin sees is what Supabase stored. applySiteConfig
       // also fires ja:site so every open page (and the admin chrome) picks it up.
       const site = (saved && saved.site) || { convBanner: conv, convBannerFr: convFr, convBold: bold };
+      bannerLoaded = site;
       const liveConv = ("convBanner" in site) ? (site.convBanner || "") : conv;
       const liveConvFr = ("convBannerFr" in site) ? (site.convBannerFr || "") : convFr;
       const liveBold = ("convBold" in site) ? (site.convBold || "") : bold;
