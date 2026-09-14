@@ -59,7 +59,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # (they overrode the owner's custom text and went stale every batch), and the
 # header banner follows the EN/FR toggle. js/store.js, js/admin.js, js/i18n.js
 # and sw.js all changed, so phones must fetch the new ones on the first visit.
-SHARED_TOKEN = "144"
+# Bumped to 145 to flush the service worker and mobile browser caches for the
+# admin moving-banner fix (siteFieldPatch moved to top-level scope in
+# js/admin.js): phones kept serving the stale js/admin.js?v=144 bundle from
+# the sw.js cache, so every shared asset ships under a fresh token.
+SHARED_TOKEN = "145"
 
 
 def _image_size(path):
