@@ -2161,7 +2161,9 @@ def _load_site():
             with open(path, encoding="utf-8") as fh:
                 return json.load(fh)
         except (OSError, ValueError):
-            return {"heroVideo":"", "heroPoster":"", "heroDoc":"", "logoUrl":"", "shopBannerUrl":"", "bannerFrom":"2026-09-15", "bannerTo":"2026-09-25", "convBanner":"", "convBannerFr":"", "convBold":"", "shippingNote":""}
+            return {"heroVideo": "", "heroPoster": "", "heroDoc": "",
+                    "logoUrl": "", "shopBannerUrl": "", "convBanner": "",
+                    "convBannerFr": "", "convBold": "", "shippingNote": ""}
     from supabase_settings import get_site_settings
     return get_site_settings()
 
@@ -2186,8 +2188,12 @@ SITE_LEGACY_MAP = {
     "heroDoc": "hero_doc_url",
     "shopBannerUrl": "shop_banner_url",
     "shippingNote": "shipping_note",
-    "bannerFrom": "banner_from",
-    "bannerTo": "banner_to",
+    # NOTE: bannerFrom / bannerTo (the "Delivery window starts / ends" date
+    # pickers) are deliberately absent. The auto-generated date-window line
+    # competed with the owner's own moving-banner text and went stale every
+    # batch; the moving banner is now conv_banner / conv_banner_fr only. The
+    # banner_from / banner_to columns are left untouched in the live table so
+    # nothing is destroyed, but nothing reads or writes them any more.
     "convBanner": "conv_banner",
     "convBannerFr": "conv_banner_fr",
     "convBold": "conv_bold",
@@ -2198,6 +2204,18 @@ SITE_LEGACY_MAP = {
 # legacy aliases (logoUrl, heroVideo, ...), so a production response carries
 # both shapes of every value.
 SITE_LEGACY_ALIASES = {col: key for key, col in SITE_LEGACY_MAP.items()}
+
+# Every site_settings column POST /api/admin/site is allowed to write. It is
+# the canonical column list: SITE_KEYS plus the columns that used to be
+# reachable ONLY through a legacy front-end alias.
+#
+# This is the bug that made "Moving banner text" look unsaveable: a client
+# posting the real column name ({"conv_banner": "..."}) had it silently
+# dropped, because the handler only ever collected SITE_KEYS and the legacy
+# aliases. The request answered 200 with the OLD row, so the Admin form
+# repainted the previous text and the storefront never changed. Both
+# spellings now write the same column.
+SITE_WRITABLE_COLUMNS = frozenset(SITE_KEYS) | set(SITE_LEGACY_MAP.values())
 
 
 # ------------------------------------------------------------- delivery page
@@ -2382,7 +2400,11 @@ def admin_site_update():
     d = request.get_json(silent=True) or {}
     clear = _site_clear_list(d)
     values = {}
-    for k in SITE_KEYS:
+    # Canonical column names first (conv_banner, conv_banner_fr, conv_bold,
+    # shipping_note, the payment columns, ...), then the legacy front-end
+    # aliases (convBanner, ...) for anything the client sent that way. A
+    # canonical value wins when both spellings arrive in one request.
+    for k in SITE_WRITABLE_COLUMNS:
         if k in d:
             values[k] = d[k]
     for legacy, column in SITE_LEGACY_MAP.items():
@@ -2392,7 +2414,7 @@ def admin_site_update():
     # it still has to reach the write as an empty value.
     for name in clear:
         column = SITE_LEGACY_MAP.get(name, name)
-        if column in SITE_KEYS or column in SITE_LEGACY_MAP.values():
+        if column in SITE_WRITABLE_COLUMNS:
             values.setdefault(column, "")
     for k in list(values):
         if k == "referral_commission_percentage":
@@ -2402,23 +2424,10 @@ def admin_site_update():
             values[k] = sec.safe_url(str(values[k] or ""))
         elif k in _SITE_TEXT_KEYS:
             values[k] = re.sub(r"<[^>]+>", "", str(values[k] or ""))
-        elif k in ("banner_from", "banner_to"):
-            v = str(values[k] or "")
-            if v and not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
-                # an invalid date keeps the previously saved value; it must
-                # not leak into the write below through the legacy mapping
-                values.pop(k, None)
-                continue
-            values[k] = v
         else:
             values[k] = sec.clean(values[k], 500)
     # Supabase column names only.
-    values = {k: v for k, v in values.items()
-              if k in ("site_logo_url", "hero_video_url", "hero_poster_url",
-                       "hero_doc_url", "shop_banner_url", "shipping_note",
-                       "banner_from", "banner_to", "conv_banner",
-                       "conv_banner_fr", "conv_bold")
-              or k in SITE_KEYS}
+    values = {k: v for k, v in values.items() if k in SITE_WRITABLE_COLUMNS}
     # An empty value only counts as a change when the client asked for that
     # column to be cleared (see _site_clear_list). Without this, one Save from
     # a form that never received the live row blanked every field it could not
@@ -2428,17 +2437,15 @@ def admin_site_update():
     if Config.ENV == "testing":
         path = os.environ.get("SITE_CONFIG_PATH", "")
         current = _load_site()
-        legacy = ("heroVideo", "heroPoster", "heroDoc", "logoUrl", "shopBannerUrl",
-                  "bannerFrom", "bannerTo", "convBanner", "convBannerFr",
-                  "convBold", "shippingNote")
+        legacy = ("heroVideo", "heroPoster", "heroDoc", "logoUrl",
+                  "shopBannerUrl", "convBanner", "convBannerFr", "convBold",
+                  "shippingNote")
         colmap = {v: k for k, v in SITE_LEGACY_MAP.items()}
         for k in legacy:
             if k in d:
                 value = str(d.get(k) or "")
                 if k in ("heroVideo", "heroPoster", "heroDoc", "logoUrl", "shopBannerUrl"):
                     value = sec.safe_url(value)
-                if k in ("bannerFrom", "bannerTo") and not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
-                    continue
                 if k in ("convBanner", "convBannerFr", "convBold", "shippingNote"):
                     value = re.sub(r"<[^>]+>", "", value)
                 # Same rule as the canonical columns above: empty means "leave

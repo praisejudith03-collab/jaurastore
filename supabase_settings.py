@@ -1,5 +1,6 @@
 """Supabase-backed site settings."""
 import re
+import time
 
 from supabase_store import client, enabled
 
@@ -10,8 +11,14 @@ DEFAULT_SETTINGS = {
     "contact_email": "", "contact_phone": "", "site_logo_url": "",
     # legacy front-end keys, persisted in the same id=1 row
     "hero_video_url": "", "hero_poster_url": "", "hero_doc_url": "",
-    "shop_banner_url": "", "shipping_note": "", "banner_from": "",
-    "banner_to": "", "conv_banner": "", "conv_banner_fr": "", "conv_bold": "",
+    "shop_banner_url": "", "shipping_note": "",
+    # The moving banner: one line per language plus the gold highlight.
+    # banner_from / banner_to (the retired "Delivery window starts / ends"
+    # date pickers) are intentionally NOT here any more - they are no longer
+    # writable, so the obsolete date-window text can never come back and
+    # override the owner's custom banner. The columns stay in the live table
+    # untouched; nothing reads them.
+    "conv_banner": "", "conv_banner_fr": "", "conv_bold": "",
     # Checkout payment details. Served by GET /api/site and edited from the
     # Admin Portal. The identity fields (provider/holder/account) carry the
     # owner's real destinations as the floor: an admin-saved value always
@@ -97,9 +104,33 @@ def get_site_settings():
 # The discovered shape is cached per worker so the next save lands on its
 # first attempt. Nothing else in the row is ever dropped: the other settings
 # still save even while a legacy table lacks the newest column.
+#
+# The "drop" half of that cache EXPIRES (DROP_RETRY_SECONDS). It used to be
+# permanent for the life of the worker, which turned a one-off missing column
+# into a permanent one: the owner would run the ALTER the log told them to
+# run, and every later banner save would STILL strip conv_banner_fr - the
+# French text silently never persisted - until the next deploy restarted the
+# process. A dropped column is now retried a few minutes later, so the save
+# starts working by itself once the table is repaired.
 # --------------------------------------------------------------------------
 
-_SITE_SHAPE = {"fill": [], "drop": [], "values": {}}
+DROP_RETRY_SECONDS = 300
+
+# "drop" maps a column -> the monotonic time it was dropped, so the entry can
+# expire. It still answers `in` and .clear() like the list it replaced.
+_SITE_SHAPE = {"fill": [], "drop": {}, "values": {}}
+
+
+def _drop_active(column):
+    """True while `column` is still believed missing from the live table."""
+    at = _SITE_SHAPE["drop"].get(column)
+    if at is None:
+        return False
+    if time.monotonic() - at >= DROP_RETRY_SECONDS:
+        # Long enough for the owner to have run the ALTER: try it again.
+        _SITE_SHAPE["drop"].pop(column, None)
+        return False
+    return True
 
 # The columns whose silent loss is unacceptable: the account a customer is
 # told to pay into. The tolerant writer below drops a column the live table
@@ -127,7 +158,11 @@ def _site_repair_statement(column):
 
 
 def _remember_site_shape(kind, column):
-    if column and column not in _SITE_SHAPE[kind]:
+    if not column:
+        return
+    if kind == "drop":
+        _SITE_SHAPE["drop"][column] = time.monotonic()
+    elif column not in _SITE_SHAPE[kind]:
         _SITE_SHAPE[kind].append(column)
 
 
@@ -140,7 +175,7 @@ def _update_site_settings_resilient(c, clean):
     error and touches nothing else.
     """
     pending = {k: v for k, v in (clean or {}).items()
-               if k not in _SITE_SHAPE["drop"]}
+               if not _drop_active(k)}
     if not pending:
         return None
     for col in _SITE_SHAPE["fill"]:

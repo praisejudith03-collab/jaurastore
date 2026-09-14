@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=143" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=144" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1465,7 +1465,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=143" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=144" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -1590,9 +1590,11 @@ let loadedSiteRow = null;
 function loadedSiteValue(site, key) {
   if (!site) return null;
   if (site[key] !== undefined && site[key] !== null) return String(site[key]).trim();
-  // legacy aliases served alongside the canonical columns
-  const alias = { shipping_note: "shippingNote", banner_from: "bannerFrom",
-                  banner_to: "bannerTo" }[key];
+  // Legacy front-end aliases /api/site serves alongside the canonical
+  // Supabase columns. (banner_from / banner_to are retired: the delivery
+  // window date pickers are gone and nothing maps them any more.)
+  const alias = { shipping_note: "shippingNote", conv_banner: "convBanner",
+                  conv_banner_fr: "convBannerFr", conv_bold: "convBold" }[key];
   if (alias && site[alias] !== undefined && site[alias] !== null) {
     return String(site[alias]).trim();
   }
@@ -1858,7 +1860,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=143", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=144", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -1893,9 +1895,9 @@ function settingsForm() {
   </div>
   <form id="banner-form" class="form-grid admin-card" style="margin-top:22px">
     <h3 class="admin-h full">Moving banner text</h3>
-    <p class="admin-note full">The moving line under the header on every page. Write your own message here — it replaces the default delivery-window banner for every visitor. French shoppers see the French line when it is filled; leave it empty and they see the English one. The <strong>bold highlight</strong> shows in gold at the end of the line. Empty text brings the default banner back.</p>
-    <div class="field full"><label>Banner text</label><input name="convBanner" id="conv-banner" maxlength="300" placeholder="e.g. Back-to-school sale: 10% off every bag" /></div>
-    <div class="field full"><label>Banner text (French)</label><input name="convBannerFr" id="conv-banner-fr" maxlength="300" placeholder="e.g. Soldes de rentrée : -10% sur tous les sacs" /></div>
+    <p class="admin-note full">The moving line under the header on every page. Write your own message here and it shows to every visitor, live, the moment you save. Shoppers reading the site in <strong>FR</strong> see the French line; leave it empty and they see the English one instead of a blank bar. The <strong>bold highlight</strong> shows in gold at the end of the line. Clear both boxes to bring the default banner back.</p>
+    <div class="field full"><label>Banner text (English — shown when EN is selected)</label><input name="convBanner" id="conv-banner" maxlength="300" placeholder="e.g. Back-to-school sale: 10% off every bag" /></div>
+    <div class="field full"><label>Banner text (French — shown when FR is selected)</label><input name="convBannerFr" id="conv-banner-fr" maxlength="300" placeholder="e.g. Soldes de rentrée : -10% sur tous les sacs" /></div>
     <div class="field full"><label>Bold highlight (optional)</label><input name="convBold" id="conv-bold" maxlength="300" placeholder="e.g. ends Sunday" /></div>
     <div class="field full"><p class="admin-err" id="banner-form-error" hidden></p><button class="btn">Save banner</button></div>
   </form>

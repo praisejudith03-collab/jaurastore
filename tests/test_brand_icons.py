@@ -53,7 +53,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # the Nigeria vs Benin-Togo WhatsApp line chooser (checkout itself does not).
 # Bumped to 143 for checkout completion/notification fixes, canonical WhatsApp
 # links, and the non-render-blocking homepage release. All assets ship together.
-SHARED_TOKEN = "143"
+# Bumped to 144 for the moving-banner release (owner directive 2026-09-14):
+# the banner saves under its canonical Supabase column names, the obsolete
+# "Delivery window starts / ends" date pickers are gone from the Admin panel
+# (they overrode the owner's custom text and went stale every batch), and the
+# header banner follows the EN/FR toggle. js/store.js, js/admin.js, js/i18n.js
+# and sw.js all changed, so phones must fetch the new ones on the first visit.
+SHARED_TOKEN = "144"
 
 
 def _image_size(path):
