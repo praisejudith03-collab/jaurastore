@@ -6510,3 +6510,21 @@ body.au-shop .shop-banner img,
   border-color: #25d366;
   color: #fff;
 }
+
+/* Responsive, accessible analytics SVGs (no fixed-width hairline bars). */
+.an-svg-scroll { width: 100%; overflow-x: auto; background: #fff; border: 1px solid #f2ece4; border-radius: 14px; padding: 8px; }
+.an-svg { display: block; width: 100%; min-width: 360px; height: auto; max-height: 240px; }
+.an-grid { stroke: #eee7f3; stroke-width: 1; }
+.an-axis { fill: #887562; font-size: 9px; font-family: sans-serif; }
+.an-legend span { display:inline-block; width:10px; height:10px; border-radius:3px; background:var(--key); margin-right:5px; }
+.an-flag { display:inline-block; width:28px; font-size:18px; }
+.live-row > span { display:grid; min-width:0; }
+.live-row > span small { margin:0; text-transform:none; letter-spacing:0; }
+@media (max-width: 600px) {
+  #an-kpis.stats, #an-conv.stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  #an-kpis .stat, #an-conv .stat { min-width: 0; padding: 13px 11px; }
+  .adx-periods { grid-template-columns: repeat(2, minmax(0,1fr)); gap:9px; }
+  .adx-periods .adx-period:last-child { grid-column: 1 / -1; }
+  .live-row { align-items:flex-start; flex-wrap:wrap; }
+  .live-row em { order:3; margin-left:20px; }
+}

@@ -1004,7 +1004,7 @@ const JA = (() => {
     if (add < want) {
       toast(stockProblemLine([{ name: displayName(p) || p.name, available: avail, requested: already + want }]));
     }
-    track("cart", { id, name: p.name, qty: add });
+    track("cart", { id, name: p.name, qty: add, variant: color });
     const totalQty = cartQtyFor(id);
     if (totalQty >= BULK_QTY) toast(tx("cart.bulkOn"));
     openMini();
@@ -1444,7 +1444,7 @@ const JA = (() => {
         path: location.pathname,
         page: page,
         productId: extra.id || "",
-        productName: extra.name || "",
+        productName: (extra.name || "") + (extra.variant ? " — " + extra.variant : ""),
         value: extra.value || 0,
         currency: extra.currency || "",
         sid: sessionId(),

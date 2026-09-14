@@ -212,7 +212,7 @@ function mediaStripHTML(imgs) {
   const tiles = (imgs || []).map((src, i) => mediaTileHTML(src, i, poster)).join("");
   const plus = (imgs || []).length < 20 ? `<label class="au-tile au-plus">+<input type="file" id="more-media" accept="image/*,video/*" multiple hidden /></label>` : "";
   return `<div class="au-media-row">${tiles}${plus}</div>
-    <p class="admin-note">Drag & drop, or tap + to pick several at once. Photos up to 6 MB, videos up to 40 MB. Your photos & videos stay as they are — up to 20 items.</p>
+    <p class="admin-note">Drag & drop, or tap + to pick several at once. Photos up to 6 MB, videos up to 50 MB. Your photos & videos stay as they are — up to 20 items.</p>
     <button type="button" class="au-view-media" id="view-media">Photos: ${(imgs || []).length} of 20 — tap + to add, × to remove</button>`;
 }
 function editorOptions(p) {
@@ -911,25 +911,29 @@ function analyticsPanel() {
     <h3 class="admin-h">Latest orders</h3><div id="an-orders" class="empty">Loading…</div>`;
 }
 function dayLabel(day) { const d = new Date(day + "T00:00:00Z"); return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
+function svgBarChart(series, bars) {
+  series = series || [];
+  if (!series.length) return `<p class="empty">No activity in this period yet.</p>`;
+  const width = Math.max(360, series.length * 30), height = 190, top = 12, bottom = 32, plot = height - top - bottom;
+  const max = Math.max(1, ...series.flatMap((d) => bars.map((b) => Number(d[b.key]) || 0)));
+  const grid = [0, .25, .5, .75, 1].map((n) => { const y = top + plot * (1-n); return `<line x1="34" y1="${y}" x2="${width-6}" y2="${y}" class="an-grid"/><text x="29" y="${y+4}" text-anchor="end" class="an-axis">${Math.round(max*n)}</text>`; }).join("");
+  const cell = (width - 42) / series.length, groupW = Math.min(24, cell - 3), barW = Math.max(4, groupW / bars.length);
+  const marks = series.map((d, i) => {
+    const x0 = 36 + i * cell + (cell-groupW)/2;
+    const rects = bars.map((bar, j) => { const v = Number(d[bar.key]) || 0, h = Math.max(v ? 3 : 0, v/max*plot); return `<rect x="${x0+j*barW}" y="${top+plot-h}" width="${Math.max(3,barW-2)}" height="${h}" rx="4" fill="${bar.color}"><title>${esc(d.day)} · ${v} ${esc(bar.label)}</title></rect>`; }).join("");
+    const step = Math.max(1, Math.ceil(series.length / 7));
+    return rects + (i % step === 0 ? `<text x="${36+i*cell+cell/2}" y="${height-8}" text-anchor="middle" class="an-axis">${esc(dayLabel(d.day))}</text>` : "");
+  }).join("");
+  return `<div class="an-svg-scroll"><svg class="an-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Analytics bar chart">${grid}${marks}</svg></div><p class="admin-note an-legend">${bars.map((b) => `<span style="--key:${b.color}"></span>${esc(b.label)}`).join(" &nbsp; ")}</p>`;
+}
 function trafficChart(series) {
-  const max = Math.max(1, ...series.map((d) => Math.max(d.views, d.visitors)));
-  const step = Math.max(1, Math.ceil((series || []).length / 10));
-  return `<div class="an-scroll"><div class="an-bars">${(series || []).map((d, i) => {
-    const showLab = i % step === 0;
-    return `<div class="an-col" title="${esc(d.day)} · ${d.views} view(s) · ${d.visitors} visitor(s)"><div class="an-bar-wrap"><div class="an-bar an-bar-views" style="height:${Math.round((d.views / max) * 120)}px"></div><div class="an-bar an-bar-visitors" style="height:${Math.round((d.visitors / max) * 120)}px"></div></div>${showLab ? `<span>${esc(dayLabel(d.day))}</span>` : ""}${showLab ? `<em>${d.views}</em>` : ""}</div>`;
-  }).join("")}</div></div><p class="admin-note"><span class="an-key an-key-views"></span> Page views &nbsp; <span class="an-key an-key-visitors"></span> Unique visitors</p>`;
+  return svgBarChart(series, [{key:"views",label:"Page views",color:"#7d47bd"},{key:"visitors",label:"Unique visitors",color:"#d5b8f1"}]);
 }
 function tableHTML(headers, rows) { return `<div class="table-wrap"><table><thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`; }
 function salesChart(series) {
   if (!series || !series.length) return `<p class="empty">No sales in this period yet.</p>`;
-  const max = Math.max(1, ...series.map((d) => d.revenue));
-  const total = series.reduce((n, d) => n + (d.revenue || 0), 0);
-  const orders = series.reduce((n, d) => n + (d.orders || 0), 0);
-  const step = Math.max(1, Math.ceil(series.length / 10));
-  return `<div class="an-scroll"><div class="an-bars">${series.map((d, i) => {
-    const showLab = i % step === 0;
-    return `<div class="an-col" title="${esc(d.day)} · ${d.orders} order(s) · ${esc(JA.money(d.revenue, "NGN"))}"><div class="an-bar-wrap"><div class="an-bar an-bar-sales" style="height:${Math.round((d.revenue / max) * 120)}px"></div></div>${showLab ? `<span>${esc(dayLabel(d.day))}</span>` : ""}${showLab ? `<em>${d.orders || ""}</em>` : ""}</div>`;
-  }).join("")}</div></div><p class="admin-note">${orders} order(s) · ${esc(JA.money(total, "NGN"))} in this period.</p>`;
+  const total = series.reduce((n, d) => n + (d.revenue || 0), 0), orders = series.reduce((n, d) => n + (d.orders || 0), 0);
+  return svgBarChart(series, [{key:"revenue",label:"Revenue",color:"#7d47bd"}]) + `<p class="admin-note">${orders} order(s) · ${esc(JA.money(total, "NGN"))} in this period.</p>`;
 }
 function timeAgo(iso) {
   if (!iso) return "";
@@ -950,10 +954,18 @@ function activityLine(a) {
   else if (a.type === "purchase") { icon = "🎉"; text = `Placed an order${a.value ? " · <strong>" + esc(JA.money(a.value, a.currency || "NGN")) + "</strong>" : ""}`; }
   return `<li class="adx-feed-row is-${esc(a.type)}"><i>${icon}</i><div>${text}${where ? ` <span class="adx-feed-geo">· ${esc(where)}</span>` : ""}</div><em>${esc(timeAgo(a.at))}</em></li>`;
 }
+function countryFlag(code) {
+  code = String(code || "").trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(code) ? String.fromCodePoint(...[...code].map((c) => 127397 + c.charCodeAt(0))) : "🌍";
+}
+function visitorNumber(vid) {
+  let n = 0; for (const c of String(vid || "visitor")) n = (n * 31 + c.charCodeAt(0)) % 1000;
+  return String(n).padStart(3, "0");
+}
 function renderLive(visitors, activity) {
   const liveBox = $("#an-live-box");
   if (liveBox) {
-    liveBox.innerHTML = (visitors || []).length ? visitors.map((v) => `<div class="live-row"><i></i><span>${esc([v.city, v.country].filter(Boolean).join(", ") || "Visitor")}</span><em>on ${esc(v.page || v.path || "the store")}</em><small>${esc(timeAgo(v.at))}</small></div>`).join("") : `<p class="empty">Nobody is browsing right now.</p>`;
+    liveBox.innerHTML = (visitors || []).length ? visitors.map((v) => `<div class="live-row"><i></i><span><strong>Visitor #${visitorNumber(v.vid)}</strong><small>${countryFlag(v.country)} ${esc([v.city, v.country].filter(Boolean).join(", ") || "Location unavailable")}</small></span><em>on ${esc(v.page || v.path || "the store")}</em><small>${esc(timeAgo(v.at))}</small></div>`).join("") : `<p class="empty">Nobody is browsing right now.</p>`;
   }
   const feed = $("#an-feed");
   if (feed) {
@@ -991,7 +1003,7 @@ async function fillAnalytics() {
   const status = c.statusBreakdown || [];
   $("#an-revenue").innerHTML = status.length ? `<p class="admin-note">${status.map((s) => `${esc(s.status)}: ${s.n}`).join(" · ")}</p>` : "";
   const locs = data.locations || [];
-  $("#an-loc").innerHTML = locs.length ? tableHTML(["Location", "Visitors"], locs.map((l) => `<tr><td>${esc([l.city, l.country].filter(Boolean).join(", "))}</td><td>${l.visitors}</td></tr>`).join("")) : `<p class="empty">No locations recorded yet.</p>`;
+  $("#an-loc").innerHTML = locs.length ? tableHTML(["Location", "Sessions"], locs.map((l) => `<tr><td><span class="an-flag">${countryFlag(l.country)}</span>${esc([l.city, l.country].filter(Boolean).join(", "))}</td><td>${l.sessions || l.visitors}</td></tr>`).join("")) : `<p class="empty">No locations recorded yet.</p>`;
   const orders = data.recentOrders || [];
   $("#an-orders").innerHTML = orders.length ? tableHTML(["Order", "Customer", "Total", "Status"], orders.map((o) => `<tr><td>${esc(o.id)}</td><td>${esc(o.customer_name || "")}</td><td>${esc(JA.money(o.total, o.currency))}</td><td><span class="status-pill ${esc(o.status || "pending")}">${esc(orderStatusLabel(o.status))}</span></td></tr>`).join("")) : `<p class="empty">No orders yet.</p>`;
   document.querySelectorAll("[data-range]").forEach((b) => { b.onclick = () => { dashRange = Number(b.dataset.range); paintDesk("analytics"); }; });
@@ -1880,7 +1892,7 @@ function settingsForm() {
   return `
   <div class="admin-card adx-hero-card">
     <h3 class="admin-h">Homepage hero video</h3>
-    <p class="admin-note">Upload a video (MP4/WebM/MOV, up to 40 MB) and it plays silently on a loop at the top of the homepage. You can also attach a PDF or document (up to 15 MB). A photo sets the hero poster.</p>
+    <p class="admin-note">Upload a video (MP4/WebM/MOV, up to 50 MB) and it plays silently on a loop at the top of the homepage. You can also attach a PDF or document (up to 15 MB). A photo sets the hero poster.</p>
     <div id="hero-video-now"><p class="empty">Checking the current hero…</p></div>
     <div class="adx-hero-actions"><label class="btn adx-upload-btn">Upload video / document<input type="file" id="hero-video-file" accept="image/*,video/*,.pdf,.doc,.docx,application/pdf" hidden /></label><button type="button" class="btn btn-line" id="hero-video-remove" hidden>Remove hero asset</button></div>
     <p class="admin-note" id="hero-video-msg"></p>

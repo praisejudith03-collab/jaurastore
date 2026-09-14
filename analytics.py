@@ -59,10 +59,23 @@ def stamp_cookie(resp, vid):
 
 
 def _geo(d):
-    city = sec.clean(d.get("city"), 80) or ""
-    region = sec.clean(d.get("region"), 80) or ""
-    country = sec.clean(d.get("country"), 80) or ""
-    return city, region, country
+    """Resolve location from trusted edge headers, with browser geo only as a
+    fallback. Render/Cloudflare/Vercel inject these without a paid lookup and
+    the values never expose or persist a shopper IP address.
+    """
+    h = request.headers
+    city = (h.get("CF-IPCity") or h.get("X-Vercel-IP-City") or
+            h.get("X-Render-City") or d.get("city") or "")
+    region = (h.get("CF-Region") or h.get("X-Vercel-IP-Country-Region") or
+              h.get("X-Render-Region") or d.get("region") or "")
+    country = (h.get("CF-IPCountry") or h.get("X-Vercel-IP-Country") or
+               h.get("X-Render-Country") or d.get("country") or "")
+    try:
+        from urllib.parse import unquote
+        city, region = unquote(str(city)), unquote(str(region))
+    except Exception:
+        pass
+    return sec.clean(city, 80) or "", sec.clean(region, 80) or "", sec.clean(country, 80).upper() or ""
 
 
 # --------------------------------------------------------------- recording
@@ -295,7 +308,7 @@ def report(days=30):
         "FROM orders ORDER BY at DESC LIMIT 8")]
 
     locations = [dict(r) for r in query(
-        "SELECT city, country, COUNT(*) visitors FROM visitors "
+        "SELECT city, country, COUNT(*) visitors, COALESCE(SUM(sessions),0) sessions FROM visitors "
         "WHERE city != '' OR country != '' GROUP BY city, country "
         "ORDER BY visitors DESC LIMIT 12")]
 

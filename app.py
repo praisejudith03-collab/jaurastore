@@ -141,8 +141,8 @@ def create_app():
         SESSION_COOKIE_SECURE=(Config.ENV == "production"),
         SESSION_COOKIE_NAME="jaura_session",
         PERMANENT_SESSION_LIFETIME=Config.PERMANENT_SESSION_LIFETIME,
-        # allows product + hero videos up to 40 MB (storage.MAX_VIDEO_BYTES)
-        MAX_CONTENT_LENGTH=45 * 1024 * 1024,
+        # allows a 50 MB video plus multipart/form-data envelope
+        MAX_CONTENT_LENGTH=52 * 1024 * 1024,
     )
     import customers as customers_mod
     customers_mod.register_routes(api)
