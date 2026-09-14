@@ -10,6 +10,12 @@
 insert into storage.buckets (id, name, public)
 values ('uploads', 'uploads', true)
 on conflict (id) do nothing;
+-- Raise an existing or newly-created bucket to the application's advertised
+-- 50 MB video limit while retaining its existing public/private choice.
+update storage.buckets set
+  file_size_limit = 52428800,
+  allowed_mime_types = array['image/jpeg','image/png','image/webp','image/gif','image/avif','image/heic','video/mp4','video/webm','video/quicktime','application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+where id = 'uploads';
 -- Idempotent policies: do not create duplicates if they already exist.
 do $$ begin
   create policy "public read uploads" on storage.objects for select using (bucket_id = 'uploads');
