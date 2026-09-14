@@ -1459,6 +1459,59 @@ const ADX_ICONS = {
   account: `<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   more: `<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.9" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.9" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.9" fill="currentColor" stroke="none"/></svg>`,
 };
+
+// The site_settings columns that carry checkout payment details. Kept in one
+// list so the form, the POST payload and the server-confirmed repaint can
+// never drift apart.
+const PAYMENT_FIELDS = [
+  "naira_payment_bank", "naira_payment_name", "naira_payment_account",
+  "naira_payment_instructions",
+  "cfa_payment_provider", "cfa_payment_name", "cfa_payment_account",
+  "cfa_payment_instructions",
+  "togo_payment_provider", "togo_payment_name", "togo_payment_account",
+  "togo_payment_instructions",
+];
+
+// The row the server last confirmed (GET /api/site, or the answer to a save).
+// The Settings form only ever sends:
+//   * fields whose value the admin actually changed, and
+//   * `_clear: [...]` for a field that HAD a value here and was emptied.
+// An empty input that was never loaded (slow fetch, a cached bundle from
+// before a deploy, a tab left open) is therefore never sent, and can no
+// longer blank the bank details it could not display. That failure is what
+// made an account number "disappear again" after an unrelated save.
+let loadedSiteRow = null;
+function loadedSiteValue(site, key) {
+  if (!site) return null;
+  if (site[key] !== undefined && site[key] !== null) return String(site[key]).trim();
+  // Legacy front-end aliases /api/site serves alongside the canonical
+  // Supabase columns. (banner_from / banner_to are retired: the delivery
+  // window date pickers are gone and nothing maps them any more.)
+  const alias = { shipping_note: "shippingNote", conv_banner: "convBanner",
+                  conv_banner_fr: "convBannerFr", conv_bold: "convBold" }[key];
+  if (alias && site[alias] !== undefined && site[alias] !== null) {
+    return String(site[alias]).trim();
+  }
+  return null;
+}
+function siteFieldPatch(candidate, site) {
+  const payload = {};
+  const clear = [];
+  Object.keys(candidate).forEach((key) => {
+    const before = loadedSiteValue(site, key);
+    const now = String(candidate[key] == null ? "" : candidate[key]).trim();
+    if (before === null) {           // nothing loaded: only ever add a value
+      if (now) payload[key] = now;
+      return;
+    }
+    if (now === before) return;      // untouched by the admin
+    if (!now) { clear.push(key); return; }
+    payload[key] = now;
+  });
+  if (clear.length) payload._clear = clear;
+  return payload;
+}
+
 function paintDesk(tab = "analytics") {
   const pending = serverOrders.filter((o) => (o.status || "pending") === "pending").length;
   const navBtn = (id, badge) => `<button type="button" data-tab="${id}" class="adx-nav-btn ${tab === id ? "is-on" : ""}">${ADX_ICONS[id]}<span>${TAB_TITLES[id]}</span>${badge ? `<em class="adx-badge">${badge}</em>` : ""}</button>`;
@@ -1565,58 +1618,6 @@ function paintDesk(tab = "analytics") {
     if (sel) sel.value = dashCat;
   }
   $("#back-all-products")?.addEventListener("click", () => { dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1; paintDesk("products"); });
-
-// The site_settings columns that carry checkout payment details. Kept in one
-// list so the form, the POST payload and the server-confirmed repaint can
-// never drift apart.
-const PAYMENT_FIELDS = [
-  "naira_payment_bank", "naira_payment_name", "naira_payment_account",
-  "naira_payment_instructions",
-  "cfa_payment_provider", "cfa_payment_name", "cfa_payment_account",
-  "cfa_payment_instructions",
-  "togo_payment_provider", "togo_payment_name", "togo_payment_account",
-  "togo_payment_instructions",
-];
-
-// The row the server last confirmed (GET /api/site, or the answer to a save).
-// The Settings form only ever sends:
-//   * fields whose value the admin actually changed, and
-//   * `_clear: [...]` for a field that HAD a value here and was emptied.
-// An empty input that was never loaded (slow fetch, a cached bundle from
-// before a deploy, a tab left open) is therefore never sent, and can no
-// longer blank the bank details it could not display. That failure is what
-// made an account number "disappear again" after an unrelated save.
-let loadedSiteRow = null;
-function loadedSiteValue(site, key) {
-  if (!site) return null;
-  if (site[key] !== undefined && site[key] !== null) return String(site[key]).trim();
-  // Legacy front-end aliases /api/site serves alongside the canonical
-  // Supabase columns. (banner_from / banner_to are retired: the delivery
-  // window date pickers are gone and nothing maps them any more.)
-  const alias = { shipping_note: "shippingNote", conv_banner: "convBanner",
-                  conv_banner_fr: "convBannerFr", conv_bold: "convBold" }[key];
-  if (alias && site[alias] !== undefined && site[alias] !== null) {
-    return String(site[alias]).trim();
-  }
-  return null;
-}
-function siteFieldPatch(candidate, site) {
-  const payload = {};
-  const clear = [];
-  Object.keys(candidate).forEach((key) => {
-    const before = loadedSiteValue(site, key);
-    const now = String(candidate[key] == null ? "" : candidate[key]).trim();
-    if (before === null) {           // nothing loaded: only ever add a value
-      if (now) payload[key] = now;
-      return;
-    }
-    if (now === before) return;      // untouched by the admin
-    if (!now) { clear.push(key); return; }
-    payload[key] = now;
-  });
-  if (clear.length) payload._clear = clear;
-  return payload;
-}
 
   $("#set-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
