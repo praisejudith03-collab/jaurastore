@@ -369,6 +369,27 @@ const offlineFixture = (id, name) => ({
   check("a French shopper falls back to the English banner when French is unwritten",
     JA.convBannerHTML().includes("English only banner"));
 
+  // The retired "Delivery window starts / ends" pickers must not come back
+  // as a fallback: with nothing written the default line carries no dates,
+  // and the owner's own text is never overridden by a generated one.
+  JA.setBanner("", "", "");
+  const fallbackFr = JA.convBannerHTML();
+  sandbox.I18N = { lang: () => "en" };
+  const fallbackEn = JA.convBannerHTML();
+  check("the default banner carries no delivery-window dates",
+    !/\d{4}-\d{2}-\d{2}/.test(fallbackEn) && !/\d{4}-\d{2}-\d{2}/.test(fallbackFr),
+    fallbackEn.slice(0, 80));
+  check("the default banner still says something in both languages",
+    fallbackEn.includes("<span>") && fallbackFr.includes("<span>"));
+
+  // A French-only banner still shows to an English shopper (the English
+  // field is the single source when French is the only one written, the
+  // owner never gets a blank bar).
+  JA.setBanner("", "", "Soldes uniquement");
+  sandbox.I18N = { lang: () => "fr" };
+  check("a French-only banner reaches the French shopper",
+    JA.convBannerHTML().includes("Soldes uniquement"));
+
   // upsertProduct keeps the two stock aliases in lock-step (the server
   // prefers stock_quantity), so a caller setting only one never ships the
   // other as a stale value.

@@ -108,7 +108,7 @@ const JA = (() => {
     "promo.referral": "Order above ₦20,000 (8,800 CFA) and get your personal referral code — share it and your friends enjoy a discount at checkout.",
     "promo.shop": "Shop now",
     "promo.kicker": "Everything you love, all in one store",
-    "conv.banner": "Benin 🇧🇯 customers: place your order now and get it between {from} and {to}",
+    "conv.banner": "Benin 🇧🇯 customers: place your order now and we deliver in the next batch",
     "ck.bjMin": "Benin deliveries: minimum order 5,000 F CFA (about 12,000 naira).",
   };
 
@@ -1818,40 +1818,42 @@ const JA = (() => {
   }
 
 
-  let _bannerDates = { from: "2026-09-15", to: "2026-09-25" };
-  // Owner-written banner (Admin → Settings). Empty = the default
-  // delivery-window line built from _bannerDates.
+  // Owner-written banner (Admin → Settings → Moving banner text). One string
+  // per language on the Supabase site_settings row. Empty = the built-in
+  // default line below.
+  //
+  // The old auto-generated "delivery window" line (banner_from / banner_to
+  // date pickers) is GONE: it competed with the owner's own text, it had to
+  // be re-typed every batch, and a stale window kept promising dates that had
+  // already passed. The banner is now exactly what the owner wrote, in the
+  // shopper's language, or the fixed default when nothing is written.
   let _bannerText = { conv: "", convFr: "", bold: "" };
   function currentLang() {
     try { return (window.I18N && I18N.lang()) || "en"; } catch (e) { return "en"; }
   }
-  function formatBannerDay(iso, lang) {
-    const s = String(iso || "").trim();
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return s || iso;
-    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    if (Number.isNaN(d.getTime())) return s;
-    try {
-      return d.toLocaleDateString(lang === "fr" ? "fr-FR" : "en-GB", { day: "numeric", month: "long" });
-    } catch (_) {
-      return s;
-    }
+  /** The banner line for the ACTIVE language.
+   *
+   *  FR active -> the French text, falling back to the English one when the
+   *  owner has not written a French line (never a blank bar).
+   *  EN active -> the English text.
+   *  Nothing written at all -> "" so the caller paints the default. */
+  function bannerLineFor(lang) {
+    const fr = String(_bannerText.convFr || "").trim();
+    const en = String(_bannerText.conv || "").trim();
+    return (String(lang || "").toLowerCase().indexOf("fr") === 0 && fr) ? fr : en;
   }
   function convBannerHTML() {
-    // The owner's banner is two fields now (English + French). A French
-    // shopper reads the French line; when it is unwritten the English line
-    // is the fallback, never a blank bar.
     const lang = currentLang();
-    const conv = (lang === "fr" && _bannerText.convFr) ? _bannerText.convFr : _bannerText.conv;
+    const conv = bannerLineFor(lang);
     if (conv) {
       const line = escape(conv);
       const tail = _bannerText.bold ? ` · <strong>${escape(_bannerText.bold)}</strong>` : "";
       const span = `<span>${line}${tail}</span>`;
       return span + span + span + span;
     }
-    const from = formatBannerDay(_bannerDates.from, lang);
-    const to = formatBannerDay(_bannerDates.to, lang);
-    const line = tx("conv.banner", { from, to });
+    // No custom banner: one fixed, translated line. It carries no dates, so
+    // it cannot go stale between delivery batches.
+    const line = tx("conv.banner");
     const min = tx("ck.bjMin");
     const span = `<span>${line} · <strong>${min}</strong></span>`;
     return span + span + span + span;
@@ -1905,8 +1907,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=143";
-        const FLYER = "images/brand/logo-flyer.jpg?v=143";
+        const LOGO = "images/brand/logo.jpg?v=144";
+        const FLYER = "images/brand/logo-flyer.jpg?v=144";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -1970,15 +1972,21 @@ const JA = (() => {
     // Server row (Supabase site_settings) is the truth; the copy used by
     // settings() and the checkout keeps ALL canonical fields live.
     _siteConfig = site;
-    if (site.bannerFrom) _bannerDates.from = site.bannerFrom;
-    if (site.bannerTo) _bannerDates.to = site.bannerTo;
-    // Keyed on `"convBanner" in site` (not truthiness): an EMPTY save is a
-    // real value meaning "restore the default delivery-window banner". The
-    // old `if (site.convBanner)` never cleared the previous text, so the
-    // moving banner kept showing something other than what the owner typed.
+    // Keyed on presence (not truthiness): an EMPTY save is a real value
+    // meaning "restore the default banner". The old `if (site.convBanner)`
+    // never cleared the previous text, so the moving banner kept showing
+    // something other than what the owner typed.
+    //
+    // Both spellings are accepted - /api/site answers the canonical Supabase
+    // column (conv_banner) AND the legacy front-end alias (convBanner), and a
+    // browser running a bundle from either side of a deploy must still pick
+    // the value up.
     if ("convBanner" in site) _bannerText.conv = site.convBanner || "";
+    else if ("conv_banner" in site) _bannerText.conv = site.conv_banner || "";
     if ("convBannerFr" in site) _bannerText.convFr = site.convBannerFr || "";
+    else if ("conv_banner_fr" in site) _bannerText.convFr = site.conv_banner_fr || "";
     if ("convBold" in site) _bannerText.bold = site.convBold || "";
+    else if ("conv_bold" in site) _bannerText.bold = site.conv_bold || "";
     // Mirror the canonical keys for the offline paint pass only. The payment
     // columns are mirrored too: a phone that opens the checkout offline must
     // still see the bank details it was shown a minute ago, instead of an
@@ -2013,7 +2021,13 @@ const JA = (() => {
     return site;
   }
 
-  function loadBannerDates() {
+  /** Re-read the live site row (GET /api/site) and apply it.
+   *
+   *  `cache: "no-store"` plus the server's `Cache-Control: private, no-store`
+   *  is what makes a banner the owner just saved visible on the very next
+   *  paint: no CDN copy, no bfcache copy, no service-worker copy (sw.js does
+   *  not cache /api/ apart from the catalogue). */
+  function loadSiteRow() {
     return fetch("api/site", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { applySiteConfig((d && d.site) || {}); })
@@ -2053,7 +2067,7 @@ const JA = (() => {
       </div>
       <div class="wrap header-inner">
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=143" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=144" alt="Jaura" />
         </a>
         <nav class="nav-left">
           <a href="index.html">${tx("nav.home")}</a>
@@ -2085,7 +2099,11 @@ const JA = (() => {
         </div>
       </div>
     </header>
-    <div class="conv-bar" role="status">
+    <!-- data-no-i18n: the moving line is language-switched by
+         convBannerHTML() (the owner's French field, or the translated
+         default). The generic French sweep must not rewrite the owner's
+         own wording on top of that. -->
+    <div class="conv-bar" role="status" data-no-i18n>
       <div class="conv-track">
         ${convBannerHTML()}
       </div>
@@ -2200,7 +2218,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=143" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=144" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2284,7 +2302,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=143" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=144" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -2306,7 +2324,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=143";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=144";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2351,7 +2369,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=143");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=144");
     document.title = title;
     [
       ["name", "description", description],
@@ -2554,7 +2572,7 @@ const JA = (() => {
     const bot = document.getElementById("site-footer");
     if (top) top.innerHTML = headerHTML();
     if (bot) bot.innerHTML = footerHTML();
-    try { loadBannerDates(); } catch (e) {}
+    try { loadSiteRow(); } catch (e) {}
     try {
       const dock = bot && bot.querySelector(".dock");
       if (dock) document.body.appendChild(dock);

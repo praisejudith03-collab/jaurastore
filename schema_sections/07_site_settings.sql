@@ -67,3 +67,18 @@ alter table site_settings add column if not exists naira_payment_name         te
 alter table site_settings add column if not exists naira_payment_account      text not null default '';
 alter table site_settings add column if not exists naira_payment_instructions text not null default '';
 
+-- Admin write access to site_settings (the moving banner, the payment
+-- details). The server reaches Supabase with SUPABASE_SERVICE_ROLE_KEY, which
+-- bypasses Row Level Security, so the Admin Portal can always write this row
+-- and no policy is required for it. RLS is deliberately NOT enabled here: the
+-- table is never queried with the anon key (the storefront reads it only
+-- through GET /api/site), and enabling RLS without a service-role policy is
+-- the one configuration that would silently turn every Admin save into a
+-- no-op. Verify with:
+--   select relrowsecurity from pg_class where relname = 'site_settings';
+-- It must be false. If a future change turns RLS on, this policy is what
+-- keeps the Admin Portal writing:
+--   create policy "service role writes site settings" on site_settings
+--     for all to service_role using (true) with check (true);
+
+

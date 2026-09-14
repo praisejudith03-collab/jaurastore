@@ -165,8 +165,8 @@ class FakeSupabaseClient:
             "hero_banner_title": "", "hero_banner_subtitle": "",
             "contact_email": "", "contact_phone": "", "site_logo_url": "",
             "hero_video_url": "", "hero_poster_url": "", "hero_doc_url": "",
-            "shop_banner_url": "", "shipping_note": "", "banner_from": "",
-            "banner_to": "", "conv_banner": "", "conv_bold": "",
+            "shop_banner_url": "", "shipping_note": "",
+            "conv_banner": "", "conv_banner_fr": "", "conv_bold": "",
         }]
 
     def next_id(self):

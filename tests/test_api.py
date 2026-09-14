@@ -1457,33 +1457,34 @@ def test_github_sync_refuses_put_without_sha_and_skips_orders_backup():
     assert "Customer orders stay on the server" in admin
 
 
-def test_banner_dates_public_read_and_admin_write(client):
+def test_the_retired_delivery_window_cannot_be_written(client):
+    """The "Delivery window starts / ends" date pickers are gone.
+
+    They auto-generated a banner line that overrode the owner's own custom
+    moving-banner text and went stale after every delivery batch. The
+    columns are no longer writable, and a client still posting them (an old
+    cached bundle, a script) must not be able to bring the date text back or
+    disturb the banner the owner actually wrote.
+    """
     if os.path.exists("/tmp/jaura_test_site.json"):
         os.remove("/tmp/jaura_test_site.json")
     r = client.get("/api/site")
     assert r.status_code == 200
     site = r.get_json()["site"]
-    assert site["bannerFrom"] == "2026-09-15"
-    assert site["bannerTo"] == "2026-09-25"
+    assert not site.get("bannerFrom") and not site.get("bannerTo")
+
     tok = login(client)
     r = client.post("/api/admin/site", headers={"X-CSRF-Token": tok}, json={
+        "convBanner": "Owner's own banner",
         "bannerFrom": "2026-10-01",
         "bannerTo": "2026-10-12",
         "heroVideo": "javascript:alert(1)",
     })
     assert r.status_code == 200
     site = r.get_json()["site"]
-    assert site["bannerFrom"] == "2026-10-01"
-    assert site["bannerTo"] == "2026-10-12"
+    assert site["convBanner"] == "Owner's own banner"
+    assert not site.get("bannerFrom") and not site.get("bannerTo")
     assert site["heroVideo"] == ""
-    # garbage dates keep the previous valid values (not run through safe_url)
-    r = client.post("/api/admin/site", headers={"X-CSRF-Token": tok}, json={
-        "bannerFrom": "not-a-date",
-        "bannerTo": "<script>x</script>",
-    })
-    site = r.get_json()["site"]
-    assert site["bannerFrom"] == "2026-10-01"
-    assert site["bannerTo"] == "2026-10-12"
 
 
 def test_homepage_video_in_lower_card_container_and_fixes():
