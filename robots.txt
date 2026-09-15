@@ -4,4 +4,39 @@ Disallow: /admin.html
 Disallow: /account.html
 Disallow: /account
 
+# Brand icons must stay crawlable or Google falls back to a generic globe in
+# place of the shop's logo. The <link rel="icon"> targets live in the Supabase
+# `public-assets` bucket (a different host, governed by that host's own
+# robots.txt, which allows everything), and the same-origin fallback plus the
+# Open Graph / JSON-LD logo are served from here - so they are named
+# explicitly. An Allow always wins over a broader Disallow for Googlebot and
+# Bingbot, which keeps these reachable if a Disallow rule is ever widened.
+Allow: /images/brand/
+Allow: /static/logo.png
+Allow: /logo.png
+
+# Googlebot-Image fetches the site icon and the Open Graph card separately
+# from the page crawl; it inherits the * group, but naming it makes the intent
+# explicit and survives future edits to the group above.
+User-agent: Googlebot-Image
+Allow: /images/brand/
+Allow: /static/logo.png
+Allow: /
+
+User-agent: Googlebot
+Allow: /images/brand/
+Allow: /static/logo.png
+Allow: /
+Disallow: /admin.html
+Disallow: /account.html
+Disallow: /account
+
+User-agent: Bingbot
+Allow: /images/brand/
+Allow: /static/logo.png
+Allow: /
+Disallow: /admin.html
+Disallow: /account.html
+Disallow: /account
+
 Sitemap: https://jaurastore.com.ng/sitemap.xml

@@ -1836,10 +1836,15 @@ def test_service_worker_precaches_the_current_asset_version():
     # social-card metadata: dimensions, logo, theme colour
     for meta in ("og:image:width", "og:image:height", "og:logo", "theme-color"):
         assert meta in store, f"meta missing: {meta}"
-    # the JSON-LD logo follows the owner's uploaded logo, with the shipped
-    # brand file as the fallback when Admin -> Branding has none
+    # The JSON-LD logo follows the owner's uploaded logo first, then the
+    # square brand mark published to the Supabase `public-assets` bucket, and
+    # the shipped file last - so og:logo and the Organization node stay valid
+    # whether or not Admin -> Branding has an upload and whether or not the
+    # bucket answers.
     assert "logo: absUrl(logoPath())" in store
-    assert 'return custom || "/static/logo.png' in store
+    assert "if (custom) return custom;" in store
+    assert "public-assets/brand/logo-square.png" in store
+    assert 'return published || BRAND_LOGO_URL || "/static/logo.png"' in store
     # the hero reel is never left frozen
     app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
     reel = app_js.split('.lux-reel video', 1)[1][:2600]
