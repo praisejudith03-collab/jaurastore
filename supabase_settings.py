@@ -9,6 +9,14 @@ DEFAULT_SETTINGS = {
     "referral_commission_percentage": 0,
     "hero_banner_title": "", "hero_banner_subtitle": "",
     "contact_email": "", "contact_phone": "", "site_logo_url": "",
+    # Brand icon set, uploaded to the Supabase `public-assets` bucket by
+    # tools/upload_brand_assets.py. The HTML <head> ships the same URLs as
+    # literals (a favicon must resolve before any JavaScript runs, and Google's
+    # site-icon crawler does not execute scripts); these columns are the
+    # database record of what was published, so the Admin portal and any later
+    # re-upload have one place to read the current addresses from.
+    "brand_logo_url": "", "favicon_32_url": "", "favicon_48_url": "",
+    "apple_touch_icon_url": "", "icon_192_url": "",
     # legacy front-end keys, persisted in the same id=1 row
     "hero_video_url": "", "hero_poster_url": "", "hero_doc_url": "",
     "shop_banner_url": "", "shipping_note": "",
