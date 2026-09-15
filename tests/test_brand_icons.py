@@ -63,7 +63,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # admin moving-banner fix (siteFieldPatch moved to top-level scope in
 # js/admin.js): phones kept serving the stale js/admin.js?v=144 bundle from
 # the sw.js cache, so every shared asset ships under a fresh token.
-SHARED_TOKEN = "145"
+# Bumped to 146 for the currency-caching fix + the Supabase-hosted favicon set
+# (owner directive 2026-09-15): js/store.js re-reads the catalogue from the
+# database on every currency switch, js/app.js drops price bounds captured in
+# the old currency, sw.js steps aside for a forced catalogue refresh, and the
+# HTML <head> points at the favicon ladder in the `public-assets` bucket.
+SHARED_TOKEN = "146"
 
 
 def _image_size(path):

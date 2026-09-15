@@ -60,6 +60,20 @@ const JA = (() => {
     return !!(box && (Date.now() - Number(box.at || 0)) < CATALOG_CACHE_TTL);
   }
 
+  /** Throw away the persisted catalogue so the next load must hit the server.
+   *
+   * Tapping ₦ / F CFA is a full re-read of the shop, not a re-format of what
+   * the device happens to be holding: the cached box could be a partial or
+   * stale answer (a page opened mid-deploy, a phone that loaded the shop on a
+   * flaky connection, an old box written before rows were published), and the
+   * currency toggle repainted straight from it - which is how switching to
+   * F CFA could drop the grid from the full catalogue to a short list. The
+   * box is dropped here and loadSeed(true) refetches every active, published
+   * row from the database before the repaint. */
+  function invalidateCatalogCache() {
+    try { localStorage.removeItem(KEYS.catalogCache); } catch (e) { /* private mode */ }
+  }
+
   const FALLBACK = {
     "nav.home": "Home",
     "nav.shop": "Shop",
@@ -425,7 +439,7 @@ const JA = (() => {
     return seed;
   }
 
-  async function loadSeed(strict = false) {
+  async function loadSeed(strict = false, opts = {}) {
     try {
       // The store management must see EXACTLY what is saved: every row,
       // including hidden/offline ones, with the stock numbers and costs the
@@ -435,8 +449,18 @@ const JA = (() => {
       // expired, so nothing ever breaks). The storefront keeps the plain
       // public catalogue, so customers and every phone see the online rows.
       const adminView = (document.body.dataset.page || "") === "admin";
-      const res = await fetch("api/catalog" + (adminView ? "?all=1" : ""),
-                               { credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(30000) });
+      let url = "api/catalog" + (adminView ? "?all=1" : "");
+      // A forced refresh (the currency toggle) must reach the DATABASE, not a
+      // 304 from an intermediate cache or a service-worker copy: cache
+      // "reload" plus a one-shot token makes the URL unique, and the explicit
+      // no-cache request headers stop any proxy in between from answering.
+      if (opts.fresh) url += (url.indexOf("?") >= 0 ? "&" : "?") + "_fresh=" + Date.now();
+      const res = await fetch(url, {
+        credentials: "same-origin",
+        cache: opts.fresh ? "reload" : "no-store",
+        headers: { "Cache-Control": "no-cache", "Pragma": "no-cache" },
+        signal: AbortSignal.timeout(30000),
+      });
       if (res.ok) {
         const d = await res.json();
         if (d && Array.isArray(d.products) && (strict || d.products.length)) {
@@ -1555,6 +1579,22 @@ const JA = (() => {
     return seed.length;
   }
 
+  /** Drop every client-side copy of the catalogue and refetch it.
+   *
+   * Used by the currency toggle. Unlike reloadCatalog() this first removes
+   * the persisted box, so a failed refetch cannot leave a stale short list
+   * behind to be re-hydrated on the next page, and the request itself is
+   * forced past any HTTP / service-worker cache. Resolves with the number of
+   * products the server served; never rejects (the shopper must not see an
+   * error for tapping a currency pill).
+   */
+  function refreshCatalog() {
+    invalidateCatalogCache();
+    return loadSeed(false, { fresh: true })
+      .then(() => seed.length)
+      .catch(() => seed.length);
+  }
+
   function asset(path) {
     if (!path) return "images/products/mouth-spray.jpg";
     if (path.startsWith("data:") || path.startsWith("http") || path.startsWith("images/")) return path;
@@ -1907,8 +1947,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=145";
-        const FLYER = "images/brand/logo-flyer.jpg?v=145";
+        const LOGO = "images/brand/logo.jpg?v=146";
+        const FLYER = "images/brand/logo-flyer.jpg?v=146";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2067,7 +2107,7 @@ const JA = (() => {
       </div>
       <div class="wrap header-inner">
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=145" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=146" alt="Jaura" />
         </a>
         <nav class="nav-left">
           <a href="index.html">${tx("nav.home")}</a>
@@ -2218,7 +2258,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=145" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=146" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2302,7 +2342,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=145" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=146" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -2324,19 +2364,33 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=145";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=146";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
   }
+  // The square brand logo published to the Supabase `public-assets` bucket
+  // (tools/upload_brand_assets.py). Google's Organization/OnlineStore logo
+  // should be a clean 1:1 mark, which is exactly what that object is - the
+  // cart + "Jaura" wordmark, cropped out of the full brand board.
+  const BRAND_LOGO_URL =
+    "https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/logo-square.png";
   // The logo Google and the social cards should use: the owner's uploaded
-  // logo when Admin → Branding has one, otherwise the shipped brand file.
-  // Falling back keeps og:logo and the JSON-LD valid even if the custom
-  // upload is later removed from Storage.
+  // logo when Admin → Branding has one, then the published square brand
+  // logo, and the shipped file last. Falling back keeps og:logo and the
+  // JSON-LD valid even if a custom upload is later removed from Storage.
   function logoPath() {
     let custom = "";
     try { custom = (settings() || {}).logoUrl || ""; } catch (e) { custom = ""; }
-    return custom || "/static/logo.png";
+    if (custom) return custom;
+    // The live site row records what tools/upload_brand_assets.py published;
+    // the constant above is the same URL, kept as the offline-safe default.
+    let published = "";
+    try {
+      const site = getSiteConfig() || {};
+      published = site.brand_logo_url || site.brandLogoUrl || "";
+    } catch (e) { published = ""; }
+    return published || BRAND_LOGO_URL || "/static/logo.png";
   }
   // FAQ answers Google can show as rich results. Kept in step with faq.html.
   const FAQ_LD = [
@@ -2369,7 +2423,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=145");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=146");
     document.title = title;
     [
       ["name", "description", description],
@@ -2810,8 +2864,21 @@ const JA = (() => {
   document.addEventListener("ja:cart", refreshChrome);
   document.addEventListener("ja:wish", refreshChrome);
   document.addEventListener("ja:currency", () => {
+    // 1. Repaint IMMEDIATELY from what is already in memory, so the prices
+    //    flip the instant the pill is tapped (no spinner, no blank grid).
     refreshChrome();
     document.dispatchEvent(new CustomEvent("ja:rerender"));
+    // 2. Then re-read the catalogue from the database. The repaint above used
+    //    whatever this device was holding, and that copy can be stale or
+    //    short (a box written mid-deploy, a phone that loaded the shop on a
+    //    flaky connection, rows published since the page opened) - which is
+    //    how switching ₦ -> F CFA could show a truncated grid instead of the
+    //    full catalogue. The cached box is dropped, every active/published
+    //    row is refetched past every cache, and the page repaints again via
+    //    "ja:catalog" when the answer differs from what is on screen.
+    refreshCatalog().then(() => {
+      document.dispatchEvent(new CustomEvent("ja:rerender"));
+    });
   });
   document.addEventListener("ja:lang", () => {
     // Order matters, and the SECOND I18N.apply() is the important half.
@@ -2850,6 +2917,7 @@ const JA = (() => {
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,
     wish, isWished, toggleWish, wishDetailed, openMini, closeMini,
     toast, upsertProduct, removeProduct, importProducts, applyServerProduct, syncPending, retryStrandedProducts, reloadCatalog,
+    refreshCatalog, invalidateCatalogCache,
     orders, saveOrder, getOrder, updateOrder, nextOrderId,
     isAdmin, loginAdmin, logoutAdmin, adminSession,
     adminAnalytics, adminOrders, setOrderStatus, deleteOrder, flushEvents,
