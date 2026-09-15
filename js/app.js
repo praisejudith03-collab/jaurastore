@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=145";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=145";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=146";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=146";
 }
 
 function renderCategories() {
@@ -245,7 +245,28 @@ function renderHome() {
   }
 }
 
-const shopFilter = { min: 0, max: 0, color: "", size: "", inited: false, cat: "" };
+/* The shop's filter state.
+ *
+ * `min` / `max` are PRICE BOUNDS IN THE ACTIVE CURRENCY, which is why `cur`
+ * is part of the state. 1 ₦ is 0.44 CFA, so a bound captured in Naira is
+ * roughly double the same product's CFA price: leaving it in place across a
+ * currency switch silently filtered out every product that fell under the
+ * old Naira floor, and the grid came back short (the "27 products in ₦, 17
+ * in F CFA" report). renderShop() re-derives the bounds from the catalogue
+ * whenever `cur` no longer matches JA.currency(). */
+const shopFilter = { min: 0, max: 0, color: "", size: "", inited: false, cat: "", cur: "" };
+
+/** Forget price bounds captured in a currency that is no longer active. */
+function resetShopFilterForCurrency() {
+  let cur = "NGN";
+  try { cur = JA.currency(); } catch (e) { cur = "NGN"; }
+  if (shopFilter.cur === cur) return false;
+  shopFilter.cur = cur;
+  shopFilter.min = 0;
+  shopFilter.max = 0;
+  shopFilter.inited = false;        // paintFilterDrawer re-derives lo/hi
+  return true;
+}
 
 function colorKey(v) {
   const s = String(v || "").trim();
@@ -451,6 +472,9 @@ function bindShopFilter() {
 
 function renderShop() {
   const cat = param("cat") || "all";
+  // A currency switch invalidates the price bounds before anything is
+  // filtered, so the grid always reopens on the whole catalogue.
+  resetShopFilterForCurrency();
   if (shopFilter.cat !== cat) {
     shopFilter.cat = cat;
     shopFilter.inited = false;

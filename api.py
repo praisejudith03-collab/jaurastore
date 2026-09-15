@@ -201,9 +201,26 @@ def catalog():
     resp.headers["ETag"] = etag
     # The live catalogue is never served from a cache: a shared/CDN copy held
     # for even 30s is a product the owner just saved (or just took offline)
-    # that some phones still show. The browser and the service worker each
-    # refetch with cache:no-store, and the ETag keeps revalidation cheap.
-    resp.headers["Cache-Control"] = "no-store"
+    # that some phones still show - and it is what made a currency switch
+    # repaint a short, stale product list instead of the full catalogue. The
+    # browser and the service worker each refetch with cache:no-store, and the
+    # ETag keeps revalidation cheap.
+    #
+    # no-cache is spelled out alongside no-store because they are not the same
+    # instruction: no-store forbids writing the answer down, no-cache forbids
+    # REUSING a stored answer without revalidating it first - which is the one
+    # that reaches caches (bfcache, an old service-worker entry, a corporate
+    # proxy) that already hold a copy from before this header shipped.
+    # must-revalidate + max-age=0 and the legacy Pragma/Expires pair close the
+    # same door for HTTP/1.0 intermediaries.
+    resp.headers["Cache-Control"] = (
+        "no-store, no-cache, must-revalidate, max-age=0")
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    # Content negotiation aside, the answer also varies with the caller's
+    # session (an admin sees hidden rows): never let a shared cache hand an
+    # admin catalogue to a shopper, or the public one back to an admin.
+    resp.headers.add("Vary", "Cookie")
     return resp
 
 # ========================================================== public: categories
