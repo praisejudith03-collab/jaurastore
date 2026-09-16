@@ -1114,6 +1114,88 @@ def create_order():
     return analytics_mod.stamp_cookie(resp, vid)
 
 
+# ============================================== public: abandoned cart email
+@api.post("/abandoned-carts")
+@sec.require_csrf
+def capture_abandoned_cart():
+    """Remember a cart only after checkout has an email address.
+
+    This endpoint is intentionally available to guests: the email is the
+    contact, not an account session. It refreshes last_activity_at whenever
+    the shopper edits the checkout, while reminder_sent remains one-shot.
+    """
+    limited = sec.guard("abandoned-cart", limit=60, window=3600)
+    if limited:
+        return limited
+    d = request.get_json(silent=True) or {}
+    token = sec.clean(d.get("token"), 80)
+    email = sec.clean_email(d.get("email"))
+    items_raw = d.get("items")
+    if not token or not email or not isinstance(items_raw, list) or not items_raw:
+        return jsonify(ok=False, error="A cart token, valid email and cart items are required."), 400
+    items = []
+    for item in items_raw[:60]:
+        if not isinstance(item, dict):
+            continue
+        name = sec.clean(item.get("name"), 160)
+        qty = sec.clean_int(item.get("qty"), 0, 1, 999)
+        price = sec.clean_int(item.get("price"), 0, 0, 10**9)
+        if name and qty:
+            items.append({"id": sec.clean(item.get("id"), 64), "name": name,
+                          "qty": qty, "price": price,
+                          "color": sec.clean(item.get("color"), 80)})
+    if not items:
+        return jsonify(ok=False, error="Your cart has no valid items."), 400
+    now = _utcnow()
+    row = {
+        "token": token,
+        "email": email,
+        "customer_name": sec.clean(d.get("customerName"), 200),
+        "items": json.dumps(items, ensure_ascii=False),
+        "currency": sec.clean(d.get("currency"), 3).upper(),
+        "total": sec.clean_int(d.get("total"), 0, 0, 10**12),
+        "last_activity_at": now,
+        "updated_at": now,
+    }
+    execute(
+        "INSERT INTO abandoned_carts (token,email,customer_name,items,currency,total,last_activity_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(token) DO UPDATE SET email=excluded.email,"
+        "customer_name=excluded.customer_name,items=excluded.items,currency=excluded.currency,"
+        "total=excluded.total,last_activity_at=excluded.last_activity_at,updated_at=excluded.updated_at",
+        (row["token"], row["email"], row["customer_name"], row["items"], row["currency"],
+         row["total"], row["last_activity_at"], row["updated_at"]),
+    )
+    stored = one("SELECT * FROM abandoned_carts WHERE token=?", (token,))
+    row = dict(stored) if stored else row
+    try:
+        from supabase_store import mirror_abandoned_cart
+        mirror_abandoned_cart(row)
+    except Exception as exc:
+        print(f"[supabase] abandoned cart capture skipped: {exc}")
+    return jsonify(ok=True, token=token, captured=True)
+
+
+@api.post("/abandoned-carts/complete")
+@sec.require_csrf
+def complete_abandoned_cart():
+    """Mark the cart converted so a completed checkout is never reminded."""
+    limited = sec.guard("abandoned-cart-complete", limit=60, window=3600)
+    if limited:
+        return limited
+    d = request.get_json(silent=True) or {}
+    token = sec.clean(d.get("token"), 80)
+    if not token:
+        return jsonify(ok=False, error="Cart token is required."), 400
+    try:
+        import abandoned
+        abandoned.mark_converted(token)
+    except Exception as exc:
+        print(f"[abandoned] conversion mark failed: {exc}")
+        return jsonify(ok=False, error="The cart could not be closed yet."), 503
+    return jsonify(ok=True, converted=True)
+
+
 # ================================================== public: payment receipt
 ALLOWED_PAYMENT_METHODS = (
     "UBA bank transfer (₦ Naira)",

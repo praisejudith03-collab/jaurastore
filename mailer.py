@@ -638,6 +638,54 @@ def order_notice_email_html(order):
         body + _order_body(order, include_receipt=False))
 
 
+def abandoned_cart_email_html(cart):
+    """The customer-facing reminder for a cart captured at checkout.
+
+    It intentionally contains only the shopper's saved item names, quantities
+    and total. The cart is not turned into an order until the customer returns
+    and completes checkout.
+    """
+    cart = dict(cart or {})
+    items = cart.get("items") or []
+    if isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except (TypeError, ValueError):
+            items = []
+    order_shape = {
+        "items": items if isinstance(items, list) else [],
+        "currency": cart.get("currency"),
+        "total": cart.get("total"),
+        "subtotal": cart.get("total"),
+    }
+    items_html, _ = _items_table(order_shape)
+    name = str(cart.get("customer_name") or "").strip()
+    greeting = f'<p style="margin:0 0 12px">Hi {_esc(name)},</p>' if name else ""
+    origin = str(_cfg("SITE_ORIGIN", "") or "").rstrip("/")
+    return _shell(
+        "Your Jaura Store cart is waiting",
+        "You left a few items in your cart. They are still waiting for you.",
+        greeting
+        + '<p style="margin:0 0 14px">When you are ready, return to the shop to finish your order. '
+          "Items are not reserved until checkout is completed.</p>"
+        + items_html
+        + (f'<p style="margin:18px 0 0"><a href="{_esc(origin + "/cart.html", quote=True)}" '
+           'style="display:inline-block;padding:10px 16px;border-radius:6px;background:#a97e48;'
+           'color:#fff;text-decoration:none;font-weight:700">Return to your cart</a></p>'
+           if origin else ""))
+
+
+def send_abandoned_cart_reminder(cart):
+    """Send one reminder to a captured checkout email."""
+    cart = dict(cart or {})
+    email = str(cart.get("email") or "").strip().lower()
+    if not _ADDRESS.fullmatch(email):
+        return False, "no valid cart email"
+    token = str(cart.get("token") or "").strip()
+    subject = "Your Jaura Store cart is waiting"
+    return send_mail_to(email, subject, abandoned_cart_email_html(cart))
+
+
 def order_received_email_html(order):
     """The customer-facing 'we have received your order' email."""
     order = dict(order or {})

@@ -81,6 +81,26 @@ CREATE INDEX IF NOT EXISTS idx_orders_at ON orders(at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_user_id);
 
+-- Carts with an email entered during checkout. A cart is eligible for one
+-- reminder after five quiet days; `reminder_sent` is intentionally explicit
+-- so retries and scheduler runs cannot email the same cart twice.
+CREATE TABLE IF NOT EXISTS abandoned_carts (
+  token             TEXT PRIMARY KEY,
+  email             TEXT NOT NULL,
+  customer_name     TEXT,
+  items             TEXT NOT NULL,
+  currency          TEXT,
+  total             REAL,
+  last_activity_at  TEXT NOT NULL,
+  reminder_sent     INTEGER NOT NULL DEFAULT 0,
+  reminder_sent_at  TEXT,
+  converted_at      TEXT,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_abandoned_due ON abandoned_carts(reminder_sent, last_activity_at);
+CREATE INDEX IF NOT EXISTS idx_abandoned_email ON abandoned_carts(email);
+
 CREATE TABLE IF NOT EXISTS customers (
   id                  TEXT PRIMARY KEY,
   email               TEXT NOT NULL UNIQUE COLLATE NOCASE,

@@ -837,6 +837,76 @@ def create_order_strict(order):
         return False
 
 
+def mirror_abandoned_cart(row):
+    """Upsert one email-captured abandoned cart. Returns False if the
+    configured Supabase table rejected the write, but never raises."""
+    c = client()
+    if c is None or not row:
+        return False
+    data = dict(row)
+    items = data.get("items")
+    if isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except (TypeError, ValueError):
+            items = []
+    data["items"] = items if isinstance(items, list) else []
+    data["reminder_sent"] = bool(data.get("reminder_sent"))
+    try:
+        c.table("abandoned_carts").upsert(data).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] abandoned cart upsert failed: {exc}")
+        return False
+
+
+def load_due_abandoned_carts(cutoff, limit=500):
+    """Load carts eligible for a reminder. Returns [] when unconfigured or
+    unavailable; the local cache remains the fallback."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = (c.table("abandoned_carts").select("*")
+               .eq("reminder_sent", False)
+               .is_("converted_at", "null")
+               .lte("last_activity_at", cutoff)
+               .order("last_activity_at").limit(limit).execute())
+        return _res_data(res) or []
+    except Exception as exc:
+        print(f"[supabase] abandoned carts load failed: {exc}")
+        return []
+
+
+def mark_abandoned_converted(token, at):
+    """Mark a cart converted in Supabase; never raises."""
+    c = client()
+    if c is None or not token:
+        return False
+    try:
+        c.table("abandoned_carts").update({"converted_at": at,
+                                            "updated_at": at}).eq("token", token).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] abandoned conversion mark failed: {exc}")
+        return False
+
+
+def mark_abandoned_reminder_sent(token, at):
+    """Persist the one-shot reminder flag in Supabase; never raises."""
+    c = client()
+    if c is None or not token:
+        return False
+    try:
+        c.table("abandoned_carts").update({"reminder_sent": True,
+                                            "reminder_sent_at": at,
+                                            "updated_at": at}).eq("token", token).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] abandoned reminder mark failed: {exc}")
+        return False
+
+
 def save_customer(row):
     """Upsert one customer account. No-op when unconfigured."""
     c = client()

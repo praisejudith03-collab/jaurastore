@@ -1702,6 +1702,58 @@ function showEmptyCartShopNotice() {
   setTimeout(() => JA.toast(message), 0);
 }
 
+const CHECKOUT_CART_TOKEN_KEY = "jaura_checkout_cart_token";
+const CHECKOUT_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+function checkoutCartToken() {
+  try {
+    const existing = String(localStorage.getItem(CHECKOUT_CART_TOKEN_KEY) || "").trim();
+    if (existing) return existing;
+    const random = window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const token = "cart-" + random.replace(/[^a-z0-9-]/gi, "").slice(0, 64);
+    localStorage.setItem(CHECKOUT_CART_TOKEN_KEY, token);
+    return token;
+  } catch (e) {
+    return "cart-" + Math.random().toString(36).slice(2, 18);
+  }
+}
+
+function captureCheckoutCart(form) {
+  if (!form || !window.JA_NET?.api) return Promise.resolve(null);
+  const email = String(form.querySelector("[name=email]")?.value || "").trim().toLowerCase();
+  if (!CHECKOUT_EMAIL_PATTERN.test(email)) return Promise.resolve(null);
+  const items = JA.cartDetailed().map((item) => ({
+    id: item.id,
+    name: item.product?.name || "Item",
+    qty: item.qty,
+    price: JA.priceOf(item.product, item.cur || JA.currency()),
+    color: item.color || "",
+  }));
+  if (!items.length) return Promise.resolve(null);
+  const first = String(form.querySelector("[name=firstName]")?.value || "").trim();
+  const last = String(form.querySelector("[name=lastName]")?.value || "").trim();
+  const payload = {
+    token: checkoutCartToken(),
+    email,
+    customerName: [first, last].filter(Boolean).join(" "),
+    currency: form.querySelector("[name=currency]:checked")?.value || JA.currency(),
+    total: JA.cartTotal(),
+    items,
+  };
+  return window.JA_NET.api("api/abandoned-carts", {
+    method: "POST", json: payload, queue: true, label: "Cart reminder",
+  }).catch(() => null);
+}
+
+function closeCapturedCheckoutCart() {
+  let token = "";
+  try { token = String(localStorage.getItem(CHECKOUT_CART_TOKEN_KEY) || "").trim(); } catch (e) {}
+  if (!token || !window.JA_NET?.api) return;
+  window.JA_NET.api("api/abandoned-carts/complete", {
+    method: "POST", json: { token }, queue: true, label: "Completed cart",
+  }).catch(() => null);
+}
+
 function renderCheckout() {
   const form = document.querySelector("[data-checkout]");
   const empty = document.querySelector("[data-empty]");
@@ -1742,11 +1794,22 @@ function renderCheckout() {
   form.dataset.bound = "1";
   // Remove a field's old error as soon as the customer starts fixing it. A
   // submit still runs the complete validation pass, including all fields.
+  let captureTimer = null;
+  const scheduleCartCapture = () => {
+    window.clearTimeout(captureTimer);
+    captureTimer = window.setTimeout(() => captureCheckoutCart(form), 500);
+  };
   form.querySelectorAll("[required]").forEach((control) => {
     ["input", "change"].forEach((eventName) => {
-      control.addEventListener(eventName, () => clearCheckoutFieldError(form, control.name));
+      control.addEventListener(eventName, () => {
+        clearCheckoutFieldError(form, control.name);
+        if (control.name !== "proof") scheduleCartCapture();
+      });
     });
   });
+  // Capture any prefilled/account email, and refresh the inactivity clock as
+  // the guest edits the checkout. No account creation or password is needed.
+  scheduleCartCapture();
   // ---- Delivery zones come from the server ----
   // The list used to be hardcoded in checkout.html and then regex-filtered
   // here, guessing which options counted as "pickup". The zone table is now
@@ -2080,6 +2143,9 @@ function renderCheckout() {
         price: JA.priceOf(i.product, cur),
       })),
     });
+    // A completed checkout must close the captured cart before the five-day
+    // reminder job gets a chance to consider it.
+    closeCapturedCheckoutCart();
 
     // Restore the instant checkout experience: the locally saved order is
     // painted as soon as the shopper taps Place order. Keep this document alive

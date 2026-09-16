@@ -155,6 +155,25 @@ create index if not exists idx_orders_at on orders (at desc);
 create index if not exists idx_orders_status on orders (status);
 create index if not exists idx_orders_customer on orders (customer_user_id);
 
+-- Carts that reached checkout with an email but were not completed. The
+-- scheduler sends at most one reminder after five days without activity.
+create table if not exists abandoned_carts (
+  token             text primary key,
+  email             text not null,
+  customer_name     text,
+  items             jsonb not null default '[]'::jsonb,
+  currency          text,
+  total             numeric,
+  last_activity_at  timestamptz not null,
+  reminder_sent     boolean not null default false,
+  reminder_sent_at  timestamptz,
+  converted_at      timestamptz,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+create index if not exists idx_abandoned_due on abandoned_carts (reminder_sent, last_activity_at);
+create index if not exists idx_abandoned_email on abandoned_carts (email);
+
 -- SECTION: receipts
 -- ------------------------------------------------------------ receipts
 create table if not exists receipts (
