@@ -54,6 +54,8 @@ jobs:
 
       - name: Validate credentials for a real publish
         if: inputs.dry_run == 'false'
+        env:
+          PUBLISH_CONFIRMATION: ${{ inputs.confirm_publish }}
         run: |
           set -eu
           missing=""
@@ -63,7 +65,7 @@ jobs:
             echo "::error::Missing repository secret(s):$missing"
             exit 1
           fi
-          if [ "${{ inputs.confirm_publish }}" != "PUBLISH" ]; then
+          if [ "$PUBLISH_CONFIRMATION" != "PUBLISH" ]; then
             echo "::error::Real publishing requires confirm_publish=PUBLISH."
             exit 1
           fi
