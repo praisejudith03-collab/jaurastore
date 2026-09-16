@@ -51,9 +51,12 @@ def test_admin_exposes_discount_and_merchandising_controls():
     assert "data-opt-price" in source and "bulkDiscountTiers" in source
 
 
-def test_watchdog_runs_every_twenty_minutes_and_audits_service_health():
+def test_watchdog_runs_hourly_and_audits_service_health():
+    """Hourly since 2026-09-16 (owner directive): with the watchdog's own
+    two-run missing tolerance, a real defect still pages within ~2 hours
+    while transient mismatches (deploys, cache edges) never page at all."""
     workflow = (ROOT / ".github/workflows/catalog-watchdog.yml").read_text(encoding="utf-8")
     watchdog = (ROOT / "tools/catalog_watchdog.py").read_text(encoding="utf-8")
-    assert 'cron: "*/20 * * * *"' in workflow
+    assert 'cron: "0 * * * *"' in workflow
     assert "fetch_service_health(base)" in watchdog
     assert '"/healthz"' in watchdog

@@ -1,19 +1,23 @@
 # Catalog watchdog: the storefront may never silently lose a product.
 #
-# Every 20 minutes it runs tools/catalog_watchdog.py autonomously. A manual
-# dispatch remains available for diagnostics, but normal operation never needs it.
-# which compares the live storefront (GET https://jaurastore.com.ng/api/catalog)
+# Hourly, it runs tools/catalog_watchdog.py autonomously. A manual dispatch
+# remains available for diagnostics, but normal operation never needs it.
+# It compares the live storefront (GET https://jaurastore.com.ng/api/catalog)
 # against the Supabase products table read DIRECTLY over PostgREST, and fails
 # when:
-#   - an online Supabase row is missing from the public catalogue (the
-#     "258 in Supabase, 241 in the browser" defect class),
+#   - an online Supabase row is missing from the public catalogue for two
+#     CONSECUTIVE runs (the "258 in Supabase, 241 in the browser" defect
+#     class; one run of missing only WARNs, so deploys and cache edges do
+#     not page the owner),
 #   - a served row is not online in Supabase,
 #   - the live catalogue collapses between runs (a fifth or more at once),
 #   - the response looks like the bundled js/products-data.js fallback rather
 #     than Supabase.
 #
 # It is READ-ONLY against production. Retiring a product is normal shopkeeping
-# and never alerts: taking rows offline or deleting them is the owner's call.
+# and never alerts: taking rows offline or deleting them is the owner's call,
+# and products on the app's durable deleted-ids list (growth_settings
+# deleted_product_ids_json) are reported as intentional, never as missing.
 #
 # On failure it opens (or comments on) a "Catalog watchdog" issue, which is the
 # shop owner's alert. On recovery it comments and closes the issue.
@@ -24,14 +28,18 @@
 #     including a README touch, re-enables it.
 #   * Retiring products needs no code change. A large bulk retirement alerts
 #     once (the shrink guard), then the new size becomes the baseline.
+#   * The hourly cadence plus the two-run tolerance means a real defect pages
+#     within about two hours; a transient one never does.
 #   * Needs the repository secrets SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
 #     (Settings -> Secrets and variables -> Actions). The key is never printed.
 name: Catalog watchdog
 
 on:
   schedule:
-    # Fully autonomous: every 20 minutes (UTC).
-    - cron: "*/20 * * * *"
+    # Fully autonomous: hourly (UTC). The watchdog's own missing-streak
+    # tolerance adds one more run of grace, so a real defect pages within
+    # ~2 hours while transient mismatches never page at all.
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
