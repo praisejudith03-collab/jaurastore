@@ -516,7 +516,9 @@ function renderShop() {
   } catch (e) {}
   const live = document.querySelector("[data-shop-q]");
   const q = (live?.value || param("q") || "").trim();
-  const sort = document.querySelector("[data-sort]")?.value || "newest";
+  const sortEl = document.querySelector("[data-sort]");
+  const sort = param("sort") || sortEl?.value || "newest";
+  if (sortEl && sortEl.value !== sort) sortEl.value = sort;
   let list = q ? JA.searchProducts(q, cat) : JA.products().filter((p) => cat === "all" || p.category === cat);
 
   list = [...list];
@@ -558,7 +560,7 @@ function renderShop() {
   const pager = document.querySelector("[data-pager]");
   if (pager && pages > 1) {
     // data-href, not onclick: inline handlers are blocked by our CSP
-    const url = (n) => `shop.html?cat=${cat}&q=${encodeURIComponent(q)}&page=${n}`;
+    const url = (n) => `shop.html?cat=${encodeURIComponent(cat)}&q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}&page=${n}`;
     // page-number window: 1 … around current … last, with ellipses
     const nums = [];
     for (let n = 1; n <= pages; n++) {
@@ -2648,7 +2650,14 @@ async function boot() {
   document.addEventListener("ja:wish", () => {
     if (page === "wishlist") draw();
   });
-  document.querySelector("[data-sort]")?.addEventListener("change", renderShop);
+  document.querySelector("[data-sort]")?.addEventListener("change", (e) => {
+    const url = new URL(location.href);
+    if (e.target.value && e.target.value !== "newest") url.searchParams.set("sort", e.target.value);
+    else url.searchParams.delete("sort");
+    url.searchParams.delete("page");
+    try { history.replaceState({}, "", url); } catch (err) {}
+    renderShop();
+  });
   document.querySelector("[data-shop-q]")?.addEventListener("input", renderShop);
   if (page === "shop") bindShopFilter();
 }
