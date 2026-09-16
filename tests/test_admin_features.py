@@ -54,6 +54,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("GET", "/api/admin/growth/settings"), ("POST", "/api/admin/growth/settings"),
     ("GET", "/api/admin/live"),
     ("GET", "/api/admin/needs-attention"),
+    ("GET", "/api/admin/customers.csv"),
     ("GET", "/api/admin/marketing/campaigns"),
     ("GET", "/api/admin/marketing/recipients"),
     ("POST", "/api/admin/marketing/campaigns"),

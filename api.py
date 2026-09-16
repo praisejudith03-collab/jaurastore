@@ -3038,6 +3038,47 @@ def marketing_recipients():
     return jsonify(ok=True, count=len(recipients))
 
 
+@api.get("/admin/customers.csv")
+@authmod.require_admin
+def admin_customers_csv():
+    """Download a de-duplicated contact list without password data."""
+    contacts = {}
+    def add(row, source):
+        row = row or {}
+        email = sec.clean_email(row.get("email"))
+        if not email:
+            return
+        current = contacts.setdefault(email, {"email": email, "name": "", "phone": "", "country": "", "city": "", "source": source})
+        for key in ("name", "phone", "country", "city"):
+            value = sec.clean(row.get(key), 160, allow_newlines=False)
+            if value and not current[key]:
+                current[key] = value
+        if current["source"] != source and source not in current["source"]:
+            current["source"] += "," + source
+    for row in query("SELECT email, name, phone, country, city FROM customers"):
+        add(dict(row), "account")
+    for row in query("SELECT email, customer_name AS name, phone, country, city FROM orders WHERE email IS NOT NULL"):
+        add(dict(row), "checkout")
+    try:
+        from supabase_store import load_customers, load_orders
+        for row in load_customers(limit=10000) or []:
+            add(row, "account")
+        for row in load_orders(limit=10000) or []:
+            add(row, "checkout")
+    except Exception as exc:
+        print(f"[marketing] remote contact export skipped: {exc}")
+    fields = ("email", "name", "phone", "country", "city", "source")
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=fields)
+    writer.writeheader()
+    for row in sorted(contacts.values(), key=lambda item: item["email"]):
+        writer.writerow(row)
+    response = make_response("\ufeff" + out.getvalue())
+    response.headers["Content-Type"] = "text/csv; charset=utf-8"
+    response.headers["Content-Disposition"] = "attachment; filename=jaura-customers.csv"
+    return response
+
+
 CAMPAIGN_TYPES = ("best_sellers", "new_arrivals", "discount_promo", "custom")
 
 

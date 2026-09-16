@@ -1389,7 +1389,7 @@ function marketingPanel() {
       </label>
       <label>Subject <input name="subject" id="mk-campaign-subject" maxlength="180" required /></label>
       <label>Message <textarea name="content" id="mk-campaign-content" rows="6" maxlength="10000" required></textarea></label>
-      <div class="mk-campaign-foot"><strong id="mk-recipient-count">Checking recipients…</strong><button type="button" class="btn btn-line" id="mk-refresh-recipients">Refresh count</button><button class="btn" type="submit" id="mk-send-campaign">Send campaign</button></div>
+      <div class="mk-campaign-foot"><strong id="mk-recipient-count">Checking recipients…</strong><button type="button" class="btn btn-line" id="mk-refresh-recipients">Refresh count</button><a class="btn btn-line" href="api/admin/customers.csv" download="jaura-customers.csv">Export contacts</a><button class="btn" type="submit" id="mk-send-campaign">Send campaign</button></div>
       <p class="admin-note" id="mk-campaign-status" role="status" aria-live="polite"></p>
     </form>
     <h4 class="mk-campaign-log-title">Past campaigns</h4><div id="mk-campaign-log"><p class="empty">Loading…</p></div>
