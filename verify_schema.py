@@ -36,6 +36,12 @@ REQUIRED_TABLES = (
     "delivery_zones",
     "product_reviews",
     "marketing_campaigns",
+    # Durable analytics: the mirrors that stop a deploy resetting the
+    # dashboard, and the background-worker crash log.
+    "analytics_events",
+    "search_queries",
+    "analytics_counters",
+    "job_failures",
 )
 
 # The columns each table must answer for. Requesting them is the check: if one
@@ -53,6 +59,14 @@ REQUIRED_COLUMNS = {
     "delivery_zones": ("id", "name", "currency", "fare_min", "fare_max", "kind", "active", "sort_order"),
     "marketing_campaigns": ("id", "campaign_type", "subject", "content", "recipient_count",
                             "sent_count", "failed_count", "status", "sent_at", "created_at"),
+    "analytics_events": ("kind", "vid", "sid", "path", "page", "ref", "product_id",
+                         "product_name", "value", "currency", "city", "region",
+                         "country", "day", "at"),
+    "search_queries": ("vid", "sid", "q", "q_norm", "results", "category",
+                       "city", "country", "day", "at"),
+    "analytics_counters": ("name", "value", "updated_at"),
+    "job_failures": ("job", "worker", "payload_id", "error_type", "message",
+                     "traceback", "rss_mb", "attempt", "host", "at"),
 }
 
 # Constraints that a column probe cannot see. Verified against the SQL file,

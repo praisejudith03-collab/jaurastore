@@ -670,3 +670,52 @@ def test_the_crash_report_endpoint_pages_too(client):
     assert body["failures"][0]["traceback"]
     page2 = client.get("/api/admin/job-failures?page=2&limit=10").get_json()
     assert page2["count"] == 4
+
+
+# =====================================================================
+# 5. the standalone migration file matches the canonical schema
+# =====================================================================
+MIGRATION = ROOT / "add_analytics_search_crash_tables.sql"
+
+
+def _statements(text):
+    """Executable SQL only: comments and blank lines removed."""
+    lines = [ln.rstrip() for ln in text.splitlines()
+             if ln.strip() and not ln.strip().startswith("--")]
+    return "\n".join(lines)
+
+
+def test_the_migration_file_is_the_canonical_schema_sql():
+    """The hand-run migration and supabase_schema.sql must never drift.
+
+    A migration that creates a slightly different table is worse than no
+    migration at all: the mirror writes would fail in production only.
+    """
+    migration = _statements(MIGRATION.read_text(encoding="utf-8"))
+    canonical = _statements((ROOT / "schema_sections/17_analytics.sql")
+                            .read_text(encoding="utf-8"))
+    for table in ("search_queries", "analytics_counters", "job_failures"):
+        needle = f"create table if not exists {table} ("
+        assert needle in migration, f"{table} missing from the migration file"
+        block = migration[migration.index(needle):].split(");")[0]
+        canon = canonical[canonical.index(needle):].split(");")[0]
+        assert block == canon, f"{table} differs from supabase_schema.sql"
+
+
+def test_the_migration_is_idempotent_and_never_destructive():
+    sql = MIGRATION.read_text(encoding="utf-8")
+    body = _statements(sql).lower()
+    # Only additive statements; nothing that could touch existing data.
+    for forbidden in ("drop ", "delete ", "truncate", "alter table",
+                      "update ", "insert into"):
+        assert forbidden not in body, f"migration contains {forbidden!r}"
+    assert body.count("create table if not exists") == 3
+    assert body.count("create index if not exists") == 4
+
+
+def test_the_new_tables_are_pre_flight_checked():
+    import verify_schema as vs
+    for table in ("analytics_events", "search_queries", "analytics_counters",
+                  "job_failures"):
+        assert table in vs.REQUIRED_TABLES
+        assert vs.REQUIRED_COLUMNS.get(table), f"{table} has no column probe"
