@@ -199,6 +199,19 @@ def create_app():
             restored = analytics_mod.restore_from_supabase()
             if restored:
                 app.logger.info("restored %d analytics rows from Supabase", restored)
+            # Customer search history is a separate table with the same
+            # deal: mirrored on write, copied back when the local window
+            # is empty, so a deploy never erases the demand signal.
+            restored_q = analytics_mod.restore_searches_from_supabase()
+            if restored_q:
+                app.logger.info("restored %d search rows from Supabase", restored_q)
+            # The lifetime counters are restored on EVERY boot (not only
+            # after a wipe): they are monotonic, merged by taking the
+            # maximum, so this can only ever move them forward. Without it
+            # the headline totals restart at zero on a fresh disk.
+            moved = analytics_mod.restore_counters()
+            if moved:
+                app.logger.info("restored %d lifetime analytics counter(s)", moved)
         except Exception as exc:
             app.logger.warning("analytics restore skipped: %s", exc)
         # Restore the local variant-stock cache for compatibility with local
@@ -444,10 +457,19 @@ def create_app():
         if Config.SCHEDULER_ENABLED and Config.ENV != "testing":
             try:
                 import scheduler
+                # health_snapshot() restarts a worker thread that died
+                # before reporting, so the 20-minute watchdog both gets the
+                # truth and leaves a healed service behind. The crash that
+                # killed it is already recorded in job_failures and travels
+                # back in `recentFailures`.
                 background = scheduler.health_snapshot()
-            except Exception:
+            except Exception as exc:
+                import observability
+                observability.record_failure("healthz.background", exc,
+                                             logger=app.logger)
                 background = {"started": False, "maintenanceAlive": False,
-                              "remindersAlive": False}
+                              "remindersAlive": False,
+                              "lastError": str(exc)[:200]}
         resp = jsonify(ok=True, env=Config.ENV, background=background)
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return resp

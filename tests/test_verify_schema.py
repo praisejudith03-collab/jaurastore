@@ -73,7 +73,7 @@ def test_a_fully_applied_schema_passes():
     rep = vs.check_live(FakeClient(_complete_schema()))
     assert rep["ok"] is True
     assert rep["missing_tables"] == []
-    assert len(rep["tables"]) == len(vs.REQUIRED_TABLES) == 12
+    assert len(rep["tables"]) == len(vs.REQUIRED_TABLES) == 16
 
 
 def test_a_missing_table_is_reported_by_name():
@@ -113,8 +113,19 @@ def test_the_required_column_inventory_covers_the_agreed_contract():
     assert vs.REQUIRED_COLUMNS["product_reviews"] == (
         "product_id", "order_id", "email", "name", "rating", "title", "body", "hidden",
         "created_at", "updated_at")
-    assert len(vs.REQUIRED_TABLES) == 12
+    assert len(vs.REQUIRED_TABLES) == 16
     assert len(vs.REQUIRED_COLUMNS["products"]) == 16
+    # The durable-analytics tables: without these the dashboard resets to
+    # zero on a deploy and a worker crash leaves no evidence off the dyno.
+    for table in ("analytics_events", "search_queries", "analytics_counters",
+                  "job_failures"):
+        assert table in vs.REQUIRED_TABLES
+        assert vs.REQUIRED_COLUMNS[table]
+    assert vs.REQUIRED_COLUMNS["analytics_counters"] == (
+        "name", "value", "updated_at")
+    assert vs.REQUIRED_COLUMNS["job_failures"] == (
+        "job", "worker", "payload_id", "error_type", "message", "traceback",
+        "rss_mb", "attempt", "host", "at")
 
 
 def test_constraints_are_checked_against_the_sql_that_is_applied():

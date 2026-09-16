@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=148" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=149" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -781,7 +781,7 @@ const PROD_PER_PAGE = 20;
 let prodSearchQ = "";
 let prodCatSel = "";
 let orderPage = 1;
-const ORDER_PAGE = 15;
+const ORDER_PAGE = 10;   // ADMIN_PAGE_SIZE - ten records per page, everywhere
 let dashRange = 30;
 let salesRange = "30";
 let orderSearch = "";
@@ -1023,7 +1023,8 @@ function analyticsPanel() {
     <div class="adx-2col"><div><h3 class="admin-h">Top viewed products</h3><div id="an-products" class="empty">Loading…</div></div><div><h3 class="admin-h">Top selling products</h3><div id="an-sellers" class="empty">Loading…</div></div></div>
     <h3 class="admin-h">Most visited pages</h3><div id="an-pages" class="empty">Loading…</div>
     <h3 class="admin-h">Conversion</h3><div class="stats" id="an-conv"></div><div id="an-revenue"></div>
-    <h3 class="admin-h">Visitor locations</h3><div id="an-loc" class="empty">Loading…</div>
+    <h3 class="admin-h">Visitor locations</h3><p class="admin-note">Resolved from the visitor's own IP address at the CDN edge (never the server's), with crawlers and datacentre traffic filtered out — so this is where real customers are.</p><div id="an-loc" class="empty">Loading…</div>
+    <h3 class="admin-h">What customers searched for</h3><p class="admin-note">Stored permanently. Terms with no results are the products shoppers wanted and did not find.</p><div id="an-searches" class="empty">Loading…</div>
     <h3 class="admin-h">Latest orders</h3><div id="an-orders" class="empty">Loading…</div>`;
 }
 function dayLabel(day) { const d = new Date(day + "T00:00:00Z"); return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
@@ -1130,7 +1131,7 @@ async function fillAnalytics() {
   const t = data.totals || {}; const c = data.conversion || {}; const pr = data.periods || {};
   const periodCard = (label, p) => { p = p || {}; return `<div class="adx-period"><span>${label}</span><b>${p.visits || 0}</b><small>${p.pageViews || 0} page views · ${p.visitors || 0} visitor(s)</small><small class="adx-period-rev">${p.orders || 0} order(s)${p.revenue ? " · " + esc(JA.money(p.revenue, "NGN")) : ""}</small></div>`; };
   $("#an-periods").innerHTML = periodCard("Today", pr.today) + periodCard("This week", pr.week) + periodCard("This month", pr.month);
-  $("#an-kpis").innerHTML = [["Live now", t.liveNow || 0, "on the site"], ["Unique visitors", t.uniqueVisitors || 0, `${t.newVisitors || 0} new`], ["Visits", t.visits || 0, "sessions"], ["Page views", t.pageViews || 0, ""], ["Orders", c.orders || 0, `${c.units || 0} items`], ["Revenue", (c.revenueByCurrency || []).map((r) => JA.money(r.value, r.currency)).join(" · ") || "—", `last ${dashRange} days`]].map(([k, v, s]) => `<div class="stat"><span class="kicker">${k}</span><b>${v}</b>${s ? `<i>${esc(s)}</i>` : ""}</div>`).join("");
+  $("#an-kpis").innerHTML = [["Live now", t.liveNow || 0, "on the site"], ["Unique visitors", t.uniqueVisitors || 0, `${t.newVisitors || 0} new`], ["Visits", t.visits || 0, "sessions"], ["Page views", t.pageViews || 0, `${t.lifetimePageViews || 0} since launch`], ["Orders", c.orders || 0, `${c.units || 0} items`], ["Revenue", (c.revenueByCurrency || []).map((r) => JA.money(r.value, r.currency)).join(" · ") || "—", `last ${dashRange} days`]].map(([k, v, s]) => `<div class="stat"><span class="kicker">${k}</span><b>${v}</b>${s ? `<i>${esc(s)}</i>` : ""}</div>`).join("");
   renderLive(data.live || [], data.activity || []);
   $("#an-sales").innerHTML = salesChart(data.sales || []);
   $("#an-chart").innerHTML = trafficChart(data.series || []);
@@ -1145,6 +1146,9 @@ async function fillAnalytics() {
   $("#an-revenue").innerHTML = status.length ? `<p class="admin-note">${status.map((s) => `${esc(s.status)}: ${s.n}`).join(" · ")}</p>` : "";
   const locs = data.locations || [];
   $("#an-loc").innerHTML = locs.length ? tableHTML(["Location", "Sessions"], locs.map((l) => `<tr><td><span class="an-flag">${countryFlag(l.country)}</span>${esc([l.city, l.country].filter(Boolean).join(", "))}</td><td>${l.sessions || l.visitors}</td></tr>`).join("")) : `<p class="empty">No locations recorded yet.</p>`;
+  const searches = data.searches || [];
+  const anSearch = $("#an-searches");
+  if (anSearch) anSearch.innerHTML = searches.length ? tableHTML(["Search term", "Searches", "Visitors", "Found nothing"], searches.map((sq) => `<tr><td>${esc(sq.term || "")}</td><td>${Number(sq.searches || 0)}</td><td>${Number(sq.visitors || 0)}</td><td>${Number(sq.empty || 0)}</td></tr>`).join("")) : `<p class="empty">No searches recorded yet.</p>`;
   const orders = data.recentOrders || [];
   $("#an-orders").innerHTML = orders.length ? tableHTML(["Order", "Customer", "Total", "Status"], orders.map((o) => `<tr><td>${esc(o.id)}</td><td>${esc(o.customer_name || "")}</td><td>${esc(JA.money(o.total, o.currency))}</td><td><span class="status-pill ${esc(o.status || "pending")}">${esc(orderStatusLabel(o.status))}</span></td></tr>`).join("")) : `<p class="empty">No orders yet.</p>`;
   document.querySelectorAll("[data-range]").forEach((b) => { b.onclick = () => { dashRange = Number(b.dataset.range); paintDesk("analytics"); }; });
@@ -1217,7 +1221,7 @@ function orderCardHTML(o) {
 }
 let orderFilter = "all";
 function ordersPanel() {
-  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}</div><div class="adx-filter-bar" aria-label="Filter orders"><input id="order-search" type="search" placeholder="Search order, customer, email…" autocomplete="off" value="${esc(orderSearch)}" /><label>From <input id="order-from" type="date" value="${esc(orderFrom)}" /></label><label>To <input id="order-to" type="date" value="${esc(orderTo)}" /></label><button type="button" class="btn btn-line" id="order-filter-clear">Clear</button><label class="adx-select-all"><input type="checkbox" id="orders-select-visible" /> Select visible</label><a class="au-link-btn" id="orders-csv" href="api/admin/orders.csv" download>Download CSV</a></div><div class="adx-bulkbar" id="orders-bulk" hidden><strong><span id="orders-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-order-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-order-bulk="confirm">Confirm selected</button><button type="button" class="btn btn-line btn-danger" data-order-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-order-bulk="clear">Clear selection</button></div><p class="admin-note">Search and dates apply before the list is paginated. Tap an order to see everything — customer details, items, the payment receipt and the action buttons.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><p class="admin-note" id="mail-status" role="status" aria-live="polite" style="margin-bottom:10px">Checking receipt emails…</p><button type="button" class="btn btn-line" id="mail-test" hidden>Email a test</button><div id="proofs-box"><p class="empty">Loading receipts…</p></div>`;
+  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}</div><div class="adx-filter-bar" aria-label="Filter orders"><input id="order-search" type="search" placeholder="Search order, customer, email…" autocomplete="off" value="${esc(orderSearch)}" /><label>From <input id="order-from" type="date" value="${esc(orderFrom)}" /></label><label>To <input id="order-to" type="date" value="${esc(orderTo)}" /></label><button type="button" class="btn btn-line" id="order-filter-clear">Clear</button><label class="adx-select-all"><input type="checkbox" id="orders-select-visible" /> Select visible</label><a class="au-link-btn" id="orders-csv" href="api/admin/orders.csv" download>Download CSV</a></div><div class="adx-bulkbar" id="orders-bulk" hidden><strong><span id="orders-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-order-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-order-bulk="confirm">Confirm selected</button><button type="button" class="btn btn-line btn-danger" data-order-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-order-bulk="clear">Clear selection</button></div><p class="admin-note">Search and dates apply before the list is paginated. Tap an order to see everything — customer details, items, the payment receipt and the action buttons.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><p class="admin-note" id="mail-status" role="status" aria-live="polite" style="margin-bottom:10px">Checking receipt emails…</p><button type="button" class="btn btn-line" id="mail-test" hidden>Email a test</button><div id="proofs-box"><p class="empty">Loading receipts…</p></div><div id="proofs-pager"></div><h3 class="admin-h">Background job failures</h3><p class="admin-note">Scheduler ticks and notification sends that failed, newest first — each one carries the error, the stack trace, the memory the worker was using and the record it was working on. Ten per page.</p><div id="crash-health"></div><div id="crash-box"><p class="empty">Loading crash reports…</p></div><div id="crash-pager"></div>`;
 }
 async function refreshMailStatus() {
   const note = $("#mail-status"); if (!note) return;
@@ -1246,15 +1250,93 @@ async function sendTestEmail() {
   }
   if (note) note.textContent = `Shop emails: on via ${res.provider} to ${res.to} — test email sent, check the inbox (and spam).`;
 }
-const PROOF_PAGE = 20;
-let proofsShown = PROOF_PAGE;
-async function fillProofs() {
-  const box = $("#proofs-box"); if (!box) return; proofsShown = Math.max(proofsShown, PROOF_PAGE); let rows = [];
-  try { const res = await fetch("api/admin/payment-proofs", { credentials: "same-origin", cache: "no-store" }); if (res.ok) rows = ((await res.json()) || {}).proofs || []; } catch (e) { rows = []; }
-  if (!rows.length) { box.innerHTML = `<p class="empty">No receipts uploaded yet.</p>`; return; }
-  const shown = rows.slice(0, proofsShown);
-  box.innerHTML = `<div class="table-wrap"><table class="proofs-table"><thead><tr><th>Sent</th><th>Order</th><th>Customer</th><th>Contact</th><th>Method</th><th>Receipt</th><th>Manage</th></tr></thead><tbody>${shown.map((p) => `<tr><td data-label="Sent"><span class="cell-nowrap">${esc((p.at || "").replace("T", " ").slice(0, 16))}</span></td><td data-label="Order"><span class="cell-nowrap">${esc(p.order_id || "")}</span></td><td data-label="Customer">${esc(p.name || "")}<br /><small>${esc(p.items || "")}</small></td><td data-label="Contact"><span class="cell-nowrap">${esc(p.phone || "")}</span><br /><small>${esc(p.email || "")}</small></td><td data-label="Method">${esc(p.method || "")}</td><td data-label="Receipt">${p.file_url ? (fileTypeOf(p.file_url) === "image" ? `<a href="${esc(p.file_url)}" target="_blank" rel="noopener"><img class="proof-thumb" src="${esc(p.file_url)}" alt="Receipt" loading="lazy" /></a>` : `<button type="button" class="btn btn-line" data-receipt-open="${esc(p.file_url)}" data-receipt-label="Receipt for ${esc(p.order_id || "")}" data-receipt-name="${esc(p.file_name || "receipt")}">View ${esc((p.file_name || "").split(".").pop().toUpperCase())}</button>`) + `<br /><a class="btn btn-line" href="${esc(p.file_url)}" download="${esc(p.file_name || "receipt")}">Download</a><small>${Math.max(1, Math.round((p.file_size || 0) / 1024))} KB</small>` : "—"}</td><td data-label="Manage"><button type="button" class="btn btn-line proof-del" data-del-proof="${esc(String(p.id))}">Delete</button></td></tr>`).join("")}</tbody></table></div><p class="admin-note">The original file is stored in the configured receipt storage and is available here.</p>` + (rows.length > proofsShown ? `<p class="admin-more"><button type="button" class="btn btn-line" id="proofs-more">Show ${Math.min(PROOF_PAGE, rows.length - proofsShown)} more of ${rows.length}</button></p>` : `<p class="admin-note">Showing all ${rows.length} receipts.</p>`);
-  const more = $("#proofs-more"); if (more) more.onclick = () => { proofsShown += PROOF_PAGE; fillProofs(); };
+// ------------------------------------------------------- admin list paging
+// Every scaling admin list (orders, uploaded receipts, notifications, crash
+// reports) shows TEN records per page with Previous / Next controls, and
+// each record is a collapsible row so an admin reads them one at a time
+// instead of scrolling a wall of markup. Nothing is ever hidden for good:
+// a record stays on its page until an admin deletes it explicitly.
+const ADMIN_PAGE_SIZE = 10;
+
+function pagerHTML(key, page, pages, total, noun) {
+  const label = total === 1 ? noun : noun + "s";
+  if (pages <= 1) return `<p class="admin-note">Showing all ${total} ${esc(label)}.</p>`;
+  const nums = [];
+  for (let n = 1; n <= pages; n++) {
+    if (n === 1 || n === pages || Math.abs(n - page) <= 1) nums.push(n);
+    else if (nums[nums.length - 1] !== "…") nums.push("…");
+  }
+  return `<div class="adx-pager">` +
+    `<button type="button" ${page <= 1 ? "disabled" : ""} data-${key}-goto="${page - 1}">‹ Previous</button>` +
+    nums.map((n) => n === "…"
+      ? `<span class="gap">…</span>`
+      : `<button type="button" class="${n === page ? "is-on" : ""}" data-${key}-goto="${n}">${n}</button>`).join("") +
+    `<button type="button" ${page >= pages ? "disabled" : ""} data-${key}-goto="${page + 1}">Next ›</button>` +
+    `</div><p class="admin-note">Page ${page} of ${pages} · ${total} ${esc(label)} in total · ${ADMIN_PAGE_SIZE} per page.</p>`;
+}
+
+function bindPager(root, key, onGo) {
+  if (!root) return;
+  root.querySelectorAll(`[data-${key}-goto]`).forEach((b) => {
+    b.addEventListener("click", () => {
+      const n = Number(b.getAttribute(`data-${key}-goto`));
+      if (!isNaN(n)) onGo(n);
+    });
+  });
+}
+
+function clampPage(page, pages) {
+  return Math.min(Math.max(1, Number(page) || 1), Math.max(1, pages));
+}
+
+// --------------------------------------------------------------- receipts
+let proofPage = 1;
+let proofRows = [];
+let proofTotal = 0;
+let proofPages = 1;
+
+function proofCardHTML(p) {
+  const when = (p.at || "").replace("T", " ").slice(0, 16);
+  const kb = p.file_size ? Math.max(1, Math.round((p.file_size || 0) / 1024)) + " KB" : "";
+  const fname = esc(p.file_name || "receipt");
+  const viewer = p.file_url
+    ? (fileTypeOf(p.file_url) === "image"
+        ? `<a href="${esc(p.file_url)}" target="_blank" rel="noopener"><img class="proof-preview" src="${esc(p.file_url)}" alt="Receipt for ${esc(p.order_id || "")}" loading="lazy" /></a>`
+        : `<button type="button" class="btn btn-line" data-receipt-open="${esc(p.file_url)}" data-receipt-label="Receipt for ${esc(p.order_id || "")}" data-receipt-name="${fname}">View ${esc(String(p.file_name || "file").split(".").pop().toUpperCase())}</button>`)
+      + `<p class="proof-actions"><a class="btn btn-line" href="${esc(p.file_url)}" target="_blank" rel="noopener">Open full size</a><a class="btn btn-line" href="${esc(p.file_url)}" download="${fname}">Download</a>${kb ? `<small>${esc(kb)}</small>` : ""}</p>`
+    : `<p class="empty">No file attached to this receipt.</p>`;
+  return `<details class="adx-order adx-receipt" data-receipt="${esc(String(p.id))}">
+    <summary class="adx-order-row">
+      <span class="adx-order-id">${esc(p.order_id || "No order")}</span>
+      <span class="adx-order-who"><strong>${esc(p.name || "Customer")}</strong><small>${esc(when)}${p.method ? " · " + esc(p.method) : ""}</small></span>
+      <span class="adx-order-total">${esc(p.amount || "")}</span>
+    </summary>
+    <div class="adx-order-body">
+      <p><strong>${esc(p.name || "Customer")}</strong></p>
+      <p>${esc(p.phone || "")}${p.email ? " · " + esc(p.email) : ""}</p>
+      ${p.items ? `<p><small>${esc(p.items)}</small></p>` : ""}
+      ${p.quantity ? `<p><small>Quantity: ${esc(p.quantity)}</small></p>` : ""}
+      ${p.note ? `<p class="order-note"><em>Note:</em> ${esc(p.note)}</p>` : ""}
+      <div class="proof-frame-wrap">${viewer}</div>
+      <div class="order-actions"><button type="button" class="btn btn-line btn-danger proof-del" data-del-proof="${esc(String(p.id))}">Delete this receipt</button></div>
+    </div>
+  </details>`;
+}
+
+function renderProofPage() {
+  const box = $("#proofs-box"); if (!box) return;
+  const pager = $("#proofs-pager");
+  if (!proofTotal) {
+    box.innerHTML = `<p class="empty">No receipts uploaded yet.</p>`;
+    if (pager) pager.innerHTML = "";
+    return;
+  }
+  box.innerHTML = proofRows.map(proofCardHTML).join("") +
+    `<p class="admin-note">Tap a receipt to open it. The original file stays in receipt storage and is kept until you delete it here.</p>`;
+  if (pager) {
+    pager.innerHTML = pagerHTML("proof", proofPage, proofPages, proofTotal, "receipt");
+    bindPager(pager, "proof", (n) => { proofPage = clampPage(n, proofPages); fillProofs(); });
+  }
   box.querySelectorAll("[data-del-proof]").forEach((b) => {
     b.onclick = async () => {
       const id = b.dataset.delProof;
@@ -1266,6 +1348,95 @@ async function fillProofs() {
     };
   });
 }
+
+async function fillProofs() {
+  const box = $("#proofs-box"); if (!box) return;
+  const params = new URLSearchParams({ page: String(proofPage), perPage: String(ADMIN_PAGE_SIZE) });
+  let data = null;
+  try {
+    const res = await fetch("api/admin/payment-proofs?" + params, { credentials: "same-origin", cache: "no-store" });
+    if (res.ok) data = await res.json();
+  } catch (e) { data = null; }
+  if (!data || data.ok === false) {
+    box.innerHTML = `<p class="empty">Receipts are unavailable right now. Try again in a moment.</p>`;
+    const pager = $("#proofs-pager"); if (pager) pager.innerHTML = "";
+    return;
+  }
+  proofRows = data.proofs || [];
+  proofTotal = Number(data.total != null ? data.total : proofRows.length) || 0;
+  proofPages = Math.max(1, Number(data.pages) || Math.ceil(proofTotal / ADMIN_PAGE_SIZE) || 1);
+  // A page that emptied out (the last receipt on it was deleted) falls back
+  // to the previous one instead of showing a blank list.
+  if (proofPage > proofPages) { proofPage = proofPages; return fillProofs(); }
+  renderProofPage();
+}
+
+// ----------------------------------------------------- worker crash reports
+// "Background scheduler workers are not healthy" used to be all the owner
+// ever saw. Each failed job is stored with its exception, stack trace,
+// memory use and payload id; they are listed here ten at a time, each one
+// collapsible so a trace can be read without burying the page.
+let crashPage = 1;
+let crashRows = [];
+let crashTotal = 0;
+let crashPages = 1;
+let crashHealth = null;
+
+function crashCardHTML(f) {
+  const when = String(f.at || "").replace("T", " ").slice(0, 19);
+  return `<details class="adx-order adx-crash" data-crash="${esc(String(f.id || ""))}">
+    <summary class="adx-order-row">
+      <span class="adx-order-id">${esc(f.job || "job")}</span>
+      <span class="adx-order-who"><strong>${esc(f.error_type || "Error")}</strong><small>${esc(when)}${f.payload_id ? " · " + esc(f.payload_id) : ""}</small></span>
+      <span class="adx-order-total">${esc(f.rss_mb ? f.rss_mb + " MB" : "")}</span>
+    </summary>
+    <div class="adx-order-body">
+      <p><strong>${esc(f.error_type || "Error")}</strong>: ${esc(f.message || "")}</p>
+      <p class="admin-note">Worker ${esc(f.worker || "unknown")} · attempt ${esc(String(f.attempt || 1))} · host ${esc(f.host || "unknown")} · memory ${esc(String(f.rss_mb || 0))} MB${f.payload_id ? " · payload " + esc(f.payload_id) : ""}</p>
+      ${f.traceback ? `<pre class="adx-trace">${esc(f.traceback)}</pre>` : `<p class="empty">No stack trace was captured for this failure.</p>`}
+    </div>
+  </details>`;
+}
+
+function renderCrashPage() {
+  const box = $("#crash-box"); if (!box) return;
+  const pager = $("#crash-pager");
+  const health = $("#crash-health");
+  if (health) {
+    const b = crashHealth;
+    health.innerHTML = !b
+      ? `<p class="admin-note">Background workers are not running in this environment.</p>`
+      : `<p class="admin-note">Maintenance worker: <strong>${b.maintenanceAlive ? "running" : "stopped"}</strong> · Reminder worker: <strong>${b.remindersAlive ? "running" : "stopped"}</strong> · last maintenance run ${esc(b.maintenanceLastRun || "—")} · last reminder run ${esc(b.remindersLastRun || "—")} · ${Number(b.failures || 0)} failure(s) recorded${Number(b.restarts || 0) ? ` · ${Number(b.restarts)} worker restart(s)` : ""}.</p>`;
+  }
+  if (!crashTotal) {
+    box.innerHTML = `<p class="empty">No background job has failed. Nothing to investigate.</p>`;
+    if (pager) pager.innerHTML = "";
+    return;
+  }
+  box.innerHTML = crashRows.map(crashCardHTML).join("");
+  if (pager) {
+    pager.innerHTML = pagerHTML("crash", crashPage, crashPages, crashTotal, "crash report");
+    bindPager(pager, "crash", (n) => { crashPage = clampPage(n, crashPages); fillCrashReports(); });
+  }
+}
+
+async function fillCrashReports() {
+  const box = $("#crash-box"); if (!box) return;
+  const params = new URLSearchParams({ page: String(crashPage), limit: String(ADMIN_PAGE_SIZE) });
+  let data = null;
+  try { data = await window.JA_NET.api("api/admin/job-failures" + (params.toString() ? "?" + params : "")); } catch (e) { data = null; }
+  if (!data || data.ok === false) {
+    box.innerHTML = `<p class="empty">Crash reports are unavailable right now.</p>`;
+    return;
+  }
+  crashRows = data.failures || [];
+  crashTotal = Number(data.total || 0);
+  crashPages = Math.max(1, Number(data.pages) || 1);
+  crashHealth = data.background || null;
+  if (crashPage > crashPages) { crashPage = crashPages; return fillCrashReports(); }
+  renderCrashPage();
+}
+
 function renderOrderPage() {
   const box = $("#orders-box"); if (!box) return;
   const allFiltered = orderFilter === "all" ? serverOrders : orderFilter === "past" ? serverOrders.filter((o) => (o.status || "pending") !== "pending") : serverOrders.filter((o) => (o.status || "pending") === orderFilter);
@@ -1284,15 +1455,8 @@ function renderOrderPage() {
   box.innerHTML = slice.map(orderCardHTML).join("");
   const pager = document.getElementById("orders-pager");
   if (pager) {
-    if (pages <= 1) pager.innerHTML = `<p class="admin-note">Showing all ${total} order(s).</p>`;
-    else {
-      const nums = [];
-      for (let n = 1; n <= pages; n++) { if (n === 1 || n === pages || Math.abs(n - orderPage) <= 1) nums.push(n); else if (nums[nums.length - 1] !== "…") nums.push("…"); }
-      pager.innerHTML = `<div class="adx-pager"><button type="button" ${orderPage <= 1 ? "disabled" : ""} data-order-goto="${orderPage - 1}">‹ Prev</button>${nums.map((n) => n === "…" ? `<span class="gap">…</span>` : `<button type="button" class="${n === orderPage ? "is-on" : ""}" data-order-goto="${n}">${n}</button>`).join("")}<button type="button" ${orderPage >= pages ? "disabled" : ""} data-order-goto="${orderPage + 1}">Next ›</button></div><p class="admin-note">Page ${orderPage} of ${pages} · ${total} order(s) total.</p>`;
-      pager.querySelectorAll("[data-order-goto]").forEach((b) => {
-        b.addEventListener("click", () => { const pg = Number(b.getAttribute("data-order-goto")); if (!isNaN(pg)) { orderPage = pg; renderOrderPage(); } });
-      });
-    }
+    pager.innerHTML = pagerHTML("order", orderPage, pages, total, "order");
+    bindPager(pager, "order", (n) => { orderPage = clampPage(n, pages); renderOrderPage(); });
   }
   bindOrderButtons();
   bindOrderSelection();
@@ -1907,7 +2071,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=148" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=149" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -1956,7 +2120,7 @@ function paintDesk(tab = "analytics") {
     };
   }
   if (tab === "analytics") { fillAnalytics(); startDashTimer(); }
-  if (tab === "orders") { fillOrders(); fillProofs(); refreshMailStatus(); const mt = $("#mail-test"); if (mt) mt.onclick = sendTestEmail; }
+  if (tab === "orders") { proofPage = 1; crashPage = 1; fillOrders(); fillProofs(); fillCrashReports(); refreshMailStatus(); const mt = $("#mail-test"); if (mt) mt.onclick = sendTestEmail; }
   if (tab === "sales") fillSales();
   if (tab === "marketing") fillMarketing();
   if (tab === "account") bindAccount();
@@ -2250,7 +2414,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=148", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=149", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

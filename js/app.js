@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=148";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=148";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=149";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=149";
 }
 
 function renderCategories() {
@@ -520,6 +520,9 @@ function renderShop() {
   const sort = param("sort") || sortEl?.value || "newest";
   if (sortEl && sortEl.value !== sort) sortEl.value = sort;
   let list = q ? JA.searchProducts(q, cat) : JA.products().filter((p) => cat === "all" || p.category === cat);
+  // Count the search on the server so the owner sees the demand (and the
+  // terms that found nothing). Deduplicated per session inside JA.logSearch.
+  if (q) { try { JA.logSearch(q, list.length, cat === "all" ? "" : cat); } catch (e) {} }
 
   list = [...list];
   try { paintFilterDrawer(list); } catch (e) {}

@@ -5613,6 +5613,33 @@ body[data-page="admin"] { background: #f8f9fc !important; }
 .adx-order-total { font-weight: 700; font-size: 14px; color: #342922; white-space: nowrap; }
 .adx-order-body { padding: 4px 16px 16px; border-top: 1px solid #f9f4ec; }
 
+/* A visible toggle arrow on every collapsible admin row, so it reads as
+   something you open rather than a static line of text. */
+.adx-order-row::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 8px; height: 8px;
+  margin-right: 2px;
+  border-right: 2px solid #7d47bd;
+  border-bottom: 2px solid #7d47bd;
+  transform: rotate(-45deg);
+  transition: transform .18s ease;
+}
+.adx-order[open] > .adx-order-row::before { transform: rotate(45deg); }
+
+/* ---------- uploaded receipts + crash reports (collapsible rows) ---------- */
+.adx-receipt .proof-preview { max-width: 100%; border-radius: 12px; display: block; }
+.adx-receipt .proof-frame-wrap { margin-top: 10px; }
+.adx-crash .adx-order-id { color: #b3261e; }
+.adx-trace {
+  margin-top: 10px; padding: 12px;
+  background: #fbf7f2; border: 1px solid #f2ece4; border-radius: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px; line-height: 1.5; color: #4a3b32;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 340px; overflow: auto;
+}
+
 /* ---------- settings: hero video ---------- */
 .adx-hero-card { background: #ffffff; }
 .adx-hero-preview { width: 100%; max-width: 460px; border-radius: 12px; background: #000000; display: block; margin-bottom: 8px; }

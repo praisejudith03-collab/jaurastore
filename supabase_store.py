@@ -1682,6 +1682,123 @@ def load_analytics_events(since_day, limit=5000):
         return []
 
 
+# ------------------------------------------------- durable search history
+SEARCH_QUERIES_TABLE = "search_queries"
+
+
+def mirror_search_queries(rows):
+    """Insert customer search rows into Supabase. Never raises."""
+    rows = [dict(r) for r in (rows or []) if isinstance(r, dict)]
+    if not rows:
+        return True
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table(SEARCH_QUERIES_TABLE).insert(rows).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] search mirror failed: {exc}")
+        return False
+
+
+def load_search_queries(since_day, limit=5000):
+    """Mirrored search rows on/after `since_day`, oldest first. Never raises."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = (c.table(SEARCH_QUERIES_TABLE)
+               .select("*")
+               .gte("day", str(since_day))
+               .order("at")
+               .limit(limit)
+               .execute())
+        return _res_data(res) or []
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] load_search_queries failed: {exc}")
+        return []
+
+
+# --------------------------------------------------- lifetime counters
+# The store's odometer: totals that must never restart at zero because a
+# deploy replaced the disk. Stored one row per counter and merged with the
+# local value by taking the maximum, so neither side can roll it back.
+ANALYTICS_COUNTERS_TABLE = "analytics_counters"
+
+
+def save_analytics_counters(rows):
+    """Upsert [{name, value, updated_at}, ...]. Never raises."""
+    rows = [dict(r) for r in (rows or []) if isinstance(r, dict) and r.get("name")]
+    if not rows:
+        return True
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table(ANALYTICS_COUNTERS_TABLE).upsert(rows, on_conflict="name").execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] counter save failed: {exc}")
+        return False
+
+
+def load_analytics_counters():
+    """Every stored counter row, or [] when unavailable. Never raises."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = c.table(ANALYTICS_COUNTERS_TABLE).select("*").limit(500).execute()
+        return _res_data(res) or []
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] load_analytics_counters failed: {exc}")
+        return []
+
+
+# ------------------------------------------------- background crash reports
+JOB_FAILURES_TABLE = "job_failures"
+
+
+def mirror_job_failure(record):
+    """Store one background-job crash report. Never raises.
+
+    The dyno that crashed is the one thing we cannot trust to keep the
+    evidence, so the report is pushed off-box immediately.
+    """
+    if not isinstance(record, dict) or not record.get("job"):
+        return False
+    c = client()
+    if c is None:
+        return False
+    row = {k: record.get(k) for k in (
+        "job", "worker", "payload_id", "error_type", "message", "traceback",
+        "rss_mb", "attempt", "host", "at") if record.get(k) not in (None, "")}
+    try:
+        c.table(JOB_FAILURES_TABLE).insert([row]).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] job failure mirror failed: {exc}")
+        return False
+
+
+def load_job_failures(limit=50):
+    """The most recent stored crash reports, newest first. Never raises."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = (c.table(JOB_FAILURES_TABLE)
+               .select("*")
+               .order("at", desc=True)
+               .limit(limit)
+               .execute())
+        return _res_data(res) or []
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] load_job_failures failed: {exc}")
+        return []
+
+
 # Per-variant stock is kept in Supabase PostgreSQL as one JSON value. This
 # avoids a local-first write in production while preserving the existing
 # growth_settings schema.

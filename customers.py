@@ -18,8 +18,8 @@ def _now():
 
 
 def _ip():
-    fwd = request.headers.get("X-Forwarded-For", "")
-    return (fwd.split(",")[0].strip() if fwd else "") or request.remote_addr or ""
+    """The shopper's own address behind Cloudflare/Render (see security)."""
+    return sec.client_ip()
 
 
 def public_customer(row):

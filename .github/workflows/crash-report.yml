@@ -1,0 +1,87 @@
+# Background-worker crash reports.
+#
+# The running shop posts a `jaura-crash` repository_dispatch whenever a
+# background scheduler tick or a notification send raises (see
+# observability.record_failure -> _report_github). The payload carries the
+# job name, the exception type and message, the stack trace, the worker's
+# memory use, the payload id it was working on and the host/process.
+#
+# This workflow turns that into the owner's alert: it opens (or comments
+# on) a single "Background worker crash" issue, so the answer to
+#
+#   FAIL could not measure production:
+#   background scheduler workers are not healthy
+#
+# is one click away instead of lost on a recycled dyno. The dyno also
+# rate-limits itself to one dispatch per job/error every 15 minutes, so a
+# worker failing every tick cannot flood the issue.
+#
+# Requires GITHUB_TOKEN + GITHUB_REPOSITORY in the Render environment (the
+# same pair repo_sync.py already uses). No secret is ever echoed here.
+name: Crash report
+
+on:
+  repository_dispatch:
+    types: [jaura-crash]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: crash-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open or update the crash issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ github.event.client_payload.job }}
+          WORKER: ${{ github.event.client_payload.worker }}
+          ERROR_TYPE: ${{ github.event.client_payload.error_type }}
+          MESSAGE: ${{ github.event.client_payload.message }}
+          PAYLOAD_ID: ${{ github.event.client_payload.payload_id }}
+          RSS_MB: ${{ github.event.client_payload.rss_mb }}
+          ATTEMPT: ${{ github.event.client_payload.attempt }}
+          HOST: ${{ github.event.client_payload.host }}
+          AT: ${{ github.event.client_payload.at }}
+          TRACE: ${{ github.event.client_payload.traceback }}
+        run: |
+          set -e
+          {
+            echo "A background worker failed in production."
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| job | \`${JOB:-unknown}\` |"
+            echo "| worker | \`${WORKER:-unknown}\` |"
+            echo "| error | \`${ERROR_TYPE:-unknown}\` |"
+            echo "| message | ${MESSAGE:-(none)} |"
+            echo "| payload id | \`${PAYLOAD_ID:-none}\` |"
+            echo "| process memory | ${RSS_MB:-0} MB |"
+            echo "| attempt | ${ATTEMPT:-1} |"
+            echo "| host / pid | \`${HOST:-unknown}\` |"
+            echo "| time (UTC) | ${AT:-unknown} |"
+            echo
+            echo "<details><summary>Stack trace</summary>"
+            echo
+            echo '```'
+            echo "${TRACE:-no traceback captured}"
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "The same report is stored in the \`job_failures\` table and is"
+            echo "listed in the Admin Portal under Orders -> Background job failures."
+          } > crash-body.md
+          NUMBER=$(gh issue list --state open --search "in:title Background worker crash" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$NUMBER" ]; then
+            gh issue comment "$NUMBER" --body-file crash-body.md
+          else
+            gh issue create --title "Background worker crash: ${JOB:-unknown}" --body-file crash-body.md
+          fi

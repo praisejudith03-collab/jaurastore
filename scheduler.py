@@ -9,12 +9,65 @@ Two isolated daemon workers, each ticking every 5 minutes:
 The abandoned-cart worker is isolated from catalog/backup work, so a slow
 maintenance task cannot delay reminders. Started from create_app(); never
 started twice, never under pytest.
+
+Crash tracing
+-------------
+Every step of every tick runs inside observability.record_failure(), so a
+failure is stored with its exception type, stack trace, timestamp, the
+worker's memory usage and the payload id it was working on - locally in
+`job_failures`, mirrored to Supabase and dispatched to GitHub Actions.
+The watchdog's "background scheduler workers are not healthy" can then be
+traced to the actual exception instead of guessed at.
+
+Both loops are also self-healing: health_snapshot() reports whether each
+named thread is alive, and start()/ensure_alive() restart a thread that
+died so the watchdog's liveness check describes a worker that is really
+running.
 """
 import datetime, os, threading, time
 
+import observability
+
 TICK_SECONDS = 300
+MAINTENANCE_THREAD = "jaura-maintenance"
+REMINDERS_THREAD = "jaura-abandoned-carts"
 _started = threading.Event()
-_health = {"maintenanceLastRun": "", "remindersLastRun": "", "lastError": ""}
+_start_lock = threading.Lock()
+_health = {
+    "maintenanceLastRun": "",
+    "remindersLastRun": "",
+    "lastError": "",
+    "lastErrorAt": "",
+    "lastErrorJob": "",
+    "failures": 0,
+    "restarts": 0,
+}
+_app_logger = None
+
+
+def _utc_now():
+    return datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _note_failure(job, exc, logger=None, payload_id="", attempt=1):
+    """Record a crash with full detail and keep the health snapshot honest."""
+    report = observability.record_failure(
+        job, exc, payload_id=payload_id, attempt=attempt,
+        logger=logger if logger is not None else _app_logger)
+    _health["lastError"] = str(exc)[:200]
+    _health["lastErrorAt"] = report.get("at") or _utc_now()
+    _health["lastErrorJob"] = job
+    _health["failures"] = int(_health.get("failures") or 0) + 1
+    return report
+
+
+def _step(job, fn, logger=None, payload_id=""):
+    """Run one tick step; a crash is traced and never kills the worker."""
+    try:
+        return fn()
+    except Exception as exc:                      # pragma: no cover - traced
+        _note_failure(job, exc, logger=logger, payload_id=payload_id)
+        return None
 
 
 def _keep_alive(logger=None):
@@ -70,46 +123,57 @@ def _repair_photos(logger=None):
                     len(report.get("repaired") or []))
 
 
+def _run_backup(logger=None):
+    import backup
+    if backup.due():
+        ok, report = backup.run()
+        backup.mark_backup_done()
+        if logger: logger.info("daily backup ok=%s %s", ok, report)
+
+
+def _remirror(logger=None):
+    import catalog as catalog_mod
+    n = catalog_mod.remirror_strays()
+    if logger and n:
+        logger.info("remirrored %d local-only product(s) to Supabase", n)
+
+
+def _persist_counters(logger=None):
+    """Push the lifetime analytics counters to Supabase every tick.
+
+    Without this the odometer only reaches durable storage when a request
+    happens to fire it, and a quiet hour before a deploy loses the tail.
+    """
+    import analytics as analytics_mod
+    analytics_mod.persist_counters()
+
+
 def _tick(logger=None):
-    try:
-        _keep_alive(logger)
-    except Exception as exc:                      # pragma: no cover
-        if logger: logger.warning("keep-alive failed: %s", exc)
-    try:
-        import backup
-        if backup.due():
-            ok, report = backup.run()
-            backup.mark_backup_done()
-            if logger: logger.info("daily backup ok=%s %s", ok, report)
-    except Exception as exc:                      # pragma: no cover
-        if logger: logger.warning("daily backup skipped: %s", exc)
-    try:
-        import catalog as catalog_mod
-        n = catalog_mod.remirror_strays()
-        if logger and n:
-            logger.info("remirrored %d local-only product(s) to Supabase", n)
-    except Exception as exc:                      # pragma: no cover
-        if logger: logger.warning("stray remirror skipped: %s", exc)
-    try:
-        _repair_photos(logger)
-    except Exception as exc:                      # pragma: no cover
-        if logger: logger.warning("photo repair skipped: %s", exc)
+    _step("scheduler.keep_alive", lambda: _keep_alive(logger), logger)
+    _step("scheduler.daily_backup", lambda: _run_backup(logger), logger)
+    _step("scheduler.remirror_strays", lambda: _remirror(logger), logger)
+    _step("scheduler.repair_photos", lambda: _repair_photos(logger), logger)
+    _step("scheduler.persist_counters", lambda: _persist_counters(logger), logger)
 
 
 def _loop(logger=None):
-    """Maintenance loop; a failed tick is logged and never kills the thread."""
+    """Maintenance loop; a failed tick is traced and never kills the thread."""
     while True:
         try:
             _tick(logger)
-            _health["maintenanceLastRun"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            _health["maintenanceLastRun"] = _utc_now()
         except Exception as exc:                  # pragma: no cover
-            _health["lastError"] = str(exc)[:200]
-            if logger: logger.exception("maintenance tick failed: %s", exc)
+            _note_failure("scheduler.maintenance_tick", exc, logger=logger)
         time.sleep(TICK_SECONDS)
 
 
 def _abandoned_tick(logger=None, attempts=3):
-    """Run abandoned-cart delivery independently with bounded retries."""
+    """Run abandoned-cart delivery independently with bounded retries.
+
+    A failing attempt is recorded as a crash report (with the traceback and
+    the attempt number) instead of a single warning line, so a notification
+    pipeline that is down is visible rather than merely quiet.
+    """
     import abandoned
     result = {"sent": 0, "failed": 0}
     total_sent = 0
@@ -117,10 +181,9 @@ def _abandoned_tick(logger=None, attempts=3):
         try:
             result = abandoned.send_due_reminders(limit=25)
             total_sent += int(result.get("sent") or 0)
-        except Exception as exc:                  # pragma: no cover
-            if logger:
-                logger.warning("abandoned-cart attempt %d/%d failed: %s",
-                               attempt + 1, attempts, exc)
+        except Exception as exc:                  # pragma: no cover - traced
+            _note_failure("notifications.abandoned_cart", exc, logger=logger,
+                          attempt=attempt + 1)
             result = {"sent": 0, "failed": 1}
         if not result.get("failed") or attempt + 1 >= attempts:
             break
@@ -139,39 +202,102 @@ def _abandoned_loop(logger=None):
     while True:
         try:
             _abandoned_tick(logger)
-            _health["remindersLastRun"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            _health["remindersLastRun"] = _utc_now()
         except Exception as exc:                  # pragma: no cover
-            _health["lastError"] = str(exc)[:200]
-            if logger: logger.exception("abandoned-cart worker survived: %s", exc)
+            _note_failure("scheduler.reminders_tick", exc, logger=logger)
         time.sleep(TICK_SECONDS)
 
 
-def health_snapshot():
-    """Public-safe liveness used by /healthz and the 20-minute watchdog."""
+def _alive(name):
+    return any(t.name == name and t.is_alive() for t in threading.enumerate())
+
+
+def _spawn(name, target, logger):
+    thread = threading.Thread(target=target, args=(logger,), daemon=True,
+                              name=name)
+    thread.start()
+    return thread
+
+
+def ensure_alive(app=None):
+    """Restart any worker thread that died. Returns the names restarted.
+
+    A daemon thread can be lost to an unrecoverable error, an OOM kill or a
+    fork; when that happened the watchdog reported "workers are not
+    healthy" forever because nothing ever put them back. /healthz calls
+    this on every check, so the next 20-minute run finds a live worker and
+    the crash that killed it is already in job_failures.
+    """
+    logger = app.logger if app is not None else _app_logger
+    restarted = []
+    if not _started.is_set():
+        return restarted
+    with _start_lock:
+        if not _alive(MAINTENANCE_THREAD):
+            _spawn(MAINTENANCE_THREAD, _loop, logger)
+            restarted.append(MAINTENANCE_THREAD)
+        if not _alive(REMINDERS_THREAD):
+            _spawn(REMINDERS_THREAD, _abandoned_loop, logger)
+            restarted.append(REMINDERS_THREAD)
+    if restarted:
+        _health["restarts"] = int(_health.get("restarts") or 0) + len(restarted)
+        observability.record_failure(
+            "scheduler.worker_died",
+            RuntimeError("restarted dead worker(s): " + ", ".join(restarted)),
+            logger=logger)
+    return restarted
+
+
+def health_snapshot(repair=True):
+    """Public-safe liveness used by /healthz and the 20-minute watchdog.
+
+    `repair` restarts a dead worker before reporting, so the watchdog gets
+    a truthful answer and a self-healed service rather than a permanent
+    failure. The recent crash reports travel with it: when the watchdog
+    fails, the reason is in the same payload.
+    """
+    if repair:
+        try:
+            ensure_alive()
+        except Exception:                          # pragma: no cover
+            pass
     names = {thread.name for thread in threading.enumerate() if thread.is_alive()}
+    recent = []
+    try:
+        for report in observability.recent(5):
+            recent.append({
+                "job": report.get("job"),
+                "error": report.get("error_type"),
+                "message": str(report.get("message") or "")[:200],
+                "payloadId": report.get("payload_id") or "",
+                "rssMb": report.get("rss_mb"),
+                "at": report.get("at"),
+            })
+    except Exception:                              # pragma: no cover
+        recent = []
     return {**_health, "started": _started.is_set(),
-            "maintenanceAlive": "jaura-maintenance" in names,
-            "remindersAlive": "jaura-abandoned-carts" in names,
-            "intervalSeconds": TICK_SECONDS}
+            "maintenanceAlive": MAINTENANCE_THREAD in names,
+            "remindersAlive": REMINDERS_THREAD in names,
+            "intervalSeconds": TICK_SECONDS,
+            "recentFailures": recent}
 
 
 def start(app=None):
+    global _app_logger
     if _started.is_set():
         return False
     _started.set()
+    logger = app.logger if app is not None else None
+    _app_logger = logger
     try:
         import backup
         if not backup.last_backup_date():
             # First boot: baseline today so the first automatic backup runs
             # at the NEXT midnight, exactly as scheduled.
             backup.mark_backup_done()
-    except Exception:                            # pragma: no cover
-        pass
-    logger = app.logger if app is not None else None
-    maintenance = threading.Thread(target=_loop, args=(logger,), daemon=True,
-                                   name="jaura-maintenance")
-    reminders = threading.Thread(target=_abandoned_loop, args=(logger,), daemon=True,
-                                 name="jaura-abandoned-carts")
-    maintenance.start()
-    reminders.start()
+    except Exception as exc:                     # pragma: no cover
+        _note_failure("scheduler.backup_baseline", exc, logger=logger)
+    with _start_lock:
+        _spawn(MAINTENANCE_THREAD, _loop, logger)
+        _spawn(REMINDERS_THREAD, _abandoned_loop, logger)
     return True

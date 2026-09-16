@@ -8,10 +8,12 @@
 #   - an online Supabase row is missing from the public catalogue (the
 #     "258 in Supabase, 241 in the browser" defect class),
 #   - a served row is not online in Supabase,
-#   - any of the 255 approved wix-* rows (wix-001..wix-258 minus owner-retired
-#     wix-006, wix-007, wix-108) disappears or goes offline,
+#   - the live catalogue collapses between runs (a fifth or more at once),
 #   - the response looks like the bundled js/products-data.js fallback rather
 #     than Supabase.
+#
+# It is READ-ONLY against production. Retiring a product is normal shopkeeping
+# and never alerts: taking rows offline or deleting them is the owner's call.
 #
 # On failure it opens (or comments on) a "Catalog watchdog" issue, which is the
 # shop owner's alert. On recovery it comments and closes the issue.
@@ -20,9 +22,8 @@
 #   * Scheduled workflows run only on the default branch. GitHub disables a
 #     cron workflow after 60 days with no repository activity - any commit,
 #     including a README touch, re-enables it.
-#   * If you INTENTIONALLY unpublish or delete one of the 255 approved wix-*
-#     rows, update tools/catalog_watchdog.py EXPECTED_WIX_IDS in the same
-#     change (or disable this workflow) - otherwise the alert is correct.
+#   * Retiring products needs no code change. A large bulk retirement alerts
+#     once (the shrink guard), then the new size becomes the baseline.
 #   * Needs the repository secrets SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
 #     (Settings -> Secrets and variables -> Actions). The key is never printed.
 name: Catalog watchdog
@@ -54,6 +55,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      # The shrink guard compares against the previous run's product count.
+      # A miss (first run, evicted cache) simply skips that one check.
+      - name: Restore the previous run's catalogue size
+        uses: actions/cache/restore@v4
+        with:
+          path: .watchdog-state.json
+          key: watchdog-state-${{ github.run_id }}
+          restore-keys: watchdog-state-
       - name: Run the catalog watchdog
         run: |
           # The Python task has bounded per-request retries. Leave a margin for
@@ -61,6 +70,12 @@ jobs:
           set -o pipefail
           timeout --signal=TERM --kill-after=15s 9m \
             python3 tools/catalog_watchdog.py 2>&1 | tee watchdog.log
+      - name: Save the catalogue size for the next run
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .watchdog-state.json
+          key: watchdog-state-${{ github.run_id }}
       - name: Open or update the alert issue
         if: failure()
         env:

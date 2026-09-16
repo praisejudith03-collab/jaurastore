@@ -1494,6 +1494,41 @@ const JA = (() => {
     } catch (e) {}
   }
 
+  // --------------------------------------------------- search history
+  // What shoppers type is the clearest signal of demand the catalogue is
+  // not answering, so it is counted on the server (api/search-log) and
+  // stored permanently, exactly like page views. Debounced so a term is
+  // logged once the shopper stops typing, never per keystroke, and never
+  // repeated for the same term in the same session.
+  let searchTimer = null;
+  const loggedSearches = new Set();
+
+  function logSearch(q, results, category) {
+    try {
+      if ((document.body.dataset.page || "") === "admin") return;
+      const text = String(q || "").trim();
+      if (text.length < 2 || !window.JA_NET) return;
+      const key = text.toLowerCase() + "|" + (category || "");
+      if (loggedSearches.has(key)) return;
+      loggedSearches.add(key);
+      window.JA_NET.api("api/search-log", {
+        method: "POST",
+        json: {
+          q: text.slice(0, 120),
+          results: Number(results) || 0,
+          category: category || "",
+          sid: sessionId(),
+        },
+        timeout: 6000,
+      }).catch(() => {});
+    } catch (e) {}
+  }
+
+  function logSearchSoon(q, results, category) {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => logSearch(q, results, category), 900);
+  }
+
   function startPresence() {
     if ((document.body.dataset.page || "") === "admin") return;
     const buffered = bufferedEvents();
@@ -1962,8 +1997,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=148";
-        const FLYER = "images/brand/logo-flyer.jpg?v=148";
+        const LOGO = "images/brand/logo.jpg?v=149";
+        const FLYER = "images/brand/logo-flyer.jpg?v=149";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2122,7 +2157,7 @@ const JA = (() => {
       </div>
       <div class="wrap header-inner">
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=148" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=149" alt="Jaura" />
         </a>
         <nav class="nav-left">
           <a href="index.html">${tx("nav.home")}</a>
@@ -2274,7 +2309,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=148" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=149" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2359,7 +2394,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=148" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=149" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -2381,7 +2416,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=148";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=149";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2440,7 +2475,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=148");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=149");
     document.title = title;
     [
       ["name", "description", description],
@@ -2726,6 +2761,7 @@ const JA = (() => {
       const q = input?.value || "";
       const hits = searchProducts(q, activeCat);
       const shown = (q ? hits : products()).slice(0, 12);
+      if (q) logSearchSoon(q, hits.length, activeCat === "all" ? "" : activeCat);
       if (meta) {
         meta.textContent = q
           ? tx(hits.length === 1 ? "search.results" : "search.resultsMany", { n: hits.length })
@@ -2775,6 +2811,7 @@ const JA = (() => {
     document.querySelector("[data-menu-search]")?.addEventListener("submit", (e) => {
       e.preventDefault();
       const q = (e.target.querySelector("input")?.value || "").trim();
+      if (q) logSearch(q, searchProducts(q).length, "");
       location.href = q ? "shop.html?q=" + encodeURIComponent(q) : "shop.html";
     });
     const menuQ = document.querySelector("[data-menu-q]");
@@ -2788,6 +2825,7 @@ const JA = (() => {
         return;
       }
       const hits = searchProducts(q).slice(0, 8);
+      logSearchSoon(q, searchProducts(q).length, "");
       menuLive.hidden = false;
       menuLive.innerHTML = (hits.length
         ? hits.map((p) => `<a class="au-hit" href="product.html?id=${encodeURIComponent(p.id)}">
@@ -2939,7 +2977,7 @@ const JA = (() => {
     isAdmin, loginAdmin, logoutAdmin, adminSession,
     adminAnalytics, adminOrders, setOrderStatus, deleteOrder, flushEvents,
     customer, setCustomer, logoutCustomer, ordersForEmail, getProof, dataUrlToBlob,
-    cardHTML, asset, escape, mountChrome, track, getStats, setSeo, absUrl, SITE,
+    cardHTML, asset, escape, mountChrome, track, logSearch, getStats, setSeo, absUrl, SITE,
     galleryOf, startCardPlay, reviews, addReview, removeReview, setReviews, reviewStats, starsHTML,
     waCountry, setWaCountry, waRegionFor, waNumber, waLink, waInquiryUrl,
     waInquiryText, refreshWaLinks, WA_NG, WA_BJ,

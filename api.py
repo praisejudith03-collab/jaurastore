@@ -28,8 +28,8 @@ def _api_no_store(resp):
 ORDER_ID = re.compile(r"^JA-[A-Z0-9]{4,16}$")
 
 def _ip():
-    fwd = request.headers.get("X-Forwarded-For", "")
-    return (fwd.split(",")[0].strip() if fwd else "") or request.remote_addr or ""
+    """The shopper's own address behind Cloudflare/Render (see security)."""
+    return sec.client_ip()
 
 # -------------------------------------------------------------- categories
 import os as _os
@@ -291,6 +291,31 @@ def track():
     stored = analytics_mod.record(items, vid, is_new)
     resp = make_response(jsonify(ok=True, recorded=stored))
     return analytics_mod.stamp_cookie(resp, vid)
+
+@api.post("/search-log")
+@sec.require_csrf
+def search_log():
+    """Record what a customer typed into the shop search box.
+
+    Stored permanently (within the analytics retention window) and mirrored
+    to Supabase, so the owner can see the demand the catalogue is not
+    answering. Bots are dropped by analytics.record_search; no personal
+    data beyond the anonymous visitor cookie is kept.
+    """
+    d = request.get_json(silent=True) or {}
+    q = sec.clean(d.get("q"), 120, allow_newlines=False)
+    if not q.strip():
+        return jsonify(ok=False, error="nothing to record"), 400
+    vid, _is_new = analytics_mod.visitor_id()
+    limited = sec.guard("search_log", limit=120, window=300, key_extra=vid)
+    if limited:
+        return limited
+    stored = analytics_mod.record_search(
+        q, results=d.get("results"), category=d.get("category"),
+        vid=vid, sid=sec.clean(d.get("sid"), 48))
+    resp = make_response(jsonify(ok=True, recorded=bool(stored)))
+    return analytics_mod.stamp_cookie(resp, vid)
+
 
 @api.get("/most-viewed")
 def most_viewed():
@@ -1580,6 +1605,45 @@ def admin_live():
                    visitors=analytics_mod.live_now(),
                    activity=analytics_mod.recent_activity())
 
+
+@api.get("/admin/searches")
+@authmod.require_admin
+def admin_searches():
+    """What customers searched for: top terms, misses and the raw feed."""
+    days = sec.clean_int(request.args.get("days"), 30, 1, 400)
+    limit = sec.clean_int(request.args.get("limit"), 20, 1, 200)
+    return jsonify(analytics_mod.search_report(days, limit))
+
+
+@api.get("/admin/job-failures")
+@authmod.require_admin
+def admin_job_failures():
+    """Background-worker crash reports, newest first.
+
+    One row per failed scheduler tick or notification send, with the
+    exception type, the stack trace, the process memory at the time and
+    the payload id the job was working on - the detail that "background
+    scheduler workers are not healthy" never carried.
+    """
+    import observability
+    limit = sec.clean_int(request.args.get("limit"), 50, 1, 500)
+    page = sec.clean_int(request.args.get("page"), 1, 1, 10000)
+    job = sec.clean(request.args.get("job"), 120)
+    rows = observability.recent_stored(limit=500, job=job or None)
+    total = len(rows)
+    start = (page - 1) * limit
+    items = rows[start:start + limit]
+    health = None
+    if Config.SCHEDULER_ENABLED and Config.ENV != "testing":
+        try:
+            import scheduler
+            health = scheduler.health_snapshot(repair=False)
+        except Exception:
+            health = None
+    return jsonify(ok=True, count=len(items), total=total, page=page,
+                   pages=max(1, -(-total // limit)), limit=limit,
+                   failures=items, background=health)
+
 # ------------------------------------------------------------ admin: sales
 @api.get("/admin/sales")
 @authmod.require_admin
@@ -1718,18 +1782,40 @@ def admin_orders_csv():
 @api.get("/admin/payment-proofs")
 @authmod.require_admin
 def admin_payment_proofs():
-    """Read payment receipts from the configured production store."""
-    limit = sec.clean_int(request.args.get("limit"), 200, 1, 1000)
+    """Read payment receipts from the configured production store.
+
+    Paginated: ``page`` (1-based) and ``perPage`` (default 10, the admin
+    UI's page size) slice an ordered, stable list so the portal loads ten
+    receipts at a time however many thousands are stored. Receipts are
+    never trimmed or expired - only an explicit admin delete removes one -
+    so `total`/`pages` describe the whole archive and any page of it stays
+    reachable.
+
+    ``limit`` remains supported for older callers and, when given without
+    ``page``, keeps returning a plain unpaginated list.
+    """
+    per_page = sec.clean_int(request.args.get("perPage"), 10, 1, 200)
+    page = sec.clean_int(request.args.get("page"), 0, 0, 100000)
+    paginated = page > 0 or request.args.get("perPage") is not None
+    # How deep the source read goes. Paginated reads still fetch the
+    # ordered head of the list and slice it, which keeps the Supabase and
+    # SQLite paths identical and the ordering stable between pages.
+    fetch = sec.clean_int(request.args.get("limit"), 1000 if paginated else 200, 1, 5000)
     if catalog_mod._prod_source():
         from supabase_store import load_receipts
-        rows = load_receipts(limit)
+        rows = load_receipts(fetch)
         if rows is None:
             return jsonify(ok=False, error="Receipts are temporarily unavailable."), 503
     else:
         rows = [dict(r) for r in query(
             "SELECT id, order_id, name, phone, email, method, items, quantity, amount, "
             "note, file_url, file_name, file_size, mime, at "
-            "FROM payment_proofs ORDER BY at DESC LIMIT ?", (limit,))]
+            "FROM payment_proofs ORDER BY at DESC, id DESC LIMIT ?", (fetch,))]
+    total = len(rows)
+    pages = max(1, -(-total // per_page)) if paginated else 1
+    if paginated:
+        page = min(max(1, page or 1), pages)
+        rows = rows[(page - 1) * per_page:(page - 1) * per_page + per_page]
     proofs = []
     for row in rows:
         d = dict(row)
@@ -1738,7 +1824,10 @@ def admin_payment_proofs():
         if d.get("file_url"):
             d["file_url"] = storage.signed_url_for(d["file_url"])
         proofs.append(d)
-    response = jsonify(ok=True, count=len(proofs), proofs=proofs)
+    payload = {"ok": True, "count": len(proofs), "proofs": proofs, "total": total}
+    if paginated:
+        payload.update({"page": page, "pages": pages, "perPage": per_page})
+    response = jsonify(**payload)
     response.headers["Cache-Control"] = "private, no-store"
     return response
 

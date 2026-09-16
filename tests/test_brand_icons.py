@@ -68,7 +68,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # database on every currency switch, js/app.js drops price bounds captured in
 # the old currency, sw.js steps aside for a forced catalogue refresh, and the
 # HTML <head> points at the favicon ladder in the `public-assets` bucket.
-SHARED_TOKEN = "148"
+# Bumped to 149 for the analytics/observability release (owner directive
+# 2026-09-16): css/style.css gained the collapsible admin card styles and
+# js/admin.js gained the ten-per-page pagers with accordion rows, while
+# js/store.js now posts search queries. A phone holding the v148 admin bundle
+# from its service-worker cache would show the old flat, unpaginated lists, so
+# every shared asset ships under a fresh token.
+SHARED_TOKEN = "149"
 
 
 def _image_size(path):
