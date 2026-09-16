@@ -934,6 +934,33 @@ def load_marketing_campaigns(limit=100):
         return []
 
 
+def suppress_marketing_email(email):
+    """Persist one promotional-email opt-out; never raises."""
+    c = client()
+    email = str(email or "").strip().lower()
+    if c is None or not email:
+        return False
+    try:
+        c.table("marketing_suppressions").upsert({"email": email}).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] marketing suppression failed: {exc}")
+        return False
+
+
+def load_marketing_suppressions(limit=10000):
+    """Return promotional opt-outs, or [] when unconfigured."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = c.table("marketing_suppressions").select("email").limit(limit).execute()
+        return _res_data(res) or []
+    except Exception as exc:
+        print(f"[supabase] marketing suppression load failed: {exc}")
+        return []
+
+
 def save_customer(row):
     """Upsert one customer account. No-op when unconfigured."""
     c = client()

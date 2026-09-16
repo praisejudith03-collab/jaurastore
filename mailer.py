@@ -34,9 +34,12 @@ Nothing here may break a sale, a receipt upload or an admin action:
     console) and nothing else.
 """
 import base64
+import hashlib
+import hmac
 import json
 import re
 import threading
+import urllib.parse
 from html import escape as _esc
 
 TIMEOUT = 20                 # seconds per provider attempt
@@ -686,23 +689,43 @@ def send_abandoned_cart_reminder(cart):
     return send_mail_to(email, subject, abandoned_cart_email_html(cart))
 
 
-def campaign_email_html(subject, content):
+def campaign_unsubscribe_token(email):
+    """Stable, non-secret link token for one campaign recipient."""
+    import config as config_mod
+    secret = str(_cfg("SECRET_KEY", "") or getattr(config_mod.Config, "SECRET_KEY", "")).encode("utf-8")
+    value = str(email or "").strip().lower()
+    return hmac.new(secret, value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def campaign_unsubscribe_url(email):
+    origin = str(_cfg("SITE_ORIGIN", "https://jaurastore.com.ng") or "https://jaurastore.com.ng").rstrip("/")
+    return origin + "/api/marketing/unsubscribe?email=" + urllib.parse.quote(str(email or "").strip().lower()) + "&token=" + campaign_unsubscribe_token(email)
+
+
+def campaign_email_html(subject, content, recipient=""):
     """Render admin-authored campaign copy as escaped plain text.
 
     The campaign editor deliberately accepts text rather than arbitrary HTML;
     line breaks are preserved and customer-provided content cannot inject
-    markup into a mailing.
+    markup into a mailing. Every promotional email also gets a signed,
+    one-click unsubscribe link.
     """
     text = str(content or "").strip()
     body = '<div style="font-size:15px;line-height:1.7">' + _esc(text).replace(chr(10), "<br>") + "</div>"
+    if recipient:
+        body += (f'<p style="margin:24px 0 0;padding-top:14px;border-top:1px solid #f0e8de;'
+                 f'font-size:12px;color:#777">You are receiving Jaura Store updates because you shared '
+                 f'your email with us. <a href="{_esc(campaign_unsubscribe_url(recipient), quote=True)}">'
+                 "Unsubscribe from promotional emails</a>.</p>")
     return _shell(_esc(str(subject or "Jaura Store")), "", body)
 
 
 def send_campaign_email(to, subject, content):
     """Send a single campaign copy to one validated recipient via Resend (or
     the configured mail transport fallback)."""
-    return send_mail_to(str(to or "").strip().lower(), str(subject or "").strip(),
-                        campaign_email_html(subject, content))
+    recipient = str(to or "").strip().lower()
+    return send_mail_to(recipient, str(subject or "").strip(),
+                        campaign_email_html(subject, content, recipient))
 
 
 def order_received_email_html(order):

@@ -1377,7 +1377,7 @@ function bindAccount() {
 function marketingPanel() {
   return `<div class="admin-card mk-campaign-card" id="mk-campaign-card">
     <h3 class="admin-h">Send campaign</h3>
-    <p class="admin-note">Email every customer with an email on file from checkout — guests and account holders. Resend sends one private copy per recipient.</p>
+    <p class="admin-note">Email customers with an email on file from checkout — guests and account holders who haven’t opted out. Resend sends one private copy per recipient.</p>
     <form id="mk-campaign-form" class="mk-campaign-form">
       <label>Campaign type
         <select name="campaignType" id="mk-campaign-type">

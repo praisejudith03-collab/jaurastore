@@ -25,3 +25,10 @@ create table if not exists marketing_campaigns (
 );
 create index if not exists idx_campaigns_sent_at on marketing_campaigns (sent_at desc);
 
+-- Addresses that asked not to receive promotional campaigns. Retaining only
+-- this suppression key prevents a later contact import from re-subscribing it.
+create table if not exists marketing_suppressions (
+  email       text primary key,
+  created_at  timestamptz not null default now()
+);
+

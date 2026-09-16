@@ -117,6 +117,13 @@ CREATE TABLE IF NOT EXISTS marketing_campaigns (
 );
 CREATE INDEX IF NOT EXISTS idx_campaigns_sent_at ON marketing_campaigns(sent_at DESC);
 
+-- Addresses that asked not to receive promotional campaigns. The address is
+-- retained only as a suppression key so a later import cannot re-subscribe it.
+CREATE TABLE IF NOT EXISTS marketing_suppressions (
+  email       TEXT PRIMARY KEY COLLATE NOCASE,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS customers (
   id                  TEXT PRIMARY KEY,
   email               TEXT NOT NULL UNIQUE COLLATE NOCASE,

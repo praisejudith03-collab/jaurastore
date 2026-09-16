@@ -1,5 +1,6 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
-import csv, io, json, os, datetime, secrets, hashlib, re
+import csv, io, json, os, datetime, secrets, hashlib, hmac, re
+from html import escape as html_escape
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
 from db import execute, one, query, audit
@@ -2854,6 +2855,36 @@ def promo_check():
     status = 200 if res.get("ok") else 404
     return jsonify(res), status
 
+@api.get("/marketing/unsubscribe")
+def marketing_unsubscribe():
+    """One-click opt-out for campaign recipients; no login or CSRF token is
+    needed because the signed email link is the authorization."""
+    email = sec.clean_email(request.args.get("email"))
+    token = sec.clean(request.args.get("token"), 128)
+    if not email:
+        return jsonify(ok=False, error="A valid email is required."), 400
+    try:
+        import mailer
+        expected = mailer.campaign_unsubscribe_token(email)
+    except Exception:
+        expected = ""
+    if not expected or not hmac.compare_digest(token, expected):
+        return jsonify(ok=False, error="That unsubscribe link is not valid."), 400
+    execute("INSERT OR IGNORE INTO marketing_suppressions (email) VALUES (?)", (email,))
+    try:
+        from supabase_store import suppress_marketing_email
+        suppress_marketing_email(email)
+    except Exception as exc:
+        print(f"[marketing] suppression mirror skipped: {exc}")
+    response = make_response(
+        "<!doctype html><meta charset='utf-8'><title>Unsubscribed · Jaura Store</title>"
+        "<style>body{font:16px Arial,sans-serif;max-width:560px;margin:15vh auto;padding:24px;color:#342922}"
+        "h1{font-family:Georgia,serif;font-weight:500}p{line-height:1.6}</style>"
+        "<h1>You’re unsubscribed</h1><p>We won’t send promotional emails to this address again.</p>")
+    response.headers["Content-Type"] = "text/html; charset=utf-8"
+    return response
+
+
 # ================================================= public: verified reviews
 def _public_review(row):
     """Shape one review row for the storefront.
@@ -3000,6 +3031,20 @@ def reviews_create():
     return reviews_list(pid)
 
 # ----------------------------------------------- admin: marketing campaigns
+def _marketing_suppressed_emails():
+    suppressed = {sec.clean_email(row["email"]) for row in query(
+        "SELECT email FROM marketing_suppressions")}
+    suppressed.discard("")
+    try:
+        from supabase_store import load_marketing_suppressions
+        suppressed.update(sec.clean_email(row.get("email"))
+                          for row in (load_marketing_suppressions(limit=10000) or []))
+    except Exception as exc:
+        print(f"[marketing] suppression load skipped: {exc}")
+    suppressed.discard("")
+    return suppressed
+
+
 def _marketing_recipient_emails():
     """Unique valid customer emails collected from accounts and checkout.
 
@@ -3028,7 +3073,7 @@ def _marketing_recipient_emails():
                 emails.add(email)
     except Exception as exc:
         print(f"[marketing] remote recipient load skipped: {exc}")
-    return sorted(emails)
+    return sorted(emails - _marketing_suppressed_emails())
 
 
 @api.get("/admin/marketing/recipients")
