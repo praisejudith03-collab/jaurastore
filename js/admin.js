@@ -1343,8 +1343,11 @@ async function fillOrders() {
   if (orderSearch) opts.q = orderSearch;
   if (orderFrom) opts.from = orderFrom;
   if (orderTo) opts.to = orderTo;
-  serverOrders = await JA.adminOrders(opts);
-  setOrderBadge(serverOrders.filter((o) => (o.status || "pending") === "pending").length);
+  const ordersRequest = JA.adminOrders(opts);
+  const attentionRequest = window.JA_NET ? window.JA_NET.api("api/admin/needs-attention").catch(() => null) : Promise.resolve(null);
+  serverOrders = await ordersRequest;
+  const attention = await attentionRequest;
+  if (attention && attention.ok !== false) setOrderBadge((attention.pending || []).length);
   bindOrderBulk();
   orderPage = 1;
   document.querySelectorAll("[data-ofilter]").forEach((b) => {
