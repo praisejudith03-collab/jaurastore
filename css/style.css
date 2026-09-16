@@ -4942,6 +4942,25 @@ body[data-page="admin"] .conv-bar { display: none !important; }
 @keyframes jaPulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
 
 /* dashboard ------------------------------------------------------------ */
+.needs-attention { margin-bottom: 24px; padding: 18px; border: 1px solid #eadfd6; border-radius: 14px; background: #fffaf6; }
+.needs-attention-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.needs-attention-head h2 { margin: 0; font-family: Georgia, serif; font-size: 21px; font-weight: 500; }
+.needs-attention-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.needs-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.attention-block { padding: 13px; border-radius: 10px; background: #fff; border: 1px solid #eee5df; }
+.attention-block.is-alert { border-color: #e4b9ae; background: #fff8f6; }
+.attention-title { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
+.attention-title b { color: #7d47bd; }
+.attention-list { list-style: none; padding: 0; margin: 10px 0 4px; }
+.attention-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid #f1ebe7; font-size: 12px; }
+.attention-list li span { min-width: 0; }
+.attention-list li strong, .attention-list li small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attention-list li small { color: var(--muted); margin-top: 2px; }
+.attention-list li > b { white-space: nowrap; }
+.attention-more { display: block; color: var(--muted); margin: 6px 0; }
+.attention-action { margin-top: 6px; }
+.needs-clear { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.needs-clear span { color: var(--muted); }
 .an-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .an-range { display: flex; gap: 6px; flex-wrap: wrap; }
 .an-rng {
@@ -5682,6 +5701,7 @@ body[data-page="admin"] { background: #f8f9fc !important; }
   .adx-head-actions { display: flex; }
   .adx-periods { grid-template-columns: 1fr; }
   .adx-2col { grid-template-columns: 1fr; }
+  .needs-grid { grid-template-columns: 1fr; }
   .adx-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
   .adx-filters { flex-wrap: wrap; }
   .adx-filters select { flex: 1 1 100%; }

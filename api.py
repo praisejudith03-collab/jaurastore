@@ -1488,6 +1488,50 @@ def low_stock():
     items.sort(key=lambda r: int(r.get("qty") or 0))
     return jsonify(ok=True, count=len(items), items=items)
 
+# --------------------------------------------------- admin: needs attention
+@api.get("/admin/needs-attention")
+@authmod.require_admin
+def admin_needs_attention():
+    """The small, actionable dashboard queue: pending orders, products at
+    five or fewer units, and pending orders waiting longer than 24 hours."""
+    pending_rows = query("SELECT id, payload, email, customer_name, phone, country, city, zone, address, "
+                         "note, payment, proof_url, items_count, total, currency, source, status, at, updated_at "
+                         "FROM orders WHERE status='pending' ORDER BY at DESC LIMIT 500")
+    pending = [_order_row(row) for row in pending_rows]
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=24)
+
+    def older_than_day(value):
+        try:
+            raw = str(value or "").replace("Z", "+00:00")
+            parsed = datetime.datetime.fromisoformat(raw)
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+            return parsed <= cutoff
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    stale = [row for row in pending if older_than_day(row.get("at"))]
+    stock_rows = _stock_rows_for_read()
+    if stock_rows is None:
+        stock_rows = []
+    try:
+        products = {str(p.get("id")): p for p in catalog_mod.merged(include_hidden=True)}
+    except Exception:
+        products = {}
+    low_stock = []
+    for row in stock_rows:
+        qty = int(row.get("qty") or 0)
+        threshold = min(5, int(row.get("low_threshold") or Config.LOW_STOCK_THRESHOLD))
+        if qty <= threshold:
+            item = dict(row)
+            product = products.get(str(row.get("product_id") or "")) or {}
+            item["name"] = product.get("name") or row.get("variant_label") or row.get("product_id")
+            low_stock.append(item)
+    low_stock.sort(key=lambda row: (int(row.get("qty") or 0), str(row.get("name") or "")))
+    return jsonify(ok=True, pending=pending, stale=stale, lowStock=low_stock,
+                   counts={"pending": len(pending), "stale": len(stale), "lowStock": len(low_stock)})
+
+
 # --------------------------------------------------------- admin: analytics
 @api.get("/admin/most-viewed")
 @authmod.require_admin

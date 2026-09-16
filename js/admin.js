@@ -885,6 +885,10 @@ function applyProductFilter() {
 function esc(v) { return JA.escape(String(v == null ? "" : v)); }
 function analyticsPanel() {
   return `
+    <section class="needs-attention" id="needs-attention">
+      <div class="needs-attention-head"><div><h2>Needs attention</h2><p>Keep today’s most important work in one place.</p></div><button type="button" class="btn btn-line" id="needs-attention-refresh">Refresh</button></div>
+      <div id="needs-attention-box"><p class="empty">Checking orders and stock…</p></div>
+    </section>
     <div class="an-top">
       <h3 class="admin-h" style="margin:0">Store insights</h3>
       <div class="an-range">
@@ -982,7 +986,31 @@ async function fillLiveFeed() {
     renderLive(d.visitors || [], d.activity || []);
   } catch (e) {}
 }
+function attentionOrderLine(o) {
+  const customer = o.customer || {};
+  return `<li><span><strong>${esc(o.id || "Order")}</strong><small>${esc(customer.name || customer.email || "Customer")} · ${esc(timeAgo(o.at) || "date unavailable")}</small></span><b>${esc(JA.money(o.total, o.currency))}</b></li>`;
+}
+async function fillNeedsAttention() {
+  const box = $("#needs-attention-box");
+  if (!box) return;
+  try {
+    const d = await window.JA_NET.api("api/admin/needs-attention");
+    const pending = d.pending || [], stale = d.stale || [], low = d.lowStock || [];
+    if (!pending.length && !low.length) {
+      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders or low-stock variants need action.</span></div>`;
+    } else {
+      const pendingBlock = `<article class="attention-block"><div class="attention-title"><strong>Pending orders</strong><b>${pending.length}</b></div>${pending.length ? `<ul class="attention-list">${pending.slice(0, 5).map(attentionOrderLine).join("")}</ul>${pending.length > 5 ? `<small class="attention-more">+ ${pending.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Review orders →</button>` : `<p class="empty">No pending orders.</p>`}</article>`;
+      const lowBlock = `<article class="attention-block"><div class="attention-title"><strong>Low stock</strong><b>${low.length}</b></div>${low.length ? `<ul class="attention-list">${low.slice(0, 5).map((r) => `<li><span><strong>${esc(r.name || r.product_id || "Product")}</strong><small>${esc(r.variant_label || r.variant_key || "Variant")}</small></span><b>${Number(r.qty || 0)} left</b></li>`).join("")}${low.length > 5 ? `<small class="attention-more">+ ${low.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Manage products →</button>` : `<p class="empty">No products at five or fewer units.</p>`}</article>`;
+      const staleBlock = `<article class="attention-block ${stale.length ? "is-alert" : ""}"><div class="attention-title"><strong>Waiting over 24 hours</strong><b>${stale.length}</b></div>${stale.length ? `<ul class="attention-list">${stale.slice(0, 3).map(attentionOrderLine).join("")}</ul><button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Follow up →</button>` : `<p class="empty">No overdue pending orders.</p>`}</article>`;
+      box.innerHTML = `<div class="needs-grid">${pendingBlock}${lowBlock}${staleBlock}</div>`;
+    }
+    box.querySelectorAll("[data-attention-tab]").forEach((button) => { button.onclick = () => paintDesk(button.dataset.attentionTab); });
+  } catch (err) {
+    box.innerHTML = `<p class="empty">Could not load this queue. Try Refresh.</p>`;
+  }
+}
 async function fillAnalytics() {
+  fillNeedsAttention();
   const data = await JA.adminAnalytics(dashRange);
   if (!data) { const box = $("#panel-analytics"); if (box) box.innerHTML = `<p class="empty">Could not load analytics.</p>`; return; }
   if (!$("#an-kpis")) return;
@@ -1011,6 +1039,7 @@ async function fillAnalytics() {
   if (customLabel) customLabel.addEventListener("click", () => { if (custom) { custom.hidden = false; custom.focus(); custom.select(); } });
   if (custom) custom.addEventListener("change", () => { const v = Math.max(1, Math.min(400, Number(custom.value) || 30)); dashRange = v; custom.value = v; paintDesk("analytics"); });
   const ref = $("#an-refresh"); if (ref) ref.onclick = () => { paintDesk("analytics"); JA.toast("Refreshed."); };
+  const attentionRef = $("#needs-attention-refresh"); if (attentionRef) attentionRef.onclick = fillNeedsAttention;
 }
 let liveTimer = null;
 function startDashTimer() {
