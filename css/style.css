@@ -1392,6 +1392,41 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #f8f0e2; }
   font-size: 15px;
   font-weight: 600;
 }
+.ck-validation-summary {
+  margin: 14px 0 0;
+  padding: 14px 16px;
+  border: 1px solid #c94b46;
+  border-left: 5px solid #b52f2a;
+  border-radius: 8px;
+  background: #fff4f3;
+  color: #5d1815;
+  line-height: 1.5;
+}
+.ck-validation-summary strong { display: block; margin-bottom: 4px; }
+.ck-validation-summary ul { margin: 5px 0 0 20px; padding: 0; }
+.ck-validation-summary a { color: inherit; text-decoration: underline; }
+.field.has-error input,
+.field.has-error select,
+.field.has-error textarea,
+.ck-upload.has-error input {
+  border-color: #b52f2a;
+  box-shadow: 0 0 0 2px rgba(181, 47, 42, 0.12);
+}
+.field-error {
+  margin: 6px 0 0;
+  color: #a32621;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.empty-cart-redirect-notice {
+  margin: 18px 0;
+  padding: 14px 16px;
+  border-left: 4px solid var(--purple, #965fb0);
+  border-radius: 8px;
+  background: #fbf4fc;
+  color: #3c2b42;
+  font-weight: 600;
+}
 .ck-exact-payment {
   margin: 16px 0 12px;
   padding: 14px 15px;

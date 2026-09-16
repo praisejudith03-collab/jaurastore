@@ -49,22 +49,26 @@
     <p class="empty" data-empty hidden><span data-i18n="ck.empty">Your cart is currently empty. Add products before checkout.</span> <a href="shop.html" data-i18n="ck.return">Return to shop</a></p>
 
     <p class="ck-form-instruction" data-form-instruction data-i18n="ck.formInstruction">Please fill this form before checking out.</p>
+    <div class="ck-validation-summary" data-checkout-errors role="alert" aria-live="assertive" tabindex="-1" hidden>
+      <strong data-checkout-errors-title data-i18n="ck.errorSummary">Please fix the highlighted fields before placing your order.</strong>
+      <ul data-checkout-error-list></ul>
+    </div>
     <form class="ck-grid" data-checkout>
       <div class="ck-main">
         <h2 data-i18n="ck.billing">Billing details</h2>
         <div class="form-grid">
-          <div class="field"><label data-i18n="ck.first">First name *</label><input name="firstName" required autocomplete="given-name" /></div>
-          <div class="field"><label data-i18n="ck.last">Last name *</label><input name="lastName" required autocomplete="family-name" /></div>
-          <div class="field full"><label data-i18n="ck.country">Country / Region *</label>
-            <select name="country" required>
+          <div class="field"><label for="ck-first-name" data-i18n="ck.first">First name *</label><input id="ck-first-name" name="firstName" required autocomplete="given-name" /></div>
+          <div class="field"><label for="ck-last-name" data-i18n="ck.last">Last name *</label><input id="ck-last-name" name="lastName" required autocomplete="family-name" /></div>
+          <div class="field full"><label for="ck-country" data-i18n="ck.country">Country / Region *</label>
+            <select id="ck-country" name="country" required>
               <option value="Benin" data-i18n="ck.benin">Benin</option>
               <option value="Nigeria" data-i18n="ck.nigeria">Nigeria</option>
               <option value="Togo" data-i18n="ck.togo">Togo</option>
               <option value="Other West Africa" data-i18n="ck.other">Other West Africa</option>
             </select>
           </div>
-          <div class="field full"><label data-i18n="ck.street">Street address *</label><input name="address" required data-i18n-placeholder="ck.streetPh" placeholder="House number and street name" autocomplete="street-address" /></div>
-          <div class="field"><label data-i18n="ck.city">Town / City *</label><input name="city" required data-i18n-placeholder="ck.cityPh" placeholder="Cotonou, Ikeja, Lekki…" /></div>
+          <div class="field full"><label for="ck-address" data-i18n="ck.street">Street address *</label><input id="ck-address" name="address" required data-i18n-placeholder="ck.streetPh" placeholder="House number and street name" autocomplete="street-address" /></div>
+          <div class="field"><label for="ck-city" data-i18n="ck.city">Town / City *</label><input id="ck-city" name="city" required data-i18n-placeholder="ck.cityPh" placeholder="Cotonou, Ikeja, Lekki…" /></div>
           <div class="field full fare-field">
             <label for="ck-zone" data-delivery-label data-i18n="ck.zone">State / Zone *</label>
             <!-- The authoritative zone list comes from GET /api/site
@@ -93,8 +97,8 @@
             <p data-i18n="ck.shipNigeria">Nigeria: 3–7 working days, according to location.</p>
             <p data-i18n="ck.shipBenin">Benin 🇧🇯: goods come in batches to keep fare cheaper. Delivery is on the dates on the banner, unless you pay for express delivery.</p>
           </div>
-          <div class="field"><label data-i18n="ck.phone">Phone *</label><input name="phone" required autocomplete="tel" /></div>
-          <div class="field"><label data-i18n="ck.email">Email address *</label><input name="email" type="email" required autocomplete="email" /></div>
+          <div class="field"><label for="ck-phone" data-i18n="ck.phone">Phone *</label><input id="ck-phone" name="phone" required autocomplete="tel" inputmode="tel" /></div>
+          <div class="field"><label for="ck-email" data-i18n="ck.email">Email address *</label><input id="ck-email" name="email" type="email" required autocomplete="email" inputmode="email" /></div>
           <div class="field full"><label data-i18n="ck.notes">Order notes (optional)</label><textarea name="note" rows="3" data-i18n-placeholder="ck.notesPh" placeholder="Notes about your order, e.g. special delivery instructions."></textarea></div>
         </div>
       </div>
@@ -158,8 +162,8 @@
           <p class="ck-ship-wa" data-i18n="ck.fareNote">Your transport fare will be discussed with you on WhatsApp after you place the order.</p>
 
           <div class="ck-upload">
-            <label class="proof-label" data-i18n="ck.uploadReceipt">Upload the bank payment receipt</label>
-            <input type="file" name="proof" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword" />
+            <label class="proof-label" for="ck-proof" data-i18n="ck.uploadReceipt">Upload the bank payment receipt *</label>
+            <input id="ck-proof" type="file" name="proof" required accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword" />
             <p class="ck-file-types" data-i18n="ck.fileTypes">Photo from your gallery or camera, or a PDF — up to 8 MB. We keep the file exactly as you send it.</p>
             <img data-proof-preview hidden class="proof-preview" alt="" />
             <div data-proof-pdf hidden class="proof-frame-wrap"></div>

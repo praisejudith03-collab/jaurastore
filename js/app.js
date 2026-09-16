@@ -1532,11 +1532,185 @@ function renderDeliveryPage() {
   }
 }
 
+/* Checkout validation is deliberately explicit instead of relying on the
+   browser's native invalid bubble. Native validation does not fire the submit
+   event, and on a long two-column form that can look like the Place order
+   button did nothing. We show every problem together, link each one to its
+   exact field, and focus the first fix. */
+function checkoutFieldControl(form, name) {
+  if (!form || !name) return null;
+  const safeName = (window.CSS && typeof window.CSS.escape === "function") ? window.CSS.escape(name) : name;
+  return form.querySelector(`[name="${safeName}"]`);
+}
+
+function checkoutFieldErrorHost(control) {
+  return control?.closest(".field, .ck-upload, .fare-field") || control?.parentElement || null;
+}
+
+function clearCheckoutFieldError(form, name) {
+  const control = checkoutFieldControl(form, name);
+  if (!control) return;
+  const host = checkoutFieldErrorHost(control);
+  host?.classList.remove("has-error");
+  control.removeAttribute("aria-invalid");
+  const error = host?.querySelector(".field-error");
+  if (error) error.remove();
+  const describedBy = (control.getAttribute("aria-describedby") || "").split(/\s+/)
+    .filter((id) => id && id !== `${control.id || name}-error`);
+  if (describedBy.length) control.setAttribute("aria-describedby", describedBy.join(" "));
+  else control.removeAttribute("aria-describedby");
+}
+
+function clearCheckoutValidation(form) {
+  if (!form) return;
+  form.querySelectorAll("[aria-invalid=\"true\"]").forEach((control) => {
+    clearCheckoutFieldError(form, control.name);
+  });
+  form.querySelectorAll(".has-error").forEach((host) => host.classList.remove("has-error"));
+  form.querySelectorAll(".field-error").forEach((error) => error.remove());
+  const summary = document.querySelector("[data-checkout-errors]");
+  if (summary) {
+    summary.hidden = true;
+    const list = summary.querySelector("[data-checkout-error-list]");
+    if (list) list.textContent = "";
+  }
+}
+
+function checkoutValidationMessage(key, fallback) {
+  const value = t(key);
+  return value && value !== key ? value : fallback;
+}
+
+function validateCheckoutForm(form, options = {}) {
+  const failures = [];
+  const value = (name) => String(form.querySelector(`[name="${name}"]`)?.value || "").trim();
+  const add = (name, message) => failures.push({ name, message });
+  const namePattern = /^[\p{L}][\p{L} .'-]*$/u;
+  const phonePattern = /^\+?[0-9][0-9 ()-]{6,24}$/;
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+  const first = value("firstName");
+  if (!first) add("firstName", checkoutValidationMessage("ck.errorFirstName", "Enter your first name."));
+  else if (first.length < 2 || !namePattern.test(first)) add("firstName", checkoutValidationMessage("ck.errorFirstNameInvalid", "Enter a valid first name using letters only."));
+
+  const last = value("lastName");
+  if (!last) add("lastName", checkoutValidationMessage("ck.errorLastName", "Enter your last name."));
+  else if (last.length < 2 || !namePattern.test(last)) add("lastName", checkoutValidationMessage("ck.errorLastNameInvalid", "Enter a valid last name using letters only."));
+
+  if (!value("country")) add("country", checkoutValidationMessage("ck.errorCountry", "Choose your country or region."));
+
+  const address = value("address");
+  if (!address) add("address", checkoutValidationMessage("ck.errorAddress", "Enter your street address."));
+  else if (address.length < 5) add("address", checkoutValidationMessage("ck.errorAddressInvalid", "Enter a little more detail for your street address."));
+
+  const city = value("city");
+  if (!city) add("city", checkoutValidationMessage("ck.errorCity", "Enter your town or city."));
+  else if (city.length < 2) add("city", checkoutValidationMessage("ck.errorCityInvalid", "Enter a valid town or city."));
+
+  if (!value("zone")) add("zone", checkoutValidationMessage("ck.errorZone", "Choose a delivery zone."));
+
+  const phone = value("phone");
+  const phoneDigits = phone.replace(/\D/g, "");
+  if (!phone) add("phone", checkoutValidationMessage("ck.errorPhone", "Enter your phone number."));
+  else if (!phonePattern.test(phone) || phoneDigits.length < 7) add("phone", checkoutValidationMessage("ck.errorPhoneInvalid", "Enter a valid phone number, including the country code if possible."));
+
+  const email = value("email");
+  if (!email) add("email", checkoutValidationMessage("ck.errorEmail", "Enter your email address."));
+  else if (!emailPattern.test(email)) add("email", checkoutValidationMessage("ck.errorEmailInvalid", "Enter a valid email address, for example name@example.com."));
+
+  const proof = form.querySelector("[name=proof]");
+  if (proof && !form.dataset.proof && !options.proofReady && !(proof.files && proof.files.length)) {
+    add("proof", checkoutValidationMessage("ck.errorProof", "Upload your payment receipt before placing the order."));
+  }
+
+  // Keep this guard future-proof: any newly added required control gets a
+  // useful error instead of silently bypassing the order handler.
+  const known = new Set(failures.map((failure) => failure.name));
+  form.querySelectorAll("[required]").forEach((control) => {
+    const name = control.name;
+    if (!name || known.has(name) || name === "proof") return;
+    if (!String(control.value || "").trim()) {
+      add(name, checkoutValidationMessage("ck.errorRequired", "Complete this required field."));
+    } else if (typeof control.checkValidity === "function" && !control.checkValidity()) {
+      add(name, checkoutValidationMessage("ck.errorRequiredInvalid", "Check this required field and try again."));
+    }
+  });
+
+  clearCheckoutValidation(form);
+  if (!failures.length) return { ok: true, failures };
+
+  const summary = document.querySelector("[data-checkout-errors]");
+  const list = summary?.querySelector("[data-checkout-error-list]");
+  failures.forEach(({ name, message }) => {
+    const control = checkoutFieldControl(form, name);
+    if (!control) return;
+    const host = checkoutFieldErrorHost(control);
+    host?.classList.add("has-error");
+    control.setAttribute("aria-invalid", "true");
+    const errorId = `${control.id || name}-error`;
+    const error = document.createElement("p");
+    error.className = "field-error";
+    error.id = errorId;
+    error.setAttribute("role", "alert");
+    error.textContent = message;
+    host?.appendChild(error);
+    const describedBy = (control.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+    if (!describedBy.includes(errorId)) describedBy.push(errorId);
+    control.setAttribute("aria-describedby", describedBy.join(" "));
+    if (list) {
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = `#${control.id || name}`;
+      link.textContent = message;
+      link.addEventListener("click", () => control.focus());
+      item.appendChild(link);
+      list.appendChild(item);
+    }
+  });
+  if (summary) {
+    summary.hidden = false;
+    summary.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }
+  const firstControl = checkoutFieldControl(form, failures[0].name);
+  firstControl?.focus?.({ preventScroll: true });
+  firstControl?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  return { ok: false, failures };
+}
+
+function rememberEmptyCartCheckout() {
+  const message = checkoutValidationMessage("ck.emptyRedirect", "Your cart is empty. Add items to your cart first. Taking you to the shop now.");
+  try { sessionStorage.setItem("jaura_checkout_notice", message); } catch (e) {}
+  if (window.location?.pathname?.endsWith("/checkout.html") || window.location?.pathname === "/checkout.html") {
+    window.setTimeout(() => {
+      try { window.location.replace("shop.html?checkout=empty-cart"); } catch (e) { window.location.href = "shop.html?checkout=empty-cart"; }
+    }, 450);
+  }
+}
+
+function showEmptyCartShopNotice() {
+  if (param("checkout") !== "empty-cart") return;
+  let message = checkoutValidationMessage("ck.emptyRedirect", "Your cart is empty. Add items to your cart first.");
+  try { message = sessionStorage.getItem("jaura_checkout_notice") || message; sessionStorage.removeItem("jaura_checkout_notice"); } catch (e) {}
+  if (document.querySelector("[data-empty-cart-redirect]") || !message) return;
+  const notice = document.createElement("p");
+  notice.className = "empty-cart-redirect-notice";
+  notice.setAttribute("data-empty-cart-redirect", "");
+  notice.setAttribute("role", "alert");
+  notice.textContent = message;
+  const root = document.querySelector("[data-shop-grid]")?.parentElement || document.querySelector("main") || document.body;
+  root.insertBefore(notice, root.firstChild);
+  setTimeout(() => JA.toast(message), 0);
+}
+
 function renderCheckout() {
   const form = document.querySelector("[data-checkout]");
   const empty = document.querySelector("[data-empty]");
   const instruction = document.querySelector("[data-form-instruction]");
   if (!form) return;
+  // Keep the submit event available for our accessible, field-by-field error
+  // summary. Without this, native validation stops the event before we can
+  // explain which of a long form's fields needs attention.
+  form.noValidate = true;
   if (form.dataset.done === "1") return;
 
   const items = JA.cartDetailed();
@@ -1544,6 +1718,10 @@ function renderCheckout() {
     if (empty) empty.hidden = false;
     if (instruction) instruction.hidden = true;
     form.hidden = true;
+    if (form.dataset.emptyRedirecting !== "1") {
+      form.dataset.emptyRedirecting = "1";
+      rememberEmptyCartCheckout();
+    }
     return;
   }
   if (empty) empty.hidden = true;
@@ -1562,6 +1740,13 @@ function renderCheckout() {
 
   if (form.dataset.bound) return;
   form.dataset.bound = "1";
+  // Remove a field's old error as soon as the customer starts fixing it. A
+  // submit still runs the complete validation pass, including all fields.
+  form.querySelectorAll("[required]").forEach((control) => {
+    ["input", "change"].forEach((eventName) => {
+      control.addEventListener(eventName, () => clearCheckoutFieldError(form, control.name));
+    });
+  });
   // ---- Delivery zones come from the server ----
   // The list used to be hardcoded in checkout.html and then regex-filtered
   // here, guessing which options counted as "pickup". The zone table is now
@@ -1766,7 +1951,19 @@ function renderCheckout() {
     const data = Object.fromEntries(new FormData(form).entries());
     const cur = data.currency || JA.currency();
     const liveItems = JA.cartDetailed();
-    if (!liveItems.length) return;
+    if (!liveItems.length) {
+      const empty = document.querySelector("[data-empty]");
+      if (empty) empty.hidden = false;
+      form.hidden = true;
+      rememberEmptyCartCheckout();
+      return;
+    }
+    const validation = validateCheckoutForm(form, {
+      // A selected file is enough to pass this first check. Compression of a
+      // camera photo can still be running and is awaited below.
+      proofReady: !!(form.dataset.proof || proofFile || form.querySelector("[name=proof]")?.files?.length),
+    });
+    if (!validation.ok) return;
     if (JA.stockProblems) {
       const probs = JA.stockProblems();
       if (probs.length) {
@@ -2306,7 +2503,10 @@ async function boot() {
   const draw = () => {
     if (page === "home") renderHome();
     if (page === "categories") renderCategories();
-    if (page === "shop") renderShop();
+    if (page === "shop") {
+      renderShop();
+      showEmptyCartShopNotice();
+    }
     if (page === "product") renderProduct();
     if (page === "home" || page === "shop") renderMostViewed();
     try { JA.startCardPlay && JA.startCardPlay(); } catch (e) {}

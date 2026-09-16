@@ -794,8 +794,49 @@ def create_order():
     customer = {k: sec.clean(customer_raw.get(k), 300) for k in CUSTOMER_FIELDS}
     email = sec.clean_email(customer.get("email") or d.get("email"))
     if not email:
-        return jsonify(ok=False, error="A valid email address is required."), 400
+        return jsonify(ok=False, error="A valid email address is required.", field="email"), 400
     customer["email"] = email
+
+    # Browser checkout sends the split first/last-name fields. Validate the
+    # complete form server-side as well, so a malformed request can never turn
+    # into a silent failed order. Keep the older compact API payload accepted
+    # for existing integrations and queued orders that only carry `name`.
+    if "firstName" in customer_raw or "lastName" in customer_raw:
+        field_errors = {}
+        first = customer.get("firstName", "")
+        last = customer.get("lastName", "")
+        name_re = re.compile(r"^[^\W\d_][\w .'-]*$", re.UNICODE)
+        phone = customer.get("phone", "")
+        phone_digits = re.sub(r"\D", "", phone)
+        if not first:
+            field_errors["firstName"] = "Enter your first name."
+        elif len(first) < 2 or not name_re.fullmatch(first):
+            field_errors["firstName"] = "Enter a valid first name."
+        if not last:
+            field_errors["lastName"] = "Enter your last name."
+        elif len(last) < 2 or not name_re.fullmatch(last):
+            field_errors["lastName"] = "Enter a valid last name."
+        if not customer.get("country"):
+            field_errors["country"] = "Choose your country or region."
+        if not customer.get("address"):
+            field_errors["address"] = "Enter your street address."
+        elif len(customer["address"]) < 5:
+            field_errors["address"] = "Enter a valid street address."
+        if not customer.get("city"):
+            field_errors["city"] = "Enter your town or city."
+        elif len(customer["city"]) < 2:
+            field_errors["city"] = "Enter a valid town or city."
+        if not customer.get("phone"):
+            field_errors["phone"] = "Enter your phone number."
+        elif not re.fullmatch(r"\+?[0-9][0-9 ()-]{6,24}", phone) or len(phone_digits) < 7:
+            field_errors["phone"] = "Enter a valid phone number."
+        if not customer.get("zone"):
+            field_errors["zone"] = "Choose a delivery zone."
+        if field_errors:
+            first_field = next(iter(field_errors))
+            return jsonify(ok=False,
+                           error="Please fix the highlighted checkout fields.",
+                           field=first_field, fieldErrors=field_errors), 400
 
     items = d.get("items")
     if not isinstance(items, list) or not items:
