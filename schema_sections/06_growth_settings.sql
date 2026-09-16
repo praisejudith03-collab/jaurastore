@@ -24,6 +24,15 @@ create table if not exists marketing_campaigns (
   created_at        timestamptz not null default now()
 );
 create index if not exists idx_campaigns_sent_at on marketing_campaigns (sent_at desc);
+-- Register the polymorphic discriminator on existing as well as new tables.
+-- The named constraint makes this migration safe to re-apply.
+do $$
+begin
+  alter table marketing_campaigns
+    add constraint marketing_campaign_type_check
+    check (campaign_type in ('abandoned_cart', 'price_drop', 'new_arrivals', 'customer_appreciation'));
+exception when duplicate_object then null;
+end $$;
 
 -- Addresses that asked not to receive promotional campaigns. Retaining only
 -- this suppression key prevents a later contact import from re-subscribing it.

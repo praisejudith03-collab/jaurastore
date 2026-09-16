@@ -1,12 +1,14 @@
 """In-process scheduler for the midnight backup and catalog maintenance.
 
-One daemon thread, one tick every 5 minutes:
+Two isolated daemon workers, each ticking every 5 minutes:
   * backup.run() — the first tick on or after midnight backs up all
     products and orders to GitHub (once per calendar day);
   * catalog.repair_dead_photos() — once a day, re-point a product whose
     uploaded photo is missing from the bucket at one that still exists.
 
-Started from create_app(); never started twice, never under pytest.
+The abandoned-cart worker is isolated from catalog/backup work, so a slow
+maintenance task cannot delay reminders. Started from create_app(); never
+started twice, never under pytest.
 """
 import datetime, os, threading, time
 
@@ -88,22 +90,54 @@ def _tick(logger=None):
     except Exception as exc:                      # pragma: no cover
         if logger: logger.warning("stray remirror skipped: %s", exc)
     try:
-        import abandoned
-        result = abandoned.send_due_reminders()
-        if logger and (result.get("sent") or result.get("failed")):
-            logger.info("abandoned-cart reminders: sent=%s failed=%s",
-                        result.get("sent"), result.get("failed"))
-    except Exception as exc:                      # pragma: no cover
-        if logger: logger.warning("abandoned-cart reminders skipped: %s", exc)
-    try:
         _repair_photos(logger)
     except Exception as exc:                      # pragma: no cover
         if logger: logger.warning("photo repair skipped: %s", exc)
 
 
 def _loop(logger=None):
+    """Maintenance loop; a failed tick is logged and never kills the thread."""
     while True:
-        _tick(logger)
+        try:
+            _tick(logger)
+        except Exception as exc:                  # pragma: no cover
+            if logger: logger.exception("maintenance tick failed: %s", exc)
+        time.sleep(TICK_SECONDS)
+
+
+def _abandoned_tick(logger=None, attempts=3):
+    """Run abandoned-cart delivery independently with bounded retries."""
+    import abandoned
+    result = {"sent": 0, "failed": 0}
+    total_sent = 0
+    for attempt in range(max(1, attempts)):
+        try:
+            result = abandoned.send_due_reminders(limit=25)
+            total_sent += int(result.get("sent") or 0)
+        except Exception as exc:                  # pragma: no cover
+            if logger:
+                logger.warning("abandoned-cart attempt %d/%d failed: %s",
+                               attempt + 1, attempts, exc)
+            result = {"sent": 0, "failed": 1}
+        if not result.get("failed") or attempt + 1 >= attempts:
+            break
+        # Failed sends release their claim and are safe to retry. Keep this
+        # short so the independent worker remains responsive.
+        time.sleep(2 ** attempt)
+    result = {"sent": total_sent, "failed": int(result.get("failed") or 0)}
+    if logger and (result["sent"] or result["failed"]):
+        logger.info("abandoned-cart reminders: sent=%s failed=%s",
+                    result["sent"], result["failed"])
+    return result
+
+
+def _abandoned_loop(logger=None):
+    """A dedicated loop means slow catalog/backup work cannot block recovery."""
+    while True:
+        try:
+            _abandoned_tick(logger)
+        except Exception as exc:                  # pragma: no cover
+            if logger: logger.exception("abandoned-cart worker survived: %s", exc)
         time.sleep(TICK_SECONDS)
 
 
@@ -120,7 +154,10 @@ def start(app=None):
     except Exception:                            # pragma: no cover
         pass
     logger = app.logger if app is not None else None
-    t = threading.Thread(target=_loop, args=(logger,), daemon=True,
-                         name="jaura-scheduler")
-    t.start()
+    maintenance = threading.Thread(target=_loop, args=(logger,), daemon=True,
+                                   name="jaura-maintenance")
+    reminders = threading.Thread(target=_abandoned_loop, args=(logger,), daemon=True,
+                                 name="jaura-abandoned-carts")
+    maintenance.start()
+    reminders.start()
     return True

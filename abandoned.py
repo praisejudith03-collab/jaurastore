@@ -49,15 +49,25 @@ def _row_from_supabase(row):
     }
 
 
-def due_carts():
-    """Return local due carts, supplementing from Supabase after a restart."""
+def due_carts(limit=25):
+    """Return a bounded due-cart batch, supplementing from Supabase.
+
+    A bounded batch prevents a provider outage/backlog from occupying the
+    background worker indefinitely. Remaining carts are picked up next tick.
+    """
+    try:
+        limit = max(1, min(int(limit), 100))
+    except (TypeError, ValueError):
+        limit = 25
     rows = [dict(r) for r in query(
         "SELECT * FROM abandoned_carts "
         "WHERE reminder_sent=0 AND converted_at IS NULL AND last_activity_at <= ? "
-        "ORDER BY last_activity_at ASC LIMIT 500", (_cutoff(),))]
+        "ORDER BY last_activity_at ASC LIMIT ?", (_cutoff(), limit))]
     try:
         from supabase_store import load_due_abandoned_carts
-        for remote in load_due_abandoned_carts(_cutoff()) or []:
+        for remote in load_due_abandoned_carts(_cutoff(), limit=limit) or []:
+            if len(rows) >= limit:
+                break
             row = _row_from_supabase(remote)
             if not row or not row["token"]:
                 continue
@@ -100,13 +110,13 @@ def mark_converted(token):
     return True
 
 
-def send_due_reminders():
-    """Send due reminders and set reminder_sent only after Resend accepts."""
+def send_due_reminders(limit=25):
+    """Send one bounded reminder batch; mark sent only after acceptance."""
     import mailer
 
     sent = 0
     failed = 0
-    for row in due_carts():
+    for row in due_carts(limit=limit):
         token = str(row.get("token") or "").strip()
         if not token or row.get("reminder_sent") or row.get("converted_at"):
             continue

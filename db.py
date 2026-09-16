@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_user_id);
 
 -- Carts with an email entered during checkout. A cart is eligible for one
--- reminder after five quiet days; `reminder_sent` is intentionally explicit
+-- reminder after two quiet hours; `reminder_sent` is intentionally explicit
 -- so retries and scheduler runs cannot email the same cart twice.
 CREATE TABLE IF NOT EXISTS abandoned_carts (
   token             TEXT PRIMARY KEY,
@@ -105,7 +105,7 @@ CREATE INDEX IF NOT EXISTS idx_abandoned_email ON abandoned_carts(email);
 -- recipient emails are never stored in the log; only the count is retained.
 CREATE TABLE IF NOT EXISTS marketing_campaigns (
   id                TEXT PRIMARY KEY,
-  campaign_type     TEXT NOT NULL,
+  campaign_type     TEXT NOT NULL CHECK (campaign_type IN ('abandoned_cart', 'price_drop', 'new_arrivals', 'customer_appreciation')),
   subject           TEXT NOT NULL,
   content           TEXT NOT NULL,
   recipient_count   INTEGER NOT NULL DEFAULT 0,

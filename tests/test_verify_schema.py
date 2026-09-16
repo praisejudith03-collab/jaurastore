@@ -73,7 +73,7 @@ def test_a_fully_applied_schema_passes():
     rep = vs.check_live(FakeClient(_complete_schema()))
     assert rep["ok"] is True
     assert rep["missing_tables"] == []
-    assert len(rep["tables"]) == len(vs.REQUIRED_TABLES) == 11
+    assert len(rep["tables"]) == len(vs.REQUIRED_TABLES) == 12
 
 
 def test_a_missing_table_is_reported_by_name():
@@ -113,7 +113,7 @@ def test_the_required_column_inventory_covers_the_agreed_contract():
     assert vs.REQUIRED_COLUMNS["product_reviews"] == (
         "product_id", "order_id", "email", "name", "rating", "title", "body", "hidden",
         "created_at", "updated_at")
-    assert len(vs.REQUIRED_TABLES) == 11
+    assert len(vs.REQUIRED_TABLES) == 12
     assert len(vs.REQUIRED_COLUMNS["products"]) == 15
 
 
@@ -121,6 +121,7 @@ def test_constraints_are_checked_against_the_sql_that_is_applied():
     got = {c["table"]: c for c in vs.check_constraints()}
     assert got["coupon_uses"]["present"] is True
     assert got["product_reviews"]["present"] is True
+    assert got["marketing_campaigns"]["present"] is True
 
 
 def test_a_removed_constraint_fails_the_check():
@@ -128,6 +129,7 @@ def test_a_removed_constraint_fails_the_check():
     got = {c["table"]: c for c in vs.check_constraints(text)}
     assert got["coupon_uses"]["present"] is False
     assert got["product_reviews"]["present"] is False
+    assert got["marketing_campaigns"]["present"] is False
 
 
 def test_the_report_never_contains_the_service_role_key(monkeypatch, capsys, tmp_path):

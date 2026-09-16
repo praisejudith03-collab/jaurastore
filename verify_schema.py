@@ -35,6 +35,7 @@ REQUIRED_TABLES = (
     "referral_uses",
     "delivery_zones",
     "product_reviews",
+    "marketing_campaigns",
 )
 
 # The columns each table must answer for. Requesting them is the check: if one
@@ -50,6 +51,8 @@ REQUIRED_COLUMNS = {
     "referral_codes": ("code", "email", "name", "uses", "reward_issued"),
     "referral_uses": ("code", "order_id"),
     "delivery_zones": ("id", "name", "currency", "fare_min", "fare_max", "kind", "active", "sort_order"),
+    "marketing_campaigns": ("id", "campaign_type", "subject", "content", "recipient_count",
+                            "sent_count", "failed_count", "status", "sent_at", "created_at"),
 }
 
 # Constraints that a column probe cannot see. Verified against the SQL file,
@@ -59,6 +62,8 @@ CONSTRAINTS = (
      "the same coupon must not count twice for one order"),
     ("product_reviews", "unique (product_id, email)",
      "one review per customer per product"),
+    ("marketing_campaigns", "check (campaign_type in ('abandoned_cart', 'price_drop', 'new_arrivals', 'customer_appreciation'))",
+     "every campaign variant must be registered in the discriminator"),
 )
 
 SCHEMA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),

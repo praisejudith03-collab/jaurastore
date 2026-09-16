@@ -913,7 +913,8 @@ def mirror_marketing_campaign(row):
     if c is None or not row:
         return False
     try:
-        c.table("marketing_campaigns").upsert(dict(row)).execute()
+        from campaign_types import serialize_campaign
+        c.table("marketing_campaigns").upsert(serialize_campaign(row)).execute()
         return True
     except Exception as exc:
         print(f"[supabase] campaign upsert failed: {exc}")
@@ -926,9 +927,16 @@ def load_marketing_campaigns(limit=100):
     if c is None:
         return []
     try:
+        from campaign_types import serialize_campaign
         res = (c.table("marketing_campaigns").select("*")
                .order("sent_at", desc=True).limit(limit).execute())
-        return _res_data(res) or []
+        rows = []
+        for row in _res_data(res) or []:
+            try:
+                rows.append(serialize_campaign(row))
+            except (TypeError, ValueError) as exc:
+                print(f"[supabase] invalid campaign row skipped: {exc}")
+        return rows
     except Exception as exc:
         print(f"[supabase] campaigns load failed: {exc}")
         return []

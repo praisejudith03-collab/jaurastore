@@ -2,6 +2,7 @@
 import csv, io, json, os, datetime, secrets, hashlib, hmac, re
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
+from campaign_types import CAMPAIGN_TYPES, campaign_type_from, serialize_campaign
 from db import execute, one, query, audit
 import security as sec
 import auth as authmod
@@ -1076,7 +1077,7 @@ def create_order():
     _threading.Thread(target=_notify_whatsapp, args=(dict(order),), daemon=True).start()
 
     # Email the shop about the new order too (fire-and-forget; mailer no-ops
-    # until MAIL_FROM / MAIL_TO / a provider key are configured).
+    # until MAIL_FROM and a provider key are configured).
     try:
         import mailer
         mailer.notify_new_order_async(order)
@@ -1324,7 +1325,7 @@ def payment_proof():
     # Email the shop the receipt WITH THE CUSTOMER'S OWN FILE ATTACHED - the
     # exact bytes they uploaded. Fire-and-forget over HTTPS (Resend/Brevo)
     # first because Render's free instances block outbound SMTP; the upload
-    # must never wait on a mail provider. No-op until MAIL_FROM, MAIL_TO and
+    # must never wait on a mail provider. No-op until MAIL_FROM and
     # a provider key are configured (see ENVIRONMENT_VARIABLES.md).
     try:
         import mailer
@@ -3181,8 +3182,6 @@ def admin_customers_csv():
     return response
 
 
-CAMPAIGN_TYPES = ("abandoned_cart", "price_drop", "new_arrivals", "customer_appreciation")
-
 
 @api.get("/admin/marketing/campaigns")
 @authmod.require_admin
@@ -3219,7 +3218,16 @@ def marketing_campaigns():
             rows = [r for r in rows if matches(r)][:limit]
         except Exception as exc:
             print(f"[marketing] campaign log load skipped: {exc}")
-    return jsonify(ok=True, campaigns=rows)
+    # Keep one validated discriminator shape across SQLite, Supabase and JSON.
+    # Invalid historical rows are skipped rather than crashing serialization of
+    # the entire campaign log.
+    normalized = []
+    for row in rows:
+        try:
+            normalized.append(serialize_campaign(row))
+        except (TypeError, ValueError) as exc:
+            print(f"[marketing] invalid campaign row skipped: {exc}")
+    return jsonify(ok=True, campaigns=normalized)
 
 
 @api.post("/admin/marketing/campaigns")
@@ -3227,7 +3235,9 @@ def marketing_campaigns():
 @sec.require_csrf
 def marketing_campaign_send():
     d = request.get_json(silent=True) or {}
-    campaign_type = sec.clean(d.get("type") or d.get("campaignType"), 30).lower()
+    # campaign_type is the canonical schema discriminator. Legacy browser
+    # aliases are normalized only at this boundary.
+    campaign_type = campaign_type_from(d)
     if campaign_type not in CAMPAIGN_TYPES:
         return jsonify(ok=False, error="Choose a campaign type."), 400
     subject = sec.clean(d.get("subject"), 180, allow_newlines=False)
@@ -3252,16 +3262,18 @@ def marketing_campaign_send():
             "Resend is not configured. Set MAIL_FROM and RESEND_API_KEY before sending.")), 400
     now = _utcnow()
     campaign_id = "CMP-" + secrets.token_hex(6).upper()
-    row = {
+    row = serialize_campaign({
         "id": campaign_id, "campaign_type": campaign_type, "subject": subject,
         "content": content, "recipient_count": len(recipients),
         "sent_count": 0, "failed_count": 0, "status": "sending",
         "sent_at": now, "created_at": now,
-    }
+    })
     execute(
         "INSERT INTO marketing_campaigns (id,campaign_type,subject,content,recipient_count,"
         "sent_count,failed_count,status,sent_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        tuple(row.values()),
+        (row["id"], row["campaign_type"], row["subject"], row["content"],
+         row["recipient_count"], row["sent_count"], row["failed_count"],
+         row["status"], row["sent_at"], row["created_at"]),
     )
     sent = failed = 0
     for email in recipients:
