@@ -2870,6 +2870,10 @@ def reviews_list(pid):
     list during an outage and invite duplicate reviews.
     """
     pid = sec.clean(pid, 64)
+    sort = sec.clean(request.args.get("sort"), 20).lower()
+    if sort not in ("newest", "oldest", "highest", "lowest"):
+        sort = "newest"
+    rating_filter = sec.clean_int(request.args.get("rating"), 0, 0, 5)
     items = None
     source = "local"
     if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
@@ -2878,20 +2882,30 @@ def reviews_list(pid):
             rows = load_product_reviews_table(pid)
             if rows is not None:
                 items = [_public_review(r)
-                         for r in rows if not r.get("hidden")][:100]
+                         for r in rows if not r.get("hidden")]
                 source = "supabase:product_reviews"
         except Exception:
             items = None
     if items is None:
         rows = query("SELECT name, rating, title, body, created_at "
                      "FROM product_reviews "
-                     "WHERE product_id=? AND hidden=0 "
-                     "ORDER BY created_at DESC LIMIT 100", (pid,))
+                     "WHERE product_id=? AND hidden=0 LIMIT 500", (pid,))
         items = [_public_review(dict(r)) for r in rows]
+    if rating_filter:
+        items = [r for r in items if int(r.get("rating") or 0) == rating_filter]
+    if sort == "oldest":
+        items.sort(key=lambda r: str(r.get("created_at") or ""))
+    elif sort == "highest":
+        items.sort(key=lambda r: (-int(r.get("rating") or 0), str(r.get("created_at") or "")), reverse=False)
+    elif sort == "lowest":
+        items.sort(key=lambda r: (int(r.get("rating") or 0), str(r.get("created_at") or "")))
+    else:
+        items.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+    items = items[:100]
     n = len(items)
     avg = round(sum(int(r.get("rating") or 0) for r in items) / n, 2) if n else 0
     return jsonify(ok=True, productId=pid, count=n, average=avg, reviews=items,
-                   source=source)
+                   source=source, sort=sort, rating=rating_filter or None)
 
 @api.post("/reviews")
 @sec.require_csrf

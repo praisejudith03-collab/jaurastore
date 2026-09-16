@@ -4625,6 +4625,9 @@ body[data-page="admin"] .wa-float { display: none !important; }
   margin-bottom: 8px;
 }
 .rev-avg { font-size: 14px; color: #665748; margin-bottom: 12px; }
+.rev-controls { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0 14px; padding: 10px; background: #fdfaf7; border: 1px solid #f2e5d5; border-radius: 9px; }
+.rev-controls label { display: grid; gap: 4px; font-size: 11px; color: #887562; }
+.rev-controls select { min-width: 128px; padding: 6px 8px; border: 1px solid #e3d7ca; background: #fff; color: #342922; }
 .stars { color: #c8ac7f; letter-spacing: 1px; font-size: 16px; }
 .rev-note {
   background: #ffffff;

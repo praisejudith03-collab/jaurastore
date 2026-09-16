@@ -631,6 +631,23 @@ function starsOf(n, pick) {
   return `<span class="star-row">${"★".repeat(s)}${"☆".repeat(5 - s)}</span>`;
 }
 
+function reviewSortItems(items, sort, filter) {
+  const list = (items || []).filter((r) => !filter || Number(r.rating != null ? r.rating : r.stars) === Number(filter));
+  const time = (r) => { const n = Date.parse(r.created_at || r.at || ""); return Number.isFinite(n) ? n : 0; };
+  if (sort === "oldest") list.sort((a, b) => time(a) - time(b));
+  else if (sort === "highest") list.sort((a, b) => (Number(b.rating != null ? b.rating : b.stars) - Number(a.rating != null ? a.rating : a.stars)) || (time(b) - time(a)));
+  else if (sort === "lowest") list.sort((a, b) => (Number(a.rating != null ? a.rating : a.stars) - Number(b.rating != null ? b.rating : b.stars)) || (time(b) - time(a)));
+  else list.sort((a, b) => time(b) - time(a));
+  return list;
+}
+function reviewCardsHTML(list) {
+  return (list || []).map((r) => `<article class="rev-note">
+    ${starsOf(r.rating != null ? r.rating : r.stars)}
+    <strong>${JA.escape(r.name || "Customer")}</strong>
+    ${r.title ? `<p class="rev-title"><strong>${JA.escape(r.title)}</strong></p>` : ""}
+    <p>${JA.escape(r.body != null ? r.body : (r.note || ""))}</p>
+  </article>`).join("");
+}
 function renderProduct() {
   const root = document.querySelector("[data-pdp]");
   if (!root) return;
@@ -741,6 +758,14 @@ function paintProduct(root, p) {
   const stockN = Number(p.stock) || 0;
   const rev = (JA.reviews && JA.reviews(p.id)) || [];
   const revStats = (JA.reviewStats && JA.reviewStats(p.id)) || { n: 0, avg: 0 };
+  let reviewSort = "newest";
+  let reviewFilter = "";
+  const initialReviews = reviewSortItems(rev, reviewSort, reviewFilter);
+  const reviewSummary = (list) => {
+    const n = list.length;
+    const avg = n ? list.reduce((sum, r) => sum + Number(r.rating != null ? r.rating : r.stars) || 0, 0) / n : 0;
+    return n ? starsOf(avg) + " " + t(n === 1 ? "rev.count" : "rev.countMany", { n }) : t(reviewFilter ? "rev.noMatch" : "rev.empty");
+  };
   const mainHTML = (idx) => JA.mediaHTML(gallery[idx], {
     full: true, eager: idx === 0, alt: p.name, ph: p.placeholderImage, attrs: { "data-main-img": "" },
   });
@@ -784,14 +809,20 @@ function paintProduct(root, p) {
       <p style="font-size:13px;color:var(--taupe)">${t("pdp.hint", { sku: p.sku || p.id })}</p>
       <section class="pdp-reviews" data-reviews="${JA.escape(p.id)}">
         <h3>${t("rev.title")}</h3>
-        <p class="rev-avg">${revStats.n ? starsOf(revStats.avg) + " " + t(revStats.n === 1 ? "rev.count" : "rev.countMany", { n: revStats.n }) : t("rev.empty")}</p>
-        <div class="rev-list">${rev.length ? rev.map((r) => `
-          <article class="rev-note">
-            ${starsOf(r.rating != null ? r.rating : r.stars)}
-            <strong>${JA.escape(r.name || "Customer")}</strong>
-            ${r.title ? `<p class="rev-title"><strong>${JA.escape(r.title)}</strong></p>` : ""}
-            <p>${JA.escape(r.body != null ? r.body : (r.note || ""))}</p>
-          </article>`).join("") : ""}</div>
+        <p class="rev-avg">${reviewSummary(initialReviews)}</p>
+        <div class="rev-controls" aria-label="${t("rev.filters")}">
+          <label>${t("rev.sort")}<select data-review-sort>
+            <option value="newest">${t("rev.newest")}</option>
+            <option value="oldest">${t("rev.oldest")}</option>
+            <option value="highest">${t("rev.highest")}</option>
+            <option value="lowest">${t("rev.lowest")}</option>
+          </select></label>
+          <label>${t("rev.filter")}<select data-review-filter>
+            <option value="">${t("rev.allRatings")}</option>
+            ${[5, 4, 3, 2, 1].map((n) => `<option value="${n}">${n} ★</option>`).join("")}
+          </select></label>
+        </div>
+        <div class="rev-list">${reviewCardsHTML(initialReviews)}</div>
         <form class="rev-form" data-rev-form>
           <h4>${t("rev.write")}</h4>
           <p class="rev-gate-note">${t("rev.gate")}</p>
@@ -807,6 +838,22 @@ function paintProduct(root, p) {
       </section>
     </div>`;
 
+  const reviewBox = root.querySelector("[data-reviews]");
+  const paintReviews = (items) => {
+    const filtered = reviewSortItems(items, reviewSort, reviewFilter);
+    const avgEl = reviewBox?.querySelector(".rev-avg");
+    const listEl = reviewBox?.querySelector(".rev-list");
+    if (avgEl) avgEl.innerHTML = reviewSummary(filtered);
+    if (listEl) listEl.innerHTML = reviewCardsHTML(filtered);
+  };
+  reviewBox?.querySelector("[data-review-sort]")?.addEventListener("change", (e) => {
+    reviewSort = e.target.value || "newest";
+    paintReviews((JA.reviews && JA.reviews(p.id)) || []);
+  });
+  reviewBox?.querySelector("[data-review-filter]")?.addEventListener("change", (e) => {
+    reviewFilter = e.target.value || "";
+    paintReviews((JA.reviews && JA.reviews(p.id)) || []);
+  });
   const showSlide = (i) => {
     const slot = root.querySelector("[data-media-slot]");
     const thumbs = [...root.querySelectorAll("[data-thumb]")];
@@ -1007,18 +1054,7 @@ function paintProduct(root, p) {
       if (JA.setReviews && JSON.stringify(cur) !== JSON.stringify(d.reviews)) {
         JA.setReviews(p.id, d.reviews);
         const box = document.querySelector(`[data-reviews="${(window.CSS && CSS.escape) ? CSS.escape(p.id) : p.id}"]`);
-        if (box) {
-          const n = d.reviews.length;
-          const avgEl = box.querySelector(".rev-avg");
-          if (avgEl) avgEl.innerHTML = n ? starsOf(d.average) + " " + t(n === 1 ? "rev.count" : "rev.countMany", { n }) : t("rev.empty");
-          const list = box.querySelector(".rev-list");
-          if (list) list.innerHTML = d.reviews.map((r) => `
-            <article class="rev-note">
-              ${starsOf(r.stars)}
-              <strong>${JA.escape(r.name || "Customer")}</strong>
-              <p>${JA.escape(r.note || "")}</p>
-            </article>`).join("");
-        }
+        if (box) paintReviews(d.reviews);
       }
     })
     .catch(() => {});
