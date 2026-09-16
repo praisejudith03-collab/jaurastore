@@ -2166,6 +2166,7 @@ const JA = (() => {
         <a class="au-link ${on("delivery")}" href="delivery.html">${tx("nav.delivery")}</a>
         <a class="au-link ${on("contact")}" href="contact.html">${tx("nav.care")}</a>
         <a class="au-link ${on("checkout")}" href="checkout.html">${tx("nav.checkout")}</a>
+        <a class="au-link ${on("track-order")}" href="track-order.html">${tx("nav.track")}</a>
         <a class="au-link ${on("account")}" href="account.html">${tx("nav.account")}</a>
         <a class="au-link ${on("wishlist")}" href="wishlist.html">${tx("nav.wishlist")}</a>
         <div class="au-menu-tools">
@@ -2274,6 +2275,7 @@ const JA = (() => {
           <h4>${tx("footer.visit")}</h4>
           <p><a href="shop.html">${tx("nav.shopAll")}</a></p>
           <p><a href="delivery.html">${tx("nav.delivery")}</a></p>
+          <p><a href="track-order.html">${tx("footer.track")}</a></p>
           <p><a href="contact.html">${tx("nav.care")}</a></p>
           <p><a href="faq.html">${tx("nav.faq")}</a></p>
         </div>

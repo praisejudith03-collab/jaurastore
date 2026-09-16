@@ -756,6 +756,17 @@ let orderPage = 1;
 const ORDER_PAGE = 15;
 let dashRange = 30;
 let salesRange = "30";
+let orderSearch = "";
+let orderFrom = "";
+let orderTo = "";
+let selectedOrderIds = new Set();
+let salesSearch = "";
+let salesFrom = "";
+let salesTo = "";
+let marketingSearch = "";
+let marketingFrom = "";
+let marketingTo = "";
+let selectedProductIds = new Set();
 let dashTimer = null;
 let dashCat = "";
 
@@ -796,7 +807,9 @@ function renderProdGrid() {
     const stockN = Number(p.stock) || 0;
     const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN <= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;
     const rowq = JA.escape((p.name + " " + (p.nameFr || "") + " " + (p.sku || "") + " " + p.category).toLowerCase());
+    const productSelected = selectedProductIds.has(String(p.id)) ? " checked" : "";
     return `<article class="adx-card" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
+      <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
       <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
       <div class="adx-card-body"><strong>${JA.escape(p.name)}</strong><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
@@ -828,6 +841,70 @@ function renderProdGrid() {
       });
     }
   }
+  updateProductBulkUI();
+}
+function updateProductBulkUI() {
+  const bar = $("#product-bulk");
+  if (!bar) return;
+  const valid = new Set(JA.products().map((p) => String(p.id)));
+  selectedProductIds.forEach((id) => { if (!valid.has(String(id))) selectedProductIds.delete(id); });
+  const count = selectedProductIds.size;
+  bar.hidden = !count;
+  const label = $("#products-selected-count"); if (label) label.textContent = count;
+  const visible = [...($("#prod-grid")?.querySelectorAll("[data-prod-select]") || [])];
+  const select = $("#products-select-visible");
+  if (select) { const n = visible.filter((input) => selectedProductIds.has(String(input.dataset.prodSelect))).length; select.checked = visible.length > 0 && n === visible.length; select.indeterminate = n > 0 && n < visible.length; }
+}
+function bindProductSelection() {
+  document.querySelectorAll("#prod-grid [data-prod-select]").forEach((input) => {
+    input.onchange = () => {
+      const id = String(input.dataset.prodSelect);
+      if (input.checked) selectedProductIds.add(id); else selectedProductIds.delete(id);
+      updateProductBulkUI();
+    };
+    input.onclick = (e) => e.stopPropagation();
+  });
+  const select = $("#products-select-visible");
+  if (select) select.onchange = () => {
+    $("#prod-grid")?.querySelectorAll("[data-prod-select]").forEach((input) => {
+      const id = String(input.dataset.prodSelect);
+      if (select.checked) selectedProductIds.add(id); else selectedProductIds.delete(id);
+      input.checked = select.checked;
+    });
+    updateProductBulkUI();
+  };
+}
+function bindProductBulk() {
+  const bar = $("#product-bulk"); if (!bar || bar.dataset.bound === "1") return;
+  bar.dataset.bound = "1";
+  bar.addEventListener("click", async (e) => {
+    const button = e.target.closest("[data-product-bulk]"); if (!button) return;
+    const action = button.dataset.productBulk;
+    if (action === "clear") { selectedProductIds.clear(); renderProdGrid(); bindProdGridEvents(); return; }
+    if (action === "select-visible") {
+      $("#prod-grid")?.querySelectorAll("[data-prod-select]").forEach((input) => { selectedProductIds.add(String(input.dataset.prodSelect)); input.checked = true; });
+      updateProductBulkUI(); return;
+    }
+    const products = [...selectedProductIds].map((id) => JA.product(id)).filter(Boolean);
+    if (!products.length) return;
+    if (action === "delete") {
+      if (!confirm(`Delete ${products.length} selected product${products.length === 1 ? "" : "s"}? Customers will no longer see them.`)) return;
+      button.disabled = true;
+      const results = await Promise.all(products.map((p) => JA.removeProduct(p.id)));
+      button.disabled = false;
+      const ok = results.filter((r) => r && r.ok !== false).length;
+      selectedProductIds.clear(); JA.toast(`${ok} product${ok === 1 ? "" : "s"} deleted${ok < products.length ? ` · ${products.length - ok} failed` : ""}.`);
+      renderProdGrid(); bindProdGridEvents(); return;
+    }
+    const online = action === "show";
+    if (!confirm(`${online ? "Show" : "Hide"} ${products.length} selected product${products.length === 1 ? "" : "s"} on the website?`)) return;
+    button.disabled = true;
+    const results = await Promise.all(products.map((p) => JA.upsertProduct({ ...p, online })));
+    button.disabled = false;
+    const ok = results.filter((r) => r && r.ok !== false).length;
+    selectedProductIds.clear(); JA.toast(`${ok} product${ok === 1 ? "" : "s"} updated${ok < products.length ? ` · ${products.length - ok} failed` : ""}.`);
+    renderProdGrid(); bindProdGridEvents();
+  });
 }
 function bindProdGridEvents() {
   document.querySelectorAll("#prod-grid [data-edit]").forEach((b) => {
@@ -851,6 +928,8 @@ function bindProdGridEvents() {
       }
     };
   });
+  bindProductSelection();
+  bindProductBulk();
 }
 function productsTable() {
   const all = JA.products();
@@ -858,15 +937,19 @@ function productsTable() {
   const catName = (id) => (cats.find((c) => c.id === id) || {}).name || id || "";
   const catOpts = cats.map((c) => `<option value="${JA.escape(c.id)}" ${ (dashCat === c.id || prodCatSel === c.id) ? "selected" : ""}>${JA.escape(c.name)}</option>`).join("");
   const backBtn = dashCat ? `<button type="button" class="btn btn-line" id="back-all-products">← All products</button>` : "";
+  const exportBtn = `<a class="btn btn-line" href="api/admin/products.csv" download="jaura-products.csv">Export CSV</a>`;
   const filteredNote = dashCat ? ` · <strong>${JA.escape(catName(dashCat))}</strong>` : "";
   const qVal = JA.escape(prodSearchQ);
   return `<div class="adx-list-head">
       <button type="button" class="btn adx-add-btn" id="add-product">+ New Product</button>
       ${backBtn}
+      ${exportBtn}
       <div class="adx-filters">
         <input id="prod-search" type="search" placeholder="Search products…" autocomplete="off" value="${qVal}" />
         <select id="prod-cat" aria-label="Filter by category"><option value="">All categories</option>${catOpts}</select>
+        <label class="adx-select-all"><input type="checkbox" id="products-select-visible" /> Select visible</label>
       </div>
+      <div class="adx-bulkbar" id="product-bulk" hidden><strong><span id="products-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-product-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-product-bulk="show">Show selected</button><button type="button" class="btn btn-line" data-product-bulk="hide">Hide selected</button><button type="button" class="btn btn-line btn-danger" data-product-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-product-bulk="clear">Clear selection</button></div>
       <p class="adx-count"><span id="prod-count">${all.length}</span> of <span id="prod-count-all">${all.length}</span> products${filteredNote} · <button type="button" class="au-cats-link" data-tab="categories">Manage categories</button></p>
     </div>
     <div class="adx-grid" id="prod-grid"></div>
@@ -876,6 +959,7 @@ function productsTable() {
 function applyProductFilter() {
   const qEl = document.getElementById("prod-search");
   const cEl = document.getElementById("prod-cat");
+  selectedProductIds.clear();
   prodSearchQ = String(qEl?.value || "").toLowerCase().trim();
   prodCatSel = String(cEl?.value || "");
   prodPage = 1;
@@ -885,6 +969,10 @@ function applyProductFilter() {
 function esc(v) { return JA.escape(String(v == null ? "" : v)); }
 function analyticsPanel() {
   return `
+    <section class="needs-attention" id="needs-attention">
+      <div class="needs-attention-head"><div><h2>Needs attention</h2><p>Keep today’s most important work in one place.</p></div><button type="button" class="btn btn-line" id="needs-attention-refresh">Refresh</button></div>
+      <div id="needs-attention-box"><p class="empty">Checking orders and stock…</p></div>
+    </section>
     <div class="an-top">
       <h3 class="admin-h" style="margin:0">Store insights</h3>
       <div class="an-range">
@@ -982,7 +1070,32 @@ async function fillLiveFeed() {
     renderLive(d.visitors || [], d.activity || []);
   } catch (e) {}
 }
+function attentionOrderLine(o) {
+  const customer = o.customer || {};
+  return `<li><span><strong>${esc(o.id || "Order")}</strong><small>${esc(customer.name || customer.email || "Customer")} · ${esc(timeAgo(o.at) || "date unavailable")}</small></span><b>${esc(JA.money(o.total, o.currency))}</b></li>`;
+}
+async function fillNeedsAttention() {
+  const box = $("#needs-attention-box");
+  if (!box) return;
+  try {
+    const d = await window.JA_NET.api("api/admin/needs-attention");
+    const pending = d.pending || [], stale = d.stale || [], low = d.lowStock || [];
+    setOrderBadge(pending.length);
+    if (!pending.length && !low.length) {
+      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders or low-stock variants need action.</span></div>`;
+    } else {
+      const pendingBlock = `<article class="attention-block"><div class="attention-title"><strong>Pending orders</strong><b>${pending.length}</b></div>${pending.length ? `<ul class="attention-list">${pending.slice(0, 5).map(attentionOrderLine).join("")}</ul>${pending.length > 5 ? `<small class="attention-more">+ ${pending.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Review orders →</button>` : `<p class="empty">No pending orders.</p>`}</article>`;
+      const lowBlock = `<article class="attention-block"><div class="attention-title"><strong>Low stock</strong><b>${low.length}</b></div>${low.length ? `<ul class="attention-list">${low.slice(0, 5).map((r) => `<li><span><strong>${esc(r.name || r.product_id || "Product")}</strong><small>${esc(r.variant_label || r.variant_key || "Variant")}</small></span><b>${Number(r.qty || 0)} left</b></li>`).join("")}${low.length > 5 ? `<small class="attention-more">+ ${low.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Manage products →</button>` : `<p class="empty">No products at five or fewer units.</p>`}</article>`;
+      const staleBlock = `<article class="attention-block ${stale.length ? "is-alert" : ""}"><div class="attention-title"><strong>Waiting over 24 hours</strong><b>${stale.length}</b></div>${stale.length ? `<ul class="attention-list">${stale.slice(0, 3).map(attentionOrderLine).join("")}</ul><button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Follow up →</button>` : `<p class="empty">No overdue pending orders.</p>`}</article>`;
+      box.innerHTML = `<div class="needs-grid">${pendingBlock}${lowBlock}${staleBlock}</div>`;
+    }
+    box.querySelectorAll("[data-attention-tab]").forEach((button) => { button.onclick = () => paintDesk(button.dataset.attentionTab); });
+  } catch (err) {
+    box.innerHTML = `<p class="empty">Could not load this queue. Try Refresh.</p>`;
+  }
+}
 async function fillAnalytics() {
+  fillNeedsAttention();
   const data = await JA.adminAnalytics(dashRange);
   if (!data) { const box = $("#panel-analytics"); if (box) box.innerHTML = `<p class="empty">Could not load analytics.</p>`; return; }
   if (!$("#an-kpis")) return;
@@ -1011,6 +1124,7 @@ async function fillAnalytics() {
   if (customLabel) customLabel.addEventListener("click", () => { if (custom) { custom.hidden = false; custom.focus(); custom.select(); } });
   if (custom) custom.addEventListener("change", () => { const v = Math.max(1, Math.min(400, Number(custom.value) || 30)); dashRange = v; custom.value = v; paintDesk("analytics"); });
   const ref = $("#an-refresh"); if (ref) ref.onclick = () => { paintDesk("analytics"); JA.toast("Refreshed."); };
+  const attentionRef = $("#needs-attention-refresh"); if (attentionRef) attentionRef.onclick = fillNeedsAttention;
 }
 let liveTimer = null;
 function startDashTimer() {
@@ -1020,6 +1134,7 @@ function startDashTimer() {
   liveTimer = setInterval(() => { if (document.body.dataset.page !== "admin") return; const on = document.querySelector("#panel-analytics.is-on"); if (on && !document.hidden && $("#an-feed")) fillLiveFeed(); }, 10000);
 }
 let serverOrders = [];
+let orderAttentionCount = 0;
 function orderStatusLabel(s) { return s === "confirmed" ? "Confirmed" : s === "declined" ? "Declined" : s === "past" ? "Past" : "Pending"; }
 document.addEventListener("click", (e) => {
   const btn = e.target.closest && e.target.closest("[data-receipt-open]");
@@ -1069,11 +1184,12 @@ function orderReviewHTML(o) {
 }
 function orderCardHTML(o) {
   const c = o.customer || {}; const shot = o.proofUrl || (JA.getProof && JA.getProof(o.id, o.proof)) || ""; const when = o.at ? new Date(o.at).toLocaleString() : ""; const s = o.status || "pending"; const nItems = (o.items || []).reduce((n, i) => n + (Number(i.qty) || 0), 0);
-  return `<details class="adx-order" data-order="${esc(o.id)}"><summary class="adx-order-row"><span class="adx-order-id">${esc(o.id)}</span><span class="adx-order-who"><strong>${esc(c.name || "Customer")}</strong><small>${esc(when)} · ${nItems} item(s)</small></span><span class="adx-order-total">${esc(JA.money(o.total, o.currency))}</span><span class="status-pill ${esc(s)}">${esc(orderStatusLabel(s))}</span></summary><div class="adx-order-body"><div class="order-card-top"><div><p><strong>${esc(c.name || "Customer")}</strong></p><p>${esc(c.email || "")}</p><p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p><p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}<p>${esc(when)}</p></div><div><p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p><p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p></div></div><ul class="order-items">${(o.items || []).map((i) => `<li>${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}</li>`).join("")}</ul>${orderReviewHTML(o)}${shot ? receiptViewer(shot, `Payment receipt for ${o.id}`, `${o.id}-receipt`) : `<p class="empty">No receipt attached.</p>`}<div class="order-actions">${orderActionsHTML(o)}</div></div></details>`;
+  const selected = selectedOrderIds.has(String(o.id)) ? " checked" : "";
+  return `<details class="adx-order" data-order="${esc(o.id)}"><summary class="adx-order-row"><span class="adx-select-wrap"><input type="checkbox" class="adx-row-select" data-order-select="${esc(o.id)}"${selected} aria-label="Select order ${esc(o.id)}" /></span><span class="adx-order-id">${esc(o.id)}</span><span class="adx-order-who"><strong>${esc(c.name || "Customer")}</strong><small>${esc(when)} · ${nItems} item(s)</small></span><span class="adx-order-total">${esc(JA.money(o.total, o.currency))}</span><span class="status-pill ${esc(s)}">${esc(orderStatusLabel(s))}</span></summary><div class="adx-order-body"><div class="order-card-top"><div><p><strong>${esc(c.name || "Customer")}</strong></p><p>${esc(c.email || "")}</p><p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p><p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}<p>${esc(when)}</p></div><div><p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p><p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p></div></div><ul class="order-items">${(o.items || []).map((i) => `<li>${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}</li>`).join("")}</ul>${orderReviewHTML(o)}${shot ? receiptViewer(shot, `Payment receipt for ${o.id}`, `${o.id}-receipt`) : `<p class="empty">No receipt attached.</p>`}<div class="order-actions">${orderActionsHTML(o)}</div></div></details>`;
 }
 let orderFilter = "all";
 function ordersPanel() {
-  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}<a class="au-link-btn" href="api/admin/orders.csv" style="margin-left:auto">Download CSV</a></div><p class="admin-note">Tap an order to see everything — customer details, items, the payment receipt and the action buttons. Every checkout is kept forever.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><p class="admin-note" id="mail-status" role="status" aria-live="polite" style="margin-bottom:10px">Checking receipt emails…</p><button type="button" class="btn btn-line" id="mail-test" hidden>Email a test</button><div id="proofs-box"><p class="empty">Loading receipts…</p></div>`;
+  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}</div><div class="adx-filter-bar" aria-label="Filter orders"><input id="order-search" type="search" placeholder="Search order, customer, email…" autocomplete="off" value="${esc(orderSearch)}" /><label>From <input id="order-from" type="date" value="${esc(orderFrom)}" /></label><label>To <input id="order-to" type="date" value="${esc(orderTo)}" /></label><button type="button" class="btn btn-line" id="order-filter-clear">Clear</button><label class="adx-select-all"><input type="checkbox" id="orders-select-visible" /> Select visible</label><a class="au-link-btn" id="orders-csv" href="api/admin/orders.csv" download>Download CSV</a></div><div class="adx-bulkbar" id="orders-bulk" hidden><strong><span id="orders-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-order-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-order-bulk="confirm">Confirm selected</button><button type="button" class="btn btn-line btn-danger" data-order-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-order-bulk="clear">Clear selection</button></div><p class="admin-note">Search and dates apply before the list is paginated. Tap an order to see everything — customer details, items, the payment receipt and the action buttons.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><p class="admin-note" id="mail-status" role="status" aria-live="polite" style="margin-bottom:10px">Checking receipt emails…</p><button type="button" class="btn btn-line" id="mail-test" hidden>Email a test</button><div id="proofs-box"><p class="empty">Loading receipts…</p></div>`;
 }
 async function refreshMailStatus() {
   const note = $("#mail-status"); if (!note) return;
@@ -1134,6 +1250,7 @@ function renderOrderPage() {
   if (!total) {
     box.innerHTML = `<p class="empty">${orderFilter === "all" ? "No orders yet." : "No " + orderStatusLabel(orderFilter).toLowerCase() + " orders."}</p>`;
     const pg = document.getElementById("orders-pager"); if (pg) pg.innerHTML = "";
+    bindOrderSelection(); updateOrderBulkUI();
     return;
   }
   box.innerHTML = slice.map(orderCardHTML).join("");
@@ -1150,19 +1267,105 @@ function renderOrderPage() {
     }
   }
   bindOrderButtons();
+  bindOrderSelection();
+  updateOrderBulkUI();
+}
+function updateOrderBulkUI() {
+  const bar = $("#orders-bulk");
+  if (!bar) return;
+  const valid = new Set(serverOrders.map((o) => String(o.id)));
+  selectedOrderIds.forEach((id) => { if (!valid.has(String(id))) selectedOrderIds.delete(id); });
+  const count = selectedOrderIds.size;
+  bar.hidden = !count;
+  const label = $("#orders-selected-count"); if (label) label.textContent = count;
+  const visible = [...($("#orders-box")?.querySelectorAll("[data-order-select]") || [])];
+  const select = $("#orders-select-visible");
+  if (select) { const n = visible.filter((input) => selectedOrderIds.has(String(input.dataset.orderSelect))).length; select.checked = visible.length > 0 && n === visible.length; select.indeterminate = n > 0 && n < visible.length; }
+}
+function bindOrderSelection() {
+  const box = $("#orders-box"); if (!box) return;
+  box.querySelectorAll("[data-order-select]").forEach((input) => {
+    input.onchange = () => {
+      const id = String(input.dataset.orderSelect);
+      if (input.checked) selectedOrderIds.add(id); else selectedOrderIds.delete(id);
+      updateOrderBulkUI();
+    };
+    input.onclick = (e) => e.stopPropagation();
+  });
+  const select = $("#orders-select-visible");
+  if (select) select.onchange = () => {
+    $("#orders-box")?.querySelectorAll("[data-order-select]").forEach((input) => {
+      const id = String(input.dataset.orderSelect);
+      if (select.checked) selectedOrderIds.add(id); else selectedOrderIds.delete(id);
+      input.checked = select.checked;
+    });
+    updateOrderBulkUI();
+  };
+}
+function bindOrderBulk() {
+  const bar = $("#orders-bulk"); if (!bar || bar.dataset.bound === "1") return;
+  bar.dataset.bound = "1";
+  bar.addEventListener("click", async (e) => {
+    const button = e.target.closest("[data-order-bulk]"); if (!button) return;
+    const action = button.dataset.orderBulk;
+    if (action === "clear") { selectedOrderIds.clear(); renderOrderPage(); return; }
+    if (action === "select-visible") {
+      $("#orders-box")?.querySelectorAll("[data-order-select]").forEach((input) => { selectedOrderIds.add(String(input.dataset.orderSelect)); input.checked = true; });
+      updateOrderBulkUI(); return;
+    }
+    const ids = [...selectedOrderIds].filter((id) => serverOrders.some((o) => String(o.id) === id));
+    if (!ids.length) return;
+    if (action === "confirm") {
+      const pending = ids.filter((id) => (serverOrders.find((o) => String(o.id) === id) || {}).status === "pending");
+      if (!pending.length) { JA.toast("Select at least one pending order to confirm."); return; }
+      if (!confirm(`Confirm payment for ${pending.length} selected order${pending.length === 1 ? "" : "s"}?`)) return;
+      button.disabled = true;
+      const results = await Promise.all(pending.map((id) => JA.setOrderStatus(id, "confirmed")));
+      button.disabled = false;
+      const ok = results.filter((r) => r && r.ok !== false).length;
+      selectedOrderIds.clear(); JA.toast(`${ok} order${ok === 1 ? "" : "s"} confirmed${ok < pending.length ? ` · ${pending.length - ok} failed` : ""}.`);
+      fillOrders(); return;
+    }
+    if (action === "delete") {
+      if (!confirm(`Delete ${ids.length} selected order${ids.length === 1 ? "" : "s"} permanently? Payment receipts will also be removed.`)) return;
+      button.disabled = true;
+      const results = await Promise.all(ids.map((id) => JA.deleteOrder(id)));
+      button.disabled = false;
+      const ok = results.filter((r) => r && r.ok !== false).length;
+      if (ok) serverOrders = serverOrders.filter((o) => !ids.includes(String(o.id)));
+      selectedOrderIds.clear(); JA.toast(`${ok} order${ok === 1 ? "" : "s"} deleted${ok < ids.length ? ` · ${ids.length - ok} failed` : ""}.`);
+      renderOrderPage(); fillProofs();
+    }
+  });
 }
 async function fillOrders() {
   const box = $("#orders-box"); if (!box) return;
-  serverOrders = await JA.adminOrders({ limit: 500 });
+  const opts = { limit: 1000 };
+  if (orderSearch) opts.q = orderSearch;
+  if (orderFrom) opts.from = orderFrom;
+  if (orderTo) opts.to = orderTo;
+  const ordersRequest = JA.adminOrders(opts);
+  const attentionRequest = window.JA_NET ? window.JA_NET.api("api/admin/needs-attention").catch(() => null) : Promise.resolve(null);
+  serverOrders = await ordersRequest;
+  const attention = await attentionRequest;
+  if (attention && attention.ok !== false) setOrderBadge((attention.pending || []).length);
+  bindOrderBulk();
   orderPage = 1;
   document.querySelectorAll("[data-ofilter]").forEach((b) => {
     b.onclick = () => {
       orderFilter = b.dataset.ofilter;
+      selectedOrderIds.clear();
       orderPage = 1;
       document.querySelectorAll("[data-ofilter]").forEach((x) => x.classList.toggle("is-on", x === b));
       renderOrderPage();
     };
   });
+  const search = $("#order-search"); const from = $("#order-from"); const to = $("#order-to");
+  const apply = () => { selectedOrderIds.clear(); orderSearch = String(search?.value || "").trim(); orderFrom = String(from?.value || ""); orderTo = String(to?.value || ""); orderPage = 1; fillOrders(); };
+  if (search) search.oninput = (() => { let timer; return () => { clearTimeout(timer); timer = setTimeout(apply, 250); }; })();
+  if (from) from.onchange = apply; if (to) to.onchange = apply;
+  $("#order-filter-clear").onclick = () => { orderSearch = ""; orderFrom = ""; orderTo = ""; fillOrders(); };
+  const csv = $("#orders-csv"); if (csv) { const p = new URLSearchParams(); if (orderSearch) p.set("q", orderSearch); if (orderFrom) p.set("from", orderFrom); if (orderTo) p.set("to", orderTo); csv.href = "api/admin/orders.csv" + (p.toString() ? "?" + p : ""); }
   renderOrderPage();
 }
 function bindOrderButtons() {
@@ -1344,11 +1547,111 @@ function bindAccount() {
   });
 }
 function marketingPanel() {
-  return `<div class="admin-card" id="mk-settings-card"><h3 class="admin-h">Referral settings</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-coupons-card"><h3 class="admin-h">Coupons</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-referrals-card"><h3 class="admin-h">Referral codes</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-backup-card"><h3 class="admin-h">Backups</h3><p class="admin-note">Product data is backed up to GitHub automatically every night at midnight. Customer orders stay on the server. You can also run a backup right now.</p><button type="button" class="btn" id="mk-backup-now">Back up now</button><p class="admin-note" id="mk-backup-out" hidden></p></div>`;
+  return `<div class="admin-card mk-campaign-card" id="mk-campaign-card">
+    <h3 class="admin-h">Send campaign</h3>
+    <p class="admin-note">Email customers with an email on file from checkout — guests and account holders who haven’t opted out. Resend sends one private copy per recipient.</p>
+    <form id="mk-campaign-form" class="mk-campaign-form">
+      <label>Campaign type
+        <select name="campaignType" id="mk-campaign-type">
+          <option value="best_sellers">Best Sellers</option>
+          <option value="new_arrivals">New Arrivals</option>
+          <option value="discount_promo">Discount / Promo</option>
+          <option value="custom">Custom message</option>
+        </select>
+      </label>
+      <label>Subject <input name="subject" id="mk-campaign-subject" maxlength="180" required /></label>
+      <label>Message <textarea name="content" id="mk-campaign-content" rows="6" maxlength="10000" required></textarea></label>
+      <div class="mk-campaign-foot"><strong id="mk-recipient-count">Checking recipients…</strong><button type="button" class="btn btn-line" id="mk-refresh-recipients">Refresh count</button><a class="btn btn-line" href="api/admin/customers.csv" download="jaura-customers.csv">Export contacts</a><button class="btn" type="submit" id="mk-send-campaign">Send campaign</button></div>
+      <p class="admin-note" id="mk-campaign-status" role="status" aria-live="polite"></p>
+    </form>
+    <h4 class="mk-campaign-log-title">Past campaigns</h4><div class="adx-filter-bar mk-campaign-filters" aria-label="Filter campaigns"><input id="marketing-search" type="search" placeholder="Search campaigns…" autocomplete="off" value="${esc(marketingSearch)}" /><label>From <input id="marketing-from" type="date" value="${esc(marketingFrom)}" /></label><label>To <input id="marketing-to" type="date" value="${esc(marketingTo)}" /></label><button type="button" class="btn btn-line" id="marketing-filter-clear">Clear</button></div><div id="mk-campaign-log"><p class="empty">Loading…</p></div>
+  </div>
+  <div class="admin-card" id="mk-settings-card"><h3 class="admin-h">Referral settings</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-coupons-card"><h3 class="admin-h">Coupons</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-referrals-card"><h3 class="admin-h">Referral codes</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-backup-card"><h3 class="admin-h">Backups</h3><p class="admin-note">Product data is backed up to GitHub automatically every night at midnight. Customer orders stay on the server. You can also run a backup right now.</p><button type="button" class="btn" id="mk-backup-now">Back up now</button><p class="admin-note" id="mk-backup-out" hidden></p></div>`;
 }
 async function fillMarketing() {
   const api = (path, opts) => window.JA_NET.api(path, opts);
   const num = (v) => esc(String(v == null ? "" : v));
+  const campaignDefaults = {
+    best_sellers: { subject: "Our best sellers are waiting", content: "Discover the pieces our customers are loving right now. Shop our best sellers today." },
+    new_arrivals: { subject: "New arrivals at Jaura Store", content: "Meet the latest arrivals from Jaura Store. Find your next favourite piece today." },
+    discount_promo: { subject: "A special offer from Jaura Store", content: "Enjoy a special offer from Jaura Store for a limited time. Shop now while it lasts." },
+    custom: { subject: "A message from Jaura Store", content: "" },
+  };
+  const campaignTypeLabel = (type) => ({ best_sellers: "Best Sellers", new_arrivals: "New Arrivals", discount_promo: "Discount / Promo", custom: "Custom message" }[type] || type || "Campaign");
+  const paintCampaignLog = (rows) => {
+    const box = $("#mk-campaign-log");
+    if (!box) return;
+    box.innerHTML = rows.length ? `<div class="mk-campaign-log">${rows.map((r) => `<article class="mk-campaign-log-row"><div><strong>${esc(campaignTypeLabel(r.campaign_type))}</strong><small>${esc(r.subject || "")}</small></div><div><b>${num(r.sent_count || 0)} / ${num(r.recipient_count || 0)}</b><small>${esc(r.status || "sent")} · ${esc(r.sent_at || "")}</small></div></article>`).join("")}</div>` : `<p class="empty">No campaigns sent yet.</p>`;
+  };
+  const loadCampaignLog = async () => {
+    const params = new URLSearchParams();
+    if (marketingSearch) params.set("q", marketingSearch);
+    if (marketingFrom) params.set("from", marketingFrom);
+    if (marketingTo) params.set("to", marketingTo);
+    try { const d = await api("api/admin/marketing/campaigns" + (params.toString() ? "?" + params : "")); paintCampaignLog(d.campaigns || []); }
+    catch (e) { const box = $("#mk-campaign-log"); if (box) box.innerHTML = `<p class="empty">Campaign history is unavailable right now.</p>`; }
+  };
+  const bindCampaignFilters = () => {
+    const search = $("#marketing-search"); const from = $("#marketing-from"); const to = $("#marketing-to");
+    const apply = () => { marketingSearch = String(search?.value || "").trim(); marketingFrom = String(from?.value || ""); marketingTo = String(to?.value || ""); loadCampaignLog(); };
+    if (search) search.oninput = (() => { let timer; return () => { clearTimeout(timer); timer = setTimeout(apply, 250); }; })();
+    if (from) from.onchange = apply; if (to) to.onchange = apply;
+    $("#marketing-filter-clear").onclick = () => { marketingSearch = ""; marketingFrom = ""; marketingTo = ""; loadCampaignLog(); };
+  };
+  bindCampaignFilters();
+  const refreshCampaignRecipients = async () => {
+    const count = $("#mk-recipient-count");
+    if (count) count.textContent = "Checking recipients…";
+    try {
+      const d = await api("api/admin/marketing/recipients");
+      const n = Number(d.count || 0);
+      if (count) count.textContent = `${n.toLocaleString()} recipient${n === 1 ? "" : "s"} will receive this campaign`;
+      return n;
+    } catch (err) {
+      if (count) count.textContent = "Could not count recipients — refresh to try again.";
+      return 0;
+    }
+  };
+  const campaignForm = $("#mk-campaign-form");
+  if (campaignForm) {
+    const type = $("#mk-campaign-type");
+    const subject = $("#mk-campaign-subject");
+    const content = $("#mk-campaign-content");
+    const applyDefaults = () => {
+      const preset = campaignDefaults[type?.value] || campaignDefaults.custom;
+      if (subject) subject.value = preset.subject;
+      if (content) content.value = preset.content;
+    };
+    applyDefaults();
+    type?.addEventListener("change", applyDefaults);
+    $("#mk-refresh-recipients")?.addEventListener("click", refreshCampaignRecipients);
+    campaignForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const recipientCount = await refreshCampaignRecipients();
+      if (!recipientCount) { JA.toast("There are no customer emails on file yet."); return; }
+      if (!String(subject?.value || "").trim() || !String(content?.value || "").trim()) {
+        JA.toast("Add a subject and message before sending."); return;
+      }
+      if (!confirm(`Send this ${campaignTypeLabel(type?.value)} campaign to ${recipientCount.toLocaleString()} customer${recipientCount === 1 ? "" : "s"}?`)) return;
+      const btn = $("#mk-send-campaign"); const status = $("#mk-campaign-status");
+      if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+      if (status) status.textContent = "Sending — please keep this tab open.";
+      try {
+        const sent = await api("api/admin/marketing/campaigns", { method: "POST", json: { type: type?.value, subject: subject?.value, content: content?.value } });
+        const failed = Number(sent.failed || 0);
+        if (status) status.textContent = failed ? `Campaign sent to ${sent.sent || 0} of ${sent.recipientCount || recipientCount}; ${failed} failed.` : `Campaign sent to ${sent.sent || recipientCount} customer${Number(sent.sent || recipientCount) === 1 ? "" : "s"}.`;
+        JA.toast(failed ? "Campaign partially sent." : "Campaign sent.");
+        await loadCampaignLog();
+      } catch (err) {
+        if (status) status.textContent = err.message || "Could not send the campaign.";
+        JA.toast(err.message || "Could not send the campaign.");
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "Send campaign"; }
+      }
+    };
+    refreshCampaignRecipients();
+  }
+  await loadCampaignLog();
   try {
     const d = await api("api/admin/growth/settings"); const s = d.settings || {}; const card = $("#mk-settings-card");
     if (card) {
@@ -1402,7 +1705,8 @@ function salesPanel() {
         <a class="an-rng" id="sales-csv" href="api/admin/sales.csv?days=${encodeURIComponent(salesRange)}">Export CSV</a>
       </div>
     </div>
-    <p class="admin-note">Only confirmed orders count as sales. Pending orders are listed separately below.</p>
+    <div class="adx-filter-bar sales-filters" aria-label="Filter sales"><input id="sales-search" type="search" placeholder="Search customer, order, product…" autocomplete="off" value="${esc(salesSearch)}" /><label>From <input id="sales-from" type="date" value="${esc(salesFrom)}" /></label><label>To <input id="sales-to" type="date" value="${esc(salesTo)}" /></label><button type="button" class="btn btn-line" id="sales-filter-clear">Clear</button></div>
+    <p class="admin-note">Only confirmed orders count as sales. Pending orders are listed separately below. Date and search filters apply to the totals and top products.</p>
     <div class="stats" id="sales-kpis"><div class="stat"><span class="kicker">Loading</span><b>…</b></div></div>
     <p class="admin-note" id="sales-pending">Loading…</p>
     <h3 class="admin-h">Top products</h3><div id="sales-top" class="empty">Loading…</div>`;
@@ -1411,8 +1715,12 @@ async function fillSales() {
   const box = $("#sales-kpis");
   if (!box) return;
   let d = null;
+  const params = new URLSearchParams({ days: salesRange });
+  if (salesSearch) params.set("q", salesSearch);
+  if (salesFrom) params.set("from", salesFrom);
+  if (salesTo) params.set("to", salesTo);
   try {
-    const res = await fetch("api/admin/sales?days=" + encodeURIComponent(salesRange), { credentials: "same-origin", cache: "no-store" });
+    const res = await fetch("api/admin/sales?" + params, { credentials: "same-origin", cache: "no-store" });
     if (res.ok) d = await res.json();
   } catch (e) { d = null; }
   if (!d || d.ok === false) {
@@ -1423,7 +1731,7 @@ async function fillSales() {
   const avg = (d.averageByCurrency || []).length > 1
     ? (d.averageByCurrency || []).map((r) => JA.money(r.average, r.currency)).join(" · ")
     : ((d.averageByCurrency || [])[0] ? JA.money((d.averageByCurrency || [])[0].average, (d.averageByCurrency || [])[0].currency) : (d.averageOrderValue ? JA.money(d.averageOrderValue, ((d.revenueByCurrency || [])[0] || {}).currency || "NGN") : "—"));
-  const rangeLab = String(salesRange) === "all" ? "all time" : `last ${salesRange} days`;
+  const rangeLab = (salesFrom || salesTo) ? "selected dates" : String(salesRange) === "all" ? "all time" : `last ${salesRange} days`;
   box.innerHTML = [
     ["Confirmed revenue", rev, rangeLab],
     ["Orders", d.orders || 0, "confirmed"],
@@ -1446,11 +1754,24 @@ async function fillSales() {
     b.onclick = () => {
       salesRange = b.dataset.salesRange;
       document.querySelectorAll("[data-sales-range]").forEach((x) => x.classList.toggle("is-on", x === b));
-      const link = $("#sales-csv");
-      if (link) link.href = "api/admin/sales.csv?days=" + encodeURIComponent(salesRange);
+      updateSalesCsv();
       fillSales();
     };
   });
+  const search = $("#sales-search"); const from = $("#sales-from"); const to = $("#sales-to");
+  const apply = () => { salesSearch = String(search?.value || "").trim(); salesFrom = String(from?.value || ""); salesTo = String(to?.value || ""); fillSales(); };
+  if (search) search.oninput = (() => { let timer; return () => { clearTimeout(timer); timer = setTimeout(apply, 250); }; })();
+  if (from) from.onchange = apply; if (to) to.onchange = apply;
+  $("#sales-filter-clear").onclick = () => { salesSearch = ""; salesFrom = ""; salesTo = ""; fillSales(); };
+  updateSalesCsv();
+}
+function updateSalesCsv() {
+  const link = $("#sales-csv"); if (!link) return;
+  const p = new URLSearchParams({ days: salesRange });
+  if (salesSearch) p.set("q", salesSearch);
+  if (salesFrom) p.set("from", salesFrom);
+  if (salesTo) p.set("to", salesTo);
+  link.href = "api/admin/sales.csv?" + p;
 }
 const TAB_TITLES = { analytics: "Dashboard", products: "Products", orders: "Orders", sales: "Sales", marketing: "Marketing", categories: "Categories", delivery: "Delivery", settings: "Settings", account: "Account", };
 // The pinned bottom dock carries the five primary sections (owner directive
@@ -1524,9 +1845,17 @@ function siteFieldPatch(candidate, site) {
   return payload;
 }
 
+function setOrderBadge(count) {
+  const n = Math.max(0, Number(count) || 0);
+  orderAttentionCount = n;
+  document.querySelectorAll("[data-orders-badge]").forEach((badge) => {
+    badge.textContent = n;
+    badge.hidden = n === 0;
+  });
+}
 function paintDesk(tab = "analytics") {
-  const pending = serverOrders.filter((o) => (o.status || "pending") === "pending").length;
-  const navBtn = (id, badge) => `<button type="button" data-tab="${id}" class="adx-nav-btn ${tab === id ? "is-on" : ""}">${ADX_ICONS[id]}<span>${TAB_TITLES[id]}</span>${badge ? `<em class="adx-badge">${badge}</em>` : ""}</button>`;
+  const pending = orderAttentionCount;
+  const navBtn = (id, badge) => `<button type="button" data-tab="${id}" class="adx-nav-btn ${tab === id ? "is-on" : ""}">${ADX_ICONS[id]}<span>${TAB_TITLES[id]}</span>${id === "orders" ? `<em class="adx-badge" data-orders-badge${badge ? "" : " hidden"}>${badge || 0}</em>` : ""}</button>`;
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
@@ -1550,7 +1879,7 @@ function paintDesk(tab = "analytics") {
     <nav class="admin-app-nav" aria-label="Admin sections">
       <button type="button" data-tab="analytics" class="${tab === "analytics" ? "is-on" : ""}">${ADX_ICONS.analytics}<span>Dashboard</span></button>
       <button type="button" data-tab="products" class="${tab === "products" ? "is-on" : ""}">${ADX_ICONS.products}<span>Products</span></button>
-      <button type="button" data-tab="orders" class="${tab === "orders" ? "is-on" : ""}">${ADX_ICONS.orders}<span>Orders</span>${pending ? `<em class="adx-badge">${pending}</em>` : ""}</button>
+      <button type="button" data-tab="orders" class="${tab === "orders" ? "is-on" : ""}">${ADX_ICONS.orders}<span>Orders</span><em class="adx-badge" data-orders-badge${pending ? "" : " hidden"}>${pending || 0}</em></button>
       <button type="button" data-tab="sales" class="${tab === "sales" ? "is-on" : ""}">${ADX_ICONS.sales}<span>Sales</span></button>
       <button type="button" data-tab="marketing" class="${tab === "marketing" ? "is-on" : ""}">${ADX_ICONS.marketing}<span>Marketing</span></button>
       <button type="button" data-admin-more aria-expanded="false" aria-controls="admin-more-sheet" class="${ADMIN_MORE_TABS.indexOf(tab) >= 0 ? "is-on" : ""}">${ADX_ICONS.more}<span>More</span></button>
@@ -1588,7 +1917,7 @@ function paintDesk(tab = "analytics") {
   }
   if (tab === "delivery") {
     bindDeliveryPage();
-    // Zones render from dzCache, so bind first and repaint the table body
+    // Zones render from dzCache, so bind first and repaint the card list
     // once the server list arrives - no full repaint, which would drop the
     // admin out of a half-filled zone form.
     bindDeliveryZones();
@@ -1890,32 +2219,39 @@ function settingsForm() {
   // paint convenience - the live Supabase row is the source of truth
   const s = { ...JA.settings(), ...(JA.getSiteConfig ? (JA.getSiteConfig() || {}) : {}) };
   return `
-  <div class="admin-card adx-hero-card">
-    <h3 class="admin-h">Homepage hero video</h3>
+  <details class="admin-settings-section" open>
+    <summary>Homepage hero video</summary>
+    <div class="admin-card adx-hero-card">
     <p class="admin-note">Upload a video (MP4/WebM/MOV, up to 50 MB) and it plays silently on a loop at the top of the homepage. You can also attach a PDF or document (up to 15 MB). A photo sets the hero poster.</p>
     <div id="hero-video-now"><p class="empty">Checking the current hero…</p></div>
     <div class="adx-hero-actions"><label class="btn adx-upload-btn">Upload video / document<input type="file" id="hero-video-file" accept="image/*,video/*,.pdf,.doc,.docx,application/pdf" hidden /></label><button type="button" class="btn btn-line" id="hero-video-remove" hidden>Remove hero asset</button></div>
     <p class="admin-note" id="hero-video-msg"></p>
-  </div>
-  <div class="admin-card" style="margin-top:22px">
-    <h3 class="admin-h">Store branding — logo & shop banner</h3>
+    </div>
+  </details>
+  <details class="admin-settings-section" open>
+    <summary>Store branding — logo &amp; shop banner</summary>
+    <div class="admin-card" style="margin-top:22px">
     <p class="admin-note">Upload your main store logo and the Shop page cursive banner image. They update sitewide instantly.</p>
     <div class="au-2">
       <div class="field"><label>Main store logo (J Aura logo)</label><div id="logo-now"><p class="admin-note">Checking current logo…</p></div><label class="btn adx-upload-btn" style="margin-top:8px">Upload / Change logo<input type="file" id="logo-file" accept="image/*" hidden /></label><button type="button" class="btn btn-line" id="logo-remove" hidden style="margin-top:8px">Remove custom logo</button></div>
       <div class="field"><label>Shop Banner Cursive Image (wordmark-bg)</label><div id="shop-banner-now"><p class="admin-note">Checking current shop banner…</p></div><label class="btn adx-upload-btn" style="margin-top:8px">Upload / Change shop banner<input type="file" id="shop-banner-file" accept="image/*" hidden /></label><button type="button" class="btn btn-line" id="shop-banner-remove" hidden style="margin-top:8px">Remove custom banner</button></div>
     </div>
     <p class="admin-note" id="branding-msg"></p>
-  </div>
-  <form id="banner-form" class="form-grid admin-card" style="margin-top:22px">
-    <h3 class="admin-h full">Moving banner text</h3>
+    </div>
+  </details>
+  <details class="admin-settings-section" open>
+    <summary>Moving banner text</summary>
+    <form id="banner-form" class="form-grid admin-card" style="margin-top:22px">
     <p class="admin-note full">The moving line under the header on every page. Write your own message here and it shows to every visitor, live, the moment you save. Shoppers reading the site in <strong>FR</strong> see the French line; leave it empty and they see the English one instead of a blank bar. The <strong>bold highlight</strong> shows in gold at the end of the line. Clear both boxes to bring the default banner back.</p>
     <div class="field full"><label>Banner text (English — shown when EN is selected)</label><input name="convBanner" id="conv-banner" maxlength="300" placeholder="e.g. Back-to-school sale: 10% off every bag" /></div>
     <div class="field full"><label>Banner text (French — shown when FR is selected)</label><input name="convBannerFr" id="conv-banner-fr" maxlength="300" placeholder="e.g. Soldes de rentrée : -10% sur tous les sacs" /></div>
     <div class="field full"><label>Bold highlight (optional)</label><input name="convBold" id="conv-bold" maxlength="300" placeholder="e.g. ends Sunday" /></div>
     <div class="field full"><p class="admin-err" id="banner-form-error" hidden></p><button class="btn">Save banner</button></div>
-  </form>
-  <form id="set-form" class="form-grid admin-card" style="margin-top:22px">
-    <h3 class="admin-h full">Site settings — live from Supabase</h3>
+    </form>
+  </details>
+  <details class="admin-settings-section" open>
+    <summary>Site settings — live from Supabase</summary>
+    <form id="set-form" class="form-grid admin-card" style="margin-top:22px">
     <p class="admin-note full">These fields are stored in the Supabase <code>site_settings</code> row (id=1) and shown on the site immediately after saving. Only the fields you change are sent, so a field that has not loaded yet can never blank what is stored.</p>
     <div class="field"><label>Bank name (fallback)</label><input name="bank_name" maxlength="120" value="${JA.escape(s.bank_name || "")}" /><p class="admin-note">Used only when the Naira bank below is empty — the checkout prefers the Naira section.</p></div>
     <div class="field"><label>Account number (fallback)</label><input name="account_number" maxlength="60" value="${JA.escape(s.account_number || "")}" /></div>
@@ -1936,7 +2272,8 @@ function settingsForm() {
     <div class="field"><label>Togo — account number</label><input name="togo_payment_account" maxlength="60" value="${JA.escape(s.togo_payment_account || "")}" /></div>
     <div class="field"><label>Togo — instructions</label><input name="togo_payment_instructions" maxlength="300" value="${JA.escape(s.togo_payment_instructions || "")}" /></div>
     <div class="field full"><p class="admin-err" id="set-form-error" hidden></p><button class="btn" id="set-form-save">Save settings</button></div>
-  </form>`;
+    </form>
+  </details>`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -2129,23 +2466,16 @@ function zoneFareLabel(z) {
 function zoneRowsHTML() {
   const list = (dzCache && dzCache.length) ? dzCache : [];
   return list.map((z) => `
-    <tr>
-      <td>${JA.escape(z.name)}</td>
-      <td>${JA.escape(z.currency)}</td>
-      <td>${zoneFareLabel(z)}</td>
-      <td>${zoneKindLabel(z.kind)}</td>
-      <td>${z.active ? "Live" : "Hidden"}</td>
-      <td class="au-row-actions">
-        <button type="button" class="au-link-btn" data-zone-edit="${JA.escape(z.id)}">Edit</button>
-        <button type="button" class="au-link-btn au-danger" data-zone-del="${JA.escape(z.id)}">Delete</button>
-      </td>
-    </tr>`).join("");
+    <article class="au-zone-card ${z.active ? "is-live" : "is-hidden"}">
+      <div class="au-zone-card-head"><div><span class="au-zone-kicker">${JA.escape(zoneKindLabel(z.kind))}</span><h4>${JA.escape(z.name)}</h4></div><span class="au-zone-status">${z.active ? "Live" : "Hidden"}</span></div>
+      <div class="au-zone-card-meta"><div><small>Fare</small><strong>${zoneFareLabel(z)}</strong></div><div><small>Currency</small><strong>${JA.escape(z.currency)}</strong></div><div><small>Display order</small><strong>${Number(z.sort_order || 0)}</strong></div></div>
+      <div class="au-zone-actions"><button type="button" class="btn btn-line" data-zone-edit="${JA.escape(z.id)}">Edit zone</button><button type="button" class="btn btn-line btn-danger" data-zone-del="${JA.escape(z.id)}">Delete</button></div>
+    </article>`).join("");
 }
 function paintZoneTable() {
-  const body = document.querySelector("#zone-table tbody");
+  const body = document.querySelector("#zone-cards");
   if (!body) return;
-  body.innerHTML = zoneRowsHTML()
-    || `<tr><td colspan="6">No zones yet. Add the first one below.</td></tr>`;
+  body.innerHTML = zoneRowsHTML() || `<p class="empty">No zones yet. Add the first one below.</p>`;
 }
 function deliveryZonesPanel() {
   return `
@@ -2153,10 +2483,7 @@ function deliveryZonesPanel() {
     <h3 class="admin-h">Delivery zones and fares</h3>
     <p class="admin-note">Checkout offers exactly these zones and the server refuses any other value, so editing here changes the storefront immediately. A fare is a range: transport varies with weight and the final figure is confirmed with the customer after payment.</p>
     <p class="admin-err" id="zone-error" hidden></p>
-    <div class="au-table-wrap"><table class="au-table" id="zone-table">
-      <thead><tr><th>Zone</th><th>Currency</th><th>Fare</th><th>Type</th><th>Status</th><th></th></tr></thead>
-      <tbody>${zoneRowsHTML() || `<tr><td colspan="6">No zones yet. Add the first one below.</td></tr>`}</tbody>
-    </table></div>
+    <div class="au-zone-cards" id="zone-cards">${zoneRowsHTML() || `<p class="empty">No zones yet. Add the first one below.</p>`}</div>
     <form id="zone-form" autocomplete="off">
       <input type="hidden" name="zone_id" value="" />
       <div class="field"><label>Zone name *</label><input name="zone_name" maxlength="80" required placeholder="e.g. Lagos Mainland" /></div>
@@ -2254,7 +2581,7 @@ function bindDeliveryZones() {
       }
       dzCache = res.zones || [];
       dzAuthoritative = true;
-      // Repaint the table body only. A full desk repaint would rebuild the
+      // Repaint the card list only. A full desk repaint would rebuild the
       // form above it and throw away whatever the owner was typing.
       paintZoneTable();
       if ((form.zone_id.value || "").trim() === String(id || "").trim()) resetZoneForm(form);
@@ -2345,7 +2672,7 @@ function bindDeliveryZones() {
       JA.toast(msg);
       return;
     }
-    // The server's list is the truth. Repaint the table from it immediately,
+    // The server's list is the truth. Repaint the cards from it immediately,
     // before anything else can repaint, so the new fare is on screen at once.
     dzCache = res.zones || [];
     dzAuthoritative = true;

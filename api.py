@@ -1,5 +1,5 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
-import csv, io, json, os, datetime, secrets, hashlib, re
+import csv, io, json, os, datetime, secrets, hashlib, hmac, re
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
 from db import execute, one, query, audit
@@ -794,8 +794,49 @@ def create_order():
     customer = {k: sec.clean(customer_raw.get(k), 300) for k in CUSTOMER_FIELDS}
     email = sec.clean_email(customer.get("email") or d.get("email"))
     if not email:
-        return jsonify(ok=False, error="A valid email address is required."), 400
+        return jsonify(ok=False, error="A valid email address is required.", field="email"), 400
     customer["email"] = email
+
+    # Browser checkout sends the split first/last-name fields. Validate the
+    # complete form server-side as well, so a malformed request can never turn
+    # into a silent failed order. Keep the older compact API payload accepted
+    # for existing integrations and queued orders that only carry `name`.
+    if "firstName" in customer_raw or "lastName" in customer_raw:
+        field_errors = {}
+        first = customer.get("firstName", "")
+        last = customer.get("lastName", "")
+        name_re = re.compile(r"^[^\W\d_][\w .'-]*$", re.UNICODE)
+        phone = customer.get("phone", "")
+        phone_digits = re.sub(r"\D", "", phone)
+        if not first:
+            field_errors["firstName"] = "Enter your first name."
+        elif len(first) < 2 or not name_re.fullmatch(first):
+            field_errors["firstName"] = "Enter a valid first name."
+        if not last:
+            field_errors["lastName"] = "Enter your last name."
+        elif len(last) < 2 or not name_re.fullmatch(last):
+            field_errors["lastName"] = "Enter a valid last name."
+        if not customer.get("country"):
+            field_errors["country"] = "Choose your country or region."
+        if not customer.get("address"):
+            field_errors["address"] = "Enter your street address."
+        elif len(customer["address"]) < 5:
+            field_errors["address"] = "Enter a valid street address."
+        if not customer.get("city"):
+            field_errors["city"] = "Enter your town or city."
+        elif len(customer["city"]) < 2:
+            field_errors["city"] = "Enter a valid town or city."
+        if not customer.get("phone"):
+            field_errors["phone"] = "Enter your phone number."
+        elif not re.fullmatch(r"\+?[0-9][0-9 ()-]{6,24}", phone) or len(phone_digits) < 7:
+            field_errors["phone"] = "Enter a valid phone number."
+        if not customer.get("zone"):
+            field_errors["zone"] = "Choose a delivery zone."
+        if field_errors:
+            first_field = next(iter(field_errors))
+            return jsonify(ok=False,
+                           error="Please fix the highlighted checkout fields.",
+                           field=first_field, fieldErrors=field_errors), 400
 
     items = d.get("items")
     if not isinstance(items, list) or not items:
@@ -1073,6 +1114,88 @@ def create_order():
     return analytics_mod.stamp_cookie(resp, vid)
 
 
+# ============================================== public: abandoned cart email
+@api.post("/abandoned-carts")
+@sec.require_csrf
+def capture_abandoned_cart():
+    """Remember a cart only after checkout has an email address.
+
+    This endpoint is intentionally available to guests: the email is the
+    contact, not an account session. It refreshes last_activity_at whenever
+    the shopper edits the checkout, while reminder_sent remains one-shot.
+    """
+    limited = sec.guard("abandoned-cart", limit=60, window=3600)
+    if limited:
+        return limited
+    d = request.get_json(silent=True) or {}
+    token = sec.clean(d.get("token"), 80)
+    email = sec.clean_email(d.get("email"))
+    items_raw = d.get("items")
+    if not token or not email or not isinstance(items_raw, list) or not items_raw:
+        return jsonify(ok=False, error="A cart token, valid email and cart items are required."), 400
+    items = []
+    for item in items_raw[:60]:
+        if not isinstance(item, dict):
+            continue
+        name = sec.clean(item.get("name"), 160)
+        qty = sec.clean_int(item.get("qty"), 0, 1, 999)
+        price = sec.clean_int(item.get("price"), 0, 0, 10**9)
+        if name and qty:
+            items.append({"id": sec.clean(item.get("id"), 64), "name": name,
+                          "qty": qty, "price": price,
+                          "color": sec.clean(item.get("color"), 80)})
+    if not items:
+        return jsonify(ok=False, error="Your cart has no valid items."), 400
+    now = _utcnow()
+    row = {
+        "token": token,
+        "email": email,
+        "customer_name": sec.clean(d.get("customerName"), 200),
+        "items": json.dumps(items, ensure_ascii=False),
+        "currency": sec.clean(d.get("currency"), 3).upper(),
+        "total": sec.clean_int(d.get("total"), 0, 0, 10**12),
+        "last_activity_at": now,
+        "updated_at": now,
+    }
+    execute(
+        "INSERT INTO abandoned_carts (token,email,customer_name,items,currency,total,last_activity_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(token) DO UPDATE SET email=excluded.email,"
+        "customer_name=excluded.customer_name,items=excluded.items,currency=excluded.currency,"
+        "total=excluded.total,last_activity_at=excluded.last_activity_at,updated_at=excluded.updated_at",
+        (row["token"], row["email"], row["customer_name"], row["items"], row["currency"],
+         row["total"], row["last_activity_at"], row["updated_at"]),
+    )
+    stored = one("SELECT * FROM abandoned_carts WHERE token=?", (token,))
+    row = dict(stored) if stored else row
+    try:
+        from supabase_store import mirror_abandoned_cart
+        mirror_abandoned_cart(row)
+    except Exception as exc:
+        print(f"[supabase] abandoned cart capture skipped: {exc}")
+    return jsonify(ok=True, token=token, captured=True)
+
+
+@api.post("/abandoned-carts/complete")
+@sec.require_csrf
+def complete_abandoned_cart():
+    """Mark the cart converted so a completed checkout is never reminded."""
+    limited = sec.guard("abandoned-cart-complete", limit=60, window=3600)
+    if limited:
+        return limited
+    d = request.get_json(silent=True) or {}
+    token = sec.clean(d.get("token"), 80)
+    if not token:
+        return jsonify(ok=False, error="Cart token is required."), 400
+    try:
+        import abandoned
+        abandoned.mark_converted(token)
+    except Exception as exc:
+        print(f"[abandoned] conversion mark failed: {exc}")
+        return jsonify(ok=False, error="The cart could not be closed yet."), 503
+    return jsonify(ok=True, converted=True)
+
+
 # ================================================== public: payment receipt
 ALLOWED_PAYMENT_METHODS = (
     "UBA bank transfer (₦ Naira)",
@@ -1224,7 +1347,7 @@ def public_order(oid):
     """Minimal, rate-limited status lookup for the Track-order page."""
     limited = sec.guard("order-lookup", limit=30, window=600)
     if limited: return limited
-    row = one("SELECT id, payload, at, status, total, currency, items_count, customer_name, city "
+    row = one("SELECT id, payload, at, status, total, currency, items_count, customer_name, country, city "
               "FROM orders WHERE id=?", (sec.clean(oid, 24).upper(),))
     if not row:
         return jsonify(ok=False, error="We could not find that order id."), 404
@@ -1365,6 +1488,50 @@ def low_stock():
     items.sort(key=lambda r: int(r.get("qty") or 0))
     return jsonify(ok=True, count=len(items), items=items)
 
+# --------------------------------------------------- admin: needs attention
+@api.get("/admin/needs-attention")
+@authmod.require_admin
+def admin_needs_attention():
+    """The small, actionable dashboard queue: pending orders, products at
+    five or fewer units, and pending orders waiting longer than 24 hours."""
+    pending_rows = query("SELECT id, payload, email, customer_name, phone, country, city, zone, address, "
+                         "note, payment, proof_url, items_count, total, currency, source, status, at, updated_at "
+                         "FROM orders WHERE status='pending' ORDER BY at DESC LIMIT 500")
+    pending = [_order_row(row) for row in pending_rows]
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=24)
+
+    def older_than_day(value):
+        try:
+            raw = str(value or "").replace("Z", "+00:00")
+            parsed = datetime.datetime.fromisoformat(raw)
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+            return parsed <= cutoff
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    stale = [row for row in pending if older_than_day(row.get("at"))]
+    stock_rows = _stock_rows_for_read()
+    if stock_rows is None:
+        stock_rows = []
+    try:
+        products = {str(p.get("id")): p for p in catalog_mod.merged(include_hidden=True)}
+    except Exception:
+        products = {}
+    low_stock = []
+    for row in stock_rows:
+        qty = int(row.get("qty") or 0)
+        threshold = min(5, int(row.get("low_threshold") or Config.LOW_STOCK_THRESHOLD))
+        if qty <= threshold:
+            item = dict(row)
+            product = products.get(str(row.get("product_id") or "")) or {}
+            item["name"] = product.get("name") or row.get("variant_label") or row.get("product_id")
+            low_stock.append(item)
+    low_stock.sort(key=lambda row: (int(row.get("qty") or 0), str(row.get("name") or "")))
+    return jsonify(ok=True, pending=pending, stale=stale, lowStock=low_stock,
+                   counts={"pending": len(pending), "stale": len(stale), "lowStock": len(low_stock)})
+
+
 # --------------------------------------------------------- admin: analytics
 @api.get("/admin/most-viewed")
 @authmod.require_admin
@@ -1399,23 +1566,52 @@ def admin_live():
 @api.get("/admin/sales")
 @authmod.require_admin
 def admin_sales():
-    """Confirmed-only sales totals; pending orders are counted separately."""
+    """Confirmed-only sales totals; pending orders are counted separately.
+
+    ``from``/``to`` are optional inclusive HTML date filters and ``q`` searches
+    customer/order/product text in the stored order payload.
+    """
     raw = (request.args.get("days") or "30").strip().lower()
     days = "all" if raw == "all" else sec.clean_int(raw, 30, 1, 3650)
-    return jsonify(analytics_mod.sales_report(days))
+    return jsonify(analytics_mod.sales_report(
+        days, date_from=request.args.get("from"), date_to=request.args.get("to"),
+        search=request.args.get("q")))
 
 @api.get("/admin/sales.csv")
 @authmod.require_admin
 def admin_sales_csv():
     raw = (request.args.get("days") or "30").strip().lower()
     days = "all" if raw == "all" else sec.clean_int(raw, 30, 1, 3650)
-    body = analytics_mod.sales_csv(days)
+    body = analytics_mod.sales_csv(
+        days, date_from=request.args.get("from"), date_to=request.args.get("to"),
+        search=request.args.get("q"))
     resp = make_response("\ufeff" + body)
     resp.headers["Content-Type"] = "text/csv; charset=utf-8"
     resp.headers["Content-Disposition"] = "attachment; filename=jaura-sales.csv"
     return resp
 
 # ---------------------------------------------------------- admin: orders
+def _admin_date_bounds():
+    """Return an inclusive start and exclusive end for admin date filters.
+
+    Inputs are HTML date values (YYYY-MM-DD). Invalid values are ignored so a
+    malformed filter can never broaden a query into a surprising SQL clause.
+    """
+    def valid(value):
+        value = sec.clean(value, 10)
+        try:
+            return datetime.date.fromisoformat(value).isoformat() if value else ""
+        except (TypeError, ValueError):
+            return ""
+
+    start = valid(request.args.get("from"))
+    end_day = valid(request.args.get("to"))
+    end = ""
+    if end_day:
+        end = (datetime.date.fromisoformat(end_day) + datetime.timedelta(days=1)).isoformat()
+    return start, end
+
+
 def _order_row(r):
     try:
         payload = json.loads(r["payload"] or "{}")
@@ -1439,12 +1635,28 @@ def admin_orders():
     limit = sec.clean_int(request.args.get("limit"), 200, 1, 1000)
     status = sec.clean(request.args.get("status"), 20)
     q = sec.clean(request.args.get("q"), 80).lower()
+    start, end = _admin_date_bounds()
     sql = ("SELECT id, payload, email, customer_name, phone, country, city, zone, address, "
            "note, payment, proof_url, items_count, total, currency, source, status, at, updated_at "
            "FROM orders")
-    params = []
+    where, params = [], []
     if status in STATUSES:
-        sql += " WHERE status=?"; params.append(status)
+        where.append("status=?"); params.append(status)
+    if start:
+        where.append("at >= ?"); params.append(start + "T00:00:00")
+    if end:
+        where.append("at < ?"); params.append(end + "T00:00:00")
+    if q:
+        like = "%" + q + "%"
+        # Search the decoded payload and the indexed contact columns before
+        # LIMIT. This prevents an older matching order disappearing simply
+        # because newer non-matches filled the first page.
+        where.append("(id LIKE ? OR payload LIKE ? OR email LIKE ? OR customer_name LIKE ? OR phone LIKE ? OR city LIKE ? OR zone LIKE ?)")
+        params.extend([like] * 7)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    # The indexed predicates (including search) are applied before LIMIT.
+    # Decode once more below to retain the existing flexible JSON matching.
     sql += " ORDER BY at DESC LIMIT ?"
     params.append(limit)
     rows = query(sql, tuple(params))
@@ -1456,9 +1668,22 @@ def admin_orders():
 @api.get("/admin/orders.csv")
 @authmod.require_admin
 def admin_orders_csv():
-    rows = query("SELECT id, at, status, customer_name, phone, email, country, city, zone, "
-                 "address, note, payment, total, currency, items_count, proof_url FROM orders "
-                 "ORDER BY at DESC")
+    start, end = _admin_date_bounds()
+    q = sec.clean(request.args.get("q"), 80).lower()
+    where, params = [], []
+    if start:
+        where.append("at >= ?"); params.append(start + "T00:00:00")
+    if end:
+        where.append("at < ?"); params.append(end + "T00:00:00")
+    if q:
+        like = "%" + q + "%"
+        where.append("(id LIKE ? OR payload LIKE ? OR email LIKE ? OR customer_name LIKE ? OR phone LIKE ? OR city LIKE ? OR zone LIKE ?)")
+        params.extend([like] * 7)
+    sql = ("SELECT id, at, status, customer_name, phone, email, country, city, zone, "
+           "address, note, payment, total, currency, items_count, proof_url FROM orders")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    rows = query(sql + " ORDER BY at DESC", tuple(params))
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["id", "date", "status", "name", "phone", "email", "country", "city",
@@ -1762,6 +1987,23 @@ def admin_order_delete(oid):
     return jsonify(ok=True, id=oid, filesRemoved=files_removed)
 
 # -------------------------------------------------------- admin: products
+@api.get("/admin/products.csv")
+@authmod.require_admin
+def admin_products_csv():
+    """Download the current admin catalogue without exposing it publicly."""
+    fields = ("id", "sku", "name", "nameFr", "category", "priceNgn", "priceCfa",
+              "stock", "online", "badge", "featured", "image")
+    rows = catalog_mod.merged(include_hidden=True)
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for product in rows:
+        writer.writerow({key: product.get(key, "") for key in fields})
+    response = make_response("\ufeff" + out.getvalue())
+    response.headers["Content-Type"] = "text/csv; charset=utf-8"
+    response.headers["Content-Disposition"] = "attachment; filename=jaura-products.csv"
+    return response
+
 @api.post("/admin/products")
 @authmod.require_admin
 @sec.require_csrf
@@ -2670,6 +2912,36 @@ def promo_check():
     status = 200 if res.get("ok") else 404
     return jsonify(res), status
 
+@api.get("/marketing/unsubscribe")
+def marketing_unsubscribe():
+    """One-click opt-out for campaign recipients; no login or CSRF token is
+    needed because the signed email link is the authorization."""
+    email = sec.clean_email(request.args.get("email"))
+    token = sec.clean(request.args.get("token"), 128)
+    if not email:
+        return jsonify(ok=False, error="A valid email is required."), 400
+    try:
+        import mailer
+        expected = mailer.campaign_unsubscribe_token(email)
+    except Exception:
+        expected = ""
+    if not expected or not hmac.compare_digest(token, expected):
+        return jsonify(ok=False, error="That unsubscribe link is not valid."), 400
+    execute("INSERT OR IGNORE INTO marketing_suppressions (email) VALUES (?)", (email,))
+    try:
+        from supabase_store import suppress_marketing_email
+        suppress_marketing_email(email)
+    except Exception as exc:
+        print(f"[marketing] suppression mirror skipped: {exc}")
+    response = make_response(
+        "<!doctype html><meta charset='utf-8'><title>Unsubscribed · Jaura Store</title>"
+        "<style>body{font:16px Arial,sans-serif;max-width:560px;margin:15vh auto;padding:24px;color:#342922}"
+        "h1{font-family:Georgia,serif;font-weight:500}p{line-height:1.6}</style>"
+        "<h1>You’re unsubscribed</h1><p>We won’t send promotional emails to this address again.</p>")
+    response.headers["Content-Type"] = "text/html; charset=utf-8"
+    return response
+
+
 # ================================================= public: verified reviews
 def _public_review(row):
     """Shape one review row for the storefront.
@@ -2703,6 +2975,10 @@ def reviews_list(pid):
     list during an outage and invite duplicate reviews.
     """
     pid = sec.clean(pid, 64)
+    sort = sec.clean(request.args.get("sort"), 20).lower()
+    if sort not in ("newest", "oldest", "highest", "lowest"):
+        sort = "newest"
+    rating_filter = sec.clean_int(request.args.get("rating"), 0, 0, 5)
     items = None
     source = "local"
     if Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY:
@@ -2711,20 +2987,30 @@ def reviews_list(pid):
             rows = load_product_reviews_table(pid)
             if rows is not None:
                 items = [_public_review(r)
-                         for r in rows if not r.get("hidden")][:100]
+                         for r in rows if not r.get("hidden")]
                 source = "supabase:product_reviews"
         except Exception:
             items = None
     if items is None:
         rows = query("SELECT name, rating, title, body, created_at "
                      "FROM product_reviews "
-                     "WHERE product_id=? AND hidden=0 "
-                     "ORDER BY created_at DESC LIMIT 100", (pid,))
+                     "WHERE product_id=? AND hidden=0 LIMIT 500", (pid,))
         items = [_public_review(dict(r)) for r in rows]
+    if rating_filter:
+        items = [r for r in items if int(r.get("rating") or 0) == rating_filter]
+    if sort == "oldest":
+        items.sort(key=lambda r: str(r.get("created_at") or ""))
+    elif sort == "highest":
+        items.sort(key=lambda r: (-int(r.get("rating") or 0), str(r.get("created_at") or "")), reverse=False)
+    elif sort == "lowest":
+        items.sort(key=lambda r: (int(r.get("rating") or 0), str(r.get("created_at") or "")))
+    else:
+        items.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+    items = items[:100]
     n = len(items)
     avg = round(sum(int(r.get("rating") or 0) for r in items) / n, 2) if n else 0
     return jsonify(ok=True, productId=pid, count=n, average=avg, reviews=items,
-                   source=source)
+                   source=source, sort=sort, rating=rating_filter or None)
 
 @api.post("/reviews")
 @sec.require_csrf
@@ -2800,6 +3086,199 @@ def reviews_create():
                        warning="Your review was saved but could not be stored "
                                "durably; it may need re-submitting."), 200
     return reviews_list(pid)
+
+# ----------------------------------------------- admin: marketing campaigns
+def _marketing_suppressed_emails():
+    suppressed = {sec.clean_email(row["email"]) for row in query(
+        "SELECT email FROM marketing_suppressions")}
+    suppressed.discard("")
+    try:
+        from supabase_store import load_marketing_suppressions
+        suppressed.update(sec.clean_email(row.get("email"))
+                          for row in (load_marketing_suppressions(limit=10000) or []))
+    except Exception as exc:
+        print(f"[marketing] suppression load skipped: {exc}")
+    suppressed.discard("")
+    return suppressed
+
+
+def _marketing_recipient_emails():
+    """Unique valid customer emails collected from accounts and checkout.
+
+    Orders are the durable source for guest checkout contacts; the customers
+    table adds account holders who may not have placed an order yet. The
+    Supabase reads supplement the local cache after a restart.
+    """
+    emails = set()
+    for row in query("SELECT email FROM orders WHERE email IS NOT NULL AND email != ''"):
+        email = sec.clean_email(row["email"])
+        if email:
+            emails.add(email)
+    for row in query("SELECT email FROM customers WHERE email IS NOT NULL AND email != ''"):
+        email = sec.clean_email(row["email"])
+        if email:
+            emails.add(email)
+    try:
+        from supabase_store import load_orders, load_customers
+        for row in load_orders(limit=10000) or []:
+            email = sec.clean_email((row or {}).get("email"))
+            if email:
+                emails.add(email)
+        for row in load_customers(limit=10000) or []:
+            email = sec.clean_email((row or {}).get("email"))
+            if email:
+                emails.add(email)
+    except Exception as exc:
+        print(f"[marketing] remote recipient load skipped: {exc}")
+    return sorted(emails - _marketing_suppressed_emails())
+
+
+@api.get("/admin/marketing/recipients")
+@authmod.require_admin
+def marketing_recipients():
+    recipients = _marketing_recipient_emails()
+    return jsonify(ok=True, count=len(recipients))
+
+
+@api.get("/admin/customers.csv")
+@authmod.require_admin
+def admin_customers_csv():
+    """Download a de-duplicated contact list without password data."""
+    contacts = {}
+    def add(row, source):
+        row = row or {}
+        email = sec.clean_email(row.get("email"))
+        if not email:
+            return
+        current = contacts.setdefault(email, {"email": email, "name": "", "phone": "", "country": "", "city": "", "source": source})
+        for key in ("name", "phone", "country", "city"):
+            value = sec.clean(row.get(key), 160, allow_newlines=False)
+            if value and not current[key]:
+                current[key] = value
+        if current["source"] != source and source not in current["source"]:
+            current["source"] += "," + source
+    for row in query("SELECT email, name, phone, country, city FROM customers"):
+        add(dict(row), "account")
+    for row in query("SELECT email, customer_name AS name, phone, country, city FROM orders WHERE email IS NOT NULL"):
+        add(dict(row), "checkout")
+    try:
+        from supabase_store import load_customers, load_orders
+        for row in load_customers(limit=10000) or []:
+            add(row, "account")
+        for row in load_orders(limit=10000) or []:
+            add(row, "checkout")
+    except Exception as exc:
+        print(f"[marketing] remote contact export skipped: {exc}")
+    fields = ("email", "name", "phone", "country", "city", "source")
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=fields)
+    writer.writeheader()
+    for row in sorted(contacts.values(), key=lambda item: item["email"]):
+        writer.writerow(row)
+    response = make_response("\ufeff" + out.getvalue())
+    response.headers["Content-Type"] = "text/csv; charset=utf-8"
+    response.headers["Content-Disposition"] = "attachment; filename=jaura-customers.csv"
+    return response
+
+
+CAMPAIGN_TYPES = ("best_sellers", "new_arrivals", "discount_promo", "custom")
+
+
+@api.get("/admin/marketing/campaigns")
+@authmod.require_admin
+def marketing_campaigns():
+    limit = sec.clean_int(request.args.get("limit"), 100, 1, 500)
+    q = sec.clean(request.args.get("q"), 80).lower()
+    start, end = _admin_date_bounds()
+    where, params = [], []
+    if q:
+        like = "%" + q + "%"
+        where.append("(campaign_type LIKE ? OR subject LIKE ? OR content LIKE ?)")
+        params.extend([like, like, like])
+    if start:
+        where.append("COALESCE(sent_at, created_at) >= ?"); params.append(start + "T00:00:00")
+    if end:
+        where.append("COALESCE(sent_at, created_at) < ?"); params.append(end + "T00:00:00")
+    sql = ("SELECT id, campaign_type, subject, content, recipient_count, sent_count, "
+           "failed_count, status, sent_at, created_at FROM marketing_campaigns")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    rows = [dict(r) for r in query(sql + " ORDER BY COALESCE(sent_at, created_at) DESC LIMIT ?", tuple(params + [limit]))]
+    if not rows:
+        try:
+            from supabase_store import load_marketing_campaigns
+            rows = load_marketing_campaigns(500) or []
+            # The cloud fallback has no SQL WHERE. Apply exactly the same
+            # filters before limiting so a remote campaign log behaves like
+            # the local admin log.
+            def matches(row):
+                row = row or {}
+                text = " ".join(str(row.get(k) or "") for k in ("campaign_type", "subject", "content")).lower()
+                stamp = str(row.get("sent_at") or row.get("created_at") or "")[:10]
+                return (not q or q in text) and (not start or stamp >= start) and (not end or stamp < end)
+            rows = [r for r in rows if matches(r)][:limit]
+        except Exception as exc:
+            print(f"[marketing] campaign log load skipped: {exc}")
+    return jsonify(ok=True, campaigns=rows)
+
+
+@api.post("/admin/marketing/campaigns")
+@authmod.require_admin
+@sec.require_csrf
+def marketing_campaign_send():
+    d = request.get_json(silent=True) or {}
+    campaign_type = sec.clean(d.get("type") or d.get("campaignType"), 30).lower()
+    if campaign_type not in CAMPAIGN_TYPES:
+        return jsonify(ok=False, error="Choose a campaign type."), 400
+    subject = sec.clean(d.get("subject"), 180, allow_newlines=False)
+    content = sec.clean(d.get("content"), 10000)
+    if not subject:
+        return jsonify(ok=False, error="Add an email subject."), 400
+    if not content:
+        return jsonify(ok=False, error="Write a campaign message."), 400
+    recipients = _marketing_recipient_emails()
+    if not recipients:
+        return jsonify(ok=False, error="There are no customer emails on file yet."), 400
+    import mailer
+    if not mailer.configured():
+        return jsonify(ok=False, error=(
+            "Resend is not configured. Set MAIL_FROM and RESEND_API_KEY before sending.")), 400
+    now = _utcnow()
+    campaign_id = "CMP-" + secrets.token_hex(6).upper()
+    row = {
+        "id": campaign_id, "campaign_type": campaign_type, "subject": subject,
+        "content": content, "recipient_count": len(recipients),
+        "sent_count": 0, "failed_count": 0, "status": "sending",
+        "sent_at": now, "created_at": now,
+    }
+    execute(
+        "INSERT INTO marketing_campaigns (id,campaign_type,subject,content,recipient_count,"
+        "sent_count,failed_count,status,sent_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        tuple(row.values()),
+    )
+    sent = failed = 0
+    for email in recipients:
+        try:
+            ok, _detail = mailer.send_campaign_email(email, subject, content)
+        except Exception as exc:
+            ok = False
+            print(f"[marketing] campaign recipient failed: {exc}")
+        if ok:
+            sent += 1
+        else:
+            failed += 1
+    status = "sent" if not failed else ("partial" if sent else "failed")
+    execute("UPDATE marketing_campaigns SET sent_count=?, failed_count=?, status=? WHERE id=?",
+            (sent, failed, status, campaign_id))
+    row.update({"sent_count": sent, "failed_count": failed, "status": status})
+    try:
+        from supabase_store import mirror_marketing_campaign
+        mirror_marketing_campaign(row)
+    except Exception as exc:
+        print(f"[marketing] campaign mirror skipped: {exc}")
+    audit(authmod.current_admin(), "marketing.campaign", f"{campaign_id} {status} {sent}/{len(recipients)}", _ip())
+    return jsonify(ok=True, campaign=row, recipientCount=len(recipients), sent=sent, failed=failed)
+
 
 # =============================================== admin: growth & marketing
 @api.get("/admin/growth/settings")

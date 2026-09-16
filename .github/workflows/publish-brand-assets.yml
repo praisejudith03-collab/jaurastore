@@ -1,0 +1,80 @@
+name: Publish brand assets
+
+# Render's free tier has no shell. Run this workflow manually when the
+# committed logo/favicon ladder needs publishing to Supabase Storage.
+# Configure the `publish-brand-assets` environment with a reviewer when the
+# repository is used by more than one operator.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Plan only; do not upload or update site_settings"
+        required: true
+        type: choice
+        default: "true"
+        options: ["true", "false"]
+      confirm_publish:
+        description: "Type PUBLISH to allow uploads and site_settings writes"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-brand-assets
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: publish-brand-assets
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Mask the service-role key
+        run: |
+          if [ -n "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::add-mask::$SUPABASE_SERVICE_ROLE_KEY"
+          fi
+
+      - name: Validate credentials for a real publish
+        if: inputs.dry_run == 'false'
+        env:
+          PUBLISH_CONFIRMATION: ${{ inputs.confirm_publish }}
+        run: |
+          set -eu
+          missing=""
+          [ -n "$SUPABASE_URL" ] || missing="$missing SUPABASE_URL"
+          [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || missing="$missing SUPABASE_SERVICE_ROLE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            exit 1
+          fi
+          if [ "$PUBLISH_CONFIRMATION" != "PUBLISH" ]; then
+            echo "::error::Real publishing requires confirm_publish=PUBLISH."
+            exit 1
+          fi
+
+      - name: Publish the committed brand assets
+        run: |
+          set -eu
+          args=(--no-build)
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python tools/upload_brand_assets.py "${args[@]}"

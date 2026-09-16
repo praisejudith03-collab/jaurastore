@@ -81,6 +81,49 @@ CREATE INDEX IF NOT EXISTS idx_orders_at ON orders(at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_user_id);
 
+-- Carts with an email entered during checkout. A cart is eligible for one
+-- reminder after five quiet days; `reminder_sent` is intentionally explicit
+-- so retries and scheduler runs cannot email the same cart twice.
+CREATE TABLE IF NOT EXISTS abandoned_carts (
+  token             TEXT PRIMARY KEY,
+  email             TEXT NOT NULL,
+  customer_name     TEXT,
+  items             TEXT NOT NULL,
+  currency          TEXT,
+  total             REAL,
+  last_activity_at  TEXT NOT NULL,
+  reminder_sent     INTEGER NOT NULL DEFAULT 0,
+  reminder_sent_at  TEXT,
+  converted_at      TEXT,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_abandoned_due ON abandoned_carts(reminder_sent, last_activity_at);
+CREATE INDEX IF NOT EXISTS idx_abandoned_email ON abandoned_carts(email);
+
+-- Campaigns sent from Admin -> Marketing. Content is stored for audit, while
+-- recipient emails are never stored in the log; only the count is retained.
+CREATE TABLE IF NOT EXISTS marketing_campaigns (
+  id                TEXT PRIMARY KEY,
+  campaign_type     TEXT NOT NULL,
+  subject           TEXT NOT NULL,
+  content           TEXT NOT NULL,
+  recipient_count   INTEGER NOT NULL DEFAULT 0,
+  sent_count        INTEGER NOT NULL DEFAULT 0,
+  failed_count      INTEGER NOT NULL DEFAULT 0,
+  status            TEXT NOT NULL DEFAULT 'sent',
+  sent_at           TEXT NOT NULL,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_campaigns_sent_at ON marketing_campaigns(sent_at DESC);
+
+-- Addresses that asked not to receive promotional campaigns. The address is
+-- retained only as a suppression key so a later import cannot re-subscribe it.
+CREATE TABLE IF NOT EXISTS marketing_suppressions (
+  email       TEXT PRIMARY KEY COLLATE NOCASE,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS customers (
   id                  TEXT PRIMARY KEY,
   email               TEXT NOT NULL UNIQUE COLLATE NOCASE,

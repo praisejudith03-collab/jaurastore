@@ -34,9 +34,12 @@ Nothing here may break a sale, a receipt upload or an admin action:
     console) and nothing else.
 """
 import base64
+import hashlib
+import hmac
 import json
 import re
 import threading
+import urllib.parse
 from html import escape as _esc
 
 TIMEOUT = 20                 # seconds per provider attempt
@@ -636,6 +639,93 @@ def order_notice_email_html(order):
         f"{title}: {_esc(str(order.get('id') or ''))}",
         "",
         body + _order_body(order, include_receipt=False))
+
+
+def abandoned_cart_email_html(cart):
+    """The customer-facing reminder for a cart captured at checkout.
+
+    It intentionally contains only the shopper's saved item names, quantities
+    and total. The cart is not turned into an order until the customer returns
+    and completes checkout.
+    """
+    cart = dict(cart or {})
+    items = cart.get("items") or []
+    if isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except (TypeError, ValueError):
+            items = []
+    order_shape = {
+        "items": items if isinstance(items, list) else [],
+        "currency": cart.get("currency"),
+        "total": cart.get("total"),
+        "subtotal": cart.get("total"),
+    }
+    items_html, _ = _items_table(order_shape)
+    name = str(cart.get("customer_name") or "").strip()
+    greeting = f'<p style="margin:0 0 12px">Hi {_esc(name)},</p>' if name else ""
+    origin = str(_cfg("SITE_ORIGIN", "") or "").rstrip("/")
+    return _shell(
+        "Your Jaura Store cart is waiting",
+        "You left a few items in your cart. They are still waiting for you.",
+        greeting
+        + '<p style="margin:0 0 14px">When you are ready, return to the shop to finish your order. '
+          "Items are not reserved until checkout is completed.</p>"
+        + items_html
+        + (f'<p style="margin:18px 0 0"><a href="{_esc(origin + "/cart.html", quote=True)}" '
+           'style="display:inline-block;padding:10px 16px;border-radius:6px;background:#a97e48;'
+           'color:#fff;text-decoration:none;font-weight:700">Return to your cart</a></p>'
+           if origin else ""))
+
+
+def send_abandoned_cart_reminder(cart):
+    """Send one reminder to a captured checkout email."""
+    cart = dict(cart or {})
+    email = str(cart.get("email") or "").strip().lower()
+    if not _ADDRESS.fullmatch(email):
+        return False, "no valid cart email"
+    token = str(cart.get("token") or "").strip()
+    subject = "Your Jaura Store cart is waiting"
+    return send_mail_to(email, subject, abandoned_cart_email_html(cart))
+
+
+def campaign_unsubscribe_token(email):
+    """Stable, non-secret link token for one campaign recipient."""
+    import config as config_mod
+    secret = str(_cfg("SECRET_KEY", "") or getattr(config_mod.Config, "SECRET_KEY", "")).encode("utf-8")
+    value = str(email or "").strip().lower()
+    return hmac.new(secret, value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def campaign_unsubscribe_url(email):
+    origin = str(_cfg("SITE_ORIGIN", "https://jaurastore.com.ng") or "https://jaurastore.com.ng").rstrip("/")
+    return origin + "/api/marketing/unsubscribe?email=" + urllib.parse.quote(str(email or "").strip().lower()) + "&token=" + campaign_unsubscribe_token(email)
+
+
+def campaign_email_html(subject, content, recipient=""):
+    """Render admin-authored campaign copy as escaped plain text.
+
+    The campaign editor deliberately accepts text rather than arbitrary HTML;
+    line breaks are preserved and customer-provided content cannot inject
+    markup into a mailing. Every promotional email also gets a signed,
+    one-click unsubscribe link.
+    """
+    text = str(content or "").strip()
+    body = '<div style="font-size:15px;line-height:1.7">' + _esc(text).replace(chr(10), "<br>") + "</div>"
+    if recipient:
+        body += (f'<p style="margin:24px 0 0;padding-top:14px;border-top:1px solid #f0e8de;'
+                 f'font-size:12px;color:#777">You are receiving Jaura Store updates because you shared '
+                 f'your email with us. <a href="{_esc(campaign_unsubscribe_url(recipient), quote=True)}">'
+                 "Unsubscribe from promotional emails</a>.</p>")
+    return _shell(_esc(str(subject or "Jaura Store")), "", body)
+
+
+def send_campaign_email(to, subject, content):
+    """Send a single campaign copy to one validated recipient via Resend (or
+    the configured mail transport fallback)."""
+    recipient = str(to or "").strip().lower()
+    return send_mail_to(recipient, str(subject or "").strip(),
+                        campaign_email_html(subject, content, recipient))
 
 
 def order_received_email_html(order):

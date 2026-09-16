@@ -88,6 +88,14 @@ def _tick(logger=None):
     except Exception as exc:                      # pragma: no cover
         if logger: logger.warning("stray remirror skipped: %s", exc)
     try:
+        import abandoned
+        result = abandoned.send_due_reminders()
+        if logger and (result.get("sent") or result.get("failed")):
+            logger.info("abandoned-cart reminders: sent=%s failed=%s",
+                        result.get("sent"), result.get("failed"))
+    except Exception as exc:                      # pragma: no cover
+        if logger: logger.warning("abandoned-cart reminders skipped: %s", exc)
+    try:
         _repair_photos(logger)
     except Exception as exc:                      # pragma: no cover
         if logger: logger.warning("photo repair skipped: %s", exc)

@@ -516,7 +516,9 @@ function renderShop() {
   } catch (e) {}
   const live = document.querySelector("[data-shop-q]");
   const q = (live?.value || param("q") || "").trim();
-  const sort = document.querySelector("[data-sort]")?.value || "newest";
+  const sortEl = document.querySelector("[data-sort]");
+  const sort = param("sort") || sortEl?.value || "newest";
+  if (sortEl && sortEl.value !== sort) sortEl.value = sort;
   let list = q ? JA.searchProducts(q, cat) : JA.products().filter((p) => cat === "all" || p.category === cat);
 
   list = [...list];
@@ -558,7 +560,7 @@ function renderShop() {
   const pager = document.querySelector("[data-pager]");
   if (pager && pages > 1) {
     // data-href, not onclick: inline handlers are blocked by our CSP
-    const url = (n) => `shop.html?cat=${cat}&q=${encodeURIComponent(q)}&page=${n}`;
+    const url = (n) => `shop.html?cat=${encodeURIComponent(cat)}&q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}&page=${n}`;
     // page-number window: 1 … around current … last, with ellipses
     const nums = [];
     for (let n = 1; n <= pages; n++) {
@@ -631,6 +633,23 @@ function starsOf(n, pick) {
   return `<span class="star-row">${"★".repeat(s)}${"☆".repeat(5 - s)}</span>`;
 }
 
+function reviewSortItems(items, sort, filter) {
+  const list = (items || []).filter((r) => !filter || Number(r.rating != null ? r.rating : r.stars) === Number(filter));
+  const time = (r) => { const n = Date.parse(r.created_at || r.at || ""); return Number.isFinite(n) ? n : 0; };
+  if (sort === "oldest") list.sort((a, b) => time(a) - time(b));
+  else if (sort === "highest") list.sort((a, b) => (Number(b.rating != null ? b.rating : b.stars) - Number(a.rating != null ? a.rating : a.stars)) || (time(b) - time(a)));
+  else if (sort === "lowest") list.sort((a, b) => (Number(a.rating != null ? a.rating : a.stars) - Number(b.rating != null ? b.rating : b.stars)) || (time(b) - time(a)));
+  else list.sort((a, b) => time(b) - time(a));
+  return list;
+}
+function reviewCardsHTML(list) {
+  return (list || []).map((r) => `<article class="rev-note">
+    ${starsOf(r.rating != null ? r.rating : r.stars)}
+    <strong>${JA.escape(r.name || "Customer")}</strong>
+    ${r.title ? `<p class="rev-title"><strong>${JA.escape(r.title)}</strong></p>` : ""}
+    <p>${JA.escape(r.body != null ? r.body : (r.note || ""))}</p>
+  </article>`).join("");
+}
 function renderProduct() {
   const root = document.querySelector("[data-pdp]");
   if (!root) return;
@@ -741,6 +760,14 @@ function paintProduct(root, p) {
   const stockN = Number(p.stock) || 0;
   const rev = (JA.reviews && JA.reviews(p.id)) || [];
   const revStats = (JA.reviewStats && JA.reviewStats(p.id)) || { n: 0, avg: 0 };
+  let reviewSort = "newest";
+  let reviewFilter = "";
+  const initialReviews = reviewSortItems(rev, reviewSort, reviewFilter);
+  const reviewSummary = (list) => {
+    const n = list.length;
+    const avg = n ? list.reduce((sum, r) => sum + Number(r.rating != null ? r.rating : r.stars) || 0, 0) / n : 0;
+    return n ? starsOf(avg) + " " + t(n === 1 ? "rev.count" : "rev.countMany", { n }) : t(reviewFilter ? "rev.noMatch" : "rev.empty");
+  };
   const mainHTML = (idx) => JA.mediaHTML(gallery[idx], {
     full: true, eager: idx === 0, alt: p.name, ph: p.placeholderImage, attrs: { "data-main-img": "" },
   });
@@ -784,14 +811,20 @@ function paintProduct(root, p) {
       <p style="font-size:13px;color:var(--taupe)">${t("pdp.hint", { sku: p.sku || p.id })}</p>
       <section class="pdp-reviews" data-reviews="${JA.escape(p.id)}">
         <h3>${t("rev.title")}</h3>
-        <p class="rev-avg">${revStats.n ? starsOf(revStats.avg) + " " + t(revStats.n === 1 ? "rev.count" : "rev.countMany", { n: revStats.n }) : t("rev.empty")}</p>
-        <div class="rev-list">${rev.length ? rev.map((r) => `
-          <article class="rev-note">
-            ${starsOf(r.rating != null ? r.rating : r.stars)}
-            <strong>${JA.escape(r.name || "Customer")}</strong>
-            ${r.title ? `<p class="rev-title"><strong>${JA.escape(r.title)}</strong></p>` : ""}
-            <p>${JA.escape(r.body != null ? r.body : (r.note || ""))}</p>
-          </article>`).join("") : ""}</div>
+        <p class="rev-avg">${reviewSummary(initialReviews)}</p>
+        <div class="rev-controls" aria-label="${t("rev.filters")}">
+          <label>${t("rev.sort")}<select data-review-sort>
+            <option value="newest">${t("rev.newest")}</option>
+            <option value="oldest">${t("rev.oldest")}</option>
+            <option value="highest">${t("rev.highest")}</option>
+            <option value="lowest">${t("rev.lowest")}</option>
+          </select></label>
+          <label>${t("rev.filter")}<select data-review-filter>
+            <option value="">${t("rev.allRatings")}</option>
+            ${[5, 4, 3, 2, 1].map((n) => `<option value="${n}">${n} ★</option>`).join("")}
+          </select></label>
+        </div>
+        <div class="rev-list">${reviewCardsHTML(initialReviews)}</div>
         <form class="rev-form" data-rev-form>
           <h4>${t("rev.write")}</h4>
           <p class="rev-gate-note">${t("rev.gate")}</p>
@@ -807,6 +840,22 @@ function paintProduct(root, p) {
       </section>
     </div>`;
 
+  const reviewBox = root.querySelector("[data-reviews]");
+  const paintReviews = (items) => {
+    const filtered = reviewSortItems(items, reviewSort, reviewFilter);
+    const avgEl = reviewBox?.querySelector(".rev-avg");
+    const listEl = reviewBox?.querySelector(".rev-list");
+    if (avgEl) avgEl.innerHTML = reviewSummary(filtered);
+    if (listEl) listEl.innerHTML = reviewCardsHTML(filtered);
+  };
+  reviewBox?.querySelector("[data-review-sort]")?.addEventListener("change", (e) => {
+    reviewSort = e.target.value || "newest";
+    paintReviews((JA.reviews && JA.reviews(p.id)) || []);
+  });
+  reviewBox?.querySelector("[data-review-filter]")?.addEventListener("change", (e) => {
+    reviewFilter = e.target.value || "";
+    paintReviews((JA.reviews && JA.reviews(p.id)) || []);
+  });
   const showSlide = (i) => {
     const slot = root.querySelector("[data-media-slot]");
     const thumbs = [...root.querySelectorAll("[data-thumb]")];
@@ -1007,18 +1056,7 @@ function paintProduct(root, p) {
       if (JA.setReviews && JSON.stringify(cur) !== JSON.stringify(d.reviews)) {
         JA.setReviews(p.id, d.reviews);
         const box = document.querySelector(`[data-reviews="${(window.CSS && CSS.escape) ? CSS.escape(p.id) : p.id}"]`);
-        if (box) {
-          const n = d.reviews.length;
-          const avgEl = box.querySelector(".rev-avg");
-          if (avgEl) avgEl.innerHTML = n ? starsOf(d.average) + " " + t(n === 1 ? "rev.count" : "rev.countMany", { n }) : t("rev.empty");
-          const list = box.querySelector(".rev-list");
-          if (list) list.innerHTML = d.reviews.map((r) => `
-            <article class="rev-note">
-              ${starsOf(r.stars)}
-              <strong>${JA.escape(r.name || "Customer")}</strong>
-              <p>${JA.escape(r.note || "")}</p>
-            </article>`).join("");
-        }
+        if (box) paintReviews(d.reviews);
       }
     })
     .catch(() => {});
@@ -1532,11 +1570,237 @@ function renderDeliveryPage() {
   }
 }
 
+/* Checkout validation is deliberately explicit instead of relying on the
+   browser's native invalid bubble. Native validation does not fire the submit
+   event, and on a long two-column form that can look like the Place order
+   button did nothing. We show every problem together, link each one to its
+   exact field, and focus the first fix. */
+function checkoutFieldControl(form, name) {
+  if (!form || !name) return null;
+  const safeName = (window.CSS && typeof window.CSS.escape === "function") ? window.CSS.escape(name) : name;
+  return form.querySelector(`[name="${safeName}"]`);
+}
+
+function checkoutFieldErrorHost(control) {
+  return control?.closest(".field, .ck-upload, .fare-field") || control?.parentElement || null;
+}
+
+function clearCheckoutFieldError(form, name) {
+  const control = checkoutFieldControl(form, name);
+  if (!control) return;
+  const host = checkoutFieldErrorHost(control);
+  host?.classList.remove("has-error");
+  control.removeAttribute("aria-invalid");
+  const error = host?.querySelector(".field-error");
+  if (error) error.remove();
+  const describedBy = (control.getAttribute("aria-describedby") || "").split(/\s+/)
+    .filter((id) => id && id !== `${control.id || name}-error`);
+  if (describedBy.length) control.setAttribute("aria-describedby", describedBy.join(" "));
+  else control.removeAttribute("aria-describedby");
+}
+
+function clearCheckoutValidation(form) {
+  if (!form) return;
+  form.querySelectorAll("[aria-invalid=\"true\"]").forEach((control) => {
+    clearCheckoutFieldError(form, control.name);
+  });
+  form.querySelectorAll(".has-error").forEach((host) => host.classList.remove("has-error"));
+  form.querySelectorAll(".field-error").forEach((error) => error.remove());
+  const summary = document.querySelector("[data-checkout-errors]");
+  if (summary) {
+    summary.hidden = true;
+    const list = summary.querySelector("[data-checkout-error-list]");
+    if (list) list.textContent = "";
+  }
+}
+
+function checkoutValidationMessage(key, fallback) {
+  const value = t(key);
+  return value && value !== key ? value : fallback;
+}
+
+function validateCheckoutForm(form, options = {}) {
+  const failures = [];
+  const value = (name) => String(form.querySelector(`[name="${name}"]`)?.value || "").trim();
+  const add = (name, message) => failures.push({ name, message });
+  const namePattern = /^[\p{L}][\p{L} .'-]*$/u;
+  const phonePattern = /^\+?[0-9][0-9 ()-]{6,24}$/;
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+  const first = value("firstName");
+  if (!first) add("firstName", checkoutValidationMessage("ck.errorFirstName", "Enter your first name."));
+  else if (first.length < 2 || !namePattern.test(first)) add("firstName", checkoutValidationMessage("ck.errorFirstNameInvalid", "Enter a valid first name using letters only."));
+
+  const last = value("lastName");
+  if (!last) add("lastName", checkoutValidationMessage("ck.errorLastName", "Enter your last name."));
+  else if (last.length < 2 || !namePattern.test(last)) add("lastName", checkoutValidationMessage("ck.errorLastNameInvalid", "Enter a valid last name using letters only."));
+
+  if (!value("country")) add("country", checkoutValidationMessage("ck.errorCountry", "Choose your country or region."));
+
+  const address = value("address");
+  if (!address) add("address", checkoutValidationMessage("ck.errorAddress", "Enter your street address."));
+  else if (address.length < 5) add("address", checkoutValidationMessage("ck.errorAddressInvalid", "Enter a little more detail for your street address."));
+
+  const city = value("city");
+  if (!city) add("city", checkoutValidationMessage("ck.errorCity", "Enter your town or city."));
+  else if (city.length < 2) add("city", checkoutValidationMessage("ck.errorCityInvalid", "Enter a valid town or city."));
+
+  if (!value("zone")) add("zone", checkoutValidationMessage("ck.errorZone", "Choose a delivery zone."));
+
+  const phone = value("phone");
+  const phoneDigits = phone.replace(/\D/g, "");
+  if (!phone) add("phone", checkoutValidationMessage("ck.errorPhone", "Enter your phone number."));
+  else if (!phonePattern.test(phone) || phoneDigits.length < 7) add("phone", checkoutValidationMessage("ck.errorPhoneInvalid", "Enter a valid phone number, including the country code if possible."));
+
+  const email = value("email");
+  if (!email) add("email", checkoutValidationMessage("ck.errorEmail", "Enter your email address."));
+  else if (!emailPattern.test(email)) add("email", checkoutValidationMessage("ck.errorEmailInvalid", "Enter a valid email address, for example name@example.com."));
+
+  const proof = form.querySelector("[name=proof]");
+  if (proof && !form.dataset.proof && !options.proofReady && !(proof.files && proof.files.length)) {
+    add("proof", checkoutValidationMessage("ck.errorProof", "Upload your payment receipt before placing the order."));
+  }
+
+  // Keep this guard future-proof: any newly added required control gets a
+  // useful error instead of silently bypassing the order handler.
+  const known = new Set(failures.map((failure) => failure.name));
+  form.querySelectorAll("[required]").forEach((control) => {
+    const name = control.name;
+    if (!name || known.has(name) || name === "proof") return;
+    if (!String(control.value || "").trim()) {
+      add(name, checkoutValidationMessage("ck.errorRequired", "Complete this required field."));
+    } else if (typeof control.checkValidity === "function" && !control.checkValidity()) {
+      add(name, checkoutValidationMessage("ck.errorRequiredInvalid", "Check this required field and try again."));
+    }
+  });
+
+  clearCheckoutValidation(form);
+  if (!failures.length) return { ok: true, failures };
+
+  const summary = document.querySelector("[data-checkout-errors]");
+  const list = summary?.querySelector("[data-checkout-error-list]");
+  failures.forEach(({ name, message }) => {
+    const control = checkoutFieldControl(form, name);
+    if (!control) return;
+    const host = checkoutFieldErrorHost(control);
+    host?.classList.add("has-error");
+    control.setAttribute("aria-invalid", "true");
+    const errorId = `${control.id || name}-error`;
+    const error = document.createElement("p");
+    error.className = "field-error";
+    error.id = errorId;
+    error.setAttribute("role", "alert");
+    error.textContent = message;
+    host?.appendChild(error);
+    const describedBy = (control.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+    if (!describedBy.includes(errorId)) describedBy.push(errorId);
+    control.setAttribute("aria-describedby", describedBy.join(" "));
+    if (list) {
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = `#${control.id || name}`;
+      link.textContent = message;
+      link.addEventListener("click", () => control.focus());
+      item.appendChild(link);
+      list.appendChild(item);
+    }
+  });
+  if (summary) {
+    summary.hidden = false;
+    summary.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }
+  const firstControl = checkoutFieldControl(form, failures[0].name);
+  firstControl?.focus?.({ preventScroll: true });
+  firstControl?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  return { ok: false, failures };
+}
+
+function rememberEmptyCartCheckout() {
+  const message = checkoutValidationMessage("ck.emptyRedirect", "Your cart is empty. Add items to your cart first. Taking you to the shop now.");
+  try { sessionStorage.setItem("jaura_checkout_notice", message); } catch (e) {}
+  if (window.location?.pathname?.endsWith("/checkout.html") || window.location?.pathname === "/checkout.html") {
+    window.setTimeout(() => {
+      try { window.location.replace("shop.html?checkout=empty-cart"); } catch (e) { window.location.href = "shop.html?checkout=empty-cart"; }
+    }, 450);
+  }
+}
+
+function showEmptyCartShopNotice() {
+  if (param("checkout") !== "empty-cart") return;
+  let message = checkoutValidationMessage("ck.emptyRedirect", "Your cart is empty. Add items to your cart first.");
+  try { message = sessionStorage.getItem("jaura_checkout_notice") || message; sessionStorage.removeItem("jaura_checkout_notice"); } catch (e) {}
+  if (document.querySelector("[data-empty-cart-redirect]") || !message) return;
+  const notice = document.createElement("p");
+  notice.className = "empty-cart-redirect-notice";
+  notice.setAttribute("data-empty-cart-redirect", "");
+  notice.setAttribute("role", "alert");
+  notice.textContent = message;
+  const root = document.querySelector("[data-shop-grid]")?.parentElement || document.querySelector("main") || document.body;
+  root.insertBefore(notice, root.firstChild);
+  setTimeout(() => JA.toast(message), 0);
+}
+
+const CHECKOUT_CART_TOKEN_KEY = "jaura_checkout_cart_token";
+const CHECKOUT_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+function checkoutCartToken() {
+  try {
+    const existing = String(localStorage.getItem(CHECKOUT_CART_TOKEN_KEY) || "").trim();
+    if (existing) return existing;
+    const random = window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const token = "cart-" + random.replace(/[^a-z0-9-]/gi, "").slice(0, 64);
+    localStorage.setItem(CHECKOUT_CART_TOKEN_KEY, token);
+    return token;
+  } catch (e) {
+    return "cart-" + Math.random().toString(36).slice(2, 18);
+  }
+}
+
+function captureCheckoutCart(form) {
+  if (!form || !window.JA_NET?.api) return Promise.resolve(null);
+  const email = String(form.querySelector("[name=email]")?.value || "").trim().toLowerCase();
+  if (!CHECKOUT_EMAIL_PATTERN.test(email)) return Promise.resolve(null);
+  const items = JA.cartDetailed().map((item) => ({
+    id: item.id,
+    name: item.product?.name || "Item",
+    qty: item.qty,
+    price: JA.priceOf(item.product, item.cur || JA.currency()),
+    color: item.color || "",
+  }));
+  if (!items.length) return Promise.resolve(null);
+  const first = String(form.querySelector("[name=firstName]")?.value || "").trim();
+  const last = String(form.querySelector("[name=lastName]")?.value || "").trim();
+  const payload = {
+    token: checkoutCartToken(),
+    email,
+    customerName: [first, last].filter(Boolean).join(" "),
+    currency: form.querySelector("[name=currency]:checked")?.value || JA.currency(),
+    total: JA.cartTotal(),
+    items,
+  };
+  return window.JA_NET.api("api/abandoned-carts", {
+    method: "POST", json: payload, queue: true, label: "Cart reminder",
+  }).catch(() => null);
+}
+
+function closeCapturedCheckoutCart() {
+  let token = "";
+  try { token = String(localStorage.getItem(CHECKOUT_CART_TOKEN_KEY) || "").trim(); } catch (e) {}
+  if (!token || !window.JA_NET?.api) return;
+  window.JA_NET.api("api/abandoned-carts/complete", {
+    method: "POST", json: { token }, queue: true, label: "Completed cart",
+  }).catch(() => null);
+}
+
 function renderCheckout() {
   const form = document.querySelector("[data-checkout]");
   const empty = document.querySelector("[data-empty]");
   const instruction = document.querySelector("[data-form-instruction]");
   if (!form) return;
+  // Keep the submit event available for our accessible, field-by-field error
+  // summary. Without this, native validation stops the event before we can
+  // explain which of a long form's fields needs attention.
+  form.noValidate = true;
   if (form.dataset.done === "1") return;
 
   const items = JA.cartDetailed();
@@ -1544,6 +1808,10 @@ function renderCheckout() {
     if (empty) empty.hidden = false;
     if (instruction) instruction.hidden = true;
     form.hidden = true;
+    if (form.dataset.emptyRedirecting !== "1") {
+      form.dataset.emptyRedirecting = "1";
+      rememberEmptyCartCheckout();
+    }
     return;
   }
   if (empty) empty.hidden = true;
@@ -1562,6 +1830,24 @@ function renderCheckout() {
 
   if (form.dataset.bound) return;
   form.dataset.bound = "1";
+  // Remove a field's old error as soon as the customer starts fixing it. A
+  // submit still runs the complete validation pass, including all fields.
+  let captureTimer = null;
+  const scheduleCartCapture = () => {
+    window.clearTimeout(captureTimer);
+    captureTimer = window.setTimeout(() => captureCheckoutCart(form), 500);
+  };
+  form.querySelectorAll("[required]").forEach((control) => {
+    ["input", "change"].forEach((eventName) => {
+      control.addEventListener(eventName, () => {
+        clearCheckoutFieldError(form, control.name);
+        if (control.name !== "proof") scheduleCartCapture();
+      });
+    });
+  });
+  // Capture any prefilled/account email, and refresh the inactivity clock as
+  // the guest edits the checkout. No account creation or password is needed.
+  scheduleCartCapture();
   // ---- Delivery zones come from the server ----
   // The list used to be hardcoded in checkout.html and then regex-filtered
   // here, guessing which options counted as "pickup". The zone table is now
@@ -1766,7 +2052,19 @@ function renderCheckout() {
     const data = Object.fromEntries(new FormData(form).entries());
     const cur = data.currency || JA.currency();
     const liveItems = JA.cartDetailed();
-    if (!liveItems.length) return;
+    if (!liveItems.length) {
+      const empty = document.querySelector("[data-empty]");
+      if (empty) empty.hidden = false;
+      form.hidden = true;
+      rememberEmptyCartCheckout();
+      return;
+    }
+    const validation = validateCheckoutForm(form, {
+      // A selected file is enough to pass this first check. Compression of a
+      // camera photo can still be running and is awaited below.
+      proofReady: !!(form.dataset.proof || proofFile || form.querySelector("[name=proof]")?.files?.length),
+    });
+    if (!validation.ok) return;
     if (JA.stockProblems) {
       const probs = JA.stockProblems();
       if (probs.length) {
@@ -1883,6 +2181,9 @@ function renderCheckout() {
         price: JA.priceOf(i.product, cur),
       })),
     });
+    // A completed checkout must close the captured cart before the five-day
+    // reminder job gets a chance to consider it.
+    closeCapturedCheckoutCart();
 
     // Restore the instant checkout experience: the locally saved order is
     // painted as soon as the shopper taps Place order. Keep this document alive
@@ -1976,6 +2277,49 @@ async function renderOrderComplete() {
   if (params.get("queued") === "1" || order.queued) paintQueuedOrderNote(true);
   bindOrderDoneCopy();
   window.scrollTo({ top: 0, behavior: "auto" });
+}
+
+function trackOrderCard(order) {
+  const status = order.status || "pending";
+  const items = (order.items || []).map((item) => `<li>${Number(item.qty) || 1}× ${JA.escape(item.name || "Item")}</li>`).join("");
+  const message = status === "confirmed" ? t("order.prep") : status === "declined" ? t("order.declineMsg") : t("order.waitMsg");
+  const whatsapp = JA.waLink("Hello Jaura Store, please update me on order " + order.id + ".", order.country);
+  return `<article class="track-result">
+    <div class="track-result-head"><div><span class="kicker">${t("order.id")}</span><strong>${JA.escape(order.id)}</strong></div><span class="status-pill ${JA.escape(status)}">${t(orderStatusKey(status))}</span></div>
+    <p class="track-message">${JA.escape(message)}</p>
+    <div class="track-total"><span>${t("order.status")}</span><strong>${JA.escape(JA.money(order.total, order.currency))}</strong></div>
+    ${items ? `<ul class="track-items">${items}</ul>` : ""}
+    <a class="btn btn-line" href="${JA.escape(whatsapp)}" target="_blank" rel="noopener">${t("order.whatsapp")}</a>
+  </article>`;
+}
+async function renderTrackOrder() {
+  const root = document.querySelector("[data-track-root]");
+  if (!root) return;
+  const params = new URLSearchParams(location.search);
+  root.innerHTML = `<form class="track-form" data-track-form><label>${t("order.id")}<input name="order" value="${JA.escape(params.get("order") || "")}" placeholder="JA-M8K2Q1" autocomplete="off" autocapitalize="characters" required /></label><button class="btn" type="submit">${t("order.lookup")}</button><p class="track-error" data-track-error role="alert" hidden></p></form><div data-track-result></div>`;
+  const form = root.querySelector("[data-track-form]");
+  const result = root.querySelector("[data-track-result]");
+  const error = root.querySelector("[data-track-error]");
+  const lookup = async (id) => {
+    if (error) { error.hidden = true; error.textContent = ""; }
+    if (result) result.innerHTML = `<p class="empty">Loading…</p>`;
+    try {
+      const d = await window.JA_NET.api("api/orders/" + encodeURIComponent(id));
+      if (result) result.innerHTML = trackOrderCard(d.order || {});
+      try { history.replaceState({}, "", "track-order.html?order=" + encodeURIComponent(id)); } catch (e) {}
+    } catch (err) {
+      if (result) result.innerHTML = "";
+      if (error) { error.hidden = false; error.textContent = (err && err.status === 429) ? "Too many lookups. Please wait a few minutes and try again." : t("order.missing"); }
+    }
+  };
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const id = String(new FormData(form).get("order") || "").trim().toUpperCase();
+    if (!id) { if (error) { error.hidden = false; error.textContent = t("toast.needId"); } return; }
+    lookup(id);
+  });
+  const initial = String(params.get("order") || "").trim().toUpperCase();
+  if (initial) lookup(initial);
 }
 
 function renderWishlist() {
@@ -2306,13 +2650,17 @@ async function boot() {
   const draw = () => {
     if (page === "home") renderHome();
     if (page === "categories") renderCategories();
-    if (page === "shop") renderShop();
+    if (page === "shop") {
+      renderShop();
+      showEmptyCartShopNotice();
+    }
     if (page === "product") renderProduct();
     if (page === "home" || page === "shop") renderMostViewed();
     try { JA.startCardPlay && JA.startCardPlay(); } catch (e) {}
     if (page === "cart") renderCart();
     if (page === "checkout") renderCheckout();
     if (page === "order-complete") renderOrderComplete();
+    if (page === "track-order") renderTrackOrder();
     if (page === "delivery") renderDeliveryPage();
     if (page === "wishlist") renderWishlist();
     if (page === "account") renderAccount();
@@ -2346,7 +2694,14 @@ async function boot() {
   document.addEventListener("ja:wish", () => {
     if (page === "wishlist") draw();
   });
-  document.querySelector("[data-sort]")?.addEventListener("change", renderShop);
+  document.querySelector("[data-sort]")?.addEventListener("change", (e) => {
+    const url = new URL(location.href);
+    if (e.target.value && e.target.value !== "newest") url.searchParams.set("sort", e.target.value);
+    else url.searchParams.delete("sort");
+    url.searchParams.delete("page");
+    try { history.replaceState({}, "", url); } catch (err) {}
+    renderShop();
+  });
   document.querySelector("[data-shop-q]")?.addEventListener("input", renderShop);
   if (page === "shop") bindShopFilter();
 }
