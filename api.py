@@ -1,6 +1,5 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
 import csv, io, json, os, datetime, secrets, hashlib, hmac, re
-from html import escape as html_escape
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
 from db import execute, one, query, audit
