@@ -5,8 +5,9 @@
 directly from the process environment for every login attempt (a Render
 environment update takes effect on the next attempt, with no database change).
 Set them privately in the deployment host and never commit or paste their values
-into code. `ADMIN_EMAILS` still controls which configured admin email identities
-may sign in.
+into code. `ADMIN_EMAIL` controls the owner identity that may sign in and the
+inbox used for system and order notifications (`ADMIN_EMAILS` remains a legacy
+multi-address alias).
 
 ## Shop email — orders, receipts + customer confirmations (set on BOTH Render services)
 
@@ -32,11 +33,12 @@ Variables (set in the Render dashboard for `jaurastore-staging` AND
 `jaurastore-production`; `sync: false` in render.yaml keeps the secrets out of
 git):
 
-- `MAIL_FROM` — the sender, e.g. `Jaura Store <orders@yourdomain>`. Must be a
-  sender the provider has verified, or the provider rejects the send.
-- `MAIL_TO` — the shop inbox that receives every order + receipt email.
-  Optional: when unset it defaults to the primary `ADMIN_EMAILS` address
-  (`jaurastore@gmail.com`), which is also the value pinned in render.yaml.
+- `MAIL_FROM` — the verified sender (`orders@jaurastore.com.ng` in Render).
+- `ADMIN_EMAIL` — the shop inbox for system and order notifications
+  (`jorastore@gmail.com`).
+- Do **not** set `MAIL_TO` in Render. It is retained only as a compatibility
+  fallback; leaving it unset ensures customer campaigns and transactional
+  messages are addressed to each customer's actual email.
 - `RESEND_API_KEY` — create an API key at resend.com and verify your sending
   domain there.
 - `BREVO_API_KEY` — alternative HTTPS provider, used when `RESEND_API_KEY` is

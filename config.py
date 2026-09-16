@@ -6,7 +6,9 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 def _emails():
-    raw = os.environ.get("ADMIN_EMAILS", "jaurastore@gmail.com")
+    # ADMIN_EMAIL is the canonical owner-notification address. Keep the plural
+    # alias for backwards compatibility with existing deployments.
+    raw = os.environ.get("ADMIN_EMAIL") or os.environ.get("ADMIN_EMAILS", "jorastore@gmail.com")
     out = []
     for part in raw.split(","):
         e = part.strip().lower()
@@ -140,10 +142,9 @@ class Config:
     # instances block outbound SMTP ports (25/465/587), so mail goes over
     # HTTPS first - Resend (RESEND_API_KEY), then Brevo (BREVO_API_KEY) -
     # and only falls back to SMTP when no HTTPS provider is configured.
-    # MAIL_FROM must be a sender the provider has verified. MAIL_TO is the
-    # shop inbox; when it is unset the mailer falls back to the primary
-    # ADMIN_EMAILS address (jaurastore@gmail.com) so order alerts always
-    # reach the owner. All dispatch runs on daemon threads - see mailer.py
+    # MAIL_FROM must be a sender the provider has verified. Owner alerts use
+    # ADMIN_EMAIL. MAIL_TO remains a legacy compatibility fallback only and
+    # must be left unset in Render so customer mail is never globally rerouted. All dispatch runs on daemon threads - see mailer.py
     # and ENVIRONMENT_VARIABLES.md.
     MAIL_FROM = os.environ.get("MAIL_FROM", "")
     MAIL_TO = os.environ.get("MAIL_TO", "")

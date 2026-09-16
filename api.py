@@ -3181,7 +3181,7 @@ def admin_customers_csv():
     return response
 
 
-CAMPAIGN_TYPES = ("best_sellers", "new_arrivals", "discount_promo", "custom")
+CAMPAIGN_TYPES = ("abandoned_cart", "price_drop", "new_arrivals", "customer_appreciation")
 
 
 @api.get("/admin/marketing/campaigns")
@@ -3236,6 +3236,13 @@ def marketing_campaign_send():
         return jsonify(ok=False, error="Add an email subject."), 400
     if not content:
         return jsonify(ok=False, error="Write a campaign message."), 400
+    selected_ids = d.get("productIds") or []
+    if not isinstance(selected_ids, list) or len(selected_ids) > 12:
+        return jsonify(ok=False, error="Choose no more than 12 products."), 400
+    selected_ids = {sec.clean(pid, 80) for pid in selected_ids if sec.clean(pid, 80)}
+    products = [p for p in catalog_mod.merged() if str(p.get("id") or "") in selected_ids]
+    if len(products) != len(selected_ids):
+        return jsonify(ok=False, error="One or more selected products are unavailable."), 400
     recipients = _marketing_recipient_emails()
     if not recipients:
         return jsonify(ok=False, error="There are no customer emails on file yet."), 400
@@ -3259,7 +3266,7 @@ def marketing_campaign_send():
     sent = failed = 0
     for email in recipients:
         try:
-            ok, _detail = mailer.send_campaign_email(email, subject, content)
+            ok, _detail = mailer.send_campaign_email(email, subject, content, products)
         except Exception as exc:
             ok = False
             print(f"[marketing] campaign recipient failed: {exc}")

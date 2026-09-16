@@ -156,7 +156,7 @@ create index if not exists idx_orders_status on orders (status);
 create index if not exists idx_orders_customer on orders (customer_user_id);
 
 -- Carts that reached checkout with an email but were not completed. The
--- scheduler sends at most one reminder after five days without activity.
+-- scheduler sends at most one reminder after two hours without activity.
 create table if not exists abandoned_carts (
   token             text primary key,
   email             text not null,

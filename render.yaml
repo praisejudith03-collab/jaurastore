@@ -16,8 +16,8 @@ services:
         value: staging
       - key: SECRET_KEY
         generateValue: true
-      - key: ADMIN_EMAILS
-        value: jaurastore@gmail.com
+      - key: ADMIN_EMAIL
+        value: jorastore@gmail.com
       - key: SITE_ORIGIN
         value: https://jaurastore-staging.onrender.com
       # Keep the free host awake: the scheduler pings SITE_ORIGIN/healthz on
@@ -90,14 +90,10 @@ services:
       # customer gets a confirmation email when an order is confirmed in the
       # admin portal. HTTPS providers first (Resend, then Brevo) because
       # Render's free/starter instances block outbound SMTP ports 25/465/587;
-      # SMTP_* is only a fallback for hosts with open SMTP. MAIL_TO is not a
-      # secret - pinning it means order alerts reach the owner's inbox even
-      # when the variable is missing from the dashboard. See
-      # ENVIRONMENT_VARIABLES.md.
+      # SMTP_* is only a fallback for hosts with open SMTP. Customer mail is
+      # always addressed to the customer; owner alerts use ADMIN_EMAIL.
       - key: MAIL_FROM
-        sync: false
-      - key: MAIL_TO
-        value: jaurastore@gmail.com
+        value: orders@jaurastore.com.ng
       - key: RESEND_API_KEY
         sync: false
       - key: BREVO_API_KEY
@@ -130,8 +126,8 @@ services:
         value: production
       - key: SECRET_KEY
         generateValue: true
-      - key: ADMIN_EMAILS
-        value: jaurastore@gmail.com
+      - key: ADMIN_EMAIL
+        value: jorastore@gmail.com
       - key: SITE_ORIGIN
         value: https://jaurastore.com.ng
       # Keep the free host awake: the scheduler pings SITE_ORIGIN/healthz on
@@ -202,14 +198,10 @@ services:
       # customer gets a confirmation email when an order is confirmed in the
       # admin portal. HTTPS providers first (Resend, then Brevo) because
       # Render's free/starter instances block outbound SMTP ports 25/465/587;
-      # SMTP_* is only a fallback for hosts with open SMTP. MAIL_TO is not a
-      # secret - pinning it means order alerts reach the owner's inbox even
-      # when the variable is missing from the dashboard. See
-      # ENVIRONMENT_VARIABLES.md.
+      # SMTP_* is only a fallback for hosts with open SMTP. Customer mail is
+      # always addressed to the customer; owner alerts use ADMIN_EMAIL.
       - key: MAIL_FROM
-        sync: false
-      - key: MAIL_TO
-        value: jaurastore@gmail.com
+        value: orders@jaurastore.com.ng
       - key: RESEND_API_KEY
         sync: false
       - key: BREVO_API_KEY
