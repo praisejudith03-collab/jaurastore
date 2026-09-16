@@ -5710,6 +5710,8 @@ body[data-page="admin"] { background: #f8f9fc !important; }
   .adx-filters select { flex: 1 1 100%; }
   .adx-order-row { flex-wrap: wrap; row-gap: 4px; }
   .adx-order-total { margin-left: auto; }
+  .track-form { align-items: stretch; flex-direction: column; }
+  .track-form .btn { width: 100%; }
 }
 /* The admin dock is permanently pinned - it is NOT hidden on wide screens
    (owner directive 2026-09-12). The desktop sidebar (.adx-side) stays as
@@ -6319,8 +6321,22 @@ select.ck-zone-select {
 .acct-msg { font-size: 13px; margin: 8px 0 12px; padding: 8px 10px; border-radius: 8px; }
 .acct-msg.is-bad { background: #fef7f6; color: #942c23; }
 .acct-msg.is-good { background: #f8fcf8; color: #376837; }
+.track-page { max-width: 760px; }
+.track-lead { max-width: 520px; margin: 10px auto 22px; color: var(--muted); }
+.track-form { display: flex; align-items: end; gap: 10px; max-width: 560px; margin: 0 auto 18px; padding: 18px; border: 1px solid #eadfd6; border-radius: 12px; background: #fffaf6; }
+.track-form label { flex: 1; display: grid; gap: 5px; text-align: left; font-size: 12px; color: #887562; }
+.track-form input { width: 100%; padding: 10px 12px; border: 1px solid var(--line, #e2e2e2); background: #fff; font: inherit; text-transform: uppercase; }
+.track-error { color: #ae3c2e; font-size: 13px; margin: 0; }
+.track-result { max-width: 560px; margin: 0 auto; padding: 18px; border: 1px solid #eadfd6; border-radius: 12px; background: #fff; text-align: left; }
+.track-result-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #f0e7e0; padding-bottom: 12px; }
+.track-result-head div { display: grid; gap: 3px; }
+.track-result-head > div strong { font-size: 18px; letter-spacing: .06em; }
+.track-message { margin: 14px 0; color: #5b4a3e; line-height: 1.55; }
+.track-total { display: flex; justify-content: space-between; gap: 10px; padding: 11px 0; border-top: 1px solid #f0e7e0; border-bottom: 1px solid #f0e7e0; font-size: 13px; }
+.track-items { margin: 14px 0; padding-left: 18px; color: #665748; font-size: 13px; }
+.track-result .btn { margin-top: 4px; }
 .acct-orders { margin-top: 10px; }
-.acct-items { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.acct-items {  font-size: 13px; color: var(--muted); margin-top: 6px; }
 .acct-order-notice,
 .admin-customer-notice {
   margin: 12px 0 0;

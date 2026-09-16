@@ -2279,6 +2279,49 @@ async function renderOrderComplete() {
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
+function trackOrderCard(order) {
+  const status = order.status || "pending";
+  const items = (order.items || []).map((item) => `<li>${Number(item.qty) || 1}× ${JA.escape(item.name || "Item")}</li>`).join("");
+  const message = status === "confirmed" ? t("order.prep") : status === "declined" ? t("order.declineMsg") : t("order.waitMsg");
+  const whatsapp = JA.waLink("Hello Jaura Store, please update me on order " + order.id + ".");
+  return `<article class="track-result">
+    <div class="track-result-head"><div><span class="kicker">${t("order.id")}</span><strong>${JA.escape(order.id)}</strong></div><span class="status-pill ${JA.escape(status)}">${t(orderStatusKey(status))}</span></div>
+    <p class="track-message">${JA.escape(message)}</p>
+    <div class="track-total"><span>${t("order.status")}</span><strong>${JA.escape(JA.money(order.total, order.currency))}</strong></div>
+    ${items ? `<ul class="track-items">${items}</ul>` : ""}
+    <a class="btn btn-line" href="${JA.escape(whatsapp)}" target="_blank" rel="noopener">${t("order.whatsapp")}</a>
+  </article>`;
+}
+async function renderTrackOrder() {
+  const root = document.querySelector("[data-track-root]");
+  if (!root) return;
+  const params = new URLSearchParams(location.search);
+  root.innerHTML = `<form class="track-form" data-track-form><label>${t("order.id")}<input name="order" value="${JA.escape(params.get("order") || "")}" placeholder="JA-M8K2Q1" autocomplete="off" autocapitalize="characters" required /></label><button class="btn" type="submit">${t("order.lookup")}</button><p class="track-error" data-track-error role="alert" hidden></p></form><div data-track-result></div>`;
+  const form = root.querySelector("[data-track-form]");
+  const result = root.querySelector("[data-track-result]");
+  const error = root.querySelector("[data-track-error]");
+  const lookup = async (id) => {
+    if (error) { error.hidden = true; error.textContent = ""; }
+    if (result) result.innerHTML = `<p class="empty">Loading…</p>`;
+    try {
+      const d = await window.JA_NET.api("api/orders/" + encodeURIComponent(id));
+      if (result) result.innerHTML = trackOrderCard(d.order || {});
+      try { history.replaceState({}, "", "track-order.html?order=" + encodeURIComponent(id)); } catch (e) {}
+    } catch (err) {
+      if (result) result.innerHTML = "";
+      if (error) { error.hidden = false; error.textContent = (err && err.status === 429) ? "Too many lookups. Please wait a few minutes and try again." : t("order.missing"); }
+    }
+  };
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const id = String(new FormData(form).get("order") || "").trim().toUpperCase();
+    if (!id) { if (error) { error.hidden = false; error.textContent = t("toast.needId"); } return; }
+    lookup(id);
+  });
+  const initial = String(params.get("order") || "").trim().toUpperCase();
+  if (initial) lookup(initial);
+}
+
 function renderWishlist() {
   const box = document.querySelector("[data-wish-grid]");
   if (!box) return;
@@ -2617,6 +2660,7 @@ async function boot() {
     if (page === "cart") renderCart();
     if (page === "checkout") renderCheckout();
     if (page === "order-complete") renderOrderComplete();
+    if (page === "track-order") renderTrackOrder();
     if (page === "delivery") renderDeliveryPage();
     if (page === "wishlist") renderWishlist();
     if (page === "account") renderAccount();
