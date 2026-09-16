@@ -686,6 +686,25 @@ def send_abandoned_cart_reminder(cart):
     return send_mail_to(email, subject, abandoned_cart_email_html(cart))
 
 
+def campaign_email_html(subject, content):
+    """Render admin-authored campaign copy as escaped plain text.
+
+    The campaign editor deliberately accepts text rather than arbitrary HTML;
+    line breaks are preserved and customer-provided content cannot inject
+    markup into a mailing.
+    """
+    text = str(content or "").strip()
+    body = '<div style="font-size:15px;line-height:1.7">' + _esc(text).replace(chr(10), "<br>") + "</div>"
+    return _shell(_esc(str(subject or "Jaura Store")), "", body)
+
+
+def send_campaign_email(to, subject, content):
+    """Send a single campaign copy to one validated recipient via Resend (or
+    the configured mail transport fallback)."""
+    return send_mail_to(str(to or "").strip().lower(), str(subject or "").strip(),
+                        campaign_email_html(subject, content))
+
+
 def order_received_email_html(order):
     """The customer-facing 'we have received your order' email."""
     order = dict(order or {})

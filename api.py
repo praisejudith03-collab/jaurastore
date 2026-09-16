@@ -2924,6 +2924,123 @@ def reviews_create():
                                "durably; it may need re-submitting."), 200
     return reviews_list(pid)
 
+# ----------------------------------------------- admin: marketing campaigns
+def _marketing_recipient_emails():
+    """Unique valid customer emails collected from accounts and checkout.
+
+    Orders are the durable source for guest checkout contacts; the customers
+    table adds account holders who may not have placed an order yet. The
+    Supabase reads supplement the local cache after a restart.
+    """
+    emails = set()
+    for row in query("SELECT email FROM orders WHERE email IS NOT NULL AND email != ''"):
+        email = sec.clean_email(row["email"])
+        if email:
+            emails.add(email)
+    for row in query("SELECT email FROM customers WHERE email IS NOT NULL AND email != ''"):
+        email = sec.clean_email(row["email"])
+        if email:
+            emails.add(email)
+    try:
+        from supabase_store import load_orders, load_customers
+        for row in load_orders(limit=10000) or []:
+            email = sec.clean_email((row or {}).get("email"))
+            if email:
+                emails.add(email)
+        for row in load_customers(limit=10000) or []:
+            email = sec.clean_email((row or {}).get("email"))
+            if email:
+                emails.add(email)
+    except Exception as exc:
+        print(f"[marketing] remote recipient load skipped: {exc}")
+    return sorted(emails)
+
+
+@api.get("/admin/marketing/recipients")
+@authmod.require_admin
+def marketing_recipients():
+    recipients = _marketing_recipient_emails()
+    return jsonify(ok=True, count=len(recipients))
+
+
+CAMPAIGN_TYPES = ("best_sellers", "new_arrivals", "discount_promo", "custom")
+
+
+@api.get("/admin/marketing/campaigns")
+@authmod.require_admin
+def marketing_campaigns():
+    limit = sec.clean_int(request.args.get("limit"), 100, 1, 500)
+    rows = [dict(r) for r in query(
+        "SELECT id, campaign_type, subject, content, recipient_count, sent_count, "
+        "failed_count, status, sent_at, created_at FROM marketing_campaigns "
+        "ORDER BY sent_at DESC LIMIT ?", (limit,))]
+    if not rows:
+        try:
+            from supabase_store import load_marketing_campaigns
+            rows = load_marketing_campaigns(limit) or []
+        except Exception as exc:
+            print(f"[marketing] campaign log load skipped: {exc}")
+    return jsonify(ok=True, campaigns=rows)
+
+
+@api.post("/admin/marketing/campaigns")
+@authmod.require_admin
+@sec.require_csrf
+def marketing_campaign_send():
+    d = request.get_json(silent=True) or {}
+    campaign_type = sec.clean(d.get("type") or d.get("campaignType"), 30).lower()
+    if campaign_type not in CAMPAIGN_TYPES:
+        return jsonify(ok=False, error="Choose a campaign type."), 400
+    subject = sec.clean(d.get("subject"), 180, allow_newlines=False)
+    content = sec.clean(d.get("content"), 10000)
+    if not subject:
+        return jsonify(ok=False, error="Add an email subject."), 400
+    if not content:
+        return jsonify(ok=False, error="Write a campaign message."), 400
+    recipients = _marketing_recipient_emails()
+    if not recipients:
+        return jsonify(ok=False, error="There are no customer emails on file yet."), 400
+    import mailer
+    if not mailer.configured():
+        return jsonify(ok=False, error=(
+            "Resend is not configured. Set MAIL_FROM and RESEND_API_KEY before sending.")), 400
+    now = _utcnow()
+    campaign_id = "CMP-" + secrets.token_hex(6).upper()
+    row = {
+        "id": campaign_id, "campaign_type": campaign_type, "subject": subject,
+        "content": content, "recipient_count": len(recipients),
+        "sent_count": 0, "failed_count": 0, "status": "sending",
+        "sent_at": now, "created_at": now,
+    }
+    execute(
+        "INSERT INTO marketing_campaigns (id,campaign_type,subject,content,recipient_count,"
+        "sent_count,failed_count,status,sent_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        tuple(row.values()),
+    )
+    sent = failed = 0
+    for email in recipients:
+        try:
+            ok, _detail = mailer.send_campaign_email(email, subject, content)
+        except Exception as exc:
+            ok = False
+            print(f"[marketing] campaign recipient failed: {exc}")
+        if ok:
+            sent += 1
+        else:
+            failed += 1
+    status = "sent" if not failed else ("partial" if sent else "failed")
+    execute("UPDATE marketing_campaigns SET sent_count=?, failed_count=?, status=? WHERE id=?",
+            (sent, failed, status, campaign_id))
+    row.update({"sent_count": sent, "failed_count": failed, "status": status})
+    try:
+        from supabase_store import mirror_marketing_campaign
+        mirror_marketing_campaign(row)
+    except Exception as exc:
+        print(f"[marketing] campaign mirror skipped: {exc}")
+    audit(authmod.current_admin(), "marketing.campaign", f"{campaign_id} {status} {sent}/{len(recipients)}", _ip())
+    return jsonify(ok=True, campaign=row, recipientCount=len(recipients), sent=sent, failed=failed)
+
+
 # =============================================== admin: growth & marketing
 @api.get("/admin/growth/settings")
 @authmod.require_admin

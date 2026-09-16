@@ -1344,11 +1344,102 @@ function bindAccount() {
   });
 }
 function marketingPanel() {
-  return `<div class="admin-card" id="mk-settings-card"><h3 class="admin-h">Referral settings</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-coupons-card"><h3 class="admin-h">Coupons</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-referrals-card"><h3 class="admin-h">Referral codes</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-backup-card"><h3 class="admin-h">Backups</h3><p class="admin-note">Product data is backed up to GitHub automatically every night at midnight. Customer orders stay on the server. You can also run a backup right now.</p><button type="button" class="btn" id="mk-backup-now">Back up now</button><p class="admin-note" id="mk-backup-out" hidden></p></div>`;
+  return `<div class="admin-card mk-campaign-card" id="mk-campaign-card">
+    <h3 class="admin-h">Send campaign</h3>
+    <p class="admin-note">Email every customer with an email on file from checkout — guests and account holders. Resend sends one private copy per recipient.</p>
+    <form id="mk-campaign-form" class="mk-campaign-form">
+      <label>Campaign type
+        <select name="campaignType" id="mk-campaign-type">
+          <option value="best_sellers">Best Sellers</option>
+          <option value="new_arrivals">New Arrivals</option>
+          <option value="discount_promo">Discount / Promo</option>
+          <option value="custom">Custom message</option>
+        </select>
+      </label>
+      <label>Subject <input name="subject" id="mk-campaign-subject" maxlength="180" required /></label>
+      <label>Message <textarea name="content" id="mk-campaign-content" rows="6" maxlength="10000" required></textarea></label>
+      <div class="mk-campaign-foot"><strong id="mk-recipient-count">Checking recipients…</strong><button type="button" class="btn btn-line" id="mk-refresh-recipients">Refresh count</button><button class="btn" type="submit" id="mk-send-campaign">Send campaign</button></div>
+      <p class="admin-note" id="mk-campaign-status" role="status" aria-live="polite"></p>
+    </form>
+    <h4 class="mk-campaign-log-title">Past campaigns</h4><div id="mk-campaign-log"><p class="empty">Loading…</p></div>
+  </div>
+  <div class="admin-card" id="mk-settings-card"><h3 class="admin-h">Referral settings</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-coupons-card"><h3 class="admin-h">Coupons</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-referrals-card"><h3 class="admin-h">Referral codes</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-backup-card"><h3 class="admin-h">Backups</h3><p class="admin-note">Product data is backed up to GitHub automatically every night at midnight. Customer orders stay on the server. You can also run a backup right now.</p><button type="button" class="btn" id="mk-backup-now">Back up now</button><p class="admin-note" id="mk-backup-out" hidden></p></div>`;
 }
 async function fillMarketing() {
   const api = (path, opts) => window.JA_NET.api(path, opts);
   const num = (v) => esc(String(v == null ? "" : v));
+  const campaignDefaults = {
+    best_sellers: { subject: "Our best sellers are waiting", content: "Discover the pieces our customers are loving right now. Shop our best sellers today." },
+    new_arrivals: { subject: "New arrivals at Jaura Store", content: "Meet the latest arrivals from Jaura Store. Find your next favourite piece today." },
+    discount_promo: { subject: "A special offer from Jaura Store", content: "Enjoy a special offer from Jaura Store for a limited time. Shop now while it lasts." },
+    custom: { subject: "A message from Jaura Store", content: "" },
+  };
+  const campaignTypeLabel = (type) => ({ best_sellers: "Best Sellers", new_arrivals: "New Arrivals", discount_promo: "Discount / Promo", custom: "Custom message" }[type] || type || "Campaign");
+  const paintCampaignLog = (rows) => {
+    const box = $("#mk-campaign-log");
+    if (!box) return;
+    box.innerHTML = rows.length ? `<div class="mk-campaign-log">${rows.map((r) => `<article class="mk-campaign-log-row"><div><strong>${esc(campaignTypeLabel(r.campaign_type))}</strong><small>${esc(r.subject || "")}</small></div><div><b>${num(r.sent_count || 0)} / ${num(r.recipient_count || 0)}</b><small>${esc(r.status || "sent")} · ${esc(r.sent_at || "")}</small></div></article>`).join("")}</div>` : `<p class="empty">No campaigns sent yet.</p>`;
+  };
+  const refreshCampaignRecipients = async () => {
+    const count = $("#mk-recipient-count");
+    if (count) count.textContent = "Checking recipients…";
+    try {
+      const d = await api("api/admin/marketing/recipients");
+      const n = Number(d.count || 0);
+      if (count) count.textContent = `${n.toLocaleString()} recipient${n === 1 ? "" : "s"} will receive this campaign`;
+      return n;
+    } catch (err) {
+      if (count) count.textContent = "Could not count recipients — refresh to try again.";
+      return 0;
+    }
+  };
+  const campaignForm = $("#mk-campaign-form");
+  if (campaignForm) {
+    const type = $("#mk-campaign-type");
+    const subject = $("#mk-campaign-subject");
+    const content = $("#mk-campaign-content");
+    const applyDefaults = () => {
+      const preset = campaignDefaults[type?.value] || campaignDefaults.custom;
+      if (subject) subject.value = preset.subject;
+      if (content) content.value = preset.content;
+    };
+    applyDefaults();
+    type?.addEventListener("change", applyDefaults);
+    $("#mk-refresh-recipients")?.addEventListener("click", refreshCampaignRecipients);
+    campaignForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const recipientCount = await refreshCampaignRecipients();
+      if (!recipientCount) { JA.toast("There are no customer emails on file yet."); return; }
+      if (!String(subject?.value || "").trim() || !String(content?.value || "").trim()) {
+        JA.toast("Add a subject and message before sending."); return;
+      }
+      if (!confirm(`Send this ${campaignTypeLabel(type?.value)} campaign to ${recipientCount.toLocaleString()} customer${recipientCount === 1 ? "" : "s"}?`)) return;
+      const btn = $("#mk-send-campaign"); const status = $("#mk-campaign-status");
+      if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+      if (status) status.textContent = "Sending — please keep this tab open.";
+      try {
+        const sent = await api("api/admin/marketing/campaigns", { method: "POST", json: { type: type?.value, subject: subject?.value, content: content?.value } });
+        const failed = Number(sent.failed || 0);
+        if (status) status.textContent = failed ? `Campaign sent to ${sent.sent || 0} of ${sent.recipientCount || recipientCount}; ${failed} failed.` : `Campaign sent to ${sent.sent || recipientCount} customer${Number(sent.sent || recipientCount) === 1 ? "" : "s"}.`;
+        JA.toast(failed ? "Campaign partially sent." : "Campaign sent.");
+        const log = await api("api/admin/marketing/campaigns");
+        paintCampaignLog(log.campaigns || []);
+      } catch (err) {
+        if (status) status.textContent = err.message || "Could not send the campaign.";
+        JA.toast(err.message || "Could not send the campaign.");
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "Send campaign"; }
+      }
+    };
+    refreshCampaignRecipients();
+  }
+  try {
+    const d = await api("api/admin/marketing/campaigns");
+    paintCampaignLog(d.campaigns || []);
+  } catch (e) {
+    const box = $("#mk-campaign-log");
+    if (box) box.innerHTML = `<p class="empty">Campaign history is unavailable right now.</p>`;
+  }
   try {
     const d = await api("api/admin/growth/settings"); const s = d.settings || {}; const card = $("#mk-settings-card");
     if (card) {

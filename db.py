@@ -101,6 +101,22 @@ CREATE TABLE IF NOT EXISTS abandoned_carts (
 CREATE INDEX IF NOT EXISTS idx_abandoned_due ON abandoned_carts(reminder_sent, last_activity_at);
 CREATE INDEX IF NOT EXISTS idx_abandoned_email ON abandoned_carts(email);
 
+-- Campaigns sent from Admin -> Marketing. Content is stored for audit, while
+-- recipient emails are never stored in the log; only the count is retained.
+CREATE TABLE IF NOT EXISTS marketing_campaigns (
+  id                TEXT PRIMARY KEY,
+  campaign_type     TEXT NOT NULL,
+  subject           TEXT NOT NULL,
+  content           TEXT NOT NULL,
+  recipient_count   INTEGER NOT NULL DEFAULT 0,
+  sent_count        INTEGER NOT NULL DEFAULT 0,
+  failed_count      INTEGER NOT NULL DEFAULT 0,
+  status            TEXT NOT NULL DEFAULT 'sent',
+  sent_at           TEXT NOT NULL,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_campaigns_sent_at ON marketing_campaigns(sent_at DESC);
+
 CREATE TABLE IF NOT EXISTS customers (
   id                  TEXT PRIMARY KEY,
   email               TEXT NOT NULL UNIQUE COLLATE NOCASE,

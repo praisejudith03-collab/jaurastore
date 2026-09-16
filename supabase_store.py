@@ -907,6 +907,33 @@ def mark_abandoned_reminder_sent(token, at):
         return False
 
 
+def mirror_marketing_campaign(row):
+    """Mirror one campaign audit row without storing recipient addresses."""
+    c = client()
+    if c is None or not row:
+        return False
+    try:
+        c.table("marketing_campaigns").upsert(dict(row)).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] campaign upsert failed: {exc}")
+        return False
+
+
+def load_marketing_campaigns(limit=100):
+    """Campaign audit rows, newest first. Never raises."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = (c.table("marketing_campaigns").select("*")
+               .order("sent_at", desc=True).limit(limit).execute())
+        return _res_data(res) or []
+    except Exception as exc:
+        print(f"[supabase] campaigns load failed: {exc}")
+        return []
+
+
 def save_customer(row):
     """Upsert one customer account. No-op when unconfigured."""
     c = client()

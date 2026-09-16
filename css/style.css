@@ -5710,6 +5710,18 @@ body[data-page="admin"] { background: #f8f9fc !important; }
 .referral-blurb { font-size: 14px; color: var(--taupe); margin: 0 0 12px; }
 .referral-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 
+.mk-campaign-form { display: grid; gap: 12px; }
+.mk-campaign-form label { display: grid; gap: 5px; font-size: 13px; font-weight: 600; }
+.mk-campaign-form input, .mk-campaign-form select, .mk-campaign-form textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--line, #e2e2e2); background: #fff; font: inherit; font-weight: 400; }
+.mk-campaign-form textarea { resize: vertical; min-height: 130px; line-height: 1.5; }
+.mk-campaign-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.mk-campaign-foot strong { margin-right: auto; color: #342922; font-size: 13px; }
+.mk-campaign-log-title { margin: 24px 0 8px; font-size: 15px; }
+.mk-campaign-log { border-top: 1px solid var(--line, #e2e2e2); }
+.mk-campaign-log-row { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line, #e2e2e2); font-size: 13px; }
+.mk-campaign-log-row > div:last-child { text-align: right; white-space: nowrap; }
+.mk-campaign-log-row strong, .mk-campaign-log-row small { display: block; }
+.mk-campaign-log-row small { color: var(--muted); margin-top: 3px; }
 .mk-inline-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
 .mk-inline-form input { padding: 8px 10px; border: 1px solid var(--line, #e2e2e2); }
 .mk-table { width: 100%; border-collapse: collapse; font-size: 14px; }
