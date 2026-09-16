@@ -56,6 +56,11 @@
     <form class="ck-grid" data-checkout>
       <div class="ck-main">
         <h2 data-i18n="ck.billing">Billing details</h2>
+        <section class="ck-guest-capture" aria-labelledby="ck-guest-title">
+          <h3 id="ck-guest-title" data-i18n="ck.guestTitle">Checking out as a guest?</h3>
+          <p data-i18n="ck.guestIntro">No account is needed. Enter your email below and we’ll use it to send your order confirmation and any cart reminder.</p>
+          <a href="account.html" data-i18n="ck.guestAccountLink">Want an account? Sign in or create one</a>
+        </section>
         <div class="form-grid">
           <div class="field"><label for="ck-first-name" data-i18n="ck.first">First name *</label><input id="ck-first-name" name="firstName" required autocomplete="given-name" /></div>
           <div class="field"><label for="ck-last-name" data-i18n="ck.last">Last name *</label><input id="ck-last-name" name="lastName" required autocomplete="family-name" /></div>
@@ -98,7 +103,7 @@
             <p data-i18n="ck.shipBenin">Benin 🇧🇯: goods come in batches to keep fare cheaper. Delivery is on the dates on the banner, unless you pay for express delivery.</p>
           </div>
           <div class="field"><label for="ck-phone" data-i18n="ck.phone">Phone *</label><input id="ck-phone" name="phone" required autocomplete="tel" inputmode="tel" /></div>
-          <div class="field"><label for="ck-email" data-i18n="ck.email">Email address *</label><input id="ck-email" name="email" type="email" required autocomplete="email" inputmode="email" /></div>
+          <div class="field"><label for="ck-email" data-i18n="ck.email">Email address *</label><input id="ck-email" name="email" type="email" required autocomplete="email" inputmode="email" /><small class="ck-field-hint" data-i18n="ck.guestEmailHint">Required for guest checkout confirmations and reminders. We won’t create an account.</small></div>
           <div class="field full"><label data-i18n="ck.notes">Order notes (optional)</label><textarea name="note" rows="3" data-i18n-placeholder="ck.notesPh" placeholder="Notes about your order, e.g. special delivery instructions."></textarea></div>
         </div>
       </div>

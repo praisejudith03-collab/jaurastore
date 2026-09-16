@@ -1392,6 +1392,17 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #f8f0e2; }
   font-size: 15px;
   font-weight: 600;
 }
+.ck-guest-capture {
+  margin: 0 0 20px;
+  padding: 14px 16px;
+  border: 1px solid #ead9c8;
+  border-radius: 10px;
+  background: #fffaf4;
+}
+.ck-guest-capture h3 { margin: 0 0 5px; font-size: 15px; }
+.ck-guest-capture p { margin: 0 0 7px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.ck-guest-capture a { color: var(--espresso); font-size: 13px; text-decoration: underline; }
+.ck-field-hint { display: block; margin-top: 6px; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
 .ck-validation-summary {
   margin: 14px 0 0;
   padding: 14px 16px;
