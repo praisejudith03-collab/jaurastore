@@ -1566,23 +1566,52 @@ def admin_live():
 @api.get("/admin/sales")
 @authmod.require_admin
 def admin_sales():
-    """Confirmed-only sales totals; pending orders are counted separately."""
+    """Confirmed-only sales totals; pending orders are counted separately.
+
+    ``from``/``to`` are optional inclusive HTML date filters and ``q`` searches
+    customer/order/product text in the stored order payload.
+    """
     raw = (request.args.get("days") or "30").strip().lower()
     days = "all" if raw == "all" else sec.clean_int(raw, 30, 1, 3650)
-    return jsonify(analytics_mod.sales_report(days))
+    return jsonify(analytics_mod.sales_report(
+        days, date_from=request.args.get("from"), date_to=request.args.get("to"),
+        search=request.args.get("q")))
 
 @api.get("/admin/sales.csv")
 @authmod.require_admin
 def admin_sales_csv():
     raw = (request.args.get("days") or "30").strip().lower()
     days = "all" if raw == "all" else sec.clean_int(raw, 30, 1, 3650)
-    body = analytics_mod.sales_csv(days)
+    body = analytics_mod.sales_csv(
+        days, date_from=request.args.get("from"), date_to=request.args.get("to"),
+        search=request.args.get("q"))
     resp = make_response("\ufeff" + body)
     resp.headers["Content-Type"] = "text/csv; charset=utf-8"
     resp.headers["Content-Disposition"] = "attachment; filename=jaura-sales.csv"
     return resp
 
 # ---------------------------------------------------------- admin: orders
+def _admin_date_bounds():
+    """Return an inclusive start and exclusive end for admin date filters.
+
+    Inputs are HTML date values (YYYY-MM-DD). Invalid values are ignored so a
+    malformed filter can never broaden a query into a surprising SQL clause.
+    """
+    def valid(value):
+        value = sec.clean(value, 10)
+        try:
+            return datetime.date.fromisoformat(value).isoformat() if value else ""
+        except (TypeError, ValueError):
+            return ""
+
+    start = valid(request.args.get("from"))
+    end_day = valid(request.args.get("to"))
+    end = ""
+    if end_day:
+        end = (datetime.date.fromisoformat(end_day) + datetime.timedelta(days=1)).isoformat()
+    return start, end
+
+
 def _order_row(r):
     try:
         payload = json.loads(r["payload"] or "{}")
@@ -1606,12 +1635,28 @@ def admin_orders():
     limit = sec.clean_int(request.args.get("limit"), 200, 1, 1000)
     status = sec.clean(request.args.get("status"), 20)
     q = sec.clean(request.args.get("q"), 80).lower()
+    start, end = _admin_date_bounds()
     sql = ("SELECT id, payload, email, customer_name, phone, country, city, zone, address, "
            "note, payment, proof_url, items_count, total, currency, source, status, at, updated_at "
            "FROM orders")
-    params = []
+    where, params = [], []
     if status in STATUSES:
-        sql += " WHERE status=?"; params.append(status)
+        where.append("status=?"); params.append(status)
+    if start:
+        where.append("at >= ?"); params.append(start + "T00:00:00")
+    if end:
+        where.append("at < ?"); params.append(end + "T00:00:00")
+    if q:
+        like = "%" + q + "%"
+        # Search the decoded payload and the indexed contact columns before
+        # LIMIT. This prevents an older matching order disappearing simply
+        # because newer non-matches filled the first page.
+        where.append("(id LIKE ? OR payload LIKE ? OR email LIKE ? OR customer_name LIKE ? OR phone LIKE ? OR city LIKE ? OR zone LIKE ?)")
+        params.extend([like] * 7)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    # The indexed predicates (including search) are applied before LIMIT.
+    # Decode once more below to retain the existing flexible JSON matching.
     sql += " ORDER BY at DESC LIMIT ?"
     params.append(limit)
     rows = query(sql, tuple(params))
@@ -1623,9 +1668,22 @@ def admin_orders():
 @api.get("/admin/orders.csv")
 @authmod.require_admin
 def admin_orders_csv():
-    rows = query("SELECT id, at, status, customer_name, phone, email, country, city, zone, "
-                 "address, note, payment, total, currency, items_count, proof_url FROM orders "
-                 "ORDER BY at DESC")
+    start, end = _admin_date_bounds()
+    q = sec.clean(request.args.get("q"), 80).lower()
+    where, params = [], []
+    if start:
+        where.append("at >= ?"); params.append(start + "T00:00:00")
+    if end:
+        where.append("at < ?"); params.append(end + "T00:00:00")
+    if q:
+        like = "%" + q + "%"
+        where.append("(id LIKE ? OR payload LIKE ? OR email LIKE ? OR customer_name LIKE ? OR phone LIKE ? OR city LIKE ? OR zone LIKE ?)")
+        params.extend([like] * 7)
+    sql = ("SELECT id, at, status, customer_name, phone, email, country, city, zone, "
+           "address, note, payment, total, currency, items_count, proof_url FROM orders")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    rows = query(sql + " ORDER BY at DESC", tuple(params))
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["id", "date", "status", "name", "phone", "email", "country", "city",
@@ -3130,14 +3188,35 @@ CAMPAIGN_TYPES = ("best_sellers", "new_arrivals", "discount_promo", "custom")
 @authmod.require_admin
 def marketing_campaigns():
     limit = sec.clean_int(request.args.get("limit"), 100, 1, 500)
-    rows = [dict(r) for r in query(
-        "SELECT id, campaign_type, subject, content, recipient_count, sent_count, "
-        "failed_count, status, sent_at, created_at FROM marketing_campaigns "
-        "ORDER BY sent_at DESC LIMIT ?", (limit,))]
+    q = sec.clean(request.args.get("q"), 80).lower()
+    start, end = _admin_date_bounds()
+    where, params = [], []
+    if q:
+        like = "%" + q + "%"
+        where.append("(campaign_type LIKE ? OR subject LIKE ? OR content LIKE ?)")
+        params.extend([like, like, like])
+    if start:
+        where.append("COALESCE(sent_at, created_at) >= ?"); params.append(start + "T00:00:00")
+    if end:
+        where.append("COALESCE(sent_at, created_at) < ?"); params.append(end + "T00:00:00")
+    sql = ("SELECT id, campaign_type, subject, content, recipient_count, sent_count, "
+           "failed_count, status, sent_at, created_at FROM marketing_campaigns")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    rows = [dict(r) for r in query(sql + " ORDER BY COALESCE(sent_at, created_at) DESC LIMIT ?", tuple(params + [limit]))]
     if not rows:
         try:
             from supabase_store import load_marketing_campaigns
-            rows = load_marketing_campaigns(limit) or []
+            rows = load_marketing_campaigns(500) or []
+            # The cloud fallback has no SQL WHERE. Apply exactly the same
+            # filters before limiting so a remote campaign log behaves like
+            # the local admin log.
+            def matches(row):
+                row = row or {}
+                text = " ".join(str(row.get(k) or "") for k in ("campaign_type", "subject", "content")).lower()
+                stamp = str(row.get("sent_at") or row.get("created_at") or "")[:10]
+                return (not q or q in text) and (not start or stamp >= start) and (not end or stamp < end)
+            rows = [r for r in rows if matches(r)][:limit]
         except Exception as exc:
             print(f"[marketing] campaign log load skipped: {exc}")
     return jsonify(ok=True, campaigns=rows)

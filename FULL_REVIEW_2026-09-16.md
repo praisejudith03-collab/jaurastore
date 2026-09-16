@@ -6,9 +6,22 @@
 
 ## Executive result
 
-The dependency-complete regression suite is green: **1,025 passed and 2 skipped**. The HTML smoke pass returned **HTTP 200 for all 20 HTML pages**, and the application/server modules and browser bundles compile. No new blocking application defect was found in the reviewed flows.
+The full available regression suite is green: **1,057 passed and 22 skipped**. The HTML smoke pass returned **HTTP 200 for all 20 HTML pages**, and the application/server modules and browser bundles compile. No new blocking application defect was found in the reviewed flows.
 
-The two skipped tests are the PostgreSQL and browser/integration paths described below. They are environment limitations, not passing substitutes for those checks.
+The skipped tests are browser/integration paths described below. They are environment limitations, not passing substitutes for those checks.
+
+## Corrected items 6–11 review
+
+The corrected scope was reviewed against the original requirements rather than the previously reported bonus work:
+
+- **Item 6 — search and dates:** Orders now expose search, From and To controls; server-side status/date/search predicates run before pagination and the filtered CSV follows the same criteria. Sales now filter confirmed totals, pending counts and top products by customer/order/product search and inclusive custom dates, while preserving relative ranges. Marketing now filters the campaign log by campaign text/type and inclusive dates, including the remote fallback path.
+- **Item 7 — Delivery Zones:** the former table has been replaced with responsive fare/status cards. Existing edit, delete, save, cancel and server-confirmation behavior remains in place without rebuilding the form while an operator is typing.
+- **Item 8 — Settings:** homepage hero, branding, moving banner, and live site settings are independently collapsible `details` sections. Existing IDs, submit handlers, upload controls and server-backed form behavior remain unchanged.
+- **Item 9 — bulk actions:** Orders and Products have checkbox selection controls, visible-item selection, selected counts, clear selection, confirmation prompts, action buttons, and success/failure feedback. Order confirmation/deletion and product show/hide/deletion reuse the existing authenticated mutation paths; failed actions are not reported as successful.
+- **Item 10 — Orders badge:** the Orders navigation badge is present in the desktop sidebar and mobile dock, starts hidden at zero, and is updated from the needs-attention pending-order count or the filtered Orders response.
+- **Item 11 — category names:** category card fields now use min/max width and box sizing constraints, allow long text to remain usable, and switch to a single-column responsive layout on narrow screens.
+
+The UI and API changes were checked with syntax compilation, API regression tests, responsive CSS tests, and a custom date/search endpoint check. Real Chromium visual interaction could not be completed in this workspace because the Playwright browser binary download failed; this remains an explicit review limitation below.
 
 ## What was checked
 
@@ -28,9 +41,9 @@ The two skipped tests are the PostgreSQL and browser/integration paths described
 - Admin authentication/session and CSRF-protected writes.
 - Dashboard analytics, live activity, needs-attention queue, pending orders and low-stock queue.
 - Product create/update/delete, stock visibility, photo flows and authenticated CSV export.
-- Orders, receipts, status changes, partial-payment notices and sales CSV export.
-- Marketing campaign composition, recipient count, campaign audit log, private per-recipient sends, customer-contact export and signed unsubscribe links.
-- Referral/coupon tools, review moderation, categories, delivery zones/page, payment/site settings, branding and account/sync controls.
+- Orders, receipts, status changes, partial-payment notices, search/date filters, bulk actions, Orders pending badge and sales CSV export.
+- Marketing campaign composition, search/date filters, recipient count, campaign audit log, private per-recipient sends, customer-contact export and signed unsubscribe links.
+- Referral/coupon tools, review moderation, categories (including responsive name inputs), delivery-zone cards/page, collapsible payment/site settings, branding and account/sync controls.
 
 ### Data and deployment boundaries
 
@@ -53,7 +66,7 @@ In this sandbox, with no Supabase credentials or local production site-settings 
 
 ### P1 — Browser and PostgreSQL integration coverage still needs a dependency-complete runner
 
-`tests/test_browser_smoke.py` and `tests/test_delivery_seeds_postgres.py` could not be collected in this workspace because `playwright` and `pgserver` are not installed. `tests/e2e.py` therefore could not run either. The static/API suite passed, but this does not validate real mobile layout, browser event wiring, autoplay, file upload rendering, or PostgreSQL delivery seed behaviour.
+The API and PostgreSQL paths ran in this workspace, but `tests/test_browser_smoke.py` skipped its 22 browser cases because the Playwright Chromium executable was not present. A browser download was attempted and failed at the network/TLS step. The static/API suite passed, but this does not validate real mobile layout, browser event wiring, card rendering, details disclosure interaction, bulk-action click flows, autoplay or file uploads.
 
 **Action:** run the complete CI/browser environment (`pip install -r requirements-test.txt`, Playwright browser installation if required) before merging.
 
@@ -102,24 +115,21 @@ Customer profile updates show a success message but do not rehydrate every visib
 ## Verification commands and results
 
 ```text
-/tmp/jaura-venv/bin/pytest -q \
-  --ignore=tests/test_browser_smoke.py \
-  --ignore=tests/test_delivery_seeds_postgres.py
-  1025 passed, 2 skipped
+/tmp/jaura-test-venv/bin/python -m pytest -q
+  1057 passed, 22 skipped
+
+python -m py_compile api.py analytics.py
+node --check js/admin.js
+  passed
 
 python tools/split_schema.py --check
   18 schema sections match supabase_schema.sql
 
-find . -maxdepth 2 -name '*.py' ... -m py_compile
-  all Python modules compile
-
-node --check js/app.js
-node --check js/admin.js
-node --check js/store.js
-  passed
-
-20 HTML pages requested from a local Flask smoke server
+20 HTML pages requested from the existing local Flask smoke review
   20 returned HTTP 200
+
+Playwright browser review
+  Chromium download attempted; network/TLS failure, so 22 browser tests remain skipped
 ```
 
-The local smoke server was stopped after inspection. The missing `playwright` and `pgserver` packages remain the only reason the full test command cannot be collected in this workspace.
+The API, PostgreSQL-compatible paths, static checks and responsive CSS checks passed. The remaining browser dependency prevents a real Chromium review of mobile layout, disclosure interaction, cards, selection flows and file uploads; run `playwright install chromium` in CI before merging.

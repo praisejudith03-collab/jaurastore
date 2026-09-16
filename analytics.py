@@ -343,24 +343,57 @@ def _sales_cutoffs(days=30):
     return _days_ago(n - 1), _iso(_now() - datetime.timedelta(days=n - 1)), n, False
 
 
-def sales_report(days=30):
+def _sales_bounds(days=30, date_from=None, date_to=None):
+    """Return (start day, start timestamp, range label, all time, end ts, end day).
+
+    Custom dates are inclusive at the day level and exclusive at midnight on
+    the following day. Invalid custom values are ignored individually, which
+    keeps the report useful when an admin clears one side of the range.
+    """
+    def day_value(value):
+        try:
+            value = str(value or "").strip()
+            return datetime.date.fromisoformat(value).isoformat() if value else ""
+        except (TypeError, ValueError):
+            return ""
+
+    from_day = day_value(date_from)
+    to_day = day_value(date_to)
+    if from_day or to_day:
+        end_day = (datetime.date.fromisoformat(to_day) + datetime.timedelta(days=1)).isoformat() if to_day else ""
+        return (from_day, from_day + "T00:00:00" if from_day else "", "custom", False,
+                end_day + "T00:00:00" if end_day else "", to_day or _day())
+    since_day, since_iso, days_out, is_all = _sales_cutoffs(days)
+    return since_day, since_iso, days_out, is_all, "", _day()
+
+
+def _sales_where(days=30, date_from=None, date_to=None, search=None, status=CONFIRMED):
+    since_day, since_iso, days_out, is_all, end_iso, to_day = _sales_bounds(days, date_from, date_to)
+    where = ["status=?"]
+    params = [status]
+    if since_iso:
+        where.append("at >= ?")
+        params.append(since_iso)
+    if end_iso:
+        where.append("at < ?")
+        params.append(end_iso)
+    q = str(search or "").strip().lower()[:80]
+    if q:
+        like = "%" + q + "%"
+        where.append("(id LIKE ? OR customer_name LIKE ? OR email LIKE ? OR payload LIKE ?)")
+        params.extend([like, like, like, like])
+    return " AND ".join(where), tuple(params), since_day, days_out, to_day
+
+
+def sales_report(days=30, date_from=None, date_to=None, search=None):
     """Confirmed-only sales totals. Pending orders never touch revenue/units.
 
-    Returns confirmed revenue by currency, order count, units sold, average
-    order value, top products, and the pending count reported separately as
-    orders still awaiting confirmation.
+    ``date_from`` and ``date_to`` are inclusive HTML date values. ``search``
+    searches order/customer/product text before aggregation, so the cards and
+    top-products list describe the same filtered set.
     """
-    since_day, since_iso, days_out, is_all = _sales_cutoffs(days)
-    if is_all:
-        where = "status=?"
-        params: tuple = (CONFIRMED,)
-        pend_where = "status=?"
-        pend_params: tuple = ("pending",)
-    else:
-        where = "status=? AND at >= ?"
-        params = (CONFIRMED, since_iso)
-        pend_where = "status=? AND at >= ?"
-        pend_params = ("pending", since_iso)
+    where, params, since_day, days_out, to_day = _sales_where(days, date_from, date_to, search, CONFIRMED)
+    pend_where, pend_params, _pday, _pout, _pto = _sales_where(days, date_from, date_to, search, "pending")
 
     o = dict(one(
         f"SELECT COUNT(*) n, COALESCE(SUM(total),0) value, "
@@ -383,8 +416,8 @@ def sales_report(days=30):
         f"SELECT COUNT(*) n FROM orders WHERE {pend_where}", pend_params) or {})
     pending_count = pend.get("n", 0) or 0
 
-    # Top products from confirmed-order payloads only.
-    agg: dict = {}
+    # Top products from the same filtered confirmed-order payloads only.
+    agg = {}
     rows = query(f"SELECT id, payload FROM orders WHERE {where}", params) or []
     for r in rows:
         oid = r["id"] if "id" in r.keys() else ""
@@ -410,15 +443,8 @@ def sales_report(days=30):
                 price = 0
             if qty <= 0:
                 continue
-            row = agg.setdefault(pid, {
-                "id": pid,
-                "name": str(it.get("name") or pid),
-                "units": 0,
-                "revenue": 0,
-                "orders": 0,
-            })
-            if not row["name"]:
-                row["name"] = str(it.get("name") or pid)
+            row = agg.setdefault(pid, {"id": pid, "name": str(it.get("name") or pid),
+                                       "units": 0, "revenue": 0, "orders": 0})
             row["units"] += qty
             row["revenue"] += qty * price
             if pid not in seen_in_order:
@@ -430,7 +456,7 @@ def sales_report(days=30):
         "ok": True,
         "days": days_out,
         "from": since_day or "",
-        "to": _day(),
+        "to": to_day,
         "orders": order_count,
         "units": units,
         "revenue": revenue,
@@ -443,20 +469,14 @@ def sales_report(days=30):
     }
 
 
-def sales_csv(days=30):
+def sales_csv(days=30, date_from=None, date_to=None, search=None):
     """One row per confirmed order. No BOM here — the HTTP layer adds it."""
-    _since_day, since_iso, _days_out, is_all = _sales_cutoffs(days)
-    if is_all:
-        rows = query(
-            "SELECT id, at, customer_name, email, phone, city, zone, payment, "
-            "total, currency, items_count, payload FROM orders "
-            "WHERE status=? ORDER BY at DESC", (CONFIRMED,)) or []
-    else:
-        rows = query(
-            "SELECT id, at, customer_name, email, phone, city, zone, payment, "
-            "total, currency, items_count, payload FROM orders "
-            "WHERE status=? AND at >= ? ORDER BY at DESC",
-            (CONFIRMED, since_iso)) or []
+    where, params, _since_day, _days_out, _to_day = _sales_where(
+        days, date_from, date_to, search, CONFIRMED)
+    rows = query(
+        "SELECT id, at, customer_name, email, phone, city, zone, payment, "
+        "total, currency, items_count, payload FROM orders "
+        f"WHERE {where} ORDER BY at DESC", params) or []
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["Order", "Date (UTC)", "Customer", "Email", "Phone", "City",
