@@ -1,7 +1,7 @@
 """Abandoned-cart reminder lifecycle.
 
 A reminder is only created after a shopper has entered an email on the
-checkout form. The cart is eligible exactly once, after two hours with no
+checkout form. The cart is eligible exactly once, after twenty minutes with no
 activity. The SQLite row is the local working copy and is mirrored to
 Supabase when configured; order completion marks it converted before a
 reminder can be sent.
@@ -11,7 +11,7 @@ import json
 
 from db import execute, one, query
 
-REMINDER_AFTER_HOURS = 2
+REMINDER_AFTER_MINUTES = 20
 
 
 def _now():
@@ -20,7 +20,7 @@ def _now():
 
 def _cutoff():
     return (datetime.datetime.utcnow()
-            - datetime.timedelta(hours=REMINDER_AFTER_HOURS)).replace(microsecond=0).isoformat()
+            - datetime.timedelta(minutes=REMINDER_AFTER_MINUTES)).replace(microsecond=0).isoformat()
 
 
 def _row_from_supabase(row):

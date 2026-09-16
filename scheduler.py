@@ -14,6 +14,7 @@ import datetime, os, threading, time
 
 TICK_SECONDS = 300
 _started = threading.Event()
+_health = {"maintenanceLastRun": "", "remindersLastRun": "", "lastError": ""}
 
 
 def _keep_alive(logger=None):
@@ -100,7 +101,9 @@ def _loop(logger=None):
     while True:
         try:
             _tick(logger)
+            _health["maintenanceLastRun"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
         except Exception as exc:                  # pragma: no cover
+            _health["lastError"] = str(exc)[:200]
             if logger: logger.exception("maintenance tick failed: %s", exc)
         time.sleep(TICK_SECONDS)
 
@@ -136,9 +139,20 @@ def _abandoned_loop(logger=None):
     while True:
         try:
             _abandoned_tick(logger)
+            _health["remindersLastRun"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
         except Exception as exc:                  # pragma: no cover
+            _health["lastError"] = str(exc)[:200]
             if logger: logger.exception("abandoned-cart worker survived: %s", exc)
         time.sleep(TICK_SECONDS)
+
+
+def health_snapshot():
+    """Public-safe liveness used by /healthz and the 20-minute watchdog."""
+    names = {thread.name for thread in threading.enumerate() if thread.is_alive()}
+    return {**_health, "started": _started.is_set(),
+            "maintenanceAlive": "jaura-maintenance" in names,
+            "remindersAlive": "jaura-abandoned-carts" in names,
+            "intervalSeconds": TICK_SECONDS}
 
 
 def start(app=None):

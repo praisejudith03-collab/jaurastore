@@ -440,7 +440,15 @@ def create_app():
         # keep-alive ping from its own cache. A cached 200 never reaches the
         # dyno, so Render would still count the service as idle and spin it
         # down - and the next real visitor eats the ~50s cold start.
-        resp = jsonify(ok=True, env=Config.ENV)
+        background = None
+        if Config.SCHEDULER_ENABLED and Config.ENV != "testing":
+            try:
+                import scheduler
+                background = scheduler.health_snapshot()
+            except Exception:
+                background = {"started": False, "maintenanceAlive": False,
+                              "remindersAlive": False}
+        resp = jsonify(ok=True, env=Config.ENV, background=background)
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return resp
 

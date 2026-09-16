@@ -50,6 +50,7 @@ create table if not exists products (
   colors           jsonb,
   options          jsonb,
   "optionStock"    jsonb,
+  "optionPrices"   jsonb,
   "placeholderImage" text,
   "usesPlaceholder"  boolean default false,
   source           text default 'admin',
@@ -77,6 +78,7 @@ alter table products add column if not exists "compareNgn"       numeric;
 alter table products add column if not exists stock              integer default 0;
 alter table products add column if not exists images             jsonb;
 alter table products add column if not exists "optionStock"      jsonb;
+alter table products add column if not exists "optionPrices"     jsonb;
 alter table products add column if not exists "placeholderImage" text;
 alter table products add column if not exists "usesPlaceholder"  boolean default false;
 alter table products add column if not exists badge              text;

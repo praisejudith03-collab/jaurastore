@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=147";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=147";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=148";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=148";
 }
 
 function renderCategories() {
@@ -787,12 +787,10 @@ function paintProduct(root, p) {
       ${stockN > 0 ? "" : `<p class="pdp-stock">${t("pdp.oos")}</p>`}
       <p class="stock-line" data-stock-line></p>
       ${(() => {
-        const unit = JA.priceOf(p);
-        const ten = Math.round(unit * 0.9) * 10;
-        return `<div class="pdp-bulk">
-          <strong>${t("pdp.bulk")}</strong>
-          <p>${t("pdp.bulkPrice", { price: JA.money(ten) })}</p>
-        </div>`;
+        const tiers = JA.bulkDiscountTiers ? JA.bulkDiscountTiers() : [];
+        if (!tiers.length) return "";
+        return `<div class="pdp-bulk"><strong>${t("pdp.bulk")}</strong><ul>${tiers.map((tier) =>
+          `<li>${tier.minQuantity}+ units: ${tier.percent}% off</li>`).join("")}</ul></div>`;
       })()}
       <button type="button" class="wish-btn pdp-wish ${JA.isWished(p.id) ? "is-on" : ""}" data-wish="${p.id}"><svg class="wish-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg><span>${t("nav.wishlist")}</span></button>
       ${showDesc ? `<p class="pdp-desc">${JA.escape(desc)}</p>` : ""}
@@ -947,6 +945,9 @@ function paintProduct(root, p) {
       root.querySelectorAll(`[data-opt="${oi}"]`).forEach((x) => x.classList.remove("is-on"));
       b.classList.add("is-on");
       chosen[oi] = b.dataset.val;
+      const selectedVariant = variantPartial();
+      const priceEl = root.querySelector(`[data-price-for="${p.id}"]`);
+      if (priceEl) priceEl.innerHTML = `<span class="now">${JA.money(JA.priceOf(p, JA.currency(), selectedVariant))}</span>`;
       updateStockUI();
     });
   });
@@ -1400,7 +1401,7 @@ function paintCheckoutTotals(form) {
             <span>${JA.escape(JA.displayName(i.product))}${i.color ? " — " + JA.escape(variantLabel(i.product, i.color)) : ""} <b>× ${i.qty}</b></span>
           </div>
         </td>
-        <td>${JA.money(JA.priceOf(i.product, cur) * i.qty, cur)}</td>
+        <td>${JA.money(i.payUnit * i.qty, cur)}</td>
       </tr>`).join("");
   }
   const sub = document.querySelector("[data-ck-sub]");
@@ -1764,7 +1765,7 @@ function captureCheckoutCart(form) {
     id: item.id,
     name: item.product?.name || "Item",
     qty: item.qty,
-    price: JA.priceOf(item.product, item.cur || JA.currency()),
+    price: item.payUnit,
     color: item.color || "",
   }));
   if (!items.length) return Promise.resolve(null);
@@ -2178,10 +2179,10 @@ function renderCheckout() {
         name: i.product.name,
         qty: i.qty,
         color: i.color,
-        price: JA.priceOf(i.product, cur),
+        price: JA.bulkUnit(i.product, JA.cartQtyFor(i.id), cur, i.color),
       })),
     });
-    // A completed checkout must close the captured cart before the five-day
+    // A completed checkout must close the captured cart before the twenty-minute
     // reminder job gets a chance to consider it.
     closeCapturedCheckoutCart();
 

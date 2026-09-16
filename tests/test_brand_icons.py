@@ -68,7 +68,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # database on every currency switch, js/app.js drops price bounds captured in
 # the old currency, sw.js steps aside for a forced catalogue refresh, and the
 # HTML <head> points at the favicon ladder in the `public-assets` bucket.
-SHARED_TOKEN = "146"
+SHARED_TOKEN = "148"
 
 
 def _image_size(path):

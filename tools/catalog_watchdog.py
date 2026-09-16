@@ -112,6 +112,21 @@ def _get_with_retries(url, headers=None, attempts=3):
     raise RuntimeError(f"request failed after {max(1, attempts)} attempt(s): {last}")
 
 
+def fetch_service_health(base):
+    """Audit HTTP and in-process background workers before catalog checks."""
+    url = base.rstrip("/") + "/healthz"
+    _status, _headers, body = _get_with_retries(url)
+    payload = json.loads(body.decode("utf-8"))
+    if not payload.get("ok"):
+        raise RuntimeError("service health endpoint did not report ok")
+    background = payload.get("background")
+    if isinstance(background, dict) and not (
+            background.get("started") and background.get("maintenanceAlive") and
+            background.get("remindersAlive")):
+        raise RuntimeError("background scheduler workers are not healthy")
+    return payload
+
+
 def fetch_public_catalog(base, attempts=3):
     """GET /api/catalog with retries (a free dyno's cold start is ~50s)."""
     url = base.rstrip("/") + "/api/catalog"
@@ -339,6 +354,7 @@ def main():
               "(GitHub Actions secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)")
         return 2
     try:
+        fetch_service_health(base)
         payload = fetch_public_catalog(base)
         db_rows = fetch_db_rows(supabase_url, service_key)
     except Exception as exc:                        # noqa: BLE001 - reported below

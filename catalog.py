@@ -88,7 +88,7 @@ NGN_TO_CFA = 0.44
 BASE_FIELDS = (
     "id", "sku", "slug", "name", "nameFr", "category", "priceCfa", "compareCfa",
     "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
-    "stock", "badge", "featured", "online", "colors", "options",
+    "stock", "badge", "featured", "online", "colors", "options", "optionPrices",
 )
 
 
@@ -634,6 +634,7 @@ def normalize(product):
         "colors": list(product.get("colors") or []),
         "options": list(product.get("options") or []),
         "optionStock": _clean_option_stock(product.get("optionStock")),
+        "optionPrices": _clean_option_prices(product.get("optionPrices") or product.get("option_prices")),
         # The id this row had before it was given a canonical one, so old
         # product links / order lines / reviews keep resolving. See
         # product_index().
@@ -669,6 +670,20 @@ def _clean_option_stock(raw):
         if not key:
             continue
         out[key] = sec.clean_int(v, 0, 0, 10**7) or 0
+    return out
+
+
+def _clean_option_prices(raw):
+    """Per-option NGN price overrides; omitted values inherit base price."""
+    import security as sec
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, value in list(raw.items())[:200]:
+        label = sec.clean(key, 160)
+        price = sec.clean_int(value, None, 0, 10**9)
+        if label and price is not None:
+            out[label] = price
     return out
 
 

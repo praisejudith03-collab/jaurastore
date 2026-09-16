@@ -59,7 +59,7 @@ FULL_PRODUCT_COLUMNS = {
     "id", "legacyId", "sku", "slug", "name", "nameFr", "descriptionFr",
     "category", "priceCfa", "compareCfa", "priceNgn", "compareNgn",
     "image", "image_url", "images", "description", "stock", "stock_quantity",
-    "badge", "featured", "online", "colors", "options", "optionStock",
+    "badge", "featured", "online", "colors", "options", "optionStock", "optionPrices",
     "placeholderImage", "usesPlaceholder", "source", "updated_at",
 }
 

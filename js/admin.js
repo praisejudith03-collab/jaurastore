@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=147" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=148" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -266,10 +266,12 @@ function refreshOptionChips() {
   const qty = Number(document.getElementById("stock-qty")?.value);
   const stock = status === "out" ? 0 : (qty > 0 ? qty : 24);
   const typed = currentOptionStock();
+  const typedPrices = currentOptionPrices();
   const optionStock = { ...(existing.optionStock || {}), ...typed };
-  const fake = { ...existing, options: collectOptions(box || document), stock, optionStock };
+  const optionPrices = { ...(existing.optionPrices || {}), ...typedPrices };
+  const fake = { ...existing, options: collectOptions(box || document), stock, optionStock, optionPrices };
   const varBox = document.getElementById("var-box");
-  if (varBox) varBox.innerHTML = optionStockHTML(fake);
+  if (varBox) varBox.innerHTML = variantPanelsHTML(fake);
 }
 function addOptionRow(title, values) {
   const box = document.getElementById("opt-box");
@@ -489,6 +491,26 @@ function currentOptionStock() {
   });
   return map;
 }
+function currentOptionPrices() {
+  const map = {};
+  document.querySelectorAll("[data-opt-price]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-price");
+    if (key && inp.value !== "") map[key] = Math.max(0, Number(inp.value) || 0);
+  });
+  return map;
+}
+function optionPricingHTML(p) {
+  const options = p.options || [];
+  const overrides = p.optionPrices || {};
+  const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
+    const key = `${opt.title}: ${value}`;
+    const inherited = Number(p.priceNgn) || 0;
+    const valueNgn = overrides[key] != null ? overrides[key] : (overrides[value] != null ? overrides[value] : "");
+    return `<label class="adx-var"><span class="adx-var-name"><strong>${JA.escape(key)}</strong><span>Blank inherits ${JA.money(inherited, "NGN")}</span></span><span class="adx-var-qty">Override ₦<input type="number" min="0" data-opt-price="${JA.escape(key)}" value="${valueNgn}" placeholder="${inherited}" /></span></label>`;
+  })).join("");
+  return `<h3>Option price overrides</h3><p class="admin-note">Leave a price blank to inherit the base product price. Add an override only when this option costs more or less.</p>${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to set individual prices.</p>`}`;
+}
+function variantPanelsHTML(p) { return optionStockHTML(p) + optionPricingHTML(p); }
 function optionStockHTML(p) {
   const opt = (p.options || [])[0];
   const vals = (opt && opt.values) || p.colors || [];
@@ -582,15 +604,15 @@ function productForm(p = {}) {
     <input type="hidden" name="id" value="${p.id || ""}" />
     <div class="au-2">
       <div class="field"><label>Price ₦</label><div class="au-price"><input name="priceNgn" type="number" min="0" required value="${p.priceNgn || ""}" /><i>₦</i></div></div>
-      <div class="field"><label>Strikethrough ₦</label><div class="au-price"><input name="compareNgn" type="number" min="0" value="${p.compareNgn || ""}" /><i>₦</i></div></div>
+      <div class="field"><label>Price reduction / strikethrough ₦</label><div class="au-price"><input name="compareNgn" type="number" min="0" value="${p.compareNgn || ""}" /><i>₦</i></div></div>
     </div>
     <p class="admin-note" id="cfa-preview">CFA on the website is converted from Naira at 1 ₦ = 0.44 F CFA. You only enter ₦.</p>
     <div class="field"><label>Add a description</label><textarea name="description" rows="3">${JA.escape(p.description || "")}</textarea></div>
     <div class="field"><label>Description (French — shown when the site is in French)</label><textarea name="descriptionFr" rows="3" placeholder="Optional">${JA.escape(p.descriptionFr || "")}</textarea></div>
-    <div class="field"><label>Ribbon</label>
+    <div class="field"><label>Promo display ribbon (Sale, New Arrival, Best Seller)</label>
       <select name="badge">
         <option value="">None</option>
-        ${["sale", "new", "bestseller"].map((b) => `<option value="${b}" ${p.badge === b ? "selected" : ""}>${b}</option>`).join("")}
+        ${[["sale","Sale / Promo Discount"],["new","New Product Arrival"],["bestseller","Best Seller"]].map(([b,label]) => `<option value="${b}" ${p.badge === b ? "selected" : ""}>${label}</option>`).join("")}
       </select>
     </div>
     <label class="au-tog"><span>Show in online store</span>
@@ -607,7 +629,7 @@ function productForm(p = {}) {
       <button type="button" data-preset="Scent">+ Scent</button>
     </div>
     <button type="button" class="au-link-btn" id="add-opt">+ Add Option</button>
-    <div id="var-box">${optionStockHTML({ ...p, options: opts })}</div>
+    <div id="var-box">${variantPanelsHTML({ ...p, options: opts })}</div>
     <h3>Inventory</h3>
     <div class="au-2">
       <div class="field"><label>Availability</label>
@@ -688,6 +710,11 @@ async function handleProductSubmit(e, existing) {
     hasOptionStock = true;
   });
   if (hasOptionStock) stock = Object.values(optionStock).reduce((n, q) => n + q, 0);
+  const optionPrices = {};
+  e.target.querySelectorAll("[data-opt-price]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-price");
+    if (key && inp.value !== "") optionPrices[key] = Math.max(0, Number(inp.value) || 0);
+  });
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
   const priceNgn = num("priceNgn") || 0;
   const compareNgn = num("compareNgn");
@@ -721,6 +748,7 @@ async function handleProductSubmit(e, existing) {
       colors: colorOpt ? colorOpt.values : [],
       options,
       optionStock: hasOptionStock ? optionStock : (existing?.optionStock || {}),
+      optionPrices,
       nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
       descriptionFr: String(fd.get("descriptionFr") || "").trim() || existing?.descriptionFr || "",
   });
@@ -1666,12 +1694,21 @@ async function fillMarketing() {
   try {
     const d = await api("api/admin/growth/settings"); const s = d.settings || {}; const card = $("#mk-settings-card");
     if (card) {
-      card.innerHTML = `<h3 class="admin-h">Referral settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? F CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's discount % (code used at checkout)<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p></label><button class="btn" type="submit">Save settings</button></form>`;
+      const tierRows = (s.bulkDiscountTiers || []).map((tier) => `<div class="mk-tier-row" data-bulk-tier><label>Minimum quantity<input type="number" min="2" name="bulkMin" value="${num(tier.minQuantity)}" required /></label><label>Discount %<input type="number" min="1" max="90" name="bulkPercent" value="${num(tier.percent)}" required /></label><button type="button" class="btn btn-line" data-remove-tier>Remove</button></div>`).join("");
+      card.innerHTML = `<h3 class="admin-h">Discount & referral settings</h3><form id="mk-set-form" class="admin-form"><h4>Flexible bulk / volume discounts</h4><p class="admin-note">Create quantity tiers such as 10 units = 5%, 15 units = 10%, or 30 units = 20%. With no tiers, no automatic volume discount is applied.</p><div id="mk-bulk-tiers">${tierRows || `<p class="admin-note" data-no-tiers>No volume discount tiers configured.</p>`}</div><button class="btn btn-line" type="button" id="mk-add-tier">+ Add discount tier</button><hr /><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? F CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's promo discount %<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><button class="btn" type="submit">Save settings</button></form>`;
       const cfaNote = () => { const f = $("#mk-set-form"); const note = $("#mk-cfa-note"); if (!f || !note) return; const spend = Number(f.minSpendNgn.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = rate > 0 ? `CFA shoppers qualify from ${Math.round(spend * rate).toLocaleString()} F CFA (₦${spend.toLocaleString()} × ${rate}).` : ""; };
       cfaNote(); ["minSpendNgn", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", cfaNote); });
+      const tiersBox = $("#mk-bulk-tiers");
+      const addTier = (min = "", percent = "") => {
+        tiersBox?.querySelector("[data-no-tiers]")?.remove();
+        tiersBox?.insertAdjacentHTML("beforeend", `<div class="mk-tier-row" data-bulk-tier><label>Minimum quantity<input type="number" min="2" name="bulkMin" value="${min}" required /></label><label>Discount %<input type="number" min="1" max="90" name="bulkPercent" value="${percent}" required /></label><button type="button" class="btn btn-line" data-remove-tier>Remove</button></div>`);
+      };
+      $("#mk-add-tier")?.addEventListener("click", () => addTier());
+      tiersBox?.addEventListener("click", (event) => { if (event.target.closest("[data-remove-tier]")) event.target.closest("[data-bulk-tier]")?.remove(); });
       $("#mk-set-form").onsubmit = async (e) => {
         e.preventDefault(); const fd = new FormData(e.target);
-        const patch = { referralEnabled: e.target.referralEnabled.checked, minSpendNgn: Number(fd.get("minSpendNgn")), cfaRate: Number(fd.get("cfaRate")), buyerPercent: Number(fd.get("buyerPercent")), referrerPercent: Number(fd.get("referrerPercent")), milestone: Number(fd.get("milestone")) , };
+        const bulkDiscountTiers = [...e.target.querySelectorAll("[data-bulk-tier]")].map((row) => ({ minQuantity: Number(row.querySelector('[name="bulkMin"]')?.value), percent: Number(row.querySelector('[name="bulkPercent"]')?.value) }));
+        const patch = { referralEnabled: e.target.referralEnabled.checked, minSpendNgn: Number(fd.get("minSpendNgn")), cfaRate: Number(fd.get("cfaRate")), buyerPercent: Number(fd.get("buyerPercent")), referrerPercent: Number(fd.get("referrerPercent")), milestone: Number(fd.get("milestone")), bulkDiscountTiers };
         try { await api("api/admin/growth/settings", { method: "POST", json: patch }); JA.toast("Marketing settings saved."); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not save."); }
       };
     }
@@ -1870,7 +1907,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=147" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=148" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -2213,7 +2250,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=147", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=148", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

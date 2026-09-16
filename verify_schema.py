@@ -42,7 +42,7 @@ REQUIRED_TABLES = (
 # is absent, PostgREST rejects the query rather than returning a partial row.
 REQUIRED_COLUMNS = {
     "products": ("id", '"legacyId"', "name", "category", '"priceNgn"', '"priceCfa"',
-                 '"compareNgn"', '"compareCfa"', "image_url", "images",
+                 '"compareNgn"', '"compareCfa"', "image_url", "images", '"optionPrices"',
                  "stock_quantity", "description", "featured", "online", "updated_at"),
     "product_reviews": ("product_id", "order_id", "email", "name", "rating", "title", "body",
                         "hidden", "created_at", "updated_at"),

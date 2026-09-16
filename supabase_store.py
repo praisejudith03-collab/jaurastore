@@ -1358,7 +1358,7 @@ def mirror_growth_settings(settings_dict):
     if c is None:
         return
     try:
-        rows = [{"key": k, "value": str(v)} for k, v in dict(settings_dict).items()]
+        rows = [{"key": k, "value": (json.dumps(v, separators=(",", ":")) if isinstance(v, (list, dict)) else str(v))} for k, v in dict(settings_dict).items()]
         c.table("growth_settings").upsert(rows).execute()
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] growth settings upsert failed: {exc}")

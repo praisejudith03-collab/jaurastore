@@ -645,7 +645,7 @@ def _price_int(value):
         return 0
 
 
-def _server_unit_price(product, currency):
+def _server_unit_price(product, currency, variant=""):
     """The authoritative unit price for one product in the order currency.
 
     Loaded from the live catalogue (Supabase in production): the browser's
@@ -656,6 +656,17 @@ def _server_unit_price(product, currency):
                      else product.get("price_cfa"))
     ngn = _price_int(product.get("priceNgn") if product.get("priceNgn") is not None
                      else product.get("price_ngn"))
+    overrides = product.get("optionPrices") or product.get("option_prices") or {}
+    if isinstance(overrides, dict) and variant:
+        candidates = [str(variant).strip()]
+        candidates.extend(part.strip() for part in str(variant).split("·") if part.strip())
+        candidates.extend(_variant_values(variant))
+        folded = {_fold(k): v for k, v in overrides.items()}
+        for candidate in candidates:
+            if _fold(candidate) in folded:
+                ngn = _price_int(folded[_fold(candidate)])
+                cfa = max(0, round(ngn * catalog_mod.NGN_TO_CFA))
+                break
     if currency == "CFA":
         if cfa:
             return cfa
@@ -695,6 +706,9 @@ def _checkout_items(clean_items, currency):
 
     items = []
     subtotal = 0
+    total_quantity_by_product = {}
+    for group in aggregated.values():
+        total_quantity_by_product[group["id"]] = total_quantity_by_product.get(group["id"], 0) + group["qty"]
     for g in aggregated.values():
         pid = g["id"]
         prod = products_map.get(pid)
@@ -719,8 +733,11 @@ def _checkout_items(clean_items, currency):
                 code="out_of_stock",
                 items=[{"id": pid, "name": prod.get("name") or g["name"],
                         "variant": g["variant"]}]), 409)
-        unit = _server_unit_price(prod, currency)
-        line_price = unit * g["qty"]
+        unit = _server_unit_price(prod, currency, g["variant"])
+        import growth
+        bulk_percent = growth.bulk_discount_percent(total_quantity_by_product[g["id"]])
+        pay_unit = round(unit * (100 - bulk_percent) / 100) if bulk_percent else unit
+        line_price = pay_unit * g["qty"]
         subtotal += line_price
         items.append({
             "id": pid,
@@ -2430,7 +2447,10 @@ def _load_site():
 @api.get("/site")
 def site_config():
     try:
-        resp = jsonify(ok=True, site=_site_payload(_load_site()))
+        site = _site_payload(_load_site())
+        import growth
+        site["bulkDiscountTiers"] = growth.settings().get("bulkDiscountTiers") or []
+        resp = jsonify(ok=True, site=site)
         # Never cacheable: the bank details on the checkout come from this
         # answer, and a CDN (or a bfcache) holding yesterday's row after an
         # Admin edit is indistinguishable from "my edit disappeared".

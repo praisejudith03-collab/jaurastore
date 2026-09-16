@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_user_id);
 
 -- Carts with an email entered during checkout. A cart is eligible for one
--- reminder after two quiet hours; `reminder_sent` is intentionally explicit
+-- reminder after twenty quiet minutes; `reminder_sent` is intentionally explicit
 -- so retries and scheduler runs cannot email the same cart twice.
 CREATE TABLE IF NOT EXISTS abandoned_carts (
   token             TEXT PRIMARY KEY,

@@ -16,11 +16,13 @@ DEFAULTS = {
     "buyerPercent": 5,         # discount for the referred buyer
     "referrerPercent": 10,     # reward coupon, hard-capped at 10
     "milestone": 2,            # successful purchases that trigger the reward
+    "bulkDiscountTiers": [],    # [{minQuantity, percent}], no static discount
 }
 
 INT_KEYS = ("referralEnabled", "minSpendNgn",
             "buyerPercent", "referrerPercent", "milestone")
 FLOAT_KEYS = ("cfaRate",)
+JSON_KEYS = ("bulkDiscountTiers",)
 
 
 def _utcnow():
@@ -36,6 +38,11 @@ def settings():
             continue
         if k in INT_KEYS:
             out[k] = int(float(v))
+        elif k in JSON_KEYS:
+            try:
+                out[k] = json.loads(v) if isinstance(v, str) else v
+            except (TypeError, ValueError):
+                out[k] = []
         elif k in FLOAT_KEYS:
             try:
                 out[k] = float(v)
@@ -59,7 +66,32 @@ def _cap(s):
         s["cfaRate"] = NGN_TO_CFA
     if not (0.01 <= s["cfaRate"] <= 100):
         s["cfaRate"] = NGN_TO_CFA
+    tiers = {}
+    for item in (s.get("bulkDiscountTiers") or [])[:20]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            qty = max(2, min(int(item.get("minQuantity")), 100000))
+            pct = max(1, min(int(item.get("percent")), 90))
+        except (TypeError, ValueError):
+            continue
+        tiers[qty] = pct
+    s["bulkDiscountTiers"] = [
+        {"minQuantity": qty, "percent": tiers[qty]} for qty in sorted(tiers)]
     return s
+
+
+def bulk_discount_percent(quantity, tiers=None):
+    """Highest configured volume tier reached by one product quantity."""
+    if tiers is None:
+        tiers = settings().get("bulkDiscountTiers") or []
+    try:
+        quantity = int(quantity)
+    except (TypeError, ValueError):
+        return 0
+    reached = [int(t["percent"]) for t in tiers
+               if quantity >= int(t["minQuantity"])]
+    return reached[-1] if reached else 0
 
 
 def save_settings(patch, actor=""):
@@ -81,12 +113,15 @@ def save_settings(patch, actor=""):
                 cur[k] = float(patch.get(k))
             except (TypeError, ValueError):
                 continue
+        elif k in JSON_KEYS:
+            cur[k] = patch.get(k) if isinstance(patch.get(k), list) else []
         else:
             cur[k] = sec.clean(str(patch.get(k) or ""), 4000)
     cur = _cap(cur)
     for k, v in cur.items():
         execute("INSERT INTO growth_settings (key, value) VALUES (?,?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, str(v)))
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (k, json.dumps(v) if k in JSON_KEYS else str(v)))
     audit(actor or "admin", "growth.settings", json.dumps(cur)[:400], "")
     try:
         from supabase_store import mirror_growth_settings

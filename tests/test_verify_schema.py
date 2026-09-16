@@ -114,7 +114,7 @@ def test_the_required_column_inventory_covers_the_agreed_contract():
         "product_id", "order_id", "email", "name", "rating", "title", "body", "hidden",
         "created_at", "updated_at")
     assert len(vs.REQUIRED_TABLES) == 12
-    assert len(vs.REQUIRED_COLUMNS["products"]) == 15
+    assert len(vs.REQUIRED_COLUMNS["products"]) == 16
 
 
 def test_constraints_are_checked_against_the_sql_that_is_applied():

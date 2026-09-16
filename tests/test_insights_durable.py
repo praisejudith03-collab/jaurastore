@@ -361,7 +361,7 @@ def test_boot_survives_supabase_being_unreachable(monkeypatch):
     boot = appmod.create_app()
     assert boot is not None
     assert boot.test_client().get("/healthz").get_json() == {
-        "ok": True, "env": Config.ENV}
+        "ok": True, "env": Config.ENV, "background": None}
     assert analytics_mod.report(days=7)["totals"]["pageViews"] == 0
 
 
