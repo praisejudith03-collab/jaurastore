@@ -16,15 +16,24 @@ and fails loudly when any of these invariants break:
     the public catalogue exactly once - in either direction (missing rows are
     the "storefront shows fewer products than Supabase" defect; extra rows
     are rows that should have been filtered out);
-  * the 254 approved customer rows (wix-001..wix-258 minus the rows the
-    owner deleted on purpose: wix-006, wix-007, wix-108) still exist in
-    Supabase and are online=true - the "products disappear" guard. If you
-    INTENTIONALLY unpublish or delete one of them, change EXPECTED_WIX_IDS
-    (or disable the watchdog) in the same change - otherwise this alert is
-    doing its job;
+  * the live catalogue does not collapse between runs (see MAX_SHRINK_RATIO).
+    Retiring products is normal shopkeeping and never alerts; losing a fifth
+    of the shop at once is a bug and does;
   * the served wix-* rows carry products-table columns (source / name_fr /
     legacyId) - a silent fallback to the bundled js/products-data.js snapshot
-    is caught even though that snapshot also holds the same 258 ids.
+    is caught even though that snapshot also holds the same ids.
+
+READ-ONLY against production. An earlier version kept a hardcoded list of 254
+approved wix-* ids and PATCHed any of them that were offline back to
+online=true on every run. That fought the shop owner: taking a product off
+sale was silently undone within 20 minutes, so the only way to retire one was
+to delete the row - which then tripped the "approved row no longer exists"
+alarm. Deciding what to sell belongs to the owner; this tool only reports
+what it sees. The one exception is a cache-busting re-read of the storefront,
+which writes nothing.
+
+Background-worker health is reported but no longer aborts the run, so a sick
+scheduler cannot hide a catalogue defect behind "could not measure".
 
 It never prints secrets: the URL and the service key stay in the
 environment, and failures are reported as counts and product ids only.
@@ -42,16 +51,13 @@ DEFAULT_BASE = "https://jaurastore.com.ng"
 REQUEST_TIMEOUT = 45
 RETRY_DELAYS = (2, 5)
 
-# The approved customer catalogue: 254 wix-* rows - ids wix-001..wix-258
-# (CUSTOMER_CATALOG_IMPORT_REVIEW.md) minus the rows the owner deleted on
-# purpose, which must never trip this guard again:
-#   wix-006 / wix-007 / wix-108  (2026-09-10)
-#   wix-002  "100L storage bag"  (permanently purged - see
-#            catalog.PERMANENTLY_REMOVED_IDS and tools/purge_product.py)
-# Zero-padded to three digits.
-RETIRED_WIX_IDS = frozenset({"wix-002", "wix-006", "wix-007", "wix-108"})
-EXPECTED_WIX_IDS = tuple(f"wix-{i:03d}" for i in range(1, 259)
-                          if f"wix-{i:03d}" not in RETIRED_WIX_IDS)
+# How far the live catalogue may shrink between two runs before this is
+# treated as data loss rather than curation. Retiring a handful of products
+# is normal shopkeeping; losing a fifth of the shop in twenty minutes is a
+# bug. The baseline is the previous run's count, carried in the state file.
+MAX_SHRINK_RATIO = 0.20
+MIN_LIVE_PRODUCTS = 50
+STATE_PATH = os.environ.get("WATCHDOG_STATE", ".watchdog-state.json")
 
 # Rows whose `source` marks a tombstone (a soft delete or a superseded bulk
 # import) are not live products - the app filters them too (supabase_store).
@@ -232,52 +238,6 @@ def fetch_db_rows(supabase_url, service_key):
     return rows
 
 
-def is_complete_product(row):
-    """Return whether a row has the minimum data required for publication."""
-    row = row or {}
-    has_price = any(
-        isinstance(row.get(key), (int, float)) and row.get(key) > 0
-        for key in ("priceCfa", "priceNgn"))
-    images = row.get("images")
-    has_image = bool(row.get("image_url") or row.get("image") or
-                     (isinstance(images, list) and any(images)))
-    return bool(str(row.get("name") or "").strip() and
-                str(row.get("category") or "").strip() and
-                has_price and has_image)
-
-
-def activate_complete_products(supabase_url, service_key, db_rows,
-                               expected_ids=EXPECTED_WIX_IDS):
-    """Set complete, approved offline rows active through PostgREST.
-
-    The products schema's storefront status field is ``online``; setting it to
-    true is the canonical equivalent of ``status = active``. Incomplete,
-    retired, tombstone, and test-fixture rows are deliberately never changed.
-    """
-    approved = set(expected_ids)
-    candidates = []
-    for row in db_rows or []:
-        pid = str((row or {}).get("id") or "")
-        source = str((row or {}).get("source") or "").strip().lower()
-        if (pid in approved and row.get("online") is not True and
-                source not in TOMBSTONE_SOURCES and not is_test_fixture(row) and
-                is_complete_product(row)):
-            candidates.append(pid)
-    headers = {
-        "apikey": service_key,
-        "Authorization": "Bearer " + service_key,
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal",
-    }
-    body = json.dumps({"online": True}).encode("utf-8")
-    for pid in candidates:
-        url = supabase_url.rstrip("/") + "/rest/v1/products?id=eq." + urllib.parse.quote(pid)
-        status, _headers, _body = _request(url, headers=headers, method="PATCH", data=body)
-        if status not in (200, 204):
-            raise RuntimeError(f"activation request for {pid} answered HTTP {status}")
-    return candidates
-
-
 def refresh_storefront_cache(base):
     """Force an uncached catalogue read so the storefront rebuilds immediately."""
     url = base.rstrip("/") + "/api/catalog?watchdog_refresh=" + str(int(time.time()))
@@ -287,7 +247,27 @@ def refresh_storefront_cache(base):
         raise RuntimeError(f"storefront cache refresh answered HTTP {status}")
 
 
-def check(db_rows, payload, expected_ids=EXPECTED_WIX_IDS):
+def load_state(path=None):
+    """Previous run's measurements. Missing/corrupt state is not an error."""
+    try:
+        with open(path or STATE_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(live_count, path=None):
+    try:
+        with open(path or STATE_PATH, "w", encoding="utf-8") as fh:
+            json.dump({"liveCount": int(live_count),
+                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                      fh)
+    except OSError:                                # pragma: no cover
+        pass
+
+
+def check(db_rows, payload, previous=None):
     """Compare the two measurements. Returns (failures, summary_lines)."""
     failures, summary = [], []
 
@@ -339,20 +319,30 @@ def check(db_rows, payload, expected_ids=EXPECTED_WIX_IDS):
             f"{len(extra)} product(s) are served that Supabase does not list "
             f"online: {', '.join(extra[:15])}")
 
-    # 3. the approved 254 customer rows never disappear and never go offline
-    gone = [pid for pid in expected_ids if pid not in live]
-    offline = [pid for pid in expected_ids if pid in live
-               and live[pid].get("online") is not True]
-    if gone:
-        failures.append(
-            f"{len(gone)} of the {len(expected_ids)} approved wix-* rows no "
-            f"longer exist in the Supabase products table: "
-            f"{', '.join(gone[:15])}" + (" …" if len(gone) > 15 else ""))
-    if offline:
-        failures.append(
-            f"{len(offline)} of the {len(expected_ids)} approved wix-* rows "
-            f"are not online=true in Supabase: {', '.join(offline[:15])}"
-            + (" …" if len(offline) > 15 else ""))
+    # 3. the shop must not lose a large slice of its catalogue at once.
+    #
+    # This replaces a hardcoded list of approved wix-* ids. That list made
+    # every deliberate retirement look like data loss, and - worse - it fed
+    # an auto-repair step that set the owner's offline products back online
+    # every 20 minutes, so the only way to retire a product was to delete the
+    # row. Curation is the shopkeeper's call; this guard only asks that the
+    # catalogue never collapses without someone noticing.
+    previous_count = None
+    if isinstance(previous, dict):
+        try:
+            previous_count = int(previous.get("liveCount"))
+        except (TypeError, ValueError):
+            previous_count = None
+    if previous_count and previous_count >= MIN_LIVE_PRODUCTS:
+        floor = int(previous_count * (1 - MAX_SHRINK_RATIO))
+        if len(visible) < floor:
+            failures.append(
+                f"the live catalogue fell from {previous_count} to "
+                f"{len(visible)} products since the last run (more than "
+                f"{int(MAX_SHRINK_RATIO * 100)}%) - if this was a deliberate "
+                f"bulk retirement, the next run adopts the new figure")
+    if db_rows and not visible:
+        failures.append("the Supabase products table lists no online products")
 
     # 4. the answer must come from the products table, not the local snapshot
     wix_rows = [p for p in products if str(p["id"]).startswith("wix-")]
@@ -391,44 +381,62 @@ def main():
         print("FAIL  SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set "
               "(GitHub Actions secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)")
         return 2
+    # Worker health is reported, but it no longer aborts the run. It used to
+    # be checked first and raise, so a sick scheduler meant the catalogue was
+    # never compared at all - the shop could quietly lose products while every
+    # alert talked about threads. The two concerns are now independent.
+    health_failure = None
     try:
         fetch_service_health(base)
+    except Exception as exc:                        # noqa: BLE001 - reported below
+        health_failure = str(exc)
+
+    try:
         payload = fetch_public_catalog(base)
         db_rows = fetch_db_rows(supabase_url, service_key)
     except Exception as exc:                        # noqa: BLE001 - reported below
         print(f"FAIL  could not measure production: {exc}")
+        if health_failure:
+            print(f"FAIL  {health_failure}")
         return 2
 
-    # Autonomous repair: approved rows are activated only when they are fully
-    # sellable. Any storefront mismatch also forces a cache-busting read. Then
-    # measure both sides again so this run reports the post-repair truth.
-    initial_failures, _initial_summary = check(db_rows, payload)
-    try:
-        activated = activate_complete_products(supabase_url, service_key, db_rows)
-        needs_refresh = bool(activated) or any(
-            "MISSING from the public catalogue" in failure
-            for failure in initial_failures)
-        if needs_refresh:
+    # A stale CDN copy is the one benign cause of "the storefront is missing a
+    # product", so re-read it uncached before believing the mismatch. This is
+    # the only remediation left here: the watchdog reads production and never
+    # writes to it. (It used to PATCH offline products back online every 20
+    # minutes, which overrode the owner's own catalogue decisions.)
+    previous = load_state()
+    initial_failures, _initial_summary = check(db_rows, payload, previous)
+    if any("MISSING from the public catalogue" in f for f in initial_failures):
+        try:
             refresh_storefront_cache(base)
             db_rows = fetch_db_rows(supabase_url, service_key)
             payload = fetch_public_catalog(base)
-            if activated:
-                print("REPAIR  set status=active (online=true) for: " +
-                      ", ".join(activated))
             print("REPAIR  storefront catalogue cache refreshed")
-    except Exception as exc:                       # noqa: BLE001 - reported below
-        print(f"FAIL  autonomous repair failed: {exc}")
-        return 2
+        except Exception as exc:                   # noqa: BLE001 - reported below
+            print(f"FAIL  storefront cache refresh failed: {exc}")
+            return 2
 
-    failures, summary = check(db_rows, payload)
+    failures, summary = check(db_rows, payload, previous)
     for line in summary:
         print("INFO  " + line)
+    if health_failure:
+        failures = failures + [health_failure]
+
+    # Record this run's figure either way: the shrink guard compares against
+    # the last observation, so a deliberate bulk retirement alerts once and
+    # then becomes the new normal instead of alerting forever.
+    live_now = sum(1 for row in (db_rows or [])
+                   if str((row or {}).get("source") or "").strip().lower()
+                   not in TOMBSTONE_SOURCES
+                   and (row or {}).get("online") is not False)
+    save_state(live_now)
+
     if failures:
         for line in failures:
             print("FAIL  " + line)
         return 1
-    print("PASS  every online Supabase product is on the public storefront, "
-          "including all approved wix-* rows")
+    print("PASS  every online Supabase product is on the public storefront")
     return 0
 
 

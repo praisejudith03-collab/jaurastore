@@ -131,7 +131,7 @@ Four independent layers now guard the catalogue:
 
 * It needs the repository secrets `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (GitHub repo → **Settings → Secrets and variables → Actions** — the same two values Render uses; the key is never printed anywhere). The existing customer-import workflow already uses these secret names.
 * Scheduled workflows run only on the **default branch** and are auto-disabled by GitHub after 60 days with no repository activity — any commit re-enables them. The watchdog also has a **Run workflow** button for on-demand checks.
-* If you ever **intentionally** unpublish or delete one of the 258 approved `wix-*` rows, update `EXPECTED_WIX_IDS` in `tools/catalog_watchdog.py` (or disable the workflow) in the same change — otherwise the alert is correctly telling you the catalogue shrank.
+* Unpublishing or deleting a product needs no code change (superseded 2026-09-16). The watchdog once held a hardcoded list of approved `wix-*` ids and re-activated any of them found offline, so a retirement was undone within 20 minutes and deleting the row was the only way to make it stick. It is now read-only and compares the storefront against Supabase, alerting only if the catalogue collapses between runs.
 * New products you add via the admin portal are protected automatically: the watchdog requires **every** online Supabase row to appear on the storefront, whatever its id.
 
 ---

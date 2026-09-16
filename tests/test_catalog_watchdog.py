@@ -16,7 +16,9 @@ directly over PostgREST. These tests pin its logic offline:
 
 Run with:  python3 -m pytest tests/test_catalog_watchdog.py -q
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -39,6 +41,11 @@ _spec = importlib.util.spec_from_file_location(
 wd = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(wd)
 
+# Products the owner retired before these fixtures were written. The watchdog
+# no longer has an opinion about specific ids; this only keeps the fixture
+# shaped like the real catalogue.
+_RETIRED = frozenset({"wix-002", "wix-006", "wix-007", "wix-108"})
+
 OFFLINE_NON_WIX = [
     ("jau-mirror-fail", "X"), ("jau-mirror-ok", "Y"), ("jau-mirror-post", "Mirror Post"),
     ("jau-stock-a", "Stock Test jau-stock-a"), ("jau-stock-b", "Stock Test jau-stock-b"),
@@ -56,14 +63,13 @@ def _production_shape():
     """(db_rows, api_payload) exactly like production: 273 table rows
     (254 online wix-* + 18 offline non-wix), 254 served products.
 
-    The owner deleted wix-006, wix-007 and wix-108 on purpose, so they are
-    in neither measurement - the retired ids must stay silent (see
-    test_watchdog_passes_on_the_healthy_production_shape)."""
+    Products the owner retired are absent from both measurements, which is
+    normal shopkeeping and must stay silent."""
     seed = json.load(open(os.path.join(ROOT, "data", "seed.json"), encoding="utf-8"))
     db_rows, api_products = [], []
     for p in seed:
         pid = str(p.get("id", ""))
-        if pid.startswith("wix-") and pid not in wd.RETIRED_WIX_IDS:
+        if pid.startswith("wix-") and pid not in _RETIRED:
             db_rows.append({"id": pid, "online": True, "source": "admin"})
             api_products.append({          # public shape, table columns included
                 "id": pid, "sku": p.get("sku"), "slug": p.get("slug"),
@@ -80,13 +86,6 @@ def _production_shape():
 
 # ------------------------------------------------------------- check() logic
 def test_watchdog_passes_on_the_healthy_production_shape():
-    # The approved set is 254: wix-001..wix-258 minus the rows the
-    # owner deleted on purpose. Their absence from Supabase is expected and
-    # must never raise the "products disappear" alarm (the scheduled run was
-    # red until they were retired here).
-    assert len(wd.EXPECTED_WIX_IDS) == 254, len(wd.EXPECTED_WIX_IDS)
-    assert wd.RETIRED_WIX_IDS == frozenset({"wix-002", "wix-006", "wix-007", "wix-108"})
-    assert not (set(wd.EXPECTED_WIX_IDS) & wd.RETIRED_WIX_IDS)
     db_rows, payload = _production_shape()
     assert len(payload["products"]) == 254
     assert len(db_rows) == 254 + len(OFFLINE_NON_WIX)
@@ -138,26 +137,58 @@ def test_watchdog_fails_when_the_api_serves_a_row_supabase_does_not_list():
     assert any("jau-ghost" in f and "does not list" in f for f in failures), failures
 
 
-def test_watchdog_fails_when_an_approved_wix_row_disappears_from_supabase():
-    # wix-009 is still approved (wix-006/007/108 were retired: their absence
-    # is expected and covered by test_watchdog_passes_on_the_healthy_...).
-    db_rows, payload = _production_shape()
-    db_rows = [r for r in db_rows if r["id"] != "wix-009"]
-    failures, _summary = wd.check(db_rows, payload)
-    assert any("wix-009" in f and "no longer exist" in f for f in failures), failures
-    # and the row is still being served by the API even though Supabase no
-    # longer lists it (the set-equality side of the same alarm)
-    assert any("wix-009" in f and "does not list" in f for f in failures), failures
+def test_retiring_a_product_is_not_an_alert():
+    """The owner's own curation must never page anyone.
 
-
-def test_watchdog_fails_when_an_approved_wix_row_goes_offline():
+    The previous version kept a hardcoded list of approved wix-* ids, so
+    taking a product off sale - or deleting it - was reported as data loss.
+    Worse, an auto-repair step put offline products back online every 20
+    minutes, so deleting the row was the only way to make a retirement stick.
+    Both directions are now silent.
+    """
     db_rows, payload = _production_shape()
-    for r in db_rows:
-        if r["id"] == "wix-042":
-            r["online"] = False
+    # taken offline in Supabase and correspondingly absent from the storefront
+    for row in db_rows:
+        if row["id"] == "wix-042":
+            row["online"] = False
     payload["products"] = [p for p in payload["products"] if p["id"] != "wix-042"]
+    # and a second one deleted outright
+    db_rows = [r for r in db_rows if r["id"] != "wix-009"]
+    payload["products"] = [p for p in payload["products"] if p["id"] != "wix-009"]
     failures, _summary = wd.check(db_rows, payload)
-    assert any("wix-042" in f and "not online=true" in f for f in failures), failures
+    assert failures == [], failures
+
+
+def test_watchdog_fails_when_the_catalogue_collapses_between_runs():
+    """Curation is fine; losing a fifth of the shop at once is not."""
+    db_rows, payload = _production_shape()
+    keep = {p["id"] for p in payload["products"][:100]}
+    db_rows = [r for r in db_rows if r["id"] in keep or not r["id"].startswith("wix-")]
+    payload["products"] = [p for p in payload["products"] if p["id"] in keep]
+    failures, _summary = wd.check(db_rows, payload, {"liveCount": 254})
+    assert any("fell from 254" in f for f in failures), failures
+    # ...and once that is the new normal, it stops alerting
+    failures, _summary = wd.check(db_rows, payload, {"liveCount": 100})
+    assert failures == [], failures
+
+
+def test_a_small_retirement_does_not_trip_the_shrink_guard():
+    db_rows, payload = _production_shape()
+    dropped = {p["id"] for p in payload["products"][:12]}
+    db_rows = [r for r in db_rows if r["id"] not in dropped]
+    payload["products"] = [p for p in payload["products"] if p["id"] not in dropped]
+    failures, _summary = wd.check(db_rows, payload, {"liveCount": 254})
+    assert failures == [], failures
+
+
+def test_the_watchdog_never_writes_to_production():
+    """A monitor that repairs its own subject cannot be trusted to report on
+    it - and this one was overruling the owner. Only GET/HEAD may appear."""
+    source = open(os.path.join(ROOT, "tools", "catalog_watchdog.py"),
+                  encoding="utf-8").read()
+    assert "activate_complete_products" not in source
+    for verb in ('"PATCH"', '"POST"', '"PUT"', '"DELETE"'):
+        assert verb not in source, f"watchdog issues a {verb} request"
 
 
 def test_watchdog_fails_on_a_duplicated_product_id():
@@ -188,29 +219,6 @@ def test_watchdog_ignores_tombstones_but_flags_a_visible_online_null():
     db_rows.append({"id": "wix-260", "online": None, "source": "admin"})
     failures, _summary = wd.check(db_rows, payload)   # visible but unserved
     assert any("wix-260" in f and "MISSING" in f for f in failures), failures
-
-
-def test_autonomous_activation_only_updates_complete_approved_rows(monkeypatch):
-    rows = [
-        {"id": "wix-010", "online": False, "source": "admin", "name": "Ready",
-         "category": "Bags", "priceCfa": 1000, "image_url": "https://img/x.jpg"},
-        {"id": "wix-011", "online": False, "source": "admin", "name": "No image",
-         "category": "Bags", "priceCfa": 1000},
-        {"id": "custom", "online": False, "source": "admin", "name": "Not approved",
-         "category": "Bags", "priceCfa": 1000, "image_url": "https://img/x.jpg"},
-    ]
-    requests = []
-
-    def fake_request(url, headers=None, timeout=120, method="GET", data=None):
-        requests.append((url, method, json.loads(data.decode())))
-        return 204, {}, b""
-
-    monkeypatch.setattr(wd, "_request", fake_request)
-    activated = wd.activate_complete_products("https://db.test", "secret", rows,
-                                              expected_ids=("wix-010", "wix-011"))
-    assert activated == ["wix-010"]
-    assert requests[0][1:] == ("PATCH", {"online": True})
-    assert "id=eq.wix-010" in requests[0][0]
 
 
 def test_storefront_refresh_is_an_uncached_automatic_request(monkeypatch):
@@ -338,3 +346,52 @@ def test_watchdog_workflow_stays_safe():
     # the alert step only uses the workflow's own token
     for m in ("GH_TOKEN: ${{ github.token }}",):
         assert m in code
+
+
+def test_unhealthy_workers_no_longer_blind_the_catalogue_check(monkeypatch, tmp_path):
+    """A sick scheduler must not stop the catalogue from being measured.
+
+    fetch_service_health() used to run first and raise, so every run ended at
+    "could not measure production: background scheduler workers are not
+    healthy" - for four days the shop could have been losing products and no
+    alert would have said so. Health is now reported alongside the catalogue
+    result, not instead of it.
+    """
+    db_rows, payload = _production_shape()
+    db_rows = [r for r in db_rows if r["id"] != "wix-100"]      # a real defect
+
+    def unhealthy(_base):
+        raise RuntimeError("background scheduler workers are not healthy: "
+                           "stopped worker(s): reminders")
+
+    monkeypatch.setattr(wd, "fetch_service_health", unhealthy)
+    monkeypatch.setattr(wd, "fetch_public_catalog", lambda *a, **k: payload)
+    monkeypatch.setattr(wd, "fetch_db_rows", lambda *a, **k: db_rows)
+    monkeypatch.setattr(wd, "refresh_storefront_cache", lambda *a, **k: None)
+    monkeypatch.setattr(wd, "STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setenv("SUPABASE_URL", "https://db.test")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = wd.main()
+    text = out.getvalue()
+    assert rc == 1, text                      # an invariant broke, not "could not measure"
+    assert "could not measure" not in text
+    assert "workers are not healthy" in text  # still reported
+    assert "wix-100" in text                  # and the catalogue defect is visible
+
+
+def test_the_run_records_its_size_so_the_next_run_has_a_baseline(monkeypatch, tmp_path):
+    db_rows, payload = _production_shape()
+    state = tmp_path / "state.json"
+    monkeypatch.setattr(wd, "fetch_service_health", lambda *a, **k: None)
+    monkeypatch.setattr(wd, "fetch_public_catalog", lambda *a, **k: payload)
+    monkeypatch.setattr(wd, "fetch_db_rows", lambda *a, **k: db_rows)
+    monkeypatch.setattr(wd, "STATE_PATH", str(state))
+    monkeypatch.setenv("SUPABASE_URL", "https://db.test")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = wd.main()
+    assert rc == 0
+    assert json.loads(state.read_text())["liveCount"] == len(payload["products"])
