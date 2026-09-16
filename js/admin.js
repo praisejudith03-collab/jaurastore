@@ -858,11 +858,13 @@ function productsTable() {
   const catName = (id) => (cats.find((c) => c.id === id) || {}).name || id || "";
   const catOpts = cats.map((c) => `<option value="${JA.escape(c.id)}" ${ (dashCat === c.id || prodCatSel === c.id) ? "selected" : ""}>${JA.escape(c.name)}</option>`).join("");
   const backBtn = dashCat ? `<button type="button" class="btn btn-line" id="back-all-products">← All products</button>` : "";
+  const exportBtn = `<a class="btn btn-line" href="api/admin/products.csv" download="jaura-products.csv">Export CSV</a>`;
   const filteredNote = dashCat ? ` · <strong>${JA.escape(catName(dashCat))}</strong>` : "";
   const qVal = JA.escape(prodSearchQ);
   return `<div class="adx-list-head">
       <button type="button" class="btn adx-add-btn" id="add-product">+ New Product</button>
       ${backBtn}
+      ${exportBtn}
       <div class="adx-filters">
         <input id="prod-search" type="search" placeholder="Search products…" autocomplete="off" value="${qVal}" />
         <select id="prod-cat" aria-label="Filter by category"><option value="">All categories</option>${catOpts}</select>

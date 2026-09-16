@@ -66,6 +66,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("GET", "/api/admin/payment-proofs"),
     ("DELETE", "/api/admin/payment-proofs/<pid>"),
 
+    ("GET", "/api/admin/products.csv"),
     ("POST", "/api/admin/products"), ("PUT", "/api/admin/products"),
     ("DELETE", "/api/admin/products/<pid>"), ("POST", "/api/admin/photos/repair"),
     ("GET", "/api/admin/referrals"),

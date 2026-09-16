@@ -1929,6 +1929,23 @@ def admin_order_delete(oid):
     return jsonify(ok=True, id=oid, filesRemoved=files_removed)
 
 # -------------------------------------------------------- admin: products
+@api.get("/admin/products.csv")
+@authmod.require_admin
+def admin_products_csv():
+    """Download the current admin catalogue without exposing it publicly."""
+    fields = ("id", "sku", "name", "nameFr", "category", "priceNgn", "priceCfa",
+              "stock", "online", "badge", "featured", "image")
+    rows = catalog_mod.merged(include_hidden=True)
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for product in rows:
+        writer.writerow({key: product.get(key, "") for key in fields})
+    response = make_response("\ufeff" + out.getvalue())
+    response.headers["Content-Type"] = "text/csv; charset=utf-8"
+    response.headers["Content-Disposition"] = "attachment; filename=jaura-products.csv"
+    return response
+
 @api.post("/admin/products")
 @authmod.require_admin
 @sec.require_csrf
