@@ -1134,6 +1134,7 @@ function startDashTimer() {
   liveTimer = setInterval(() => { if (document.body.dataset.page !== "admin") return; const on = document.querySelector("#panel-analytics.is-on"); if (on && !document.hidden && $("#an-feed")) fillLiveFeed(); }, 10000);
 }
 let serverOrders = [];
+let orderAttentionCount = 0;
 function orderStatusLabel(s) { return s === "confirmed" ? "Confirmed" : s === "declined" ? "Declined" : s === "past" ? "Past" : "Pending"; }
 document.addEventListener("click", (e) => {
   const btn = e.target.closest && e.target.closest("[data-receipt-open]");
@@ -1846,13 +1847,14 @@ function siteFieldPatch(candidate, site) {
 
 function setOrderBadge(count) {
   const n = Math.max(0, Number(count) || 0);
+  orderAttentionCount = n;
   document.querySelectorAll("[data-orders-badge]").forEach((badge) => {
     badge.textContent = n;
     badge.hidden = n === 0;
   });
 }
 function paintDesk(tab = "analytics") {
-  const pending = serverOrders.filter((o) => (o.status || "pending") === "pending").length;
+  const pending = orderAttentionCount;
   const navBtn = (id, badge) => `<button type="button" data-tab="${id}" class="adx-nav-btn ${tab === id ? "is-on" : ""}">${ADX_ICONS[id]}<span>${TAB_TITLES[id]}</span>${id === "orders" ? `<em class="adx-badge" data-orders-badge${badge ? "" : " hidden"}>${badge || 0}</em>` : ""}</button>`;
   $("#admin-root").innerHTML = `
     <div class="adx">
