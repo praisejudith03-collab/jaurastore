@@ -2283,7 +2283,7 @@ function trackOrderCard(order) {
   const status = order.status || "pending";
   const items = (order.items || []).map((item) => `<li>${Number(item.qty) || 1}× ${JA.escape(item.name || "Item")}</li>`).join("");
   const message = status === "confirmed" ? t("order.prep") : status === "declined" ? t("order.declineMsg") : t("order.waitMsg");
-  const whatsapp = JA.waLink("Hello Jaura Store, please update me on order " + order.id + ".");
+  const whatsapp = JA.waLink("Hello Jaura Store, please update me on order " + order.id + ".", order.country);
   return `<article class="track-result">
     <div class="track-result-head"><div><span class="kicker">${t("order.id")}</span><strong>${JA.escape(order.id)}</strong></div><span class="status-pill ${JA.escape(status)}">${t(orderStatusKey(status))}</span></div>
     <p class="track-message">${JA.escape(message)}</p>

@@ -1347,7 +1347,7 @@ def public_order(oid):
     """Minimal, rate-limited status lookup for the Track-order page."""
     limited = sec.guard("order-lookup", limit=30, window=600)
     if limited: return limited
-    row = one("SELECT id, payload, at, status, total, currency, items_count, customer_name, city "
+    row = one("SELECT id, payload, at, status, total, currency, items_count, customer_name, country, city "
               "FROM orders WHERE id=?", (sec.clean(oid, 24).upper(),))
     if not row:
         return jsonify(ok=False, error="We could not find that order id."), 404
