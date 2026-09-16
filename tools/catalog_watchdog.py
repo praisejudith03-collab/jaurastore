@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Production catalog watchdog: the storefront may never lose a product.
 
-Runs hourly from .github/workflows/catalog-watchdog.yml (and on demand via
-workflow_dispatch). It takes two INDEPENDENT measurements and compares them:
+Runs autonomously every 20 minutes from .github/workflows/catalog-watchdog.yml
+(and can also run on demand for diagnostics). It takes two INDEPENDENT
+measurements and compares them:
 
   1. the public storefront answer - GET {WATCHDOG_BASE_URL}/api/catalog
   2. the source of truth - the Supabase products table, read directly over
@@ -34,6 +35,7 @@ import json
 import os
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 DEFAULT_BASE = "https://jaurastore.com.ng"
@@ -83,12 +85,16 @@ DB_ROW_CEILING = 100_000        # a sane stop against a runaway pagination loop
 TABLE_COLUMN_CANARIES = ("source", "name_fr", "legacyId")
 
 
-def _get(url, headers=None, timeout=120):
-    """GET a URL, returning (status, {lowercased header: value}, body bytes)."""
-    req = urllib.request.Request(url, headers=headers or {})
+def _request(url, headers=None, timeout=120, method="GET", data=None):
+    """Make an HTTP request and return (status, lower-case headers, body)."""
+    req = urllib.request.Request(url, headers=headers or {}, method=method, data=data)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         hdrs = {k.lower(): v for k, v in resp.headers.items()}
         return resp.status, hdrs, resp.read()
+
+
+def _get(url, headers=None, timeout=120):
+    return _request(url, headers=headers, timeout=timeout)
 
 
 def fetch_public_catalog(base, attempts=3):
@@ -116,7 +122,7 @@ def fetch_db_rows(supabase_url, service_key):
     read path ever loses rows, this measurement still sees the whole table.
     """
     url = (supabase_url.rstrip("/") +
-           "/rest/v1/products?select=id,online,source,sku,name&order=id.asc")
+           "/rest/v1/products?select=id,online,source,sku,name,category,priceCfa,priceNgn,image,image_url,images&order=id.asc")
     base_headers = {
         "apikey": service_key,
         "Authorization": "Bearer " + service_key,
@@ -156,6 +162,61 @@ def fetch_db_rows(supabase_url, service_key):
         if len(rows) > DB_ROW_CEILING:
             raise RuntimeError("pagination did not converge - aborting")
     return rows
+
+
+def is_complete_product(row):
+    """Return whether a row has the minimum data required for publication."""
+    row = row or {}
+    has_price = any(
+        isinstance(row.get(key), (int, float)) and row.get(key) > 0
+        for key in ("priceCfa", "priceNgn"))
+    images = row.get("images")
+    has_image = bool(row.get("image_url") or row.get("image") or
+                     (isinstance(images, list) and any(images)))
+    return bool(str(row.get("name") or "").strip() and
+                str(row.get("category") or "").strip() and
+                has_price and has_image)
+
+
+def activate_complete_products(supabase_url, service_key, db_rows,
+                               expected_ids=EXPECTED_WIX_IDS):
+    """Set complete, approved offline rows active through PostgREST.
+
+    The products schema's storefront status field is ``online``; setting it to
+    true is the canonical equivalent of ``status = active``. Incomplete,
+    retired, tombstone, and test-fixture rows are deliberately never changed.
+    """
+    approved = set(expected_ids)
+    candidates = []
+    for row in db_rows or []:
+        pid = str((row or {}).get("id") or "")
+        source = str((row or {}).get("source") or "").strip().lower()
+        if (pid in approved and row.get("online") is not True and
+                source not in TOMBSTONE_SOURCES and not is_test_fixture(row) and
+                is_complete_product(row)):
+            candidates.append(pid)
+    headers = {
+        "apikey": service_key,
+        "Authorization": "Bearer " + service_key,
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    body = json.dumps({"online": True}).encode("utf-8")
+    for pid in candidates:
+        url = supabase_url.rstrip("/") + "/rest/v1/products?id=eq." + urllib.parse.quote(pid)
+        status, _headers, _body = _request(url, headers=headers, method="PATCH", data=body)
+        if status not in (200, 204):
+            raise RuntimeError(f"activation request for {pid} answered HTTP {status}")
+    return candidates
+
+
+def refresh_storefront_cache(base):
+    """Force an uncached catalogue read so the storefront rebuilds immediately."""
+    url = base.rstrip("/") + "/api/catalog?watchdog_refresh=" + str(int(time.time()))
+    headers = {"Cache-Control": "no-cache, no-store", "Pragma": "no-cache"}
+    status, _headers, _body = _get(url, headers=headers)
+    if status != 200:
+        raise RuntimeError(f"storefront cache refresh answered HTTP {status}")
 
 
 def check(db_rows, payload, expected_ids=EXPECTED_WIX_IDS):
@@ -267,6 +328,27 @@ def main():
         db_rows = fetch_db_rows(supabase_url, service_key)
     except Exception as exc:                        # noqa: BLE001 - reported below
         print(f"FAIL  could not measure production: {exc}")
+        return 2
+
+    # Autonomous repair: approved rows are activated only when they are fully
+    # sellable. Any storefront mismatch also forces a cache-busting read. Then
+    # measure both sides again so this run reports the post-repair truth.
+    initial_failures, _initial_summary = check(db_rows, payload)
+    try:
+        activated = activate_complete_products(supabase_url, service_key, db_rows)
+        needs_refresh = bool(activated) or any(
+            "MISSING from the public catalogue" in failure
+            for failure in initial_failures)
+        if needs_refresh:
+            refresh_storefront_cache(base)
+            db_rows = fetch_db_rows(supabase_url, service_key)
+            payload = fetch_public_catalog(base)
+            if activated:
+                print("REPAIR  set status=active (online=true) for: " +
+                      ", ".join(activated))
+            print("REPAIR  storefront catalogue cache refreshed")
+    except Exception as exc:                       # noqa: BLE001 - reported below
+        print(f"FAIL  autonomous repair failed: {exc}")
         return 2
 
     failures, summary = check(db_rows, payload)

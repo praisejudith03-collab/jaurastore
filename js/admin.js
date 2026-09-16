@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=146" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=147" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1553,14 +1553,15 @@ function marketingPanel() {
     <form id="mk-campaign-form" class="mk-campaign-form">
       <label>Campaign type
         <select name="campaignType" id="mk-campaign-type">
-          <option value="best_sellers">Best Sellers</option>
+          <option value="abandoned_cart">Abandoned Cart</option>
+          <option value="price_drop">Price Drop / Discount Alert</option>
           <option value="new_arrivals">New Arrivals</option>
-          <option value="discount_promo">Discount / Promo</option>
-          <option value="custom">Custom message</option>
+          <option value="customer_appreciation">Customer Appreciation / Special Offer</option>
         </select>
       </label>
       <label>Subject <input name="subject" id="mk-campaign-subject" maxlength="180" required /></label>
       <label>Message <textarea name="content" id="mk-campaign-content" rows="6" maxlength="10000" required></textarea></label>
+      <fieldset class="mk-product-picker"><legend>Products to feature <small>(optional, up to 12)</small></legend><input id="mk-product-search" type="search" placeholder="Search catalog…" autocomplete="off" /><div id="mk-product-options"><p class="empty">Loading catalog…</p></div></fieldset>
       <div class="mk-campaign-foot"><strong id="mk-recipient-count">Checking recipients…</strong><button type="button" class="btn btn-line" id="mk-refresh-recipients">Refresh count</button><a class="btn btn-line" href="api/admin/customers.csv" download="jaura-customers.csv">Export contacts</a><button class="btn" type="submit" id="mk-send-campaign">Send campaign</button></div>
       <p class="admin-note" id="mk-campaign-status" role="status" aria-live="polite"></p>
     </form>
@@ -1572,12 +1573,12 @@ async function fillMarketing() {
   const api = (path, opts) => window.JA_NET.api(path, opts);
   const num = (v) => esc(String(v == null ? "" : v));
   const campaignDefaults = {
-    best_sellers: { subject: "Our best sellers are waiting", content: "Discover the pieces our customers are loving right now. Shop our best sellers today." },
+    abandoned_cart: { subject: "Your Jaura Store cart is waiting", content: "You left something special behind. Complete your order while your favourites are still available." },
+    price_drop: { subject: "Price drop at Jaura Store", content: "Good news — selected favourites are now available at a special price for a limited time." },
     new_arrivals: { subject: "New arrivals at Jaura Store", content: "Meet the latest arrivals from Jaura Store. Find your next favourite piece today." },
-    discount_promo: { subject: "A special offer from Jaura Store", content: "Enjoy a special offer from Jaura Store for a limited time. Shop now while it lasts." },
-    custom: { subject: "A message from Jaura Store", content: "" },
+    customer_appreciation: { subject: "A special offer, just for you", content: "Thank you for shopping with Jaura Store. Enjoy this special offer selected for our valued customers." },
   };
-  const campaignTypeLabel = (type) => ({ best_sellers: "Best Sellers", new_arrivals: "New Arrivals", discount_promo: "Discount / Promo", custom: "Custom message" }[type] || type || "Campaign");
+  const campaignTypeLabel = (type) => ({ abandoned_cart: "Abandoned Cart", price_drop: "Price Drop / Discount Alert", new_arrivals: "New Arrivals", customer_appreciation: "Customer Appreciation / Special Offer" }[type] || type || "Campaign");
   const paintCampaignLog = (rows) => {
     const box = $("#mk-campaign-log");
     if (!box) return;
@@ -1617,6 +1618,16 @@ async function fillMarketing() {
     const type = $("#mk-campaign-type");
     const subject = $("#mk-campaign-subject");
     const content = $("#mk-campaign-content");
+    let campaignProducts = []; const selectedProducts = new Set();
+    const paintProducts = () => {
+      const box = $("#mk-product-options"); const q = String($("#mk-product-search")?.value || "").trim().toLowerCase();
+      if (!box) return;
+      const rows = campaignProducts.filter((p) => !q || `${p.name || ""} ${p.sku || ""}`.toLowerCase().includes(q));
+      box.innerHTML = rows.length ? rows.map((p) => `<label class="mk-product-option"><input type="checkbox" name="campaignProduct" value="${esc(p.id)}" ${selectedProducts.has(String(p.id)) ? "checked" : ""} /><img src="${esc(p.image_url || p.image || "images/products/_placeholder.jpg")}" alt="" /><span><b>${esc(p.name || "Product")}</b><small>${p.priceCfa ? `${Number(p.priceCfa).toLocaleString()} F CFA` : `₦${Number(p.priceNgn || 0).toLocaleString()}`}${p.badge ? ` · ${esc(p.badge)}` : ""}</small></span></label>`).join("") : `<p class="empty">No matching products.</p>`;
+    };
+    try { const catalog = await api("api/catalog?all=1"); campaignProducts = catalog.products || []; paintProducts(); } catch (_err) { const box = $("#mk-product-options"); if (box) box.innerHTML = `<p class="empty">Catalog unavailable.</p>`; }
+    $("#mk-product-search")?.addEventListener("input", paintProducts);
+    $("#mk-product-options")?.addEventListener("change", (e) => { const input = e.target.closest('input[name="campaignProduct"]'); if (!input) return; if (input.checked && selectedProducts.size >= 12) { input.checked = false; JA.toast("Choose no more than 12 products."); return; } input.checked ? selectedProducts.add(input.value) : selectedProducts.delete(input.value); });
     const applyDefaults = () => {
       const preset = campaignDefaults[type?.value] || campaignDefaults.custom;
       if (subject) subject.value = preset.subject;
@@ -1637,7 +1648,7 @@ async function fillMarketing() {
       if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
       if (status) status.textContent = "Sending — please keep this tab open.";
       try {
-        const sent = await api("api/admin/marketing/campaigns", { method: "POST", json: { type: type?.value, subject: subject?.value, content: content?.value } });
+        const sent = await api("api/admin/marketing/campaigns", { method: "POST", json: { type: type?.value, subject: subject?.value, content: content?.value, productIds: [...selectedProducts] } });
         const failed = Number(sent.failed || 0);
         if (status) status.textContent = failed ? `Campaign sent to ${sent.sent || 0} of ${sent.recipientCount || recipientCount}; ${failed} failed.` : `Campaign sent to ${sent.sent || recipientCount} customer${Number(sent.sent || recipientCount) === 1 ? "" : "s"}.`;
         JA.toast(failed ? "Campaign partially sent." : "Campaign sent.");
@@ -1859,7 +1870,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=146" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=147" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -2202,7 +2213,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=146", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=147", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

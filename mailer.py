@@ -49,7 +49,7 @@ _EMAIL_IN_BRACKETS = re.compile(r"^\s*(.*?)\s*<([^>]+)>\s*$")
 _ADDRESS = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
 # Where order alerts go when MAIL_TO is not set (the shop owner's inbox).
-DEFAULT_SHOP_INBOX = "jaurastore@gmail.com"
+DEFAULT_SHOP_INBOX = "jorastore@gmail.com"
 
 
 def _cfg(name, default=""):
@@ -78,7 +78,7 @@ def _shop_inbox():
     to = str(_cfg("MAIL_TO", "") or "").strip()
     if to:
         return to
-    admins = _cfg("ADMIN_EMAILS", "")
+    admins = _cfg("ADMIN_EMAIL", "") or _cfg("ADMIN_EMAILS", "")
     if isinstance(admins, (list, tuple)):
         admins = ",".join(str(a) for a in admins)
     first = str(admins or "").split(",")[0].strip()
@@ -702,7 +702,7 @@ def campaign_unsubscribe_url(email):
     return origin + "/api/marketing/unsubscribe?email=" + urllib.parse.quote(str(email or "").strip().lower()) + "&token=" + campaign_unsubscribe_token(email)
 
 
-def campaign_email_html(subject, content, recipient=""):
+def campaign_email_html(subject, content, recipient="", products=None):
     """Render admin-authored campaign copy as escaped plain text.
 
     The campaign editor deliberately accepts text rather than arbitrary HTML;
@@ -712,6 +712,23 @@ def campaign_email_html(subject, content, recipient=""):
     """
     text = str(content or "").strip()
     body = '<div style="font-size:15px;line-height:1.7">' + _esc(text).replace(chr(10), "<br>") + "</div>"
+    origin = str(_cfg("SITE_ORIGIN", "https://jaurastore.com.ng") or "https://jaurastore.com.ng").rstrip("/")
+    for product in (products or [])[:12]:
+        product = dict(product or {})
+        name = str(product.get("name") or "Product")
+        image = str(product.get("image_url") or product.get("image") or "")
+        price = product.get("priceCfa") or product.get("priceNgn") or 0
+        currency = "F CFA" if product.get("priceCfa") else "₦"
+        compare = product.get("compareCfa") or product.get("compareNgn") or 0
+        badge = str(product.get("badge") or ("Discount" if compare and compare > price else ""))
+        pid = urllib.parse.quote(str(product.get("id") or ""))
+        body += ('<div style="margin:18px 0;border:1px solid #eadfce;border-radius:10px;overflow:hidden">'
+                 + (f'<img src="{_esc(image, quote=True)}" alt="{_esc(name, quote=True)}" style="width:100%;max-height:280px;object-fit:cover">' if image else "")
+                 + '<div style="padding:14px">'
+                 + (f'<span style="background:#8f2635;color:white;padding:3px 8px;border-radius:10px;font-size:11px">{_esc(badge)}</span>' if badge else "")
+                 + f'<h3 style="margin:8px 0">{_esc(name)}</h3><strong>{currency}{float(price):,.0f}</strong>'
+                 + (f' <s style="color:#888">{currency}{float(compare):,.0f}</s>' if compare and compare > price else "")
+                 + f'<p><a href="{_esc(origin + "/product.html?id=" + pid, quote=True)}" style="display:inline-block;background:#a97e48;color:#fff;padding:9px 15px;text-decoration:none;border-radius:6px">Shop now</a></p></div></div>')
     if recipient:
         body += (f'<p style="margin:24px 0 0;padding-top:14px;border-top:1px solid #f0e8de;'
                  f'font-size:12px;color:#777">You are receiving Jaura Store updates because you shared '
@@ -720,12 +737,12 @@ def campaign_email_html(subject, content, recipient=""):
     return _shell(_esc(str(subject or "Jaura Store")), "", body)
 
 
-def send_campaign_email(to, subject, content):
+def send_campaign_email(to, subject, content, products=None):
     """Send a single campaign copy to one validated recipient via Resend (or
     the configured mail transport fallback)."""
     recipient = str(to or "").strip().lower()
     return send_mail_to(recipient, str(subject or "").strip(),
-                        campaign_email_html(subject, content, recipient))
+                        campaign_email_html(subject, content, recipient, products))
 
 
 def order_received_email_html(order):

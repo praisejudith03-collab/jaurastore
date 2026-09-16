@@ -1,6 +1,7 @@
 # Catalog watchdog: the storefront may never silently lose a product.
 #
-# Hourly (plus a manual "Run workflow" button) it runs tools/catalog_watchdog.py,
+# Every 20 minutes it runs tools/catalog_watchdog.py autonomously. A manual
+# dispatch remains available for diagnostics, but normal operation never needs it.
 # which compares the live storefront (GET https://jaurastore.com.ng/api/catalog)
 # against the Supabase products table read DIRECTLY over PostgREST, and fails
 # when:
@@ -28,7 +29,8 @@ name: Catalog watchdog
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    # Fully autonomous: every 20 minutes (UTC).
+    - cron: "*/20 * * * *"
   workflow_dispatch:
 
 permissions:
