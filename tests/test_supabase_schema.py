@@ -139,7 +139,7 @@ REQUIRED_TABLES = (
 
 REQUIRED_PRODUCT_COLUMNS = (
     "id", "legacyId", "name", "category", "priceNgn", "priceCfa",
-    "compareNgn", "compareCfa", "image_url", "images", "stock_quantity",
+    "compareNgn", "compareCfa", "image_url", "images", "optionPrices", "stock_quantity",
     "description", "featured", "online", "updated_at",
 )
 

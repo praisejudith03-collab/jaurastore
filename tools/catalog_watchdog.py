@@ -39,6 +39,8 @@ import urllib.parse
 import urllib.request
 
 DEFAULT_BASE = "https://jaurastore.com.ng"
+REQUEST_TIMEOUT = 45
+RETRY_DELAYS = (2, 5)
 
 # The approved customer catalogue: 254 wix-* rows - ids wix-001..wix-258
 # (CUSTOMER_CATALOG_IMPORT_REVIEW.md) minus the rows the owner deleted on
@@ -85,7 +87,7 @@ DB_ROW_CEILING = 100_000        # a sane stop against a runaway pagination loop
 TABLE_COLUMN_CANARIES = ("source", "name_fr", "legacyId")
 
 
-def _request(url, headers=None, timeout=120, method="GET", data=None):
+def _request(url, headers=None, timeout=REQUEST_TIMEOUT, method="GET", data=None):
     """Make an HTTP request and return (status, lower-case headers, body)."""
     req = urllib.request.Request(url, headers=headers or {}, method=method, data=data)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -93,8 +95,36 @@ def _request(url, headers=None, timeout=120, method="GET", data=None):
         return resp.status, hdrs, resp.read()
 
 
-def _get(url, headers=None, timeout=120):
+def _get(url, headers=None, timeout=REQUEST_TIMEOUT):
     return _request(url, headers=headers, timeout=timeout)
+
+
+def _get_with_retries(url, headers=None, attempts=3):
+    """Bounded GET retries for transient storefront/PostgREST failures."""
+    last = None
+    for attempt in range(max(1, attempts)):
+        try:
+            return _get(url, headers=headers)
+        except Exception as exc:                    # noqa: BLE001 - summarized
+            last = exc
+            if attempt < min(len(RETRY_DELAYS), attempts - 1):
+                time.sleep(RETRY_DELAYS[attempt])
+    raise RuntimeError(f"request failed after {max(1, attempts)} attempt(s): {last}")
+
+
+def fetch_service_health(base):
+    """Audit HTTP and in-process background workers before catalog checks."""
+    url = base.rstrip("/") + "/healthz"
+    _status, _headers, body = _get_with_retries(url)
+    payload = json.loads(body.decode("utf-8"))
+    if not payload.get("ok"):
+        raise RuntimeError("service health endpoint did not report ok")
+    background = payload.get("background")
+    if isinstance(background, dict) and not (
+            background.get("started") and background.get("maintenanceAlive") and
+            background.get("remindersAlive")):
+        raise RuntimeError("background scheduler workers are not healthy")
+    return payload
 
 
 def fetch_public_catalog(base, attempts=3):
@@ -132,7 +162,7 @@ def fetch_db_rows(supabase_url, service_key):
     while True:
         headers = dict(base_headers)
         headers["Range"] = f"{start}-{start + DB_PAGE - 1}"
-        status, hdrs, body = _get(url, headers=headers)
+        status, hdrs, body = _get_with_retries(url, headers=headers)
         if status not in (200, 206):
             raise RuntimeError(f"PostgREST answered HTTP {status}")
         try:
@@ -214,7 +244,7 @@ def refresh_storefront_cache(base):
     """Force an uncached catalogue read so the storefront rebuilds immediately."""
     url = base.rstrip("/") + "/api/catalog?watchdog_refresh=" + str(int(time.time()))
     headers = {"Cache-Control": "no-cache, no-store", "Pragma": "no-cache"}
-    status, _headers, _body = _get(url, headers=headers)
+    status, _headers, _body = _get_with_retries(url, headers=headers)
     if status != 200:
         raise RuntimeError(f"storefront cache refresh answered HTTP {status}")
 
@@ -324,6 +354,7 @@ def main():
               "(GitHub Actions secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)")
         return 2
     try:
+        fetch_service_health(base)
         payload = fetch_public_catalog(base)
         db_rows = fetch_db_rows(supabase_url, service_key)
     except Exception as exc:                        # noqa: BLE001 - reported below

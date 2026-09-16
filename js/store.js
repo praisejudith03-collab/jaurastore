@@ -859,12 +859,19 @@ const JA = (() => {
     return "F CFA " + val.toLocaleString("fr-FR");
   }
 
-  function priceOf(p, cur = currency()) {
-    if (hasNgn(p)) {
-      if (cur === "NGN") return Number(p.priceNgn);
-      return toCfa(p.priceNgn);
+  function priceOf(p, cur = currency(), variant = "") {
+    let ngn = Number(p && p.priceNgn) || 0;
+    let overridden = false;
+    const overrides = (p && p.optionPrices && typeof p.optionPrices === "object") ? p.optionPrices : {};
+    if (variant && Object.keys(overrides).length) {
+      const fold = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const indexed = Object.fromEntries(Object.entries(overrides).map(([k, v]) => [fold(k), Number(v)]));
+      const candidates = [variant, ...String(variant).split("·"), ...String(variant).split("·").map((x) => String(x).split(":").pop())];
+      const match = candidates.map((x) => indexed[fold(x)]).find((v) => Number.isFinite(v) && v >= 0);
+      if (match != null) { ngn = match; overridden = true; }
     }
-    return Number(p.priceCfa) || 0;
+    if (overridden || ngn > 0) return cur === "NGN" ? ngn : toCfa(ngn);
+    return Number(p && p.priceCfa) || 0;
   }
   function compareOf(p, cur = currency()) {
     if (hasNgn(p)) {
@@ -897,8 +904,16 @@ const JA = (() => {
     write(KEYS.cart, items);
     document.dispatchEvent(new CustomEvent("ja:cart"));
   }
-  const BULK_QTY = 10;
-  const BULK_OFF = 0.10;
+  function bulkDiscountTiers() {
+    const raw = (_siteConfig && _siteConfig.bulkDiscountTiers) || [];
+    return (Array.isArray(raw) ? raw : []).map((t) => ({
+      minQuantity: Math.max(2, Number(t.minQuantity) || 0),
+      percent: Math.max(1, Math.min(90, Number(t.percent) || 0)),
+    })).filter((t) => t.minQuantity > 1 && t.percent > 0).sort((a, b) => a.minQuantity - b.minQuantity);
+  }
+  function bulkPercent(qty) {
+    return bulkDiscountTiers().filter((t) => Number(qty) >= t.minQuantity).reduce((n, t) => t.percent, 0);
+  }
   function stockFold(s) {
     return String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]/g, "");
   }
@@ -996,10 +1011,10 @@ const JA = (() => {
     }
     return `Only ${left} unit${left === 1 ? "" : "s"} of ${name} ${left === 1 ? "is" : "are"} in stock.`;
   }
-  function bulkUnit(p, qty, cur) {
-    const unit = priceOf(p, cur);
-    if ((Number(qty) || 0) >= BULK_QTY) return Math.round(unit * (1 - BULK_OFF));
-    return unit;
+  function bulkUnit(p, qty, cur, variant = "") {
+    const unit = priceOf(p, cur, variant);
+    const percent = bulkPercent(qty);
+    return percent ? Math.round(unit * (100 - percent) / 100) : unit;
   }
   function addToCart(id, qty = 1, color = "") {
     const p = product(id);
@@ -1030,7 +1045,7 @@ const JA = (() => {
     }
     track("cart", { id, name: p.name, qty: add, variant: color });
     const totalQty = cartQtyFor(id);
-    if (totalQty >= BULK_QTY) toast(tx("cart.bulkOn"));
+    if (bulkPercent(totalQty)) toast(tx("cart.bulkOn"));
     openMini();
   }
   function setQty(id, color, qty) {
@@ -1073,17 +1088,17 @@ const JA = (() => {
       const p = product(i.id);
       if (!p) return null;
       const cur = displayCur(p);
-      const unit = priceOf(p, cur);
+      const unit = priceOf(p, cur, i.color);
       const qtyAll = cartQtyFor(i.id);
-      const bulk = qtyAll >= BULK_QTY;
-      const payUnit = bulkUnit(p, qtyAll, cur);
+      const bulk = bulkPercent(qtyAll) > 0;
+      const payUnit = bulkUnit(p, qtyAll, cur, i.color);
       return { ...i, product: p, cur, unit, bulk, payUnit, line: payUnit * i.qty };
     }).filter(Boolean);
   }
   function cartTotal(cur = currency()) {
     return cartDetailed().reduce((n, i) => {
       const use = i.cur || displayCur(i.product, cur);
-      return n + bulkUnit(i.product, cartQtyFor(i.id), use) * i.qty;
+      return n + bulkUnit(i.product, cartQtyFor(i.id), use, i.color) * i.qty;
     }, 0);
   }
 
@@ -1947,8 +1962,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=147";
-        const FLYER = "images/brand/logo-flyer.jpg?v=147";
+        const LOGO = "images/brand/logo.jpg?v=148";
+        const FLYER = "images/brand/logo-flyer.jpg?v=148";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2107,7 +2122,7 @@ const JA = (() => {
       </div>
       <div class="wrap header-inner">
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=147" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=148" alt="Jaura" />
         </a>
         <nav class="nav-left">
           <a href="index.html">${tx("nav.home")}</a>
@@ -2259,7 +2274,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=147" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=148" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2344,7 +2359,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=147" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=148" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -2366,7 +2381,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=147";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=148";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2425,7 +2440,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=147");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=148");
     document.title = title;
     [
       ["name", "description", description],
@@ -2914,7 +2929,7 @@ const JA = (() => {
     ready, CATEGORIES: [], categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,
     products, product, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
-    currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, BULK_QTY,
+    currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, bulkPercent, bulkDiscountTiers,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,
     wish, isWished, toggleWish, wishDetailed, openMini, closeMini,

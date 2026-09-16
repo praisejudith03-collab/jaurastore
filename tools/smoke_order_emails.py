@@ -26,7 +26,6 @@ os.environ.update({
     "ADMIN_EMAILS": "jaurastore@gmail.com",
     "ADMIN_BOOTSTRAP_PASSWORD": "smoke-pw",
     "MAIL_FROM": "Jaura Store <orders@jaurastore.com.ng>",
-    "MAIL_TO": "",                       # deliberately unset -> admin fallback
     "RESEND_API_KEY": "re_smoke",
     "SITE_ORIGIN": "https://jaurastore.com.ng",
     "UPLOAD_MODE": "local",

@@ -19,9 +19,9 @@ first and only falls back to SMTP:
 
 Off until MAIL_FROM and one provider are configured - local dev and the test
 suite send nothing (see ENVIRONMENT_VARIABLES.md for the Render setup). The
-shop inbox is MAIL_TO when set, otherwise the primary ADMIN_EMAILS address
-(jaurastore@gmail.com by default), so order alerts reach the owner without any
-extra setup. The admin Orders tab reads transport_status() to show which
+shop inbox is always the primary ADMIN_EMAILS address
+(jaurastore@gmail.com by default), so a legacy global recipient override can
+never reroute customer campaigns or owner alerts. The admin Orders tab reads transport_status() to show which
 transport is live and offers an "Email a test" button backed by
 POST /admin/mail/test.
 
@@ -48,8 +48,8 @@ PROBE_JOIN_SECONDS = 25      # the admin "Email a test" request waits at most th
 _EMAIL_IN_BRACKETS = re.compile(r"^\s*(.*?)\s*<([^>]+)>\s*$")
 _ADDRESS = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
-# Where order alerts go when MAIL_TO is not set (the shop owner's inbox).
-DEFAULT_SHOP_INBOX = "jorastore@gmail.com"
+# Canonical fallback for owner alerts and admin authentication.
+DEFAULT_SHOP_INBOX = "jaurastore@gmail.com"
 
 
 def _cfg(name, default=""):
@@ -73,11 +73,11 @@ def _cfg(name, default=""):
 
 
 def _shop_inbox():
-    """The inbox every shop email lands in: MAIL_TO when set, else the
-    primary admin address (ADMIN_EMAILS[0], default jaurastore@gmail.com)."""
-    to = str(_cfg("MAIL_TO", "") or "").strip()
-    if to:
-        return to
+    """The canonical owner inbox (ADMIN_EMAIL/ADMIN_EMAILS[0]).
+
+    Deliberately do not consult the retired MAIL_TO setting: customer mail has
+    an explicit recipient and owner alerts must follow the admin identity.
+    """
     admins = _cfg("ADMIN_EMAIL", "") or _cfg("ADMIN_EMAILS", "")
     if isinstance(admins, (list, tuple)):
         admins = ",".join(str(a) for a in admins)
@@ -99,7 +99,7 @@ def provider():
 def configured():
     """True when a transport AND a sender address are set (mail may go out).
 
-    The destination always resolves (MAIL_TO, else the primary admin inbox),
+    The destination always resolves to the primary admin inbox,
     so only MAIL_FROM and a provider key are required.
     """
     return bool(provider() and _cfg("MAIL_FROM"))
@@ -260,7 +260,7 @@ def send_mail_to(to, subject, html, attachments=()):
 
 
 def send_mail(subject, html, attachments=()):
-    """Send one email to the SHOP inbox (MAIL_TO, else the primary admin
+    """Send one email to the SHOP inbox (the primary admin
     address) over the first configured transport. Returns (ok, detail);
     NEVER raises."""
     return send_mail_to(_shop_inbox(), subject, html, attachments)

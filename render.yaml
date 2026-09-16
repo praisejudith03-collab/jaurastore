@@ -17,7 +17,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: ADMIN_EMAIL
-        value: jorastore@gmail.com
+        value: jaurastore@gmail.com
       - key: SITE_ORIGIN
         value: https://jaurastore-staging.onrender.com
       # Keep the free host awake: the scheduler pings SITE_ORIGIN/healthz on
@@ -127,7 +127,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: ADMIN_EMAIL
-        value: jorastore@gmail.com
+        value: jaurastore@gmail.com
       - key: SITE_ORIGIN
         value: https://jaurastore.com.ng
       # Keep the free host awake: the scheduler pings SITE_ORIGIN/healthz on

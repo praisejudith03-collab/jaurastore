@@ -35,10 +35,10 @@ git):
 
 - `MAIL_FROM` — the verified sender (`orders@jaurastore.com.ng` in Render).
 - `ADMIN_EMAIL` — the shop inbox for system and order notifications
-  (`jorastore@gmail.com`).
-- Do **not** set `MAIL_TO` in Render. It is retained only as a compatibility
-  fallback; leaving it unset ensures customer campaigns and transactional
-  messages are addressed to each customer's actual email.
+  (`jaurastore@gmail.com`).
+- `MAIL_TO` is unsupported and must not be configured. Customer campaigns and
+  transactional messages use each customer's explicit address; owner alerts
+  use `ADMIN_EMAIL`.
 - `RESEND_API_KEY` — create an API key at resend.com and verify your sending
   domain there.
 - `BREVO_API_KEY` — alternative HTTPS provider, used when `RESEND_API_KEY` is

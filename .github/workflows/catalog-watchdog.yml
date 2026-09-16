@@ -44,7 +44,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -56,8 +56,11 @@ jobs:
           python-version: "3.11"
       - name: Run the catalog watchdog
         run: |
+          # The Python task has bounded per-request retries. Leave a margin for
+          # issue reporting instead of letting Actions kill the whole job.
           set -o pipefail
-          python3 tools/catalog_watchdog.py 2>&1 | tee watchdog.log
+          timeout --signal=TERM --kill-after=15s 9m \
+            python3 tools/catalog_watchdog.py 2>&1 | tee watchdog.log
       - name: Open or update the alert issue
         if: failure()
         env:

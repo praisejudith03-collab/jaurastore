@@ -50,6 +50,7 @@ create table if not exists products (
   colors           jsonb,
   options          jsonb,
   "optionStock"    jsonb,
+  "optionPrices"   jsonb,
   "placeholderImage" text,
   "usesPlaceholder"  boolean default false,
   source           text default 'admin',
@@ -77,6 +78,7 @@ alter table products add column if not exists "compareNgn"       numeric;
 alter table products add column if not exists stock              integer default 0;
 alter table products add column if not exists images             jsonb;
 alter table products add column if not exists "optionStock"      jsonb;
+alter table products add column if not exists "optionPrices"     jsonb;
 alter table products add column if not exists "placeholderImage" text;
 alter table products add column if not exists "usesPlaceholder"  boolean default false;
 alter table products add column if not exists badge              text;
@@ -156,7 +158,7 @@ create index if not exists idx_orders_status on orders (status);
 create index if not exists idx_orders_customer on orders (customer_user_id);
 
 -- Carts that reached checkout with an email but were not completed. The
--- scheduler sends at most one reminder after two hours without activity.
+-- scheduler sends at most one reminder after twenty minutes without activity.
 create table if not exists abandoned_carts (
   token             text primary key,
   email             text not null,
@@ -297,6 +299,15 @@ create table if not exists marketing_campaigns (
   created_at        timestamptz not null default now()
 );
 create index if not exists idx_campaigns_sent_at on marketing_campaigns (sent_at desc);
+-- Register the polymorphic discriminator on existing as well as new tables.
+-- The named constraint makes this migration safe to re-apply.
+do $$
+begin
+  alter table marketing_campaigns
+    add constraint marketing_campaign_type_check
+    check (campaign_type in ('abandoned_cart', 'price_drop', 'new_arrivals', 'customer_appreciation'));
+exception when duplicate_object then null;
+end $$;
 
 -- Addresses that asked not to receive promotional campaigns. Retaining only
 -- this suppression key prevents a later contact import from re-subscribing it.

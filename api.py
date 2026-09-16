@@ -2,6 +2,7 @@
 import csv, io, json, os, datetime, secrets, hashlib, hmac, re
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
+from campaign_types import CAMPAIGN_TYPES, campaign_type_from, serialize_campaign
 from db import execute, one, query, audit
 import security as sec
 import auth as authmod
@@ -644,7 +645,7 @@ def _price_int(value):
         return 0
 
 
-def _server_unit_price(product, currency):
+def _server_unit_price(product, currency, variant=""):
     """The authoritative unit price for one product in the order currency.
 
     Loaded from the live catalogue (Supabase in production): the browser's
@@ -655,6 +656,17 @@ def _server_unit_price(product, currency):
                      else product.get("price_cfa"))
     ngn = _price_int(product.get("priceNgn") if product.get("priceNgn") is not None
                      else product.get("price_ngn"))
+    overrides = product.get("optionPrices") or product.get("option_prices") or {}
+    if isinstance(overrides, dict) and variant:
+        candidates = [str(variant).strip()]
+        candidates.extend(part.strip() for part in str(variant).split("·") if part.strip())
+        candidates.extend(_variant_values(variant))
+        folded = {_fold(k): v for k, v in overrides.items()}
+        for candidate in candidates:
+            if _fold(candidate) in folded:
+                ngn = _price_int(folded[_fold(candidate)])
+                cfa = max(0, round(ngn * catalog_mod.NGN_TO_CFA))
+                break
     if currency == "CFA":
         if cfa:
             return cfa
@@ -694,6 +706,9 @@ def _checkout_items(clean_items, currency):
 
     items = []
     subtotal = 0
+    total_quantity_by_product = {}
+    for group in aggregated.values():
+        total_quantity_by_product[group["id"]] = total_quantity_by_product.get(group["id"], 0) + group["qty"]
     for g in aggregated.values():
         pid = g["id"]
         prod = products_map.get(pid)
@@ -718,8 +733,11 @@ def _checkout_items(clean_items, currency):
                 code="out_of_stock",
                 items=[{"id": pid, "name": prod.get("name") or g["name"],
                         "variant": g["variant"]}]), 409)
-        unit = _server_unit_price(prod, currency)
-        line_price = unit * g["qty"]
+        unit = _server_unit_price(prod, currency, g["variant"])
+        import growth
+        bulk_percent = growth.bulk_discount_percent(total_quantity_by_product[g["id"]])
+        pay_unit = round(unit * (100 - bulk_percent) / 100) if bulk_percent else unit
+        line_price = pay_unit * g["qty"]
         subtotal += line_price
         items.append({
             "id": pid,
@@ -1076,7 +1094,7 @@ def create_order():
     _threading.Thread(target=_notify_whatsapp, args=(dict(order),), daemon=True).start()
 
     # Email the shop about the new order too (fire-and-forget; mailer no-ops
-    # until MAIL_FROM / MAIL_TO / a provider key are configured).
+    # until MAIL_FROM and a provider key are configured).
     try:
         import mailer
         mailer.notify_new_order_async(order)
@@ -1324,7 +1342,7 @@ def payment_proof():
     # Email the shop the receipt WITH THE CUSTOMER'S OWN FILE ATTACHED - the
     # exact bytes they uploaded. Fire-and-forget over HTTPS (Resend/Brevo)
     # first because Render's free instances block outbound SMTP; the upload
-    # must never wait on a mail provider. No-op until MAIL_FROM, MAIL_TO and
+    # must never wait on a mail provider. No-op until MAIL_FROM and
     # a provider key are configured (see ENVIRONMENT_VARIABLES.md).
     try:
         import mailer
@@ -2429,7 +2447,10 @@ def _load_site():
 @api.get("/site")
 def site_config():
     try:
-        resp = jsonify(ok=True, site=_site_payload(_load_site()))
+        site = _site_payload(_load_site())
+        import growth
+        site["bulkDiscountTiers"] = growth.settings().get("bulkDiscountTiers") or []
+        resp = jsonify(ok=True, site=site)
         # Never cacheable: the bank details on the checkout come from this
         # answer, and a CDN (or a bfcache) holding yesterday's row after an
         # Admin edit is indistinguishable from "my edit disappeared".
@@ -3181,8 +3202,6 @@ def admin_customers_csv():
     return response
 
 
-CAMPAIGN_TYPES = ("abandoned_cart", "price_drop", "new_arrivals", "customer_appreciation")
-
 
 @api.get("/admin/marketing/campaigns")
 @authmod.require_admin
@@ -3219,7 +3238,16 @@ def marketing_campaigns():
             rows = [r for r in rows if matches(r)][:limit]
         except Exception as exc:
             print(f"[marketing] campaign log load skipped: {exc}")
-    return jsonify(ok=True, campaigns=rows)
+    # Keep one validated discriminator shape across SQLite, Supabase and JSON.
+    # Invalid historical rows are skipped rather than crashing serialization of
+    # the entire campaign log.
+    normalized = []
+    for row in rows:
+        try:
+            normalized.append(serialize_campaign(row))
+        except (TypeError, ValueError) as exc:
+            print(f"[marketing] invalid campaign row skipped: {exc}")
+    return jsonify(ok=True, campaigns=normalized)
 
 
 @api.post("/admin/marketing/campaigns")
@@ -3227,7 +3255,9 @@ def marketing_campaigns():
 @sec.require_csrf
 def marketing_campaign_send():
     d = request.get_json(silent=True) or {}
-    campaign_type = sec.clean(d.get("type") or d.get("campaignType"), 30).lower()
+    # campaign_type is the canonical schema discriminator. Legacy browser
+    # aliases are normalized only at this boundary.
+    campaign_type = campaign_type_from(d)
     if campaign_type not in CAMPAIGN_TYPES:
         return jsonify(ok=False, error="Choose a campaign type."), 400
     subject = sec.clean(d.get("subject"), 180, allow_newlines=False)
@@ -3252,16 +3282,18 @@ def marketing_campaign_send():
             "Resend is not configured. Set MAIL_FROM and RESEND_API_KEY before sending.")), 400
     now = _utcnow()
     campaign_id = "CMP-" + secrets.token_hex(6).upper()
-    row = {
+    row = serialize_campaign({
         "id": campaign_id, "campaign_type": campaign_type, "subject": subject,
         "content": content, "recipient_count": len(recipients),
         "sent_count": 0, "failed_count": 0, "status": "sending",
         "sent_at": now, "created_at": now,
-    }
+    })
     execute(
         "INSERT INTO marketing_campaigns (id,campaign_type,subject,content,recipient_count,"
         "sent_count,failed_count,status,sent_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        tuple(row.values()),
+        (row["id"], row["campaign_type"], row["subject"], row["content"],
+         row["recipient_count"], row["sent_count"], row["failed_count"],
+         row["status"], row["sent_at"], row["created_at"]),
     )
     sent = failed = 0
     for email in recipients:

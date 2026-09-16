@@ -8,7 +8,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 def _emails():
     # ADMIN_EMAIL is the canonical owner-notification address. Keep the plural
     # alias for backwards compatibility with existing deployments.
-    raw = os.environ.get("ADMIN_EMAIL") or os.environ.get("ADMIN_EMAILS", "jorastore@gmail.com")
+    raw = os.environ.get("ADMIN_EMAIL") or os.environ.get("ADMIN_EMAILS", "jaurastore@gmail.com")
     out = []
     for part in raw.split(","):
         e = part.strip().lower()
@@ -25,6 +25,7 @@ class Config:
     # or the catalogue resets on every deploy.
     CATALOG_PATH = os.environ.get("CATALOG_PATH", os.path.join(ROOT, "data", "catalog.json"))
     ADMIN_EMAILS = _emails()
+    ADMIN_EMAIL = ADMIN_EMAILS[0]
 
     # WhatsApp order notifications (either provider; see whatsapp.py)
     WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
@@ -143,11 +144,10 @@ class Config:
     # HTTPS first - Resend (RESEND_API_KEY), then Brevo (BREVO_API_KEY) -
     # and only falls back to SMTP when no HTTPS provider is configured.
     # MAIL_FROM must be a sender the provider has verified. Owner alerts use
-    # ADMIN_EMAIL. MAIL_TO remains a legacy compatibility fallback only and
-    # must be left unset in Render so customer mail is never globally rerouted. All dispatch runs on daemon threads - see mailer.py
-    # and ENVIRONMENT_VARIABLES.md.
+    # ADMIN_EMAIL. Customer and campaign messages always use their explicit
+    # recipient; there is no global destination override. All dispatch runs on
+    # daemon threads - see mailer.py and ENVIRONMENT_VARIABLES.md.
     MAIL_FROM = os.environ.get("MAIL_FROM", "")
-    MAIL_TO = os.environ.get("MAIL_TO", "")
     RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
     BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
     SMTP_HOST = os.environ.get("SMTP_HOST", "")

@@ -5,8 +5,8 @@ CUSTOMER'S OWN FILE ATTACHED - the exact bytes they uploaded - and every new
 order emails the shop too. Render's free/starter instances block outbound
 SMTP ports (25/465/587), so mailer.py sends over an HTTPS provider
 (Resend first, then Brevo) and only falls back to SMTP when no HTTPS
-provider is configured. Nothing is sent until MAIL_FROM, MAIL_TO and a
-provider are configured, so local dev and the test suite stay silent.
+provider is configured. Nothing is sent until MAIL_FROM and a provider are
+configured, so local dev and the test suite stay silent.
 
 The HTTP tests drive the admin portal's Orders tab: the transport status
 line and the "Email a test" button, plus the end-to-end rule that the bytes
@@ -75,7 +75,6 @@ def resend_env(monkeypatch):
 
     monkeypatch.setattr(config_mod, "MAIL_FROM",
                         "Jaura Store <orders@jaurastore.com.ng>", raising=False)
-    monkeypatch.setattr(config_mod, "MAIL_TO", EMAIL, raising=False)
     monkeypatch.setattr(config_mod, "RESEND_API_KEY", "re_test_key_123",
                         raising=False)
     monkeypatch.setattr(config_mod, "BREVO_API_KEY", "", raising=False)
@@ -87,7 +86,7 @@ def resend_env(monkeypatch):
 @pytest.fixture()
 def unconfigured(monkeypatch):
     import config as config_mod
-    for attr in ("MAIL_FROM", "MAIL_TO", "RESEND_API_KEY", "BREVO_API_KEY",
+    for attr in ("MAIL_FROM", "RESEND_API_KEY", "BREVO_API_KEY",
                  "SMTP_HOST"):
         monkeypatch.setattr(config_mod, attr, "", raising=False)
 
@@ -153,8 +152,8 @@ class TestTransportSelection:
     def test_status_reports_missing_pieces(self, unconfigured):
         st = mailer.transport_status()
         assert st["enabled"] is False and st["provider"] == ""
-        # MAIL_TO is no longer required: the inbox defaults to the primary
-        # admin address, so only the sender + a provider can be missing.
+        # The inbox defaults to the primary admin address, so only the sender
+        # and a provider can be missing.
         assert set(st["missing"]) == {"MAIL_FROM",
                                       "RESEND_API_KEY (or BREVO_API_KEY / SMTP_HOST)"}
         assert st["to"] == EMAIL  # ADMIN_EMAILS[0] fallback
@@ -164,7 +163,6 @@ class TestTransportSelection:
         never exist at runtime - so a fully configured Render deploy still
         sent nothing. It must fall through to config.Config."""
         import config as config_mod
-        monkeypatch.setattr(config_mod, "MAIL_TO", "", raising=False)
         monkeypatch.setattr(config_mod, "RESEND_API_KEY", "", raising=False)
         monkeypatch.setattr(config_mod.Config, "RESEND_API_KEY", "re_from_class",
                             raising=False)
@@ -175,6 +173,11 @@ class TestTransportSelection:
         assert mailer.send_mail("s", "<p>b</p>") == (
             False, "not configured: MAIL_FROM, "
                    "RESEND_API_KEY (or BREVO_API_KEY / SMTP_HOST)")
+
+    def test_legacy_mail_to_cannot_override_owner_or_customer_routes(self, monkeypatch):
+        import config as config_mod
+        monkeypatch.setattr(config_mod, "MAIL_TO", "wrong-admin@example.com", raising=False)
+        assert mailer._shop_inbox() == EMAIL
 
     def test_status_exposes_no_secret(self, resend_env):
         st = mailer.transport_status()
