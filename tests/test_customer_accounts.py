@@ -229,10 +229,17 @@ def test_admin_login_drops_customer_session(client):
 
 
 def test_public_stock_is_state_only(client):
-    execute("INSERT INTO variant_stock "
-            "(product_id, variant_key, variant_label, qty, low_threshold) "
-            "VALUES ('wix-005','__default__','Default',12,3) "
-            "ON CONFLICT(product_id, variant_key) DO UPDATE SET qty=12, low_threshold=3")
+    # The quantity lives on the product row (the store checkout guards and
+    # decrements); /api/stock derives its state from it. Seeding the legacy
+    # variant_stock table no longer moves the number - that split was the
+    # "manager said 10, shop sold 24" defect.
+    import catalog as catalog_mod
+    wix005 = next(p for p in catalog_mod.merged(include_hidden=True)
+                  if p.get("id") == "wix-005")
+    wix005["stock"] = 12
+    wix005["stock_quantity"] = 12
+    saved, _action, _mirrored = catalog_mod.upsert(wix005, "tester")
+    assert saved is not None
     pub = client.get("/api/stock").get_json()
     blob = json.dumps(pub)
     assert "\"qty\"" not in blob
@@ -241,3 +248,16 @@ def test_public_stock_is_state_only(client):
     client.post("/api/admin/login", json={"email": EMAIL, "password": PW})
     admin = client.get("/api/stock").get_json()
     assert admin["stock"]["wix-005"][0]["qty"] == 12
+    # and a reservation on the same store flips the public state - the two
+    # views can never disagree again
+    execute("DELETE FROM rate_limits WHERE action='order'")
+    r = client.post("/api/orders", json={
+        "id": _oid(90), "currency": "NGN", "total": 100,
+        "customer": {"name": "S", "email": _mail("stock"), "phone": "+2348012345678",
+                     "city": "Lagos", "zone": "Lagos Mainland", "address": "1 St"},
+        "items": [{"id": "wix-005", "name": "X", "qty": 12,
+                   "price": 100}]},
+        headers={"X-CSRF-Token": client.get("/api/config").get_json()["csrf"]})
+    assert r.status_code == 200, r.get_json()
+    after = client.get("/api/stock").get_json()
+    assert after["stock"]["wix-005"][0]["state"] == "out"

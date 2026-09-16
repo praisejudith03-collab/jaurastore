@@ -68,13 +68,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # database on every currency switch, js/app.js drops price bounds captured in
 # the old currency, sw.js steps aside for a forced catalogue refresh, and the
 # HTML <head> points at the favicon ladder in the `public-assets` bucket.
-# Bumped to 149 for the analytics/observability release (owner directive
-# 2026-09-16): css/style.css gained the collapsible admin card styles and
-# js/admin.js gained the ten-per-page pagers with accordion rows, while
-# js/store.js now posts search queries. A phone holding the v148 admin bundle
-# from its service-worker cache would show the old flat, unpaginated lists, so
+# Bumped to 150 for the stock-accuracy / bulk-discount release (owner
+# directive 2026-09-16): js/store.js ships numberless per-variant stock
+# states and per-product bulk pricing, js/app.js blocks over-orders with a
+# generic message and never fakes a completed order on a 409, js/admin.js
+# gains the per-product bulk discount fields, and js/i18n.js carries the
+# dynamic bulk-discount copy. A phone holding the v149 bundle from its
+# service-worker cache would keep leaking stock counts and stale prices, so
 # every shared asset ships under a fresh token.
-SHARED_TOKEN = "149"
+SHARED_TOKEN = "150"
 
 
 def _image_size(path):

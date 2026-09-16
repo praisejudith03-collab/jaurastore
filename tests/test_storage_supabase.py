@@ -30,9 +30,9 @@ from config import Config  # noqa: E402
 import storage  # noqa: E402
 import supabase_store  # noqa: E402
 
-if os.path.exists(os.environ["DB_PATH"]):
-    os.remove(os.environ["DB_PATH"])
-
+# conftest.py owns the scratch database (see the note in tests/test_api.py):
+# deleting it at import time would orphan the connection the first-imported
+# module already opened through app's module-level create_app().
 import app as appmod  # noqa: E402
 import auth as authmod  # noqa: E402
 from db import execute, init_db, one, query  # noqa: E402

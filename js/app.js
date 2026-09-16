@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=149";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=149";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=150";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=150";
 }
 
 function renderCategories() {
@@ -735,14 +735,28 @@ function paintProduct(root, p) {
   );
   const optHTML = opts.map((opt, oi) => {
     const isColor = /colou?r|metal|type/i.test(opt.title || "") || opt.type === "COLOR";
+    // A variant the server's availability map marks "out" renders struck
+    // through (the shopper can still tap it to see the price and the Out of
+    // Stock line, but Add to cart is blocked by the stock gate).
+    const soldOutVal = (v) => {
+      try {
+        if (!JA.stockFor || !p.optionStockStatus) return false;
+        const raw = String(JA.displayOptionRaw ? JA.displayOptionRaw(v) : v);
+        const fold = (s) => String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]/g, "");
+        const fk = fold(raw);
+        const tracked = Object.keys(p.optionStockStatus).some((k) => fold(k) === fk);
+        return tracked && JA.stockFor(p, raw) <= 0;
+      } catch (e) { return false; }
+    };
     const btns = (opt.values || []).map((v) => {
       const hex = namedSwatch(v);
       const showDot = isColor && hex;
+      const sold = soldOutVal(v);
       // data-val carries the RAW value - it is the variant's identity (the key
       // of optionStock, the cart line, the order row). Only the visible <span>
       // is translated, so a French shopper reads "Noir" while the shop still
       // sells and stocks the variant stored as "Black".
-      return `<button type="button" class="opt-chip${showDot ? " has-dot" : ""}" data-opt="${oi}" data-val="${JA.escape(JA.displayOptionRaw(v))}">
+      return `<button type="button" class="opt-chip${showDot ? " has-dot" : ""}${sold ? " is-oos" : ""}" data-opt="${oi}" data-val="${JA.escape(JA.displayOptionRaw(v))}"${sold ? ' title="Out of stock"' : ""}>
         ${showDot ? `<i class="opt-dot" style="background:${hex}"></i>` : ""}
         <span>${JA.escape(JA.displayOptionValue(opt, v))}</span>
       </button>`;
@@ -791,8 +805,12 @@ function paintProduct(root, p) {
       <p class="stock-line" data-stock-line></p>
       ${(() => {
         const tiers = JA.bulkDiscountTiers ? JA.bulkDiscountTiers() : [];
-        if (!tiers.length) return "";
-        return `<div class="pdp-bulk"><strong>${t("pdp.bulk")}</strong><ul>${tiers.map((tier) =>
+        const ownQty = Math.round(Number(p.bulkQty) || 0);
+        const ownPct = Math.round(Number(p.bulkPercent) || 0);
+        const own = ownQty > 0 && ownPct > 0
+          ? `<li>More than ${ownQty} units: ${ownPct}% off</li>` : "";
+        if (!tiers.length && !own) return "";
+        return `<div class="pdp-bulk"><strong>${t("bulk.label")}</strong><ul>${own}${tiers.map((tier) =>
           `<li>${tier.minQuantity}+ units: ${tier.percent}% off</li>`).join("")}</ul></div>`;
       })()}
       <button type="button" class="wish-btn pdp-wish ${JA.isWished(p.id) ? "is-on" : ""}" data-wish="${p.id}"><svg class="wish-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg><span>${t("nav.wishlist")}</span></button>
@@ -1094,7 +1112,7 @@ function renderCart() {
           <a href="product.html?id=${i.id}"><strong>${JA.escape(JA.displayName(i.product))}</strong></a>
           ${i.color ? `<div class="card-cat">${JA.escape(variantLabel(i.product, i.color))}</div>` : ""}
         </td>
-        <td>${i.bulk ? `<s>${JA.money(i.unit, i.cur)}</s> ${JA.money(i.payUnit, i.cur)}` : JA.priceHTML(i.product)}${i.bulk ? `<div class="bulk-tag">${t("cart.bulk")}</div>` : ""}</td>
+        <td>${i.bulk ? `<s>${JA.money(i.unit, i.cur)}</s> ${JA.money(i.payUnit, i.cur)}` : JA.priceHTML(i.product)}${i.bulk ? `<div class="bulk-tag">${t("bulk.label")} ${i.bulkPercent}%</div>` : ""}</td>
         <td>
           <div class="qty">
             <button type="button" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-n="${i.qty - 1}"${atMin ? " disabled" : ""}>−</button>
@@ -1322,7 +1340,7 @@ function showOrderDone(order) {
       ${((JA.getProof && JA.getProof(order.id, order.proof)) || (String(order.proof || "").startsWith("data:") ? order.proof : "")) ? `<p class="proof-label">${t("ck.uploadReceipt")}</p><img class="proof-preview" src="${(JA.getProof && JA.getProof(order.id, order.proof)) || order.proof}" alt="Payment screenshot" />` : ""}
       <table class="ck-table" style="margin-top:22px">
         <thead><tr><th>${t("ck.product")}</th><th>${t("ck.total")}</th></tr></thead>
-        <tbody>${order.items.map((i) => `<tr><td>${i.qty}× ${JA.escape(i.name)}${i.color ? " · " + JA.escape(variantLabel(i, i.color)) : ""}</td><td>${JA.money(i.price * i.qty, order.currency)}</td></tr>`).join("")}</tbody>
+        <tbody>${order.items.map((i) => `<tr><td>${i.qty}× ${JA.escape(i.name)}${i.color ? " · " + JA.escape(variantLabel(i, i.color)) : ""}${i.bulkPercent ? ` <em class="bulk-tag">${t("bulk.label")} ${i.bulkPercent}%</em>` : ""}</td><td>${JA.money(i.price * i.qty, order.currency)}</td></tr>`).join("")}</tbody>
         <tfoot><tr class="ck-total"><th>${t("ck.total")}</th><td>${JA.money(order.total, order.currency)}</td></tr></tfoot>
       </table>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:22px">
@@ -1401,10 +1419,10 @@ function paintCheckoutTotals(form) {
         <td>
           <div class="ck-line">
             <img src="${JA.asset(i.product.image)}" alt="" onerror="fallbackImg(event)" />
-            <span>${JA.escape(JA.displayName(i.product))}${i.color ? " — " + JA.escape(variantLabel(i.product, i.color)) : ""} <b>× ${i.qty}</b></span>
+            <span>${JA.escape(JA.displayName(i.product))}${i.color ? " — " + JA.escape(variantLabel(i.product, i.color)) : ""} <b>× ${i.qty}</b>${i.bulk ? ` <em class="bulk-tag">${t("bulk.label")} ${i.bulkPercent}%</em>` : ""}</span>
           </div>
         </td>
-        <td>${JA.money(i.payUnit * i.qty, cur)}</td>
+        <td>${i.bulk ? `<s>${JA.money(i.unit * i.qty, cur)}</s> ` : ""}${JA.money(i.payUnit * i.qty, cur)}</td>
       </tr>`).join("");
   }
   const sub = document.querySelector("[data-ck-sub]");
@@ -2195,29 +2213,56 @@ function renderCheckout() {
     // cannot abort a receipt upload. The address bar still becomes the dedicated
     // completion URL, and refreshing it loads order-complete.html normally.
     const submission = order.submission;
+    const finishOrder = () => {
+      JA.clearCart();
+      ckPromo = null;
+      form.dataset.done = "1";
+      const target = "order-complete.html?order=" + encodeURIComponent(order.id);
+      try { window.history.replaceState({ orderId: order.id }, "", target); } catch (e) {}
+      paintOrderCompleteChrome();
+      showOrderDone(order);
+      bindOrderDoneCopy();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+    // A definitive server rejection (409 out of stock, 400 validation) must
+    // never look like a completed order: the cart stays, the shopper is told
+    // exactly what the server said, and the Place order button comes back.
+    const rejectOrder = (err) => {
+      const msg = (err && err.message) || "Your order could not be placed. Please try again.";
+      try { JA.updateOrder(order.id, { failed: true, error: String(msg).slice(0, 300) }); } catch (e) {}
+      JA.toast(msg);
+      try {
+        let warn = document.querySelector("[data-ck-order-error]");
+        if (!warn) {
+          warn = document.createElement("div");
+          warn.setAttribute("data-ck-order-error", "");
+          warn.className = "stock-warn";
+          form.insertBefore(warn, form.querySelector(".ck-place")?.parentElement || form.firstChild);
+        }
+        warn.textContent = msg;
+        warn.hidden = false;
+      } catch (e) {}
+      if (btn) { btn.disabled = false; btn.textContent = t("ck.place"); }
+    };
     if (submission && typeof submission.then === "function") {
       submission.then((result) => {
-        if (!(result && result.queued)) return;
-        try { JA.updateOrder(order.id, { queued: true }); } catch (e) {}
-        const queuedTarget = "order-complete.html?order=" + encodeURIComponent(order.id) + "&queued=1";
-        try { window.history.replaceState({ orderId: order.id }, "", queuedTarget); } catch (e) {}
-        paintQueuedOrderNote(result.persisted === true);
-      }).catch(() => {
-        // This is deliberately background work, matching the original instant
-        // checkout. JA_NET displays pending retries; the completed order remains
-        // available on this device with its ID and entered information.
+        if (result && result.queued) {
+          try { JA.updateOrder(order.id, { queued: true }); } catch (e) {}
+          const queuedTarget = "order-complete.html?order=" + encodeURIComponent(order.id) + "&queued=1";
+          try { window.history.replaceState({ orderId: order.id }, "", queuedTarget); } catch (e) {}
+          paintQueuedOrderNote(result.persisted === true);
+        }
+        finishOrder();
+      }).catch((err) => {
+        // Only definitive rejections reach here: a network failure is queued
+        // by JA_NET and resolves as {queued: true} above, so this is the
+        // server saying NO (out of stock, validation, ...). Show it.
+        rejectOrder(err);
       });
+      return;
     }
 
-    JA.clearCart();
-    ckPromo = null;
-    form.dataset.done = "1";
-    const target = "order-complete.html?order=" + encodeURIComponent(order.id);
-    try { window.history.replaceState({ orderId: order.id }, "", target); } catch (e) {}
-    paintOrderCompleteChrome();
-    showOrderDone(order);
-    bindOrderDoneCopy();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    finishOrder();
   });
 }
 

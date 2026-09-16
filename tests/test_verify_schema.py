@@ -114,7 +114,8 @@ def test_the_required_column_inventory_covers_the_agreed_contract():
         "product_id", "order_id", "email", "name", "rating", "title", "body", "hidden",
         "created_at", "updated_at")
     assert len(vs.REQUIRED_TABLES) == 16
-    assert len(vs.REQUIRED_COLUMNS["products"]) == 16
+    # 16 original columns + the two per-product bulk-discount columns.
+    assert len(vs.REQUIRED_COLUMNS["products"]) == 18
     # The durable-analytics tables: without these the dashboard resets to
     # zero on a deploy and a worker crash leaves no evidence off the dyno.
     for table in ("analytics_events", "search_queries", "analytics_counters",

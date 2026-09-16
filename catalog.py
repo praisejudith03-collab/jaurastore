@@ -14,7 +14,7 @@ Two persistence backends are supported:
   mirrored there. The local override file is still used as a read-through cache
   so a momentarily unavailable Supabase never empties the shop.
 """
-import os, sys, json, secrets, datetime, contextlib
+import os, sys, json, re, secrets, datetime, contextlib
 from config import Config
 
 try:
@@ -583,6 +583,13 @@ def normalize(product):
     name = sec.clean(product.get("name"), 200)
     if not name:
         return None
+    # Per-product bulk discount: both values or neither (a lone half-config
+    # pair can never fire and would only confuse the admin editor).
+    _bulk_qty = _clean_bulk_qty(product.get("bulkQty"), product.get("bulk_qty"))
+    _bulk_pct = _clean_bulk_percent(product.get("bulkPercent"), product.get("bulk_percent"))
+    if not (_bulk_qty and _bulk_pct):
+        _bulk_qty = None
+        _bulk_pct = None
     raw_id = sec.clean(product.get("id"), 64)
     pid = raw_id or ("jau-" + secrets.token_hex(5))
     ngn, cfa = _derive_cfa(product)
@@ -604,6 +611,15 @@ def normalize(product):
             image = real_photos[0]
     stock_qty = sec.clean_int(product.get("stock_quantity"),
                               sec.clean_int(product.get("stock"), 24), 0, 10**7)
+    option_stock = _clean_option_stock(product.get("optionStock"))
+    if option_stock:
+        # Per-variant stock is the truth for a variant product and the total
+        # is the sum of its variants (the admin editor has always computed it
+        # that way, but only client-side). Enforcing it server-side keeps
+        # stock / stock_quantity and optionStock from ever disagreeing: a row
+        # that said stock=24 while every variant was 0 still showed
+        # "In Stock" on the storefront and stayed orderable.
+        stock_qty = sum(int(v or 0) for v in option_stock.values())
     out = {
         "id": pid,
         "sku": sec.valid_sku(product.get("sku") or ""),
@@ -633,8 +649,14 @@ def normalize(product):
         "online": product.get("online", True) is not False,
         "colors": list(product.get("colors") or []),
         "options": list(product.get("options") or []),
-        "optionStock": _clean_option_stock(product.get("optionStock")),
+        "optionStock": option_stock,
         "optionPrices": _clean_option_prices(product.get("optionPrices") or product.get("option_prices")),
+        # Optional per-product bulk discount: order MORE than bulkQty units of
+        # this product and bulkPercent is taken off its unit price at
+        # checkout. Both values or neither - a lone percentage with no
+        # threshold can never fire and would only confuse the admin editor.
+        "bulkQty": _bulk_qty,
+        "bulkPercent": _bulk_pct,
         # The id this row had before it was given a canonical one, so old
         # product links / order lines / reviews keep resolving. See
         # product_index().
@@ -658,6 +680,29 @@ def _clean_legacy_id(raw, pid):
     return val
 
 
+def stock_of(product):
+    """The authoritative integer stock of one product row.
+
+    ONE precedence for every reader in the app (display, checkout
+    validation, reservation, admin): the canonical ``stock_quantity``
+    column when the row carries it, the legacy ``stock`` alias otherwise
+    (seed rows and older mirrors). Before this helper existed the readers
+    were split - the storefront displayed ``stock`` while the reservation
+    RPC guarded ``stock_quantity`` - so a row whose two spellings
+    disagreed (an import that left stock_quantity at the table default 0)
+    showed "In Stock" and then failed checkout, or the reverse. Never
+    negative; a non-numeric value reads as 0.
+    """
+    p = product if isinstance(product, dict) else {}
+    raw = p.get("stock_quantity")
+    if raw is None:
+        raw = p.get("stock")
+    try:
+        return max(0, int(raw or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _clean_option_stock(raw):
     """Per-option-value stock, e.g. {"Red": 4, "Blue": 0}. The admin editor
     tracks quantity per value of the product's first option, like Wix."""
@@ -671,6 +716,104 @@ def _clean_option_stock(raw):
             continue
         out[key] = sec.clean_int(v, 0, 0, 10**7) or 0
     return out
+
+
+def fold_option_value(value):
+    """Case/punctuation-insensitive key for matching variant option values.
+
+    The single canonical spelling matcher: the cart line, the optionStock
+    map and the Supabase RPC argument are all folded through it, so
+    "Colour: Red", "red" and "RED" all address the same stored key.
+    """
+    return "".join(c.lower() for c in str(value or "") if c.isalnum())
+
+
+def variant_values(variant):
+    """Option values from a cart variant string like "Color: Red · Size: M"."""
+    v = str(variant or "")
+    if not v or v == "__default__":
+        return []
+    out = []
+    for part in re.split(r"[·;|]", v):
+        p = str(part or "").strip()
+        if not p:
+            continue
+        if ":" in p:
+            _title, val = p.split(":", 1)
+            val = val.strip()
+            if val:
+                out.append(val)
+        else:
+            out.append(p)
+    return out
+
+
+
+def _clean_bulk_qty(*raws):
+    """A bulk-discount quantity threshold, or None when not configured.
+
+    Zero (or a negative) means "no discount", never a threshold of 1 -
+    clean_int alone would clamp it up and switch the discount on."""
+    import security as sec
+    for raw in raws:
+        if raw is None or raw == "":
+            continue
+        try:
+            if float(raw) <= 0:
+                return None
+        except (TypeError, ValueError):
+            continue
+        qty = sec.clean_int(raw, None, 1, 10**6)
+        if qty is not None:
+            return qty
+    return None
+
+
+def _clean_bulk_percent(*raws):
+    """A bulk-discount percentage (1-90), or None when not configured.
+
+    Zero means "no discount" - clean_int alone would clamp it up to 1%."""
+    import security as sec
+    for raw in raws:
+        if raw is None or raw == "":
+            continue
+        try:
+            if float(raw) <= 0:
+                return None
+        except (TypeError, ValueError):
+            continue
+        pct = sec.clean_int(raw, None, 1, 90)
+        if pct is not None:
+            return pct
+    return None
+
+
+def bulk_discount_for(product, quantity):
+    """The bulk-discount percentage one product earns at ``quantity``.
+
+    A per-product discount (bulkQty + bulkPercent, set in the admin editor)
+    wins when configured; otherwise the shop-wide volume tiers from the
+    growth settings apply. The per-product threshold fires when the customer
+    orders MORE than bulkQty units of that one product (all its variants
+    combined).
+    """
+    try:
+        qty = int(quantity or 0)
+    except (TypeError, ValueError):
+        return 0
+    if qty <= 0:
+        return 0
+    p = product if isinstance(product, dict) else {}
+    threshold = _clean_bulk_qty(p.get("bulkQty"), p.get("bulk_qty"))
+    percent = _clean_bulk_percent(p.get("bulkPercent"), p.get("bulk_percent"))
+    if threshold and percent:
+        return percent if qty > int(threshold) else 0
+    try:
+        import growth
+        return growth.bulk_discount_percent(qty)
+    except Exception:
+        return 0
+
 
 
 def _clean_option_prices(raw):
@@ -1020,8 +1163,11 @@ def apply_stock_delta(pid, qty_delta, option_key=None, actor=None):
     if _prod_source():
         from supabase_store import reserve_product_stock, release_product_stock
         if qty_delta < 0:
-            return reserve_product_stock(pid, -qty_delta)
-        return release_product_stock(pid, qty_delta)
+            # The variant key must travel with the reservation: without it
+            # only the product-level total is guarded and a variant can be
+            # sold past its own quantity.
+            return reserve_product_stock(pid, -qty_delta, option=_match_option_key(pid, option_key))
+        return release_product_stock(pid, qty_delta, option=_match_option_key(pid, option_key))
 
     found = None
     for p in merged(include_hidden=True):
@@ -1031,28 +1177,18 @@ def apply_stock_delta(pid, qty_delta, option_key=None, actor=None):
     if found is None:
         return None
     rec = dict(found)
-    try:
-        stock = int(rec.get("stock_quantity", rec.get("stock")) or 0)
-    except (TypeError, ValueError):
-        stock = 0
-    new_stock = max(0, stock + qty_delta)
+    new_stock = stock_of(rec) + qty_delta
+    if new_stock < 0:
+        new_stock = 0
     # keep the canonical Supabase column AND the legacy alias in sync, or
     # normalize() (which prefers stock_quantity) would silently revert it
     rec["stock"] = new_stock
     rec["stock_quantity"] = new_stock
     os_map = rec.get("optionStock")
     if option_key and isinstance(os_map, dict) and os_map:
-        os_map = dict(os_map)
-        key = str(option_key)
-        matched = key if key in os_map else None
-        if matched is None:
-            want = "".join(c.lower() for c in key if c.isalnum())
-            for k in os_map:
-                fk = "".join(c.lower() for c in str(k) if c.isalnum())
-                if fk and fk == want:
-                    matched = k
-                    break
+        matched = _option_stock_key_for(rec, option_key)
         if matched is not None:
+            os_map = dict(os_map)
             try:
                 cur = int(os_map[matched] or 0)
             except (TypeError, ValueError):
@@ -1061,6 +1197,203 @@ def apply_stock_delta(pid, qty_delta, option_key=None, actor=None):
             rec["optionStock"] = os_map
     upsert(rec, actor=actor or "stock")
     return rec
+
+
+def _match_option_key(pid, option_key):
+    """The exact optionStock key for ``option_key`` on product ``pid``.
+
+    The Supabase RPC guards on the jsonb key itself, so the caller must hand
+    it the key as stored on the row (not a folded/cart-side spelling). Best
+    effort: when the row or the key cannot be resolved the reservation falls
+    back to the product-level guard, exactly like a no-variant line.
+    """
+    if not option_key:
+        return None
+    try:
+        for p in merged(include_hidden=True):
+            if str(p.get("id")) == pid:
+                return _option_stock_key_for(p, option_key)
+    except Exception:
+        return None
+    return None
+
+
+def _option_stock_key_for(product, variant):
+    """The optionStock map key matching a cart variant spelling, or None."""
+    if not isinstance(product, dict):
+        return None
+    os_map = product.get("optionStock")
+    if not isinstance(os_map, dict) or not os_map:
+        return None
+    vals = variant_values(variant)
+    if not vals:
+        return None
+    folded = {}
+    for k in os_map:
+        fk = fold_option_value(k)
+        if fk:
+            folded[fk] = k
+    for val in vals:
+        fk = fold_option_value(val)
+        if fk and fk in folded:
+            return folded[fk]
+    return None
+
+
+def reserve_stock(pid, qty, option_key=None, actor=None):
+    """Atomically reserve ``qty`` units of one product (local backend).
+
+    The guarded counterpart of apply_stock_delta(-qty): it only succeeds when
+    the product is online and BOTH the product total and the chosen variant
+    still have the quantity. The read-modify-write runs under the catalogue's
+    cross-process file lock, so two concurrent checkouts (two gunicorn
+    workers) can never both take the last unit. Returns the updated row on
+    success, None when there is not enough stock, and False when the write
+    itself failed.
+    """
+    pid = str(pid or "")
+    try:
+        qty = int(qty)
+    except (TypeError, ValueError):
+        return None
+    if not pid or qty <= 0:
+        return None
+
+    if _prod_source():
+        # Production guards in PostgreSQL (single guarded UPDATE); the local
+        # lock below would not span dynos anyway.
+        from supabase_store import reserve_product_stock
+        return reserve_product_stock(pid, qty, option=_match_option_key(pid, option_key))
+
+    path = _norm_filename(CATALOG_FILE)
+    with _catalog_lock(path):
+        found = None
+        for p in merged(include_hidden=True):
+            if str(p.get("id")) == pid:
+                found = p
+                break
+        if found is None:
+            return None
+        rec = dict(found)
+        stock = stock_of(rec)
+        if rec.get("online") is False or stock < qty:
+            return None
+        matched = _option_stock_key_for(rec, option_key) if option_key else None
+        if matched is not None:
+            try:
+                variant_qty = int(rec["optionStock"][matched] or 0)
+            except (TypeError, ValueError):
+                variant_qty = 0
+            if variant_qty < qty:
+                return None
+        rec["stock"] = max(0, stock - qty)
+        rec["stock_quantity"] = rec["stock"]
+        if matched is not None:
+            os_map = dict(rec["optionStock"])
+            os_map[matched] = max(0, int(os_map[matched] or 0) - qty)
+            rec["optionStock"] = os_map
+        # Write the override row directly (upsert() would re-take the lock we
+        # already hold).
+        try:
+            clean = normalize(rec)
+            if clean is None:
+                return False
+            data, path = _load_overrides()
+            data["products"] = [p for p in (data.get("products") or []) if p.get("id") != pid]
+            data["products"].append(clean)
+            data["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            data["updatedBy"] = actor or "stock"
+            _write_overrides(data, path)
+        except Exception as exc:                   # pragma: no cover - disk
+            print(f"[catalog] local stock reserve failed: {exc}")
+            return False
+    return rec
+
+
+def set_variant_stock(pid, qty, option_key=None, actor=None):
+    """Set the ABSOLUTE quantity of one product, or of one variant of it.
+
+    The admin stock manager used to write a separate variant_stock store the
+    checkout never read: the manager said 10 while the product row (what
+    reservations guard and decrement) still said 24, and the shopper could
+    order stock the owner believed was gone. Every stock number now lives on
+    the product row - stock / stock_quantity for the total, optionStock for
+    the per-variant split - and this is the one setter.
+
+    Semantics: a matching optionStock key sets that variant (and re-syncs the
+    product total to the variant sum); anything else sets the product total.
+    The local branch read-modify-writes under the catalogue's cross-process
+    lock, exactly like reserve_stock. Production writes through the same
+    upsert the product editor uses.
+    """
+    pid = str(pid or "")
+    try:
+        qty = max(0, int(qty))
+    except (TypeError, ValueError):
+        return None
+    if not pid:
+        return None
+
+    if _prod_source():
+        found = _read_back_product(pid)
+        if found is None:
+            return None
+        rec = dict(found)
+        matched = _option_stock_key_for(rec, option_key) if option_key else None
+        if matched is not None:
+            os_map = dict(rec.get("optionStock") or {})
+            os_map[matched] = qty
+            rec["optionStock"] = os_map
+            rec["stock"] = max(0, sum(int(v or 0) for v in os_map.values()))
+        else:
+            rec["stock"] = qty
+        rec["stock_quantity"] = rec["stock"]
+        try:
+            clean = normalize(rec)
+            if clean is None:
+                return False
+            from supabase_store import upsert_products
+            if not upsert_products([clean]):
+                return False
+        except Exception as exc:                   # pragma: no cover - network
+            print(f"[catalog] product stock set failed: {exc}")
+            return False
+        return clean
+
+    path = _norm_filename(CATALOG_FILE)
+    with _catalog_lock(path):
+        found = None
+        for p in merged(include_hidden=True):
+            if str(p.get("id")) == pid:
+                found = p
+                break
+        if found is None:
+            return None
+        rec = dict(found)
+        matched = _option_stock_key_for(rec, option_key) if option_key else None
+        if matched is not None:
+            os_map = dict(rec.get("optionStock") or {})
+            os_map[matched] = qty
+            rec["optionStock"] = os_map
+            rec["stock"] = max(0, sum(int(v or 0) for v in os_map.values()))
+        else:
+            rec["stock"] = qty
+        rec["stock_quantity"] = rec["stock"]
+        try:
+            clean = normalize(rec)
+            if clean is None:
+                return False
+            data, wpath = _load_overrides()
+            data["products"] = [p for p in (data.get("products") or []) if p.get("id") != pid]
+            data["products"].append(clean)
+            data["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            data["updatedBy"] = actor or "stock"
+            _write_overrides(data, wpath)
+        except Exception as exc:                   # pragma: no cover - disk
+            print(f"[catalog] local stock set failed: {exc}")
+            return False
+    return rec
+
 
 
 def local_only_products():

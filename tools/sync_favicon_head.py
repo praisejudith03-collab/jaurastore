@@ -30,7 +30,7 @@ SUPABASE_URL = "https://rvkweyipqgsggcnimhxf.supabase.co"
 # The shared asset token, bumped whenever a shipped asset changes. Only the
 # same-origin fallback carries it: the Supabase objects are immutable at their
 # key and are re-uploaded in place.
-TOKEN = "149"
+TOKEN = "150"
 
 START = "  <!-- brand icons: Supabase public-assets bucket (tools/upload_brand_assets.py) -->"
 END = "  <!-- /brand icons -->"

@@ -64,6 +64,9 @@ class FakeTable:
         self._owner = owner
         self._name = name
         self._filters = []
+        self._order = None
+        self._limit = None
+        self._range = None
 
     def insert(self, rows):
         store = self._owner.tables.setdefault(self._name, [])
@@ -91,10 +94,17 @@ class FakeTable:
     def select(self, *a):
         return self
 
-    def order(self, *a, **k):
+    def order(self, column=None, *a, **k):
+        self._order = (column, bool(k.get("desc")))
         return self
 
     def limit(self, n=None):
+        self._limit = n
+        return self
+
+    def range(self, start, end, *a, **k):
+        # PostgREST Range pagination (inclusive of end), like the real client.
+        self._range = (int(start), int(end))
         return self
 
     def eq(self, key, val):
@@ -112,6 +122,14 @@ class FakeTable:
                 rows = [r for r in rows if r.get(key) == val]
             elif op == "gte":
                 rows = [r for r in rows if str(r.get(key) or "") >= str(val)]
+        if self._order and self._order[0]:
+            col, desc = self._order
+            rows = sorted(rows, key=lambda r: str(r.get(col) or ""), reverse=desc)
+        if self._range:
+            s, e = self._range
+            rows = rows[s:e + 1]
+        elif self._limit:
+            rows = rows[:self._limit]
         return {"data": rows}
 
 

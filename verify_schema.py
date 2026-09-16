@@ -49,7 +49,11 @@ REQUIRED_TABLES = (
 REQUIRED_COLUMNS = {
     "products": ("id", '"legacyId"', "name", "category", '"priceNgn"', '"priceCfa"',
                  '"compareNgn"', '"compareCfa"', "image_url", "images", '"optionPrices"',
-                 "stock_quantity", "description", "featured", "online", "updated_at"),
+                 "stock_quantity", "description", "featured", "online", "updated_at",
+                 # Optional per-product bulk discount (more than bulkQty units
+                 # of this product -> bulkPercent off). Nullable, so adding
+                 # them to an existing table is a pure ALTER TABLE ADD COLUMN.
+                 '"bulkQty"', '"bulkPercent"'),
     "product_reviews": ("product_id", "order_id", "email", "name", "rating", "title", "body",
                         "hidden", "created_at", "updated_at"),
     "coupon_uses": ("code", "email", "order_id", "percent", "used_at"),

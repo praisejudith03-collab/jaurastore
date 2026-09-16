@@ -124,6 +124,8 @@ const JA = (() => {
     "promo.kicker": "Everything you love, all in one store",
     "conv.banner": "Benin 🇧🇯 customers: place your order now and we deliver in the next batch",
     "ck.bjMin": "Benin deliveries: minimum order 5,000 F CFA (about 12,000 naira).",
+    "bulk.label": "Bulk discount",
+    "cart.bulkApplied": "Bulk discount applied — {p}% off this item.",
   };
 
   const tx = (key, vars) => {
@@ -345,6 +347,20 @@ const JA = (() => {
     // An admin row (?all=1) already carries the real number: keep it exactly.
     if (typeof p.stock === "number") return p;
     const out = { ...p };
+    // Public per-variant availability (the server never ships the numbers):
+    // {"Red": "out", "Black": "in"}. Translate it into the shape stockFor()
+    // reads - a variant marked "out" has 0 available, an "in" variant a high
+    // sentinel (the server re-checks the real quantity when the order is
+    // placed). Without this the storefront could not tell a sold-out colour
+    // from an available one at all.
+    const oss = p.option_stock_status;
+    if (oss && typeof oss === "object" && !Array.isArray(oss) && Object.keys(oss).length) {
+      const status = {};
+      Object.keys(oss).forEach((k) => {
+        status[k] = String(oss[k]).toLowerCase() === "out" ? 0 : 9999;
+      });
+      out.optionStockStatus = status;
+    }
     const os = p.option_stock;
     if (os && typeof os === "object" && !Array.isArray(os) && Object.keys(os).length) {
       // Per-variant stock: the map IS the truth, and the total is its sum, so
@@ -914,6 +930,18 @@ const JA = (() => {
   function bulkPercent(qty) {
     return bulkDiscountTiers().filter((t) => Number(qty) >= t.minQuantity).reduce((n, t) => t.percent, 0);
   }
+  function bulkPercentFor(p, qty) {
+    // Per-product bulk discount first: order MORE than the product's own
+    // threshold (all its variants combined) and its configured percentage
+    // applies. With no per-product discount the shop-wide tiers apply - the
+    // same rule the server's checkout pricing uses.
+    const threshold = Math.round(Number(p && p.bulkQty) || 0);
+    const percent = Math.round(Number(p && p.bulkPercent) || 0);
+    if (threshold > 0 && percent > 0) {
+      return Number(qty) > threshold ? Math.min(90, Math.max(1, percent)) : 0;
+    }
+    return bulkPercent(qty);
+  }
   function stockFold(s) {
     return String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]/g, "");
   }
@@ -933,6 +961,23 @@ const JA = (() => {
   function stockFor(idOrProduct, variant) {
     const p = typeof idOrProduct === "string" ? product(idOrProduct) : idOrProduct;
     if (!p) return 0;
+    // Per-variant availability from the public in/out map (no numbers ship to
+    // the browser): a variant the server marks "out" reads 0 here, whatever
+    // the product-level sentinel says. A variant missing from the map falls
+    // through to the product level.
+    const status = p.optionStockStatus;
+    if (status && typeof status === "object" && !Array.isArray(status) && Object.keys(status).length) {
+      const foldedStatus = {};
+      Object.keys(status).forEach((k) => {
+        const fk = stockFold(k);
+        if (fk) foldedStatus[fk] = Math.max(0, Math.round(Number(status[k]) || 0));
+      });
+      const statusVals = stockVariantValues(variant);
+      for (let i = 0; i < statusVals.length; i += 1) {
+        const fk = stockFold(statusVals[i]);
+        if (fk && Object.prototype.hasOwnProperty.call(foldedStatus, fk)) return foldedStatus[fk];
+      }
+    }
     const base = Math.max(0, Math.round(Number(p.stock) || 0));
     const os = p.optionStock;
     if (!os || typeof os !== "object" || !Object.keys(os).length) return base;
@@ -997,6 +1042,9 @@ const JA = (() => {
     return out;
   }
   function stockProblemLine(problems) {
+    // Generic by design: the exact quantity on the shelf is a business
+    // secret, so the shopper is told THAT the option is unavailable in the
+    // quantity selected - never how many units exist.
     let list = problems;
     if (list && !Array.isArray(list)) list = [list];
     if (!list) list = stockProblems();
@@ -1004,16 +1052,12 @@ const JA = (() => {
     const p = list[0];
     const name = String(p.name || "This item");
     const left = Math.max(0, Number(p.available != null ? p.available : p.left) || 0);
-    const asked = Math.max(0, Number(p.requested != null ? p.requested : p.asked) || 0);
     if (left <= 0) return `${name} is out of stock.`;
-    if (asked > left) {
-      return `Only ${left} unit${left === 1 ? "" : "s"} of ${name} ${left === 1 ? "is" : "are"} in stock — you asked for ${asked}.`;
-    }
-    return `Only ${left} unit${left === 1 ? "" : "s"} of ${name} ${left === 1 ? "is" : "are"} in stock.`;
+    return `${name} — this option is currently unavailable in the quantity selected.`;
   }
   function bulkUnit(p, qty, cur, variant = "") {
     const unit = priceOf(p, cur, variant);
-    const percent = bulkPercent(qty);
+    const percent = bulkPercentFor(p, qty);
     return percent ? Math.round(unit * (100 - percent) / 100) : unit;
   }
   function addToCart(id, qty = 1, color = "") {
@@ -1045,7 +1089,8 @@ const JA = (() => {
     }
     track("cart", { id, name: p.name, qty: add, variant: color });
     const totalQty = cartQtyFor(id);
-    if (bulkPercent(totalQty)) toast(tx("cart.bulkOn"));
+    const bulkPct = bulkPercentFor(p, totalQty);
+    if (bulkPct) toast(tx("cart.bulkApplied", { p: bulkPct }));
     openMini();
   }
   function setQty(id, color, qty) {
@@ -1090,9 +1135,10 @@ const JA = (() => {
       const cur = displayCur(p);
       const unit = priceOf(p, cur, i.color);
       const qtyAll = cartQtyFor(i.id);
-      const bulk = bulkPercent(qtyAll) > 0;
+      const bulkPct = bulkPercentFor(p, qtyAll);
+      const bulk = bulkPct > 0;
       const payUnit = bulkUnit(p, qtyAll, cur, i.color);
-      return { ...i, product: p, cur, unit, bulk, payUnit, line: payUnit * i.qty };
+      return { ...i, product: p, cur, unit, bulk, bulkPercent: bulkPct, payUnit, line: payUnit * i.qty };
     }).filter(Boolean);
   }
   function cartTotal(cur = currency()) {
@@ -1310,6 +1356,7 @@ const JA = (() => {
       },
       items: (order.items || []).map((i) => ({
         id: i.id, name: i.name, qty: i.qty, price: i.price, color: i.color,
+        ...(i.bulkPercent ? { bulkPercent: i.bulkPercent } : {}),
       })),
     };
     if (order.promoCode) payload.promoCode = order.promoCode;
@@ -1997,8 +2044,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=149";
-        const FLYER = "images/brand/logo-flyer.jpg?v=149";
+        const LOGO = "images/brand/logo.jpg?v=150";
+        const FLYER = "images/brand/logo-flyer.jpg?v=150";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2157,7 +2204,7 @@ const JA = (() => {
       </div>
       <div class="wrap header-inner">
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=149" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=150" alt="Jaura" />
         </a>
         <nav class="nav-left">
           <a href="index.html">${tx("nav.home")}</a>
@@ -2293,7 +2340,7 @@ const JA = (() => {
             <span>${i.qty}</span>
             <button type="button" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-n="${i.qty + 1}"${atMax ? " disabled" : ""}>+</button>
           </div>
-          <p class="mini-price">${i.qty} × ${money(i.payUnit, i.cur)}${i.bulk ? ` <em class="bulk-tag">${tx("cart.bulk")}</em>` : ""}</p>
+          <p class="mini-price">${i.qty} × ${money(i.payUnit, i.cur)}${i.bulk ? ` <em class="bulk-tag">${tx("bulk.label")}</em>` : ""}</p>
         </div>
         <button type="button" class="mini-remove" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-n="0" aria-label="Remove">×</button>
       </div>`;
@@ -2309,7 +2356,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=149" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=150" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2394,7 +2441,7 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=149" alt="Jaura" />
+        <img class="welcome-logo" src="images/brand/logo.jpg?v=150" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
         <p class="welcome-referral">${tx("promo.referral")}</p>
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
@@ -2416,7 +2463,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=149";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=150";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2475,7 +2522,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=149");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=150");
     document.title = title;
     [
       ["name", "description", description],
@@ -2967,7 +3014,7 @@ const JA = (() => {
     ready, CATEGORIES: [], categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,
     products, product, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
-    currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, bulkPercent, bulkDiscountTiers,
+    currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,
     wish, isWished, toggleWish, wishDetailed, openMini, closeMini,
