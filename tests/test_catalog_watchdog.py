@@ -1,6 +1,6 @@
 """Tests for the production catalog watchdog (tools/catalog_watchdog.py).
 
-The watchdog is the "it must never happen again" layer: hourly, in CI, it
+The watchdog is the "it must never happen again" layer: every 20 minutes, it
 compares the live storefront against the Supabase products table read
 directly over PostgREST. These tests pin its logic offline:
 
@@ -190,6 +190,42 @@ def test_watchdog_ignores_tombstones_but_flags_a_visible_online_null():
     assert any("wix-260" in f and "MISSING" in f for f in failures), failures
 
 
+def test_autonomous_activation_only_updates_complete_approved_rows(monkeypatch):
+    rows = [
+        {"id": "wix-010", "online": False, "source": "admin", "name": "Ready",
+         "category": "Bags", "priceCfa": 1000, "image_url": "https://img/x.jpg"},
+        {"id": "wix-011", "online": False, "source": "admin", "name": "No image",
+         "category": "Bags", "priceCfa": 1000},
+        {"id": "custom", "online": False, "source": "admin", "name": "Not approved",
+         "category": "Bags", "priceCfa": 1000, "image_url": "https://img/x.jpg"},
+    ]
+    requests = []
+
+    def fake_request(url, headers=None, timeout=120, method="GET", data=None):
+        requests.append((url, method, json.loads(data.decode())))
+        return 204, {}, b""
+
+    monkeypatch.setattr(wd, "_request", fake_request)
+    activated = wd.activate_complete_products("https://db.test", "secret", rows,
+                                              expected_ids=("wix-010", "wix-011"))
+    assert activated == ["wix-010"]
+    assert requests[0][1:] == ("PATCH", {"online": True})
+    assert "id=eq.wix-010" in requests[0][0]
+
+
+def test_storefront_refresh_is_an_uncached_automatic_request(monkeypatch):
+    seen = {}
+
+    def fake_get(url, headers=None, timeout=120):
+        seen.update(url=url, headers=headers)
+        return 200, {}, b"{}"
+
+    monkeypatch.setattr(wd, "_get", fake_get)
+    wd.refresh_storefront_cache("https://shop.test")
+    assert "/api/catalog?watchdog_refresh=" in seen["url"]
+    assert "no-store" in seen["headers"]["Cache-Control"]
+
+
 # ---------------------------------------------------------- fetch layers (HTTP)
 class _Handler(BaseHTTPRequestHandler):
     """Serves /api/catalog and a PostgREST-style /rest/v1/products with
@@ -283,6 +319,7 @@ def test_watchdog_workflow_stays_safe():
     data = yaml.safe_load(text)
     triggers = data.get("on", data.get(True))
     assert "schedule" in triggers and "workflow_dispatch" in triggers
+    assert triggers["schedule"] == [{"cron": "*/20 * * * *"}]
     perms = data["permissions"]
     assert perms == {"contents": "read", "issues": "write"}, perms
     assert data["concurrency"]["group"] == "catalog-watchdog"
