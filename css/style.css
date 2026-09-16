@@ -6696,3 +6696,8 @@ body.au-shop .shop-banner img,
   .au-cat-card { grid-template-columns: 1fr; }
   .au-cat-pic img, .au-cat-pic .cat-doc-chip { width: 100%; max-width: 180px; }
 }
+.adx-select-all { display: inline-flex; align-items: center; gap: 6px; color: #665748; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.adx-select-all input { accent-color: #7d47bd; cursor: pointer; }
+@media (max-width: 920px) {
+  .adx-select-all { flex: 1 1 100%; }
+}

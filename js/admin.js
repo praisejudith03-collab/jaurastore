@@ -851,6 +851,9 @@ function updateProductBulkUI() {
   const count = selectedProductIds.size;
   bar.hidden = !count;
   const label = $("#products-selected-count"); if (label) label.textContent = count;
+  const visible = [...($("#prod-grid")?.querySelectorAll("[data-prod-select]") || [])];
+  const select = $("#products-select-visible");
+  if (select) { const n = visible.filter((input) => selectedProductIds.has(String(input.dataset.prodSelect))).length; select.checked = visible.length > 0 && n === visible.length; select.indeterminate = n > 0 && n < visible.length; }
 }
 function bindProductSelection() {
   document.querySelectorAll("#prod-grid [data-prod-select]").forEach((input) => {
@@ -861,6 +864,15 @@ function bindProductSelection() {
     };
     input.onclick = (e) => e.stopPropagation();
   });
+  const select = $("#products-select-visible");
+  if (select) select.onchange = () => {
+    $("#prod-grid")?.querySelectorAll("[data-prod-select]").forEach((input) => {
+      const id = String(input.dataset.prodSelect);
+      if (select.checked) selectedProductIds.add(id); else selectedProductIds.delete(id);
+      input.checked = select.checked;
+    });
+    updateProductBulkUI();
+  };
 }
 function bindProductBulk() {
   const bar = $("#product-bulk"); if (!bar || bar.dataset.bound === "1") return;
@@ -935,6 +947,7 @@ function productsTable() {
       <div class="adx-filters">
         <input id="prod-search" type="search" placeholder="Search products…" autocomplete="off" value="${qVal}" />
         <select id="prod-cat" aria-label="Filter by category"><option value="">All categories</option>${catOpts}</select>
+        <label class="adx-select-all"><input type="checkbox" id="products-select-visible" /> Select visible</label>
       </div>
       <div class="adx-bulkbar" id="product-bulk" hidden><strong><span id="products-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-product-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-product-bulk="show">Show selected</button><button type="button" class="btn btn-line" data-product-bulk="hide">Hide selected</button><button type="button" class="btn btn-line btn-danger" data-product-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-product-bulk="clear">Clear selection</button></div>
       <p class="adx-count"><span id="prod-count">${all.length}</span> of <span id="prod-count-all">${all.length}</span> products${filteredNote} · <button type="button" class="au-cats-link" data-tab="categories">Manage categories</button></p>
@@ -1175,7 +1188,7 @@ function orderCardHTML(o) {
 }
 let orderFilter = "all";
 function ordersPanel() {
-  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}</div><div class="adx-filter-bar" aria-label="Filter orders"><input id="order-search" type="search" placeholder="Search order, customer, email…" autocomplete="off" value="${esc(orderSearch)}" /><label>From <input id="order-from" type="date" value="${esc(orderFrom)}" /></label><label>To <input id="order-to" type="date" value="${esc(orderTo)}" /></label><button type="button" class="btn btn-line" id="order-filter-clear">Clear</button><a class="au-link-btn" id="orders-csv" href="api/admin/orders.csv" download>Download CSV</a></div><div class="adx-bulkbar" id="orders-bulk" hidden><strong><span id="orders-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-order-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-order-bulk="confirm">Confirm selected</button><button type="button" class="btn btn-line btn-danger" data-order-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-order-bulk="clear">Clear selection</button></div><p class="admin-note">Search and dates apply before the list is paginated. Tap an order to see everything — customer details, items, the payment receipt and the action buttons.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><p class="admin-note" id="mail-status" role="status" aria-live="polite" style="margin-bottom:10px">Checking receipt emails…</p><button type="button" class="btn btn-line" id="mail-test" hidden>Email a test</button><div id="proofs-box"><p class="empty">Loading receipts…</p></div>`;
+  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}</div><div class="adx-filter-bar" aria-label="Filter orders"><input id="order-search" type="search" placeholder="Search order, customer, email…" autocomplete="off" value="${esc(orderSearch)}" /><label>From <input id="order-from" type="date" value="${esc(orderFrom)}" /></label><label>To <input id="order-to" type="date" value="${esc(orderTo)}" /></label><button type="button" class="btn btn-line" id="order-filter-clear">Clear</button><label class="adx-select-all"><input type="checkbox" id="orders-select-visible" /> Select visible</label><a class="au-link-btn" id="orders-csv" href="api/admin/orders.csv" download>Download CSV</a></div><div class="adx-bulkbar" id="orders-bulk" hidden><strong><span id="orders-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-order-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-order-bulk="confirm">Confirm selected</button><button type="button" class="btn btn-line btn-danger" data-order-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-order-bulk="clear">Clear selection</button></div><p class="admin-note">Search and dates apply before the list is paginated. Tap an order to see everything — customer details, items, the payment receipt and the action buttons.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><p class="admin-note" id="mail-status" role="status" aria-live="polite" style="margin-bottom:10px">Checking receipt emails…</p><button type="button" class="btn btn-line" id="mail-test" hidden>Email a test</button><div id="proofs-box"><p class="empty">Loading receipts…</p></div>`;
 }
 async function refreshMailStatus() {
   const note = $("#mail-status"); if (!note) return;
@@ -1264,6 +1277,9 @@ function updateOrderBulkUI() {
   const count = selectedOrderIds.size;
   bar.hidden = !count;
   const label = $("#orders-selected-count"); if (label) label.textContent = count;
+  const visible = [...($("#orders-box")?.querySelectorAll("[data-order-select]") || [])];
+  const select = $("#orders-select-visible");
+  if (select) { const n = visible.filter((input) => selectedOrderIds.has(String(input.dataset.orderSelect))).length; select.checked = visible.length > 0 && n === visible.length; select.indeterminate = n > 0 && n < visible.length; }
 }
 function bindOrderSelection() {
   const box = $("#orders-box"); if (!box) return;
@@ -1275,6 +1291,15 @@ function bindOrderSelection() {
     };
     input.onclick = (e) => e.stopPropagation();
   });
+  const select = $("#orders-select-visible");
+  if (select) select.onchange = () => {
+    $("#orders-box")?.querySelectorAll("[data-order-select]").forEach((input) => {
+      const id = String(input.dataset.orderSelect);
+      if (select.checked) selectedOrderIds.add(id); else selectedOrderIds.delete(id);
+      input.checked = select.checked;
+    });
+    updateOrderBulkUI();
+  };
 }
 function bindOrderBulk() {
   const bar = $("#orders-bulk"); if (!bar || bar.dataset.bound === "1") return;
