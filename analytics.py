@@ -59,28 +59,86 @@ def stamp_cookie(resp, vid):
 
 
 def _geo(d):
-    """Resolve location from trusted edge headers, with browser geo only as a
-    fallback. Render/Cloudflare/Vercel inject these without a paid lookup and
-    the values never expose or persist a shopper IP address.
+    """Resolve the visitor's location.
+
+    The edge headers (Cloudflare / Vercel / Render) are geocoded from the
+    CLIENT IP the edge saw, so they are the trustworthy source and they are
+    read first. They are only meaningful when the request actually came
+    through that edge for a real client address: if the connection carries
+    no client IP at all (an internal health ping, the keep-alive worker)
+    the header would describe the datacentre, which is how every visitor
+    ended up pinned to Finland. In that case the location is dropped.
+
+    The browser-reported values (`d`) are the last resort, and are never
+    allowed to overrule the edge. No IP address is stored, in either path.
     """
-    h = request.headers
+    try:
+        h = request.headers
+    except RuntimeError:                  # no request context: browser data only
+        h = {}
+    if not h:
+        city = sec.clean(d.get("city"), 80) or ""
+        region = sec.clean(d.get("region"), 80) or ""
+        country = sec.clean(d.get("country"), 80).upper() or ""
+        return city, region, country
     city = (h.get("CF-IPCity") or h.get("X-Vercel-IP-City") or
-            h.get("X-Render-City") or d.get("city") or "")
+            h.get("X-Render-City") or "")
     region = (h.get("CF-Region") or h.get("X-Vercel-IP-Country-Region") or
-              h.get("X-Render-Region") or d.get("region") or "")
+              h.get("X-Render-Region") or "")
     country = (h.get("CF-IPCountry") or h.get("X-Vercel-IP-Country") or
-               h.get("X-Render-Country") or d.get("country") or "")
+               h.get("X-Render-Country") or "")
+    edge = bool(city or region or country)
+    if edge and not sec.is_public_ip(sec.client_ip()):
+        # Edge header with no real client address behind it: a proxy/monitor
+        # hop. Attributing it to a shopper is exactly the Finland defect.
+        city = region = country = ""
+        edge = False
+    if not edge:
+        city = d.get("city") or ""
+        region = d.get("region") or ""
+        country = d.get("country") or ""
     try:
         from urllib.parse import unquote
         city, region = unquote(str(city)), unquote(str(region))
     except Exception:
         pass
-    return sec.clean(city, 80) or "", sec.clean(region, 80) or "", sec.clean(country, 80).upper() or ""
+    # "XX" is Cloudflare's own "this is a bot / unknown" country code, and
+    # "T1" is Tor. Neither is a place a customer lives.
+    country = sec.clean(country, 80).upper() or ""
+    if country in ("XX", "T1"):
+        city = region = country = ""
+    return sec.clean(city, 80) or "", sec.clean(region, 80) or "", country
 
 
 # --------------------------------------------------------------- recording
+def should_skip_bot():
+    """True when this request is automated traffic, not a customer.
+
+    Crawlers, uptime monitors and scrapers never buy anything, but they hit
+    every page: counting them inflated page views and - because most of
+    them run on cheap European VPS estates - filled the live location map
+    with visitors from Finland and other datacentres. The storefront still
+    answers them normally; only the analytics tables ignore them.
+
+    Outside a request (a server-side caller, a migration, a test) there is
+    no user agent to judge, so nothing is skipped.
+    """
+    try:
+        if not request:
+            return False
+        return bool(sec.bot_reason())
+    except RuntimeError:                  # no request context
+        return False
+
+
 def record(items, vid, is_new):
-    """Store a batch of tracking events. `items` is a list of dicts."""
+    """Store a batch of tracking events. `items` is a list of dicts.
+
+    Automated traffic is dropped before anything is written, so a crawler
+    can never move a counter, a location or the live-visitor list.
+    """
+    if should_skip_bot():
+        return 0
     now = _now()
     iso = _iso(now)
     day = _day(now)
@@ -145,6 +203,13 @@ def record(items, vid, is_new):
             mirror_analytics_events(mirror_batch)
         except Exception:
             pass
+        # Lifetime odometer. page_views/events are pruned to the retention
+        # window and restored after a wipe; these totals are only ever
+        # incremented, so the headline numbers can never fall back to zero.
+        views = sum(1 for m in mirror_batch if m["kind"] == "page_view")
+        if views:
+            bump_counter("page_views_total", views)
+        bump_counter("events_total", len(mirror_batch))
 
     if sid and not one("SELECT 1 FROM page_views WHERE vid=? AND sid=? LIMIT 1", (vid, sid)):
         execute("UPDATE visitors SET sessions=sessions+1 WHERE vid=?", (vid,))
@@ -169,6 +234,230 @@ def record(items, vid, is_new):
         (vid, iso, iso, city, region, country, ref, ua),
     )
     return stored
+
+
+# ------------------------------------------------------- lifetime counters
+# Page views, events and searches are stored as rows with a retention
+# window, so pruning (or a wiped disk before the restore lands) moves the
+# headline numbers. These counters are the store's odometer: monotonic,
+# mirrored to Supabase and merged by taking the maximum of the two sides,
+# so a deploy, a restart or a worker reboot can never reset them to zero.
+COUNTER_NAMES = ("page_views_total", "events_total", "searches_total")
+
+
+def bump_counter(name, by=1):
+    """Increment a lifetime counter. Never raises - counting is not a sale."""
+    try:
+        by = int(by or 0)
+        if by <= 0:
+            return 0
+        execute(
+            "INSERT INTO analytics_counters (name, value, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(name) DO UPDATE SET value=analytics_counters.value+excluded.value, "
+            "updated_at=excluded.updated_at",
+            (str(name)[:60], by, _iso()))
+        return counter(name)
+    except Exception:
+        return 0
+
+
+def counter(name):
+    """The current value of one lifetime counter."""
+    try:
+        row = one("SELECT value FROM analytics_counters WHERE name=?", (str(name),))
+        return int((row or {"value": 0})["value"] or 0)
+    except Exception:
+        return 0
+
+
+def counters():
+    """Every lifetime counter as a plain dict."""
+    out = {name: 0 for name in COUNTER_NAMES}
+    try:
+        for row in query("SELECT name, value FROM analytics_counters"):
+            out[row["name"]] = int(row["value"] or 0)
+    except Exception:
+        pass
+    return out
+
+
+def persist_counters():
+    """Push the odometer to Supabase. Best-effort; returns True on success."""
+    try:
+        rows = [{"name": name, "value": int(value), "updated_at": _iso()}
+                for name, value in counters().items()]
+        from supabase_store import save_analytics_counters
+        return bool(save_analytics_counters(rows))
+    except Exception:
+        return False
+
+
+def restore_counters(rows=None):
+    """Merge the stored odometer back in after a wipe. Never raises.
+
+    The maximum of (local, remote) wins, so restoring can only ever move a
+    counter forward - a stale mirror cannot undo traffic counted since.
+    Returns the number of counters that were moved forward.
+    """
+    try:
+        if rows is None:
+            from supabase_store import load_analytics_counters
+            rows = load_analytics_counters()
+        moved = 0
+        local = counters()
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "")[:60]
+            if not name:
+                continue
+            try:
+                remote = int(row.get("value") or 0)
+            except (TypeError, ValueError):
+                continue
+            if remote > int(local.get(name, 0) or 0):
+                execute(
+                    "INSERT INTO analytics_counters (name, value, updated_at) VALUES (?,?,?) "
+                    "ON CONFLICT(name) DO UPDATE SET value=excluded.value, "
+                    "updated_at=excluded.updated_at",
+                    (name, remote, _iso()))
+                moved += 1
+        return moved
+    except Exception as exc:
+        print(f"[analytics] counter restore failed: {exc}")
+        return 0
+
+
+# -------------------------------------------------------- search history
+def _normalise_query(value):
+    """Fold case and whitespace so "Body Oil" and "body  oil" group together."""
+    return " ".join(str(value or "").lower().split())[:120]
+
+
+def record_search(q, results=0, category="", vid="", sid=""):
+    """Store one customer search. Returns True when it was stored.
+
+    Bots never reach this (the same filter the event tracker uses), and an
+    empty query is not a search. Every stored row is mirrored to Supabase
+    so the history survives a redeploy.
+    """
+    try:
+        if should_skip_bot():
+            return False
+        text = sec.clean(q, 120, allow_newlines=False)
+        norm = _normalise_query(text)
+        if not norm:
+            return False
+        now = _now()
+        iso, day = _iso(now), _day(now)
+        city, region, country = _geo({})
+        results = sec.clean_int(results, 0, 0, 10 ** 6)
+        category = sec.clean(category, 60)
+        vid = sec.clean(vid, 64)
+        sid = sec.clean(sid, 48)
+        execute(
+            "INSERT INTO search_queries (vid, sid, q, q_norm, results, category, "
+            "city, country, day, at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (vid, sid, text, norm, results, category, city, country, day, iso))
+        bump_counter("searches_total", 1)
+        try:
+            from supabase_store import mirror_search_queries
+            mirror_search_queries([{
+                "vid": vid, "sid": sid, "q": text, "q_norm": norm,
+                "results": results, "category": category, "city": city,
+                "country": country, "day": day, "at": iso,
+            }])
+        except Exception:
+            pass                      # durability gap only; the row is stored
+        return True
+    except Exception as exc:
+        print(f"[analytics] search not recorded: {exc}")
+        return False
+
+
+def top_searches(days=30, limit=20):
+    """The most-used search terms, with how often they found nothing."""
+    days = max(1, min(int(days or 30), 400))
+    since = _days_ago(days - 1)
+    rows = query(
+        "SELECT q_norm term, COUNT(*) searches, "
+        "COUNT(DISTINCT vid) visitors, "
+        "SUM(CASE WHEN results = 0 THEN 1 ELSE 0 END) empty, "
+        "MAX(at) last_at FROM search_queries WHERE day >= ? "
+        "GROUP BY q_norm ORDER BY searches DESC, last_at DESC LIMIT ?",
+        (since, max(1, min(int(limit or 20), 200))))
+    return [dict(r) for r in rows]
+
+
+def recent_searches(limit=40):
+    """The newest searches, most recent first - the raw demand feed."""
+    rows = query(
+        "SELECT q, results, category, city, country, at FROM search_queries "
+        "ORDER BY id DESC LIMIT ?", (max(1, min(int(limit or 40), 200)),))
+    return [dict(r) for r in rows]
+
+
+def search_report(days=30, limit=20):
+    total = dict(one(
+        "SELECT COUNT(*) n, COUNT(DISTINCT vid) visitors, "
+        "SUM(CASE WHEN results = 0 THEN 1 ELSE 0 END) empty "
+        "FROM search_queries WHERE day >= ?", (_days_ago(max(1, int(days or 30)) - 1),)) or {})
+    return {
+        "ok": True,
+        "days": days,
+        "searches": total.get("n", 0) or 0,
+        "searchers": total.get("visitors", 0) or 0,
+        "withoutResults": total.get("empty", 0) or 0,
+        "lifetimeSearches": counter("searches_total"),
+        "top": top_searches(days, limit),
+        "recent": recent_searches(limit),
+    }
+
+
+def restore_searches_from_supabase(rows=None):
+    """Copy the search history back after a wiped disk. Never raises.
+
+    Mirrors restore_from_supabase(): a no-op unless the local window is
+    empty, so a normal reboot cannot duplicate a single row.
+    """
+    try:
+        cutoff = _retention_cutoff_day()
+        local = one("SELECT COUNT(*) n FROM search_queries WHERE day >= ?", (cutoff,))
+        if local is None or (local["n"] or 0) > 0:
+            return 0
+        if rows is None:
+            from supabase_store import load_search_queries
+            rows = load_search_queries(cutoff)
+        if not rows:
+            return 0
+        now_iso = _iso()
+        restored = 0
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            day = str(r.get("day") or "")[:10]
+            if len(day) != 10 or day < cutoff:
+                continue
+            text = str(r.get("q") or "")[:120]
+            norm = str(r.get("q_norm") or "") or _normalise_query(text)
+            if not norm:
+                continue
+            try:
+                results = int(r.get("results") or 0)
+            except (TypeError, ValueError):
+                results = 0
+            execute(
+                "INSERT INTO search_queries (vid, sid, q, q_norm, results, category, "
+                "city, country, day, at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (str(r.get("vid") or "")[:64], str(r.get("sid") or "")[:48],
+                 text, norm[:120], results, str(r.get("category") or "")[:60],
+                 str(r.get("city") or "")[:80], str(r.get("country") or "")[:80],
+                 day, _clean_restored_at(r.get("at"), day, now_iso)))
+            restored += 1
+        return restored
+    except Exception as exc:
+        print(f"[analytics] search restore failed: {exc}")
+        return 0
 
 
 # ----------------------------------------------------------------- reporting
@@ -247,6 +536,12 @@ def report(days=30):
         "newVisitors": (dict(one("SELECT COUNT(*) n FROM visitors WHERE first_at >= ?", (since_iso,)) or {})).get("n", 0) or 0,
         "liveNow": len(live_now()),
     }
+    # The odometer travels with the window totals so the dashboard can show
+    # "since the shop opened" even right after a deploy replaced the disk.
+    lifetime = counters()
+    totals["lifetimePageViews"] = lifetime.get("page_views_total", 0)
+    totals["lifetimeEvents"] = lifetime.get("events_total", 0)
+    totals["lifetimeSearches"] = lifetime.get("searches_total", 0)
 
     series_rows = query(
         "SELECT day, COUNT(*) views, COUNT(DISTINCT vid) visitors, COUNT(DISTINCT sid) sessions "
@@ -326,6 +621,8 @@ def report(days=30):
         "locations": locations,
         "live": live_now(),
         "activity": recent_activity(),
+        "searches": top_searches(days, 12),
+        "lifetime": counters(),
     }
 
 
@@ -508,12 +805,17 @@ def sales_csv(days=30, date_from=None, date_to=None, search=None):
 
 
 def prune(retention_days=None):
-    """Drop raw analytics rows older than the retention window. Orders are kept."""
+    """Drop raw analytics rows older than the retention window. Orders are kept.
+
+    The lifetime counters (analytics_counters) are deliberately NOT pruned:
+    they are the odometer the headline numbers fall back on.
+    """
     days = int(retention_days or Config.ANALYTICS_RETENTION_DAYS)
     cutoff_day = _days_ago(max(1, days))
     cutoff_iso = _iso(_now() - datetime.timedelta(days=max(1, days)))
     execute("DELETE FROM page_views WHERE day < ?", (cutoff_day,))
     execute("DELETE FROM events WHERE day < ?", (cutoff_day,))
+    execute("DELETE FROM search_queries WHERE day < ?", (cutoff_day,))
     execute("DELETE FROM presence WHERE at < ?",
             (_iso(_now() - datetime.timedelta(days=2)),))
     execute("DELETE FROM visitors WHERE last_at < ?", (cutoff_iso,))

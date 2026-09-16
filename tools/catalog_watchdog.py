@@ -112,6 +112,43 @@ def _get_with_retries(url, headers=None, attempts=3):
     raise RuntimeError(f"request failed after {max(1, attempts)} attempt(s): {last}")
 
 
+def describe_worker_failure(background):
+    """Explain WHY the workers are unhealthy, using the health payload.
+
+    /healthz now carries the last recorded crash (job, exception type,
+    message, payload id and memory) alongside the liveness flags, so the
+    alert names the actual defect instead of only its symptom.
+    """
+    background = background or {}
+    dead = [name for name, alive in (
+        ("maintenance", background.get("maintenanceAlive")),
+        ("reminders", background.get("remindersAlive"))) if not alive]
+    bits = []
+    if not background.get("started"):
+        bits.append("scheduler never started")
+    if dead:
+        bits.append("stopped worker(s): " + ", ".join(dead))
+    if background.get("lastErrorJob") or background.get("lastError"):
+        bits.append("last error in %s: %s (%s)" % (
+            background.get("lastErrorJob") or "unknown",
+            str(background.get("lastError") or "")[:200],
+            background.get("lastErrorAt") or "time unknown"))
+    for report in (background.get("recentFailures") or [])[:3]:
+        if not isinstance(report, dict):
+            continue
+        bits.append("  - %s %s: %s%s (rss %s MB, %s)" % (
+            report.get("job") or "job",
+            report.get("error") or "Error",
+            str(report.get("message") or "")[:160],
+            " payload=" + str(report.get("payloadId")) if report.get("payloadId") else "",
+            report.get("rssMb"), report.get("at")))
+    if int(background.get("failures") or 0):
+        bits.append("%s failure(s) recorded since boot" % background["failures"])
+    if int(background.get("restarts") or 0):
+        bits.append("%s worker restart(s)" % background["restarts"])
+    return "; ".join(bits) if bits else "no detail reported by /healthz"
+
+
 def fetch_service_health(base):
     """Audit HTTP and in-process background workers before catalog checks."""
     url = base.rstrip("/") + "/healthz"
@@ -123,7 +160,8 @@ def fetch_service_health(base):
     if isinstance(background, dict) and not (
             background.get("started") and background.get("maintenanceAlive") and
             background.get("remindersAlive")):
-        raise RuntimeError("background scheduler workers are not healthy")
+        raise RuntimeError("background scheduler workers are not healthy: "
+                           + describe_worker_failure(background))
     return payload
 
 

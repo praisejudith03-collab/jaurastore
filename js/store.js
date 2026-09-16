@@ -1494,6 +1494,41 @@ const JA = (() => {
     } catch (e) {}
   }
 
+  // --------------------------------------------------- search history
+  // What shoppers type is the clearest signal of demand the catalogue is
+  // not answering, so it is counted on the server (api/search-log) and
+  // stored permanently, exactly like page views. Debounced so a term is
+  // logged once the shopper stops typing, never per keystroke, and never
+  // repeated for the same term in the same session.
+  let searchTimer = null;
+  const loggedSearches = new Set();
+
+  function logSearch(q, results, category) {
+    try {
+      if ((document.body.dataset.page || "") === "admin") return;
+      const text = String(q || "").trim();
+      if (text.length < 2 || !window.JA_NET) return;
+      const key = text.toLowerCase() + "|" + (category || "");
+      if (loggedSearches.has(key)) return;
+      loggedSearches.add(key);
+      window.JA_NET.api("api/search-log", {
+        method: "POST",
+        json: {
+          q: text.slice(0, 120),
+          results: Number(results) || 0,
+          category: category || "",
+          sid: sessionId(),
+        },
+        timeout: 6000,
+      }).catch(() => {});
+    } catch (e) {}
+  }
+
+  function logSearchSoon(q, results, category) {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => logSearch(q, results, category), 900);
+  }
+
   function startPresence() {
     if ((document.body.dataset.page || "") === "admin") return;
     const buffered = bufferedEvents();
@@ -2726,6 +2761,7 @@ const JA = (() => {
       const q = input?.value || "";
       const hits = searchProducts(q, activeCat);
       const shown = (q ? hits : products()).slice(0, 12);
+      if (q) logSearchSoon(q, hits.length, activeCat === "all" ? "" : activeCat);
       if (meta) {
         meta.textContent = q
           ? tx(hits.length === 1 ? "search.results" : "search.resultsMany", { n: hits.length })
@@ -2775,6 +2811,7 @@ const JA = (() => {
     document.querySelector("[data-menu-search]")?.addEventListener("submit", (e) => {
       e.preventDefault();
       const q = (e.target.querySelector("input")?.value || "").trim();
+      if (q) logSearch(q, searchProducts(q).length, "");
       location.href = q ? "shop.html?q=" + encodeURIComponent(q) : "shop.html";
     });
     const menuQ = document.querySelector("[data-menu-q]");
@@ -2788,6 +2825,7 @@ const JA = (() => {
         return;
       }
       const hits = searchProducts(q).slice(0, 8);
+      logSearchSoon(q, searchProducts(q).length, "");
       menuLive.hidden = false;
       menuLive.innerHTML = (hits.length
         ? hits.map((p) => `<a class="au-hit" href="product.html?id=${encodeURIComponent(p.id)}">
@@ -2939,7 +2977,7 @@ const JA = (() => {
     isAdmin, loginAdmin, logoutAdmin, adminSession,
     adminAnalytics, adminOrders, setOrderStatus, deleteOrder, flushEvents,
     customer, setCustomer, logoutCustomer, ordersForEmail, getProof, dataUrlToBlob,
-    cardHTML, asset, escape, mountChrome, track, getStats, setSeo, absUrl, SITE,
+    cardHTML, asset, escape, mountChrome, track, logSearch, getStats, setSeo, absUrl, SITE,
     galleryOf, startCardPlay, reviews, addReview, removeReview, setReviews, reviewStats, starsHTML,
     waCountry, setWaCountry, waRegionFor, waNumber, waLink, waInquiryUrl,
     waInquiryText, refreshWaLinks, WA_NG, WA_BJ,

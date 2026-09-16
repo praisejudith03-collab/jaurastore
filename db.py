@@ -214,6 +214,56 @@ CREATE INDEX IF NOT EXISTS idx_ev_type_day ON events(type, day);
 CREATE INDEX IF NOT EXISTS idx_ev_product ON events(product_id);
 CREATE INDEX IF NOT EXISTS idx_ev_at ON events(at DESC);
 
+-- What customers typed into the shop search box. Kept permanently (subject
+-- to the analytics retention window) and mirrored to Supabase, so the owner
+-- can see the demand the catalogue is not answering. No shopper identity
+-- beyond the anonymous visitor cookie is stored.
+CREATE TABLE IF NOT EXISTS search_queries (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  vid      TEXT,
+  sid      TEXT,
+  q        TEXT NOT NULL,
+  q_norm   TEXT NOT NULL,
+  results  INTEGER NOT NULL DEFAULT 0,
+  category TEXT,
+  city     TEXT,
+  country  TEXT,
+  day      TEXT NOT NULL,
+  at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_search_day ON search_queries(day);
+CREATE INDEX IF NOT EXISTS idx_search_norm ON search_queries(q_norm);
+CREATE INDEX IF NOT EXISTS idx_search_at ON search_queries(at DESC);
+
+-- Running totals that must never restart at zero. page_views/events carry a
+-- retention window and can be pruned or restored; these counters are the
+-- store's lifetime odometer and are only ever incremented.
+CREATE TABLE IF NOT EXISTS analytics_counters (
+  name       TEXT PRIMARY KEY,
+  value      INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Background-job crash log. A scheduler tick, a notification send or any
+-- other worker that raises lands here with its traceback, so "the workers
+-- are not healthy" can be diagnosed from the admin portal and /healthz
+-- instead of a lost stdout line on a recycled dyno.
+CREATE TABLE IF NOT EXISTS job_failures (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  job        TEXT NOT NULL,
+  worker     TEXT,
+  payload_id TEXT,
+  error_type TEXT,
+  message    TEXT,
+  traceback  TEXT,
+  rss_mb     REAL,
+  attempt    INTEGER NOT NULL DEFAULT 1,
+  host       TEXT,
+  at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_job_failures_at ON job_failures(at DESC);
+CREATE INDEX IF NOT EXISTS idx_job_failures_job ON job_failures(job);
+
 -- Heartbeat table: who is on the site right now.
 CREATE TABLE IF NOT EXISTS presence (
   vid     TEXT PRIMARY KEY,

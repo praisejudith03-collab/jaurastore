@@ -520,6 +520,9 @@ function renderShop() {
   const sort = param("sort") || sortEl?.value || "newest";
   if (sortEl && sortEl.value !== sort) sortEl.value = sort;
   let list = q ? JA.searchProducts(q, cat) : JA.products().filter((p) => cat === "all" || p.category === cat);
+  // Count the search on the server so the owner sees the demand (and the
+  // terms that found nothing). Deduplicated per session inside JA.logSearch.
+  if (q) { try { JA.logSearch(q, list.length, cat === "all" ? "" : cat); } catch (e) {} }
 
   list = [...list];
   try { paintFilterDrawer(list); } catch (e) {}

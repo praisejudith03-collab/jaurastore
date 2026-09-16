@@ -1,7 +1,226 @@
-"""CSRF, rate limiting, input sanitisation, security headers."""
-import hashlib, hmac, html, re, time, secrets, sqlite3
+"""CSRF, rate limiting, input sanitisation, security headers, client IP."""
+import hashlib, hmac, html, ipaddress, os, re, time, secrets, sqlite3
 from flask import request, jsonify, current_app, session
 from db import execute, one, connect
+
+# ------------------------------------------------------------- client IP
+# Render, Cloudflare and Vercel all terminate TLS in front of the dyno, so
+# request.remote_addr is the *proxy* - never the shopper. Reading it as the
+# visitor address is what put shoppers on the analytics map in Finland (the
+# datacentre the edge/monitoring traffic comes from) instead of Lagos or
+# Lome. The true client address is carried in a header; these are the ones
+# our hosts actually set, most trustworthy first.
+#
+# CF-Connecting-IP / True-Client-IP are written BY Cloudflare (a client
+# cannot forge them through the edge). X-Real-IP is set by Render's router.
+# X-Forwarded-For is a chain - "client, proxy1, proxy2" - and only the
+# left-most PUBLIC address can be the visitor.
+CLIENT_IP_HEADERS = (
+    "CF-Connecting-IP",      # Cloudflare
+    "True-Client-IP",        # Cloudflare Enterprise / Akamai
+    "Fly-Client-IP",         # Fly.io
+    "X-Vercel-Forwarded-For",  # Vercel
+    "X-Real-IP",             # Render / nginx
+    "X-Client-IP",
+)
+
+
+def _parse_ip(value):
+    """Return an ip_address for `value`, or None. Tolerates "ip:port"."""
+    raw = str(value or "").strip().strip('"')
+    if not raw:
+        return None
+    if raw.lower().startswith("for="):
+        raw = raw[4:].strip().strip('"')
+    if raw.startswith("[") and "]" in raw:               # [2001:db8::1]:443
+        raw = raw[1:raw.index("]")]
+    elif raw.count(":") == 1 and "." in raw:             # 1.2.3.4:5678
+        raw = raw.split(":", 1)[0]
+    try:
+        return ipaddress.ip_address(raw)
+    except ValueError:
+        return None
+
+
+def is_public_ip(value):
+    """True for a routable internet address (not LAN / loopback / CGNAT)."""
+    ip = _parse_ip(value)
+    if ip is None:
+        return False
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+        return False
+    if ip.is_multicast or ip.is_unspecified:
+        return False
+    # 100.64.0.0/10 (carrier NAT) is how Render addresses its own mesh.
+    if ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"):
+        return False
+    return True
+
+
+def forwarded_chain():
+    """Every address in X-Forwarded-For / Forwarded, left to right."""
+    chain = []
+    for header in ("X-Forwarded-For", "Forwarded"):
+        raw = request.headers.get(header, "") or ""
+        for part in raw.split(","):
+            part = part.strip()
+            if header == "Forwarded":
+                # Forwarded: for=1.2.3.4;proto=https, for=5.6.7.8
+                for bit in part.split(";"):
+                    bit = bit.strip()
+                    if bit.lower().startswith("for="):
+                        part = bit
+                        break
+                else:
+                    continue
+            ip = _parse_ip(part)
+            if ip is not None:
+                chain.append(str(ip))
+    return chain
+
+
+def client_ip(default=""):
+    """The visitor's own IP address behind a CDN / proxy.
+
+    Order: the headers our edge writes itself, then the left-most public
+    address of the X-Forwarded-For chain (the client; everything after it
+    is a proxy that appended itself), then remote_addr. A private address
+    is only returned when nothing public exists - local dev and the test
+    suite talk to the app from 127.0.0.1 and must keep working.
+    """
+    try:
+        for header in CLIENT_IP_HEADERS:
+            value = request.headers.get(header, "")
+            first = str(value or "").split(",")[0]
+            if is_public_ip(first):
+                return str(_parse_ip(first))
+        for candidate in forwarded_chain():
+            if is_public_ip(candidate):
+                return candidate
+        # Nothing public: fall back to whatever we were given so rate
+        # limiting still has a key in development.
+        chain = forwarded_chain()
+        if chain:
+            return chain[0]
+        remote = _parse_ip(request.remote_addr)
+        if remote is not None:
+            return str(remote)
+    except Exception:                      # never let IP parsing break a route
+        pass
+    return default
+
+
+# --------------------------------------------------------- bot filtering
+# Crawlers, uptime monitors and scrapers are not customers. Counting them
+# put "visitors" in Helsinki/Ashburn on the live map (cheap VPS estates in
+# Finland and Virginia are where most of that traffic is hosted) and
+# inflated every page-view number. They are dropped from analytics - never
+# from the storefront itself, which still answers them normally.
+BOT_UA_PATTERNS = (
+    "bot", "crawl", "spider", "slurp", "search engine", "scraper", "scrapy",
+    "curl/", "wget", "python-requests", "python-urllib", "aiohttp", "httpx",
+    "go-http-client", "okhttp", "java/", "apache-httpclient", "libwww",
+    "node-fetch", "axios/", "guzzlehttp", "postmanruntime", "insomnia",
+    "headlesschrome", "phantomjs", "puppeteer", "playwright", "selenium",
+    "lighthouse", "pagespeed", "gtmetrix", "pingdom", "uptimerobot",
+    "statuscake", "site24x7", "betteruptime", "newrelicpinger", "datadog",
+    "monitoring", "healthcheck", "keepalive", "jaura-keepalive",
+    "facebookexternalhit", "whatsapp", "telegrambot", "discordbot",
+    "slackbot", "twitterbot", "linkedinbot", "embedly", "quora link preview",
+    "feedfetcher", "google-read-aloud", "google favicon", "mediapartners",
+    "censys", "zgrab", "masscan", "nmap", "netcraft", "expanse", "paloalto",
+    "semrush", "ahrefs", "mj12", "dotbot", "blexbot", "seekport", "serpstat",
+    "dataforseo", "petalbot", "bytespider", "gptbot", "claudebot", "ccbot",
+    "perplexitybot", "amazonbot", "applebot", "yandex", "baiduspider",
+    "sogou", "exabot", "duckduckbot", "bingpreview", "adsbot",
+)
+
+# Networks that only ever originate automated traffic for a retail shop:
+# crawler ranges plus the cheap-VPS/cloud estates that host scrapers and
+# uptime monitors. Hetzner Helsinki (Finland) is the single biggest source
+# of the phantom "Finland visitors" this shop was seeing.
+BOT_IP_NETWORKS = (
+    # Googlebot / Google infrastructure
+    "66.249.64.0/19", "64.233.160.0/19", "72.14.192.0/18", "209.85.128.0/17",
+    "216.239.32.0/19", "35.190.247.0/24", "34.64.0.0/10", "35.192.0.0/12",
+    # Bing / Microsoft crawlers
+    "40.77.167.0/24", "13.66.139.0/24", "157.55.39.0/24", "207.46.13.0/24",
+    "204.79.180.0/24",
+    # Hetzner (FI/DE) - the "Finland" visitors
+    "65.108.0.0/16", "65.109.0.0/16", "65.21.0.0/16", "95.216.0.0/16",
+    "95.217.0.0/16", "135.181.0.0/16", "37.27.0.0/16", "157.90.0.0/16",
+    "138.201.0.0/16", "159.69.0.0/16", "168.119.0.0/16", "116.202.0.0/16",
+    "144.76.0.0/16", "78.46.0.0/15", "88.99.0.0/16", "94.130.0.0/16",
+    # DigitalOcean / Linode / OVH / Contabo scraper estates
+    "104.131.0.0/16", "159.65.0.0/16", "165.227.0.0/16", "167.71.0.0/16",
+    "178.62.0.0/16", "45.55.0.0/16", "139.59.0.0/16",
+    "172.104.0.0/15", "45.79.0.0/16", "139.162.0.0/16",
+    "51.178.0.0/16", "51.75.0.0/16", "141.94.0.0/16",
+    "161.35.0.0/16", "146.190.0.0/16",
+    # Amazon crawler / Alexa style estates commonly used by scrapers
+    "54.36.0.0/16", "5.188.0.0/16",
+)
+
+
+def _networks(raw_list):
+    out = []
+    for item in raw_list:
+        try:
+            out.append(ipaddress.ip_network(str(item).strip(), strict=False))
+        except ValueError:
+            continue
+    return tuple(out)
+
+
+def _extra_networks():
+    """ANALYTICS_BOT_IP_NETWORKS lets an operator add ranges without a deploy."""
+    raw = os.environ.get("ANALYTICS_BOT_IP_NETWORKS", "")
+    return _networks([p for p in re.split(r"[,\s]+", raw) if p.strip()])
+
+
+_BOT_NETWORKS = _networks(BOT_IP_NETWORKS)
+
+
+def is_bot_ip(value):
+    """True when the address belongs to a known crawler / datacentre range."""
+    ip = _parse_ip(value)
+    if ip is None:
+        return False
+    for net in _BOT_NETWORKS + _extra_networks():
+        try:
+            if ip.version == net.version and ip in net:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def is_bot_ua(value):
+    """True when the User-Agent names a crawler, monitor or HTTP library."""
+    ua = str(value or "").strip().lower()
+    if not ua:
+        return True                       # a real browser always sends one
+    return any(pattern in ua for pattern in BOT_UA_PATTERNS)
+
+
+def bot_reason(ua=None, ip=None):
+    """Why this request is not a customer visit - "" when it looks human."""
+    ua = request.headers.get("User-Agent", "") if ua is None else ua
+    ip = client_ip() if ip is None else ip
+    if is_bot_ua(ua):
+        return "ua"
+    if is_bot_ip(ip):
+        return "ip"
+    # Chrome/Edge tell us directly, and honest crawlers set it too.
+    purpose = (request.headers.get("Sec-Purpose", "") or
+               request.headers.get("Purpose", "")).lower()
+    if "prefetch" in purpose:
+        return "prefetch"
+    return ""
+
+
+def is_bot_request():
+    return bool(bot_reason())
 
 # ---------------------------------------------------------------- sanitising
 _TAG = re.compile(r"<[^>]*>")
@@ -82,8 +301,9 @@ def require_csrf(f):
 
 # --------------------------------------------------------------- rate limits
 def _client_key():
-    fwd = request.headers.get("X-Forwarded-For", "")
-    ip = (fwd.split(",")[0].strip() if fwd else "") or request.remote_addr or "unknown"
+    # The true client address (see client_ip) - a proxy IP would put every
+    # shopper behind the CDN into one shared rate-limit bucket.
+    ip = client_ip() or "unknown"
     return hashlib.sha256(ip.encode()).hexdigest()[:32]
 
 def rate_limit(action, limit=5, window=300, key_extra=""):
@@ -140,8 +360,7 @@ def verify_recaptcha(token, action=""):
     import json as _json
     import urllib.parse
     import urllib.request
-    fwd = request.headers.get("X-Forwarded-For", "")
-    ip = (fwd.split(",")[0].strip() if fwd else "") or request.remote_addr or ""
+    ip = client_ip()
     body = urllib.parse.urlencode({
         "secret": secret,
         "response": token[:2048],

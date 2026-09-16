@@ -841,13 +841,35 @@ def _log(message):
         pass
 
 
+def _payload_id(args):
+    """The id this notification is about - order id, receipt or recipient.
+
+    A crash report without it says "a mail send failed"; with it, the owner
+    knows exactly which order never reached the customer.
+    """
+    for arg in args:
+        if isinstance(arg, dict):
+            for key in ("id", "order_id", "orderId", "token", "email"):
+                value = arg.get(key)
+                if value:
+                    return str(value)[:120]
+        elif isinstance(arg, str) and "@" in arg:
+            return arg[:120]
+    return ""
+
+
 def _fire(fn, *args):
     """Run fn(*args) on a daemon thread (fire-and-forget).
 
     Never raises and never blocks the caller: this is what keeps SMTP/HTTPS
     dispatch off the HTTP request path so a slow provider cannot time a
-    worker out. A failure inside fn is logged quietly and swallowed.
+    worker out. A failure inside fn is recorded as a full crash report
+    (exception, stack trace, timestamp, worker memory and the payload id)
+    so a broken notification pipeline is visible instead of merely quiet.
     """
+    job = "notifications." + getattr(fn, "__name__", "mail")
+    payload_id = _payload_id(args)
+
     def _run():
         try:
             result = fn(*args)
@@ -855,13 +877,44 @@ def _fire(fn, *args):
             if (isinstance(result, tuple) and len(result) == 2
                     and result[0] is False):
                 _log(f"{getattr(fn, '__name__', 'mail')} failed: {result[1]}")
+                _trace_soft_failure(job, payload_id, result[1])
         except Exception as exc:
             _log(f"{getattr(fn, '__name__', 'mail')} error: {str(exc)[:200]}")
+            _trace(job, exc, payload_id)
 
     try:
         threading.Thread(target=_run, daemon=True).start()
-    except Exception:
+    except Exception as exc:
+        _trace(job + ".thread", exc, payload_id)
         _run()
+
+
+def _trace(job, exc, payload_id=""):
+    """Record a mail crash with its stack trace. Never raises."""
+    try:
+        import observability
+        observability.record_failure(job, exc, payload_id=payload_id)
+    except Exception:
+        pass
+
+
+def _trace_soft_failure(job, payload_id, detail):
+    """A provider that answered "no" is a delivery failure, not a crash -
+    but the owner still needs to know which message never went out.
+
+    "not configured" is skipped: a shop without mail keys is a deliberate
+    setup (and the whole test suite), not a pipeline that broke, and
+    filling the crash log with it would bury the real failures.
+    """
+    text = str(detail or "")
+    if "not configured" in text.lower() or "no recipient" in text.lower():
+        return
+    try:
+        import observability
+        observability.record_failure(
+            job, RuntimeError(text[:400]), payload_id=payload_id, notify=False)
+    except Exception:
+        pass
 
 
 def notify_new_order_async(order):

@@ -74,3 +74,36 @@ Do not delete `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `UPLOAD_MODE`,
 data, storage, and the admin login. Do not delete the shop-email variables
 above, or receipts stop reaching the inbox. Removing obsolete variables does not
 mutate products, orders, customers, receipts, reviews, or catalogue data.
+
+## Analytics geolocation, bot filtering and crash reporting
+
+Visitor locations come from the CDN edge headers (`CF-IPCity` /
+`CF-IPCountry` on Cloudflare, `X-Vercel-IP-*`, `X-Render-*`), which the edge
+geocodes from **the shopper's own IP address**. The app reads that client
+address through `security.client_ip()`, which prefers `CF-Connecting-IP` /
+`True-Client-IP` / `X-Real-IP` and otherwise takes the left-most *public*
+address of `X-Forwarded-For` — never `remote_addr`, which is the proxy. This
+is what previously pinned visitors to Finland and other datacentres. No IP
+address is ever stored.
+
+Automated traffic (crawlers, uptime monitors, scrapers, the keep-alive ping)
+is filtered out of analytics entirely — it still gets served normally, it is
+just not counted. Two optional variables tune this:
+
+- `ANALYTICS_BOT_IP_NETWORKS` — extra CIDR ranges to treat as bots, comma or
+  space separated (e.g. `203.0.113.0/24, 198.51.100.0/24`). Added to the
+  built-in crawler/datacentre list in `security.BOT_IP_NETWORKS`; no deploy
+  is needed to widen it beyond a restart.
+- `ANALYTICS_RETENTION_DAYS` (default `400`) — how long raw page views,
+  events and search rows are kept. The lifetime counters in
+  `analytics_counters` are **never** pruned, so the headline totals cannot
+  fall back to zero.
+
+Background-worker crashes (scheduler ticks, notification sends) are recorded
+with their exception, stack trace, timestamp, process memory and payload id
+in the `job_failures` table, mirrored to Supabase and listed in the Admin
+Portal under **Orders → Background job failures**. When `GITHUB_TOKEN` (or
+`GITHUB_API_TOKEN`) and `GITHUB_REPOSITORY` are set, each crash also fires a
+`jaura-crash` repository dispatch, which `.github/workflows/crash-report.yml`
+turns into a GitHub issue comment — the same pair of variables `repo_sync.py`
+already uses, so nothing new needs configuring if repo sync is on.
