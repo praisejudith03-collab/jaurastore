@@ -706,11 +706,37 @@ def test_the_migration_is_idempotent_and_never_destructive():
     sql = MIGRATION.read_text(encoding="utf-8")
     body = _statements(sql).lower()
     # Only additive statements; nothing that could touch existing data.
-    for forbidden in ("drop ", "delete ", "truncate", "alter table",
+    for forbidden in ("drop ", "delete ", "truncate",
                       "update ", "insert into"):
         assert forbidden not in body, f"migration contains {forbidden!r}"
     assert body.count("create table if not exists") == 3
     assert body.count("create index if not exists") == 4
+    # The only permitted ALTERs enable RLS on the three tables this file
+    # creates. An ALTER against any other table, or one that adds/drops a
+    # column, would be operating on live data and must never appear here.
+    alters = [" ".join(ln.split())
+              for ln in body.splitlines() if "alter table" in ln]
+    assert len(alters) == 3
+    assert sorted(alters) == sorted(
+        f"alter table {t} enable row level security;"
+        for t in ("search_queries", "analytics_counters", "job_failures")
+    ), alters
+
+
+def test_the_analytics_tables_are_protected_by_row_level_security():
+    """RLS on, no policies: deny-all for browser keys, bypassed by the
+    service role the server uses. These tables hold visitor paths, search
+    terms and stack traces, so an anon key must never read them."""
+    canonical = (ROOT / "schema_sections/17_analytics.sql").read_text(
+        encoding="utf-8")
+    body = _statements(canonical).lower()
+    for table in ("analytics_events", "search_queries", "analytics_counters",
+                  "job_failures"):
+        assert f"alter table {table} enable row level security;" in " ".join(
+            body.split()), f"{table} is left without RLS"
+    # No policy may be attached: any policy would grant the browser keys a
+    # way in, and the server does not need one (service role bypasses RLS).
+    assert "create policy" not in body
 
 
 def test_the_new_tables_are_pre_flight_checked():

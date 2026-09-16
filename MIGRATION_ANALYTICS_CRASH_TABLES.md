@@ -16,10 +16,18 @@ keeps counting locally in SQLite throughout.
 
 ## Before you start
 
-This migration is **additive only**. Every statement is `if not exists`; the
-file contains no `DROP`, `DELETE`, `TRUNCATE`, `ALTER`, `UPDATE` or `INSERT`
-(a test enforces that). Nothing existing is dropped, renamed, altered,
-backfilled or deleted. Running it twice is a no-op.
+This migration is **additive only**. Every `create` is `if not exists`; the
+file contains no `DROP`, `DELETE`, `TRUNCATE`, `UPDATE` or `INSERT` (a test
+enforces that). The only `ALTER`s enable Row Level Security on the three
+tables the same file just created — a test pins them to exactly that, so an
+`ALTER` against a pre-existing table cannot slip in. Nothing existing is
+dropped, renamed, altered, backfilled or deleted. Running it twice is a no-op.
+
+**On Row Level Security:** these three tables hold visitor paths, search terms
+and stack traces, so no browser key should reach them. The app connects with
+`SUPABASE_SERVICE_ROLE_KEY`, which *bypasses* RLS, so turning RLS on with no
+policy attached is a deny-all for anon/authenticated clients and a no-op for
+the app. That is why the file enables RLS and attaches no `create policy`.
 
 You do **not** need to:
 
@@ -98,9 +106,20 @@ create table if not exists job_failures (
 );
 create index if not exists idx_job_failures_at on job_failures(at desc);
 create index if not exists idx_job_failures_job on job_failures(job);
+
+-- Deny-all for browser keys; the server's service-role key bypasses RLS.
+alter table search_queries     enable row level security;
+alter table analytics_counters enable row level security;
+alter table job_failures       enable row level security;
 ```
 
 Tap **Run**. Expect **Success. No rows returned**.
+
+If Supabase interrupts with **"Potential issue detected — this query creates
+tables without enabling Row Level Security"**, the SQL above already handles
+it on the last three lines, so either button works. Prefer **Run and enable
+RLS**; if you tap **Run without RLS**, the `alter table` statements still
+switch it on.
 
 If you get an error, stop and record it rather than working around it by
 dropping anything. The likely causes are being on the wrong project, or the
@@ -121,7 +140,16 @@ order by table_name;
 ```
 
 Expect exactly three rows: `analytics_counters`, `job_failures`,
-`search_queries`. Then confirm the indexes (expect four rows):
+`search_queries`. Then confirm Row Level Security is on — all three must come
+back `true`, otherwise Supabase's linter (the lightbulb icon) flags them
+CRITICAL:
+
+```sql
+select relname, relrowsecurity from pg_class
+where relname in ('search_queries', 'analytics_counters', 'job_failures');
+```
+
+Then confirm the indexes (expect four rows):
 
 ```sql
 select indexname from pg_indexes

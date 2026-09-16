@@ -841,6 +841,27 @@ create table if not exists job_failures (
 );
 create index if not exists idx_job_failures_at on job_failures(at desc);
 create index if not exists idx_job_failures_job on job_failures(job);
+
+-- Row Level Security. The server reaches Supabase with
+-- SUPABASE_SERVICE_ROLE_KEY, which BYPASSES RLS, so the app reads and writes
+-- these tables normally with no policy attached. Enabling RLS with zero
+-- policies is therefore a deny-all for anon and authenticated clients and a
+-- no-op for us -- which is what we want, because these tables hold visitor
+-- paths, search terms and stack traces that no browser key should reach.
+--
+-- Deliberately different from site_settings (section 07), which keeps RLS off
+-- because it predates this and is documented there. Do NOT copy that reasoning
+-- to new tables.
+--
+-- These statements are idempotent: re-enabling is not an error. Verify with
+--   select relname, relrowsecurity from pg_class
+--   where relname in ('analytics_events', 'search_queries',
+--                     'analytics_counters', 'job_failures');
+-- All four must be true.
+alter table analytics_events   enable row level security;
+alter table search_queries     enable row level security;
+alter table analytics_counters enable row level security;
+alter table job_failures       enable row level security;
 -- SECTION: brand_assets
 -- -------------------------------------------------------- brand assets
 -- The brand logo and the favicon ladder (32, 48, 180, 192) published to the

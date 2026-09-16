@@ -19,9 +19,11 @@
 --
 --   * IDEMPOTENT — every statement is "if not exists"; running it twice is a
 --     no-op and the second run reports success with no rows.
---   * NON-DESTRUCTIVE — it only CREATEs. Nothing is dropped, altered,
---     renamed, deleted or backfilled. No existing table, row, policy,
---     bucket or object is touched.
+--   * NON-DESTRUCTIVE — it only CREATEs the three tables above and turns on
+--     Row Level Security for them. Nothing is dropped, renamed, deleted or
+--     backfilled, and no pre-existing table, row, policy, bucket or object is
+--     touched. The only ALTERs are "enable row level security" on the three
+--     tables this file just created.
 --   * SAFE ON A LIVE SHOP — the app keeps working while it runs, and keeps
 --     working if you never run it (the writes are best-effort mirrors; the
 --     shop counts locally in SQLite either way).
@@ -76,6 +78,20 @@ create table if not exists job_failures (
 create index if not exists idx_job_failures_at on job_failures(at desc);
 create index if not exists idx_job_failures_job on job_failures(job);
 
+-- Row Level Security. Supabase flags a new public table without RLS as
+-- CRITICAL, and it is right to: these tables hold visitor paths, search terms
+-- and stack traces that no browser key should ever reach.
+--
+-- The server reaches Supabase with SUPABASE_SERVICE_ROLE_KEY, which BYPASSES
+-- RLS, so the app keeps reading and writing normally with no policy attached.
+-- Enabling RLS with zero policies is a deny-all for anon and authenticated
+-- clients and a no-op for us. That is why no "create policy" follows.
+--
+-- Safe to re-run: enabling RLS twice is not an error.
+alter table search_queries     enable row level security;
+alter table analytics_counters enable row level security;
+alter table job_failures       enable row level security;
+
 
 -- ===========================================================================
 -- VERIFICATION (read-only — safe to run any time, changes nothing)
@@ -88,6 +104,12 @@ create index if not exists idx_job_failures_job on job_failures(job);
 --   where table_schema = 'public'
 --     and table_name in ('search_queries', 'analytics_counters', 'job_failures')
 --   order by table_name;
+--
+-- Confirm Row Level Security is on (expect three rows, all true). If any is
+-- false, Supabase's linter will flag it as CRITICAL:
+--
+--   select relname, relrowsecurity from pg_class
+--   where relname in ('search_queries', 'analytics_counters', 'job_failures');
 --
 -- Confirm the indexes landed (expect four rows):
 --
