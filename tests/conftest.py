@@ -161,6 +161,11 @@ def _restore_seed_stock():
                 continue
             if p.get("stock") != src.get("stock") or p.get("optionStock") != src.get("optionStock"):
                 p["stock"] = src.get("stock")
+                # Both spellings of the number, or the suite's own stale
+                # stock_quantity (0) beats the restored stock in every
+                # stock_quantity-first reader and poisons the next test.
+                if "stock_quantity" in p or src.get("stock") is not None:
+                    p["stock_quantity"] = src.get("stock")
                 if "optionStock" in src:
                     p["optionStock"] = src.get("optionStock")
                 elif "optionStock" in p:

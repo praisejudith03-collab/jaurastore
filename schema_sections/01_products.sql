@@ -19,12 +19,9 @@
 -- ------------------------------------------------------------ products
 -- Canonical columns (source of truth): id, name, category, priceNgn,
 -- priceCfa, compareNgn, compareCfa, image_url, images, stock_quantity,
--- description, descriptionFr, featured, online, updated_at. The legacy camelCase
--- columns below (image, stock, ...) are kept as compatibility aliases for
--- the same-origin test/dev path and older rows; production writes both.
--- camelCase keys MUST be quoted: Postgres folds unquoted identifiers to
--- lowercase, so an unquoted priceCfa would create a pricecfa column and
--- every write would still fail with PGRST204.
+-- description, descriptionFr, featured, online, updated_at. Legacy camelCase
+-- columns (image, stock, ...) are compatibility aliases; production writes
+-- both. camelCase MUST be quoted or Postgres folds it to lowercase (PGRST204).
 create table if not exists products (
   id               text primary key,
   "legacyId"       text,
@@ -51,6 +48,8 @@ create table if not exists products (
   options          jsonb,
   "optionStock"    jsonb,
   "optionPrices"   jsonb,
+  "bulkQty"        integer,
+  "bulkPercent"    integer,
   "placeholderImage" text,
   "usesPlaceholder"  boolean default false,
   source           text default 'admin',
@@ -62,12 +61,9 @@ create table if not exists products (
     and stock is null or stock >= 0)
 );
 
--- Repair an EXISTING products table hand-built narrower than the row the app
--- writes. Add-only: never drops or rewrites data. Run it if the Render log
--- says "[supabase] products upsert: stored without columns [...]" or
--- "products upsert failed". It covers every column in
--- supabase_store._CRITICAL_PRODUCT_COLUMNS - a product cannot be sold without
--- them. ("id" is the primary key and cannot be added to an existing table.)
+-- Repair an EXISTING hand-built table: add-only, never drops data. Covers
+-- every column in supabase_store._CRITICAL_PRODUCT_COLUMNS (a product cannot
+-- be sold without them); "id" is the primary key and cannot be added.
 alter table products add column if not exists name               text;
 alter table products add column if not exists "nameFr"           text;
 alter table products add column if not exists "descriptionFr"    text;
@@ -79,6 +75,8 @@ alter table products add column if not exists stock              integer default
 alter table products add column if not exists images             jsonb;
 alter table products add column if not exists "optionStock"      jsonb;
 alter table products add column if not exists "optionPrices"     jsonb;
+alter table products add column if not exists "bulkQty"      integer;
+alter table products add column if not exists "bulkPercent"  integer;
 alter table products add column if not exists "placeholderImage" text;
 alter table products add column if not exists "usesPlaceholder"  boolean default false;
 alter table products add column if not exists badge              text;

@@ -151,10 +151,11 @@ window.I18N = (() => {
     "pdp.oos": "Out of stock",
     "pdp.payIn": "Pay in {cur}",
     "pdp.hint": "Tap ₦ or F CFA in the menu to switch prices · SKU {sku}",
-    "pdp.bulk": "Buy 10 of this item and get 10% off.",
-    "pdp.bulkPrice": "10 pcs: {price} (10% off)",
-    "cart.bulk": "10% off · 10+ items",
-    "cart.bulkOn": "10% off applied — you have 10 or more of this item.",
+    // Bulk-discount copy is DYNAMIC: the threshold and percentage come from
+    // the shop-wide tiers or the product's own bulkQty/bulkPercent, so the
+    // label is generic and the numbers travel with it.
+    "bulk.label": "Bulk discount",
+    "cart.bulkApplied": "Bulk discount applied — {p}% off this item.",
     "pdp.more": "More from this aisle",
     "pdp.also": "You may also like",
     "pdp.missing": "This piece is no longer listed.",
@@ -643,10 +644,8 @@ window.I18N = (() => {
     "pdp.oos": "Rupture de stock",
     "pdp.payIn": "Payer en {cur}",
     "pdp.hint": "Touchez CFA ou ₦ dans le menu pour changer les prix · SKU {sku}",
-    "pdp.bulk": "Achetez 10 exemplaires de cet article et obtenez 10 % de réduction.",
-    "pdp.bulkPrice": "10 pcs : {price} (−10 %)",
-    "cart.bulk": "−10 % · 10 articles ou plus",
-    "cart.bulkOn": "−10 % appliqué — vous avez 10 exemplaires ou plus de cet article.",
+    "bulk.label": "Remise quantité",
+    "cart.bulkApplied": "Remise quantité appliquée — −{p} % sur cet article.",
     "pdp.more": "Dans le même rayon",
     "pdp.also": "Vous aimerez aussi",
     "pdp.missing": "Cette pièce n’est plus listée.",

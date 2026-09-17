@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Production catalog watchdog: the storefront may never lose a product.
 
-Runs autonomously every 20 minutes from .github/workflows/catalog-watchdog.yml
+Runs autonomously every hour from .github/workflows/catalog-watchdog.yml
 (and can also run on demand for diagnostics). It takes two INDEPENDENT
 measurements and compares them:
 
@@ -22,6 +22,20 @@ and fails loudly when any of these invariants break:
   * the served wix-* rows carry products-table columns (source / name_fr /
     legacyId) - a silent fallback to the bundled js/products-data.js snapshot
     is caught even though that snapshot also holds the same ids.
+
+Two kinds of tolerance keep the owner's alert meaningful instead of noisy:
+
+  * INTENTIONAL DELETIONS are never "missing". The app keeps the ids the
+    owner deleted in the durable growth_settings list (deleted_product_ids_json,
+    the same key supabase_store.DELETED_IDS_KEY reads); an online row whose id
+    is on that list was deliberately suppressed while the row itself stayed
+    online (wix-229, confirmed intentional by the owner), and is reported in
+    the summary as intentional - not as a defect.
+  * A MISSING PRODUCT needs to stay missing. One run of "online in Supabase,
+    absent from the storefront" can be a deploy in flight, a cache edge or
+    replication lag; it prints a WARN and only pages (exit 1) once the same
+    product is still missing on the next run (MISSING_STREAK_RUNS consecutive
+    observations, carried in the state file).
 
 READ-ONLY against production. An earlier version kept a hardcoded list of 254
 approved wix-* ids and PATCHed any of them that were offline back to
@@ -53,11 +67,21 @@ RETRY_DELAYS = (2, 5)
 
 # How far the live catalogue may shrink between two runs before this is
 # treated as data loss rather than curation. Retiring a handful of products
-# is normal shopkeeping; losing a fifth of the shop in twenty minutes is a
-# bug. The baseline is the previous run's count, carried in the state file.
+# is normal shopkeeping; losing a fifth of the shop in an hour is a bug.
+# The baseline is the previous run's count, carried in the state file.
 MAX_SHRINK_RATIO = 0.20
 MIN_LIVE_PRODUCTS = 50
 STATE_PATH = os.environ.get("WATCHDOG_STATE", ".watchdog-state.json")
+
+# How many CONSECUTIVE runs a product must be missing from the public
+# catalogue before the watchdog pages the owner (a single observation only
+# WARNs - see the module docstring).
+MISSING_STREAK_RUNS = 2
+
+# The durable list of product ids the owner deleted, stored by the app in
+# growth_settings. Keep in step with supabase_store.DELETED_IDS_KEY: an id on
+# this list is an intentional deletion, never a "missing product" defect.
+DELETED_IDS_KEY = "deleted_product_ids_json"
 
 # Rows whose `source` marks a tombstone (a soft delete or a superseded bulk
 # import) are not live products - the app filters them too (supabase_store).
@@ -247,6 +271,38 @@ def refresh_storefront_cache(base):
         raise RuntimeError(f"storefront cache refresh answered HTTP {status}")
 
 
+def fetch_deleted_ids(supabase_url, service_key):
+    """The durable deleted-product id list, read-only over PostgREST.
+
+    This is the SAME key the app reads (supabase_store.DELETED_IDS_KEY ->
+    growth_settings.deleted_product_ids_json), so "the owner deleted it" means
+    the same thing here as it does in the storefront. Returns a set of ids;
+    None when the read failed (the caller then runs without deletion
+    tolerance rather than inventing either an empty or a full list). Uses a
+    single attempt - the streak tolerance below still guards a product that
+    is missing for a less benign reason.
+    """
+    url = (supabase_url.rstrip("/") + "/rest/v1/growth_settings"
+           "?select=value&key=eq." + urllib.parse.quote(DELETED_IDS_KEY))
+    try:
+        _status, _hdrs, body = _get(url, headers={
+            "apikey": service_key,
+            "Authorization": "Bearer " + service_key,
+        })
+        rows = json.loads(body.decode("utf-8"))
+        if not isinstance(rows, list) or not rows:
+            return set()
+        raw = (rows[0] or {}).get("value")
+        if raw is None or raw == "":
+            return set()
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(data, list):
+            return set()
+        return {str(x).strip() for x in data if str(x or "").strip()}
+    except Exception:                              # noqa: BLE001 - tolerated
+        return None
+
+
 def load_state(path=None):
     """Previous run's measurements. Missing/corrupt state is not an error."""
     try:
@@ -257,18 +313,30 @@ def load_state(path=None):
         return {}
 
 
-def save_state(live_count, path=None):
+def save_state(live_count, missing_streaks=None, path=None):
     try:
+        state = {"liveCount": int(live_count),
+                 "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        if isinstance(missing_streaks, dict):
+            # Only ids still missing carry a streak forward; everything else
+            # resets, so one healthy run clears the tolerance counter.
+            state["missingStreaks"] = {str(k): int(v) for k, v in missing_streaks.items()
+                                       if str(k or "").strip() and int(v) > 0}
         with open(path or STATE_PATH, "w", encoding="utf-8") as fh:
-            json.dump({"liveCount": int(live_count),
-                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
-                      fh)
+            json.dump(state, fh)
     except OSError:                                # pragma: no cover
         pass
 
 
-def check(db_rows, payload, previous=None):
-    """Compare the two measurements. Returns (failures, summary_lines)."""
+def check(db_rows, payload, previous=None, deleted_ids=None, state=None):
+    """Compare the two measurements. Returns (failures, summary_lines).
+
+    ``deleted_ids`` is the owner's durable deleted list (see
+    fetch_deleted_ids): ids on it were removed from the storefront on
+    purpose and are never reported missing. ``state``, when a dict, is filled
+    with this run's ``missingStreaks`` so the caller can persist them for the
+    next run's tolerance decision.
+    """
     failures, summary = [], []
 
     products = [p for p in (payload.get("products") or []) if p and p.get("id")]
@@ -307,13 +375,53 @@ def check(db_rows, payload, previous=None):
             f"storefront: {', '.join(served_fixtures[:15])}"
             + (" …" if len(served_fixtures) > 15 else ""))
 
-    missing = sorted(visible - seen)
-    extra = sorted(pid for pid in (seen - visible) if pid not in fixture_ids)
-    if missing:
+    # 2c. the owner's durable deleted list: an online row whose id is on it
+    # was suppressed FROM THE STOREFRONT ON PURPOSE (the row itself stays
+    # online). That is shopkeeping, not data loss - reporting it as "missing"
+    # is exactly the false alarm that made the owner stop trusting #75.
+    deleted_ids = {str(x or "").strip() for x in (deleted_ids or set())}
+    missing_candidates = {pid for pid in visible if pid not in deleted_ids}
+
+    # 2d. tolerance: a product missing from ONE run can be a deploy in
+    # flight, a cache edge or replication lag - WARN only. The same product
+    # still missing on the next run (MISSING_STREAK_RUNS consecutive
+    # observations, carried in the state file) is a real defect and pages.
+    streaks = {}
+    if isinstance(previous, dict) and isinstance(previous.get("missingStreaks"), dict):
+        for k, v in previous["missingStreaks"].items():
+            try:
+                streaks[str(k)] = int(v)
+            except (TypeError, ValueError):
+                continue
+    missing = sorted(missing_candidates - seen)
+    newly_missing, chronically_missing = [], []
+    for pid in missing:
+        streaks[pid] = streaks.get(pid, 0) + 1
+        if streaks[pid] >= MISSING_STREAK_RUNS:
+            chronically_missing.append(pid)
+        else:
+            newly_missing.append(pid)
+    for pid in list(streaks):                      # present again: reset
+        if pid not in missing:
+            del streaks[pid]
+    if state is not None and isinstance(state, dict):
+        state["missingStreaks"] = streaks
+
+    if newly_missing:
+        summary.append(
+            f"WARN  {len(newly_missing)} online Supabase product(s) newly "
+            f"missing from the public catalogue (tolerance: pages only if "
+            f"still missing on the next run): "
+            f"{', '.join(newly_missing[:15])}"
+            + (" …" if len(newly_missing) > 15 else ""))
+    if chronically_missing:
         failures.append(
-            f"{len(missing)} online Supabase product(s) are MISSING from the "
-            f"public catalogue: {', '.join(missing[:15])}"
-            + (" …" if len(missing) > 15 else ""))
+            f"{len(chronically_missing)} online Supabase product(s) are MISSING "
+            f"from the public catalogue for {MISSING_STREAK_RUNS}+ consecutive "
+            f"runs: {', '.join(chronically_missing[:15])}"
+            + (" …" if len(chronically_missing) > 15 else ""))
+
+    extra = sorted(pid for pid in (seen - visible) if pid not in fixture_ids)
     if extra:
         failures.append(
             f"{len(extra)} product(s) are served that Supabase does not list "
@@ -368,6 +476,10 @@ def check(db_rows, payload, previous=None):
         f"public catalogue: {len(products)} products "
         f"({len(wix_rows)} wix-*) · Supabase: {len(db_rows or [])} rows, "
         f"{len(live)} live, {len(visible)} online"
+        + (f", {len(deleted_ids)} intentionally deleted (durable list)"
+           if deleted_ids else "")
+        + (f", {len(missing)} missing ({len(newly_missing)} first run, "
+           f"{len(chronically_missing)} repeated)" if missing else "")
         + (f", {len(fixture_ids)} test-suite row(s) still untombstoned"
            if fixture_ids else ""))
     return failures, summary
@@ -400,14 +512,25 @@ def main():
             print(f"FAIL  {health_failure}")
         return 2
 
+    # The owner's durable deleted list: intentional deletions are never
+    # "missing products". An unreadable list degrades to "no deletion
+    # tolerance" (the streaks below still guard) rather than to a guess.
+    deleted_ids = fetch_deleted_ids(supabase_url, service_key)
+    if deleted_ids is None:
+        print("WARN  could not read the durable deleted-ids list "
+              "(growth_settings) - running without intentional-deletion "
+              "tolerance")
+
     # A stale CDN copy is the one benign cause of "the storefront is missing a
     # product", so re-read it uncached before believing the mismatch. This is
     # the only remediation left here: the watchdog reads production and never
     # writes to it. (It used to PATCH offline products back online every 20
     # minutes, which overrode the owner's own catalogue decisions.)
     previous = load_state()
-    initial_failures, _initial_summary = check(db_rows, payload, previous)
-    if any("MISSING from the public catalogue" in f for f in initial_failures):
+    initial_failures, initial_summary = check(db_rows, payload, previous,
+                                              deleted_ids=deleted_ids)
+    if (any("MISSING" in f for f in initial_failures)
+            or any("newly missing" in s for s in initial_summary)):
         try:
             refresh_storefront_cache(base)
             db_rows = fetch_db_rows(supabase_url, service_key)
@@ -417,20 +540,28 @@ def main():
             print(f"FAIL  storefront cache refresh failed: {exc}")
             return 2
 
-    failures, summary = check(db_rows, payload, previous)
+    # The streak bookkeeping must reflect ONE run: only this final check
+    # writes it into the state that main() persists.
+    run_state = {}
+    failures, summary = check(db_rows, payload, previous,
+                              deleted_ids=deleted_ids, state=run_state)
     for line in summary:
-        print("INFO  " + line)
+        if line.startswith("WARN"):
+            print(line)
+        else:
+            print("INFO  " + line)
     if health_failure:
         failures = failures + [health_failure]
 
-    # Record this run's figure either way: the shrink guard compares against
+    # Record this run's figures either way: the shrink guard compares against
     # the last observation, so a deliberate bulk retirement alerts once and
-    # then becomes the new normal instead of alerting forever.
+    # then becomes the new normal instead of alerting forever; the missing
+    # streaks give the next run its tolerance memory.
     live_now = sum(1 for row in (db_rows or [])
                    if str((row or {}).get("source") or "").strip().lower()
                    not in TOMBSTONE_SOURCES
                    and (row or {}).get("online") is not False)
-    save_state(live_now)
+    save_state(live_now, run_state.get("missingStreaks"))
 
     if failures:
         for line in failures:

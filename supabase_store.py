@@ -528,11 +528,15 @@ def replace_all_products(products):
         _upsert_products_resilient(rows)
 
 
-def reserve_product_stock(product_id, qty):
+def reserve_product_stock(product_id, qty, option=None):
     """Atomically reserve ``qty`` of one product in PostgreSQL.
 
     Uses the ``reserve_product_stock`` RPC (single guarded UPDATE), so two
     concurrent checkouts can never oversell: only one of them gets True.
+    When ``option`` names a stored optionStock key, the guard ALSO covers
+    that variant's own quantity, and the reservation decrements the variant
+    alongside the product total - without it a sold-out variant kept its
+    stale number and could be sold again.
     Returns the fresh row (dict) on success, False on failure/None on
     unavailable (Supabase down, out of stock or offline).
     """
@@ -542,9 +546,11 @@ def reserve_product_stock(product_id, qty):
     try:
         pid = str(product_id or "").strip()
         qty = int(qty or 0)
+        opt = str(option or "").strip() or None
         if not pid or qty <= 0:
             return False
-        res = c.rpc("reserve_product_stock", {"p_id": pid, "p_qty": qty}).execute()
+        res = c.rpc("reserve_product_stock",
+                    {"p_id": pid, "p_qty": qty, "p_option": opt}).execute()
         ok = _res_data(res)
         reserved = bool(ok and (ok[0] if isinstance(ok, list) else ok))
         if not reserved:
@@ -555,17 +561,23 @@ def reserve_product_stock(product_id, qty):
         return False
 
 
-def release_product_stock(product_id, qty):
-    """Return reserved stock to a product. Best-effort; never raises."""
+def release_product_stock(product_id, qty, option=None):
+    """Return reserved stock to a product. Best-effort; never raises.
+
+    ``option`` (a stored optionStock key) restores the variant's quantity
+    together with the product total, mirroring reserve_product_stock.
+    """
     c = client()
     if c is None:
         return False
     try:
         pid = str(product_id or "").strip()
         qty = int(qty or 0)
+        opt = str(option or "").strip() or None
         if not pid or qty <= 0:
             return False
-        res = c.rpc("release_product_stock", {"p_id": pid, "p_qty": qty}).execute()
+        res = c.rpc("release_product_stock",
+                    {"p_id": pid, "p_qty": qty, "p_option": opt}).execute()
         ok = _res_data(res)
         return bool(ok and (ok[0] if isinstance(ok, list) else ok))
     except Exception as exc:
@@ -1638,6 +1650,11 @@ def load_receipt(receipt_id):
 # gap for that batch.
 ANALYTICS_EVENTS_TABLE = "analytics_events"
 
+# PostgREST page size for the restore reads, and a sane stop against a
+# runaway pagination loop (mirrors the watchdog's DB_ROW_CEILING).
+ANALYTICS_PAGE = 2000
+ANALYTICS_ROW_CEILING = 200_000
+
 
 def mirror_analytics_events(rows):
     """Insert analytics rows into Supabase in one call. Never raises.
@@ -1660,23 +1677,43 @@ def mirror_analytics_events(rows):
         return False
 
 
-def load_analytics_events(since_day, limit=5000):
-    """Rows mirrored on/after `since_day` (YYYY-MM-DD), oldest first.
+def load_analytics_events(since_day, limit=None):
+    """Rows mirrored on/after `since_day` (YYYY-MM-DD), NEWEST first.
+
+    Paged through the WHOLE window: the restore after a disk wipe must never
+    lose the newest rows - today's visitors are the dashboard's headline
+    number, and a hard row cap ordered oldest-first silently dropped them
+    (the "1 visitor today right after a deploy" defect). Pages are read
+    newest-first so even a configured ceiling would shed the oldest days,
+    never the current one.
 
     Returns [] when Supabase is unconfigured or the read fails - the caller
-    treats that as "nothing to restore", never as an error. Never raises.
+    treats that as "nothing to restore" (and, because nothing was written,
+    the next boot simply tries again). Never raises.
     """
     c = client()
     if c is None:
         return []
+    ceiling = int(limit or ANALYTICS_ROW_CEILING)
+    rows = []
+    start = 0
     try:
-        res = (c.table(ANALYTICS_EVENTS_TABLE)
-               .select("*")
-               .gte("day", str(since_day))
-               .order("at")
-               .limit(limit)
-               .execute())
-        return _res_data(res) or []
+        while start < ceiling:
+            end = min(start + ANALYTICS_PAGE, ceiling) - 1
+            res = (c.table(ANALYTICS_EVENTS_TABLE)
+                   .select("*")
+                   .gte("day", str(since_day))
+                   .order("at", desc=True)
+                   .range(start, end)
+                   .execute())
+            page = _res_data(res) or []
+            if not isinstance(page, list):
+                raise RuntimeError("PostgREST returned an unexpected payload shape")
+            rows.extend(page)
+            if len(page) < (end - start + 1):
+                break                        # short page: the window ended
+            start += len(page)
+        return rows
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] load_analytics_events failed: {exc}")
         return []
@@ -1702,19 +1739,33 @@ def mirror_search_queries(rows):
         return False
 
 
-def load_search_queries(since_day, limit=5000):
-    """Mirrored search rows on/after `since_day`, oldest first. Never raises."""
+def load_search_queries(since_day, limit=None):
+    """Mirrored search rows on/after `since_day`, NEWEST first, fully paged
+    (see load_analytics_events for why the newest rows must never be the ones
+    a cap drops). Never raises."""
     c = client()
     if c is None:
         return []
+    ceiling = int(limit or ANALYTICS_ROW_CEILING)
+    rows = []
+    start = 0
     try:
-        res = (c.table(SEARCH_QUERIES_TABLE)
-               .select("*")
-               .gte("day", str(since_day))
-               .order("at")
-               .limit(limit)
-               .execute())
-        return _res_data(res) or []
+        while start < ceiling:
+            end = min(start + ANALYTICS_PAGE, ceiling) - 1
+            res = (c.table(SEARCH_QUERIES_TABLE)
+                   .select("*")
+                   .gte("day", str(since_day))
+                   .order("at", desc=True)
+                   .range(start, end)
+                   .execute())
+            page = _res_data(res) or []
+            if not isinstance(page, list):
+                break
+            rows.extend(page)
+            if len(page) < (end - start + 1):
+                break
+            start += len(page)
+        return rows
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] load_search_queries failed: {exc}")
         return []

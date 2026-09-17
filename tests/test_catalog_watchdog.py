@@ -1,6 +1,6 @@
 """Tests for the production catalog watchdog (tools/catalog_watchdog.py).
 
-The watchdog is the "it must never happen again" layer: every 20 minutes, it
+The watchdog is the "it must never happen again" layer: every hour, it
 compares the live storefront against the Supabase products table read
 directly over PostgREST. These tests pin its logic offline:
 
@@ -94,13 +94,67 @@ def test_watchdog_passes_on_the_healthy_production_shape():
     assert any("272 rows" in s for s in summary)
 
 
-def test_watchdog_fails_when_an_online_row_is_missing_from_the_api():
+def test_a_newly_missing_product_warns_first_then_fails_when_it_persists():
     """The original defect class: Supabase says 254, the storefront serves
-    fewer. Even ONE missing online row must trip the watchdog."""
+    fewer. One run of missing only WARNs (a deploy in flight, a cache edge,
+    replication lag - the owner asked for tolerance); the SAME product still
+    missing on the next run is a defect and must page."""
     db_rows, payload = _production_shape()
     payload["products"] = [p for p in payload["products"] if p["id"] != "wix-100"]
-    failures, _summary = wd.check(db_rows, payload)
+
+    # first observation: a warning, not a page
+    state = {}
+    failures, summary = wd.check(db_rows, payload, state=state)
+    assert failures == [], failures
+    assert any("wix-100" in s and s.startswith("WARN") for s in summary), summary
+    assert state["missingStreaks"] == {"wix-100": 1}
+
+    # still missing on the next run: a page
+    failures, _summary = wd.check(db_rows, payload, previous=state)
     assert any("wix-100" in f and "MISSING" in f for f in failures), failures
+
+    # and back on the storefront: the streak resets
+    payload["products"].append({"id": "wix-100", "name": "Back", "online": True,
+                                "source": "admin"})
+    state = {}
+    failures, _summary = wd.check(db_rows, payload, previous={"missingStreaks": {"wix-100": 1}},
+                                  state=state)
+    assert failures == [], failures
+    assert state["missingStreaks"] == {}
+
+
+def test_intentionally_deleted_products_are_never_missing():
+    """wix-229 ("Thank you sticker 2") was deleted from the storefront ON
+    PURPOSE (owner confirmed): its Supabase row stays online while the app's
+    durable deleted-ids list suppresses it. Reporting that as "missing" was
+    the false alarm that kept #75 open - it is shopkeeping, not data loss."""
+    db_rows, payload = _production_shape()
+    payload["products"] = [p for p in payload["products"] if p["id"] != "wix-229"]
+    state = {}
+    failures, summary = wd.check(db_rows, payload,
+                                 deleted_ids={"wix-229"}, state=state)
+    assert failures == [], failures
+    assert not any("wix-229" in s and "WARN" in s for s in summary), summary
+    assert any("intentionally deleted" in s for s in summary), summary
+    # and it stays silent even across runs (no streak grows)
+    failures, _summary = wd.check(db_rows, payload, previous=state,
+                                  deleted_ids={"wix-229"})
+    assert failures == [], failures
+
+
+def test_a_missing_deleted_ids_read_degrades_to_streak_tolerance():
+    """If growth_settings cannot be read the watchdog must neither guess a
+    full list (everything excused) nor fail the run - it just loses the
+    intentional-deletion layer and keeps the two-run tolerance."""
+    db_rows, payload = _production_shape()
+    payload["products"] = [p for p in payload["products"] if p["id"] != "wix-229"]
+    state = {}
+    failures, summary = wd.check(db_rows, payload, deleted_ids=None, state=state)
+    assert failures == [], failures                       # first run: WARN only
+    assert any("wix-229" in s and s.startswith("WARN") for s in summary), summary
+    failures, _summary = wd.check(db_rows, payload, previous=state,
+                                  deleted_ids=None)
+    assert any("wix-229" in f and "MISSING" in f for f in failures), failures
 
 
 def test_watchdog_does_not_call_a_filtered_test_product_missing():
@@ -217,7 +271,9 @@ def test_watchdog_ignores_tombstones_but_flags_a_visible_online_null():
     failures, _summary = wd.check(db_rows, payload)   # tombstone: ignored
     assert failures == []
     db_rows.append({"id": "wix-260", "online": None, "source": "admin"})
-    failures, _summary = wd.check(db_rows, payload)   # visible but unserved
+    # visible but unserved; carried over one run so the tolerance is satisfied
+    failures, _summary = wd.check(db_rows, payload,
+                                  previous={"missingStreaks": {"wix-260": 1}})
     assert any("wix-260" in f and "MISSING" in f for f in failures), failures
 
 
@@ -251,6 +307,15 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/rest/v1/growth_settings"):
+            body = json.dumps([{"value": json.dumps(
+                list(self.server.deleted_ids))}]).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/rest/v1/products"):
             rng = (self.headers.get("Range") or "0-499")
             start, end = (int(x) for x in rng.split("-"))
@@ -274,6 +339,7 @@ def local_servers(monkeypatch):
     db_rows.append({"id": "zz-tomb", "online": True, "source": "replaced"})
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     srv.api_payload, srv.db_rows = payload, db_rows
+    srv.deleted_ids = {"wix-229"}
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
     # force multiple pages so the Range walk is really exercised
@@ -290,6 +356,33 @@ def test_fetch_layers_read_the_whole_table_and_catalog(local_servers):
     got_rows = wd.fetch_db_rows(base, "test-key")
     assert len(got_rows) == len(db_rows)           # every page, incl. tombstone
     assert got_rows == db_rows
+
+
+def test_fetch_deleted_ids_reads_the_durable_list(local_servers):
+    """The intentional-deletion layer reads the same growth_settings key the
+    app writes, over PostgREST, with the service key - read-only."""
+    base, _db_rows, _payload = local_servers
+    ids = wd.fetch_deleted_ids(base, "test-key")
+    assert ids == {"wix-229"}
+
+
+def test_fetch_deleted_ids_returns_none_on_a_broken_read():
+    class _500Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_GET(self):
+            self.send_response(500)
+            self.end_headers()
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _500Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    broken_base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        assert wd.fetch_deleted_ids(broken_base, "test-key") is None
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 def test_fetch_public_catalog_fails_cleanly_on_a_broken_site():
@@ -327,7 +420,7 @@ def test_watchdog_workflow_stays_safe():
     data = yaml.safe_load(text)
     triggers = data.get("on", data.get(True))
     assert "schedule" in triggers and "workflow_dispatch" in triggers
-    assert triggers["schedule"] == [{"cron": "*/20 * * * *"}]
+    assert triggers["schedule"] == [{"cron": "0 * * * *"}]
     perms = data["permissions"]
     assert perms == {"contents": "read", "issues": "write"}, perms
     assert data["concurrency"]["group"] == "catalog-watchdog"
@@ -368,10 +461,15 @@ def test_unhealthy_workers_no_longer_blind_the_catalogue_check(monkeypatch, tmp_
     monkeypatch.setattr(wd, "fetch_public_catalog", lambda *a, **k: payload)
     monkeypatch.setattr(wd, "fetch_db_rows", lambda *a, **k: db_rows)
     monkeypatch.setattr(wd, "refresh_storefront_cache", lambda *a, **k: None)
+    monkeypatch.setattr(wd, "fetch_deleted_ids", lambda *a, **k: set())
     monkeypatch.setattr(wd, "STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setenv("SUPABASE_URL", "https://db.test")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
 
+    # This defect is the EXTRA direction (the storefront serves a row the
+    # table no longer lists): it pages immediately - the two-run tolerance
+    # only softens the missing direction - and the sick workers are reported
+    # alongside it instead of hiding the catalogue defect.
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         rc = wd.main()
@@ -382,16 +480,52 @@ def test_unhealthy_workers_no_longer_blind_the_catalogue_check(monkeypatch, tmp_
     assert "wix-100" in text                  # and the catalogue defect is visible
 
 
+def test_a_missing_product_pages_on_the_second_run_not_the_first(monkeypatch, tmp_path):
+    """End to end through main(): the missing direction is softened by the
+    two-run tolerance (the extra direction is not - see the workers test),
+    and the streak memory survives in the state file between runs."""
+    db_rows, payload = _production_shape()
+    payload["products"] = [p for p in payload["products"] if p["id"] != "wix-100"]
+    state = tmp_path / "state.json"
+    monkeypatch.setattr(wd, "fetch_service_health", lambda *a, **k: None)
+    monkeypatch.setattr(wd, "fetch_public_catalog", lambda *a, **k: payload)
+    monkeypatch.setattr(wd, "fetch_db_rows", lambda *a, **k: db_rows)
+    monkeypatch.setattr(wd, "refresh_storefront_cache", lambda *a, **k: None)
+    monkeypatch.setattr(wd, "fetch_deleted_ids", lambda *a, **k: set())
+    monkeypatch.setattr(wd, "STATE_PATH", str(state))
+    monkeypatch.setenv("SUPABASE_URL", "https://db.test")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = wd.main()
+    assert rc == 0, out.getvalue()              # WARN only, no page
+    assert any("wix-100" in line and line.startswith("WARN")
+               for line in out.getvalue().splitlines())
+    assert json.loads(state.read_text())["missingStreaks"] == {"wix-100": 1}
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = wd.main()
+    assert rc == 1, out.getvalue()              # still missing: page
+    assert any("wix-100" in line and "consecutive" in line
+               for line in out.getvalue().splitlines())
+
+
 def test_the_run_records_its_size_so_the_next_run_has_a_baseline(monkeypatch, tmp_path):
     db_rows, payload = _production_shape()
     state = tmp_path / "state.json"
     monkeypatch.setattr(wd, "fetch_service_health", lambda *a, **k: None)
     monkeypatch.setattr(wd, "fetch_public_catalog", lambda *a, **k: payload)
     monkeypatch.setattr(wd, "fetch_db_rows", lambda *a, **k: db_rows)
+    monkeypatch.setattr(wd, "fetch_deleted_ids", lambda *a, **k: set())
     monkeypatch.setattr(wd, "STATE_PATH", str(state))
     monkeypatch.setenv("SUPABASE_URL", "https://db.test")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
     with contextlib.redirect_stdout(io.StringIO()):
         rc = wd.main()
     assert rc == 0
-    assert json.loads(state.read_text())["liveCount"] == len(payload["products"])
+    saved = json.loads(state.read_text())
+    assert saved["liveCount"] == len(payload["products"])
+    # the tolerance memory rides along in the same state file
+    assert saved["missingStreaks"] == {}

@@ -15,9 +15,13 @@ os.environ.setdefault("ADMIN_EMAILS", "jaurastore@gmail.com")
 
 import pytest  # noqa: E402
 
-if os.path.exists(os.environ["DB_PATH"]):
-    os.remove(os.environ["DB_PATH"])
-
+# The scratch database is owned by tests/conftest.py, which removes it (and
+# its -wal/-shm sidecars) before ANY test module imports `app`. Removing it
+# here, at import time, is destructive: `app` builds itself at import
+# (module-level create_app()), so the first-imported module already holds an
+# open connection - deleting the file under it orphans the database, and
+# every connection opened afterwards (any test that uses THREADS, like the
+# stock-race tests) creates a fresh empty file and finds no tables.
 import app as appmod  # noqa: E402
 import auth as authmod  # noqa: E402
 from db import execute, init_db, one, query  # noqa: E402
@@ -959,7 +963,11 @@ def test_option_stock_survives_product_save(client):
     saved = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == "jau-optstock")
     assert saved["optionStock"]["S"] == 3 and saved["optionStock"]["L"] == 0
     assert "<script>x</script>" not in saved["optionStock"]      # keys are cleaned
-    assert saved["stock"] == 7
+    # For a variant product the map IS the truth: the stored total is the sum
+    # of its cleaned variants (the admin editor computes exactly this), so the
+    # product-level availability can never disagree with the per-variant one.
+    assert saved["stock"] == sum(saved["optionStock"].values()) == 9
+    assert saved["stock_quantity"] == saved["stock"]              # aliases in sync
     catalog_mod.remove("jau-optstock", "tester")
 
 

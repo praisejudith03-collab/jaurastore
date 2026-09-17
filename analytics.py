@@ -6,10 +6,12 @@ import csv
 import datetime
 import io
 import json
+import os
 import secrets
+import contextlib
 from flask import request, make_response, jsonify
 from config import Config
-from db import execute, one, query
+from db import execute, execute_many, one, query
 import security as sec
 
 CONFIRMED = "confirmed"
@@ -418,43 +420,48 @@ def restore_searches_from_supabase(rows=None):
     """Copy the search history back after a wiped disk. Never raises.
 
     Mirrors restore_from_supabase(): a no-op unless the local window is
-    empty, so a normal reboot cannot duplicate a single row.
+    empty (checked again inside the cross-process restore lock), so a normal
+    reboot - or two workers booting together - cannot duplicate a row.
     """
     try:
-        cutoff = _retention_cutoff_day()
-        local = one("SELECT COUNT(*) n FROM search_queries WHERE day >= ?", (cutoff,))
-        if local is None or (local["n"] or 0) > 0:
-            return 0
-        if rows is None:
-            from supabase_store import load_search_queries
-            rows = load_search_queries(cutoff)
-        if not rows:
-            return 0
-        now_iso = _iso()
-        restored = 0
-        for r in rows:
-            if not isinstance(r, dict):
-                continue
-            day = str(r.get("day") or "")[:10]
-            if len(day) != 10 or day < cutoff:
-                continue
-            text = str(r.get("q") or "")[:120]
-            norm = str(r.get("q_norm") or "") or _normalise_query(text)
-            if not norm:
-                continue
-            try:
-                results = int(r.get("results") or 0)
-            except (TypeError, ValueError):
-                results = 0
-            execute(
-                "INSERT INTO search_queries (vid, sid, q, q_norm, results, category, "
-                "city, country, day, at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (str(r.get("vid") or "")[:64], str(r.get("sid") or "")[:48],
-                 text, norm[:120], results, str(r.get("category") or "")[:60],
-                 str(r.get("city") or "")[:80], str(r.get("country") or "")[:80],
-                 day, _clean_restored_at(r.get("at"), day, now_iso)))
-            restored += 1
-        return restored
+        with _restore_lock():
+            cutoff = _retention_cutoff_day()
+            local = one("SELECT COUNT(*) n FROM search_queries WHERE day >= ?", (cutoff,))
+            if local is None or (local["n"] or 0) > 0:
+                return 0
+            if rows is None:
+                from supabase_store import load_search_queries
+                rows = load_search_queries(cutoff)
+            if not rows:
+                return 0
+            now_iso = _iso()
+            batch = []
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                day = str(r.get("day") or "")[:10]
+                if len(day) != 10 or day < cutoff:
+                    continue
+                text = str(r.get("q") or "")[:120]
+                norm = str(r.get("q_norm") or "") or _normalise_query(text)
+                if not norm:
+                    continue
+                try:
+                    results = int(r.get("results") or 0)
+                except (TypeError, ValueError):
+                    results = 0
+                batch.append((str(r.get("vid") or "")[:64], str(r.get("sid") or "")[:48],
+                              text, norm[:120], results, str(r.get("category") or "")[:60],
+                              str(r.get("city") or "")[:80], str(r.get("country") or "")[:80],
+                              day, _clean_restored_at(r.get("at"), day, now_iso)))
+            restored = 0
+            for i in range(0, len(batch), 500):
+                chunk = batch[i:i + 500]
+                execute_many(
+                    "INSERT INTO search_queries (vid, sid, q, q_norm, results, category, "
+                    "city, country, day, at) VALUES (?,?,?,?,?,?,?,?,?,?)", chunk)
+                restored += len(chunk)
+            return restored
     except Exception as exc:
         print(f"[analytics] search restore failed: {exc}")
         return 0
@@ -828,6 +835,42 @@ def _retention_cutoff_day():
     return _days_ago(max(1, int(Config.ANALYTICS_RETENTION_DAYS)))
 
 
+try:
+    import fcntl
+except ImportError:                                 # non-POSIX: no-op lock
+    fcntl = None
+
+RESTORE_LOCK_PATH = (os.environ.get("ANALYTICS_RESTORE_LOCK")
+                     or os.path.join(os.path.dirname(os.path.abspath(
+                         Config.DB_PATH or "data/jaura.db")), ".analytics-restore.lock"))
+
+
+@contextlib.contextmanager
+def _restore_lock():
+    """Serialise the boot restore across gunicorn workers.
+
+    Every worker runs create_app() at boot. Two workers can both see an
+    empty local window and both copy the mirrored rows back, duplicating
+    every page view (the visitors metric dedupes, the view counts do not).
+    An advisory POSIX lock on a file next to the SQLite database - the same
+    trick catalog._catalog_lock uses for product saves - makes the second
+    worker wait, re-check emptiness inside the lock, and find the first
+    worker's rows already there. Falls back to no-op when fcntl is missing.
+    """
+    try:
+        os.makedirs(os.path.dirname(RESTORE_LOCK_PATH) or ".", exist_ok=True)
+        with open(RESTORE_LOCK_PATH, "a+") as lock:
+            if fcntl is not None:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        yield                     # never block a boot because of locking
+
+
 def _clean_restored_at(value, day, fallback):
     """Supabase returns timestamptz as ISO text with an offset
     ("2026-09-10T12:00:00+00:00"); local `at` is naive YYYY-MM-DDTHH:MM:SS.
@@ -863,63 +906,78 @@ def restore_from_supabase(rows=None):
     wipe takes every analytics row and an intact disk needs nothing - which
     also makes the restore idempotent across boots. Pass `rows` to restore
     from an explicit list (tests); otherwise the window is read from the
-    Supabase analytics_events table. Returns the number of rows restored.
+    Supabase analytics_events table (fully paged, newest first - see
+    supabase_store.load_analytics_events). The whole check-then-copy runs
+    under a cross-process lock so two gunicorn workers booting together can
+    never duplicate the window. Returns the number of rows restored.
     Never raises: a failed restore must not stop the boot or the sale.
     """
     try:
-        cutoff = _retention_cutoff_day()
-        local = one(
-            "SELECT (SELECT COUNT(*) FROM page_views WHERE day >= ?) + "
-            "(SELECT COUNT(*) FROM events WHERE day >= ?) n",
-            (cutoff, cutoff))
-        if local is None or (local["n"] or 0) > 0:
-            return 0
-        if rows is None:
-            from supabase_store import load_analytics_events
-            rows = load_analytics_events(cutoff)
-        if not rows:
-            return 0
-        now_iso = _iso()
-        restored = 0
-        for r in rows:
-            if not isinstance(r, dict):
-                continue
-            day = str(r.get("day") or "")[:10]
-            if len(day) != 10 or day < cutoff:
-                continue                        # outside the window (or junk)
-            at = _clean_restored_at(r.get("at"), day, now_iso)
-            kind = str(r.get("kind") or "")
-
-            def _get(key, n):
-                return str(r.get(key) or "")[:n]
-
-            if kind == "page_view":
-                execute(
-                    "INSERT INTO page_views (vid, sid, path, page, ref, city, country, day, at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?)",
-                    (_get("vid", 64), _get("sid", 48), _get("path", 200),
-                     _get("page", 40), _get("ref", 300), _get("city", 80),
-                     _get("country", 80), day, at),
-                )
-                restored += 1
-            elif kind in ("view", "cart", "checkout_start", "purchase"):
-                try:
-                    value = float(r.get("value") or 0)
-                except (TypeError, ValueError):
-                    value = 0
-                execute(
-                    "INSERT INTO events (type, vid, sid, product_id, product_name, page, path, "
-                    "value, currency, city, country, day, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (kind, _get("vid", 64), _get("sid", 48),
-                     _get("product_id", 64), _get("product_name", 160),
-                     _get("page", 40), _get("path", 200), value,
-                     _get("currency", 3).upper(), _get("city", 80),
-                     _get("country", 80), day, at),
-                )
-                restored += 1
-        if restored:
-            _rebuild_visitors(cutoff)
-        return restored
-    except Exception as exc:                       # never stop the boot
+        with _restore_lock():
+            return _restore_from_supabase_locked(rows)
+    except Exception as exc:                    # never stop the boot
         print(f"[analytics] restore failed: {exc}")
         return 0
+
+
+def _restore_from_supabase_locked(rows):
+    cutoff = _retention_cutoff_day()
+    local = one(
+        "SELECT (SELECT COUNT(*) FROM page_views WHERE day >= ?) + "
+        "(SELECT COUNT(*) FROM events WHERE day >= ?) n",
+        (cutoff, cutoff))
+    if local is None or (local["n"] or 0) > 0:
+        return 0
+    if rows is None:
+        from supabase_store import load_analytics_events
+        rows = load_analytics_events(cutoff)
+    if not rows:
+        return 0
+    now_iso = _iso()
+    pv_batch, ev_batch = [], []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        day = str(r.get("day") or "")[:10]
+        if len(day) != 10 or day < cutoff:
+            continue                        # outside the window (or junk)
+        at = _clean_restored_at(r.get("at"), day, now_iso)
+        kind = str(r.get("kind") or "")
+
+        def _get(key, n):
+            return str(r.get(key) or "")[:n]
+
+        if kind == "page_view":
+            pv_batch.append((_get("vid", 64), _get("sid", 48), _get("path", 200),
+                             _get("page", 40), _get("ref", 300), _get("city", 80),
+                             _get("country", 80), day, at))
+        elif kind in ("view", "cart", "checkout_start", "purchase"):
+            try:
+                value = float(r.get("value") or 0)
+            except (TypeError, ValueError):
+                value = 0
+            ev_batch.append((kind, _get("vid", 64), _get("sid", 48),
+                             _get("product_id", 64), _get("product_name", 160),
+                             _get("page", 40), _get("path", 200), value,
+                             _get("currency", 3).upper(), _get("city", 80),
+                             _get("country", 80), day, at))
+    restored = 0
+    # Batched inserts (one transaction per chunk) instead of one commit per
+    # row: a busy 400-day window is tens of thousands of rows, and a
+    # row-at-a-time restore could hold the boot for minutes.
+    for i in range(0, len(pv_batch), 500):
+        chunk = pv_batch[i:i + 500]
+        execute_many(
+            "INSERT INTO page_views (vid, sid, path, page, ref, city, country, day, at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)", chunk)
+        restored += len(chunk)
+    for i in range(0, len(ev_batch), 500):
+        chunk = ev_batch[i:i + 500]
+        execute_many(
+            "INSERT INTO events (type, vid, sid, product_id, product_name, page, path, "
+            "value, currency, city, country, day, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            chunk)
+        restored += len(chunk)
+    if restored:
+        _rebuild_visitors(cutoff)
+    return restored

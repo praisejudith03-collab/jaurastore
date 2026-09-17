@@ -164,18 +164,33 @@ def products():
 
 # ============================================================ public: catalog
 # Customers never see numerical stock: the public catalogue carries only an
-# In Stock / Out of Stock flag (the admin portal, with a session, still gets
-# the numbers it needs to manage the shop).
+# In Stock / Out of Stock flag, plus - for a product sold per variant - a
+# per-variant in/out map (option_stock_status). No count, no threshold, no
+# "only N left": the exact quantity is a business secret (the admin portal,
+# with a session, still gets the numbers it needs to manage the shop).
 _FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock",
                          "variantStock", "inventory")
 
 
 def _public_product(p):
     out = {k: v for k, v in dict(p or {}).items() if k not in _FORBIDDEN_PUBLIC_KEYS}
-    try:
-        qty = int(p.get("stock") if p.get("stock") is not None else p.get("stock_quantity") or 0)
-    except (TypeError, ValueError):
-        qty = 0
+    qty = catalog_mod.stock_of(p)
+    os_map = p.get("optionStock") if isinstance(p, dict) else None
+    if isinstance(os_map, dict) and os_map:
+        # Variant product: the map is the truth (catalog.normalize keeps
+        # stock == sum(optionStock)). The product is sellable only while at
+        # least one variant still has units, and each variant's own state is
+        # published WITHOUT its number so the storefront can grey out a
+        # sold-out colour without learning how many Reds are left.
+        cleaned = {}
+        for k, v in os_map.items():
+            try:
+                cleaned[str(k)] = max(0, int(v or 0))
+            except (TypeError, ValueError):
+                cleaned[str(k)] = 0
+        out["option_stock_status"] = {k: ("in" if v > 0 else "out")
+                                      for k, v in cleaned.items()}
+        qty = sum(cleaned.values())
     out["stock_status"] = "in" if qty > 0 else "out"
     return out
 
@@ -339,13 +354,82 @@ def track_view():
             (pid, datetime.datetime.utcnow().isoformat(timespec="seconds")))
     return jsonify(ok=True)
 
-def _stock_rows_for_read():
-    """Production reads come from Supabase; local SQLite is test/dev only."""
+def _legacy_variant_rows():
+    """The old per-variant store: labels and low-stock thresholds only.
+
+    Quantities in it are NOT truth - checkout guards and decrements the
+    product row (stock/stock_quantity + optionStock), so a qty here can only
+    drift. Kept because it carries the admin's labels and thresholds.
+    Returns a {(product_id, variant_key): row} map, or None when the
+    production read failed (callers surface a 503, never stale numbers)."""
+    rows = None
     if catalog_mod._prod_source():
         from supabase_store import load_variant_stock_strict
-        return load_variant_stock_strict()
-    return [dict(r) for r in query(
-        "SELECT product_id, variant_key, variant_label, qty, low_threshold FROM variant_stock")]
+        rows = load_variant_stock_strict()
+    else:
+        rows = [dict(r) for r in query(
+            "SELECT product_id, variant_key, variant_label, qty, low_threshold FROM variant_stock")]
+    if rows is None:
+        return None
+    out = {}
+    for r in rows or []:
+        try:
+            out[(str(r.get("product_id") or ""), str(r.get("variant_key") or "__default__"))] = dict(r)
+        except Exception:
+            continue
+    return out
+
+
+def _stock_rows_for_read():
+    """One row per product-variant, derived from the catalogue rows.
+
+    This is the SAME store checkout guards and decrements (products.stock /
+    stock_quantity / optionStock), so the stock view can never disagree with
+    what a shopper is allowed to order - the old separate variant_stock copy
+    could show 10 while the product row still had 24 sellable units. The
+    legacy store contributes only labels and low-stock thresholds.
+
+    Returns None when the underlying read failed (callers 503 - honest
+    unavailability beats confidently stale numbers)."""
+    legacy = _legacy_variant_rows()
+    if legacy is None:
+        return None
+    if catalog_mod._prod_source():
+        # merged() silently falls back to the seed when Supabase is down;
+        # a stock view built from that fallback would be fiction. Probe the
+        # live table first and fail honestly.
+        if catalog_mod._supabase_products() is None:
+            return None
+    try:
+        products = catalog_mod.merged(include_hidden=True)
+    except Exception:
+        return None
+    rows = []
+    for p in products or []:
+        pid = str(p.get("id") or "")
+        if not pid:
+            continue
+        os_map = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else None
+        if os_map:
+            for key, val in (os_map or {}).items():
+                old = legacy.get((pid, str(key)), {})
+                try:
+                    qty = int(val or 0)
+                except (TypeError, ValueError):
+                    qty = 0
+                rows.append({"product_id": pid, "variant_key": str(key),
+                             "variant_label": old.get("variant_label") or str(key),
+                             "qty": max(0, qty),
+                             "low_threshold": int(old.get("low_threshold")
+                                                  or Config.LOW_STOCK_THRESHOLD)})
+        else:
+            old = legacy.get((pid, "__default__"), {})
+            rows.append({"product_id": pid, "variant_key": "__default__",
+                         "variant_label": old.get("variant_label") or "Default",
+                         "qty": max(0, catalog_mod.stock_of(p)),
+                         "low_threshold": int(old.get("low_threshold")
+                                              or Config.LOW_STOCK_THRESHOLD)})
+    return rows
 
 
 @api.get("/stock")
@@ -423,38 +507,19 @@ def upload_proof():
 
 def _fold(value):
     """Case/punctuation-insensitive key for matching variant option values."""
-    return "".join(c.lower() for c in str(value or "") if c.isalnum())
+    return catalog_mod.fold_option_value(value)
 
 
 def _variant_values(variant):
     """Option values from a cart variant string like "Color: Red · Size: M"."""
-    v = str(variant or "")
-    if not v or v == "__default__":
-        return []
-    out = []
-    for part in re.split(r"[·;|]", v):
-        p = str(part or "").strip()
-        if not p:
-            continue
-        if ":" in p:
-            _title, val = p.split(":", 1)
-            val = val.strip()
-            if val:
-                out.append(val)
-        else:
-            out.append(p)
-    return out
+    return catalog_mod.variant_values(variant)
 
 
 def _stock_available(product, variant="__default__"):
-    """Integer stock for one product+variant, falling back to product["stock"]."""
+    """Integer stock for one product+variant, falling back to product stock."""
     if not isinstance(product, dict):
         return 0
-    try:
-        base = int(product.get("stock") or 0)
-    except (TypeError, ValueError):
-        base = 0
-    base = max(0, base)
+    base = catalog_mod.stock_of(product)
     os_map = product.get("optionStock")
     if not isinstance(os_map, dict) or not os_map:
         return base
@@ -477,91 +542,10 @@ def _stock_available(product, variant="__default__"):
     return base
 
 
-def _stock_problems(items):
-    """Sum requested quantities per product+variant and compare with stock.
-
-    Returns a list of {id, name, variant, available, requested} (with left /
-    asked aliases) for every line that asks for more than is left. Unknown
-    product ids are skipped so legacy / custom items never block checkout.
-    """
-    try:
-        products = {p.get("id"): p for p in catalog_mod.merged(include_hidden=True)}
-    except Exception:
-        return []
-    groups = {}
-    for it in items or []:
-        if not isinstance(it, dict):
-            continue
-        pid = str(it.get("id") or "")
-        if not pid:
-            continue
-        variant = str(it.get("color") or it.get("variant") or "__default__")
-        if not variant:
-            variant = "__default__"
-        try:
-            qty = int(it.get("qty") or 0)
-        except (TypeError, ValueError):
-            qty = 0
-        if qty <= 0:
-            continue
-        key = (pid, variant)
-        if key not in groups:
-            groups[key] = {"id": pid, "variant": variant, "requested": 0,
-                           "name": str(it.get("name") or "")}
-        groups[key]["requested"] += qty
-        if not groups[key]["name"]:
-            groups[key]["name"] = str(it.get("name") or "")
-    problems = []
-    for (pid, variant), g in groups.items():
-        product = products.get(pid)
-        if product is None:
-            continue
-        avail = _stock_available(product, variant)
-        if g["requested"] > avail:
-            name = product.get("name") or g["name"] or pid
-            problems.append({
-                "id": pid,
-                "name": name,
-                "variant": "" if variant == "__default__" else variant,
-                "available": avail,
-                "requested": g["requested"],
-                "left": avail,
-                "asked": g["requested"],
-            })
-    return problems
-
-
-def _stock_message(problems):
-    """One human sentence naming the product, the stock left and the ask."""
-    if not problems:
-        return ""
-    bits = []
-    for p in problems:
-        bits.append(f'Only {p.get("available", 0)} left of "{p.get("name", "")}"'
-                    f' — you asked for {p.get("requested", 0)}.')
-    return " ".join(bits)
-
 
 def _option_stock_key(product, variant):
     """The optionStock map key that matches a cart variant, or None."""
-    if not isinstance(product, dict):
-        return None
-    os_map = product.get("optionStock")
-    if not isinstance(os_map, dict) or not os_map:
-        return None
-    vals = _variant_values(variant)
-    if not vals:
-        return None
-    folded = {}
-    for k in os_map:
-        fk = _fold(k)
-        if fk:
-            folded[fk] = k
-    for val in vals:
-        fk = _fold(val)
-        if fk and fk in folded:
-            return folded[fk]
-    return None
+    return catalog_mod._option_stock_key_for(product, variant)
 
 
 def _order_stock_moves(payload):
@@ -628,34 +612,41 @@ def _sync_order_stock(payload, old_status, new_status, actor=None):
     second confirm (already=True, admin re-save) never double-decrements,
     and a decline / reopen / delete restores the same quantities.
 
-    In production the stock was already reserved atomically at checkout, so a
-    confirm only marks the reservation (it never decrements again), while a
-    decline or reopen releases it back.
+    One implementation for BOTH backends, because they now share the same
+    lifecycle: an order placed while stock enforcement is on reserves its
+    units atomically at CHECKOUT (PostgreSQL in production, the catalogue's
+    cross-process lock locally) and carries ``stockApplied`` from creation.
+    Confirming such an order only keeps the reservation; declining, reopening
+    or deleting it releases exactly those units back. An order without
+    ``stockApplied`` (placed with ENFORCE_STOCK off, or before reservations
+    existed) keeps the legacy behaviour: the first confirm decrements, and
+    only a confirmed order restores on decline.
     """
     if not isinstance(payload, dict):
         return payload
-    old_c = (old_status or "pending") == "confirmed"
-    new_c = (new_status or "pending") == "confirmed"
-    if catalog_mod._prod_source():
-        if new_c and not old_c:
-            payload["stockApplied"] = _order_stock_moves(payload)
-        elif (old_c and not new_c) or \
-                ((old_status or "pending") == "pending" and new_status == "declined"):
-            moves = payload.get("stockApplied") or _order_stock_moves(payload)
-            if moves:
-                _apply_stock_moves(moves, +1, actor=actor)
-            payload["stockApplied"] = None
-        return payload
-    if old_c == new_c:
-        return payload
-    if new_c:
+    old_status = old_status or "pending"
+    new_status = new_status or "pending"
+    old_c = old_status == "confirmed"
+    new_c = new_status == "confirmed"
+
+    if new_c and not old_c:
         if payload.get("stockApplied"):
-            return payload
+            return payload          # reserved at checkout; already deducted
         moves = _order_stock_moves(payload)
-        _apply_stock_moves(moves, -1, actor=actor)
-        payload["stockApplied"] = moves
-    else:
-        moves = payload.get("stockApplied") or _order_stock_moves(payload)
+        if moves:
+            _apply_stock_moves(moves, -1, actor=actor)
+            payload["stockApplied"] = moves
+        return payload
+
+    if (old_c and not new_c) or (old_status == "pending" and new_status == "declined"):
+        # Confirmed -> anything: give the applied units back (a confirmed
+        # order always carries stockApplied - its own confirm wrote it).
+        # Pending -> declined (the delete path): release ONLY a checkout-time
+        # reservation; a legacy pending order never deducted anything, so
+        # restoring would invent stock.
+        moves = payload.get("stockApplied")
+        if not moves and old_c:
+            moves = _order_stock_moves(payload)
         if moves:
             _apply_stock_moves(moves, +1, actor=actor)
         payload["stockApplied"] = None
@@ -709,6 +700,13 @@ def _checkout_items(clean_items, currency):
     (items, subtotal, error_response). The error response is 400 for an
     unknown product, 409 with code ``out_of_stock`` for an unavailable line
     - and never contains a numerical stock count (only In/Out of Stock).
+
+    Every line comes back with the product's CANONICAL id (a legacy wix-*
+    cart line is resolved onto the real row), so the stock reservation and
+    the admin confirm/decline moves always hit the row that exists. A
+    per-product bulk discount (bulkQty + bulkPercent) applies automatically
+    when the customer orders more than bulkQty units of that one product;
+    with no per-product discount the shop-wide volume tiers apply.
     """
     try:
         live = catalog_mod.merged(include_hidden=True)
@@ -720,9 +718,14 @@ def _checkout_items(clean_items, currency):
 
     aggregated = {}
     for it in clean_items:
-        key = (str(it.get("id") or ""), str(it.get("color") or ""))
+        sent_id = str(it.get("id") or "")
+        prod = products_map.get(sent_id)
+        # canonical id first: reservation, stock moves and the stored order
+        # line must all address the row that actually exists.
+        canon = str((prod or {}).get("id") or sent_id).strip()
+        key = (canon, str(it.get("color") or ""))
         g = aggregated.setdefault(key, {
-            "id": str(it.get("id") or ""),
+            "id": canon,
             "variant": str(it.get("color") or ""),
             "qty": 0,
             "name": str(it.get("name") or ""),
@@ -753,14 +756,15 @@ def _checkout_items(clean_items, currency):
         avail = _stock_available(prod, g["variant"])
         if Config.ENFORCE_STOCK and g["qty"] > avail:
             return [], 0, (jsonify(ok=False, error=(
-                f'"{prod.get("name") or g["name"]}" is out of stock. '
-                "Please remove it or choose fewer items."),
+                f'"{prod.get("name") or g["name"]}"'
+                + (f' ({g["variant"]})' if g["variant"] else "")
+                + " — this option is currently unavailable in the quantity "
+                "selected. Please remove it or choose fewer items."),
                 code="out_of_stock",
                 items=[{"id": pid, "name": prod.get("name") or g["name"],
                         "variant": g["variant"]}]), 409)
         unit = _server_unit_price(prod, currency, g["variant"])
-        import growth
-        bulk_percent = growth.bulk_discount_percent(total_quantity_by_product[g["id"]])
+        bulk_percent = catalog_mod.bulk_discount_for(prod, total_quantity_by_product[pid])
         pay_unit = round(unit * (100 - bulk_percent) / 100) if bulk_percent else unit
         line_price = pay_unit * g["qty"]
         subtotal += line_price
@@ -770,17 +774,33 @@ def _checkout_items(clean_items, currency):
             "qty": g["qty"],
             "price": line_price,
             "color": g["variant"],
+            **({"bulkPercent": bulk_percent} if bulk_percent else {}),
         })
     return items, subtotal, None
 
 
+def _product_display_name(clean_items, pid):
+    """The customer-facing name of one product id from a checkout's lines."""
+    for it in clean_items or []:
+        if isinstance(it, dict) and str(it.get("id") or "") == str(pid):
+            return str(it.get("name") or pid)
+    return str(pid)
+
+
 def _release_stock_lines(lines):
-    """Best-effort release of reserved stock after a failed checkout."""
+    """Best-effort release of reserved stock after a failed checkout.
+
+    ``lines`` is [(product_id, qty, option_key)] - the option travels with the
+    release so a reserved variant is given back to the variant, not only to
+    the product total.
+    """
     try:
         from supabase_store import release_product_stock
-        for pid, qty in (lines or []):
+        for line in (lines or []):
+            pid, qty, option = (list(line) + [None, None])[:3] \
+                if isinstance(line, (list, tuple)) else (line, None, None)
             try:
-                release_product_stock(pid, qty)
+                release_product_stock(pid, qty, option=option)
             except Exception:
                 pass
     except Exception:
@@ -925,6 +945,18 @@ def create_order():
         return err
     total = subtotal
     discount = 0
+    # Which lines earned an automatic bulk discount, so the admin order view
+    # and the customer's receipt can both show it was applied and by how much.
+    # One entry PER PRODUCT, with the product's whole quantity (its variants
+    # combined) - that combined total is what crossed the threshold.
+    _bulk_by_id = {}
+    for i in clean_items:
+        if not i.get("bulkPercent"):
+            continue
+        entry = _bulk_by_id.setdefault(i["id"], {"id": i["id"], "name": i["name"],
+                                                 "qty": 0, "percent": i["bulkPercent"]})
+        entry["qty"] += i["qty"]
+    bulk_discount_lines = list(_bulk_by_id.values())
 
     oid = sec.clean(d.get("id"), 24).upper()
     if not ORDER_ID.match(oid or ""):
@@ -997,6 +1029,8 @@ def create_order():
         # records the RANGE the checkout quoted plus who has to confirm it.
         "delivery": fare,
     }
+    if bulk_discount_lines:
+        order["bulkDiscount"] = bulk_discount_lines
     if promo:
         order["promo"] = promo
 
@@ -1017,33 +1051,44 @@ def create_order():
     prod_source = bool(catalog_mod._prod_source())
     reserved = []
 
-    if prod_source and Config.ENFORCE_STOCK:
+    if Config.ENFORCE_STOCK:
         # Reserve every line atomically BEFORE the order is written, so two
-        # concurrent checkouts can never sell the same last unit.
-        try:
-            from supabase_store import reserve_product_stock
-            for it in clean_items:
-                res = reserve_product_stock(it["id"], int(it["qty"]))
-                if res is None:
-                    _release_stock_lines(reserved)
-                    return jsonify(ok=False, error=(
-                        f'"{it["name"]}" is out of stock. Please remove it '
-                        "or choose fewer items."),
-                        code="out_of_stock",
-                        items=[{"id": it["id"], "name": it["name"],
-                                "variant": it.get("color") or ""}]), 409
-                if res is False:
-                    _release_stock_lines(reserved)
-                    return jsonify(ok=False, error=(
-                        "We could not confirm your stock right now. "
-                        "Please try again in a moment.")), 503
-                reserved.append((it["id"], int(it["qty"])))
-        except Exception as exc:
-            print(f"[supabase] order reserve failed: {exc}")
-            _release_stock_lines(reserved)
-            return jsonify(ok=False, error=(
-                "We could not confirm your stock right now. "
-                "Please try again in a moment.")), 503
+        # concurrent checkouts can never sell the same last unit. Production
+        # guards inside PostgreSQL (a single guarded UPDATE covers the product
+        # total AND the chosen variant); the local backend guards under the
+        # catalogue's cross-process lock. The variant key travels with every
+        # reservation - without it a sold-out variant kept its stale number
+        # and could be ordered again while other variants still had units.
+        reservation_moves = _order_stock_moves({"items": clean_items})
+        for move in reservation_moves:
+            pid = str(move.get("id") or "")
+            qty = int(move.get("qty") or 0)
+            option = move.get("option")
+            if not pid or qty <= 0:
+                continue
+            res = catalog_mod.reserve_stock(pid, qty, option_key=option, actor="checkout")
+            if res is None:
+                _release_stock_lines(reserved)
+                return jsonify(ok=False, error=(
+                    f'"{_product_display_name(clean_items, pid)}"'
+                    + (f' ({option})' if option else "")
+                    + " — this option is currently unavailable in the quantity "
+                    "selected. Please remove it or choose fewer items."),
+                    code="out_of_stock",
+                    items=[{"id": pid,
+                            "name": _product_display_name(clean_items, pid),
+                            "variant": option or ""}]), 409
+            if res is False:
+                _release_stock_lines(reserved)
+                return jsonify(ok=False, error=(
+                    "We could not confirm your stock right now. "
+                    "Please try again in a moment.")), 503
+            reserved.append((pid, qty, option))
+        if reserved:
+            # The reservation IS the stock move for this order. Recording it
+            # on the payload keeps confirm from decrementing a second time
+            # and lets decline / reopen / delete give exactly it back.
+            order["stockApplied"] = reservation_moves
 
     if prod_source:
         # Supabase PostgreSQL is the record of the sale. A failed write is a
@@ -1075,17 +1120,26 @@ def create_order():
         except Exception as exc:
             print(f"[sqlite] order cache write skipped: {exc}")
     else:
-        execute(
-            "INSERT INTO orders (id, payload, email, customer_name, phone, country, city, zone, "
-            "address, note, payment, proof_url, items_count, total, currency, source, status, at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (oid, json.dumps(order, ensure_ascii=False), email,
-             sec.clean(customer.get("name") or (customer.get("firstName") + " " + customer.get("lastName")).strip(), 200),
-             customer.get("phone", ""), customer.get("country", ""), customer.get("city", ""),
-             zone, customer.get("address", ""), customer.get("note", ""),
-             order["payment"], proof_url, len(clean_items), total, currency,
-             order["source"], "pending", order["at"], now),
-        )
+        try:
+            execute(
+                "INSERT INTO orders (id, payload, email, customer_name, phone, country, city, zone, "
+                "address, note, payment, proof_url, items_count, total, currency, source, status, at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (oid, json.dumps(order, ensure_ascii=False), email,
+                 sec.clean(customer.get("name") or (customer.get("firstName") + " " + customer.get("lastName")).strip(), 200),
+                 customer.get("phone", ""), customer.get("country", ""), customer.get("city", ""),
+                 zone, customer.get("address", ""), customer.get("note", ""),
+                 order["payment"], proof_url, len(clean_items), total, currency,
+                 order["source"], "pending", order["at"], now),
+            )
+        except Exception as exc:
+            # The order is NOT saved: holding the reservation would strand the
+            # units forever, so give them back and fail loudly.
+            print(f"[sqlite] order write failed: {exc}")
+            _release_stock_lines(reserved)
+            return jsonify(ok=False, error=(
+                "Your order could not be saved right now. Please try again "
+                "in a moment — nothing was charged.")), 503
         # mirror into Supabase when enabled (best effort in test/dev;
         # production never reaches this branch)
         from supabase_store import create_order as _sb_create_order
@@ -1148,6 +1202,7 @@ def create_order():
     resp = make_response(jsonify(ok=True, id=oid, status="pending", proofUrl=proof_url,
                                  referralCode=referral_code,
                                  promo=promo or None,
+                                 bulkDiscount=bulk_discount_lines or None,
                                  subtotal=subtotal, discount=discount, total=total,
                                  # The fare range this checkout quoted, so the
                                  # confirmation page can restate it instead of
@@ -1479,11 +1534,24 @@ def admin_stock_set():
     if not pid or qty is None:
         return jsonify(ok=False, error="productId and qty are required."), 400
     now = datetime.datetime.utcnow().isoformat(timespec="seconds")
+
+    # The product row is the source of truth (it is what checkout guards and
+    # decrements), so the setter runs FIRST: only when it lands is the legacy
+    # label/threshold row written. The old order - legacy only - is how the
+    # manager said 10 while the shop kept selling from a row that said 24.
+    set_result = catalog_mod.set_variant_stock(pid, qty,
+                                               option_key=None if variant == "__default__" else variant,
+                                               actor=authmod.current_admin())
+    if set_result is None:
+        return jsonify(ok=False, error="That product does not exist."), 404
+    if set_result is False:
+        return jsonify(ok=False, error="Stock could not be saved to the catalogue. No changes were made."), 503
+
     if catalog_mod._prod_source():
         from supabase_store import load_variant_stock_strict, replace_variant_stock_strict
         rows = load_variant_stock_strict()
         if rows is None:
-            return jsonify(ok=False, error="Stock is temporarily unavailable. No changes were made."), 503
+            rows = []
         updated = []
         found = False
         for row in rows:
@@ -1519,7 +1587,10 @@ def admin_stock_set():
     audit(authmod.current_admin(), "stock.set", f"{pid}/{variant} = {qty}", _ip())
     return jsonify(ok=True, item=next((r for r in items if r.get("product_id") == pid and
                                        (r.get("variant_key") or "__default__") == variant), None),
-                   items=items)
+                   items=items,
+                   product={"id": set_result.get("id"), "stock": set_result.get("stock"),
+                            "stock_quantity": set_result.get("stock_quantity"),
+                            "optionStock": set_result.get("optionStock")})
 
 @api.get("/admin/low-stock")
 @authmod.require_admin
@@ -1703,6 +1774,10 @@ def _order_row(r):
     out.pop("payload", None)
     out["customer"] = payload.get("customer") or {}
     out["items"] = payload.get("items") or []
+    # The automatic bulk discount this order earned (per line), so the admin
+    # order view can show why a line is cheaper than the list price.
+    if payload.get("bulkDiscount"):
+        out["bulkDiscount"] = payload["bulkDiscount"]
     out["proofUrl"] = r["proof_url"] or payload.get("proofUrl") or ""
     # Payment-review metadata is intentionally visible to the admin list; it
     # lives in payload so no schema migration is needed for existing orders.
@@ -2044,8 +2119,10 @@ def admin_order_delete(oid):
     if old_status == "confirmed":
         _sync_order_stock(payload, "confirmed", "pending",
                          actor=authmod.current_admin())
-    elif catalog_mod._prod_source():
-        # stock was reserved at checkout; deleting a pending order frees it
+    else:
+        # stock was reserved at checkout (both backends); deleting a pending
+        # order frees it. _sync_order_stock itself no-ops for a pending order
+        # that never reserved anything (ENFORCE_STOCK off, legacy rows).
         _sync_order_stock(payload, "pending", "declined",
                           actor=authmod.current_admin())
 

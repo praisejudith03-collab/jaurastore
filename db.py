@@ -519,6 +519,22 @@ def execute(sql, params=()):
     cx.commit()
     return cur
 
+
+def execute_many(sql, seq):
+    """Run one INSERT for every parameter tuple in a single transaction.
+
+    Used by the analytics restore, which can copy tens of thousands of
+    mirrored rows back after a wiped disk: one commit per row would hold the
+    boot for minutes. Raises on failure (the caller decides what to keep).
+    """
+    seq = list(seq or [])
+    if not seq:
+        return 0
+    cx = connect()
+    cx.executemany(sql, seq)
+    cx.commit()
+    return len(seq)
+
 def audit(actor, action, detail="", ip=""):
     execute(
         "INSERT INTO audit_log (actor, action, detail, ip) VALUES (?,?,?,?)",
