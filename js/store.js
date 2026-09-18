@@ -920,6 +920,17 @@ const JA = (() => {
     write(KEYS.cart, items);
     document.dispatchEvent(new CustomEvent("ja:cart"));
   }
+  /** Is the referral programme switched ON? (GET /api/site -> referralEnabled)
+   *
+   *  The owner can disable the whole programme from Admin -> Marketing. When
+   *  it is off the shop must behave as if it does not exist: no referral
+   *  prompt in the welcome pop-up, no referral field on the checkout, no
+   *  referral card after an order. Default ON so a site row that predates
+   *  the flag (or an offline paint) keeps today's behaviour. */
+  function referralEnabled() {
+    const raw = _siteConfig ? _siteConfig.referralEnabled : undefined;
+    return raw === undefined || raw === null ? true : !!raw;
+  }
   function bulkDiscountTiers() {
     const raw = (_siteConfig && _siteConfig.bulkDiscountTiers) || [];
     return (Array.isArray(raw) ? raw : []).map((t) => ({
@@ -2092,6 +2103,9 @@ const JA = (() => {
   }
 
   let _siteConfig = {};
+  // The in-flight GET /api/site, so a caller that must not paint before the
+  // live row lands (the welcome pop-up's referral line) can await it.
+  let _siteRowReady = null;
   function getSiteConfig() { return _siteConfig; }
 
   /** Apply one /api/site answer to the whole front-end.
@@ -2433,6 +2447,24 @@ const JA = (() => {
       if (sessionStorage.getItem(WELCOME_SEEN)) return;
     } catch (e) {}
     if (document.querySelector("[data-welcome]")) return;
+    // Wait for the live site row so referralEnabled() is the owner's real
+    // setting, then paint. A failed/absent fetch resolves immediately and
+    // the default (ON) keeps today's behaviour.
+    if (_siteRowReady && !_siteRowReady.__welcomeAwaited) {
+      _siteRowReady.__welcomeAwaited = true;
+      const again = () => { try { paintWelcome(); } catch (e) {} };
+      _siteRowReady.then(again, again);
+      return;
+    }
+    paintWelcome();
+  }
+
+  function paintWelcome() {
+    if ((document.body.dataset.page || "") === "admin") return;
+    try {
+      if (sessionStorage.getItem(WELCOME_SEEN)) return;
+    } catch (e) {}
+    if (document.querySelector("[data-welcome]")) return;
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -2443,7 +2475,7 @@ const JA = (() => {
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
         <img class="welcome-logo" src="images/brand/logo.jpg?v=150" alt="Jaura" />
         <p class="welcome-hello">${tx("promo.welcome")}</p>
-        <p class="welcome-referral">${tx("promo.referral")}</p>
+        ${referralEnabled() ? `<p class="welcome-referral">${tx("promo.referral")}</p>` : ""}
         <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
       </div>`;
     document.body.appendChild(el);
@@ -2725,7 +2757,10 @@ const JA = (() => {
     const bot = document.getElementById("site-footer");
     if (top) top.innerHTML = headerHTML();
     if (bot) bot.innerHTML = footerHTML();
-    try { loadSiteRow(); } catch (e) {}
+    // Keep the in-flight promise: showWelcome() must know whether the
+    // referral programme is ON before it paints, or a disabled programme
+    // still advertises a code for the split second before /api/site lands.
+    try { _siteRowReady = loadSiteRow(); } catch (e) { _siteRowReady = null; }
     try {
       const dock = bot && bot.querySelector(".dock");
       if (dock) document.body.appendChild(dock);
@@ -3015,6 +3050,7 @@ const JA = (() => {
     products, product, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
+    referralEnabled,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,
     wish, isWished, toggleWish, wishDetailed, openMini, closeMini,

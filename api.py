@@ -1185,6 +1185,23 @@ def create_order():
     except Exception:
         pass
 
+    # Close the captured cart server-side. The browser also posts
+    # /api/abandoned-carts/complete, but that call is easily lost: the
+    # confirmation redirect, a closed tab or a flaky mobile connection all
+    # skip it, and the cart then stays "due" and emails a reminder to someone
+    # who has already paid. Marking it here, in the same request that creates
+    # the order, is the reliable point. Fall back to the buyer's email so a
+    # checkout that lost its token still closes.
+    try:
+        import abandoned
+        cart_token = sec.clean(d.get("cartToken"), 80)
+        if cart_token:
+            abandoned.mark_converted(cart_token)
+        elif email:
+            abandoned.mark_converted_for_email(email)
+    except Exception as exc:
+        print(f"[abandoned] order conversion mark failed: {exc}")
+
     # growth hooks: count the promo use and mint a referral code when the order qualifies
     referral_code = ""
     try:
@@ -1228,6 +1245,17 @@ def capture_abandoned_cart():
     d = request.get_json(silent=True) or {}
     token = sec.clean(d.get("token"), 80)
     email = sec.clean_email(d.get("email"))
+    if not email:
+        # A signed-in shopper's address is already known, so a cart filled
+        # from the shop - without ever opening the checkout - can still be
+        # reminded. Guests are unchanged: no email, no capture.
+        try:
+            import customers
+            account = customers.current_customer()
+            if account:
+                email = sec.clean_email(dict(account).get("email"))
+        except Exception:
+            email = ""
     items_raw = d.get("items")
     if not token or not email or not isinstance(items_raw, list) or not items_raw:
         return jsonify(ok=False, error="A cart token, valid email and cart items are required."), 400
@@ -2615,7 +2643,14 @@ def site_config():
     try:
         site = _site_payload(_load_site())
         import growth
-        site["bulkDiscountTiers"] = growth.settings().get("bulkDiscountTiers") or []
+        _growth = growth.settings()
+        site["bulkDiscountTiers"] = _growth.get("bulkDiscountTiers") or []
+        # The referral programme's master switch. The storefront needs it so a
+        # disabled programme shows NO referral prompt anywhere: with the flag
+        # absent the welcome pop-up kept advertising a code the server would
+        # never mint, and the checkout kept offering a referral field that
+        # could only ever answer "not recognised".
+        site["referralEnabled"] = bool(_growth.get("referralEnabled"))
         resp = jsonify(ok=True, site=site)
         # Never cacheable: the bank details on the checkout come from this
         # answer, and a CDN (or a bfcache) holding yesterday's row after an
