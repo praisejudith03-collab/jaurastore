@@ -110,6 +110,28 @@ def mark_converted(token):
     return True
 
 
+def mark_converted_for_email(email):
+    """Close every still-open cart belonging to a buyer who just ordered.
+
+    The cart token lives in the browser's localStorage, so a checkout
+    completed on a different tab or device - or one whose token was cleared -
+    arrives without it. Matching on the email address stops that buyer being
+    chased for a cart they have already paid for.
+    """
+    email = str(email or "").strip().lower()
+    if not email:
+        return 0
+    now = _now()
+    rows = query(
+        "SELECT token FROM abandoned_carts "
+        "WHERE lower(email)=? AND converted_at IS NULL",
+        (email,),
+    )
+    for row in rows:
+        mark_converted(row["token"])
+    return len(rows)
+
+
 def send_due_reminders(limit=25):
     """Send one bounded reminder batch; mark sent only after acceptance."""
     import mailer

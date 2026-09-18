@@ -68,9 +68,16 @@ function renderCategories() {
 
 function newestTwelve() {
   const all = JA.products();
-  const featured = all.filter((p) => p.featured);
-  const rest = all.filter((p) => !p.featured);
-  return featured.concat(rest).slice(0, 12);
+  // Products the owner flagged "New Product Arrival" on the product editor's
+  // promo ribbon lead the row - that dropdown is the control for this
+  // section, and before this it only drove the card's pill, so ticking it
+  // never actually moved a product into "Just in". Featured products, then
+  // everything else, fill the remaining slots so the row is never empty.
+  const isNew = (p) => p.badge === "new";
+  const arrivals = all.filter(isNew);
+  const featured = all.filter((p) => !isNew(p) && p.featured);
+  const rest = all.filter((p) => !isNew(p) && !p.featured);
+  return arrivals.concat(featured, rest).slice(0, 12);
 }
 
 function startCatSlide() {
@@ -1365,6 +1372,10 @@ function paintReferralSlot(orderId) {
   const paint = (code) => {
     const slot = document.querySelector("[data-referral-slot]");
     if (!slot || !code || slot.dataset.done) return;
+    // Programme switched off in Admin -> Marketing: show nothing. The server
+    // stops minting codes, but a code stashed in localStorage from an earlier
+    // order would otherwise keep advertising a dead programme.
+    if (JA.referralEnabled && !JA.referralEnabled()) return;
     slot.dataset.done = "1";
     const shopUrl = location.origin + location.pathname.replace(/[^/]*$/, "") + "shop.html";
     const shareText = t("ref.shareText", { code, url: shopUrl });
@@ -1802,6 +1813,35 @@ function captureCheckoutCart(form) {
   };
   return window.JA_NET.api("api/abandoned-carts", {
     method: "POST", json: payload, queue: true, label: "Cart reminder",
+  }).catch(() => null);
+}
+
+/* Capture the cart from anywhere on the shop, not just the checkout form.
+ *
+ * Reminders used to depend entirely on the shopper reaching the checkout AND
+ * typing a valid email: filling a cart and leaving - the most common way a
+ * cart is actually abandoned - was never recorded, so no reminder could ever
+ * be sent. A signed-in shopper's email is known server-side, so the capture
+ * POST carries no address and the server fills it in from the session.
+ * Guests are untouched: the server refuses a capture with no email. */
+function captureCartForAccount() {
+  if (!window.JA_NET?.api) return Promise.resolve(null);
+  let items = [];
+  try {
+    items = JA.cartDetailed().map((item) => ({
+      id: item.id,
+      name: item.product?.name || "Item",
+      qty: item.qty,
+      price: item.payUnit,
+      color: item.color || "",
+    }));
+  } catch (e) { items = []; }
+  if (!items.length) return Promise.resolve(null);
+  return window.JA_NET.api("api/abandoned-carts", {
+    method: "POST",
+    json: { token: checkoutCartToken(), currency: JA.currency(), total: JA.cartTotal(), items },
+    queue: false,
+    label: "Cart reminder",
   }).catch(() => null);
 }
 
@@ -2737,8 +2777,19 @@ async function boot() {
     siteReady.then(draw).catch(() => {});
   }
   if (catalogReady) { catalogReady.then(() => {}).catch(() => {}); }
+  let accountCaptureTimer = null;
   document.addEventListener("ja:cart", () => {
     if (page === "cart") draw();
+    // Record the cart shortly after it settles, so leaving the shop without
+    // checking out can still be reminded. Debounced so a burst of quantity
+    // changes sends one capture, and skipped on the checkout page where the
+    // form's own capture (with the typed email) owns the cart.
+    if (page !== "checkout" && page !== "admin") {
+      window.clearTimeout(accountCaptureTimer);
+      accountCaptureTimer = window.setTimeout(() => {
+        try { captureCartForAccount(); } catch (e) {}
+      }, 1500);
+    }
   });
   document.addEventListener("ja:wish", () => {
     if (page === "wishlist") draw();
