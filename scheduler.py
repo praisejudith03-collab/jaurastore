@@ -24,11 +24,17 @@ named thread is alive, and start()/ensure_alive() restart a thread that
 died so the watchdog's liveness check describes a worker that is really
 running.
 """
-import datetime, os, threading, time
+import datetime, gc, os, threading, time
 
 import observability
 
 TICK_SECONDS = 300
+# One tick never processes more than this many reminders, and never holds
+# more than one page of rows in memory. Both ceilings exist so the worker's
+# resident memory stays far below the 50MB budget that used to be blown by
+# "SELECT everything" batches (the cause of scheduler.worker_died).
+REMINDER_PAGE_SIZE = 25
+REMINDER_MAX_PER_TICK = 200
 MAINTENANCE_THREAD = "jaura-maintenance"
 REMINDERS_THREAD = "jaura-abandoned-carts"
 _started = threading.Event()
@@ -41,6 +47,7 @@ _health = {
     "lastErrorJob": "",
     "failures": 0,
     "restarts": 0,
+    "rssMb": 0.0,
 }
 _app_logger = None
 
@@ -162,6 +169,7 @@ def _loop(logger=None):
         try:
             _tick(logger)
             _health["maintenanceLastRun"] = _utc_now()
+            _release_memory(MAINTENANCE_THREAD, logger)
         except Exception as exc:                  # pragma: no cover
             _note_failure("scheduler.maintenance_tick", exc, logger=logger)
         time.sleep(TICK_SECONDS)
@@ -170,16 +178,25 @@ def _loop(logger=None):
 def _abandoned_tick(logger=None, attempts=3):
     """Run abandoned-cart delivery independently with bounded retries.
 
-    A failing attempt is recorded as a crash report (with the traceback and
-    the attempt number) instead of a single warning line, so a notification
-    pipeline that is down is visible rather than merely quiet.
+    Work is paginated inside abandoned.send_due_reminders (one small page of
+    rows in memory at a time) and every individual send is try/except-ed
+    there, so one bad recipient can neither stop the queue nor kill the
+    worker. A failing attempt is recorded as a crash report (with traceback
+    and attempt number) so a downed notification pipeline is visible rather
+    than merely quiet.
     """
     import abandoned
     result = {"sent": 0, "failed": 0}
     total_sent = 0
     for attempt in range(max(1, attempts)):
         try:
-            result = abandoned.send_due_reminders(limit=25)
+            try:
+                result = abandoned.send_due_reminders(
+                    limit=REMINDER_MAX_PER_TICK, page_size=REMINDER_PAGE_SIZE)
+            except TypeError:
+                # A sender without the pagination keyword (older build or a
+                # test double) still runs with its own bounded default.
+                result = abandoned.send_due_reminders(limit=REMINDER_PAGE_SIZE)
             total_sent += int(result.get("sent") or 0)
         except Exception as exc:                  # pragma: no cover - traced
             _note_failure("notifications.abandoned_cart", exc, logger=logger,
@@ -197,12 +214,32 @@ def _abandoned_tick(logger=None, attempts=3):
     return result
 
 
+def _release_memory(job, logger=None):
+    """Drop per-tick garbage and log the worker's RSS.
+
+    The workers used to die (scheduler.worker_died) because a tick built
+    large transient lists that the allocator kept hold of between ticks.
+    Collecting at the end of every tick returns that memory immediately and
+    gives the health snapshot an honest reading.
+    """
+    try:
+        gc.collect()
+        rss = observability.memory_mb()
+        _health["rssMb"] = rss
+        if logger and rss:
+            logger.debug("%s tick finished rss=%.1fMB", job, rss)
+        return rss
+    except Exception:                             # pragma: no cover
+        return 0.0
+
+
 def _abandoned_loop(logger=None):
     """A dedicated loop means slow catalog/backup work cannot block recovery."""
     while True:
         try:
             _abandoned_tick(logger)
             _health["remindersLastRun"] = _utc_now()
+            _release_memory(REMINDERS_THREAD, logger)
         except Exception as exc:                  # pragma: no cover
             _note_failure("scheduler.reminders_tick", exc, logger=logger)
         time.sleep(TICK_SECONDS)

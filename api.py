@@ -1,5 +1,5 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
-import csv, io, json, os, datetime, secrets, hashlib, hmac, re
+import csv, io, itertools, json, os, datetime, secrets, hashlib, hmac, re
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
 from campaign_types import CAMPAIGN_TYPES, campaign_type_from, serialize_campaign
@@ -9,6 +9,7 @@ import auth as authmod
 import storage
 import catalog as catalog_mod
 import analytics as analytics_mod
+import currency as currency_mod
 import delivery
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -681,15 +682,19 @@ def _server_unit_price(product, currency, variant=""):
         for candidate in candidates:
             if _fold(candidate) in folded:
                 ngn = _price_int(folded[_fold(candidate)])
-                cfa = max(0, round(ngn * catalog_mod.NGN_TO_CFA))
+                cfa = currency_mod.to_cfa(ngn)
                 break
     if currency == "CFA":
+        # CFA is a converted/display currency: whether the amount is stored
+        # explicitly or derived from the Naira base, it is always a clean
+        # 50/100 step so no odd amount reaches a cart or checkout total.
         if cfa:
-            return cfa
-        return max(0, round((ngn or 0) * catalog_mod.NGN_TO_CFA))
+            return currency_mod.round_cfa(cfa)
+        return currency_mod.to_cfa(ngn)
+    # Naira is the base currency and is returned exactly as stored.
     if ngn:
         return ngn
-    return max(0, round((cfa or 0) / catalog_mod.NGN_TO_CFA))
+    return currency_mod.to_ngn(cfa)
 
 
 def _checkout_items(clean_items, currency):
@@ -3310,56 +3315,147 @@ def reviews_create():
     return reviews_list(pid)
 
 # ----------------------------------------------- admin: marketing campaigns
+MARKETING_PAGE_SIZE = 200        # rows held in memory per read
+MARKETING_MAX_RECIPIENTS = 20000  # hard ceiling on one broadcast
+
+
 def _marketing_suppressed_emails():
-    suppressed = {sec.clean_email(row["email"]) for row in query(
-        "SELECT email FROM marketing_suppressions")}
-    suppressed.discard("")
+    """Promotional opt-outs, read in small pages (never one giant SELECT)."""
+    suppressed = set()
+    offset = 0
+    while True:
+        rows = query("SELECT email FROM marketing_suppressions "
+                     "ORDER BY email LIMIT ? OFFSET ?",
+                     (MARKETING_PAGE_SIZE, offset))
+        if not rows:
+            break
+        for row in rows:
+            email = sec.clean_email(row["email"])
+            if email:
+                suppressed.add(email)
+        if len(rows) < MARKETING_PAGE_SIZE:
+            break
+        offset += MARKETING_PAGE_SIZE
     try:
         from supabase_store import load_marketing_suppressions
-        suppressed.update(sec.clean_email(row.get("email"))
-                          for row in (load_marketing_suppressions(limit=10000) or []))
+        offset = 0
+        while True:
+            rows = load_marketing_suppressions(limit=MARKETING_PAGE_SIZE,
+                                               offset=offset) or []
+            for row in rows:
+                email = sec.clean_email((row or {}).get("email"))
+                if email:
+                    suppressed.add(email)
+            if len(rows) < MARKETING_PAGE_SIZE:
+                break
+            offset += MARKETING_PAGE_SIZE
     except Exception as exc:
         print(f"[marketing] suppression load skipped: {exc}")
     suppressed.discard("")
     return suppressed
 
 
-def _marketing_recipient_emails():
-    """Unique valid customer emails collected from accounts and checkout.
+def _iter_contact_emails(page_size=MARKETING_PAGE_SIZE,
+                         max_rows=MARKETING_MAX_RECIPIENTS):
+    """Yield unique store contact emails, reading a page at a time.
 
     Orders are the durable source for guest checkout contacts; the customers
-    table adds account holders who may not have placed an order yet. The
-    Supabase reads supplement the local cache after a restart.
+    table adds account holders who may not have ordered yet, and the Supabase
+    reads supplement the local cache after a restart. Only one page of rows
+    (plus the de-duplication set of plain email strings) is ever resident, so
+    a large contact book cannot blow the worker's memory budget.
     """
-    emails = set()
-    for row in query("SELECT email FROM orders WHERE email IS NOT NULL AND email != ''"):
-        email = sec.clean_email(row["email"])
-        if email:
-            emails.add(email)
-    for row in query("SELECT email FROM customers WHERE email IS NOT NULL AND email != ''"):
-        email = sec.clean_email(row["email"])
-        if email:
-            emails.add(email)
+    seen = set()
+
+    def offer(raw):
+        email = sec.clean_email(raw)
+        if not email or email in seen:
+            return None
+        seen.add(email)
+        return email
+
+    for table in ("orders", "customers"):
+        offset = 0
+        while len(seen) < max_rows:
+            try:
+                rows = query(
+                    f"SELECT email FROM {table} "
+                    "WHERE email IS NOT NULL AND email != '' "
+                    "ORDER BY email LIMIT ? OFFSET ?", (page_size, offset))
+            except Exception as exc:
+                print(f"[marketing] local {table} contact page skipped: {exc}")
+                break
+            if not rows:
+                break
+            for row in rows:
+                email = offer(row["email"])
+                if email:
+                    yield email
+            if len(rows) < page_size:
+                break
+            offset += page_size
+
     try:
         from supabase_store import load_orders, load_customers
-        for row in load_orders(limit=10000) or []:
-            email = sec.clean_email((row or {}).get("email"))
-            if email:
-                emails.add(email)
-        for row in load_customers(limit=10000) or []:
-            email = sec.clean_email((row or {}).get("email"))
-            if email:
-                emails.add(email)
     except Exception as exc:
         print(f"[marketing] remote recipient load skipped: {exc}")
-    return sorted(emails - _marketing_suppressed_emails())
+        return
+    for loader in (load_orders, load_customers):
+        offset = 0
+        while len(seen) < max_rows:
+            try:
+                rows = loader(limit=page_size, offset=offset,
+                              columns="email") or []
+            except TypeError:
+                # Older/stubbed loaders without pagination support.
+                try:
+                    rows = loader(limit=page_size) or []
+                except Exception as exc:
+                    print(f"[marketing] remote recipient load skipped: {exc}")
+                    break
+                for row in rows:
+                    email = offer((row or {}).get("email"))
+                    if email:
+                        yield email
+                break
+            except Exception as exc:
+                print(f"[marketing] remote recipient load skipped: {exc}")
+                break
+            for row in rows:
+                email = offer((row or {}).get("email"))
+                if email:
+                    yield email
+            if len(rows) < page_size:
+                break
+            offset += page_size
+
+
+def _iter_marketing_recipients(page_size=MARKETING_PAGE_SIZE,
+                               max_rows=MARKETING_MAX_RECIPIENTS):
+    """Every subscribed (non-suppressed) contact, streamed one at a time."""
+    suppressed = _marketing_suppressed_emails()
+    for email in _iter_contact_emails(page_size=page_size, max_rows=max_rows):
+        if email not in suppressed:
+            yield email
+
+
+def _marketing_recipient_emails():
+    """Sorted list of subscribed contacts (admin preview / small lists)."""
+    return sorted(_iter_marketing_recipients())
+
+
+def _marketing_recipient_count():
+    """Count subscribed contacts without materialising the address list."""
+    total = 0
+    for _email in _iter_marketing_recipients():
+        total += 1
+    return total
 
 
 @api.get("/admin/marketing/recipients")
 @authmod.require_admin
 def marketing_recipients():
-    recipients = _marketing_recipient_emails()
-    return jsonify(ok=True, count=len(recipients))
+    return jsonify(ok=True, count=_marketing_recipient_count())
 
 
 @api.get("/admin/customers.csv")
@@ -3379,16 +3475,38 @@ def admin_customers_csv():
                 current[key] = value
         if current["source"] != source and source not in current["source"]:
             current["source"] += "," + source
-    for row in query("SELECT email, name, phone, country, city FROM customers"):
-        add(dict(row), "account")
-    for row in query("SELECT email, customer_name AS name, phone, country, city FROM orders WHERE email IS NOT NULL"):
-        add(dict(row), "checkout")
+    # Paginated reads: a large contact book is streamed page by page rather
+    # than pulled into memory as one enormous result set.
+    for sql, source in (
+            ("SELECT email, name, phone, country, city FROM customers "
+             "ORDER BY email LIMIT ? OFFSET ?", "account"),
+            ("SELECT email, customer_name AS name, phone, country, city FROM orders "
+             "WHERE email IS NOT NULL ORDER BY email LIMIT ? OFFSET ?", "checkout")):
+        offset = 0
+        while True:
+            rows = query(sql, (MARKETING_PAGE_SIZE, offset))
+            for row in rows:
+                add(dict(row), source)
+            if len(rows) < MARKETING_PAGE_SIZE:
+                break
+            offset += MARKETING_PAGE_SIZE
     try:
         from supabase_store import load_customers, load_orders
-        for row in load_customers(limit=10000) or []:
-            add(row, "account")
-        for row in load_orders(limit=10000) or []:
-            add(row, "checkout")
+        for loader, source in ((load_customers, "account"), (load_orders, "checkout")):
+            offset = 0
+            while True:
+                try:
+                    rows = loader(limit=MARKETING_PAGE_SIZE, offset=offset) or []
+                except TypeError:
+                    rows = loader(limit=MARKETING_PAGE_SIZE) or []
+                    for row in rows:
+                        add(row, source)
+                    break
+                for row in rows:
+                    add(row, source)
+                if len(rows) < MARKETING_PAGE_SIZE:
+                    break
+                offset += MARKETING_PAGE_SIZE
     except Exception as exc:
         print(f"[marketing] remote contact export skipped: {exc}")
     fields = ("email", "name", "phone", "country", "city", "source")
@@ -3474,9 +3592,13 @@ def marketing_campaign_send():
     products = [p for p in catalog_mod.merged() if str(p.get("id") or "") in selected_ids]
     if len(products) != len(selected_ids):
         return jsonify(ok=False, error="One or more selected products are unavailable."), 400
-    recipients = _marketing_recipient_emails()
-    if not recipients:
+    # Peek at the first recipient without materialising the whole list, then
+    # chain it back on so the broadcast streams page by page.
+    recipient_stream = _iter_marketing_recipients()
+    first = next(recipient_stream, None)
+    if first is None:
         return jsonify(ok=False, error="There are no customer emails on file yet."), 400
+    recipient_stream = itertools.chain([first], recipient_stream)
     import mailer
     if not mailer.configured():
         return jsonify(ok=False, error=(
@@ -3485,7 +3607,7 @@ def marketing_campaign_send():
     campaign_id = "CMP-" + secrets.token_hex(6).upper()
     row = serialize_campaign({
         "id": campaign_id, "campaign_type": campaign_type, "subject": subject,
-        "content": content, "recipient_count": len(recipients),
+        "content": content, "recipient_count": 0,
         "sent_count": 0, "failed_count": 0, "status": "sending",
         "sent_at": now, "created_at": now,
     })
@@ -3496,28 +3618,33 @@ def marketing_campaign_send():
          row["recipient_count"], row["sent_count"], row["failed_count"],
          row["status"], row["sent_at"], row["created_at"]),
     )
-    sent = failed = 0
-    for email in recipients:
+    # Send immediately, one recipient at a time. A single failing address is
+    # logged and counted; it can never abort the broadcast.
+    sent = failed = total = 0
+    for email in recipient_stream:
+        total += 1
         try:
-            ok, _detail = mailer.send_campaign_email(email, subject, content, products)
+            ok, detail = mailer.send_campaign_email(email, subject, content, products)
         except Exception as exc:
-            ok = False
-            print(f"[marketing] campaign recipient failed: {exc}")
+            ok, detail = False, str(exc)
         if ok:
             sent += 1
         else:
             failed += 1
+            print(f"[marketing] campaign recipient failed: {email}: {detail}")
     status = "sent" if not failed else ("partial" if sent else "failed")
-    execute("UPDATE marketing_campaigns SET sent_count=?, failed_count=?, status=? WHERE id=?",
-            (sent, failed, status, campaign_id))
-    row.update({"sent_count": sent, "failed_count": failed, "status": status})
+    execute("UPDATE marketing_campaigns SET recipient_count=?, sent_count=?, "
+            "failed_count=?, status=? WHERE id=?",
+            (total, sent, failed, status, campaign_id))
+    row.update({"recipient_count": total, "sent_count": sent,
+                "failed_count": failed, "status": status})
     try:
         from supabase_store import mirror_marketing_campaign
         mirror_marketing_campaign(row)
     except Exception as exc:
         print(f"[marketing] campaign mirror skipped: {exc}")
-    audit(authmod.current_admin(), "marketing.campaign", f"{campaign_id} {status} {sent}/{len(recipients)}", _ip())
-    return jsonify(ok=True, campaign=row, recipientCount=len(recipients), sent=sent, failed=failed)
+    audit(authmod.current_admin(), "marketing.campaign", f"{campaign_id} {status} {sent}/{total}", _ip())
+    return jsonify(ok=True, campaign=row, recipientCount=total, sent=sent, failed=failed)
 
 
 # =============================================== admin: growth & marketing
