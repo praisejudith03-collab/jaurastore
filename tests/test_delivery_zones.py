@@ -82,11 +82,16 @@ def _login(client):
     return r.get_json()["csrf"]
 
 
-def _order(client, tok, oid, zone, currency="CFA", qty=1):
+def _order(client, tok, oid, zone, currency="CFA", qty=2):
     # /tmp/jaura_test.db outlives the process, and a duplicate order id makes
     # create_order return 200 with duplicate=True WITHOUT inserting a row - so
     # a stale row from an earlier run would make these assertions pass or fail
     # for the wrong reason. Each test owns its own row.
+    #
+    # qty defaults to 2 so the basket (2 x wix-001 = 20,000 NGN / 6,600 F CFA)
+    # clears the Benin/Togo minimum in BOTH currencies. These tests are about
+    # zones and fares; a basket under the floor makes the minimum rule fire
+    # first and the zone behaviour under test is never reached.
     execute("DELETE FROM orders WHERE id=?", (oid,))
     return client.post("/api/orders", json={
         "id": oid, "currency": currency, "total": 999999,
@@ -228,9 +233,9 @@ def test_a_currency_mismatch_is_flagged_not_rejected(client):
     Cotonou must still go through - the shop has always taken that sale. The
     fare is simply unpublished and flagged for the operator."""
     tok = _csrf(client)
-    # qty 2 = 15,000 NGN, which clears the 12,000 NGN Benin/Togo minimum; at
-    # qty 1 the minimum rule fires first and the mismatch is never reached.
-    r = _order(client, tok, "JA-DZMIX", "Cotonou", currency="NGN", qty=2)
+    # The default qty already clears the Benin/Togo minimum; below it the
+    # minimum rule fires first and the mismatch is never reached.
+    r = _order(client, tok, "JA-DZMIX", "Cotonou", currency="NGN")
     assert r.status_code == 200, r.data
     d = r.get_json()["delivery"]
     assert d["fare_status"] == "currency_mismatch"

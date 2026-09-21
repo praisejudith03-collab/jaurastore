@@ -163,9 +163,22 @@ def test_pickup_is_not_a_delivery_option(client, zone):
     assert r.status_code == 400
 
 
+def _min_ngn():
+    """The Naira floor derived from the 5,000 F CFA source of truth.
+
+    Hardcoding 12,000 here made these tests stale the moment the floor became
+    rate-derived. Asking the server keeps them correct at any `cfaRate`.
+    """
+    import api
+    return api.benin_togo_min_ngn()
+
+
 def _post_min_order(client, oid, currency, total, zone, qty=1, pid="wix-008"):
     """wix-008 is a 1,000 CFA / 2,400 NGN item - the server recomputes the
-    order total from the catalogue, so qty drives the tested minimum."""
+    order total from the catalogue, so qty drives the tested minimum.
+
+    A CLEARING basket is qty 6 = 6,000 F CFA / 14,400 NGN, comfortably over
+    the 5,000 F CFA floor and its Naira equivalent in both currencies."""
     tok = csrf(client)
     return client.post("/api/orders", json={
         "id": oid, "currency": currency, "total": total,
@@ -182,16 +195,47 @@ def test_benin_minimum_is_enforced_on_orders(client):
 
 
 def test_benin_minimum_in_naira_is_enforced(client):
+    # qty 1 = 2,400 NGN server-side, far below the derived Naira floor.
     r = _post_min_order(client, "JA-BJ2", "NGN", 11999, "Calavi")
     assert r.status_code == 400, r.data
-    assert "12,000" in r.get_json()["error"]
+    assert f"{_min_ngn():,} naira" in r.get_json()["error"]
 
 
 def test_benin_minimum_exact_cfa_and_ngn_are_accepted(client):
-    a = _post_min_order(client, "JA-BJ3", "CFA", 5000, "Cotonou", qty=5)
-    b = _post_min_order(client, "JA-BJ4", "NGN", 12000, "Porto-Novo", qty=5)
+    # qty 6 = 6,000 F CFA / 14,400 NGN: clears the floor in both currencies.
+    a = _post_min_order(client, "JA-BJ3", "CFA", 6000, "Cotonou", qty=6)
+    b = _post_min_order(client, "JA-BJ4", "NGN", 14400, "Porto-Novo", qty=6)
     assert a.status_code == 200, a.data
     assert b.status_code == 200, b.data
+
+
+def test_the_naira_floor_is_derived_from_the_cfa_floor(client):
+    """5,000 F CFA is the single source of truth for both thresholds.
+
+    There must be NO basket that one currency accepts and the other refuses:
+    the Naira floor is exactly the smallest Naira amount whose converted CFA
+    value still clears 5,000 F CFA.
+    """
+    import api
+    import currency as currency_mod
+
+    for rate in (0.44, 0.5, 1.0, 2.0):
+        floor = api.benin_togo_min_ngn(rate)
+        for naira in range(max(0, floor - 200), floor + 200):
+            accepted_in_ngn = naira >= floor
+            accepted_in_cfa = (currency_mod.to_cfa(naira, rate)
+                               >= api.BENIN_TOGO_MIN_CFA)
+            assert accepted_in_ngn == accepted_in_cfa, (rate, naira, floor)
+
+
+def test_changing_the_cfa_rate_moves_the_naira_floor(client):
+    """The floors stay aligned when the admin updates the exchange rate."""
+    import api
+
+    assert api.benin_togo_min_ngn(0.44) > api.benin_togo_min_ngn(2.0)
+    # Doubling the rate roughly halves the Naira floor.
+    assert abs(api.benin_togo_min_ngn(1.0) * 2
+               - api.benin_togo_min_ngn(0.5)) <= 2
 
 
 def test_lagos_orders_have_no_benin_minimum(client):
@@ -1409,7 +1453,7 @@ def test_benin_and_togo_payment_methods_supported(client):
 
 
 def test_benin_minimum_order_cfa_and_ngn_limits(client):
-    """Benin deliveries enforce 5,000 CFA and 12,000 NGN minimums.
+    """Benin deliveries enforce the 5,000 CFA floor and its Naira equivalent.
 
     wix-008 = 1,000 CFA / 2,400 NGN per unit server-side, so these carts are
     below the minimum even though the browser claims otherwise.
@@ -1435,7 +1479,7 @@ def test_benin_minimum_order_cfa_and_ngn_limits(client):
     }
     r2 = client.post("/api/orders", json=order_ngn_low, headers={"X-CSRF-Token": tok})
     assert r2.status_code == 400
-    assert "12,000 naira" in r2.get_json().get("error", "")
+    assert f"{_min_ngn():,} naira" in r2.get_json().get("error", "")
 
 
 def test_net_js_blob_uploads_wait_five_minutes_and_persist_timeout():

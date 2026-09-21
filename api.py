@@ -1,5 +1,5 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
-import csv, io, itertools, json, os, datetime, secrets, hashlib, hmac, re
+import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, re
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
 from campaign_types import CAMPAIGN_TYPES, campaign_type_from, serialize_campaign
@@ -812,19 +812,70 @@ def _release_stock_lines(lines):
         pass
 
 
-def _benin_togo_min(zone, country, currency, total):
-    """The 5,000 CFA / 12,000 NGN minimum for Benin & Togo deliveries."""
-    if not re.search(r"(?i)\bbenin\b|\btogo\b|cotonou|calavi|porto|lom[ée]|lome", zone) and \
-       not re.search(r"(?i)\bbenin\b|\btogo\b", country or ""):
+# The cross-border delivery minimum. 5,000 F CFA is the SINGLE SOURCE OF
+# TRUTH: the Naira floor is derived from it at the live admin-set `cfaRate`
+# so the two thresholds can never drift apart when the rate is changed in the
+# admin panel. (They used to be hardcoded as 5,000 CFA / 12,000 NGN, which at
+# 0.44 meant ~11,364 vs 12,000 - a band where the same basket was accepted in
+# one currency and refused in the other.)
+BENIN_TOGO_MIN_CFA = 5000
+
+_BENIN_TOGO_ZONE = re.compile(r"(?i)\bbenin\b|\btogo\b|cotonou|calavi|porto|lom[ée]|lome")
+_BENIN_TOGO_COUNTRY = re.compile(r"(?i)\bbenin\b|\btogo\b")
+
+
+def benin_togo_min_ngn(rate=None):
+    """The Naira floor that is EXACTLY equivalent to BENIN_TOGO_MIN_CFA.
+
+    `cfaRate` is "1 NGN = cfaRate F CFA". The floor is defined as the
+    smallest Naira basket whose converted, 50-step-rounded CFA value still
+    clears BENIN_TOGO_MIN_CFA - i.e. the smallest n where
+    currency.to_cfa(n) >= BENIN_TOGO_MIN_CFA.
+
+    Deriving it this way (rather than simply dividing, or rounding to a tidy
+    hundred) leaves NO band in which a basket is accepted in one currency and
+    refused in the other, which is the whole point of having one source of
+    truth. Never raises: a missing or nonsensical rate falls back to the
+    house default.
+    """
+    if rate is None:
+        try:
+            import growth
+            rate = growth.settings().get("cfaRate")
+        except Exception:
+            rate = None
+    try:
+        rate = float(rate or 0)
+    except (TypeError, ValueError):
+        rate = 0.0
+    if rate <= 0:
+        rate = currency_mod.NGN_TO_CFA
+    # to_cfa(n) = ceil(n * rate / STEP) * STEP, so to_cfa(n) >= FLOOR exactly
+    # when n * rate > FLOOR - STEP.
+    step = currency_mod.CFA_STEP
+    threshold = (BENIN_TOGO_MIN_CFA - step) / rate
+    floor_ngn = int(math.floor(threshold)) + 1
+    return max(0, floor_ngn)
+
+
+def _benin_togo_min(zone, country, currency, total, rate=None):
+    """Enforce the Benin & Togo delivery minimum in either currency.
+
+    Both thresholds describe the SAME basket value: 5,000 F CFA, and its
+    Naira equivalent derived from the current rate.
+    """
+    if not _BENIN_TOGO_ZONE.search(zone or "") and \
+       not _BENIN_TOGO_COUNTRY.search(country or ""):
         return None
-    if currency == "CFA" and total < 5000:
-        return ("Benin & Togo deliveries: minimum order 5,000 F CFA "
-                "(about 12,000 naira). Please add a few more items to meet "
+    min_ngn = benin_togo_min_ngn(rate)
+    if currency == "CFA" and total < BENIN_TOGO_MIN_CFA:
+        return (f"Benin & Togo deliveries: minimum order {BENIN_TOGO_MIN_CFA:,} F CFA "
+                f"(about {min_ngn:,} naira). Please add a few more items to meet "
                 "the minimum.")
-    if currency == "NGN" and total < 12000:
-        return ("Benin & Togo deliveries: minimum order 12,000 naira "
-                "(about 5,000 F CFA). Please add a few more items to meet "
-                "the minimum.")
+    if currency == "NGN" and total < min_ngn:
+        return (f"Benin & Togo deliveries: minimum order {min_ngn:,} naira "
+                f"(about {BENIN_TOGO_MIN_CFA:,} F CFA). Please add a few more items "
+                "to meet the minimum.")
     return None
 
 
@@ -983,6 +1034,14 @@ def create_order():
     if promo:
         discount = round(subtotal * int(promo["percent"]) / 100)
         total = max(0, subtotal - discount)
+        if currency == "CFA":
+            # CFA is a converted/display currency and must never show an odd
+            # amount. Snap the discounted total to a clean 50 step (rounding
+            # DOWN, so the shopper always keeps at least the promised
+            # discount) and restate the discount from it, so the order row,
+            # the receipt and the referral/discount tracking all agree.
+            total = currency_mod.floor_cfa(total)
+            discount = max(0, subtotal - total)
 
     # Benin & Togo: the minimum is enforced against the SERVER total, never
     # the number the browser sent.

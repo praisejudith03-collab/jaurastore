@@ -43,6 +43,23 @@ def round_cfa(amount):
     return steps * CFA_STEP
 
 
+def floor_cfa(amount):
+    """Round one F CFA amount DOWN to a clean 50 / 100 step.
+
+    Used for discounted totals: rounding a price UP is right (the shop is
+    never short-changed), but rounding a DISCOUNTED total up would quietly
+    claw back part of the discount the shopper was promised. Rounding down
+    keeps the amount clean and always at least as generous as advertised.
+    """
+    try:
+        value = float(amount or 0)
+    except (TypeError, ValueError):
+        return 0
+    if value <= 0:
+        return 0
+    return int(value // CFA_STEP) * CFA_STEP
+
+
 def to_cfa(ngn, rate=None):
     """Convert a Naira amount to a clean, rounded-up F CFA amount."""
     try:
