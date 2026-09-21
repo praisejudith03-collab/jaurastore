@@ -558,8 +558,18 @@ const JA = (() => {
   function hasNgn(p) {
     return Number(p && p.priceNgn) > 0;
   }
+  // F CFA is a CONVERTED currency: Naira is the exact base, and every CFA
+  // figure derived from it is rounded UP to a clean 50 / 100 step (24 -> 50,
+  // 64 -> 100) so no odd amount appears on a listing, option or cart line.
+  // Mirrors currency.py round_cfa/to_cfa on the server.
+  const CFA_STEP = 50;
+  function roundCfa(amount) {
+    const v = Number(amount) || 0;
+    if (v <= 0) return 0;
+    return Math.ceil(v / CFA_STEP) * CFA_STEP;
+  }
   function toCfa(ngn) {
-    return Math.round(Number(ngn || 0) * NGN_TO_CFA);
+    return roundCfa(Number(ngn || 0) * NGN_TO_CFA);
   }
 
   function products() {
@@ -887,7 +897,7 @@ const JA = (() => {
       if (match != null) { ngn = match; overridden = true; }
     }
     if (overridden || ngn > 0) return cur === "NGN" ? ngn : toCfa(ngn);
-    return Number(p && p.priceCfa) || 0;
+    return cur === "NGN" ? (Number(p && p.priceCfa) || 0) : roundCfa(p && p.priceCfa);
   }
   function compareOf(p, cur = currency()) {
     if (hasNgn(p)) {
@@ -895,7 +905,7 @@ const JA = (() => {
       if (cur === "NGN") return was;
       return was > 0 ? toCfa(was) : 0;
     }
-    return Number(p.compareCfa) || 0;
+    return roundCfa(p.compareCfa);
   }
   function displayCur(p, cur = currency()) {
     return hasNgn(p) ? cur : "CFA";
@@ -3049,7 +3059,7 @@ const JA = (() => {
     ready, CATEGORIES: [], categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,
     products, product, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
-    currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
+    currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
     referralEnabled,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,

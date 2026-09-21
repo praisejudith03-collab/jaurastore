@@ -519,7 +519,7 @@ function optionStockHTML(p) {
       <p class="admin-note">Add an option above (Colour, Size…) and a stock box appears here for each choice. Until then the single Quantity below is used.</p>`;
   }
   const os = p.optionStock || {};
-  const toCfa = JA.toCfa || ((n) => Math.round(Number(n || 0) * 0.44));
+  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   const price = `${Number(p.compareNgn) > Number(p.priceNgn) ? `<s>${JA.money(p.compareNgn, "NGN")}</s> ` : ""}${JA.money(p.priceNgn || 0, "NGN")} · ${JA.money(toCfa(p.priceNgn), "CFA")}`;
   const rows = vals.map((v) => {
     const qty = os[v] != null ? Number(os[v]) : "";
@@ -569,7 +569,7 @@ function bindCfaPreview() {
   const form = document.getElementById("prod-form");
   const el = document.getElementById("cfa-preview");
   if (!form || !el) return;
-  const toCfa = JA.toCfa || ((n) => Math.round(Number(n || 0) * 0.44));
+  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   const paint = () => {
     const n = Number(form.priceNgn && form.priceNgn.value) || 0;
     const c = Number(form.compareNgn && form.compareNgn.value) || 0;
@@ -736,7 +736,7 @@ async function handleProductSubmit(e, existing) {
   const priceNgn = num("priceNgn") || 0;
   const compareNgn = num("compareNgn");
   if (!(priceNgn > 0)) { JA.toast("Enter the ₦ price."); return; }
-  const toCfa = JA.toCfa || ((n) => Math.round(Number(n || 0) * 0.44));
+  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
   const savedCategory = String(fd.get("category") || "").trim();
   const res = await JA.upsertProduct({
@@ -850,7 +850,7 @@ function renderProdGrid() {
     const ngnWas = Number(p.compareNgn) || 0;
     const ngn = ngnNow > 0 ? JA.money(ngnNow, "NGN") : "";
     const ngnStrike = ngnWas > ngnNow ? JA.money(ngnWas, "NGN") : "";
-    const cfaNowN = ngnNow > 0 ? (JA.toCfa ? JA.toCfa(ngnNow) : Math.round(ngnNow * 0.44)) : (Number(p.priceCfa) || 0);
+    const cfaNowN = ngnNow > 0 ? (JA.toCfa ? JA.toCfa(ngnNow) : Math.ceil((ngnNow * 0.44) / 50) * 50) : (Number(p.priceCfa) || 0);
     const cfaNow = JA.money(cfaNowN, "CFA");
     const stockN = Number(p.stock) || 0;
     const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN <= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;

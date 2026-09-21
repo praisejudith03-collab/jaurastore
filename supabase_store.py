@@ -97,6 +97,23 @@ def _res_data(res):
     return (res or {}).get("data") or []
 
 
+def _page(builder, limit, offset=0):
+    """Apply a bounded page window to a PostgREST query builder.
+
+    `range()` is the paginated form; a builder (or a test double) that only
+    knows `limit()` still gets a bounded, never-unbounded query.
+    """
+    limit = max(1, int(limit or 1))
+    offset = max(0, int(offset or 0))
+    if offset and hasattr(builder, "range"):
+        return builder.range(offset, offset + limit - 1)
+    if hasattr(builder, "limit"):
+        return builder.limit(limit)
+    if hasattr(builder, "range"):
+        return builder.range(offset, offset + limit - 1)
+    return builder
+
+
 def _fetch_product_pages(c, include_dead=False):
     """Yield product rows from the products table, page by page.
 
@@ -872,18 +889,24 @@ def mirror_abandoned_cart(row):
         return False
 
 
-def load_due_abandoned_carts(cutoff, limit=500):
-    """Load carts eligible for a reminder. Returns [] when unconfigured or
-    unavailable; the local cache remains the fallback."""
+def load_due_abandoned_carts(cutoff, limit=500, offset=0):
+    """Load ONE bounded page of carts eligible for a reminder.
+
+    `offset` lets a worker walk a backlog page by page instead of pulling
+    every due cart into memory at once. Returns [] when unconfigured or
+    unavailable; the local cache remains the fallback.
+    """
     c = client()
     if c is None:
         return []
     try:
-        res = (c.table("abandoned_carts").select("*")
-               .eq("reminder_sent", False)
-               .is_("converted_at", "null")
-               .lte("last_activity_at", cutoff)
-               .order("last_activity_at").limit(limit).execute())
+        offset = max(0, int(offset or 0))
+        limit = max(1, int(limit or 1))
+        res = _page((c.table("abandoned_carts").select("*")
+                     .eq("reminder_sent", False)
+                     .is_("converted_at", "null")
+                     .lte("last_activity_at", cutoff)
+                     .order("last_activity_at")), limit, offset).execute()
         return _res_data(res) or []
     except Exception as exc:
         print(f"[supabase] abandoned carts load failed: {exc}")
@@ -968,13 +991,16 @@ def suppress_marketing_email(email):
         return False
 
 
-def load_marketing_suppressions(limit=10000):
-    """Return promotional opt-outs, or [] when unconfigured."""
+def load_marketing_suppressions(limit=10000, offset=0):
+    """Return one page of promotional opt-outs, or [] when unconfigured."""
     c = client()
     if c is None:
         return []
     try:
-        res = c.table("marketing_suppressions").select("email").limit(limit).execute()
+        offset = max(0, int(offset or 0))
+        limit = max(1, int(limit or 1))
+        res = _page(c.table("marketing_suppressions").select("email"),
+                    limit, offset).execute()
         return _res_data(res) or []
     except Exception as exc:
         print(f"[supabase] marketing suppression load failed: {exc}")
@@ -995,14 +1021,21 @@ def save_customer(row):
         return False
 
 
-def load_customers(limit=2000):
-    """Customer rows, or [] when unconfigured. Never raises."""
+def load_customers(limit=2000, offset=0, columns="*"):
+    """One page of customer rows, or [] when unconfigured. Never raises.
+
+    `offset`/`columns` keep batch jobs (marketing broadcasts) inside a small,
+    predictable memory budget: they can ask for just `email`, one page at a
+    time, instead of every column of every customer.
+    """
     c = client()
     if c is None:
         return []
     try:
-        res = (c.table("customers").select("*")
-               .order("updated_at", desc=True).limit(limit).execute())
+        offset = max(0, int(offset or 0))
+        limit = max(1, int(limit or 1))
+        res = _page((c.table("customers").select(columns or "*")
+                     .order("updated_at", desc=True)), limit, offset).execute()
         return _res_data(res) or []
     except Exception as exc:
         print(f"[supabase] load_customers failed: {exc}")
@@ -1591,17 +1624,21 @@ def load_categories():
         return None
 
 
-def load_orders(limit=500):
-    """Return the order list stored in Supabase orders table, or []. Never raises."""
+def load_orders(limit=500, offset=0, columns="*"):
+    """Return ONE page of the Supabase orders table, or []. Never raises.
+
+    `offset`/`columns` allow paginated, low-memory scans (e.g. the marketing
+    recipient walk asks only for `email`, 200 rows at a time).
+    """
     c = client()
     if c is None:
         return []
     try:
-        res = (c.table("orders")
-               .select("*")
-               .order("updated_at", desc=True)
-               .limit(limit)
-               .execute())
+        offset = max(0, int(offset or 0))
+        limit = max(1, int(limit or 1))
+        res = _page((c.table("orders")
+                     .select(columns or "*")
+                     .order("updated_at", desc=True)), limit, offset).execute()
         data = _res_data(res)
         return data or []
     except Exception as exc:

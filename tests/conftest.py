@@ -68,6 +68,26 @@ if not os.path.exists(_SCRATCH_CATEGORIES):
     shutil.copyfile(os.path.join(ROOT, "data", "categories.json"),
                     _SCRATCH_CATEGORIES)
 
+# The scratch CATALOGUE has exactly the same problem as the scratch database,
+# and it bit hard: catalog._load_overrides() falls back to "<path>.bak" when
+# the main file is missing or unreadable, so deleting only the main file left
+# the suite silently reading a catalogue written by an EARLIER RUN. A stale
+# .bak that carried a different price for a seed product (e.g. wix-005 priced
+# at a derived CFA amount instead of its explicit 15,000) made nine unrelated
+# tests fail - orders fell under the Benin/Togo minimum and referral codes
+# were never minted - with nothing wrong in the code under test.
+#
+# Every override file is a per-run artefact: clear the main file, the .bak
+# fallback and the lock together so the catalogue is always rebuilt from
+# data/seed.json.
+_TEST_CATALOG = "/tmp/jaura_test_catalog.json"
+if os.environ.get("CATALOG_PATH", _TEST_CATALOG) == _TEST_CATALOG:
+    for _suffix in ("", ".bak", ".tmp", ".lock"):
+        try:
+            os.remove(_TEST_CATALOG + _suffix)
+        except OSError:
+            pass
+
 # Same problem, worse consequence, for the site-settings file. Every test
 # module calls os.environ.setdefault("SITE_CONFIG_PATH", <its own file>), so
 # whichever module is COLLECTED FIRST wins for the whole session - adding a new

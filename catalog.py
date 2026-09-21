@@ -82,7 +82,9 @@ FIXTURE_SKU_PREFIX = "JAUSTOCK"
 FIXTURE_NAME_PREFIX = "stock test"
 
 # Prices the shop shows are entered in Naira and converted at the house rate.
-NGN_TO_CFA = 0.44
+# Naira is the exact base currency; the CFA figure is rounded UP to a clean
+# 50/100 step by currency.to_cfa so no odd amount ever reaches a shopper.
+from currency import NGN_TO_CFA, round_cfa, to_cfa  # noqa: F401
 
 # Every field an admin-edited product may carry (with sensible defaults).
 BASE_FIELDS = (
@@ -531,7 +533,12 @@ def _derive_cfa(product):
     if cfa is not None and cfa < 0:
         cfa = 0
     if ngn and ngn > 0 and (cfa is None or cfa <= 0):
-        cfa = round(ngn * NGN_TO_CFA)
+        # Naira is the exact base currency; the converted CFA figure is
+        # rounded UP to a clean 50/100 step.
+        cfa = to_cfa(ngn)
+    elif cfa:
+        # An explicitly priced CFA amount still has to be a clean step.
+        cfa = round_cfa(cfa)
     return ngn, cfa
 
 
@@ -597,6 +604,12 @@ def normalize(product):
     compare_ngn = _int_or_none(product.get("compareNgn"))
     compare_cfa = max(0, compare_cfa) if compare_cfa is not None else None
     compare_ngn = max(0, compare_ngn) if compare_ngn is not None else None
+    # "Was" prices follow the same rule: a converted figure is rounded up,
+    # and an explicit CFA figure is snapped to a clean step.
+    if compare_ngn and not compare_cfa:
+        compare_cfa = to_cfa(compare_ngn)
+    elif compare_cfa:
+        compare_cfa = round_cfa(compare_cfa)
     image = sec.safe_url(product.get("image_url") or product.get("image") or "")
     images = [sec.safe_url(i) for i in (product.get("images") or []) if sec.safe_url(i)]
     # The branded placeholder is a fallback, never a photo: a row that carries
