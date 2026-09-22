@@ -176,12 +176,17 @@ def test_a_naira_discount_is_left_exact(client):
     assert body["total"] == body["subtotal"] - expected
 
 
-def test_floor_cfa_never_rounds_a_discount_away():
-    assert currency_mod.floor_cfa(5580) == 5550
+def test_floor_cfa_is_a_deprecated_alias_that_rounds_up():
+    """floor_cfa used to round a discounted total DOWN. The single rounding
+    contract now sends every F CFA amount UP to the next 50 step - no
+    exceptions - and the old name is kept only as an alias for round_cfa so
+    existing imports keep working."""
+    assert currency_mod.floor_cfa(5580) == 5600
     assert currency_mod.floor_cfa(5000) == 5000
     assert currency_mod.floor_cfa(0) == 0
     assert currency_mod.floor_cfa(-10) == 0
     assert currency_mod.floor_cfa("x") == 0
     for value in range(0, 3000, 7):
-        assert currency_mod.floor_cfa(value) <= value
+        assert currency_mod.floor_cfa(value) >= value
         assert currency_mod.floor_cfa(value) % currency_mod.CFA_STEP == 0
+        assert currency_mod.floor_cfa(value) == currency_mod.round_cfa(value)
