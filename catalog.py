@@ -424,8 +424,14 @@ def _supabase_products():
 
 
 def base_products():
-    """The seed products. Never includes admin edits or deletions."""
-    return _seed_products()
+    """The seed products. Never includes admin edits or deletions.
+
+    The F CFA figures are ceilinged here too: GET /api/products serves this
+    list directly and bypasses merged() entirely, so without the cleaning a
+    seed row with an odd CFA price (wix-144 = 325) would reach the shopper
+    unrounded on that route.
+    """
+    return [_clean_cfa_prices(p) for p in _seed_products()]
 
 
 # --------------------------------------------------------------- local overrides
@@ -1121,6 +1127,10 @@ def merged(include_hidden=False):
     # This mirrors _fold_product_categories() but works for every backend
     # (Supabase rows and seed products pass through merged() unchanged).
     products = [_fold_p(p) for p in products]
+    # Every F CFA figure served to a shopper is a clean 50 step, whichever
+    # backend the row came from. This is the read-time half of the rounding
+    # contract in currency.py; js/store.js ceilings the same figures.
+    products = [_clean_cfa_prices(p) for p in products]
     return resolve_images(products)
 
 
@@ -1128,6 +1138,40 @@ def _fold_p(product):
     """Return a copy of ``product`` with any merged/legacy category remapped."""
     p = dict(product or {})
     p["category"] = _folded_category(p.get("category"))
+    return p
+
+
+def _clean_cfa_prices(product):
+    """Round every F CFA figure on a product UP to the next 50 step.
+
+    The seed and admin rows can carry an odd CFA amount (wix-144 is 325,
+    wix-212 is 680) while the browser already ceilings whatever it is given
+    (js/store.js roundCfa), so a raw serve makes the two sides disagree on
+    the price of the same piece.
+
+    An EXISTING CFA price is only ever ROUNDED, never re-derived from the
+    Naira base: 247 of the 257 seed products are priced independently per
+    currency (wix-005 is 8,550 NGN but 15,000 F CFA), so re-deriving would
+    re-price the whole shop downward. The CFA figure is derived from Naira
+    ONLY when it is missing entirely. Naira fields are never touched -
+    Naira is the exact base currency and is never rounded.
+    """
+    p = dict(product or {})
+    cfa = _int_or_none(p.get("priceCfa"))
+    ngn = _int_or_none(p.get("priceNgn"))
+    if cfa:
+        p["priceCfa"] = round_cfa(cfa)
+    elif ngn and ngn > 0:
+        p["priceCfa"] = to_cfa(ngn)
+    compare_cfa = _int_or_none(p.get("compareCfa"))
+    compare_ngn = _int_or_none(p.get("compareNgn"))
+    if compare_cfa:
+        p["compareCfa"] = round_cfa(compare_cfa)
+    elif compare_ngn and compare_ngn > 0:
+        p["compareCfa"] = to_cfa(compare_ngn)
+    option_cfa = p.get("optionPricesCfa")
+    if isinstance(option_cfa, dict) and option_cfa:
+        p["optionPricesCfa"] = {k: round_cfa(v) for k, v in option_cfa.items()}
     return p
 
 

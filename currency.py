@@ -44,20 +44,15 @@ def round_cfa(amount):
 
 
 def floor_cfa(amount):
-    """Round one F CFA amount DOWN to a clean 50 / 100 step.
+    """DEPRECATED alias for :func:`round_cfa` - do not use in new code.
 
-    Used for discounted totals: rounding a price UP is right (the shop is
-    never short-changed), but rounding a DISCOUNTED total up would quietly
-    claw back part of the discount the shopper was promised. Rounding down
-    keeps the amount clean and always at least as generous as advertised.
+    Every F CFA amount now follows the one rounding contract: UP to the next
+    50 step, no exceptions (base prices, compare-at, sale prices, percentage
+    discounts, cart and checkout totals). This older name used to round DOWN
+    for discounted totals; it is kept only so existing imports keep working
+    and now returns exactly what ``round_cfa`` returns.
     """
-    try:
-        value = float(amount or 0)
-    except (TypeError, ValueError):
-        return 0
-    if value <= 0:
-        return 0
-    return int(value // CFA_STEP) * CFA_STEP
+    return round_cfa(amount)
 
 
 def to_cfa(ngn, rate=None):

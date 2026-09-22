@@ -1079,7 +1079,13 @@ const JA = (() => {
   function bulkUnit(p, qty, cur, variant = "") {
     const unit = priceOf(p, cur, variant);
     const percent = bulkPercentFor(p, qty);
-    return percent ? Math.round(unit * (100 - percent) / 100) : unit;
+    if (!percent) return unit;
+    const discounted = unit * (100 - percent) / 100;
+    // F CFA always lands on a clean 50 step, a discounted unit included:
+    // 2,150 at -10% is 1,935 raw and 1,950 on the tag, and the server
+    // (api._checkout_items) bills the identical figure. Naira is the exact
+    // base currency and keeps ordinary rounding.
+    return cur === "CFA" ? roundCfa(discounted) : Math.round(discounted);
   }
   function addToCart(id, qty = 1, color = "") {
     const p = product(id);

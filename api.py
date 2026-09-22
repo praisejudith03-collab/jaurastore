@@ -771,6 +771,13 @@ def _checkout_items(clean_items, currency):
         unit = _server_unit_price(prod, currency, g["variant"])
         bulk_percent = catalog_mod.bulk_discount_for(prod, total_quantity_by_product[pid])
         pay_unit = round(unit * (100 - bulk_percent) / 100) if bulk_percent else unit
+        if bulk_percent and currency == "CFA":
+            # The money path, not just display: the browser ceilings a
+            # discounted CFA unit (js/store.js bulkUnit -> roundCfa), so the
+            # server must bill the identical figure - 2,150 at -10% is 1,935
+            # in the raw maths but 1,950 on the receipt. Naira is the exact
+            # base currency and keeps ordinary rounding.
+            pay_unit = currency_mod.round_cfa(pay_unit)
         line_price = pay_unit * g["qty"]
         subtotal += line_price
         items.append({
