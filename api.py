@@ -204,10 +204,14 @@ def catalog():
     products = catalog_mod.merged(include_hidden=include_hidden)
     if not admin:
         products = [_public_product(p) for p in products]
+    meta = catalog_mod.meta()
+    featured = meta.get("homepageFeatured") or catalog_mod.homepage_featured()
+    meta["homepageFeatured"] = featured
     body = json.dumps({
         "ok": True,
         "products": products,
-        "meta": catalog_mod.meta(),
+        "meta": meta,
+        "homepageFeatured": featured,
     }, ensure_ascii=False, separators=(",", ":"))
     etag = 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:28] + '"'
     if request.headers.get("If-None-Match") == etag:
@@ -239,6 +243,56 @@ def catalog():
     # admin catalogue to a shopper, or the public one back to an admin.
     resp.headers.add("Vary", "Cookie")
     return resp
+
+
+def _featured_group_payload(group, public=True):
+    products = group.get("products") or []
+    if public:
+        products = [_public_product(p) for p in products]
+    return {
+        "category": group.get("category") or "",
+        "productIds": [str(x) for x in (group.get("productIds") or []) if str(x or "")],
+        "products": products,
+        "custom": bool(group.get("custom")),
+    }
+
+
+@api.get("/homepage-featured")
+def homepage_featured():
+    """Homepage Featured Products settings resolved into storefront groups."""
+    products = catalog_mod.merged()
+    groups = catalog_mod.homepage_featured_groups(products)
+    return jsonify(ok=True, featured=catalog_mod.homepage_featured(),
+                   groups=[_featured_group_payload(g, public=True) for g in groups])
+
+
+@api.get("/admin/homepage-featured")
+@authmod.require_admin
+def admin_homepage_featured():
+    products = catalog_mod.merged(include_hidden=True)
+    groups = catalog_mod.homepage_featured_groups(products)
+    return jsonify(ok=True, featured=catalog_mod.homepage_featured(),
+                   groups=[_featured_group_payload(g, public=False) for g in groups])
+
+
+@api.post("/admin/homepage-featured")
+@authmod.require_admin
+@sec.require_csrf
+def admin_homepage_featured_save():
+    d = request.get_json(silent=True) or {}
+    raw = d.get("categories") if isinstance(d.get("categories"), dict) else d.get("featured")
+    if isinstance(raw, dict) and isinstance(raw.get("categories"), dict):
+        raw = raw.get("categories")
+    if raw is None and isinstance(d, dict):
+        raw = d
+    saved = catalog_mod.save_homepage_featured(raw, authmod.current_admin())
+    if saved is None:
+        return jsonify(ok=False, error="Homepage featured products could not be saved. No changes were made."), 503
+    audit(authmod.current_admin(), "homepage_featured.save", json.dumps(saved.get("categories") or {})[:300], _ip())
+    products = catalog_mod.merged(include_hidden=True)
+    groups = catalog_mod.homepage_featured_groups(products)
+    return jsonify(ok=True, featured=saved,
+                   groups=[_featured_group_payload(g, public=False) for g in groups])
 
 # ========================================================== public: categories
 @api.get("/categories")

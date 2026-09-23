@@ -1548,6 +1548,53 @@ def save_categories(categories):
         return False
 
 
+# Homepage "More from the house" product picks. They share the same durable
+# growth_settings pattern as categories: one JSON row, no table migration, and
+# the value survives Render's ephemeral disk.
+HOMEPAGE_FEATURED_KEY = "homepage_featured_json"
+
+
+def save_homepage_featured(featured):
+    """Persist the homepage featured-product selector payload. Never raises."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        payload = json.dumps(featured or {"categories": {}}, ensure_ascii=False)
+        c.table("growth_settings").upsert(
+            [{"key": HOMEPAGE_FEATURED_KEY, "value": payload}]
+        ).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] homepage featured save failed: {exc}")
+        return False
+
+
+def load_homepage_featured():
+    """Return the homepage featured selector payload, {} if unset, or None
+    when Supabase is unavailable."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("growth_settings")
+               .select("value")
+               .eq("key", HOMEPAGE_FEATURED_KEY)
+               .limit(1)
+               .execute())
+        rows = _res_data(res)
+        if not rows:
+            return {"categories": {}}
+        raw = (rows[0] or {}).get("value")
+        if raw is None or raw == "":
+            return {"categories": {}}
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        return data if isinstance(data, dict) else {"categories": {}}
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] homepage featured load failed: {exc}")
+        return None
+
+
 # The Delivery page the owner edits in Admin -> Delivery. Same growth_settings
 # pattern as the categories above: one JSON row, no new schema, survives a
 # Render redeploy (the repo copy of delivery.html is only the fallback).

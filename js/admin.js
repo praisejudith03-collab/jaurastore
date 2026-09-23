@@ -2145,7 +2145,7 @@ function paintDesk(tab = "analytics") {
   if (tab === "marketing") fillMarketing();
   if (tab === "account") bindAccount();
   if (tab === "settings") {
-    bindHeroVideo(); bindBanner(); bindWelcome(); bindSiteBranding();
+    bindHeroVideo(); bindHomepageFeatured(); bindBanner(); bindWelcome(); bindSiteBranding();
   }
   if (tab === "delivery") {
     bindDeliveryPage();
@@ -2446,6 +2446,107 @@ function bindCategories() {
   });
 }
 
+function homepageFeaturedSection() {
+  return `<details class="admin-settings-section" open>
+    <summary>Homepage Featured Products</summary>
+    <div class="admin-card" id="home-featured-admin">
+      <p class="admin-note">Choose the products that appear in <strong>More from the house</strong>. Products are grouped by category below. You can select up to <strong>12 total</strong>; categories with no custom picks fall back to the normal homepage sort.</p>
+      <div class="adx-filter-bar"><strong><span id="home-featured-count">0</span> / 12 selected</strong><button type="button" class="au-link-btn" id="home-featured-refresh">Refresh from server</button></div>
+      <div id="home-featured-products"><p class="empty">Loading products…</p></div>
+      <div class="field full" style="margin-top:16px"><p class="admin-err" id="home-featured-error" hidden></p><button type="button" class="btn" id="home-featured-save">Save homepage featured products</button></div>
+    </div>
+  </details>`;
+}
+
+function homeFeaturedCheckedCount() {
+  return document.querySelectorAll('[data-home-featured-pid]:checked').length;
+}
+function updateHomeFeaturedCount() {
+  const count = homeFeaturedCheckedCount();
+  const label = document.getElementById("home-featured-count");
+  if (label) label.textContent = count;
+  document.querySelectorAll('[data-home-featured-pid]:not(:checked)').forEach((el) => {
+    el.disabled = count >= 12;
+  });
+}
+function collectHomepageFeaturedSelections() {
+  const out = {};
+  document.querySelectorAll('[data-home-featured-pid]:checked').forEach((input) => {
+    const cat = input.getAttribute("data-home-featured-cat") || "";
+    const pid = input.getAttribute("data-home-featured-pid") || input.value || "";
+    if (!cat || !pid) return;
+    if (!out[cat]) out[cat] = [];
+    out[cat].push(pid);
+  });
+  return out;
+}
+function paintHomepageFeaturedPicker() {
+  const box = document.getElementById("home-featured-products");
+  if (!box) return;
+  const settings = JA.homepageFeatured ? JA.homepageFeatured() : { categories: {} };
+  const selected = new Set();
+  Object.keys(settings.categories || {}).forEach((cid) => {
+    (settings.categories[cid] || []).forEach((pid) => selected.add(String(pid)));
+  });
+  const all = (JA.products ? JA.products() : []).slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  const cats = JA.categories ? JA.categories() : [];
+  const known = new Set(cats.map((c) => c.id));
+  all.forEach((p) => { if (p.category && !known.has(p.category)) { cats.push({ id: p.category, name: JA.categoryName(p.category) }); known.add(p.category); } });
+  const html = cats.map((c) => {
+    const rows = all.filter((p) => String(p.category || "") === String(c.id));
+    if (!rows.length) return "";
+    return `<section class="home-featured-admin-cat" data-home-featured-admin-cat="${JA.escape(c.id)}">
+      <h3 class="admin-h">${JA.escape(JA.categoryName(c.id))} <small>${rows.length} product${rows.length === 1 ? "" : "s"}</small></h3>
+      <div class="home-featured-admin-grid">${rows.map((p) => `
+        <label class="home-featured-choice">
+          <input type="checkbox" value="${JA.escape(p.id)}" data-home-featured-pid="${JA.escape(p.id)}" data-home-featured-cat="${JA.escape(c.id)}" ${selected.has(String(p.id)) ? "checked" : ""} />
+          <img src="${JA.escape(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="" onerror="fallbackImg(event)" />
+          <span><b>${JA.escape(JA.displayName ? JA.displayName(p) : p.name || "Product")}</b><small>${JA.escape(p.sku || p.id || "")}</small></span>
+        </label>`).join("")}</div>
+    </section>`;
+  }).join("");
+  box.innerHTML = html || `<p class="empty">No products are available to feature yet.</p>`;
+  updateHomeFeaturedCount();
+}
+function bindHomepageFeatured() {
+  const root = document.getElementById("home-featured-admin");
+  if (!root || root.dataset.bound === "1") return;
+  root.dataset.bound = "1";
+  paintHomepageFeaturedPicker();
+  if (JA.loadHomepageFeatured) JA.loadHomepageFeatured().then(paintHomepageFeaturedPicker).catch(() => {});
+  root.addEventListener("change", (e) => {
+    const input = e.target.closest && e.target.closest('[data-home-featured-pid]');
+    if (!input) return;
+    if (input.checked && homeFeaturedCheckedCount() > 12) {
+      input.checked = false;
+      JA.toast("Choose no more than 12 homepage featured products.");
+    }
+    updateHomeFeaturedCount();
+  });
+  document.getElementById("home-featured-refresh")?.addEventListener("click", async () => {
+    if (JA.loadHomepageFeatured) await JA.loadHomepageFeatured();
+    paintHomepageFeaturedPicker();
+    JA.toast("Homepage featured selections refreshed.");
+  });
+  document.getElementById("home-featured-save")?.addEventListener("click", async () => {
+    const btn = document.getElementById("home-featured-save");
+    const err = document.getElementById("home-featured-error");
+    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    if (err) { err.hidden = true; err.textContent = ""; }
+    let res = null;
+    try { res = await JA.saveHomepageFeatured(collectHomepageFeaturedSelections()); } catch (e) { res = null; }
+    if (btn) { btn.disabled = false; btn.textContent = "Save homepage featured products"; }
+    if (!res || res.ok === false) {
+      const msg = (res && res.error) || "Could not save homepage featured products.";
+      if (err) { err.textContent = msg; err.hidden = false; }
+      JA.toast(msg);
+      return;
+    }
+    paintHomepageFeaturedPicker();
+    JA.toast("Homepage featured products saved — live now.");
+  });
+}
+
 function settingsForm() {
   // server row first (if already fetched), localStorage only as an offline
   // paint convenience - the live Supabase row is the source of truth
@@ -2460,6 +2561,7 @@ function settingsForm() {
     <p class="admin-note" id="hero-video-msg"></p>
     </div>
   </details>
+  ${homepageFeaturedSection()}
   <details class="admin-settings-section" open>
     <summary>Store branding — logo &amp; shop banner</summary>
     <div class="admin-card" style="margin-top:22px">

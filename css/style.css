@@ -6749,3 +6749,32 @@ body.au-shop .shop-banner img,
 .mk-tier-row { display:grid; grid-template-columns:1fr 1fr auto; gap:10px; align-items:end; margin:10px 0; }
 .mk-tier-row label { display:grid; gap:5px; }
 @media (max-width:640px) { .mk-tier-row { grid-template-columns:1fr 1fr; } .mk-tier-row button { grid-column:1 / -1; } }
+
+/* Homepage featured groups (Admin-selected "More from the house") ---------- */
+.home-featured-groups {
+  display: block !important;
+  grid-template-columns: none !important;
+}
+.home-featured-cat { margin: 0 0 24px; }
+.home-featured-cat__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  margin: 0 0 10px;
+}
+.home-featured-cat__head h3 { margin: 0; font-size: 15px; letter-spacing: .04em; text-transform: uppercase; }
+.home-featured-cat__head a { color: var(--taupe, #887562); font-size: 12px; text-decoration: none; white-space: nowrap; }
+.home-featured-grid { margin-bottom: 4px; }
+
+/* Most-viewed cards are product cards with buttons, not raw analytics badges. */
+.mv-card-link { color: inherit; text-decoration: none; display: flex; flex-direction: column; gap: 5px; }
+.mv-card .mv-add { margin-top: auto; width: 100%; min-height: 34px; font-size: 11px; padding: 7px 8px; }
+
+/* Admin Homepage Featured picker ----------------------------------------- */
+.home-featured-admin-cat { border-top: 1px solid var(--line, #f2e5d5); padding-top: 12px; margin-top: 14px; }
+.home-featured-admin-cat .admin-h { display: flex; align-items: baseline; gap: 8px; }
+.home-featured-admin-cat .admin-h small { color: var(--muted, #887562); font-size: 11px; letter-spacing: 0; text-transform: none; }
+.home-featured-admin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.home-featured-choice { display: grid; grid-template-columns: auto 46px 1fr; align-items: center; gap: 10px; border: 1px solid var(--line, #f2e5d5); border-radius: 12px; padding: 8px; background: #fff; cursor: pointer; }
+.home-featured-choice img { width: 46px; height: 46px; object-fit: cover; border-radius: 10px; background: #fbf6f0; }
+.home-featured-choice b { display: block; font-size: 13px; line-height: 1.25; }
+.home-featured-choice small { color: var(--muted, #887562); font-size: 11px; }
+.home-featured-choice input:disabled ~ span { opacity: .55; }

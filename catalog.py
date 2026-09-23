@@ -1175,15 +1175,240 @@ def _clean_cfa_prices(product):
     return p
 
 
+HOMEPAGE_FEATURED_MAX = 12
+
+
+def _homepage_featured_raw_from_supabase():
+    """The durable homepage featured selector payload from Supabase, or None.
+
+    None means unavailable/not configured; an empty dict means the owner has not
+    selected any products yet. The caller may fall back to the local override
+    copy when Supabase is unavailable.
+    """
+    try:
+        from supabase_store import load_homepage_featured
+        return load_homepage_featured()
+    except Exception:
+        return None
+
+
+def _product_category_index(products):
+    out = {}
+    for p in products or []:
+        pid = str((p or {}).get("id") or "").strip()
+        if not pid:
+            continue
+        out[pid] = _folded_category((p or {}).get("category"))
+    return out
+
+
+def _normalize_homepage_featured(raw, products=None):
+    """Clean the Admin homepage featured-product selector payload.
+
+    Shape stored and served:
+      {maxTotal: 12, categories: {category_id: [product_id, ...]},
+       updatedAt, updatedBy}
+
+    Product ids are deduped globally and capped at 12 total. When a product is
+    present in the live catalogue, its current category wins so a later category
+    move cannot strand the id under an old header.
+    """
+    source = raw if isinstance(raw, dict) else {}
+    cats_raw = source.get("categories") if isinstance(source.get("categories"), dict) else source
+    if not isinstance(cats_raw, dict):
+        cats_raw = {}
+    by_pid = _product_category_index(products or [])
+    seen, out, total = set(), {}, 0
+    for raw_cat, ids in cats_raw.items():
+        if total >= HOMEPAGE_FEATURED_MAX:
+            break
+        cat = _folded_category(raw_cat)
+        if not cat:
+            continue
+        if not isinstance(ids, (list, tuple, set)):
+            ids = [ids]
+        for item in ids:
+            if total >= HOMEPAGE_FEATURED_MAX:
+                break
+            pid = str(item or "").strip()
+            if not pid or pid in seen:
+                continue
+            if by_pid and pid not in by_pid:
+                continue
+            dest = by_pid.get(pid) or cat
+            if not dest:
+                continue
+            out.setdefault(dest, []).append(pid)
+            seen.add(pid)
+            total += 1
+    payload = {
+        "maxTotal": HOMEPAGE_FEATURED_MAX,
+        "categories": out,
+        "updatedAt": str(source.get("updatedAt") or ""),
+        "updatedBy": str(source.get("updatedBy") or ""),
+    }
+    return payload
+
+
+def homepage_featured():
+    """Current Homepage Featured Products selector settings.
+
+    Supabase/growth_settings is the durable production source. The local
+    catalogue override file carries the same key for dev/testing and as a
+    read-through cache.
+    """
+    products = []
+    try:
+        products = merged(include_hidden=True)
+    except Exception:
+        products = []
+    raw = None
+    if _prod_source():
+        raw = _homepage_featured_raw_from_supabase()
+    if raw is None:
+        raw = (overrides() or {}).get("homepageFeatured") or {}
+    return _normalize_homepage_featured(raw, products)
+
+
+def save_homepage_featured(raw, actor=None):
+    """Persist Homepage Featured Products selections. Returns payload or None.
+
+    In production, a failed Supabase write is a real failure: the Admin portal
+    must not claim a homepage change is live unless the durable setting landed.
+    The local override copy is refreshed after a successful write so a rolling
+    process can still answer consistently while Supabase is momentarily slow.
+    """
+    clean = _normalize_homepage_featured(raw, merged(include_hidden=True))
+    clean["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    clean["updatedBy"] = actor or ""
+
+    if _prod_source():
+        try:
+            from supabase_store import save_homepage_featured as _save_featured
+            if not _save_featured(clean):
+                return None
+        except Exception:
+            return None
+
+    def _apply(data, _path):
+        data["homepageFeatured"] = clean
+        data["updatedAt"] = clean["updatedAt"]
+        data["updatedBy"] = actor or ""
+        return data
+
+    try:
+        _mutate(actor, _apply)
+    except Exception:
+        if not _prod_source():
+            return None
+    return clean
+
+
+def _home_rank(product):
+    p = product or {}
+    badge = str(p.get("badge") or "").lower()
+    if badge == "new":
+        rank = 0
+    elif p.get("featured"):
+        rank = 1
+    elif badge == "bestseller":
+        rank = 2
+    elif badge == "sale":
+        rank = 3
+    else:
+        rank = 4
+    return (rank, str(p.get("name") or "").lower(), str(p.get("id") or ""))
+
+
+def homepage_featured_groups(products=None, limit=HOMEPAGE_FEATURED_MAX):
+    """Resolve selector settings into category groups of live products.
+
+    Selected ids lead, grouped under their current category. Empty/non-selected
+    categories fall back to the standard homepage merchandising sort so the
+    section never goes blank when a category has no custom picks.
+    """
+    live = list(products if products is not None else merged())
+    try:
+        max_total = max(1, min(HOMEPAGE_FEATURED_MAX, int(limit or HOMEPAGE_FEATURED_MAX)))
+    except (TypeError, ValueError):
+        max_total = HOMEPAGE_FEATURED_MAX
+    settings = homepage_featured()
+    selected = settings.get("categories") or {}
+    by_id = {str(p.get("id") or ""): p for p in live if p.get("id")}
+    by_cat = {}
+    for p in live:
+        by_cat.setdefault(_folded_category(p.get("category")), []).append(p)
+    for cid in list(by_cat):
+        by_cat[cid] = sorted(by_cat[cid], key=_home_rank)
+
+    def _cat_order():
+        order = []
+        # Prefer the category table order from api.py when available, but do not
+        # import api here (avoids a circular import). The product order is a
+        # safe fallback and selected categories are always promoted below.
+        for p in live:
+            cid = _folded_category(p.get("category"))
+            if cid and cid not in order:
+                order.append(cid)
+        for cid in selected:
+            cid = _folded_category(cid)
+            if cid and cid not in order:
+                order.append(cid)
+        return order
+
+    selected_order = [cid for cid in _cat_order() if selected.get(cid)]
+    order = selected_order + [cid for cid in _cat_order() if cid not in selected_order]
+    groups, seen, total = [], set(), 0
+    if selected_order:
+        for cid in order:
+            if total >= max_total:
+                break
+            custom = []
+            for pid in selected.get(cid, []):
+                p = by_id.get(str(pid))
+                if not p or str(pid) in seen:
+                    continue
+                if _folded_category(p.get("category")) != cid:
+                    continue
+                custom.append(p)
+            picks = custom or [p for p in by_cat.get(cid, []) if str(p.get("id")) not in seen]
+            if not custom:
+                picks = picks[:min(4, max_total - total)]
+            take = picks[:max_total - total]
+            if not take:
+                continue
+            for p in take:
+                seen.add(str(p.get("id") or ""))
+            total += len(take)
+            groups.append({"category": cid, "productIds": [p.get("id") for p in take],
+                           "products": take, "custom": bool(custom)})
+        return groups
+
+    # No admin selections yet: use the standard homepage sort and group those
+    # first 12 pieces by category. This is the legacy behaviour, just labelled.
+    chosen = sorted(live, key=_home_rank)[:max_total]
+    for p in chosen:
+        cid = _folded_category(p.get("category"))
+        if groups and groups[-1]["category"] == cid:
+            groups[-1]["products"].append(p)
+            groups[-1]["productIds"].append(p.get("id"))
+        else:
+            groups.append({"category": cid, "productIds": [p.get("id")],
+                           "products": [p], "custom": False})
+    return groups
+
+
 def meta():
     """Metadata blob used for ETag / change detection on the catalogue."""
     data, _p = _load_overrides()
     products = merged(include_hidden=True)
     latest_update = max((str(p.get("updated_at") or "") for p in products), default="")
+    featured = homepage_featured()
     return {
-        "updatedAt": max(str(data.get("updatedAt") or ""), latest_update),
+        "updatedAt": max(str(data.get("updatedAt") or ""), latest_update, str(featured.get("updatedAt") or "")),
         "updatedBy": data.get("updatedBy") or "",
         "count": len(products),
+        "homepageFeatured": featured,
     }
 
 

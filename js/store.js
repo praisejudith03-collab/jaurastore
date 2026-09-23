@@ -44,10 +44,10 @@ const JA = (() => {
     } catch (e) { return null; }
   }
 
-  function writeCatalogCache(products) {
+  function writeCatalogCache(products, meta) {
     try {
       localStorage.setItem(KEYS.catalogCache, JSON.stringify({
-        at: Date.now(), view: catalogView(), products,
+        at: Date.now(), view: catalogView(), products, meta: meta || {},
       }));
     } catch (e) { /* quota: the cache is optional */ }
   }
@@ -303,6 +303,8 @@ const JA = (() => {
   // only while they are still waiting to sync, so a second device never shows
   // a stale copy of a product someone else already changed.
   let catalogMeta = { server: false };
+  const HOME_FEATURED_MAX = 12;
+  let homepageFeaturedSettings = { maxTotal: HOME_FEATURED_MAX, categories: {}, updatedAt: "", updatedBy: "" };
 
   function pendingMap() { return read(KEYS.pending, {}) || {}; }
   function markPending(id) { const p = pendingMap(); p[id] = Date.now(); write(KEYS.pending, p); }
@@ -387,6 +389,160 @@ const JA = (() => {
     return out;
   }
 
+  function normalizeHomepageFeatured(raw) {
+    const src = raw && typeof raw === "object" ? raw : {};
+    const catSrc = src.categories && typeof src.categories === "object" ? src.categories : src;
+    const out = {};
+    const seen = new Set();
+    let total = 0;
+    const max = Math.max(1, Math.min(HOME_FEATURED_MAX, Number(src.maxTotal || HOME_FEATURED_MAX) || HOME_FEATURED_MAX));
+    Object.keys(catSrc || {}).forEach((cat) => {
+      if (total >= max) return;
+      const cid = String(cat || "").trim();
+      if (!cid || ["maxTotal", "updatedAt", "updatedBy"].includes(cid)) return;
+      const ids = Array.isArray(catSrc[cat]) ? catSrc[cat] : [catSrc[cat]];
+      ids.forEach((id) => {
+        if (total >= max) return;
+        const pid = String(id || "").trim();
+        if (!pid || seen.has(pid)) return;
+        if (!out[cid]) out[cid] = [];
+        out[cid].push(pid);
+        seen.add(pid);
+        total += 1;
+      });
+    });
+    return {
+      maxTotal: max,
+      categories: out,
+      updatedAt: String(src.updatedAt || ""),
+      updatedBy: String(src.updatedBy || ""),
+    };
+  }
+
+  function setHomepageFeatured(raw) {
+    homepageFeaturedSettings = normalizeHomepageFeatured(raw);
+    return homepageFeatured();
+  }
+
+  function homepageFeatured() {
+    const cats = {};
+    Object.keys(homepageFeaturedSettings.categories || {}).forEach((cid) => {
+      cats[cid] = (homepageFeaturedSettings.categories[cid] || []).slice();
+    });
+    return { ...homepageFeaturedSettings, categories: cats };
+  }
+
+  function homeRank(p) {
+    const badge = String((p && p.badge) || "").toLowerCase();
+    if (badge === "new") return 0;
+    if (p && p.featured) return 1;
+    if (badge === "bestseller") return 2;
+    if (badge === "sale") return 3;
+    return 4;
+  }
+
+  function homeSorted(list) {
+    return (list || []).slice().sort((a, b) => {
+      const r = homeRank(a) - homeRank(b);
+      if (r) return r;
+      const ta = Date.parse((a && (a.updated_at || a.updatedAt)) || "") || 0;
+      const tb = Date.parse((b && (b.updated_at || b.updatedAt)) || "") || 0;
+      if (tb !== ta) return tb - ta;
+      return String((a && a.name) || "").localeCompare(String((b && b.name) || ""));
+    });
+  }
+
+  function homepageFeaturedGroups(limit = HOME_FEATURED_MAX) {
+    const all = products();
+    const max = Math.max(1, Math.min(HOME_FEATURED_MAX, Number(limit || homepageFeaturedSettings.maxTotal || HOME_FEATURED_MAX) || HOME_FEATURED_MAX));
+    const selected = homepageFeaturedSettings.categories || {};
+    const byId = new Map(all.map((p) => [String(p.id), p]));
+    const byCat = {};
+    all.forEach((p) => {
+      const cid = String(p.category || "");
+      if (!byCat[cid]) byCat[cid] = [];
+      byCat[cid].push(p);
+    });
+    Object.keys(byCat).forEach((cid) => { byCat[cid] = homeSorted(byCat[cid]); });
+
+    const catOrder = [];
+    const addCat = (cid) => { cid = String(cid || ""); if (cid && !catOrder.includes(cid)) catOrder.push(cid); };
+    try { categories().forEach((c) => addCat(c.id)); } catch (e) {}
+    Object.keys(selected).forEach(addCat);
+    Object.keys(byCat).forEach(addCat);
+
+    const selectedCats = catOrder.filter((cid) => (selected[cid] || []).length);
+    const groups = [];
+    const seen = new Set();
+    const pushGroup = (cid, list, custom) => {
+      const take = [];
+      for (const p of list || []) {
+        if (seen.size >= max) break;
+        const pid = String(p && p.id || "");
+        if (!pid || seen.has(pid)) continue;
+        seen.add(pid);
+        take.push(p);
+      }
+      if (take.length) groups.push({ category: cid, products: take, productIds: take.map((p) => p.id), custom: !!custom });
+    };
+
+    if (selectedCats.length) {
+      selectedCats.concat(catOrder.filter((cid) => !selectedCats.includes(cid))).forEach((cid) => {
+        if (seen.size >= max) return;
+        const custom = (selected[cid] || [])
+          .map((id) => byId.get(String(id)))
+          .filter((p) => p && String(p.category || "") === cid);
+        if (custom.length) pushGroup(cid, custom, true);
+        else pushGroup(cid, (byCat[cid] || []).slice(0, Math.min(4, max - seen.size)), false);
+      });
+      return groups;
+    }
+
+    const buckets = {};
+    homeSorted(all).slice(0, max).forEach((p) => {
+      const cid = String(p.category || "");
+      if (!buckets[cid]) buckets[cid] = [];
+      buckets[cid].push(p);
+      addCat(cid);
+    });
+    catOrder.forEach((cid) => {
+      if (buckets[cid] && buckets[cid].length) groups.push({
+        category: cid, products: buckets[cid], productIds: buckets[cid].map((p) => p.id), custom: false,
+      });
+    });
+    return groups;
+  }
+
+  async function loadHomepageFeatured() {
+    try {
+      const r = await fetch("api/homepage-featured", { credentials: "same-origin", cache: "no-store" });
+      const d = await r.json();
+      if (d && d.ok !== false && d.featured) {
+        setHomepageFeatured(d.featured);
+        try { document.dispatchEvent(new CustomEvent("ja:homepage-featured")); } catch (e) {}
+        try { document.dispatchEvent(new CustomEvent("ja:rerender")); } catch (e) {}
+      }
+    } catch (e) {}
+    return homepageFeatured();
+  }
+
+  async function saveHomepageFeatured(categoriesPayload) {
+    const payload = { categories: (categoriesPayload && categoriesPayload.categories) || categoriesPayload || {} };
+    const call = window.JA_NET && window.JA_NET.api
+      ? window.JA_NET.api("api/admin/homepage-featured", { method: "POST", json: payload })
+      : fetch("api/admin/homepage-featured", {
+          method: "POST", credentials: "same-origin", cache: "no-store",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+        }).then((r) => r.json());
+    const d = await call;
+    if (d && d.ok !== false && d.featured) {
+      setHomepageFeatured(d.featured);
+      try { document.dispatchEvent(new CustomEvent("ja:homepage-featured")); } catch (e) {}
+      try { document.dispatchEvent(new CustomEvent("ja:rerender")); } catch (e) {}
+    }
+    return d;
+  }
+
   function applyServerProduct(p) {
     p = normalizeServerProduct(p);
     if (!p || !p.id) return;
@@ -445,6 +601,7 @@ const JA = (() => {
     const box = readCatalogCache();
     if (box) {
       seed = dedupeProducts(box.products.map(normalizeServerProduct));
+      if (box.meta && box.meta.homepageFeatured) setHomepageFeatured(box.meta.homepageFeatured);
       window.JA_SEED = seed;
       return seed;
     }
@@ -480,7 +637,12 @@ const JA = (() => {
       if (res.ok) {
         const d = await res.json();
         if (d && Array.isArray(d.products) && (strict || d.products.length)) {
+          const prevHomepageFeatured = JSON.stringify(homepageFeaturedSettings);
           catalogMeta = Object.assign({ server: true }, d.meta || {});
+          const incomingHomepageFeatured = d.homepageFeatured || catalogMeta.homepageFeatured || {};
+          const nextHomepageFeatured = normalizeHomepageFeatured(incomingHomepageFeatured);
+          const featuredChanged = JSON.stringify(nextHomepageFeatured) !== prevHomepageFeatured;
+          homepageFeaturedSettings = nextHomepageFeatured;
           // keep only edits that have not reached the server yet
           const pend = pendingMap();
           const stillPending = (read(KEYS.custom, []) || []).filter((p) => p && pend[p.id]);
@@ -514,10 +676,10 @@ const JA = (() => {
             || JSON.stringify(next.map((x) => x.id)) !== JSON.stringify(seed.map((x) => x.id));
           seed = next;
           window.JA_SEED = seed;
-          writeCatalogCache(d.products);
-          // A background refresh that actually changed something repaints the
-          // page; an identical answer never causes a flicker.
-          if (changed) {
+          writeCatalogCache(d.products, catalogMeta);
+          // A background refresh that changed products OR homepage selectors
+          // repaints the page; an identical answer never causes a flicker.
+          if (changed || featuredChanged) {
             try { document.dispatchEvent(new CustomEvent("ja:catalog")); } catch (e) {}
           }
           return seed;
@@ -3088,6 +3250,7 @@ const JA = (() => {
     ready, CATEGORIES: [], categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,
     products, product, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
+    homepageFeatured, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
     currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
     referralEnabled,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
