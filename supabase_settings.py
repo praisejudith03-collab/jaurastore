@@ -41,6 +41,10 @@ DEFAULT_SETTINGS = {
     # variables WHATSAPP_NUMBER_NG / WHATSAPP_NUMBER_BJ supply the default
     # when the row carries nothing (see api._site_payload).
     "whatsapp_number_ng": "", "whatsapp_number_bj": "",
+    "welcome_enabled": "", "welcome_title": "", "welcome_title_fr": "",
+    "welcome_body": "", "welcome_body_fr": "", "welcome_image_url": "",
+    "welcome_cta_label": "", "welcome_cta_label_fr": "",
+    "welcome_cta_href": "",
 }
 
 # The payment identity floor: the same 9 values as DEFAULT_SETTINGS. When a

@@ -925,3 +925,14 @@ alter table site_settings add column if not exists icon_192_url         text not
 -- Public read is the point (browsers and Googlebot fetch a favicon
 -- anonymously); writes need the service-role key, which only the server and
 -- that tool hold.
+-- SECTION: site_settings_welcome
+-- Owner-editable storefront welcome pop-up. Empty values retain built-in defaults.
+alter table site_settings add column if not exists welcome_enabled      text not null default '';
+alter table site_settings add column if not exists welcome_title        text not null default '';
+alter table site_settings add column if not exists welcome_title_fr     text not null default '';
+alter table site_settings add column if not exists welcome_body         text not null default '';
+alter table site_settings add column if not exists welcome_body_fr      text not null default '';
+alter table site_settings add column if not exists welcome_image_url    text not null default '';
+alter table site_settings add column if not exists welcome_cta_label    text not null default '';
+alter table site_settings add column if not exists welcome_cta_label_fr text not null default '';
+alter table site_settings add column if not exists welcome_cta_href     text not null default '';

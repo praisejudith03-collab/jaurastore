@@ -2695,6 +2695,10 @@ SITE_KEYS = ("bank_name", "account_number", "account_name",
              # the legacy `shippingNote` alias, so an admin form posting the
              # real column name had it silently dropped.
              "shipping_note")
+WELCOME_POPUP_KEYS = ("welcome_enabled", "welcome_title", "welcome_title_fr",
+                      "welcome_body", "welcome_body_fr", "welcome_image_url",
+                      "welcome_cta_label", "welcome_cta_label_fr",
+                      "welcome_cta_href")
 
 def _load_site():
     if Config.ENV == "testing":
@@ -2705,7 +2709,8 @@ def _load_site():
         except (OSError, ValueError):
             return {"heroVideo": "", "heroPoster": "", "heroDoc": "",
                     "logoUrl": "", "shopBannerUrl": "", "convBanner": "",
-                    "convBannerFr": "", "convBold": "", "shippingNote": ""}
+                    "convBannerFr": "", "convBold": "", "shippingNote": "",
+                    **{key: "" for key in WELCOME_POPUP_KEYS}}
     from supabase_settings import get_site_settings
     return get_site_settings()
 
@@ -2767,7 +2772,8 @@ SITE_LEGACY_ALIASES = {col: key for key, col in SITE_LEGACY_MAP.items()}
 # aliases. The request answered 200 with the OLD row, so the Admin form
 # repainted the previous text and the storefront never changed. Both
 # spellings now write the same column.
-SITE_WRITABLE_COLUMNS = frozenset(SITE_KEYS) | set(SITE_LEGACY_MAP.values())
+SITE_WRITABLE_COLUMNS = (frozenset(SITE_KEYS) | set(SITE_LEGACY_MAP.values())
+                         | set(WELCOME_POPUP_KEYS))
 
 
 # ------------------------------------------------------------- delivery page
@@ -2888,6 +2894,8 @@ def admin_delivery_page_save():
 def _site_payload(site):
     """Canonical site_settings row + the legacy front-end aliases."""
     out = dict(site or {})
+    for key in WELCOME_POPUP_KEYS:
+        out.setdefault(key, "")
     # Dual-country WhatsApp lines are pinned in Config. Do not let an older
     # site_settings row reintroduce the invalid Benin "01" prefix: /api/site is
     # consumed by both fresh and cached browser bundles, so it must always
@@ -2918,11 +2926,14 @@ def _site_payload(site):
 _SITE_URL_KEYS = frozenset(SITE_KEYS) | {
     "site_logo_url", "hero_video_url", "hero_poster_url", "hero_doc_url",
     "shop_banner_url", "logoUrl", "heroVideo", "heroPoster", "heroDoc",
-    "shopBannerUrl",
+    "shopBannerUrl", "welcome_image_url", "welcome_cta_href",
 }
 _SITE_TEXT_KEYS = frozenset({"conv_banner", "conv_banner_fr", "conv_bold",
                              "convBanner", "convBannerFr", "convBold",
-                             "shipping_note", "shippingNote"})
+                             "shipping_note", "shippingNote",
+                             "welcome_title", "welcome_title_fr",
+                             "welcome_body", "welcome_body_fr",
+                             "welcome_cta_label", "welcome_cta_label_fr"})
 
 
 def _site_clear_list(d):
