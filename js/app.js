@@ -202,24 +202,48 @@ function mountHeroVideo() {
     .catch(() => {});   // offline / static hosting: keep whatever is showing
 }
 
+function homeFeaturedGroupHTML(group) {
+  const cid = group && group.category ? group.category : "";
+  const list = (group && group.products) || [];
+  if (!list.length) return "";
+  return `<section class="home-featured-cat" data-home-featured-cat="${JA.escape(cid)}">
+    <div class="home-featured-cat__head">
+      <h3>${JA.escape(JA.categoryName(cid))}</h3>
+      <a href="shop.html?cat=${encodeURIComponent(cid)}">Shop ${JA.escape(JA.categoryName(cid))} →</a>
+    </div>
+    <div class="product-grid just-in-grid home-featured-grid">${list.map(JA.cardHTML).join("")}</div>
+  </section>`;
+}
+
 function renderHome() {
   const newIn = document.querySelector("[data-new]");
   if (newIn) {
-    let list = [];
-    try { list = newestTwelve(); } catch (e) { list = []; }
-    if (!list.length) {
-      const raw = (typeof JA.products === "function" ? JA.products() : []) || window.JA_SEED || [];
-      list = raw.slice(0, 12);
+    let groups = [];
+    try { groups = JA.homepageFeaturedGroups ? JA.homepageFeaturedGroups(12) : []; } catch (e) { groups = []; }
+    if (groups.length) {
+      try {
+        newIn.classList.add("home-featured-groups");
+        newIn.innerHTML = groups.map(homeFeaturedGroupHTML).join("");
+      } catch (e) { groups = []; }
     }
-    try {
-      newIn.innerHTML = list.map(JA.cardHTML).join("");
-    } catch (e) {
-      newIn.innerHTML = list.map((p) => {
-        const img = (p.images && p.images[0]) || p.image || "";
-        const id = p.id || "";
-        const name = p.name || "";
-        return `<article class="card"><a class="card-media" href="product.html?id=${encodeURIComponent(id)}"><img src="${img}" alt="" loading="lazy" decoding="async" onerror="fallbackImg(event)"></a><div class="card-body"><h3><a href="product.html?id=${encodeURIComponent(id)}">${name}</a></h3></div></article>`;
-      }).join("");
+    if (!groups.length) {
+      newIn.classList.remove("home-featured-groups");
+      let list = [];
+      try { list = newestTwelve(); } catch (e) { list = []; }
+      if (!list.length) {
+        const raw = (typeof JA.products === "function" ? JA.products() : []) || window.JA_SEED || [];
+        list = raw.slice(0, 12);
+      }
+      try {
+        newIn.innerHTML = list.map(JA.cardHTML).join("");
+      } catch (e) {
+        newIn.innerHTML = list.map((p) => {
+          const img = (p.images && p.images[0]) || p.image || "";
+          const id = p.id || "";
+          const name = p.name || "";
+          return `<article class="card"><a class="card-media" href="product.html?id=${encodeURIComponent(id)}"><img src="${img}" alt="" loading="lazy" decoding="async" onerror="fallbackImg(event)"></a><div class="card-body"><h3><a href="product.html?id=${encodeURIComponent(id)}">${name}</a></h3></div></article>`;
+        }).join("");
+      }
     }
   }
   const cats = document.querySelector("[data-home-cats]");
@@ -595,34 +619,52 @@ function renderShop() {
   } else if (pager) pager.innerHTML = "";
 }
 
-async function renderMostViewed() {
-  const host = document.querySelector("[data-most-viewed]");
-  if (!host || host.dataset.done === "1") return;
-  let items = [];
-  try {
-    const res = await fetch("api/most-viewed?limit=12", { credentials: "same-origin", cache: "no-store" });
-    const d = await res.json();
-    if (d && d.ok) {
-      items = (d.items || [])
-        .map((x) => ({ views: x.views || 0, carts: x.carts || 0, p: JA.product(x.productId) }))
-        .filter((x) => x.p);
-    }
-  } catch (e) { items = []; }
-  if (items.length < 4) return;                 // an empty rail is worse than none
-  host.dataset.done = "1";
+function paintMostViewed(host, items) {
   const cur = JA.currency();
+  const live = (items || [])
+    .map((x) => JA.product(x.productId || x.id || (x.p && x.p.id)))
+    .filter(Boolean);
+  if (live.length < 4) return false;
+  host.dataset.done = "1";
+  host.__jaMostViewedItems = live.map((p) => ({ productId: p.id }));
   host.innerHTML = `
     <div class="mv-head">
       <h2 class="serif-title">Most viewed right now</h2>
       <a class="mv-more" href="shop.html">Shop all ›</a>
     </div>
-    <div class="mv-rail">${items.map((x) => `
-      <a class="mv-card" href="product.html?id=${encodeURIComponent(x.p.id)}">
-        <img src="${JA.asset(x.p.image)}" alt="" loading="lazy" onerror="fallbackImg(event)" />
-        <strong>${JA.escape(JA.displayName(x.p))}</strong>
-        <span>${JA.escape(JA.money(JA.priceOf(x.p, cur), cur))}</span>
-        <em>${x.views} view${x.views === 1 ? "" : "s"}${x.carts ? " · " + x.carts + " in carts" : ""}</em>
-      </a>`).join("")}</div>`;
+    <div class="mv-rail">${live.map((p) => {
+      const sold = !(Number(p.stock) > 0);
+      return `<article class="mv-card${sold ? " is-oos" : ""}">
+        <a class="mv-card-link" href="product.html?id=${encodeURIComponent(p.id)}">
+          <img src="${JA.asset(p.image)}" alt="" loading="lazy" onerror="fallbackImg(event)" />
+          <strong>${JA.escape(JA.displayName(p))}</strong>
+          <span data-mv-price-for="${JA.escape(p.id)}">${JA.escape(JA.money(JA.priceOf(p, cur), cur))}</span>
+        </a>
+        <button class="add-mini mv-add" ${sold ? "disabled" : ""} data-add="${JA.escape(p.id)}">${sold ? t("card.oos") : t("card.add")}</button>
+      </article>`;
+    }).join("")}</div>`;
+  return true;
+}
+
+async function renderMostViewed() {
+  const host = document.querySelector("[data-most-viewed]");
+  if (!host) return;
+  if (host.__jaMostViewedItems && host.__jaMostViewedItems.length) {
+    paintMostViewed(host, host.__jaMostViewedItems);
+    return;
+  }
+  if (host.dataset.loading === "1") return;
+  host.dataset.loading = "1";
+  let items = [];
+  try {
+    const res = await fetch("api/most-viewed?limit=12", { credentials: "same-origin", cache: "no-store" });
+    const d = await res.json();
+    if (d && d.ok) {
+      items = (d.items || []).map((x) => ({ productId: x.productId }));
+    }
+  } catch (e) { items = []; }
+  host.dataset.loading = "0";
+  paintMostViewed(host, items);                 // an empty rail is worse than none
 }
 
 function namedSwatch(val) {

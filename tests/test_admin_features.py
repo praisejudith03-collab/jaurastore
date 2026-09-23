@@ -52,6 +52,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("DELETE", "/api/admin/delivery-zones/<zone_id>"),
     ("POST", "/api/admin/delivery-page"),
     ("GET", "/api/admin/growth/settings"), ("POST", "/api/admin/growth/settings"),
+    ("GET", "/api/admin/homepage-featured"), ("POST", "/api/admin/homepage-featured"),
     ("GET", "/api/admin/live"),
     ("GET", "/api/admin/needs-attention"),
     ("GET", "/api/admin/customers.csv"),
