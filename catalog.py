@@ -1203,51 +1203,39 @@ def _product_category_index(products):
 
 
 def _normalize_homepage_featured(raw, products=None):
-    """Clean the Admin homepage featured-product selector payload.
+    """Return the canonical, ordered homepage featured selector.
 
-    Shape stored and served:
-      {maxTotal: 12, categories: {category_id: [product_id, ...]},
-       updatedAt, updatedBy}
-
-    Product ids are deduped globally and capped at 12 total. When a product is
-    present in the live catalogue, its current category wins so a later category
-    move cannot strand the id under an old header.
+    ``featured_products`` is the storefront contract: one ordered list, never
+    grouped by category.  Older saved rows used ``categories``; accept those
+    rows and flatten them in insertion order so existing admin selections are
+    not lost.  The derived ``categories`` map is retained only as a backwards
+    compatible admin/read-cache field and is not used by the storefront.
     """
     source = raw if isinstance(raw, dict) else {}
-    cats_raw = source.get("categories") if isinstance(source.get("categories"), dict) else source
-    if not isinstance(cats_raw, dict):
-        cats_raw = {}
+    ids_raw = raw if isinstance(raw, (list, tuple)) else source.get("featured_products")
+    if not isinstance(ids_raw, (list, tuple)):
+        cats = source.get("categories") if isinstance(source.get("categories"), dict) else source
+        ids_raw = []
+        if isinstance(cats, dict):
+            for values in cats.values():
+                ids_raw.extend(values if isinstance(values, (list, tuple, set)) else [values])
     by_pid = _product_category_index(products or [])
-    seen, out, total = set(), {}, 0
-    for raw_cat, ids in cats_raw.items():
-        if total >= HOMEPAGE_FEATURED_MAX:
-            break
-        cat = _folded_category(raw_cat)
-        if not cat:
+    seen, flat = set(), []
+    for item in ids_raw:
+        pid = str(item or "").strip()
+        if not pid or pid in seen or len(flat) >= HOMEPAGE_FEATURED_MAX:
             continue
-        if not isinstance(ids, (list, tuple, set)):
-            ids = [ids]
-        for item in ids:
-            if total >= HOMEPAGE_FEATURED_MAX:
-                break
-            pid = str(item or "").strip()
-            if not pid or pid in seen:
-                continue
-            if by_pid and pid not in by_pid:
-                continue
-            dest = by_pid.get(pid) or cat
-            if not dest:
-                continue
-            out.setdefault(dest, []).append(pid)
-            seen.add(pid)
-            total += 1
-    payload = {
-        "maxTotal": HOMEPAGE_FEATURED_MAX,
-        "categories": out,
-        "updatedAt": str(source.get("updatedAt") or ""),
-        "updatedBy": str(source.get("updatedBy") or ""),
-    }
-    return payload
+        if by_pid and pid not in by_pid:  # deleted/unknown products are not saved
+            continue
+        seen.add(pid)
+        flat.append(pid)
+    derived = {}
+    for pid in flat:
+        derived.setdefault(by_pid.get(pid, ""), []).append(pid)
+    derived.pop("", None)
+    return {"maxTotal": HOMEPAGE_FEATURED_MAX, "featured_products": flat,
+            "categories": derived, "updatedAt": str(source.get("updatedAt") or ""),
+            "updatedBy": str(source.get("updatedBy") or "")}
 
 
 def homepage_featured():
@@ -1321,82 +1309,35 @@ def _home_rank(product):
 
 
 def homepage_featured_groups(products=None, limit=HOMEPAGE_FEATURED_MAX):
-    """Resolve selector settings into category groups of live products.
-
-    Selected ids lead, grouped under their current category. Empty/non-selected
-    categories fall back to the standard homepage merchandising sort so the
-    section never goes blank when a category has no custom picks.
-    """
+    """Legacy API projection of the flat selector (storefront does not group)."""
     live = list(products if products is not None else merged())
-    try:
-        max_total = max(1, min(HOMEPAGE_FEATURED_MAX, int(limit or HOMEPAGE_FEATURED_MAX)))
-    except (TypeError, ValueError):
-        max_total = HOMEPAGE_FEATURED_MAX
+    max_total = max(1, min(HOMEPAGE_FEATURED_MAX, int(limit or HOMEPAGE_FEATURED_MAX)))
     settings = homepage_featured()
-    selected = settings.get("categories") or {}
-    by_id = {str(p.get("id") or ""): p for p in live if p.get("id")}
-    by_cat = {}
-    for p in live:
-        by_cat.setdefault(_folded_category(p.get("category")), []).append(p)
-    for cid in list(by_cat):
-        by_cat[cid] = sorted(by_cat[cid], key=_home_rank)
-
-    def _cat_order():
-        order = []
-        # Prefer the category table order from api.py when available, but do not
-        # import api here (avoids a circular import). The product order is a
-        # safe fallback and selected categories are always promoted below.
-        for p in live:
-            cid = _folded_category(p.get("category"))
-            if cid and cid not in order:
-                order.append(cid)
-        for cid in selected:
-            cid = _folded_category(cid)
-            if cid and cid not in order:
-                order.append(cid)
-        return order
-
-    selected_order = [cid for cid in _cat_order() if selected.get(cid)]
-    order = selected_order + [cid for cid in _cat_order() if cid not in selected_order]
-    groups, seen, total = [], set(), 0
-    if selected_order:
-        for cid in order:
-            if total >= max_total:
-                break
-            custom = []
-            for pid in selected.get(cid, []):
-                p = by_id.get(str(pid))
-                if not p or str(pid) in seen:
-                    continue
-                if _folded_category(p.get("category")) != cid:
-                    continue
-                custom.append(p)
-            picks = custom or [p for p in by_cat.get(cid, []) if str(p.get("id")) not in seen]
-            if not custom:
-                picks = picks[:min(4, max_total - total)]
-            take = picks[:max_total - total]
-            if not take:
-                continue
-            for p in take:
-                seen.add(str(p.get("id") or ""))
-            total += len(take)
-            groups.append({"category": cid, "productIds": [p.get("id") for p in take],
-                           "products": take, "custom": bool(custom)})
-        return groups
-
-    # No admin selections yet: use the standard homepage sort and group those
-    # first 12 pieces by category. This is the legacy behaviour, just labelled.
-    chosen = sorted(live, key=_home_rank)[:max_total]
-    for p in chosen:
-        cid = _folded_category(p.get("category"))
-        if groups and groups[-1]["category"] == cid:
-            groups[-1]["products"].append(p)
-            groups[-1]["productIds"].append(p.get("id"))
-        else:
-            groups.append({"category": cid, "productIds": [p.get("id")],
-                           "products": [p], "custom": False})
+    by_id = {str(p.get("id")): p for p in live if p.get("id")}
+    ids = settings.get("featured_products") or []
+    chosen = [by_id[pid] for pid in ids if pid in by_id][:max_total]
+    if not chosen:
+        chosen = sorted(live, key=_home_rank)[:max_total]
+    groups, buckets = [], {}
+    for product in chosen:
+        cid = _folded_category(product.get("category"))
+        buckets.setdefault(cid, []).append(product)
+    for cid, rows in buckets.items():
+        groups.append({"category": cid, "productIds": [p.get("id") for p in rows],
+                       "products": rows, "custom": bool(ids)})
     return groups
 
+
+def homepage_featured_products(products=None, limit=HOMEPAGE_FEATURED_MAX):
+    """Resolve the ordered, admin-selected flat homepage product list."""
+    live = list(products if products is not None else merged())
+    max_total = max(1, min(HOMEPAGE_FEATURED_MAX, int(limit or HOMEPAGE_FEATURED_MAX)))
+    settings = homepage_featured()
+    by_id = {str(p.get("id")): p for p in live if p.get("id")}
+    selected = [by_id[pid] for pid in settings.get("featured_products", []) if pid in by_id]
+    if selected:
+        return selected[:max_total]
+    return sorted(live, key=_home_rank)[:max_total]
 
 def meta():
     """Metadata blob used for ETag / change detection on the catalogue."""

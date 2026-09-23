@@ -202,48 +202,27 @@ function mountHeroVideo() {
     .catch(() => {});   // offline / static hosting: keep whatever is showing
 }
 
-function homeFeaturedGroupHTML(group) {
-  const cid = group && group.category ? group.category : "";
-  const list = (group && group.products) || [];
-  if (!list.length) return "";
-  return `<section class="home-featured-cat" data-home-featured-cat="${JA.escape(cid)}">
-    <div class="home-featured-cat__head">
-      <h3>${JA.escape(JA.categoryName(cid))}</h3>
-      <a href="shop.html?cat=${encodeURIComponent(cid)}">Shop ${JA.escape(JA.categoryName(cid))} →</a>
-    </div>
-    <div class="product-grid just-in-grid home-featured-grid">${list.map(JA.cardHTML).join("")}</div>
-  </section>`;
-}
-
 function renderHome() {
   const newIn = document.querySelector("[data-new]");
   if (newIn) {
-    let groups = [];
-    try { groups = JA.homepageFeaturedGroups ? JA.homepageFeaturedGroups(12) : []; } catch (e) { groups = []; }
-    if (groups.length) {
-      try {
-        newIn.classList.add("home-featured-groups");
-        newIn.innerHTML = groups.map(homeFeaturedGroupHTML).join("");
-      } catch (e) { groups = []; }
-    }
-    if (!groups.length) {
-      newIn.classList.remove("home-featured-groups");
-      let list = [];
+    let list = [];
+    try { list = JA.homepageFeaturedProducts ? JA.homepageFeaturedProducts(12) : []; } catch (e) { list = []; }
+    if (!list.length) {
       try { list = newestTwelve(); } catch (e) { list = []; }
       if (!list.length) {
         const raw = (typeof JA.products === "function" ? JA.products() : []) || window.JA_SEED || [];
         list = raw.slice(0, 12);
       }
-      try {
-        newIn.innerHTML = list.map(JA.cardHTML).join("");
-      } catch (e) {
-        newIn.innerHTML = list.map((p) => {
-          const img = (p.images && p.images[0]) || p.image || "";
-          const id = p.id || "";
-          const name = p.name || "";
-          return `<article class="card"><a class="card-media" href="product.html?id=${encodeURIComponent(id)}"><img src="${img}" alt="" loading="lazy" decoding="async" onerror="fallbackImg(event)"></a><div class="card-body"><h3><a href="product.html?id=${encodeURIComponent(id)}">${name}</a></h3></div></article>`;
-        }).join("");
-      }
+    }
+    try {
+      newIn.innerHTML = list.map(JA.cardHTML).join("");
+    } catch (e) {
+      newIn.innerHTML = list.map((p) => {
+        const img = (p.images && p.images[0]) || p.image || "";
+        const id = p.id || "";
+        const name = p.name || "";
+        return `<article class="card"><a class="card-media" href="product.html?id=${encodeURIComponent(id)}"><img src="${img}" alt="" loading="lazy" decoding="async" onerror="fallbackImg(event)"></a><div class="card-body"><h3><a href="product.html?id=${encodeURIComponent(id)}">${name}</a></h3></div></article>`;
+      }).join("");
     }
   }
   const cats = document.querySelector("[data-home-cats]");
