@@ -76,7 +76,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # dynamic bulk-discount copy. A phone holding the v149 bundle from its
 # service-worker cache would keep leaking stock counts and stale prices, so
 # every shared asset ships under a fresh token.
-SHARED_TOKEN = "150"
+SHARED_TOKEN = "151"
 
 
 def _image_size(path):

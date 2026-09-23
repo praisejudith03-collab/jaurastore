@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=150";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=150";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=151";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=151";
 }
 
 function renderCategories() {
@@ -373,12 +373,14 @@ function paintFilterDrawer(baseList) {
   });
   const minV = shopFilter.min || lo;
   const maxV = shopFilter.max || hi;
+  const cfa = JA.currency() === "CFA";
+  const step = cfa ? 50 : 1;
   body.innerHTML = `
     <section class="filt-block">
       <h3>${t("filt.price")}</h3>
       <div class="filt-range">
-        <input type="range" data-fmin min="${lo}" max="${hi}" value="${minV}" />
-        <input type="range" data-fmax min="${lo}" max="${hi}" value="${maxV}" />
+        <input type="range" data-fmin min="${lo}" max="${hi}" step="${step}" value="${minV}" />
+        <input type="range" data-fmax min="${lo}" max="${hi}" step="${step}" value="${maxV}" />
       </div>
       <div class="filt-price-row">
         <p data-fprice-lab>${t("filt.priceLab")} ${JA.money(minV)} — ${JA.money(maxV)}</p>
@@ -407,7 +409,10 @@ function paintFilterDrawer(baseList) {
   const maxEl = body.querySelector("[data-fmax]");
   const syncLab = () => {
     let a = Number(minEl.value), b = Number(maxEl.value);
+    if (cfa) { a = JA.roundCfa(a); b = JA.roundCfa(b); }
     if (a > b) { const t = a; a = b; b = t; }
+    minEl.value = String(a);
+    maxEl.value = String(b);
     shopFilter.min = a;
     shopFilter.max = b;
     if (lab) lab.textContent = t("filt.priceLab") + " " + JA.money(a) + " — " + JA.money(b);
@@ -1419,6 +1424,11 @@ function ckDiscountFor(sub) {
   if (!ckPromo || !ckPromo.percent) return 0;
   return Math.round(sub * ckPromo.percent / 100);
 }
+function ckCeiledDiscount(sub, cur) {
+  const disc = ckDiscountFor(sub);
+  if (cur === "CFA" && disc) return Math.max(0, sub - JA.roundCfa(sub - disc));
+  return disc;
+}
 
 function paintCheckoutTotals(form) {
   const cur = checkoutCurrency(form);
@@ -1439,7 +1449,7 @@ function paintCheckoutTotals(form) {
   const sub = document.querySelector("[data-ck-sub]");
   const tot = document.querySelector("[data-ck-total]");
   const subVal = JA.cartTotal(cur);
-  const disc = ckDiscountFor(subVal);
+  const disc = ckCeiledDiscount(subVal, cur);
   const discRow = document.querySelector("[data-ck-disc-row]");
   const discCell = document.querySelector("[data-ck-disc]");
   if (sub) sub.textContent = JA.money(subVal, cur);
@@ -2213,7 +2223,7 @@ function renderCheckout() {
     const proofBlob = proofFile
       || ((JA.dataUrlToBlob && form.dataset.proof) ? JA.dataUrlToBlob(form.dataset.proof) : null);
     const subNow = JA.cartTotal(cur);
-    const discNow = ckDiscountFor(subNow);
+    const discNow = ckCeiledDiscount(subNow, cur);
     const order = JA.saveOrder({
       id: JA.nextOrderId(),
       proofBlob: proofBlob || undefined,

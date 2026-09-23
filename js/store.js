@@ -2071,8 +2071,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=150";
-        const FLYER = "images/brand/logo-flyer.jpg?v=150";
+        const LOGO = "images/brand/logo.jpg?v=151";
+        const FLYER = "images/brand/logo-flyer.jpg?v=151";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2234,7 +2234,7 @@ const JA = (() => {
       </div>
       <div class="wrap header-inner">
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=150" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=151" alt="Jaura" />
         </a>
         <nav class="nav-left">
           <a href="index.html">${tx("nav.home")}</a>
@@ -2386,7 +2386,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=150" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=151" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2475,24 +2475,47 @@ const JA = (() => {
     paintWelcome();
   }
 
+  function welcomeField(en, fr) {
+    const first = inFrench() ? fr : en;
+    const other = inFrench() ? en : fr;
+    return String((_siteConfig && (_siteConfig[first] || _siteConfig[other])) || "");
+  }
+
+  function welcomeEnabled() {
+    return String((_siteConfig && _siteConfig.welcome_enabled) || "") !== "0";
+  }
+
+  function welcomeUrl(value, fallback, allowHtml) {
+    const raw = String(value || "").trim();
+    if (!raw) return fallback;
+    if (/^https?:\/\//i.test(raw) || raw.startsWith("/") || (allowHtml && /^[\w./-]+\.html(?:[?#].*)?$/i.test(raw))) return raw;
+    return fallback;
+  }
+
   function paintWelcome() {
-    if ((document.body.dataset.page || "") === "admin") return;
+    if ((document.body.dataset.page || "") === "admin" || !welcomeEnabled()) return;
     try {
       if (sessionStorage.getItem(WELCOME_SEEN)) return;
     } catch (e) {}
     if (document.querySelector("[data-welcome]")) return;
+    const title = welcomeField("welcome_title", "welcome_title_fr") || tx("promo.welcome");
+    const body = welcomeField("welcome_body", "welcome_body_fr");
+    const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
+    const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=151", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
     el.setAttribute("role", "dialog");
-    el.setAttribute("aria-label", tx("promo.welcome"));
+    el.setAttribute("aria-label", escape(title));
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="images/brand/logo.jpg?v=150" alt="Jaura" />
-        <p class="welcome-hello">${tx("promo.welcome")}</p>
+        <img class="welcome-logo" src="${escape(img)}" alt="Jaura" />
+        <p class="welcome-hello">${escape(title)}</p>
+        ${body ? `<p class="welcome-body">${escape(body).replace(/\n/g, "<br>")}</p>` : ""}
         ${referralEnabled() ? `<p class="welcome-referral">${tx("promo.referral")}</p>` : ""}
-        <a class="welcome-cta" href="shop.html" data-welcome-shop>${tx("promo.shop")} ›</a>
+        <a class="welcome-cta" href="${escape(href)}" data-welcome-shop>${escape(cta)} ›</a>
       </div>`;
     document.body.appendChild(el);
     document.body.classList.add("welcome-open");
@@ -2505,13 +2528,13 @@ const JA = (() => {
       setTimeout(() => el.remove(), 520);
     };
     el.querySelector("[data-welcome-x]")?.addEventListener("click", close);
-    el.querySelector("[data-welcome-shop]")?.addEventListener("click", (e) => { markWelcomeSeen(); });
+    el.querySelector("[data-welcome-shop]")?.addEventListener("click", () => { markWelcomeSeen(); });
     el.addEventListener("click", (e) => { if (e.target === el) close(); });
   }
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=150";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=151";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2570,7 +2593,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=150");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=151");
     document.title = title;
     [
       ["name", "description", description],

@@ -74,7 +74,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=150" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=151" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -2091,7 +2091,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=150" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=151" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -2145,7 +2145,7 @@ function paintDesk(tab = "analytics") {
   if (tab === "marketing") fillMarketing();
   if (tab === "account") bindAccount();
   if (tab === "settings") {
-    bindHeroVideo(); bindBanner(); bindSiteBranding();
+    bindHeroVideo(); bindBanner(); bindWelcome(); bindSiteBranding();
   }
   if (tab === "delivery") {
     bindDeliveryPage();
@@ -2434,7 +2434,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=150", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=151", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -2479,6 +2479,22 @@ function settingsForm() {
     <div class="field full"><label>Banner text (French — shown when FR is selected)</label><input name="convBannerFr" id="conv-banner-fr" maxlength="300" placeholder="e.g. Soldes de rentrée : -10% sur tous les sacs" /></div>
     <div class="field full"><label>Bold highlight (optional)</label><input name="convBold" id="conv-bold" maxlength="300" placeholder="e.g. ends Sunday" /></div>
     <div class="field full"><p class="admin-err" id="banner-form-error" hidden></p><button class="btn">Save banner</button></div>
+    </form>
+  </details>
+  <details class="admin-settings-section" open>
+    <summary>Welcome pop-up</summary>
+    <form id="welcome-form" class="form-grid admin-card" style="margin-top:22px">
+      <p class="admin-note full">Customize the greeting shown once per visit. Empty fields use the built-in storefront defaults.</p>
+      <div class="field full"><label><input type="checkbox" id="welcome-enabled" /> Enable welcome pop-up</label></div>
+      <div class="field"><label>Heading (English)</label><input name="welcome_title" maxlength="200" /></div>
+      <div class="field"><label>Heading (French)</label><input name="welcome_title_fr" maxlength="200" /></div>
+      <div class="field"><label>Message (English)</label><textarea name="welcome_body" maxlength="500"></textarea></div>
+      <div class="field"><label>Message (French)</label><textarea name="welcome_body_fr" maxlength="500"></textarea></div>
+      <div class="field full"><label>Image URL</label><input name="welcome_image_url" maxlength="500" /><div id="welcome-image-preview"></div></div>
+      <div class="field"><label>Button text (English)</label><input name="welcome_cta_label" maxlength="120" /></div>
+      <div class="field"><label>Button text (French)</label><input name="welcome_cta_label_fr" maxlength="120" /></div>
+      <div class="field full"><label>Button link</label><input name="welcome_cta_href" maxlength="500" placeholder="shop.html" /></div>
+      <div class="field full"><p class="admin-err" id="welcome-form-error" hidden></p><button class="btn">Save welcome pop-up</button></div>
     </form>
   </details>
   <details class="admin-settings-section" open>
@@ -2927,6 +2943,47 @@ function bindDeliveryZones() {
 async function saveSiteConfig(patch) {
   return window.JA_NET ? window.JA_NET.api("api/admin/site", { method: "POST", json: patch }) : Promise.resolve(null);
 }
+const WELCOME_FIELDS = ["welcome_title", "welcome_title_fr", "welcome_body", "welcome_body_fr",
+  "welcome_image_url", "welcome_cta_label", "welcome_cta_label_fr", "welcome_cta_href"];
+function bindWelcome() {
+  const form = $("#welcome-form"); if (!form) return;
+  const enabled = $("#welcome-enabled");
+  const preview = $("#welcome-image-preview");
+  let loadedRow = null;
+  const repaint = (site) => {
+    loadedRow = site || {};
+    WELCOME_FIELDS.forEach((name) => { const el = form.elements.namedItem(name); if (el) el.value = loadedRow[name] || ""; });
+    if (enabled) enabled.checked = loadedRow.welcome_enabled !== "0";
+    const url = loadedRow.welcome_image_url || "";
+    if (preview) preview.innerHTML = url ? `<img src="${JA.escape(url)}" alt="Welcome preview" style="max-width:96px;max-height:96px;margin-top:8px" />` : "";
+  };
+  fetch("api/site", { cache: "no-store" }).then((r) => r.ok ? r.json() : null)
+    .then((d) => repaint((d && d.site) || {})).catch(() => {});
+  form.elements.namedItem("welcome_image_url")?.addEventListener("input", (e) => {
+    if (preview) preview.innerHTML = e.target.value ? `<img src="${JA.escape(e.target.value)}" alt="Welcome preview" style="max-width:96px;max-height:96px;margin-top:8px" />` : "";
+  });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const errorBox = $("#welcome-form-error");
+    if (errorBox) { errorBox.hidden = true; errorBox.textContent = ""; }
+    const candidate = {};
+    WELCOME_FIELDS.forEach((name) => { candidate[name] = String(form.elements.namedItem(name)?.value || "").trim(); });
+    const patch = siteFieldPatch(candidate, loadedRow);
+    patch.welcome_enabled = enabled && enabled.checked ? "1" : "0";
+    try {
+      const saved = await saveSiteConfig(patch);
+      if (!saved || saved.ok === false) throw new Error((saved && saved.error) || "Could not save welcome pop-up.");
+      repaint(saved.site || { ...loadedRow, ...patch });
+      if (JA.applySiteConfig) JA.applySiteConfig(saved.site || patch);
+      JA.toast("Welcome pop-up saved — changes are live on the next page load.");
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      if (errorBox) { errorBox.textContent = message; errorBox.hidden = false; }
+      JA.toast(message);
+    }
+  });
+}
+
 function bindBanner() {
   const form = $("#banner-form"); if (!form) return;
   // The row this form was painted from; an empty box can only clear a line
