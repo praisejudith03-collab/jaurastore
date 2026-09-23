@@ -262,7 +262,8 @@ def homepage_featured():
     """Homepage Featured Products settings resolved into storefront groups."""
     products = catalog_mod.merged()
     groups = catalog_mod.homepage_featured_groups(products)
-    return jsonify(ok=True, featured=catalog_mod.homepage_featured(),
+    featured = catalog_mod.homepage_featured()
+    return jsonify(ok=True, featured=featured, featured_products=featured.get("featured_products", []),
                    groups=[_featured_group_payload(g, public=True) for g in groups])
 
 
@@ -271,7 +272,8 @@ def homepage_featured():
 def admin_homepage_featured():
     products = catalog_mod.merged(include_hidden=True)
     groups = catalog_mod.homepage_featured_groups(products)
-    return jsonify(ok=True, featured=catalog_mod.homepage_featured(),
+    featured = catalog_mod.homepage_featured()
+    return jsonify(ok=True, featured=featured, featured_products=featured.get("featured_products", []),
                    groups=[_featured_group_payload(g, public=False) for g in groups])
 
 
@@ -280,7 +282,7 @@ def admin_homepage_featured():
 @sec.require_csrf
 def admin_homepage_featured_save():
     d = request.get_json(silent=True) or {}
-    raw = d.get("categories") if isinstance(d.get("categories"), dict) else d.get("featured")
+    raw = d.get("featured_products") if isinstance(d.get("featured_products"), list) else (d.get("categories") if isinstance(d.get("categories"), dict) else d.get("featured"))
     if isinstance(raw, dict) and isinstance(raw.get("categories"), dict):
         raw = raw.get("categories")
     if raw is None and isinstance(d, dict):
@@ -288,10 +290,10 @@ def admin_homepage_featured_save():
     saved = catalog_mod.save_homepage_featured(raw, authmod.current_admin())
     if saved is None:
         return jsonify(ok=False, error="Homepage featured products could not be saved. No changes were made."), 503
-    audit(authmod.current_admin(), "homepage_featured.save", json.dumps(saved.get("categories") or {})[:300], _ip())
+    audit(authmod.current_admin(), "homepage_featured.save", json.dumps(saved.get("featured_products") or [])[:300], _ip())
     products = catalog_mod.merged(include_hidden=True)
     groups = catalog_mod.homepage_featured_groups(products)
-    return jsonify(ok=True, featured=saved,
+    return jsonify(ok=True, featured=saved, featured_products=saved.get("featured_products", []),
                    groups=[_featured_group_payload(g, public=False) for g in groups])
 
 # ========================================================== public: categories

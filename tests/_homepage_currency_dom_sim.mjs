@@ -145,7 +145,7 @@ vm.runInContext(`
 `, sandbox);
 await vm.runInContext("renderMostViewed()", sandbox);
 
-check("More from the house rendered grouped category headings", /home-featured-cat/.test(newEl.innerHTML) && /Household/.test(newEl.innerHTML) && /Beauty/.test(newEl.innerHTML));
+check("More from the house rendered a flat product grid", !/home-featured-cat|home-featured-groups|HOUSEHOLD ITEMS|BEAUTY &|SKINCARE/i.test(newEl.innerHTML) && /class="card"/.test(newEl.innerHTML));
 check("Most viewed rendered product buttons", /data-add=/.test(mostViewedEl.innerHTML) && /Add to cart/.test(mostViewedEl.innerHTML) && /Out of stock/.test(mostViewedEl.innerHTML));
 check("Most viewed hides raw view/cart counts", !/\b\d+\s+views?\b|\bin carts\b/.test(mostViewedEl.innerHTML));
 check("initial homepage prices are Naira", /₦1,000/.test(newEl.innerHTML) && /₦1,000/.test(mostViewedEl.innerHTML));

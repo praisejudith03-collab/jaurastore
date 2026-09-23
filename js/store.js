@@ -304,7 +304,7 @@ const JA = (() => {
   // a stale copy of a product someone else already changed.
   let catalogMeta = { server: false };
   const HOME_FEATURED_MAX = 12;
-  let homepageFeaturedSettings = { maxTotal: HOME_FEATURED_MAX, categories: {}, updatedAt: "", updatedBy: "" };
+  let homepageFeaturedSettings = { maxTotal: HOME_FEATURED_MAX, featured_products: [], categories: {}, updatedAt: "", updatedBy: "" };
 
   function pendingMap() { return read(KEYS.pending, {}) || {}; }
   function markPending(id) { const p = pendingMap(); p[id] = Date.now(); write(KEYS.pending, p); }
@@ -391,32 +391,18 @@ const JA = (() => {
 
   function normalizeHomepageFeatured(raw) {
     const src = raw && typeof raw === "object" ? raw : {};
-    const catSrc = src.categories && typeof src.categories === "object" ? src.categories : src;
-    const out = {};
-    const seen = new Set();
-    let total = 0;
-    const max = Math.max(1, Math.min(HOME_FEATURED_MAX, Number(src.maxTotal || HOME_FEATURED_MAX) || HOME_FEATURED_MAX));
-    Object.keys(catSrc || {}).forEach((cat) => {
-      if (total >= max) return;
-      const cid = String(cat || "").trim();
-      if (!cid || ["maxTotal", "updatedAt", "updatedBy"].includes(cid)) return;
-      const ids = Array.isArray(catSrc[cat]) ? catSrc[cat] : [catSrc[cat]];
-      ids.forEach((id) => {
-        if (total >= max) return;
-        const pid = String(id || "").trim();
-        if (!pid || seen.has(pid)) return;
-        if (!out[cid]) out[cid] = [];
-        out[cid].push(pid);
-        seen.add(pid);
-        total += 1;
+    let ids = Array.isArray(src.featured_products) ? src.featured_products : [];
+    if (!ids.length && src.categories && typeof src.categories === "object") {
+      Object.keys(src.categories).forEach((cat) => {
+        const values = Array.isArray(src.categories[cat]) ? src.categories[cat] : [src.categories[cat]];
+        ids = ids.concat(values);
       });
-    });
-    return {
-      maxTotal: max,
-      categories: out,
-      updatedAt: String(src.updatedAt || ""),
-      updatedBy: String(src.updatedBy || ""),
-    };
+    }
+    const seen = new Set();
+    const flat = ids.map((id) => String(id || "").trim()).filter((id) => id && !seen.has(id) && seen.add(id)).slice(0, HOME_FEATURED_MAX);
+    return { maxTotal: HOME_FEATURED_MAX, featured_products: flat,
+      categories: src.categories && typeof src.categories === "object" ? src.categories : {},
+      updatedAt: String(src.updatedAt || ""), updatedBy: String(src.updatedBy || "") };
   }
 
   function setHomepageFeatured(raw) {
@@ -425,11 +411,15 @@ const JA = (() => {
   }
 
   function homepageFeatured() {
-    const cats = {};
-    Object.keys(homepageFeaturedSettings.categories || {}).forEach((cid) => {
-      cats[cid] = (homepageFeaturedSettings.categories[cid] || []).slice();
-    });
-    return { ...homepageFeaturedSettings, categories: cats };
+    return { ...homepageFeaturedSettings, featured_products: (homepageFeaturedSettings.featured_products || []).slice() };
+  }
+
+  function homepageFeaturedProducts(limit = HOME_FEATURED_MAX) {
+    const all = products();
+    const max = Math.max(1, Math.min(HOME_FEATURED_MAX, Number(limit || HOME_FEATURED_MAX) || HOME_FEATURED_MAX));
+    const byId = new Map(all.map((p) => [String(p.id), p]));
+    const selected = (homepageFeaturedSettings.featured_products || []).map((id) => byId.get(String(id))).filter(Boolean);
+    return (selected.length ? selected : homeSorted(all)).slice(0, max);
   }
 
   function homeRank(p) {
@@ -527,7 +517,7 @@ const JA = (() => {
   }
 
   async function saveHomepageFeatured(categoriesPayload) {
-    const payload = { categories: (categoriesPayload && categoriesPayload.categories) || categoriesPayload || {} };
+    const payload = { featured_products: (categoriesPayload && categoriesPayload.featured_products) || (Array.isArray(categoriesPayload) ? categoriesPayload : []) };
     const call = window.JA_NET && window.JA_NET.api
       ? window.JA_NET.api("api/admin/homepage-featured", { method: "POST", json: payload })
       : fetch("api/admin/homepage-featured", {
@@ -3250,7 +3240,7 @@ const JA = (() => {
     ready, CATEGORIES: [], categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,
     products, product, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
-    homepageFeatured, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
+    homepageFeatured, homepageFeaturedProducts, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
     currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
     referralEnabled,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,

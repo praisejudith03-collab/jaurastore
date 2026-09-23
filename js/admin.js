@@ -2470,24 +2470,17 @@ function updateHomeFeaturedCount() {
   });
 }
 function collectHomepageFeaturedSelections() {
-  const out = {};
-  document.querySelectorAll('[data-home-featured-pid]:checked').forEach((input) => {
-    const cat = input.getAttribute("data-home-featured-cat") || "";
-    const pid = input.getAttribute("data-home-featured-pid") || input.value || "";
-    if (!cat || !pid) return;
-    if (!out[cat]) out[cat] = [];
-    out[cat].push(pid);
-  });
-  return out;
+  // The picker may be grouped for convenience, but persistence is one ordered
+  // list. DOM order is deterministic and keeps the saved order stable.
+  return [...document.querySelectorAll('[data-home-featured-pid]:checked')]
+    .map((input) => input.getAttribute("data-home-featured-pid") || input.value || "")
+    .filter(Boolean);
 }
 function paintHomepageFeaturedPicker() {
   const box = document.getElementById("home-featured-products");
   if (!box) return;
-  const settings = JA.homepageFeatured ? JA.homepageFeatured() : { categories: {} };
-  const selected = new Set();
-  Object.keys(settings.categories || {}).forEach((cid) => {
-    (settings.categories[cid] || []).forEach((pid) => selected.add(String(pid)));
-  });
+  const settings = JA.homepageFeatured ? JA.homepageFeatured() : { featured_products: [] };
+  const selected = new Set((settings.featured_products || []).map(String));
   const all = (JA.products ? JA.products() : []).slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
   const cats = JA.categories ? JA.categories() : [];
   const known = new Set(cats.map((c) => c.id));
