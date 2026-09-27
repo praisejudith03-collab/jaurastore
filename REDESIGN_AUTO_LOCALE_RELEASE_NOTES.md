@@ -114,13 +114,13 @@ here. They run in GitHub CI where Playwright installs Chromium.
 
 ---
 
-## 3. Release checklist (owner / CI — NOT done by the agent)
+## 3. Release checklist (owner / CI)
 
-1. **Bump the cache token** `151 → 152` everywhere
-   (`?v=` references in all `*.html`, `js/*.js`, `sw.js VERSION` + precache
-   list, and `SHARED_TOKEN` in `tests/test_brand_icons.py`) so phones with
-   the v151 service worker receive the new JS/CSS. (Same step previous
-   releases took.)
+1. ✅ **Cache token bumped** `151 → 152` everywhere (254 `?v=` references in
+   all `*.html` / `js/*.js` / `css/fonts.css`, `sw.js VERSION` +
+   `jaura-v152` precache list, and `SHARED_TOKEN` in
+   `tests/test_brand_icons.py`), so phones holding the v151 service worker
+   receive the new JS/CSS without clearing their cache.
 2. Merge this PR (`main` auto-deploys on Render).
 3. Run the deployed browser check:
    `Actions → Deployed mobile browser check` (or
