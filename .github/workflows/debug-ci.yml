@@ -1,0 +1,44 @@
+name: Debug CI (temporary - remove before merge)
+
+on:
+  push:
+    branches: [arena/01a0e3a2-jaurastore]
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt -r requirements-test.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Browser tests with annotation report
+        run: |
+          set +e
+          python -m pytest tests/test_browser_smoke.py -q --tb=short -ra > /tmp/pytest.log 2>&1
+          rc=$?
+          python - <<'PY'
+          def esc(s):
+              return s.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          lines = open('/tmp/pytest.log').read().splitlines()
+          fails = [l for l in lines if l.startswith(('FAILED', 'ERROR'))][:8]
+          summary = []
+          grab = False
+          for line in lines:
+              if 'short test summary' in line:
+                  grab = True
+              if grab:
+                  summary.append(line)
+          for line in (fails or summary[-8:] or lines[-8:])[:8]:
+              print(f"::error ::{esc(line)}")
+          for line in summary[1:5] + summary[-8:]:
+              if not line.startswith(('FAILED', 'ERROR')):
+                  print(f"::notice ::{esc(line)}")
+          PY
+          exit $rc
