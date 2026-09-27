@@ -12,25 +12,25 @@
   <meta property="og:title" content="Checkout · Jaura Store" />
   <meta property="og:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
   <meta property="og:url" content="https://jaurastore.com.ng/checkout.html" />
-  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=153" />
+  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=154" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Checkout · Jaura Store" />
   <meta name="twitter:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
-  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=153" />
+  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=154" />
   <!-- brand icons: Supabase public-assets bucket (tools/upload_brand_assets.py) -->
   <link rel="icon" type="image/png" sizes="32x32" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="48x48" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/favicon-48.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/apple-touch-180.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/icon-192.png" />
   <!-- same-origin fallback: still a legible mark if the bucket is unreachable -->
-  <link rel="icon" type="image/png" sizes="16x16" href="/images/brand/favicon-16.png?v=153" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/brand/favicon-16.png?v=154" />
   <!-- /brand icons -->
-  <link rel="stylesheet" href="css/fonts.css?v=153" />
+  <link rel="stylesheet" href="css/fonts.css?v=154" />
   <!-- product photos live in the shop's Supabase storage bucket:
        open that connection while the HTML is still parsing so the
        first photo starts the moment the grid renders -->
   <link rel="preconnect" href="https://rvkweyipqgsggcnimhxf.supabase.co" />
-  <link rel="stylesheet" href="css/style.css?v=153" />
+  <link rel="stylesheet" href="css/style.css?v=154" />
 </head>
 <body data-page="checkout">
   <div id="site-header"></div>
@@ -147,6 +147,35 @@
               <span data-i18n="ck.payCfaHint">Pay in F CFA by MTN MoMo (Benin) or Moov Money (Togo).</span>
             </div>
           </label>
+          <script>
+            // A French checkout locks the currency to FCFA (js/app.js boot()
+            // makes this same call, in full, once it has loaded), but that
+            // bundle has to be fetched over the network first, and this form
+            // is visible the instant the cart has an item - so on a slow
+            // connection the Naira gateway could sit "checked" (its markup
+            // default, above) for a moment even for a French shopper. Decide
+            // the zero-network-dependency subset of that same rule right
+            // here, synchronously, during parsing, so it is never wrong even
+            // for an instant. js/app.js repeats and owns the full decision
+            // once it is ready; this is purely a paint-time guard.
+            (function () {
+              try {
+                var q = new URLSearchParams(location.search).get("lang");
+                var lang = (q === "fr" || q === "en") ? q : null;
+                if (!lang) { try { lang = localStorage.getItem("jaura_lang"); } catch (e) {} }
+                if (!lang) { try { lang = sessionStorage.getItem("jaura_lang"); } catch (e) {} }
+                if (lang !== "fr") return;
+                var cfa = document.querySelector('[name="currency"][value="CFA"]');
+                var ngn = document.querySelector('[name="currency"][value="NGN"]');
+                if (cfa) cfa.checked = true;
+                if (ngn) {
+                  ngn.checked = false;
+                  var ngnCard = ngn.closest(".pay-card");
+                  if (ngnCard) ngnCard.hidden = true;
+                }
+              } catch (e) {}
+            })();
+          </script>
 
           <div class="bank-sheet" data-bank-ngn>
             <h4 data-i18n="ck.ourBank">Our bank details</h4>
@@ -186,11 +215,11 @@
   </div>
 
   <div id="site-footer"></div>
-  <script src="js/products-data.js?v=153"></script>
-  <script src="js/i18n-phrases.js?v=153"></script>
-  <script src="js/i18n.js?v=153"></script>
-  <script src="js/net.js?v=153"></script>
-  <script src="js/store.js?v=153"></script>
-  <script src="js/app.js?v=153"></script>
+  <script src="js/products-data.js?v=154"></script>
+  <script src="js/i18n-phrases.js?v=154"></script>
+  <script src="js/i18n.js?v=154"></script>
+  <script src="js/net.js?v=154"></script>
+  <script src="js/store.js?v=154"></script>
+  <script src="js/app.js?v=154"></script>
 </body>
 </html>

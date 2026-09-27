@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=153";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=153";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=154";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=154";
 }
 
 function renderCategories() {
@@ -608,8 +608,8 @@ function paintMostViewed(host, items) {
   host.__jaMostViewedItems = live.map((p) => ({ productId: p.id }));
   host.innerHTML = `
     <div class="mv-head">
-      <h2 class="serif-title">Most viewed right now</h2>
-      <a class="mv-more" href="shop.html">Shop all ›</a>
+      <h2 class="serif-title">${t("home.mostViewed")}</h2>
+      <a class="mv-more" href="shop.html">${t("home.shopAllArrow")}</a>
     </div>
     <div class="mv-rail">${live.map((p) => {
       const sold = !(Number(p.stock) > 0);
@@ -1546,9 +1546,9 @@ function zoneLabel(z) {
 function zoneGroups(list) {
   const zones = Array.isArray(list) ? list.filter((z) => z && z.name) : [];
   const groups = [
-    { id: "ngn", label: "Nigeria (\u20A6 Naira)", zones: [] },
-    { id: "cfa", label: "Benin & Togo (F CFA)", zones: [] },
-    { id: "pickup", label: "Pickup / collection", zones: [] },
+    { id: "ngn", label: t("ck.zoneGroupNaira"), zones: [] },
+    { id: "cfa", label: t("ck.zoneGroupCfa"), zones: [] },
+    { id: "pickup", label: t("ck.zoneGroupPickup"), zones: [] },
   ];
   const by = { ngn: groups[0], cfa: groups[1], pickup: groups[2] };
   zones.forEach((z) => {
@@ -1572,8 +1572,11 @@ function paintDeliveryZones(form) {
   sel.textContent = "";
   const ph = document.createElement("option");
   ph.value = "";
-  ph.textContent = (window.JA_i18n && JA_i18n.t && JA_i18n.t("ck.zonePlaceholder"))
-    || "Choose a delivery zone";
+  // t() (defined above) already reads window.I18N.t with an English
+  // fallback — the previous window.JA_i18n reference never existed, so
+  // this placeholder was silently stuck in English regardless of the
+  // active locale.
+  ph.textContent = t("ck.zonePlaceholder");
   ph.selected = true;
   sel.appendChild(ph);
   zoneGroups(list).forEach((group) => {
@@ -2675,6 +2678,31 @@ async function boot() {
    */
   const page = document.body.dataset.page;
   const needsSiteFirst = page === "checkout" || page === "order-complete";
+
+  // A French interface locks the currency to FCFA the instant I18N can
+  // answer that question (?lang=fr is read synchronously from the URL - no
+  // network needed), but the checkout form's FCFA/Naira radio used to only
+  // get set inside renderCheckout(), which on this page is deliberately
+  // gated behind the site/categories fetch below. On a real network that
+  // fetch is never instant, so the form could paint (it is visible from the
+  // static HTML the instant the cart has an item, before any JS runs) with
+  // the NGN gateway still showing "checked" from checkout.html's markup for
+  // that whole gap. Do the one synchronous, catalogue-free part of that
+  // decision immediately, before any await, so a French checkout never
+  // shows the wrong gateway even for a moment.
+  if (page === "checkout") {
+    try {
+      const form = document.querySelector("[data-checkout]");
+      if (form && JA.currencyLocked && JA.currencyLocked()) {
+        const cfaRadio = form.querySelector('[name=currency][value="CFA"]');
+        if (cfaRadio) cfaRadio.checked = true;
+        form.querySelectorAll(".pay-card").forEach((card) => {
+          const input = card.querySelector("input");
+          if (input && input.value === "NGN") card.hidden = true;
+        });
+      }
+    } catch (e) {}
+  }
 
   try { JA.hydrateFromCache && JA.hydrateFromCache(); } catch (e) {}
 

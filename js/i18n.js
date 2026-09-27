@@ -232,6 +232,9 @@ window.I18N = (() => {
     "ck.cityPh": "Cotonou, Ikeja, Lekki…",
     "ck.zone": "State / Zone *",
     "ck.zonePlaceholder": "Choose a delivery zone",
+    "ck.zoneGroupNaira": "Nigeria (₦ Naira)",
+    "ck.zoneGroupCfa": "Benin & Togo (F CFA)",
+    "ck.zoneGroupPickup": "Pickup / collection",
     "ck.shipNigeria": "Nigeria: 3–7 working days, according to location.",
     "ck.shipBenin": "Benin 🇧🇯: goods come in batches to keep fare cheaper. Delivery is on the dates on the banner, unless you pay for express delivery.",
     "ck.bjMin": "Benin deliveries: minimum order 5,000 F CFA (about 12,000 naira).",
@@ -309,6 +312,8 @@ window.I18N = (() => {
     "dock.wish": "Wishlist",
     "dock.cart": "Cart",
     "home.bestsellers": "Bestsellers",
+    "home.mostViewed": "Most viewed right now",
+    "home.shopAllArrow": "Shop all ›",
     "footer.tiktok": "TikTok",
     "footer.channel": "Follow the Jaura Store channel on WhatsApp",
     "shop.filter": "Filter",
@@ -722,6 +727,9 @@ window.I18N = (() => {
     "ck.cityPh": "Cotonou, Ikeja, Lekki…",
     "ck.zone": "État / Zone *",
     "ck.zonePlaceholder": "Choisissez une zone de livraison",
+    "ck.zoneGroupNaira": "Nigéria (₦ Naira)",
+    "ck.zoneGroupCfa": "Bénin & Togo (F CFA)",
+    "ck.zoneGroupPickup": "Retrait / point relais",
     "ck.shipNigeria": "Nigéria : 3 à 7 jours ouvrables, selon la localité.",
     "ck.shipBenin": "Bénin 🇧🇯 : les marchandises arrivent par lots pour réduire les frais. La livraison se fait aux dates indiquées sur la bannière, sauf si vous payez une livraison express.",
     "ck.bjMin": "Livraisons au Bénin : commande minimum de 5 000 F CFA (environ 12 000 nairas).",
@@ -798,6 +806,8 @@ window.I18N = (() => {
     "dock.wish": "Envies",
     "dock.cart": "Panier",
     "home.bestsellers": "Meilleures ventes",
+    "home.mostViewed": "Les plus consultés en ce moment",
+    "home.shopAllArrow": "Tout voir ›",
     "footer.tiktok": "TikTok",
     "footer.channel": "Suivre le canal Jaura Store sur WhatsApp",
     "shop.filter": "Filtrer",
@@ -987,21 +997,34 @@ window.I18N = (() => {
   const dict = { en, fr };
 
   /* --------------------------------------------------------------
-   * Automatic language (owner request 2026-09-27).
+   * Explicit language selection ONLY (owner fix 2026-09-27).
    *
-   * The storefront NO LONGER has a manual EN | FR switch anywhere: the
-   * browser's own primary language drives the interface on every page
-   * load. A phone whose language is French (fr, fr-FR, fr-BJ, ...) gets
-   * the French interface and the FCFA lock handled by store.js; anything
-   * else - including every English locale (en, en-NG, en-US, ...) and any
-   * unrecognised language - gets the default English interface.
+   * ENGLISH IS THE DEFAULT for every visitor. The interface only becomes
+   * French when the shopper (or a support/QA link) explicitly asks for it -
+   * it is NEVER inferred from the visitor's IP address, geography, browser
+   * region or device locale. A Nigerian/English visitor whose phone or
+   * browser happens to report a French system language must still see
+   * English by default, so navigator.language / navigator.languages is
+   * never consulted to pick the interface.
    *
-   * The ?lang=fr / ?lang=en URL parameter is kept as an explicit override
-   * (support links, QA), but stale stored copies are intentionally NOT
-   * read: they could only have been written by the removed manual switch
-   * and would defeat the detection this rule exists for.
+   * An explicit choice is made in exactly two ways:
+   *   1. Opening a link with ?lang=fr or ?lang=en (support links, WhatsApp
+   *      broadcasts, QA) - the query string always wins for that load AND
+   *      is remembered for every later page.
+   *   2. Calling I18N.setLang("fr" | "en") from a language control, dev
+   *      tools, or the e2e harness.
+   *
+   * Either way the choice is written to localStorage (mirrored to
+   * sessionStorage and a cookie for private-mode browsers) under KEY, and
+   * is read back on every later page load until the shopper explicitly
+   * changes it again - so reopening the shop keeps whatever was chosen, in
+   * both directions: English stays English (with Naira), French stays
+   * French (with F CFA).
    * ------------------------------------------------------------ */
   function detectBrowserLang() {
+    // Kept as an optional diagnostic ONLY (e.g. a support script that wants
+    // to know what the device reports). It MUST NOT be used to choose the
+    // default interface language - see the note above.
     let tags = [];
     try {
       if (typeof navigator !== "undefined") {
@@ -1013,29 +1036,80 @@ window.I18N = (() => {
     for (let i = 0; i < tags.length; i += 1) {
       const tag = String(tags[i] || "").toLowerCase().trim();
       if (!tag) continue;
-      // fr, fr-FR, fr-BJ, fr-CA, ... — any French locale switches the shop
-      // to French; the FIRST recognisable language in the device's ordered
-      // preference list decides, and English (or nothing recognised) keeps
-      // the default English interface.
       if (tag === "fr" || tag.indexOf("fr-") === 0) return "fr";
       if (tag === "en" || tag.indexOf("en-") === 0) return "en";
     }
     return "en";
   }
 
-  /* An explicit in-session override: I18N.setLang() (dev tools, the e2e
-   * harness, support scripts) pins the language until the next page load,
-   * where detection rules again. It is intentionally NOT persisted - the
-   * device language stays the source of truth across loads. */
+  function validLang(v) {
+    return v === "fr" || v === "en" ? v : null;
+  }
+
+  /** Anything under KEY that is not exactly "en"/"fr" cannot be a real
+   * explicit choice — this build only ever writes one of those two values —
+   * so it is either corruption or a leftover from a retired feature. It is
+   * purged once, on load, so it can never leak French/F CFA onto a fresh
+   * English visitor (owner fix 2026-09-27, requirement: clear/migrate stale
+   * locale storage). A *valid* stored "fr" or "en" is left untouched: it is
+   * the shopper's own earlier explicit choice and must keep being honoured. */
+  function migrateStaleLocale() {
+    try {
+      const v = localStorage.getItem(KEY);
+      if (v != null && !validLang(v)) localStorage.removeItem(KEY);
+    } catch (e) {}
+    try {
+      const v = sessionStorage.getItem(KEY);
+      if (v != null && !validLang(v)) sessionStorage.removeItem(KEY);
+    } catch (e) {}
+  }
+  migrateStaleLocale();
+
+  /* An explicit in-session override: set as soon as this tab has read (or
+   * written) a choice, so repeated calls within the same load are cheap and
+   * consistent. */
   let sessionOverride = null;
 
-  function readStored() {
+  function persist(value) {
+    try { localStorage.setItem(KEY, value); } catch (e) {}
+    try { sessionStorage.setItem(KEY, value); } catch (e) {}
+    try { document.cookie = "jaura_lang=" + value + ";path=/;max-age=31536000;SameSite=Lax"; } catch (e) {}
+  }
+
+  function storedChoice() {
     try {
-      const q = new URLSearchParams(location.search).get("lang");
-      if (q === "fr" || q === "en") return q;
+      const v = validLang(localStorage.getItem(KEY));
+      if (v) return v;
     } catch (e) {}
-    if (sessionOverride === "fr" || sessionOverride === "en") return sessionOverride;
-    return detectBrowserLang();
+    try {
+      const v = validLang(sessionStorage.getItem(KEY));
+      if (v) return v;
+    } catch (e) {}
+    return null;
+  }
+
+  function readStored() {
+    // lang()/t() are called many times per render (every translated string
+    // on the page asks), so once this load has already resolved a choice -
+    // from the URL or from storage - answer from that cached value instead
+    // of re-parsing the URL and re-writing localStorage/sessionStorage/the
+    // cookie on every single call. That repeated I/O was pure waste, and on
+    // a slow device it could noticeably delay whatever runs after the first
+    // batch of translations (e.g. a checkout page's gateway selection).
+    if (sessionOverride) return sessionOverride;
+    try {
+      const picked = validLang(new URLSearchParams(location.search).get("lang"));
+      if (picked) {
+        sessionOverride = picked;
+        persist(picked);                // a deliberate link is a real choice
+        return picked;
+      }
+    } catch (e) {}
+    const stored = storedChoice();
+    if (stored) return stored;
+    // Fresh visitor, no explicit choice yet: ENGLISH — never inferred from
+    // the device, browser region, IP or geography.
+    return "en";
   }
 
   function lang() {
@@ -1043,11 +1117,9 @@ window.I18N = (() => {
   }
 
   function setLang(next) {
-    const value = next === "fr" ? "fr" : "en";
+    const value = validLang(next) || "en";
     sessionOverride = value;
-    try { localStorage.setItem(KEY, value); } catch (e) {}
-    try { sessionStorage.setItem(KEY, value); } catch (e) {}
-    try { document.cookie = "jaura_lang=" + value + ";path=/;max-age=31536000;SameSite=Lax"; } catch (e) {}
+    persist(value);
     document.documentElement.lang = value;
     document.dispatchEvent(new CustomEvent("ja:lang"));
   }

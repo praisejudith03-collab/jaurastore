@@ -1,19 +1,33 @@
-"""Automatic language/currency detection, checkout cleanup, floating pill
-and the finer hero (owner request 2026-09-27).
+"""Locale selection / defaulting fix (owner request 2026-09-27).
 
-The shopping-facing rules pinned here:
+The live storefront was opening in French for visitors who should see
+English (₦ Naira, English navigation, English product cards, English
+checkout and delivery-zone copy). Root cause: the interface language was
+being decided from the visitor's device/browser locale
+(`navigator.languages` / `navigator.language`), which a Nigerian/English
+visitor cannot control and which does not reliably reflect their preferred
+storefront language.
 
-  * the device language is detected on every page load (navigator.languages /
-    navigator.language) - French renders the French interface and LOCKS the
-    currency to FCFA; English and everything else keeps English with prices
-    in Naira first;
-  * the "Benin/Togo delivery detected - choose your currency" confirm()
-    popup was removed from the checkout (fares stay silent, in the active
-    currency);
-  * the floating white currency pill (English storefront only) sits pinned
-    above the WhatsApp bubble;
-  * the hero got the polite greeting, the finer serif headline and the
-    CTA pop-in + gentle pulse.
+The rules pinned here:
+
+  * ENGLISH is the default storefront language for EVERY visitor. It is
+    NEVER inferred from the visitor's IP address, geography, browser region
+    or device locale.
+  * French only renders when the shopper EXPLICITLY asks for it - opening a
+    link with `?lang=fr`, or a call to `I18N.setLang("fr")`. Either way the
+    choice is persisted (localStorage `jaura_lang`, existing storage
+    mechanism) and is honoured on every later page load and every page of
+    the site, until the shopper explicitly changes it again.
+  * A stale/garbage value under the storage key (anything that is not
+    exactly "en" or "fr") is purged on load so it can never leak French/F
+    CFA onto a fresh English visitor.
+  * The currency still follows the active language: French locks FCFA;
+    English opens in Naira first and the floating pill still switches it.
+  * The "Benin/Togo delivery detected - choose your currency" confirm()
+    popup stays removed from the checkout (fares stay silent, in the active
+    currency).
+  * The floating white currency pill (English storefront only) sits pinned
+    above the WhatsApp bubble.
 
 The runtime half boots the real js/i18n.js, js/store.js and js/app.js in a
 stubbed browser: tests/_auto_locale_sim.mjs. The static half is asserted
@@ -50,17 +64,44 @@ def _read(rel):
         return fh.read()
 
 
-def test_i18n_detects_the_device_language_on_load():
+def test_english_is_the_default_never_inferred_from_the_device():
     src = _read(os.path.join("js", "i18n.js"))
-    assert "detectBrowserLang" in src, "the detector is missing"
-    assert "navigator.languages" in src and "navigator.language" in src, (
-        "detection must read the device's preferred languages")
-    # readStored: URL override, then detection - never a stale stored choice
-    body = src.split("function readStored()", 1)[1][:400]
-    assert "detectBrowserLang()" in body, (
-        "every page load must fall back to the device language")
-    assert "sessionStorage.getItem(KEY)" not in body and "localStorage.getItem(KEY)" not in body, (
-        "a stale stored language must NOT win over the device language")
+    body = src.split("function readStored()", 1)[1].split("\n  }", 1)[0]
+    assert 'return "en";' in body, (
+        "a fresh visitor with no explicit choice must default to English")
+    assert "detectBrowserLang()" not in body, (
+        "the default language must never be decided by the device/browser "
+        "locale (Nigerian/English visitors must not be forced into French)")
+    assert "navigator.language" not in body and "navigator.languages" not in body, (
+        "readStored() must not consult the device language at all")
+
+
+def test_explicit_choice_is_persisted_and_read_back():
+    src = _read(os.path.join("js", "i18n.js"))
+    # setLang() must persist to the existing storage mechanism.
+    set_lang = src.split("function setLang(", 1)[1][:400]
+    assert "persist(value)" in set_lang or "localStorage.setItem(KEY" in set_lang, (
+        "setLang must persist the explicit choice")
+    # readStored() must actually read a previously persisted choice back —
+    # this is the bug: the old build wrote the choice but never read it.
+    body = src.split("function readStored()", 1)[1].split("\n  }", 1)[0]
+    assert "storedChoice()" in body or "localStorage.getItem(KEY)" in body, (
+        "an explicit stored choice must be honoured on later loads")
+    # the ?lang= URL override remains, and it also persists so the choice
+    # sticks past the single page it was opened on.
+    assert 'get("lang")' in body
+    assert "persist(picked)" in body or "localStorage.setItem(KEY" in body
+
+
+def test_stale_locale_storage_is_migrated_away():
+    src = _read(os.path.join("js", "i18n.js"))
+    assert "function migrateStaleLocale()" in src, (
+        "a migration guard must clear invalid stored locale values"
+    )
+    assert "migrateStaleLocale();" in src, "the migration must run on load"
+    guard = src.split("function migrateStaleLocale()", 1)[1][:800]
+    assert "removeItem(KEY)" in guard, (
+        "a value that is not exactly \"en\"/\"fr\" must be purged")
 
 
 def test_i18n_carries_the_hero_greeting_and_verbatim_headline():
@@ -71,10 +112,28 @@ def test_i18n_carries_the_hero_greeting_and_verbatim_headline():
         "the main hero headline must stay verbatim")
 
 
+def test_most_viewed_heading_is_translatable():
+    """'Most viewed right now' must follow the active locale like every
+    other storefront string, not stay hard-coded in English."""
+    i18n = _read(os.path.join("js", "i18n.js"))
+    assert '"home.mostViewed": "Most viewed right now"' in i18n
+    assert '"home.mostViewed": "Les plus consultés en ce moment"' in i18n
+    app = _read(os.path.join("js", "app.js"))
+    assert 't("home.mostViewed")' in app, (
+        "paintMostViewed must render the heading through the i18n table")
+    assert "Most viewed right now" not in app.split("function paintMostViewed", 1)[1][:600], (
+        "the heading must not be hard-coded English inside paintMostViewed")
+
+
 # ---------------------------------------------------------------- store.js
 
+def _store_js():
+    with open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8") as fh:
+        return fh.read()
+
+
 def test_store_locks_french_to_fcfa_and_defaults_english_to_naira():
-    src = _read(os.path.join("js", "store.js"))
+    src = _store_js()
     assert "function currencyLocked()" in src, "the FCFA lock helper is missing"
     body = src.split("function currency()", 1)[1][:200]
     assert 'currencyLocked()) return "CFA"' in body, (

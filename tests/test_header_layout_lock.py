@@ -244,7 +244,9 @@ def test_currency_pill_position_and_palette_are_pinned():
     pos = _last_setting(top_rules, ".cur-float", "position")
     assert pos and pos[1] == "fixed", ".cur-float must stay position:fixed"
     bottom = _last_setting(top_rules, ".cur-float", "bottom")
-    assert bottom and int(re.match(r"(\d+)", bottom[1]).group(1)) >= 130
+    # The value is wrapped for phone safe-areas — calc(150px + env(...)) —
+    # so the pixel figure is searched for, not anchored to the start.
+    assert bottom and int(re.search(r"(\d+)", bottom[1]).group(1)) >= 130
     assert "env(safe-area-inset-bottom" in bottom[1]
     right = _last_setting(top_rules, ".cur-float", "right")
     assert right and right[1].startswith("20px"), (
@@ -289,10 +291,15 @@ def test_whatsapp_bubble_position_is_pinned_under_the_pill():
     found = None
     for media, sel, props in top_rules:
         parts = [p.strip() for p in sel.split(",")]
-        if all(p.endswith(".wa-float") for p in parts) and "bottom" in props:
+        # Require z-index too, so this only matches the shared rule (every
+        # page, including home) and skips the home page's dock-less bottom
+        # override added 2026-09-27 (body[data-page="home"] .wa-float, more
+        # specific, wins there, but only overrides `bottom`).
+        if all(p.endswith(".wa-float") for p in parts) and "bottom" in props and "z-index" in props:
             found = props
     assert found, "no .wa-float rule sets bottom"
-    assert int(re.match(r"(\d+)", found["bottom"]).group(1)) >= 72
+    # Wrapped for phone safe-areas — calc(84px + env(...)) — search, don't anchor.
+    assert int(re.search(r"(\d+)", found["bottom"]).group(1)) >= 72
     assert "env(safe-area-inset-bottom" in found["bottom"]
     assert found["right"].startswith("20px"), (
         f"wa-float must stay right:20px, got {found['right']!r}")

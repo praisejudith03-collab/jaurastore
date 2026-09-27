@@ -1,11 +1,22 @@
-// Automatic language/currency (owner request 2026-09-27) — Node, no browser.
+// Locale selection / defaulting fix (owner request 2026-09-27) — Node, no
+// browser.
 //
 // The rule under test:
 //
-//   * The device language is detected on load (navigator.languages /
-//     navigator.language). French (fr, fr-FR, fr-BJ, ...) renders the French
-//     interface and LOCKS the currency to FCFA; English (en, en-NG, en-US)
-//     and everything else stays English with prices in ₦ Naira first.
+//   * ENGLISH is the default storefront language for EVERY visitor. It is
+//     NEVER inferred from navigator.language / navigator.languages, the
+//     visitor's IP address, geography or device locale - a Nigerian/English
+//     visitor whose phone or browser reports a French system language must
+//     still see English.
+//   * French only renders when the shopper EXPLICITLY asks for it: opening
+//     a link with ?lang=fr, or a call to I18N.setLang("fr"). Either way the
+//     choice is persisted (localStorage "jaura_lang") and is honoured on
+//     every later page load until the shopper explicitly changes it again -
+//     so English stays English (Naira) and French stays French (F CFA)
+//     across reopened tabs and page navigation.
+//   * A stale/garbage value under the storage key (anything that isn't
+//     exactly "en" or "fr") is purged so it can never leak French onto a
+//     fresh English visitor.
 //   * French lock: JA.currency() is "CFA", JA.setCurrency("NGN") cannot undo
 //     it, the floating pill is hidden, and paintCheckoutTotals() surfaces the
 //     FCFA payment gateway while hiding the Naira pay-card.
@@ -40,47 +51,77 @@ function check(name, ok, detail = "") {
 }
 
 // ---------------------------------------------------------- i18n detection
-function detect(navTags, opts = {}) {
+function detect({ navTags = [], search = "", stored = null, staleStored = null } = {}) {
   const storage = new Map();
+  if (stored) storage.set("jaura_lang", stored);
+  if (staleStored != null) storage.set("jaura_lang", staleStored);
   const sandbox = {
     console, URLSearchParams,
-    navigator: opts.navigator || { languages: navTags, language: navTags[0] || "", onLine: true },
-    location: { search: opts.search || "", href: "https://jaurastore.com.ng/" },
-    document: { documentElement: { lang: "" } },
+    navigator: { languages: navTags, language: navTags[0] || "", onLine: true },
+    location: { search, href: "https://jaurastore.com.ng/" },
+    document: { documentElement: { lang: "" }, cookie: "", dispatchEvent() {} },
     localStorage: {
       getItem: (k) => (storage.has(k) ? storage.get(k) : null),
       setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
     },
-    sessionStorage: { getItem: () => null, setItem() {} },
+    sessionStorage: {
+      getItem: () => null, setItem() {}, removeItem() {},
+    },
     CustomEvent: class { constructor(t) { this.type = t; } },
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(i18nSrc, sandbox, { filename: "js/i18n.js" });
-  return sandbox.I18N;
+  return { I18N: sandbox.I18N, storage };
 }
 
-check('fr-FR device -> French', detect(["fr-FR", "fr", "en"]).lang() === "fr");
-check('fr-BJ device -> French', detect(["fr-BJ"]).lang() === "fr");
-check('bare fr device -> French', detect(["fr"]).lang() === "fr");
-check('en-NG device -> English', detect(["en-NG"]).lang() === "en");
-check('en-US device -> English', detect(["en-US"]).lang() === "en");
-check('bare en device -> English', detect(["en"]).lang() === "en");
-check('any other language -> English default', detect(["es-ES", "de-DE"]).lang() === "en");
-check('empty languages -> English default', detect([], { navigator: {} }).lang() === "en");
-check('?lang=fr overrides detection (support/QA hatch)',
-  detect(["en-US"], { search: "?lang=fr" }).lang() === "fr");
-check('?lang=en overrides a French device (support/QA hatch)',
-  detect(["fr-FR"], { search: "?lang=en" }).lang() === "en");
+// ------------------------------------------------- 1. English is the default
+check('fresh visitor, no stored choice -> English', detect({}).I18N.lang() === "en");
+check('fresh visitor with a FRENCH browser locale -> still English (never inferred)',
+  detect({ navTags: ["fr-FR", "fr", "en"] }).I18N.lang() === "en");
+check('fresh visitor with fr-BJ device -> still English (never inferred)',
+  detect({ navTags: ["fr-BJ"] }).I18N.lang() === "en");
+check('fresh visitor, empty navigator languages -> English',
+  detect({ navTags: [] }).I18N.lang() === "en");
+check('any other browser language -> English default',
+  detect({ navTags: ["es-ES", "de-DE"] }).I18N.lang() === "en");
 
-const frI18n = detect(["fr-FR"]);
+// ---------------------------------------------- 2. explicit selection sticks
+check('?lang=fr is an explicit choice -> French',
+  detect({ navTags: ["en-US"], search: "?lang=fr" }).I18N.lang() === "fr");
+check('?lang=en is an explicit choice -> English, even on a French device',
+  detect({ navTags: ["fr-FR"], search: "?lang=en" }).I18N.lang() === "en");
+{
+  const { I18N, storage } = detect({ search: "?lang=fr" });
+  check('the explicit ?lang=fr choice persists to storage for later loads',
+    I18N.lang() === "fr" && storage.get("jaura_lang") === "fr");
+}
+check('a PREVIOUSLY stored explicit French choice persists on an English-tagged device',
+  detect({ navTags: ["en-US", "en"], stored: "fr" }).I18N.lang() === "fr");
+check('a PREVIOUSLY stored explicit English choice persists on a French-tagged device',
+  detect({ navTags: ["fr-FR"], stored: "en" }).I18N.lang() === "en");
+
+// -------------------------------------------- 3. stale storage is neutralised
+check('a stale/garbage stored value cannot force French — purged back to English',
+  detect({ navTags: ["en-NG"], staleStored: "fr-old" }).I18N.lang() === "en");
+check('a stale/garbage stored value is actually removed from storage',
+  (() => { const { storage } = detect({ staleStored: "xx" }); return !storage.has("jaura_lang"); })());
+check('an empty-string stored value does not count as an explicit French choice',
+  detect({ navTags: ["fr-FR"], staleStored: "" }).I18N.lang() === "en");
+
+const frI18n = detect({ stored: "fr" }).I18N;
 check('home.kicker greeting is the polite English one',
-  detect(["en-US"]).t("home.kicker") === "Welcome. Ready to shop?");
-check('home.kicker greeting translates for French shoppers',
+  detect({}).I18N.t("home.kicker") === "Welcome. Ready to shop?");
+check('home.kicker greeting translates for an explicitly French shopper',
   frI18n.t("home.kicker") === "Bienvenue. Prêt à faire vos achats ?",
   frI18n.t("home.kicker"));
 check('the headline stays verbatim',
-  detect(["en-US"]).t("home.heroLine") === "Experience effortless elegance and curated essentials");
+  detect({}).I18N.t("home.heroLine") === "Experience effortless elegance and curated essentials");
+check('"Most viewed" heading is English by default',
+  detect({}).I18N.t("home.mostViewed") === "Most viewed right now");
+check('"Most viewed" heading translates for an explicit French choice',
+  frI18n.t("home.mostViewed") === "Les plus consultés en ce moment");
 
 // ------------------------------------------------- full storefront sandbox
 const PRODUCTS = Array.from({ length: 4 }, (_, i) => ({
@@ -127,8 +168,12 @@ function makeEl(tag) {
   return el;
 }
 
-function makeStoreSandbox(langTags) {
+function makeStoreSandbox({ navTags = ["fr-FR", "fr"], search = "", stored = null } = {}) {
+  // navTags defaults to a FRENCH device on purpose: every check below must
+  // still land on English unless `stored`/`search` explicitly asks for
+  // French, which proves the device language is not the decision-maker.
   const storage = new Map();
+  if (stored) storage.set("jaura_lang", stored);
   const listeners = new Map();
   const sandbox = {
     console,
@@ -145,10 +190,10 @@ function makeStoreSandbox(langTags) {
       clear: () => storage.clear(),
     },
     sessionStorage: { getItem: () => "1", setItem() {}, removeItem() {} }, // welcome dismissed
-    navigator: { onLine: true, languages: langTags, language: langTags[0] || "en" },
+    navigator: { onLine: true, languages: navTags, language: navTags[0] || "en" },
     location: {
       href: "https://jaurastore.com.ng/index.html", origin: "https://jaurastore.com.ng",
-      protocol: "https:", host: "jaurastore.com.ng", pathname: "/index.html", search: "",
+      protocol: "https:", host: "jaurastore.com.ng", pathname: "/index.html", search,
     },
     history: { replaceState() {} },
     requestAnimationFrame: (fn) => setTimeout(fn, 0),
@@ -184,6 +229,7 @@ function makeStoreSandbox(langTags) {
     body: makeEl("body"),
     documentElement: { dataset: {}, lang: "", classList: makeEl("div").classList },
     head: { querySelector: () => null, appendChild() {} },
+    cookie: "",
     addEventListener: (type, fn) => {
       if (!listeners.has(type)) listeners.set(type, []);
       listeners.get(type).push(fn);
@@ -217,8 +263,8 @@ function makeStoreSandbox(langTags) {
   return sandbox;
 }
 
-async function bootShop(langTags) {
-  const sandbox = makeStoreSandbox(langTags);
+async function bootShop(opts) {
+  const sandbox = makeStoreSandbox(opts);
   vm.createContext(sandbox);
   vm.runInContext(i18nSrc, sandbox, { filename: "js/i18n.js" });
   vm.runInContext(storeSrc, sandbox, { filename: "js/store.js" });
@@ -230,10 +276,12 @@ async function bootShop(langTags) {
 }
 
 // ---------------------------------------------------------- ENGLISH shop
+// The device reports FRENCH ("fr-FR") on purpose: a fresh visitor with no
+// explicit choice must still get the English storefront.
 {
-  const { sandbox, JA } = await bootShop(["en-NG", "en"]);
+  const { sandbox, JA } = await bootShop({ navTags: ["fr-FR", "fr"] });
   const els = sandbox.__els;
-  check("detected English interface", sandbox.I18N.lang() === "en");
+  check("a fresh visitor gets English even on a French-tagged device", sandbox.I18N.lang() === "en");
   check("FCFA is NOT locked for English shoppers", JA.currencyLocked() === false);
   check("English default prices open in ₦ Naira", JA.currency() === "NGN");
 
@@ -275,11 +323,13 @@ async function bootShop(langTags) {
 }
 
 // ---------------------------------------------------------- FRENCH shop
+// French only because of an EXPLICIT stored choice — the device tags are
+// English on purpose, proving French is opt-in, not device-inferred.
 {
-  const { sandbox, JA } = await bootShop(["fr-BJ", "fr"]);
+  const { sandbox, JA } = await bootShop({ navTags: ["en-US", "en"], stored: "fr" });
   const els = sandbox.__els;
-  check("detected French interface", sandbox.I18N.lang() === "fr");
-  check("FCFA IS locked for French shoppers", JA.currencyLocked() === true);
+  check("explicit stored choice -> French interface, even on an English device", sandbox.I18N.lang() === "fr");
+  check("FCFA IS locked once French is explicitly active", JA.currencyLocked() === true);
   check("French prices open in F CFA", JA.currency() === "CFA");
   check("setCurrency cannot undo the French FCFA lock",
     (JA.setCurrency("NGN"), JA.currency() === "CFA"));
@@ -338,6 +388,76 @@ async function bootShop(langTags) {
   check("French checkout hides the NGN bank sheet", ngnBox.hidden === true);
   sandbox.document.querySelector = docQS;
 }
+
+// ------------------------------------- reopening the tab / new page loads
+// The SAME storage must be honoured by a brand new "page load" (a fresh
+// sandbox reading the same persisted key), in both directions.
+{
+  const { sandbox: s1 } = await bootShop({ navTags: ["en-US"], search: "?lang=fr" });
+  const persisted = s1.localStorage.getItem("jaura_lang");
+  check("explicit ?lang=fr choice is written to the persistent store", persisted === "fr");
+
+  // Simulate "reopening the tab" / navigating to another page: a brand new
+  // sandbox, no query string this time, seeded with the same storage value.
+  const { sandbox: s2, JA: JA2 } = await bootShop({ navTags: ["en-US"], stored: persisted });
+  check("reopening after an explicit French choice stays French", s2.I18N.lang() === "fr");
+  check("reopening after an explicit French choice stays on F CFA", JA2.currency() === "CFA");
+
+  const { sandbox: s3 } = await bootShop({ navTags: ["fr-FR"], search: "?lang=en" });
+  const persistedEn = s3.localStorage.getItem("jaura_lang");
+  const { sandbox: s4, JA: JA4 } = await bootShop({ navTags: ["fr-FR"], stored: persistedEn });
+  check("reopening after an explicit English choice stays English", s4.I18N.lang() === "en");
+  check("reopening after an explicit English choice stays on ₦ Naira", JA4.currency() === "NGN");
+}
+
+// -------------------------- delivery-zone dropdown + "Most viewed" locale
+// Both must render in whichever language is EXPLICITLY active — English by
+// default, French only when explicitly chosen — never a mix.
+async function localeSurfaceCheck(stored, label) {
+  const { sandbox, JA } = await bootShop({ navTags: ["fr-FR"], stored });
+  vm.runInContext(appSrc, sandbox, { filename: "js/app.js" });
+
+  // 1. Checkout delivery-zone dropdown groups.
+  const zones = [
+    { name: "Lekki", currency: "NGN", fare_min: 3000, fare_max: 6000 },
+    { name: "Cotonou", currency: "CFA", fare_min: 1000, fare_max: 3000 },
+    { name: "Store pickup", currency: "NGN", kind: "pickup" },
+  ];
+  const groups = vm.runInContext("zoneGroups", sandbox)(zones);
+  const naira = groups.find((g) => g.id === "ngn");
+  const cfa = groups.find((g) => g.id === "cfa");
+  const pickup = groups.find((g) => g.id === "pickup");
+  if (stored === "fr") {
+    check(`[${label}] delivery-zone Naira group heading is French`, naira.label === "Nigéria (₦ Naira)", naira.label);
+    check(`[${label}] delivery-zone F CFA group heading is French`, cfa.label === "Bénin & Togo (F CFA)", cfa.label);
+    check(`[${label}] delivery-zone pickup group heading is French`, pickup.label === "Retrait / point relais", pickup.label);
+  } else {
+    check(`[${label}] delivery-zone Naira group heading is English`, naira.label === "Nigeria (₦ Naira)", naira.label);
+    check(`[${label}] delivery-zone F CFA group heading is English`, cfa.label === "Benin & Togo (F CFA)", cfa.label);
+    check(`[${label}] delivery-zone pickup group heading is English`, pickup.label === "Pickup / collection", pickup.label);
+  }
+
+  // 2. "Most viewed right now" heading + product-card buttons.
+  const host = { dataset: {}, innerHTML: "" };
+  const items = [
+    { productId: PRODUCTS[0].id }, { productId: PRODUCTS[1].id },
+    { productId: PRODUCTS[2].id }, { productId: PRODUCTS[3].id },
+  ];
+  sandbox.__mvHost = host;
+  vm.runInContext("paintMostViewed(__mvHost, __mvItems)",
+    Object.assign(sandbox, { __mvItems: items }));
+  if (stored === "fr") {
+    check(`[${label}] "Most viewed" heading is French`, host.innerHTML.includes("Les plus consultés en ce moment"));
+    check(`[${label}] "Most viewed" add-to-cart button is French`, host.innerHTML.includes(">Ajouter au panier<"));
+    check(`[${label}] "Most viewed" does not leak the English heading`, !host.innerHTML.includes("Most viewed right now"));
+  } else {
+    check(`[${label}] "Most viewed" heading is English`, host.innerHTML.includes("Most viewed right now"));
+    check(`[${label}] "Most viewed" add-to-cart button is English`, host.innerHTML.includes(">Add to cart<"));
+    check(`[${label}] "Most viewed" does not leak the French heading`, !host.innerHTML.includes("Les plus consultés"));
+  }
+}
+await localeSurfaceCheck(null, "fresh visitor (English default)");
+await localeSurfaceCheck("fr", "explicit French choice");
 
 // ------------------------------------------------ static checkout cleanup
 {
