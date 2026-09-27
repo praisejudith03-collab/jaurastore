@@ -3,8 +3,8 @@
 Owner request (2026-09-27), three complaints about the floating ₦ / F CFA
 pill and one about what English shoppers see first:
 
-  * the pill looked stretched and too long - it is now a compact badge
-    (11px labels, 6px side padding, a 2px shell) whose two currencies own
+  * the pill looked stretched and too long - it is now a small, fine badge
+    (10px labels, 5px side padding, a 2px shell) whose two currencies own
     fixed minimum widths, so tapping it can never resize or reflow it;
   * the pill (z-index 9999) and the WhatsApp bubble (9998) floated ABOVE the
     slide-out bag (5000) and sat on top of its "View bag" / "Checkout"
@@ -28,7 +28,7 @@ import subprocess
 
 import pytest
 
-from test_french_catalog import _blocks, _css, _props, _strip_media
+from test_french_catalog import _blocks, _css, _media_blocks, _props, _strip_media
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SIM = os.path.join(ROOT, "tests", "_naira_first_cart_pill_sim.mjs")
@@ -77,6 +77,14 @@ def _last(rules, selector, prop):
 
 def _px(value):
     m = re.match(r"^(-?[\d.]+)px$", str(value or "").strip())
+    return float(m.group(1)) if m else None
+
+
+def _px_in(value):
+    """The first pixel figure inside a value, plain ("18px") or wrapped for
+    phone safe-areas ("calc(84px + env(safe-area-inset-bottom, 0px))")."""
+    raw = value[0] if isinstance(value, tuple) else value
+    m = re.search(r"(-?[\d.]+)px", str(raw or ""))
     return float(m.group(1)) if m else None
 
 
@@ -242,10 +250,29 @@ def test_the_pill_is_still_the_way_out_to_fcfa():
 
 
 def test_the_floats_clear_the_bottom_dock():
-    css = open(os.path.join(ROOT, "css", "style.css")).read()
-    desktop_pill = int(re.search(r"\.cur-float \{.*?bottom: calc\((\d+)px", css, re.S).group(1))
-    desktop_wa = int(re.search(r"\.wa-float,.*?bottom: calc\((\d+)px", css, re.S).group(1))
-    phone_wa = int(re.search(r"@media \(max-width: 640px\).*?bottom: calc\((\d+)px", css, re.S).group(1))
-    phone_pill = int(re.findall(r"\.cur-float \{\s*bottom: calc\((\d+)px", css)[-1])
+    """Cascade-aware, not a raw text search: the stylesheet accumulated
+    several superseded `.wa-float` blocks from earlier redesigns, so a plain
+    "first match wins" regex can silently grab a dead rule instead of the
+    one the browser actually applies (the LAST declaration for an exact
+    selector, since every candidate carries the same !important weight)."""
+    rules = _top_rules()
+    desktop_pill = _px_in(_last(rules, ".cur-float", "bottom"))
+    desktop_wa = _px_in(_last(rules, ".wa-float, body[data-page=\"home\"] .wa-float", "bottom"))
     assert desktop_wa >= 72 and desktop_pill >= desktop_wa + 58
+
+    phone_css = _media_blocks(_css(), "@media (max-width: 640px)")
+    assert phone_css, "the <=640px floating-control budget block is missing"
+    phone_wa = phone_pill = None
+    for body in phone_css:
+        for selector, decl in _blocks(body):
+            sel = re.sub(r"\s+", " ", selector).strip()
+            props = _decls(decl)
+            if "bottom" not in props:
+                continue
+            if sel == '.wa-float, body[data-page="home"] .wa-float':
+                phone_wa = _px_in(props["bottom"][0])
+            elif sel == ".cur-float":
+                phone_pill = _px_in(props["bottom"][0])
+    assert phone_wa is not None and phone_pill is not None, (
+        "the <=640px block must set both .wa-float and .cur-float bottom offsets")
     assert phone_wa >= 76 and phone_pill >= phone_wa + 50

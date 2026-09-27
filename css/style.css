@@ -6792,10 +6792,11 @@ body.au-shop .shop-banner img,
    directly above the WhatsApp bubble. Pure-white pill, soft shadow, thin
    lavender border; the active currency is bold white on vibrant purple.
 
-   COMPACT SIZING (owner request): the pill used to read as a long stretched
-   bar — 12px labels inside 13px of horizontal padding. It is now a tight
-   badge: 11px labels, 6px of side padding and a 2px shell, so it takes
-   ~86px instead of ~107px and stops competing with the WhatsApp bubble.
+   COMPACT SIZING (owner request, tightened further 2026-09-27): the pill
+   used to read as a long stretched bar — 12px labels inside 13px of
+   horizontal padding. It is now a small, fine badge: 10px labels, 5px of
+   side padding and a 2px shell, so the whole control reserves well under
+   80px (was ~107px) and no longer competes with the WhatsApp bubble.
    Each currency owns a fixed minimum width that is WIDER than its own bold
    text, so switching ₦ <-> F CFA (the active one turns bold) can never
    resize or reflow the pill. */
@@ -6807,7 +6808,7 @@ body.au-shop .shop-banner img,
   z-index: 9999;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   padding: 2px;
   background: #FFFFFF;
   border: 1px solid #D8B4FE;
@@ -6821,19 +6822,19 @@ body.au-shop .shop-banner img,
   margin: 0;
   background: transparent;
   color: #33251a;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   line-height: 1;
-  padding: 8px 6px;
+  padding: 6px 5px;
   border-radius: 999px;
   cursor: pointer;
   white-space: nowrap;
   text-align: center;
   transition: background .18s ease, color .18s ease, transform .15s ease;
 }
-.cur-float button[data-cur="NGN"] { min-width: 30px; }
-.cur-float button[data-cur="CFA"] { min-width: 48px; }
+.cur-float button[data-cur="NGN"] { min-width: 24px; }
+.cur-float button[data-cur="CFA"] { min-width: 36px; }
 .cur-float button.is-on {
   background: #7C3AED;
   color: #FFFFFF;
