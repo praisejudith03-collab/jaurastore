@@ -21,24 +21,35 @@ jobs:
       - name: Full suite with annotation report
         run: |
           set +e
-          python -m pytest tests/ -q --tb=line -ra > /tmp/pytest.log 2>&1
+          python -m pytest tests/ -q -p no:cacheprovider --color=no --tb=short -ra > /tmp/pytest.log 2>&1
           rc=$?
           python - <<'PY'
-          def esc(s):
-              return s.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
-          lines = open('/tmp/pytest.log').read().splitlines()
-          fails = [l for l in lines if l.startswith(('FAILED', 'ERROR'))][:8]
-          summary = []
+          import re
+          ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+          def clean(s):
+              s = ANSI.sub('', s).strip()
+              s = s.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              s = s.replace('::', ':|')
+              return s[:400]
+          lines = [ANSI.sub('', l) for l in open('/tmp/pytest.log').read().splitlines()]
+          plain = [l.strip() for l in lines if l.strip()]
+          fails = [l for l in plain if l.startswith(('FAILED', 'ERROR'))][:8]
+          block = []
           grab = False
           for line in lines:
               if 'short test summary' in line:
                   grab = True
-              if grab:
-                  summary.append(line)
-          for line in (fails or summary[-8:] or lines[-8:])[:8]:
-              print(f"::error ::{esc(line)}")
-          for line in summary[1:5] + summary[-8:]:
-              if not line.startswith(('FAILED', 'ERROR')):
-                  print(f"::notice ::{esc(line)}")
+              if grab and line.strip():
+                  block.append(line)
+          pick = fails or [l for l in block if l.startswith('=') is False][:10] or plain[-10:]
+          for line in pick[:8]:
+              print(f"::error ::{clean(line)}")
+          # extra context: the assertion line under === FAILURES ===
+          for i, l in enumerate(plain):
+              if l.startswith(('E  ', 'E ')) or 'Error' in l[:30]:
+                  print(f"::notice ::{clean(l)}")
+                  if i > 0:
+                      print(f"::notice ::{clean(plain[i-1])}")
+                  break
           PY
           exit $rc
