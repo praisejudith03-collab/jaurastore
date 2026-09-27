@@ -18,10 +18,10 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt -r requirements-test.txt
       - run: python -m playwright install --with-deps chromium
-      - name: Browser tests with annotation report
+      - name: Full suite with annotation report
         run: |
           set +e
-          python -m pytest tests/test_browser_smoke.py -q --tb=short -ra > /tmp/pytest.log 2>&1
+          python -m pytest tests/ -q --tb=line -ra > /tmp/pytest.log 2>&1
           rc=$?
           python - <<'PY'
           def esc(s):
