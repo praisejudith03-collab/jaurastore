@@ -244,8 +244,8 @@ def test_currency_pill_position_and_palette_are_pinned():
     pos = _last_setting(top_rules, ".cur-float", "position")
     assert pos and pos[1] == "fixed", ".cur-float must stay position:fixed"
     bottom = _last_setting(top_rules, ".cur-float", "bottom")
-    assert bottom and bottom[1].startswith("85px"), (
-        f".cur-float must stay bottom:85px (stacked above WhatsApp), got {bottom!r}")
+    assert bottom and int(re.match(r"(\d+)", bottom[1]).group(1)) >= 130
+    assert "env(safe-area-inset-bottom" in bottom[1]
     right = _last_setting(top_rules, ".cur-float", "right")
     assert right and right[1].startswith("20px"), (
         f".cur-float must stay right:20px, got {right!r}")
@@ -292,8 +292,8 @@ def test_whatsapp_bubble_position_is_pinned_under_the_pill():
         if all(p.endswith(".wa-float") for p in parts) and "bottom" in props:
             found = props
     assert found, "no .wa-float rule sets bottom"
-    assert found["bottom"].startswith("20px"), (
-        f"wa-float must stay bottom:20px, got {found['bottom']!r}")
+    assert int(re.match(r"(\d+)", found["bottom"]).group(1)) >= 72
+    assert "env(safe-area-inset-bottom" in found["bottom"]
     assert found["right"].startswith("20px"), (
         f"wa-float must stay right:20px, got {found['right']!r}")
     assert found["z-index"] == "9998", (
