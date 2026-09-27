@@ -6892,6 +6892,16 @@ body[data-page="home"] .wa-float {
   z-index: 9998 !important;
 }
 
+/* The home page never shows the bottom dock ("Home: no bottom dock" above),
+   so on desktop the WhatsApp bubble and currency pill don't need the
+   dock-clearing offset every other page uses above - they sit at a plain
+   bottom:20px / bottom:85px instead. More specific than the shared rule
+   above, so it wins here regardless of source order; it only overrides
+   `bottom`, so every other property (colour, z-index, animation, the
+   <=640px phone spacing) stays exactly what the shared rules already set. */
+body[data-page="home"] .wa-float { bottom: calc(20px + env(safe-area-inset-bottom, 0px)) !important; }
+body[data-page="home"] .cur-float { bottom: calc(85px + env(safe-area-inset-bottom, 0px)) !important; }
+
 @media (max-width: 640px) {
   .wa-float,
   body[data-page="home"] .wa-float {

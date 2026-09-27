@@ -291,7 +291,11 @@ def test_whatsapp_bubble_position_is_pinned_under_the_pill():
     found = None
     for media, sel, props in top_rules:
         parts = [p.strip() for p in sel.split(",")]
-        if all(p.endswith(".wa-float") for p in parts) and "bottom" in props:
+        # Require z-index too, so this only matches the shared rule (every
+        # page, including home) and skips the home page's dock-less bottom
+        # override added 2026-09-27 (body[data-page="home"] .wa-float, more
+        # specific, wins there, but only overrides `bottom`).
+        if all(p.endswith(".wa-float") for p in parts) and "bottom" in props and "z-index" in props:
             found = props
     assert found, "no .wa-float rule sets bottom"
     # Wrapped for phone safe-areas — calc(84px + env(...)) — search, don't anchor.

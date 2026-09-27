@@ -2679,6 +2679,31 @@ async function boot() {
   const page = document.body.dataset.page;
   const needsSiteFirst = page === "checkout" || page === "order-complete";
 
+  // A French interface locks the currency to FCFA the instant I18N can
+  // answer that question (?lang=fr is read synchronously from the URL - no
+  // network needed), but the checkout form's FCFA/Naira radio used to only
+  // get set inside renderCheckout(), which on this page is deliberately
+  // gated behind the site/categories fetch below. On a real network that
+  // fetch is never instant, so the form could paint (it is visible from the
+  // static HTML the instant the cart has an item, before any JS runs) with
+  // the NGN gateway still showing "checked" from checkout.html's markup for
+  // that whole gap. Do the one synchronous, catalogue-free part of that
+  // decision immediately, before any await, so a French checkout never
+  // shows the wrong gateway even for a moment.
+  if (page === "checkout") {
+    try {
+      const form = document.querySelector("[data-checkout]");
+      if (form && JA.currencyLocked && JA.currencyLocked()) {
+        const cfaRadio = form.querySelector('[name=currency][value="CFA"]');
+        if (cfaRadio) cfaRadio.checked = true;
+        form.querySelectorAll(".pay-card").forEach((card) => {
+          const input = card.querySelector("input");
+          if (input && input.value === "NGN") card.hidden = true;
+        });
+      }
+    } catch (e) {}
+  }
+
   try { JA.hydrateFromCache && JA.hydrateFromCache(); } catch (e) {}
 
   // Catalogue: only block when there is nothing cached to paint yet.

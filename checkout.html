@@ -147,6 +147,35 @@
               <span data-i18n="ck.payCfaHint">Pay in F CFA by MTN MoMo (Benin) or Moov Money (Togo).</span>
             </div>
           </label>
+          <script>
+            // A French checkout locks the currency to FCFA (js/app.js boot()
+            // makes this same call, in full, once it has loaded), but that
+            // bundle has to be fetched over the network first, and this form
+            // is visible the instant the cart has an item - so on a slow
+            // connection the Naira gateway could sit "checked" (its markup
+            // default, above) for a moment even for a French shopper. Decide
+            // the zero-network-dependency subset of that same rule right
+            // here, synchronously, during parsing, so it is never wrong even
+            // for an instant. js/app.js repeats and owns the full decision
+            // once it is ready; this is purely a paint-time guard.
+            (function () {
+              try {
+                var q = new URLSearchParams(location.search).get("lang");
+                var lang = (q === "fr" || q === "en") ? q : null;
+                if (!lang) { try { lang = localStorage.getItem("jaura_lang"); } catch (e) {} }
+                if (!lang) { try { lang = sessionStorage.getItem("jaura_lang"); } catch (e) {} }
+                if (lang !== "fr") return;
+                var cfa = document.querySelector('[name="currency"][value="CFA"]');
+                var ngn = document.querySelector('[name="currency"][value="NGN"]');
+                if (cfa) cfa.checked = true;
+                if (ngn) {
+                  ngn.checked = false;
+                  var ngnCard = ngn.closest(".pay-card");
+                  if (ngnCard) ngnCard.hidden = true;
+                }
+              } catch (e) {}
+            })();
+          </script>
 
           <div class="bank-sheet" data-bank-ngn>
             <h4 data-i18n="ck.ourBank">Our bank details</h4>

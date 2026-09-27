@@ -1089,6 +1089,14 @@ window.I18N = (() => {
   }
 
   function readStored() {
+    // lang()/t() are called many times per render (every translated string
+    // on the page asks), so once this load has already resolved a choice -
+    // from the URL or from storage - answer from that cached value instead
+    // of re-parsing the URL and re-writing localStorage/sessionStorage/the
+    // cookie on every single call. That repeated I/O was pure waste, and on
+    // a slow device it could noticeably delay whatever runs after the first
+    // batch of translations (e.g. a checkout page's gateway selection).
+    if (sessionOverride) return sessionOverride;
     try {
       const picked = validLang(new URLSearchParams(location.search).get("lang"));
       if (picked) {
@@ -1097,7 +1105,6 @@ window.I18N = (() => {
         return picked;
       }
     } catch (e) {}
-    if (sessionOverride) return sessionOverride;
     const stored = storedChoice();
     if (stored) return stored;
     // Fresh visitor, no explicit choice yet: ENGLISH — never inferred from
