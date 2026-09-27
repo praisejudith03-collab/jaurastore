@@ -119,8 +119,9 @@ here. They run in GitHub CI where Playwright installs Chromium.
 1. ✅ **Cache token bumped** `151 → 152` everywhere (254 `?v=` references in
    all `*.html` / `js/*.js` / `css/fonts.css`, `sw.js VERSION` +
    `jaura-v152` precache list, and `SHARED_TOKEN` in
-   `tests/test_brand_icons.py`), so phones holding the v151 service worker
-   receive the new JS/CSS without clearing their cache.
+   `tests/test_brand_icons.py`, and the favicon head generator
+   `tools/sync_favicon_head.py` TOKEN), so phones holding the v151 service
+   worker receive the new JS/CSS without clearing their cache.
 2. Merge this PR (`main` auto-deploys on Render).
 3. Run the deployed browser check:
    `Actions → Deployed mobile browser check` (or
