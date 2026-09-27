@@ -1741,9 +1741,13 @@ def test_admin_receipts_table_has_a_delete_control():
 def test_product_photos_are_compressed_and_time_out_quickly():
     src = open(os.path.join(os.path.dirname(__file__), "..", "js", "admin.js"),
                encoding="utf-8").read()
-    # photos are shrunk in the browser before they are sent
+    # photos are shrunk in the browser before they are sent: the canvas
+    # compressor caps the longest side at 1200px and re-encodes to WebP/JPEG
+    # (see tests/test_image_compression.py for the full behaviour)
     assert "function fileToBlob" in src
-    assert "fileToBlob(file, 1400, 0.82)" in src
+    assert "async function compressImageFile(" in src
+    assert "const PHOTO_MAX_DIMENSION = 1200" in src
+    assert "squeezed = await compressImageFile(file);" in src
     # 45 s for a (small) photo; videos keep the long window
     assert "timeout: isVideo ? 300000 : 45000" in src
     # Save waits ~8 s at most, and never pumps the outbox for minutes

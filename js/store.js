@@ -3,6 +3,9 @@ const JA = (() => {
     const KEYS = {
     cart: "jaura_cart",
     currency: "jaura_currency",
+    // Per-VISIT marker: the shopper tapped the ₦ / F CFA pill themselves.
+    // Without it an English page load always opens in Naira (see currency()).
+    currencyManual: "jaura_currency_manual",
     custom: "jaura_custom_products",
     deleted: "jaura_deleted",
     settings: "jaura_settings",
@@ -1035,7 +1038,35 @@ const JA = (() => {
    *     first on every page load (the "NGN" fallback below is what paints
    *     them), and the floating pill lets the shopper recalculate everything
    *     on screen in FCFA on tap; that manual choice is remembered.
+   *
+   * NAIRA FIRST, STRICTLY (owner request). "Remembered" used to mean
+   * localStorage forever, and jaura_currency is also written by the FRENCH
+   * storefront (where CFA is forced) - so an English shopper could open the
+   * shop in F CFA without ever having asked for it: one French visit, or one
+   * tap weeks ago, and every later English load painted CFA. The manual
+   * choice is now scoped to the VISIT (sessionStorage + this tab's memory):
+   *
+   *   - a fresh visit in English always opens in ₦ Naira;
+   *   - tapping F CFA on the pill keeps F CFA while the shopper browses
+   *     (page to page, product to checkout) - the toggle stays useful;
+   *   - the French lock never counts as a manual choice, so it cannot leak
+   *     into an English session.
    */
+  let _curManual = "";                       // this tab's live choice
+  function manualCurrency() {
+    if (_curManual) return _curManual;
+    try { return sessionStorage.getItem(KEYS.currencyManual) || ""; } catch (e) { return ""; }
+  }
+  function rememberManualCurrency(pick) {
+    // The French lock is the device's language talking, never the shopper.
+    if (currencyLocked()) {
+      _curManual = "";
+      try { sessionStorage.removeItem(KEYS.currencyManual); } catch (e) {}
+      return;
+    }
+    _curManual = pick;
+    try { sessionStorage.setItem(KEYS.currencyManual, pick); } catch (e) { /* private mode */ }
+  }
   function currencyLocked() {
     try {
       return !!(window.I18N && typeof window.I18N.lang === "function" && window.I18N.lang() === "fr");
@@ -1043,10 +1074,13 @@ const JA = (() => {
   }
   function currency() {
     if (currencyLocked()) return "CFA";
+    if (!manualCurrency()) return "NGN";     // English opens in Naira. Always.
     return localStorage.getItem(KEYS.currency) || "NGN";
   }
   function setCurrency(c) {
-    localStorage.setItem(KEYS.currency, currencyLocked() ? "CFA" : (c === "NGN" ? "NGN" : "CFA"));
+    const pick = currencyLocked() ? "CFA" : (c === "NGN" ? "NGN" : "CFA");
+    localStorage.setItem(KEYS.currency, pick);
+    rememberManualCurrency(pick);
     document.dispatchEvent(new CustomEvent("ja:currency"));
   }
 
@@ -2457,17 +2491,36 @@ const JA = (() => {
     </nav>`;
   }
 
+  /** Keep the floating chrome clear of the slide-out bag.
+   *
+   *  The bag parks "View bag" and "Checkout" in the bottom-right corner -
+   *  the same corner the currency pill (z-index 9999) and the WhatsApp
+   *  bubble (9998) live in, and both floated ABOVE the drawer, covering
+   *  those two buttons. While the pane is open they drop below the drawer
+   *  and fade out (css: body.mini-open .cur-float / .wa-float), and they are
+   *  taken out of the tab order + the accessibility tree here so the only
+   *  reachable controls are the ones inside the bag. */
+  function floatsBehindCart(open) {
+    document.querySelectorAll(".cur-float, .wa-float").forEach((el) => {
+      el.classList.toggle("is-behind-cart", !!open);
+      if (open) el.setAttribute("aria-hidden", "true");
+      else el.removeAttribute("aria-hidden");
+      try { if ("inert" in el) el.inert = !!open; } catch (e) {}
+    });
+  }
   function openMini() {
     ensureMini();
     paintMini();
     document.querySelector("[data-mini]")?.classList.add("open");
     document.querySelector("[data-mini-mask]")?.classList.add("open");
     document.body.classList.add("mini-open");
+    floatsBehindCart(true);
   }
   function closeMini() {
     document.querySelector("[data-mini]")?.classList.remove("open");
     document.querySelector("[data-mini-mask]")?.classList.remove("open");
     document.body.classList.remove("mini-open");
+    floatsBehindCart(false);
   }
   function ensureMini() {
     if (document.querySelector("[data-mini]")) return;

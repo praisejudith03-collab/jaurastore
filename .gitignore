@@ -49,3 +49,4 @@ migration-*.json
 
 # Local verification artifacts and temporary preview configuration
 .cache/
+data/.analytics-restore.lock
