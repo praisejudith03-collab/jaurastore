@@ -286,7 +286,10 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     assert mobile.evaluate("JA.currency()") == "CFA"
     # -- Checkout gateways follow the active/locked currency.
     mobile.goto(live_shop + "/shop.html?lang=fr")
-    mobile.evaluate("JA.addToCart(JA.products()[0].id)")
+    mobile.evaluate(
+        "() => { const p = JA.products().find(p => JA.stockFor(p, '') > 0) || JA.products()[0];"
+        " JA.addToCart(p.id); }")
+    assert mobile.evaluate("JA.cartCount()") > 0, "the test item must be in the cart"
     mobile.goto(live_shop + "/checkout.html?lang=fr")
     expect(mobile.locator("[data-checkout]")).to_be_visible()
     assert mobile.locator('[name=currency][value="CFA"]').is_checked(), (
@@ -353,7 +356,10 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     mobile.context.clear_cookies()
     mobile.goto(live_shop + '/shop.html?cat=perfume')
     expect(mobile.locator('[data-shop-grid]')).to_contain_text('Perfume browser sample')
-    mobile.locator('#site-header .nav-right [data-lang="fr"]').click()
+    # Language follows the device since 2026-09-27 (the header EN|FR buttons
+    # are gone); I18N.setLang is the in-session override.
+    mobile.evaluate("I18N.setLang('fr')")
+    mobile.wait_for_timeout(500)
     expect(mobile.locator('[data-shop-grid]')).to_contain_text('Parfum de démonstration')
     expect(mobile.locator('[data-shop-title]').last).to_have_text('Parfum')
     mobile.goto(live_shop + '/categories.html')
@@ -369,6 +375,8 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
 @pytest.mark.parametrize('language', ['en', 'fr'])
 def test_faq_wording_in_browser(mobile, live_shop, language):
     import re
-    mobile.goto(live_shop + '/faq.html')
-    mobile.locator(f'#site-header .nav-right [data-lang="{language}"]').click()
+    # Language is auto-detected from the device since 2026-09-27; ?lang= is
+    # the explicit override the header buttons used to provide.
+    mobile.goto(live_shop + '/faq.html?lang=' + language)
+    assert mobile.evaluate("I18N.lang()") == language
     assert not re.search(r'admin[\s_-]*portal|portail\s+admin', mobile.locator('body').inner_text(), re.I)
