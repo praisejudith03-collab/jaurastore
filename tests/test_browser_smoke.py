@@ -299,7 +299,12 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     ng_card = mobile.locator(".pay-card").filter(has=mobile.locator('[value="NGN"]'))
     assert ng_card.evaluate("el => el.hidden"), (
         "the Naira pay-card is removed from a French (FCFA-locked) checkout")
-    # English checkout: Naira gateway surfaced first.
+    # English checkout: Naira gateway surfaced first. The pill tap above
+    # left localStorage on CFA, and English mode honors that unprompted
+    # choice, so reset to Naira before checking the default gateway.
+    mobile.goto(live_shop + "/shop.html?lang=en")
+    mobile.evaluate("JA.setCurrency('NGN')")
+    assert mobile.evaluate("JA.currency()") == "NGN"
     mobile.goto(live_shop + "/checkout.html?lang=en")
     expect(mobile.locator("[data-checkout]")).to_be_visible()
     assert mobile.locator('[name=currency][value="NGN"]').is_checked(), (
