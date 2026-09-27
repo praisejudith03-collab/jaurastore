@@ -263,12 +263,11 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     expect(mobile.locator(".cur-float")).to_be_visible()
     first_price = mobile.locator(".price").first
     expect(first_price).to_be_visible()
-    assert "₦" in first_price.inner_text()
+    expect(first_price).to_contain_text("₦")
     mobile.locator('.cur-float button[data-cur="CFA"]').click()
     mobile.wait_for_timeout(600)
     assert mobile.evaluate("JA.currency()") == "CFA"
-    assert "F CFA" in mobile.locator(".price").first.inner_text(), (
-        "tapping FCFA recalculates prices on screen without a reload")
+    expect(mobile.locator(".price").first).to_contain_text("F CFA")  # recalculated without reload
     assert mobile.locator(".price").first.evaluate(
         "el => el.isConnected"), "prices repainted in place, no navigation"
     # -- French: greeting + interface in French, FCFA locked, pill hidden.
@@ -279,8 +278,9 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     pill = mobile.locator(".cur-float")
     assert pill.count() == 1 and pill.evaluate("el => el.hidden"), (
         "the floating currency pill stays hidden in French mode")
-    assert "Bienvenue. Prêt à faire vos achats ?" in mobile.locator("body").inner_text()
-    assert "F CFA" in mobile.locator(".price").first.inner_text()
+    expect(mobile.locator('.home-hero-static [data-i18n="home.kicker"]')).to_have_text(
+        "Bienvenue. Prêt à faire vos achats ?")
+    expect(mobile.locator(".price").first).to_contain_text("F CFA")
     # setCurrency cannot talk a French storefront out of FCFA
     mobile.evaluate("JA.setCurrency('NGN')")
     assert mobile.evaluate("JA.currency()") == "CFA"
@@ -357,12 +357,13 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     mobile.goto(live_shop + '/shop.html?cat=perfume')
     expect(mobile.locator('[data-shop-grid]')).to_contain_text('Perfume browser sample')
     # Language follows the device since 2026-09-27 (the header EN|FR buttons
-    # are gone); I18N.setLang is the in-session override.
+    # are gone); I18N.setLang is the in-session override, and the ?lang= URL
+    # parameter carries a language onto the next page load.
     mobile.evaluate("I18N.setLang('fr')")
     mobile.wait_for_timeout(500)
     expect(mobile.locator('[data-shop-grid]')).to_contain_text('Parfum de démonstration')
     expect(mobile.locator('[data-shop-title]').last).to_have_text('Parfum')
-    mobile.goto(live_shop + '/categories.html')
+    mobile.goto(live_shop + '/categories.html?lang=fr')
     expect(mobile.locator('[data-cat-list] a').first).to_have_attribute('href', 'shop.html?cat=perfume')
     expect(mobile.locator('[data-cat-list] a').first).to_contain_text('Parfum')
     # A new Flask app has no browser-local category/product state.
