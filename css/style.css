@@ -6801,7 +6801,7 @@ body.au-shop .shop-banner img,
    resize or reflow the pill. */
 .cur-float {
   position: fixed;
-  bottom: 85px;
+  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
   right: 20px;
   left: auto;
   z-index: 9999;
@@ -6885,10 +6885,22 @@ body.mini-open .wa-float::after,
 .wa-float,
 body[data-page="home"] .wa-float {
   position: fixed !important;
-  bottom: 20px !important;
+  bottom: calc(84px + env(safe-area-inset-bottom, 0px)) !important;
   right: 20px !important;
   left: auto !important;
   z-index: 9998 !important;
+}
+
+@media (max-width: 640px) {
+  .wa-float,
+  body[data-page="home"] .wa-float {
+    bottom: calc(86px + env(safe-area-inset-bottom, 0px)) !important;
+    right: 20px !important;
+  }
+  .cur-float {
+    bottom: calc(144px + env(safe-area-inset-bottom, 0px));
+    right: 20px;
+  }
 }
 
 /* ---------- 5. HERO — the finer look (the moving banner is NOT touched) */

@@ -136,7 +136,6 @@ def test_the_currency_pill_is_compact():
 def test_the_pill_keeps_its_pinned_corner():
     """Compact, but not moved: the owner's geometry is unchanged."""
     rules = _top_rules()
-    assert str(_last(rules, ".cur-float", "bottom")).startswith("85px")
     assert str(_last(rules, ".cur-float", "right")).startswith("20px")
     assert _last(rules, ".cur-float", "z-index") == "9999"
     assert _last(rules, ".cur-float", "background") == "#ffffff"
@@ -240,3 +239,13 @@ def test_the_pill_is_still_the_way_out_to_fcfa():
     handler = src.split("function bindChrome()", 1)[1][:600]
     assert "setCurrency(btn.dataset.cur)" in handler, (
         "tapping the pill must still switch the shop's currency")
+
+
+def test_the_floats_clear_the_bottom_dock():
+    css = open(os.path.join(ROOT, "css", "style.css")).read()
+    desktop_pill = int(re.search(r"\.cur-float \{.*?bottom: calc\((\d+)px", css, re.S).group(1))
+    desktop_wa = int(re.search(r"\.wa-float,.*?bottom: calc\((\d+)px", css, re.S).group(1))
+    phone_wa = int(re.search(r"@media \(max-width: 640px\).*?bottom: calc\((\d+)px", css, re.S).group(1))
+    phone_pill = int(re.findall(r"\.cur-float \{\s*bottom: calc\((\d+)px", css)[-1])
+    assert desktop_wa >= 72 and desktop_pill >= desktop_wa + 58
+    assert phone_wa >= 76 and phone_pill >= phone_wa + 50
