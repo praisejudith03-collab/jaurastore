@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=151";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=151";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=152";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=152";
 }
 
 function renderCategories() {
@@ -1452,6 +1452,20 @@ function ckCeiledDiscount(sub, cur) {
 }
 
 function paintCheckoutTotals(form) {
+  // Automatic language rule (2026-09-27): a French interface means FCFA is
+  // the only currency, so the checkout surfaces the FCFA payment gateways
+  // and the Naira card is removed from the choice. In English the opposite
+  // default holds - the Naira gateway is pre-selected from JA.currency()
+  // (NGN first) and the shopper can still switch to FCFA via the floating
+  // pill, which repaints this form through ja:currency -> renderCheckout.
+  if (JA.currencyLocked && JA.currencyLocked()) {
+    const cfaRadio = form.querySelector("[name=currency][value=\"CFA\"]");
+    if (cfaRadio) cfaRadio.checked = true;
+    form.querySelectorAll(".pay-card").forEach((card) => {
+      const input = card.querySelector("input");
+      if (input && input.value === "NGN") card.hidden = true;
+    });
+  }
   const cur = checkoutCurrency(form);
   const items = JA.cartDetailed();
   const lines = document.querySelector("[data-ck-lines]");
@@ -1989,39 +2003,14 @@ function renderCheckout() {
     });
   } catch (e) {}
 
-  // ---- Benin & Togo currency prompt ----
-  const promptCurrencyForBeninTogo = (val) => {
-    const v = String(val || "").toLowerCase();
-    if (/benin|togo|cotonou|calavi|porto|lom[ée]|lome/i.test(v)) {
-      // Prompt once per session for this zone
-      if (form.dataset.currencyPrompted === v) return;
-      form.dataset.currencyPrompted = v;
-      const curNow = JA.currency();
-      // Show prompt: OK = F CFA, Cancel = NGN, but we use confirm
-      const msg = v.includes("benin") || v.includes("cotonou") || v.includes("calavi") || v.includes("porto")
-        ? "Benin delivery detected. Choose your currency:\nOK = F CFA (XOF)\nCancel = Naira (₦)\n\nCurrent: " + curNow
-        : "Togo delivery detected. Choose your currency:\nOK = F CFA (XOF)\nCancel = Naira (₦)\n\nCurrent: " + curNow;
-      // Delay to not block UI instantly
-      setTimeout(() => {
-        const wantsCFA = confirm(msg);
-        const targetCur = wantsCFA ? "CFA" : "NGN";
-        if (targetCur !== JA.currency()) {
-          JA.setCurrency(targetCur);
-          const radio = form.querySelector(`[name=currency][value="${targetCur}"]`);
-          if (radio) radio.checked = true;
-          paintCheckoutTotals(form);
-          JA.toast(targetCur === "CFA" ? "Switched to F CFA" : "Switched to Naira");
-        }
-      }, 200);
-    }
-  };
-  // Bind to zone and country selects/inputs
-  const zoneField = form.querySelector("[name=zone]");
+  // ---- Delivery fares stay SILENT and in the shopper's active currency ----
+  // The old Benin/Togo delivery confirm() currency popup was removed on
+  // purpose (owner request 2026-09-27): picking a zone or a country must
+  // never interrupt the checkout. The zone list still labels each fare range
+  // (paintDeliveryZones) and the order totals repaint in the currency the
+  // shopper already has active (paintCheckoutTotals) - no dialog, no forced
+  // switch.
   const countryField = form.querySelector("[name=country]");
-  if (zoneField) {
-    zoneField.addEventListener("change", (e) => promptCurrencyForBeninTogo(e.target.value));
-    zoneField.addEventListener("blur", (e) => promptCurrencyForBeninTogo(e.target.value));
-  }
   if (countryField) {
     // Remember the checkout country so the order-completed page can route its
     // single WhatsApp action correctly. The old two-button chooser was removed
@@ -2030,8 +2019,6 @@ function renderCheckout() {
     countryField.addEventListener("change", (e) => {
       try { JA.setWaCountry(e.target.value); } catch (err) {}
     });
-    countryField.addEventListener("change", (e) => promptCurrencyForBeninTogo(e.target.value));
-    countryField.addEventListener("blur", (e) => promptCurrencyForBeninTogo(e.target.value));
   }
 
   form.addEventListener("change", (e) => {

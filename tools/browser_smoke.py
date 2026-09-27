@@ -47,13 +47,18 @@ with sync_playwright() as pw:
         page.set_viewport_size({"width": width, "height": 900})
         for language in ("en", "fr"):
             for path in ("/shop.html", "/categories.html", "/faq.html"):
-                page.goto(base + path, wait_until="domcontentloaded", timeout=90000)
+                # Language is auto-detected from the device (2026-09-27); the
+                # ?lang= URL parameter is the explicit override harness.
+                page.goto(base + path + "?lang=" + language,
+                          wait_until="domcontentloaded", timeout=90000)
                 logo = page.locator("#site-header .logo img")
                 expect(logo).to_be_visible(timeout=90000)
-                # The header logo is LOCKED to the LEFT edge of the header
-                # row (logo | links | controls, one flex row, space-between).
-                # Fail the deploy check if any stylesheet ever drags it back
-                # to the centre or scatters it onto a second row.
+                # The header logo is LOCKED to the CENTRE of the header row
+                # ("Option A", owner request 2026-09-27): menu [=] left, logo
+                # centred, search + cart right, one grid row, and NO language
+                # or currency dropdowns in the header. Fail the deploy check
+                # if any stylesheet ever drags it off-centre, scatters it
+                # onto a second row, or the old header switches come back.
                 box = logo.bounding_box()
                 nav_right = page.locator("#site-header .header .nav-right")
                 rbox = nav_right.bounding_box()
@@ -65,20 +70,40 @@ with sync_playwright() as pw:
                     f"logo mid {logo_mid} != controls mid {right_mid}")
                 assert box["x"] + box["width"] <= rbox["x"] + 1, (
                     f"logo overlaps controls on {base + path}")
+                assert page.locator("#site-header .header .lang-switch").count() == 0, (
+                    f"the removed header language switch is back on {base + path}")
+                assert page.locator("#site-header .header .currency-switch").count() == 0, (
+                    f"the removed header currency switch is back on {base + path}")
                 if width >= 1024:
-                    row_left = page.evaluate(
-                        "document.querySelector('#site-header .header .header-inner')"
-                        ".getBoundingClientRect().left")
-                    assert abs(box["x"] - row_left) <= 4, (
-                        f"header logo not at the left edge on {base + path}: "
-                        f"logo x {box['x']} != row left {row_left}")
-                    cfa = page.locator('#site-header .header .currency-switch [data-cur="CFA"]')
-                    cbox = cfa.bounding_box()
-                    assert cbox and 40 <= cbox["width"] <= 80, (
-                        f"currency pill wrong width: {cbox}")
+                    row = page.evaluate(
+                        "(() => { const r = document.querySelector("
+                        "'#site-header .header .header-inner').getBoundingClientRect();"
+                        " return { left: r.left, width: r.width }; })()")
+                    logo_mid_x = box["x"] + box["width"] / 2
+                    row_mid_x = row["left"] + row["width"] / 2
+                    assert abs(logo_mid_x - row_mid_x) <= 4, (
+                        f"header logo not centred on {base + path}: "
+                        f"logo centre {logo_mid_x} != row centre {row_mid_x}")
+                # The currency now lives in the floating pill: visible in
+                # English, hidden while French locks FCFA (bottom:85px
+                # right:20px, stacked above the WhatsApp bubble).
+                pill = page.locator(".cur-float")
+                assert pill.count() == 1, f"floating currency pill missing on {base + path}"
+                if language == "en":
+                    expect(pill).to_be_visible(timeout=90000)
+                    pbox = pill.bounding_box()
+                    bottom_gap = 900 - (pbox["y"] + pbox["height"])
+                    assert 75 <= bottom_gap <= 95, (
+                        f"currency pill not stacked at bottom:85px on {base + path}: {pbox}")
+                    assert width - (pbox["x"] + pbox["width"]) <= 24, (
+                        f"currency pill not pinned right:20px on {base + path}: {pbox}")
+                else:
+                    assert pill.evaluate("el => el.hidden"), (
+                        f"French mode must hide the currency pill on {base + path}")
+                    assert page.evaluate("JA.currency()") == "CFA", (
+                        f"French mode must lock FCFA on {base + path}")
                 # The two golden butterflies stay in the header, untouched.
                 assert page.locator("#site-header .header-flies .hfly").count() == 2
-                page.locator(f'#site-header .nav-right [data-lang="{language}"]').click()
                 assert logo.evaluate("img => img.complete && img.naturalWidth > 0")
                 selector = "[data-shop-grid] > *" if path == "/shop.html" else "[data-cat-list] > *"
                 if path != "/faq.html":

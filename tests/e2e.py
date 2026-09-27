@@ -192,15 +192,15 @@ def main():
         check("page view recorded on the server", pv[0]["n"] > 0, pv[0])
 
         # --------------------------------------- currency pill + French switch
-        # (a) The pill must not resize when tapped. Measure the rendered box,
-        #     switch currency, measure again: identical width AND height. This
-        #     is the visual bug the fixed-size block at the end of
-        #     css/style.css exists for, and it is the one thing the Python
-        #     cascade test cannot actually see.
+        # (a) The 2026-09-27 redesign moved the currency control out of the
+        #     header: it is now a floating white pill (.cur-float) stacked
+        #     above the WhatsApp bubble. The pill must still not resize when
+        #     tapped - measure the rendered box, switch currency, measure
+        #     again: identical width AND height.
         def pill_box():
             return page.evaluate("""() => {
-                const btn = document.querySelector('.currency-switch button[data-cur="CFA"]');
-                const grp = document.querySelector('.currency-switch');
+                const btn = document.querySelector('.cur-float button[data-cur="CFA"]');
+                const grp = document.querySelector('.cur-float');
                 if (!btn || !grp) return null;
                 const b = btn.getBoundingClientRect(), g = grp.getBoundingClientRect();
                 return { btnW: Math.round(b.width), btnH: Math.round(b.height),
@@ -208,16 +208,16 @@ def main():
             }""")
 
         before = pill_box()
-        check("the currency switch renders", bool(before), before)
-        page.locator('.currency-switch button[data-cur="CFA"]').first.click()
+        check("the floating currency pill renders", bool(before), before)
+        page.locator('.cur-float button[data-cur="CFA"]').first.click()
         page.wait_for_timeout(800)
         after = pill_box()
-        check("tapping the currency switch never resizes it",
+        check("tapping the currency pill never resizes it",
               bool(before) and before == after, f"{before} -> {after}")
-        check("the currency pill keeps its fixed height (34px, or 42px on a phone)",
-              bool(after) and after["grpH"] in (34, 42), after)
+        check("the currency pill keeps a comfortable fixed height",
+              bool(after) and 30 <= after["grpH"] <= 44, after)
         ngn_box = page.evaluate("""() => {
-            const b = document.querySelector('.currency-switch button[data-cur="NGN"]');
+            const b = document.querySelector('.cur-float button[data-cur="NGN"]');
             return b ? Math.round(b.getBoundingClientRect().width) : null;
         }""")
         check("₦ and F CFA each hold their own fixed width",
@@ -225,12 +225,13 @@ def main():
               f"NGN={ngn_box}px CFA={after and after['btnW']}px")
 
         # (b) French has to reach the CATALOGUE, not just the chrome. Translating
-        #     the menus while product names stay English was the bug.
-        page.locator('.lang-switch button[data-lang="fr"]').first.click()
+        #     the menus while product names stay English was the bug. Language
+        #     is auto-detected on load since 2026-09-27 (the header buttons are
+        #     gone); I18N.setLang is the in-session override this harness uses.
+        page.evaluate("I18N.setLang('fr')")
         page.wait_for_timeout(1000)
-        check("the language switch marks French as selected",
-              page.locator('.lang-switch button[data-lang="fr"]').first
-              .evaluate("el => el.classList.contains('is-on')"))
+        check("the language override switched the interface to French",
+              page.evaluate("I18N.lang()") == "fr")
         fr_name = page.locator("h1").first.inner_text()
         check("a French shopper reads the French product name",
               "batterie externe" in fr_name, fr_name[:60])
@@ -242,7 +243,7 @@ def main():
               any(w in shop_fr for w in ("Beauté", "Chaussures", "Électronique")),
               [w for w in ("Beauté", "Chaussures", "Électronique") if w in shop_fr])
         # put the browser back on the default language for the rest of the run
-        page.locator('.lang-switch button[data-lang="en"]').first.click()
+        page.evaluate("I18N.setLang('en')")
         page.wait_for_timeout(600)
 
         # ----------------------------------------------------- cart + checkout

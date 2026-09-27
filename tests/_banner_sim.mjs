@@ -166,17 +166,17 @@ async function main() {
   check("the bold highlight rides along", bannerText(w).includes("ends Sunday"));
   check("the English shopper does NOT see the French line", !bannerText(w).includes(FR));
 
-  // ------------------------------------------------------ 2. the FR/EN toggle
-  const frBtn = w.document.querySelector('[data-lang="fr"]');
-  check("the header carries an FR toggle", !!frBtn);
-  frBtn.dispatchEvent(new w.MouseEvent("click", { bubbles: true, cancelable: true }));
+  // ------------------------------------------------------ 2. the FR/EN switch
+  // Language is auto-detected from the device since 2026-09-27 (the header
+  // EN|FR buttons are gone); an explicit I18N.setLang is the supported
+  // in-session override this harness uses.
+  await w.I18N.setLang("fr");
   await new Promise((r) => setTimeout(r, 600));
   check("switching to FR renders the French banner", bannerText(w).includes(FR),
         bannerText(w).slice(0, 90));
   check("the English line is replaced, not appended", !bannerText(w).includes(EN));
 
-  const enBtn = w.document.querySelector('[data-lang="en"]');
-  enBtn.dispatchEvent(new w.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await w.I18N.setLang("en");
   await new Promise((r) => setTimeout(r, 600));
   check("switching back to EN restores the English banner",
         bannerText(w).includes(EN) && !bannerText(w).includes(FR),
@@ -222,10 +222,9 @@ async function main() {
   const bar = phone.document.querySelector(".conv-bar");
   check("the moving bar is present and non-empty on mobile",
         !!bar && bar.textContent.trim().length > 0);
-  const phoneFr = phone.document.querySelector('[data-lang="fr"]');
-  phoneFr.dispatchEvent(new phone.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await phone.I18N.setLang("fr");
   await new Promise((r) => setTimeout(r, 600));
-  check("the FR toggle works on mobile too", bannerText(phone).includes(FR),
+  check("the FR switch works on mobile too", bannerText(phone).includes(FR),
         bannerText(phone).slice(0, 90));
 
   // the admin page itself must stay clean (it hides the bar via CSS)

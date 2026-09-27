@@ -157,60 +157,160 @@ def test_advanced_actions(mobile, live_shop, monkeypatch):
 
 
 @pytest.mark.parametrize("width", [320, 360, 390, 680, 1440])
-@pytest.mark.parametrize("language", ["en", "fr"])
-def test_header_controls_do_not_overlap(mobile, live_shop, width, language):
+def test_header_controls_do_not_overlap(mobile, live_shop, width):
+    """Option A (owner request 2026-09-27): menu left, logo centred, search +
+    cart right - at every width the three slots stay on one row, never
+    overlap, and never leave the viewport."""
     mobile.set_viewport_size({"width": width, "height": 844})
     mobile.goto(live_shop + "/shop.html")
+    menu = mobile.locator("#site-header .header-slot--left [data-open-menu]")
+    expect(menu).to_be_visible()
     logo = mobile.locator("#site-header .logo")
     expect(logo).to_be_visible()
-    mobile.locator(f'#site-header .nav-right [data-lang="{language}"]').click()
-    a = logo.bounding_box()
-    b = mobile.locator("#site-header .nav-right").bounding_box()
-    assert a["x"] + a["width"] <= b["x"] + 1 or a["y"] + a["height"] <= b["y"] + 1
-    for control in mobile.locator("#site-header .nav-right button").all():
+    right = mobile.locator("#site-header .header-slot.nav-right")
+    expect(right).to_be_visible()
+    m, a, b = menu.bounding_box(), logo.bounding_box(), right.bounding_box()
+    # one row: the vertical centres agree within 2px
+    assert abs((m["y"] + m["height"] / 2) - (a["y"] + a["height"] / 2)) <= 2
+    assert abs((a["y"] + a["height"] / 2) - (b["y"] + b["height"] / 2)) <= 2
+    # menu left of logo, logo left of the controls - no overlaps
+    assert m["x"] + m["width"] <= a["x"] + 1
+    assert a["x"] + a["width"] <= b["x"] + 1
+    for control in mobile.locator("#site-header .header-slot.nav-right button, "
+                                  "#site-header .header-slot.nav-right a").all():
         box = control.bounding_box()
         assert box and box["x"] >= 0 and box["x"] + box["width"] <= width
+    # the old header dropdowns never come back
+    assert mobile.locator("#site-header .lang-switch").count() == 0
+    assert mobile.locator("#site-header .currency-switch").count() == 0
 
 
-def test_desktop_logo_sits_left_on_one_row_and_currency_pills_stay_small(mobile, live_shop):
-    """The locked header (owner request 2026-09-11): the logo sits flush at
-    the LEFT edge of the header row on desktop, on the SAME horizontal line
-    as the language/currency switches and icons (one flex row,
-    space-between), and the ₦/F CFA pills keep their small fixed boxes.
-    Fails if anything ever drags the logo back to the centre, scatters the
-    controls onto a second row, or inflates the currency switch again."""
+def test_desktop_logo_is_centered_on_one_row_and_currency_pill_floats(mobile, live_shop):
+    """The Option A header (owner request 2026-09-27, supersedes the
+    2026-09-11 left-logo lock): the logo sits at the horizontal CENTRE of
+    the header row on desktop, on the SAME horizontal line as the
+    menu/search/cart controls, the header carries NO language or currency
+    dropdowns, and the floating currency pill sits pinned above the
+    WhatsApp bubble."""
     width = 1440
     mobile.set_viewport_size({"width": width, "height": 900})
     mobile.goto(live_shop + "/")
     logo = mobile.locator("#site-header .logo img")
     expect(logo).to_be_visible()
     box = logo.bounding_box()
-    # The logo's left edge must be the header row's left edge (within 3px),
-    # and its vertical centre must match the controls' - i.e. one row.
-    row_left = mobile.evaluate(
-        "document.querySelector('#site-header .header .header-inner')"
-        ".getBoundingClientRect().left")
-    assert abs(box["x"] - row_left) <= 3, (
-        f"header logo x {box['x']} != header row left edge {row_left} "
-        "- the left-logo lock regressed")
+    # The logo's horizontal centre must be the header row's horizontal
+    # centre (within 3px), and its vertical centre must match the
+    # controls' - i.e. one row.
+    row_box = mobile.evaluate(
+        "(() => { const r = document.querySelector('#site-header .header .header-inner')"
+        ".getBoundingClientRect(); return { left: r.left, width: r.width }; })()")
+    logo_mid_x = box["x"] + box["width"] / 2
+    row_mid_x = row_box["left"] + row_box["width"] / 2
+    assert abs(logo_mid_x - row_mid_x) <= 3, (
+        f"header logo centre {logo_mid_x} != header row centre {row_mid_x} "
+        "- the Option A centred-logo lock regressed")
     right_box = mobile.locator("#site-header .header .nav-right").bounding_box()
     logo_mid = box["y"] + box["height"] / 2
     right_mid = right_box["y"] + right_box["height"] / 2
     assert abs(logo_mid - right_mid) <= 2, (
         f"logo mid {logo_mid} != controls mid {right_mid} "
         "- the header stopped being a single row")
-    for cur, low, high in (("NGN", 24, 46), ("CFA", 42, 76)):
-        # .header scopes to the visible header bar - the closed mobile menu
-        # (.mobile-nav inside #site-header) carries a second copy.
-        pill = mobile.locator(f'#site-header .header .currency-switch [data-cur="{cur}"]')
-        expect(pill).to_be_visible()
-        pbox = pill.bounding_box()
-        assert low <= pbox["width"] <= high, (cur, pbox)
+    # No language/currency dropdowns in the header; the currency lives in the
+    # floating pill (English storefront), white with a lavender border.
+    assert mobile.locator("#site-header .header .currency-switch").count() == 0
+    assert mobile.locator("#site-header .header .lang-switch").count() == 0
+    pill = mobile.locator(".cur-float")
+    expect(pill).to_be_visible()
+    pbox = pill.bounding_box()
+    assert width - (pbox["x"] + pbox["width"]) <= 24, (
+        f"the pill must hug the right edge (right:20px), box {pbox}")
+    bottom_gap = 900 - (pbox["y"] + pbox["height"])
+    assert 75 <= bottom_gap <= 95, (
+        f"the pill must float 85px above the bottom (stacked over WhatsApp), "
+        f"gap {bottom_gap}")
+    pill_bg = pill.evaluate("el => getComputedStyle(el).backgroundColor")
+    assert pill_bg.replace(" ", "") in ("rgb(255,255,255)",), pill_bg
+    on_btn = mobile.locator('.cur-float button[data-cur="NGN"]')
+    on_bg = on_btn.evaluate("el => getComputedStyle(el).backgroundColor")
+    assert on_bg.replace(" ", "") == "rgb(124,58,237)", (
+        f"the active currency must be #7C3AED, got {on_bg}")
+    wa = mobile.locator(".wa-float")
+    wbox = wa.bounding_box()
+    assert 900 - (wbox["y"] + wbox["height"]) <= 25, (
+        f"WhatsApp must hug bottom:20px, box {wbox}")
     # And the two golden butterflies still fly, exactly as the owner left them.
     assert mobile.locator("#site-header .header-flies .hfly").count() == 2
     mobile.locator('#site-header [data-open-search]').click()
     expect(mobile.locator('[data-search-input]')).to_be_visible()
     expect(mobile.locator('[data-search]')).to_have_count(1)
+
+
+def test_automatic_language_and_currency_logic(mobile, live_shop):
+    """The 2026-09-27 rule: the device language decides everything.
+
+    English (Chromium's default en-US here): interface English, prices open
+    in Naira FIRST, the floating pill is shown, and a tap on FCFA recalculates
+    every price on screen without a reload. French (?lang=fr, the explicit
+    form of what a French phone detects): the whole interface turns French,
+    the currency locks to FCFA, the pill disappears, and the checkout
+    surfaces the FCFA payment gateway instead of the Naira one.
+    """
+    # -- English default: NGN first, pill visible, tap FCFA recalculates.
+    mobile.set_viewport_size({"width": 390, "height": 844})
+    mobile.goto(live_shop + "/shop.html")
+    assert mobile.evaluate("I18N.lang()") == "en"
+    assert mobile.evaluate("JA.currency()") == "NGN"
+    expect(mobile.locator(".cur-float")).to_be_visible()
+    first_price = mobile.locator(".price").first
+    expect(first_price).to_be_visible()
+    expect(first_price).to_contain_text("₦")
+    mobile.locator('.cur-float button[data-cur="CFA"]').click()
+    mobile.wait_for_timeout(600)
+    assert mobile.evaluate("JA.currency()") == "CFA"
+    expect(mobile.locator(".price").first).to_contain_text("F CFA")  # recalculated without reload
+    assert mobile.locator(".price").first.evaluate(
+        "el => el.isConnected"), "prices repainted in place, no navigation"
+    # -- French: greeting + interface in French, FCFA locked, pill hidden.
+    mobile.goto(live_shop + "/?lang=fr")
+    assert mobile.evaluate("I18N.lang()") == "fr"
+    assert mobile.evaluate("JA.currency()") == "CFA"
+    assert mobile.evaluate("JA.currencyLocked()") is True
+    pill = mobile.locator(".cur-float")
+    assert pill.count() == 1 and pill.evaluate("el => el.hidden"), (
+        "the floating currency pill stays hidden in French mode")
+    expect(mobile.locator('.home-hero-static [data-i18n="home.kicker"]')).to_have_text(
+        "Bienvenue. Prêt à faire vos achats ?")
+    expect(mobile.locator(".price").first).to_contain_text("F CFA")
+    # setCurrency cannot talk a French storefront out of FCFA
+    mobile.evaluate("JA.setCurrency('NGN')")
+    assert mobile.evaluate("JA.currency()") == "CFA"
+    # -- Checkout gateways follow the active/locked currency.
+    mobile.goto(live_shop + "/shop.html?lang=fr")
+    mobile.evaluate(
+        "() => { const p = JA.products().find(p => JA.stockFor(p, '') > 0) || JA.products()[0];"
+        " JA.addToCart(p.id); }")
+    assert mobile.evaluate("JA.cartCount()") > 0, "the test item must be in the cart"
+    mobile.goto(live_shop + "/checkout.html?lang=fr")
+    expect(mobile.locator("[data-checkout]")).to_be_visible()
+    assert mobile.locator('[name=currency][value="CFA"]').is_checked(), (
+        "French checkout pre-selects the FCFA gateway")
+    expect(mobile.locator("[data-bank-cfa]")).to_be_visible()
+    expect(mobile.locator("[data-bank-ngn]")).to_be_hidden()
+    ng_card = mobile.locator(".pay-card").filter(has=mobile.locator('[value="NGN"]'))
+    assert ng_card.evaluate("el => el.hidden"), (
+        "the Naira pay-card is removed from a French (FCFA-locked) checkout")
+    # English checkout: Naira gateway surfaced first. The pill tap above
+    # left localStorage on CFA, and English mode honors that unprompted
+    # choice, so reset to Naira before checking the default gateway.
+    mobile.goto(live_shop + "/shop.html?lang=en")
+    mobile.evaluate("JA.setCurrency('NGN')")
+    assert mobile.evaluate("JA.currency()") == "NGN"
+    mobile.goto(live_shop + "/checkout.html?lang=en")
+    expect(mobile.locator("[data-checkout]")).to_be_visible()
+    assert mobile.locator('[name=currency][value="NGN"]').is_checked(), (
+        "English checkout pre-selects the Naira gateway")
+    expect(mobile.locator("[data-bank-ngn]")).to_be_visible()
+    expect(mobile.locator("[data-bank-cfa]")).to_be_hidden()
 
 
 def test_owner_category_creation_product_and_reordering(mobile, live_shop):
@@ -261,10 +361,14 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     mobile.context.clear_cookies()
     mobile.goto(live_shop + '/shop.html?cat=perfume')
     expect(mobile.locator('[data-shop-grid]')).to_contain_text('Perfume browser sample')
-    mobile.locator('#site-header .nav-right [data-lang="fr"]').click()
+    # Language follows the device since 2026-09-27 (the header EN|FR buttons
+    # are gone); I18N.setLang is the in-session override, and the ?lang= URL
+    # parameter carries a language onto the next page load.
+    mobile.evaluate("I18N.setLang('fr')")
+    mobile.wait_for_timeout(500)
     expect(mobile.locator('[data-shop-grid]')).to_contain_text('Parfum de démonstration')
     expect(mobile.locator('[data-shop-title]').last).to_have_text('Parfum')
-    mobile.goto(live_shop + '/categories.html')
+    mobile.goto(live_shop + '/categories.html?lang=fr')
     expect(mobile.locator('[data-cat-list] a').first).to_have_attribute('href', 'shop.html?cat=perfume')
     expect(mobile.locator('[data-cat-list] a').first).to_contain_text('Parfum')
     # A new Flask app has no browser-local category/product state.
@@ -277,6 +381,8 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
 @pytest.mark.parametrize('language', ['en', 'fr'])
 def test_faq_wording_in_browser(mobile, live_shop, language):
     import re
-    mobile.goto(live_shop + '/faq.html')
-    mobile.locator(f'#site-header .nav-right [data-lang="{language}"]').click()
+    # Language is auto-detected from the device since 2026-09-27; ?lang= is
+    # the explicit override the header buttons used to provide.
+    mobile.goto(live_shop + '/faq.html?lang=' + language)
+    assert mobile.evaluate("I18N.lang()") == language
     assert not re.search(r'admin[\s_-]*portal|portail\s+admin', mobile.locator('body').inner_text(), re.I)
