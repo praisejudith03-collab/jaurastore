@@ -1,68 +1,208 @@
 const $ = (s, r = document) => r.querySelector(s);
 
+/* =======================================================================
+ * CLIENT-SIDE IMAGE COMPRESSION (owner request 2026-09-27)
+ *
+ * Every photo the owner adds comes straight out of a phone camera: 3-6 MB
+ * of 4000px pixels for a card the shop paints ~600px wide. Uploading that
+ * over mobile data is slow, times out on a weak signal, and burns Storage
+ * for pixels no shopper ever sees.
+ *
+ * So the browser resizes and re-encodes the picture BEFORE it is sent:
+ *
+ *   * the longest side is capped at PHOTO_MAX_DIMENSION (1200px) - never
+ *     upscaled, so a small photo keeps its own size;
+ *   * the result is re-encoded to WebP when the browser can encode it
+ *     (every current Chrome / Safari / Firefox), JPEG otherwise, at
+ *     PHOTO_QUALITY - typically 3-6 MB down to 150-350 KB;
+ *   * EXIF orientation is applied while decoding, so a portrait photo from
+ *     a phone is never stored sideways;
+ *   * the ORIGINAL is kept whenever the squeeze cannot help: animations
+ *     (GIF), vectors (SVG), files the canvas refuses to decode, and any
+ *     re-encode that does not actually come out smaller.
+ *
+ * The server still runs storage.optimize_image_bytes() on what it receives
+ * - this does not replace that, it stops the megabytes from ever leaving
+ * the phone. The upload's 6 MB ceiling is therefore checked AFTER the
+ * squeeze: a 9 MB camera original is now a 250 KB WebP, not a rejection.
+ * ===================================================================== */
+const PHOTO_MAX_DIMENSION = 1200;                 // px kept on the longest side
+const PHOTO_QUALITY = 0.82;                       // WebP / JPEG encoder quality
+const PHOTO_SKIP_BYTES = 180 * 1024;              // already small: sent as-is
+const PHOTO_DECODE_MAX_BYTES = 40 * 1024 * 1024;  // refuse to decode beyond this
+const PHOTO_KEEP_AS_IS = /^image\/(gif|svg\+xml)$/i;   // animation / vector
+const PHOTO_NAME_RE = /\.(jpe?g|png|webp|avif|heic|heif|bmp)$/i;
+
+let _canEncodeWebp = null;
+/** Can this browser's canvas actually ENCODE WebP? (asked once) */
+function canEncodeWebp() {
+  if (_canEncodeWebp !== null) return _canEncodeWebp;
+  try {
+    const probe = document.createElement("canvas");
+    probe.width = 1; probe.height = 1;
+    _canEncodeWebp = probe.toDataURL("image/webp").indexOf("data:image/webp") === 0;
+  } catch (e) { _canEncodeWebp = false; }
+  return _canEncodeWebp;
+}
+
+/** A still photo the canvas may redraw (not a video, GIF, SVG or document). */
+function isCompressibleImage(file) {
+  const type = String((file && file.type) || "");
+  const name = String((file && file.name) || "");
+  if (PHOTO_KEEP_AS_IS.test(type) || /\.(gif|svg)$/i.test(name)) return false;
+  if (/^image\//i.test(type)) return true;
+  return PHOTO_NAME_RE.test(name);               // some phones send no type
+}
+
+/** "IMG_20260927_112233.HEIC" + "webp" -> "IMG_20260927_112233.webp" */
+function withExtension(name, ext) {
+  const base = String(name || "photo").split(/[\\/]/).pop().replace(/\.[^.]+$/, "").trim();
+  return (base || "photo").slice(0, 60) + "." + ext;
+}
+
+function readableBytes(n) {
+  const size = Number(n) || 0;
+  if (size >= 1048576) return (size / 1048576).toFixed(1) + " MB";
+  return Math.max(1, Math.round(size / 1024)) + " KB";
+}
+
+/** Decode a file to something drawImage() accepts, honouring EXIF rotation.
+ *  createImageBitmap is the fast path (off the main thread, and the only
+ *  API that applies the camera's orientation for us); FileReader + <img> is
+ *  the fallback for engines without it. */
+function decodeImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const viaReader = () => {
+      if (typeof FileReader !== "function") { reject(new Error("no image decoder")); return; }
+      const r = new FileReader();
+      r.onerror = () => reject(new Error("could not read the file"));
+      r.onload = () => {
+        const img = new Image();
+        img.onload = () => resolve({
+          source: img,
+          width: img.naturalWidth || img.width,
+          height: img.naturalHeight || img.height,
+          close: () => {},
+        });
+        img.onerror = () => reject(new Error("could not decode the image"));
+        img.src = r.result;
+      };
+      r.readAsDataURL(file);
+    };
+    if (typeof createImageBitmap !== "function") { viaReader(); return; }
+    let pending = null;
+    try { pending = createImageBitmap(file, { imageOrientation: "from-image" }); } catch (e) { pending = null; }
+    if (!pending || typeof pending.then !== "function") { viaReader(); return; }
+    pending.then((bmp) => resolve({
+      source: bmp,
+      width: bmp.width,
+      height: bmp.height,
+      close: () => { try { bmp.close(); } catch (e) {} },
+    }), viaReader);
+  });
+}
+
+/** Draw the decoded picture into a canvas no wider/taller than `max`. */
+function drawScaled(decoded, max, type) {
+  const w = Math.max(1, Number(decoded.width) || 1);
+  const h = Math.max(1, Number(decoded.height) || 1);
+  const scale = Math.min(1, max / Math.max(w, h));        // never upscale
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(w * scale));
+  canvas.height = Math.max(1, Math.round(h * scale));
+  const ctx = canvas.getContext("2d");
+  try { ctx.imageSmoothingQuality = "high"; } catch (e) {}
+  // JPEG has no alpha: flatten onto white so a transparent PNG does not come
+  // out with a black background. WebP keeps the transparency as it is.
+  if (type !== "image/webp") {
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  ctx.drawImage(decoded.source, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function canvasToBlob(canvas, type, quality) {
+  return new Promise((resolve) => {
+    try {
+      if (canvas.toBlob) { canvas.toBlob((b) => resolve(b || null), type, quality); return; }
+      const url = canvas.toDataURL(type, quality);
+      const parts = String(url).split(",");
+      const mime = (/:(.*?);/.exec(parts[0]) || [])[1] || type;
+      const bin = atob(parts[1] || "");
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+      resolve(new Blob([bytes], { type: mime }));
+    } catch (e) { resolve(null); }
+  });
+}
+
+/** Resize + re-encode a picked photo in the browser.
+ *
+ *  Always resolves - never rejects - with a descriptor the uploader can use
+ *  as-is: { blob, filename, type, size, originalSize, width, height,
+ *  compressed }. When nothing could be gained, `blob` IS the original file
+ *  and `compressed` is false, so every caller can send `blob` blindly. */
+async function compressImageFile(file, opts) {
+  const o = opts || {};
+  const out = {
+    blob: file,
+    filename: (file && file.name) || "photo.jpg",
+    type: (file && file.type) || "",
+    size: (file && file.size) || 0,
+    originalSize: (file && file.size) || 0,
+    width: 0, height: 0, compressed: false,
+  };
+  if (!file || !isCompressibleImage(file)) return out;
+  if (out.originalSize > PHOTO_DECODE_MAX_BYTES) return out;
+  const max = Math.max(64, Number(o.maxSize) || PHOTO_MAX_DIMENSION);
+  const quality = Number(o.quality) > 0 ? Number(o.quality) : PHOTO_QUALITY;
+  const skipBytes = Number(o.skipBytes) >= 0 ? Number(o.skipBytes) : PHOTO_SKIP_BYTES;
+  let decoded = null;
+  try { decoded = await decodeImageFile(file); } catch (e) { return out; }
+  try {
+    const oversized = Math.max(decoded.width || 0, decoded.height || 0) > max;
+    // A small picture that already fits keeps its own bytes: re-encoding it
+    // would only cost quality.
+    if (!oversized && out.originalSize <= skipBytes) return out;
+    const type = o.type || (canEncodeWebp() ? "image/webp" : "image/jpeg");
+    const canvas = drawScaled(decoded, max, type);
+    const blob = await canvasToBlob(canvas, type, quality);
+    // Keep the original unless the squeeze genuinely paid off.
+    if (!blob || !blob.size || blob.size >= out.originalSize) return out;
+    out.blob = blob;
+    out.type = blob.type || type;
+    out.filename = withExtension(file.name, out.type === "image/webp" ? "webp" : "jpg");
+    out.size = blob.size;
+    out.width = canvas.width;
+    out.height = canvas.height;
+    out.compressed = true;
+    return out;
+  } catch (e) {
+    return out;
+  } finally {
+    try { decoded.close(); } catch (e) {}
+  }
+}
+
+/** Legacy helper kept for callers that only want the bytes to upload. */
+function fileToBlob(file, maxSize, quality) {
+  if (!file) return Promise.resolve(null);
+  return compressImageFile(file, { maxSize, quality }).then((r) => r.blob || file, () => file);
+}
+
+/** Same squeeze, handed back as a data URL (offline previews / fallbacks). */
 function fileToData(file, maxSize, quality) {
   return new Promise((resolve, reject) => {
     if (!file) { reject(new Error("No file")); return; }
-    const r = new FileReader();
-    r.onerror = reject;
-    r.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const max = maxSize || 1200;
-        const scale = Math.min(1, max / Math.max(img.width, img.height));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
-        const ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#fff";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", quality || 0.82));
-      };
-      img.onerror = () => resolve(r.result);
-      img.src = r.result;
+    if (typeof FileReader !== "function") { reject(new Error("No file reader")); return; }
+    const read = (blob) => {
+      const r = new FileReader();
+      r.onerror = () => reject(new Error("Could not read that file."));
+      r.onload = () => resolve(r.result);
+      r.readAsDataURL(blob);
     };
-    r.readAsDataURL(file);
-  });
-}
-function fileToBlob(file, maxSize, quality) {
-  return new Promise((resolve) => {
-    if (!file) { resolve(null); return; }
-    if (typeof createImageBitmap !== "function" && typeof FileReader !== "function") {
-      resolve(file); return;
-    }
-    const done = (blob) => resolve(blob && blob.size && blob.size < file.size ? blob : file);
-    const draw = (img, width, height) => {
-      try {
-        const max = maxSize || 1400;
-        const scale = Math.min(1, max / Math.max(width, height));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(width * scale));
-        canvas.height = Math.max(1, Math.round(height * scale));
-        const ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#fff";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        if (canvas.toBlob) canvas.toBlob((b) => done(b), "image/jpeg", quality || 0.82);
-        else done(null);
-      } catch (e) { resolve(file); }
-    };
-    if (typeof createImageBitmap === "function") {
-      createImageBitmap(file).then((bmp) => {
-        draw(bmp, bmp.width, bmp.height);
-        try { bmp.close(); } catch (e) {}
-      }, () => resolve(file));
-      return;
-    }
-    const r = new FileReader();
-    r.onerror = () => resolve(file);
-    r.onload = () => {
-      const img = new Image();
-      img.onload = () => draw(img, img.width, img.height);
-      img.onerror = () => resolve(file);
-      img.src = r.result;
-    };
-    r.readAsDataURL(file);
+    compressImageFile(file, { maxSize, quality }).then((r) => read(r.blob || file), () => read(file));
   });
 }
 function slugify(name) {
@@ -212,7 +352,7 @@ function mediaStripHTML(imgs) {
   const tiles = (imgs || []).map((src, i) => mediaTileHTML(src, i, poster)).join("");
   const plus = (imgs || []).length < 20 ? `<label class="au-tile au-plus">+<input type="file" id="more-media" accept="image/*,video/*" multiple hidden /></label>` : "";
   return `<div class="au-media-row">${tiles}${plus}</div>
-    <p class="admin-note">Drag & drop, or tap + to pick several at once. Photos up to 6 MB, videos up to 50 MB. Your photos & videos stay as they are — up to 20 items.</p>
+    <p class="admin-note">Drag &amp; drop, or tap + to pick several at once. Big camera photos are resized to 1200px and compressed on your phone before they upload, so they go up fast on mobile data and still look sharp. Videos up to 50 MB — up to 20 items.</p>
     <button type="button" class="au-view-media" id="view-media">Photos: ${(imgs || []).length} of 20 — tap + to add, × to remove</button>`;
 }
 function editorOptions(p) {
@@ -330,8 +470,11 @@ function bindMedia() {
       JA.toast("That video is " + (file.size / 1048576).toFixed(1) + " MB. The limit is 40 MB.");
       return;
     }
-    if (!isVideo && file.size > maxPhoto) {
-      JA.toast("That photo is " + (file.size / 1048576).toFixed(1) + " MB. The limit is 6 MB.");
+    // A camera original is allowed to be huge: it is squeezed below, and the
+    // 6 MB ceiling is checked on what will ACTUALLY be uploaded. Only a file
+    // too big to even decode is turned away here.
+    if (!isVideo && file.size > PHOTO_DECODE_MAX_BYTES) {
+      JA.toast("That photo is " + (file.size / 1048576).toFixed(1) + " MB — too large to open. Please pick a smaller one.");
       return;
     }
     if (!window.JA_NET) {
@@ -341,17 +484,34 @@ function bindMedia() {
     const preview = URL.createObjectURL(file);
     const idx = window.__editImages.push({ pending: true, preview, video: isVideo }) - 1;
     paintMedia(box);
+    // Resize + re-encode on the phone first: a 1200px WebP uploads in a
+    // fraction of the time (and of the Storage) a camera original needs.
     let payload = file;
+    let filename = file.name || (isVideo ? "video.mp4" : "photo.jpg");
+    let squeezed = null;
     if (!isVideo && looksImage) {
-      try { payload = (await fileToBlob(file, 1400, 0.82)) || file; } catch (err) { payload = file; }
+      try {
+        squeezed = await compressImageFile(file);
+        payload = squeezed.blob || file;
+        filename = squeezed.filename || filename;
+      } catch (err) { payload = file; }
+    }
+    if (!isVideo && payload.size > maxPhoto) {
+      window.__editImages.splice(idx, 1);
+      paintMedia(box);
+      JA.toast("That photo is still " + (payload.size / 1048576).toFixed(1) + " MB after compression. The limit is 6 MB.");
+      return;
     }
     const res = await photoSlot(() => window.JA_NET.api(endpoint, {
-      method: "POST", blob: payload, field: "file", filename: file.name || (isVideo ? "video.mp4" : "photo.jpg"),
+      method: "POST", blob: payload, field: "file", filename,
       queue: true, timeout: isVideo ? 300000 : 45000, label: isVideo ? "Video" : "Photo",
     }));
     if (res && res.url) {
       window.__editImages[idx] = bustMediaCache(res.url);
-      JA.toast(isVideo ? "Video uploaded." : "Photo uploaded.");
+      JA.toast(isVideo ? "Video uploaded."
+        : (squeezed && squeezed.compressed
+          ? "Photo uploaded — compressed " + readableBytes(squeezed.originalSize) + " → " + readableBytes(squeezed.size) + "."
+          : "Photo uploaded."));
     } else if (res && res.queued) {
       window.__jaPendingPhoto = (window.__jaPendingPhoto || 0) + 1;
     } else {
@@ -2355,9 +2515,12 @@ function bindCategories() {
     const isDoc = /\.(pdf|doc|docx)$/i.test(f.name || "") || /pdf|word|msword|document/.test(f.type || "");
     if (isDoc && f.size > 8 * 1024 * 1024) { JA.toast("That asset is " + (f.size / 1048576).toFixed(1) + " MB. The limit is 8 MB."); input.value = ""; return; }
     const card = input.closest("[data-cat-i]"); const pic = card?.querySelector(".au-cat-pic");
+    // Category covers get the same browser-side squeeze as product photos
+    // (1200px WebP/JPEG); documents and videos pass through untouched.
+    const squeezed = await compressImageFile(f);
     try {
       if (window.JA_NET) {
-        const res = await window.JA_NET.api("api/admin/uploads/category", { method: "POST", blob: f, field: "file", filename: f.name || "category.jpg", timeout: 300000, label: "Category asset", });
+        const res = await window.JA_NET.api("api/admin/uploads/category", { method: "POST", blob: squeezed.blob || f, field: "file", filename: squeezed.filename || f.name || "category.jpg", timeout: 300000, label: "Category asset", });
         if (res && res.url) {
           // complete HTTPS Storage URL with a cache-buster: repaint the
           // preview from it, then persist the same URL into
@@ -3212,10 +3375,12 @@ function bindSiteBranding() {
     logoFile.addEventListener("change", async () => {
       const f = logoFile.files && logoFile.files[0]; if (!f) return;
       if (!window.JA_NET) { JA.toast("Logo upload needs live server."); return; }
-      if (f.size > 6 * 1024 * 1024) { JA.toast("Logo too big — 6 MB max."); logoFile.value = ""; return; }
       if (msg) msg.textContent = "Uploading logo…";
+      // Squeeze first, then measure: a phone original never trips the 6 MB cap.
+      const logoImg = await compressImageFile(f, { maxSize: 1200 });
+      if ((logoImg.blob || f).size > 6 * 1024 * 1024) { JA.toast("Logo too big — 6 MB max."); logoFile.value = ""; if (msg) msg.textContent = ""; return; }
       try {
-        const res = await window.JA_NET.api("api/admin/uploads/image", { method: "POST", blob: f, field: "file", filename: f.name || "logo.jpg", timeout: 60000 });
+        const res = await window.JA_NET.api("api/admin/uploads/image", { method: "POST", blob: logoImg.blob || f, field: "file", filename: logoImg.filename || f.name || "logo.jpg", timeout: 60000 });
         if (res && res.url) {
           const freshUrl = bustMediaCache(res.url);
           const saved = await saveSiteConfig({ logoUrl: freshUrl });
@@ -3238,10 +3403,12 @@ function bindSiteBranding() {
     bannerFile.addEventListener("change", async () => {
       const f = bannerFile.files && bannerFile.files[0]; if (!f) return;
       if (!window.JA_NET) { JA.toast("Banner upload needs live server."); return; }
-      if (f.size > 6 * 1024 * 1024) { JA.toast("Banner too big — 6 MB max."); bannerFile.value = ""; return; }
       if (msg) msg.textContent = "Uploading shop banner…";
+      // Same squeeze as every other picture: 1200px WebP/JPEG before the wire.
+      const bannerImg = await compressImageFile(f, { maxSize: 1200 });
+      if ((bannerImg.blob || f).size > 6 * 1024 * 1024) { JA.toast("Banner too big — 6 MB max."); bannerFile.value = ""; if (msg) msg.textContent = ""; return; }
       try {
-        const res = await window.JA_NET.api("api/admin/uploads/image", { method: "POST", blob: f, field: "file", filename: f.name || "banner.jpg", timeout: 60000 });
+        const res = await window.JA_NET.api("api/admin/uploads/image", { method: "POST", blob: bannerImg.blob || f, field: "file", filename: bannerImg.filename || f.name || "banner.jpg", timeout: 60000 });
         if (res && res.url) {
           const freshUrl = bustMediaCache(res.url);
           const saved = await saveSiteConfig({ shopBannerUrl: freshUrl });
