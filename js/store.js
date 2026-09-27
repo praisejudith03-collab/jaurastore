@@ -1023,11 +1023,30 @@ const JA = (() => {
     return id.charAt(0).toUpperCase() + id.slice(1).replace(/-/g, " ");
   }
 
+  /* ------------------------------------------------ automatic currency rule
+   * The interface language is auto-detected from the device (js/i18n.js) and
+   * the currency follows it (owner request 2026-09-27):
+   *
+   *   French interface (fr, fr-FR, fr-BJ, ...)  -> FCFA ONLY. The currency
+   *     is locked: currency() always answers CFA, setCurrency() cannot talk
+   *     the shop out of CFA, and the floating ₦/FCFA pill stays hidden.
+   *
+   *   English interface (en, en-NG, en-US, default) -> prices open in ₦ NGN
+   *     first on every page load (the "NGN" fallback below is what paints
+   *     them), and the floating pill lets the shopper recalculate everything
+   *     on screen in FCFA on tap; that manual choice is remembered.
+   */
+  function currencyLocked() {
+    try {
+      return !!(window.I18N && typeof window.I18N.lang === "function" && window.I18N.lang() === "fr");
+    } catch (e) { return false; }
+  }
   function currency() {
+    if (currencyLocked()) return "CFA";
     return localStorage.getItem(KEYS.currency) || "NGN";
   }
   function setCurrency(c) {
-    localStorage.setItem(KEYS.currency, c === "NGN" ? "NGN" : "CFA");
+    localStorage.setItem(KEYS.currency, currencyLocked() ? "CFA" : (c === "NGN" ? "NGN" : "CFA"));
     document.dispatchEvent(new CustomEvent("ja:currency"));
   }
 
@@ -2385,26 +2404,15 @@ const JA = (() => {
         <span class="hfly hfly2">${goldFly()}</span>
       </div>
       <div class="wrap header-inner">
+        <div class="header-slot header-slot--left">
+          <button class="icon-btn menu-toggle" data-open-menu aria-label="${tx("nav.menu")}">
+            <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+          </button>
+        </div>
         <a class="logo" href="index.html">
           <img src="images/brand/logo.jpg?v=151" alt="Jaura" />
         </a>
-        <nav class="nav-left">
-          <a href="index.html">${tx("nav.home")}</a>
-          <a href="shop.html">${tx("nav.shop")}</a>
-          <a href="categories.html">${tx("nav.categories")}</a>
-          <a href="faq.html">${tx("nav.faq")}</a>
-          <a href="about.html">${tx("nav.vision")}</a>
-          <a href="contact.html">${tx("nav.contact")}</a>
-        </nav>
-        <div class="nav-right">
-          <div class="lang-switch" role="group" aria-label="${tx("lang.group")}">
-            <button type="button" data-lang="en">EN</button>
-            <button type="button" data-lang="fr">FR</button>
-          </div>
-          <div class="currency-switch" role="group" aria-label="Currency">
-            <button type="button" data-cur="NGN">₦</button>
-            <button type="button" data-cur="CFA">F CFA</button>
-          </div>
+        <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></svg>
           </button>
@@ -2412,9 +2420,6 @@ const JA = (() => {
             <svg viewBox="0 0 24 24"><path d="M6 7h15l-1.5 9h-12z"/><path d="M6 7L5 4H2"/><circle cx="9" cy="20" r="1.3"/><circle cx="18" cy="20" r="1.3"/></svg>
             <span class="badge-count" data-cart-count>0</span>
           </a>
-          <button class="icon-btn menu-toggle" data-open-menu aria-label="${tx("nav.menu")}">
-            <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-          </button>
         </div>
       </div>
     </header>
@@ -2448,16 +2453,6 @@ const JA = (() => {
         <a class="au-link ${on("track-order")}" href="track-order.html">${tx("nav.track")}</a>
         <a class="au-link ${on("account")}" href="account.html">${tx("nav.account")}</a>
         <a class="au-link ${on("wishlist")}" href="wishlist.html">${tx("nav.wishlist")}</a>
-        <div class="au-menu-tools">
-          <div class="lang-switch">
-            <button type="button" data-lang="en">EN</button>
-            <button type="button" data-lang="fr">FR</button>
-          </div>
-          <div class="currency-switch">
-            <button type="button" data-cur="NGN">₦</button>
-            <button type="button" data-cur="CFA">F CFA</button>
-          </div>
-        </div>
       </div>
     </nav>`;
   }
@@ -2597,6 +2592,15 @@ const JA = (() => {
         <div class="search-meta" data-search-meta></div>
         <div class="search-results" data-search-results></div>
       </div>
+    </div>
+    <!-- Floating currency pill (English storefront only): sits stacked above
+         the WhatsApp bubble. The shared [data-cur] click handler in
+         bindChrome() recalculates every price on screen without a reload.
+         In French mode the currency is locked to FCFA, so the pill stays
+         hidden (see currencyLocked() and refreshChrome()). -->
+    <div class="cur-float" data-cur-float role="group" aria-label="Currency"${currencyLocked() ? " hidden" : ""}>
+      <button type="button" data-cur="NGN">₦</button>
+      <button type="button" data-cur="CFA">F CFA</button>
     </div>
     <a class="wa-float" data-wa-inquiry data-wa-country="benin" href="${waInquiryUrl(WA_BJ)}" target="_blank" rel="noopener" aria-label="WhatsApp">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M12.04 2C6.58 2 2.15 6.4 2.15 11.84c0 1.74.46 3.44 1.33 4.94L2 22l5.36-1.4a10 10 0 0 0 4.68 1.19h.01c5.46 0 9.89-4.4 9.89-9.85C21.94 6.4 17.5 2 12.04 2zm5.72 14.13c-.24.68-1.4 1.3-1.95 1.38-.5.07-1.12.1-1.81-.11-.42-.13-.95-.31-1.64-.6-2.89-1.25-4.77-4.16-4.92-4.35-.14-.2-1.18-1.57-1.18-3 0-1.42.75-2.12 1.01-2.41.27-.29.58-.36.78-.36h.56c.18 0 .42-.07.66.5.24.58.82 2 .89 2.15.07.15.12.32.02.52-.1.2-.14.32-.29.5-.14.17-.3.38-.43.51-.14.14-.29.29-.12.56.16.27.73 1.2 1.56 1.95 1.08.96 1.98 1.26 2.26 1.4.27.14.43.12.59-.07.16-.2.68-.79.86-1.06.18-.27.36-.22.6-.13.25.08 1.57.74 1.84.87.27.14.45.2.52.31.06.11.06.64-.18 1.32z"/></svg>
@@ -2942,7 +2946,7 @@ const JA = (() => {
   function mountChrome() {
     // These nodes live outside the footer for fixed positioning. Remove the
     // previous set before a language switch mounts and binds fresh controls.
-    document.querySelectorAll("body > .dock, body > [data-search], body > .wa-float")
+    document.querySelectorAll("body > .dock, body > [data-search], body > .wa-float, body > .cur-float")
       .forEach((node) => node.remove());
     const top = document.getElementById("site-header");
     const bot = document.getElementById("site-footer");
@@ -2957,6 +2961,8 @@ const JA = (() => {
       if (dock) document.body.appendChild(dock);
       const search = bot && bot.querySelector("[data-search]");
       if (search) document.body.appendChild(search);
+      const cur = bot && bot.querySelector(".cur-float");
+      if (cur) document.body.appendChild(cur);
       const wa = bot && bot.querySelector(".wa-float");
       if (wa) document.body.appendChild(wa);
     } catch (e) {}
@@ -2998,6 +3004,16 @@ const JA = (() => {
     const currentLang = window.I18N ? window.I18N.lang() : "en";
     document.querySelectorAll("[data-lang]").forEach((btn) => {
       btn.classList.toggle("is-on", btn.dataset.lang === currentLang);
+    });
+    // The floating currency pill only exists for the English storefront: a
+    // French interface means FCFA is locked in, so the pill is hidden (and
+    // the body class lets CSS hide it as a backstop).
+    const locked = currencyLocked();
+    try {
+      if (document.body && document.body.classList) document.body.classList.toggle("ja-fr", locked);
+    } catch (e) {}
+    document.querySelectorAll("[data-cur-float]").forEach((el) => {
+      el.hidden = locked;
     });
   }
 
@@ -3241,7 +3257,7 @@ const JA = (() => {
     products, product, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     homepageFeatured, homepageFeaturedProducts, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
-    currency, setCurrency, money, priceOf, compareOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
+    currency, setCurrency, currencyLocked, money, priceOf, compareOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
     referralEnabled,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,

@@ -63,7 +63,7 @@ window.I18N = (() => {
     "cat.perfume": "Perfume",
     "ticker": "• SHOP LUXURY • LAGOS & COTONOU • WHATSAPP +229 68 95 31 10 • PAY IN ₦ OR F CFA •",
     "conv.banner": "Benin 🇧🇯 customers: place your order now and we deliver in the next batch",
-    "home.kicker": "Experience effortless elegance",
+    "home.kicker": "Welcome. Ready to shop?",
     "home.heroLine": "Experience effortless elegance and curated essentials",
     "home.explore": "Explore",
     "pager.prev": "Prev",
@@ -556,7 +556,7 @@ window.I18N = (() => {
     "cat.perfume": "Parfum",
     "ticker": "• SHOP LUXE • LAGOS & COTONOU • WHATSAPP +229 68 95 31 10 • PAYEZ EN ₦ OU F CFA •",
     "conv.banner": "Clients du Bénin 🇧🇯 : passez commande maintenant, livraison au prochain envoi",
-    "home.kicker": "Élégance, en toute simplicité",
+    "home.kicker": "Bienvenue. Prêt à faire vos achats ?",
     "home.heroLine": "Élégance, en toute simplicité et des essentiels choisis",
     "home.explore": "Explorer",
     "pager.prev": "Préc.",
@@ -986,18 +986,56 @@ window.I18N = (() => {
 
   const dict = { en, fr };
 
+  /* --------------------------------------------------------------
+   * Automatic language (owner request 2026-09-27).
+   *
+   * The storefront NO LONGER has a manual EN | FR switch anywhere: the
+   * browser's own primary language drives the interface on every page
+   * load. A phone whose language is French (fr, fr-FR, fr-BJ, ...) gets
+   * the French interface and the FCFA lock handled by store.js; anything
+   * else - including every English locale (en, en-NG, en-US, ...) and any
+   * unrecognised language - gets the default English interface.
+   *
+   * The ?lang=fr / ?lang=en URL parameter is kept as an explicit override
+   * (support links, QA), but stale stored copies are intentionally NOT
+   * read: they could only have been written by the removed manual switch
+   * and would defeat the detection this rule exists for.
+   * ------------------------------------------------------------ */
+  function detectBrowserLang() {
+    let tags = [];
+    try {
+      if (typeof navigator !== "undefined") {
+        if (Array.isArray(navigator.languages) && navigator.languages.length) tags = navigator.languages;
+        else if (navigator.language) tags = [navigator.language];
+        else if (navigator.userLanguage) tags = [navigator.userLanguage];
+      }
+    } catch (e) { tags = []; }
+    for (let i = 0; i < tags.length; i += 1) {
+      const tag = String(tags[i] || "").toLowerCase().trim();
+      if (!tag) continue;
+      // fr, fr-FR, fr-BJ, fr-CA, ... — any French locale switches the shop
+      // to French; the FIRST recognisable language in the device's ordered
+      // preference list decides, and English (or nothing recognised) keeps
+      // the default English interface.
+      if (tag === "fr" || tag.indexOf("fr-") === 0) return "fr";
+      if (tag === "en" || tag.indexOf("en-") === 0) return "en";
+    }
+    return "en";
+  }
+
+  /* An explicit in-session override: I18N.setLang() (dev tools, the e2e
+   * harness, support scripts) pins the language until the next page load,
+   * where detection rules again. It is intentionally NOT persisted - the
+   * device language stays the source of truth across loads. */
+  let sessionOverride = null;
+
   function readStored() {
     try {
       const q = new URLSearchParams(location.search).get("lang");
       if (q === "fr" || q === "en") return q;
     } catch (e) {}
-    try { if (sessionStorage.getItem(KEY) === "fr") return "fr"; } catch (e) {}
-    try { if (localStorage.getItem(KEY) === "fr") return "fr"; } catch (e) {}
-    try {
-      const m = String(document.cookie || "").match(/(?:^|; )jaura_lang=(fr|en)/);
-      if (m) return m[1];
-    } catch (e) {}
-    return "en";
+    if (sessionOverride === "fr" || sessionOverride === "en") return sessionOverride;
+    return detectBrowserLang();
   }
 
   function lang() {
@@ -1006,6 +1044,7 @@ window.I18N = (() => {
 
   function setLang(next) {
     const value = next === "fr" ? "fr" : "en";
+    sessionOverride = value;
     try { localStorage.setItem(KEY, value); } catch (e) {}
     try { sessionStorage.setItem(KEY, value); } catch (e) {}
     try { document.cookie = "jaura_lang=" + value + ";path=/;max-age=31536000;SameSite=Lax"; } catch (e) {}
@@ -1191,6 +1230,6 @@ window.I18N = (() => {
 
   if (document.documentElement) document.documentElement.lang = lang();
 
-  return { lang, setLang, t, apply, sweep };
+  return { lang, setLang, t, apply, sweep, detectBrowserLang };
 })();
 var I18N = window.I18N;

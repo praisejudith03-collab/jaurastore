@@ -210,10 +210,11 @@ async function main() {
         bannerText(storeWin).includes(BOLD),
         bannerText(storeWin).slice(0, 90));
 
-  // 12. Tapping FR toggle renders the French banner
-  const frBtn = storeWin.document.querySelector('[data-lang="fr"]');
-  if (frBtn) {
-    frBtn.dispatchEvent(new storeWin.MouseEvent("click", { bubbles: true, cancelable: true }));
+  // 12. Switching the storefront to FR renders the French banner. Language
+  // is auto-detected from the device since 2026-09-27 (the header EN|FR
+  // buttons are gone); I18N.setLang is the supported in-session override.
+  if (storeWin.I18N && typeof storeWin.I18N.setLang === "function") {
+    storeWin.I18N.setLang("fr");
     await new Promise((r) => setTimeout(r, 600));
   }
   check("switching storefront to FR renders the French banner text",
