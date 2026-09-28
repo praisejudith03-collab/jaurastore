@@ -2913,6 +2913,33 @@ DELIVERY_PAGE_FILE = _os.environ.get(
     "DELIVERY_PAGE_PATH",
     _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "delivery_page.json"))
 
+# The requested public coverage list. The HTML retains the same data as an
+# offline/static fallback and the Admin Delivery form starts with it. This
+# server copy also lets us make one *safe* upgrade of the old stock document
+# that is already stored in production (rather than letting that document
+# continue to mask the new fallback after a deploy).
+DETAILED_DELIVERY_PAGE = {
+    "title": "Delivery Locations",
+    "lead": "Accessible hubs and regions across Nigeria, Benin Republic and Togo",
+    "blocks": [
+        {"heading": "Nigeria", "locations": [
+            {"name": "Lagos Mainland", "detail": "Ikeja, Yaba, Surulere, Oshodi, Iyana-Ipaja, Ojodu Berger, Agege, Gbagada, Ketu, Ikorodu"},
+            {"name": "Lagos Island", "detail": "Victoria Island, Lekki Phase 1, Ajah, Ikoyi, Lagos Island, Epe"},
+            {"name": "Ogun State", "detail": "Abeokuta, Sagamu, Mowe/Ibafo, Ijebu-Ode, Ota"},
+            {"name": "Abuja (FCT)", "detail": "Maitama, Wuse, Garki, Jabi, Asokoro, Kubwa, Lugbe"},
+            {"name": "Regional hubs", "detail": "Rivers (Port Harcourt), Edo (Benin City), Delta (Warri, Asaba), Ekiti (Ado-Ekiti), Osun (Osogbo, Ile-Ife), Oyo (Ibadan), Kwara (Ilorin), Abia (Aba, Umuahia), Anambra (Awka, Onitsha)"},
+        ]},
+        {"heading": "Benin Republic", "locations": [
+            {"name": "Cotonou", "detail": "Haie Vive, Ganhi, Akpakpa, Cadjehoun, Zongo, Fidjrosse"},
+            {"name": "Abomey-Calavi", "detail": "Godomey, Togoudo, Zogbadje, Arconville"},
+            {"name": "Porto-Novo", "detail": "Catchi, Ouando, Djassin"},
+        ]},
+        {"heading": "Togo", "locations": [
+            {"name": "Lomé", "detail": "Deck, Hedzranawoe, Agoè, Akodesséwa"},
+        ]},
+    ],
+}
+
 
 def _normalize_delivery_page(raw):
     """Sanitise an incoming Delivery page. Returns None when unusable.
@@ -2976,6 +3003,50 @@ def _load_delivery_page():
     except Exception as exc:
         print(f"[supabase] delivery page read failed: {exc}")
     return None
+
+
+def _is_legacy_delivery_page(page):
+    """Only recognise the exact starter document that was live pre-update.
+
+    This is deliberately narrow. A page that the owner edited in any way
+    stays theirs; only the generic six-Nigeria/three-Benin stock document is
+    upgraded so the requested locations are actually visible after deploy.
+    """
+    if not isinstance(page, dict):
+        return False
+    if page.get("title") != "Delivery Locations" or page.get("lead") != "Curated coverage across West Africa":
+        return False
+    blocks = page.get("blocks")
+    if not isinstance(blocks, list) or len(blocks) != 2:
+        return False
+    expected = [("Nigeria", ["Lagos", "Ogun", "Abia", "Anambra", "Osun", "Abuja"]),
+                ("Benin Republic", ["Cotonou", "Calavi", "Porto-Novo"])]
+    actual = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            return False
+        locations = block.get("locations")
+        if not isinstance(locations, list):
+            return False
+        actual.append((block.get("heading"), [loc.get("name") for loc in locations if isinstance(loc, dict)]))
+    return actual == expected
+
+
+def _delivery_page_for_storefront():
+    """Read the owner page, upgrading only the known legacy starter once."""
+    page = _load_delivery_page()
+    if not _is_legacy_delivery_page(page):
+        return page
+    try:
+        saved = _save_delivery_page(DETAILED_DELIVERY_PAGE)
+        if isinstance(saved, dict):
+            return saved
+    except Exception as exc:
+        # Serving the requested locations is still preferable to serving a
+        # stale document when a transient write fails. The next /api/site read
+        # retries the idempotent upgrade.
+        print(f"[delivery-page] legacy upgrade write failed: {exc}")
+    return DETAILED_DELIVERY_PAGE
 
 
 def _save_delivery_page(page):
@@ -3150,7 +3221,7 @@ def _site_payload(site):
     # The owner-editable Delivery page. None when nothing has been saved yet,
     # and the storefront then keeps the static delivery.html fallback.
     try:
-        out["delivery_page"] = _load_delivery_page()
+        out["delivery_page"] = _delivery_page_for_storefront()
     except Exception:
         out["delivery_page"] = None
     return out
