@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=154";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=154";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=155";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=155";
 }
 
 function renderCategories() {
@@ -2075,6 +2075,27 @@ function renderCheckout() {
   promoInput?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); promoBtn?.click(); }
   });
+  // When the owner has switched BOTH the referral programme AND promotions
+  // off (Admin -> Marketing), no code of any kind can be accepted - so the
+  // Referral / Promo field must not keep offering an input that can only
+  // ever answer "not recognised". Hidden, cleared, and any earlier code
+  // dropped from the totals. Re-evaluated when the live site row lands.
+  const paintPromoGate = () => {
+    const box = document.querySelector("[data-ck-promo]");
+    if (!box) return;
+    const refOn = !JA.referralEnabled || JA.referralEnabled();
+    const promoOn = !JA.promosEnabled || JA.promosEnabled();
+    const usable = refOn || promoOn;
+    box.hidden = !usable;
+    if (!usable && ckPromo) {
+      ckPromo = null;
+      try { promoInput.value = ""; } catch (e) {}
+      setPromoMsg("", true);
+      paintCheckoutTotals(form);
+    }
+  };
+  paintPromoGate();
+  document.addEventListener("ja:site", paintPromoGate);
 
   const shot = form.querySelector("[name=proof]");
   const preview = form.querySelector("[data-proof-preview]");
@@ -2173,45 +2194,60 @@ function renderCheckout() {
         } catch (e) {}
       }
     }
-    // Benin & Togo deliveries: 5,000 F CFA or its 12,000 naira equivalent. Guard
-    // before any proof handling / queueing so an under-minimum order is
-    // never saved locally or sent to the server.
+    // Benin & Togo deliveries: the minimum order is an ADMIN SETTING
+    // (Admin -> Marketing, growth setting minOrderCfa, served on /api/site).
+    // It used to be hardcoded at 5,000 F CFA / 12,000 naira; now the guard
+    // reads the live value, and a saved 0 switches the rule OFF (no guard,
+    // the server skips it the same way). Runs before any proof handling /
+    // queueing so an under-minimum order is never saved locally or sent.
     const zoneStr = String(data.zone || "");
     const countryStr = String(data.country || "");
     const isBeninTogo = /benin|togo|cotonou|calavi|porto|lom[ée]|lome/i.test(zoneStr) || /benin|togo/i.test(countryStr);
+    const siteRow = (JA.getSiteConfig && JA.getSiteConfig()) || {};
+    const _minRaw = siteRow.minOrderCfa;
+    const minOrderCfa = (_minRaw === undefined || _minRaw === null || _minRaw === "")
+      ? 5000 : (Number(_minRaw) || 0);
+    const minOrderNgn = Number(siteRow.minOrderNgn) || (minOrderCfa ? Math.round(minOrderCfa / 0.44) : 0);
+    const _fr = (window.I18N && I18N.lang && I18N.lang() || "en").toLowerCase().indexOf("fr") === 0;
+    const _grp = (n) => String(Math.max(0, Math.round(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, _fr ? " " : ",");
+    const minOrderMsg = (cur_) => {
+      if (cur_ === "CFA") {
+        if (minOrderCfa === 5000) return t("ck.minOrderCfa");
+        return _fr
+          ? `Bénin & Togo : commande minimum ${_grp(minOrderCfa)} F CFA (environ ${_grp(minOrderNgn)} nairas). Ajoutez quelques articles de plus.`
+          : `Benin & Togo: minimum order ${_grp(minOrderCfa)} F CFA (about ${_grp(minOrderNgn)} naira). Please add more items.`;
+      }
+      // The Naira line is ALWAYS built from the live figure: it must quote
+      // the exact floor the server enforces (the old static phrase claimed
+      // 12,000 naira while the server floor is derived from the rate).
+      return _fr
+        ? `Bénin & Togo : commande minimum ${_grp(minOrderNgn)} nairas (environ ${_grp(minOrderCfa)} F CFA). Ajoutez quelques articles de plus.`
+        : `Benin & Togo: minimum order ${_grp(minOrderNgn)} naira (about ${_grp(minOrderCfa)} F CFA). Please add more items.`;
+    };
+    const showMinWarn = (cur_) => {
+      const msg = minOrderMsg(cur_);
+      JA.toast(msg);
+      try {
+        let warn = document.querySelector("[data-ck-min-warn]");
+        if (!warn) {
+          warn = document.createElement("div");
+          warn.setAttribute("data-ck-min-warn", "");
+          warn.style.cssText = "margin:10px 0;padding:10px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;color:#664d03;font-size:13px;";
+          form.insertBefore(warn, form.querySelector(".ck-place")?.parentElement || form.firstChild);
+        }
+        warn.textContent = msg;
+        warn.hidden = false;
+      } catch (e) {}
+      shot?.focus?.();
+    };
     const totalNow = JA.cartTotal(cur);
-    if (isBeninTogo && cur === "CFA" && totalNow < 5000) {
-      JA.toast(t("ck.minOrderCfa") || "Benin & Togo: minimum order 5,000 F CFA (about 12,000 naira). Please add more items.");
-      // Also show inline warning
+    if (isBeninTogo && minOrderCfa > 0) {
+      if (cur === "CFA" && totalNow < minOrderCfa) { showMinWarn("CFA"); return; }
+      if (cur === "NGN" && totalNow < minOrderNgn) { showMinWarn("NGN"); return; }
       try {
-        let warn = document.querySelector("[data-ck-min-warn]");
-        if (!warn) {
-          warn = document.createElement("div");
-          warn.setAttribute("data-ck-min-warn", "");
-          warn.style.cssText = "margin:10px 0;padding:10px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;color:#664d03;font-size:13px;";
-          form.insertBefore(warn, form.querySelector(".ck-place")?.parentElement || form.firstChild);
-        }
-        warn.textContent = t("ck.minOrderCfa") || "Benin & Togo: minimum order 5,000 F CFA (about 12,000 naira). Please add more items.";
-        warn.hidden = false;
+        const warn = document.querySelector("[data-ck-min-warn]");
+        if (warn) warn.hidden = true;
       } catch (e) {}
-      shot?.focus?.();
-      return;
-    }
-    if (isBeninTogo && cur === "NGN" && totalNow < 12000) {
-      JA.toast(t("ck.minOrderNgn") || "Benin & Togo: minimum order 12,000 naira (about 5,000 F CFA). Please add more items.");
-      try {
-        let warn = document.querySelector("[data-ck-min-warn]");
-        if (!warn) {
-          warn = document.createElement("div");
-          warn.setAttribute("data-ck-min-warn", "");
-          warn.style.cssText = "margin:10px 0;padding:10px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;color:#664d03;font-size:13px;";
-          form.insertBefore(warn, form.querySelector(".ck-place")?.parentElement || form.firstChild);
-        }
-        warn.textContent = t("ck.minOrderNgn") || "Benin & Togo: minimum order 12,000 naira (about 5,000 F CFA). Please add more items.";
-        warn.hidden = false;
-      } catch (e) {}
-      shot?.focus?.();
-      return;
     }
     // A big phone photo can still be compressing when the customer taps
     // "Place order". Wait for it instead of refusing the order.

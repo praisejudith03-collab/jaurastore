@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=154" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=155" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -2035,13 +2035,16 @@ async function fillMarketing() {
     refreshCampaignRecipients();
   }
   await loadCampaignLog();
+  let mkGrowthSettings = {};
   try {
-    const d = await api("api/admin/growth/settings"); const s = d.settings || {}; const card = $("#mk-settings-card");
+    const d = await api("api/admin/growth/settings"); const s = d.settings || {}; mkGrowthSettings = s; const card = $("#mk-settings-card");
     if (card) {
       const tierRows = (s.bulkDiscountTiers || []).map((tier) => `<div class="mk-tier-row" data-bulk-tier><label>Minimum quantity<input type="number" min="2" name="bulkMin" value="${num(tier.minQuantity)}" required /></label><label>Discount %<input type="number" min="1" max="90" name="bulkPercent" value="${num(tier.percent)}" required /></label><button type="button" class="btn btn-line" data-remove-tier>Remove</button></div>`).join("");
-      card.innerHTML = `<h3 class="admin-h">Discount & referral settings</h3><form id="mk-set-form" class="admin-form"><h4>Flexible bulk / volume discounts</h4><p class="admin-note">Create quantity tiers such as 10 units = 5%, 15 units = 10%, or 30 units = 20%. With no tiers, no automatic volume discount is applied.</p><div id="mk-bulk-tiers">${tierRows || `<p class="admin-note" data-no-tiers>No volume discount tiers configured.</p>`}</div><button class="btn btn-line" type="button" id="mk-add-tier">+ Add discount tier</button><hr /><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? F CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's promo discount %<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><button class="btn" type="submit">Save settings</button></form>`;
+      card.innerHTML = `<h3 class="admin-h">Discounts, promos & referral settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="promosEnabled" ${s.promosEnabled === 0 || s.promosEnabled === false ? "" : "checked"} /> Promotions ON — promo codes, coupons and volume discounts are live at checkout</label><p class="admin-note">Master switch for every discount: when it is OFF, the checkout promo box disappears, no coupon can be redeemed, and no bulk discount is applied — your coupons and tiers are kept intact and come back the moment you switch it back ON.</p><h4>Flexible bulk / volume discounts</h4><p class="admin-note">Create quantity tiers such as 10 units = 5%, 15 units = 10%, or 30 units = 20%. With no tiers, no automatic volume discount is applied.</p><div id="mk-bulk-tiers">${tierRows || `<p class="admin-note" data-no-tiers>No volume discount tiers configured.</p>`}</div><button class="btn btn-line" type="button" id="mk-add-tier">+ Add discount tier</button><hr /><h4>Minimum order rule — Benin &amp; Togo deliveries</h4><div class="admin-grid"><label>Minimum order (F CFA)<input name="minOrderCfa" type="number" min="0" step="50" value="${num(s.minOrderCfa === undefined || s.minOrderCfa === null ? 5000 : s.minOrderCfa)}" /></label></div><p class="admin-note">Deliveries to Benin &amp; Togo must reach this basket total. Type <strong>0</strong> to switch the rule OFF completely. The naira floor follows automatically from the exchange rate below: <span id="mk-min-note"></span></p><hr /><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? F CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's promo discount %<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><button class="btn" type="submit">Save settings</button></form>`;
       const cfaNote = () => { const f = $("#mk-set-form"); const note = $("#mk-cfa-note"); if (!f || !note) return; const spend = Number(f.minSpendNgn.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = rate > 0 ? `CFA shoppers qualify from ${Math.round(spend * rate).toLocaleString()} F CFA (₦${spend.toLocaleString()} × ${rate}).` : ""; };
-      cfaNote(); ["minSpendNgn", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", cfaNote); });
+      const minNote = () => { const f = $("#mk-set-form"); const note = $("#mk-min-note"); if (!f || !note) return; const minCfa = Number(f.minOrderCfa.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = minCfa <= 0 ? "the rule is OFF — any basket total is accepted." : rate > 0 ? `${Math.round(minCfa).toLocaleString()} F CFA ≈ ₦${Math.round(minCfa / rate).toLocaleString()}.` : ""; };
+      cfaNote(); minNote(); ["minSpendNgn", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", cfaNote); });
+      ["minOrderCfa", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", minNote); });
       const tiersBox = $("#mk-bulk-tiers");
       const addTier = (min = "", percent = "") => {
         tiersBox?.querySelector("[data-no-tiers]")?.remove();
@@ -2052,7 +2055,7 @@ async function fillMarketing() {
       $("#mk-set-form").onsubmit = async (e) => {
         e.preventDefault(); const fd = new FormData(e.target);
         const bulkDiscountTiers = [...e.target.querySelectorAll("[data-bulk-tier]")].map((row) => ({ minQuantity: Number(row.querySelector('[name="bulkMin"]')?.value), percent: Number(row.querySelector('[name="bulkPercent"]')?.value) }));
-        const patch = { referralEnabled: e.target.referralEnabled.checked, minSpendNgn: Number(fd.get("minSpendNgn")), cfaRate: Number(fd.get("cfaRate")), buyerPercent: Number(fd.get("buyerPercent")), referrerPercent: Number(fd.get("referrerPercent")), milestone: Number(fd.get("milestone")), bulkDiscountTiers };
+        const patch = { referralEnabled: e.target.referralEnabled.checked, promosEnabled: e.target.promosEnabled.checked, minOrderCfa: Math.max(0, Math.round(Number(fd.get("minOrderCfa")) || 0)), minSpendNgn: Number(fd.get("minSpendNgn")), cfaRate: Number(fd.get("cfaRate")), buyerPercent: Number(fd.get("buyerPercent")), referrerPercent: Number(fd.get("referrerPercent")), milestone: Number(fd.get("milestone")), bulkDiscountTiers };
         try { await api("api/admin/growth/settings", { method: "POST", json: patch }); JA.toast("Marketing settings saved."); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not save."); }
       };
     }
@@ -2060,8 +2063,9 @@ async function fillMarketing() {
   try {
     const d = await api("api/admin/coupons"); const card = $("#mk-coupons-card");
     if (card) {
+      const promosOff = mkGrowthSettings && (mkGrowthSettings.promosEnabled === 0 || mkGrowthSettings.promosEnabled === false);
       const rows = (d.coupons || []).map((c) => `<tr><td><strong>${esc(c.code)}</strong>${c.kind === "reward" ? ' <small>(auto reward)</small>' : ""}</td><td>${num(c.percent)}%</td><td>${num(c.uses)}${c.max_uses ? " / " + num(c.max_uses) : ""}</td><td>${c.expires_at ? esc(c.expires_at) : "—"}</td><td>${c.active ? "Active" : "Off"}</td><td class="mk-row-actions"><button type="button" class="btn btn-line" data-mk-cp-toggle="${esc(c.code)}" data-on="${c.active ? 1 : 0}">${c.active ? "Turn off" : "Turn on"}</button><button type="button" class="btn btn-line" data-mk-cp-del="${esc(c.code)}">Delete</button></td></tr>`).join("");
-      card.innerHTML = `<h3 class="admin-h">Coupons</h3><form id="mk-cp-form" class="mk-inline-form"><input name="code" placeholder="Code (blank = auto)" maxlength="24" /><input name="percent" type="number" placeholder="%" min="1" max="90" required style="width:80px" /><input name="maxUses" type="number" placeholder="Max uses" min="1" style="width:110px" /><input name="expiresAt" type="date" title="Expiry date (optional)" /><input name="note" placeholder="Note (optional)" maxlength="200" /><button class="btn" type="submit">Create coupon</button></form>${rows ? `<table class="mk-table"><thead><tr><th>Code</th><th>%</th><th>Uses</th><th>Expires</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">No coupons yet.</p>`}`;
+      card.innerHTML = `<h3 class="admin-h">Coupons</h3>${promosOff ? `<p class="admin-note"><strong>Promotions are currently OFF.</strong> Your coupons stay saved below, but customers cannot redeem any code until Promotions are switched back ON above.</p>` : ""}<form id="mk-cp-form" class="mk-inline-form"><input name="code" placeholder="Code (blank = auto)" maxlength="24" /><input name="percent" type="number" placeholder="%" min="1" max="90" required style="width:80px" /><input name="maxUses" type="number" placeholder="Max uses" min="1" style="width:110px" /><input name="expiresAt" type="date" title="Expiry date (optional)" /><input name="note" placeholder="Note (optional)" maxlength="200" /><button class="btn" type="submit">Create coupon</button></form>${rows ? `<table class="mk-table"><thead><tr><th>Code</th><th>%</th><th>Uses</th><th>Expires</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">No coupons yet.</p>`}`;
       $("#mk-cp-form").onsubmit = async (e) => {
         e.preventDefault(); const fd = new FormData(e.target); const body = { code: fd.get("code"), percent: Number(fd.get("percent")), note: fd.get("note") }; if (fd.get("maxUses")) body.maxUses = Number(fd.get("maxUses")); if (fd.get("expiresAt")) body.expiresAt = fd.get("expiresAt") + " 23:59:59";
         try { const res = await api("api/admin/coupons", { method: "POST", json: body }); JA.toast("Coupon created: " + res.code); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not create the coupon."); }
@@ -2251,7 +2255,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=154" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=155" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -2597,7 +2601,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=154", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=155", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -2742,8 +2746,8 @@ function settingsForm() {
   <details class="admin-settings-section" open>
     <summary>Welcome pop-up</summary>
     <form id="welcome-form" class="form-grid admin-card" style="margin-top:22px">
-      <p class="admin-note full">Customize the greeting shown once per visit. Empty fields use the built-in storefront defaults.</p>
-      <div class="field full"><label><input type="checkbox" id="welcome-enabled" /> Enable welcome pop-up</label></div>
+      <p class="admin-note full">Customize the greeting shown once per visit. Empty fields use the built-in storefront defaults. <strong>No promotion running?</strong> Untick the switch below and the pop-up is removed from the storefront completely — no empty banner, no box, nothing renders at all.</p>
+      <div class="field full"><label><input type="checkbox" id="welcome-enabled" /> Show welcome pop-up — untick to turn it OFF everywhere</label></div>
       <div class="field"><label>Heading (English)</label><input name="welcome_title" maxlength="200" /></div>
       <div class="field"><label>Heading (French)</label><input name="welcome_title_fr" maxlength="200" /></div>
       <div class="field"><label>Message (English)</label><textarea name="welcome_body" maxlength="500"></textarea></div>

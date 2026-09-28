@@ -16,8 +16,9 @@ Past drift that must never come back:
     bottom of the slide-out menu (removed on purpose and guarded here),
   * a header row that stops being `grid-template-columns: 1fr auto 1fr` or
     lets the logo leave the horizontal centre,
-  * the floating pill losing its pinned geometry (bottom:85px right:20px
-    z-index:9999) or its white/lavender/violet styling,
+  * the floating pill losing its pinned geometry (right:20px z-index:9999)
+    or its white/nude/espresso styling (owner retheme 2026-09-28: the
+    lavender/violet version is retired),
   * the WhatsApp bubble drifting from bottom:20px right:20px z-index:9998,
   * the two golden butterflies (.header-flies/.hfly1/.hfly2) being removed
     or stopped - the owner wants the animation left exactly the way it is.
@@ -236,10 +237,12 @@ def test_normal_phones_keep_the_single_row():
 # --------------------------------------------------------- floating pill pins
 
 def test_currency_pill_position_and_palette_are_pinned():
-    """Owner spec 2026-09-27: fixed bottom-right, stacked directly above the
-    WhatsApp bubble - bottom:85px right:20px z-index:9999 - a pure-white
-    pill (#FFFFFF) with a thin lavender border (#D8B4FE), soft shadow, and
-    the active currency bold white on vibrant purple (#7C3AED)."""
+    """Owner spec 2026-09-28 (supersedes the 2026-09-27 purple spec): fixed
+    bottom-right, stacked directly above the WhatsApp bubble - right:20px
+    z-index:9999 - a pure-white pill (#FFFFFF) with a thin NUDE border
+    (#E8CDAC, the store's blush tan), a soft espresso shadow, and the active
+    currency bold white on rich espresso brown (#33251A). The earlier
+    lavender/purple (#D8B4FE / #7C3AED) must never come back."""
     top_rules = [r for r in _all_rules() if r[0] is None]
     pos = _last_setting(top_rules, ".cur-float", "position")
     assert pos and pos[1] == "fixed", ".cur-float must stay position:fixed"
@@ -256,17 +259,31 @@ def test_currency_pill_position_and_palette_are_pinned():
     bg = _last_setting(top_rules, ".cur-float", "background")
     assert bg and bg[1] == "#ffffff", ".cur-float must stay a pure-white pill"
     border = _last_setting(top_rules, ".cur-float", "border")
-    assert border and "#d8b4fe" in border[1], (
-        ".cur-float must keep its thin lavender border (#D8B4FE)")
+    assert border and "#e8cdac" in border[1], (
+        ".cur-float must keep its thin nude border (#E8CDAC)")
     shadow = _last_setting(top_rules, ".cur-float", "box-shadow")
     assert shadow and "rgba(" in shadow[1], ".cur-float must keep its soft shadow"
     on = _last_setting(top_rules, ".cur-float button.is-on", "background")
-    assert on and on[1] == "#7c3aed", (
-        "the active currency is filled vibrant purple (#7C3AED)")
+    assert on and on[1] == "#33251a", (
+        "the active currency is filled rich espresso brown (#33251A)")
     on_color = _last_setting(top_rules, ".cur-float button.is-on", "color")
     assert on_color and on_color[1] == "#ffffff", "active currency text stays white"
     on_weight = _last_setting(top_rules, ".cur-float button.is-on", "font-weight")
     assert on_weight and on_weight[1] in ("700", "bold"), "active currency stays bold"
+
+
+def test_currency_pill_carries_no_purple():
+    """The 2026-09-28 retheme: no purple hex/rgba may style the currency
+    pill any more - the pill is nude brown, matching the storefront."""
+    css = _css()
+    pill_start = css.find(".cur-float {")
+    assert pill_start != -1, "the .cur-float block is missing"
+    pill_end = css.find(".cur-float[hidden]", pill_start)
+    assert pill_end != -1, "the .cur-float hide rule is missing"
+    block = re.sub(r"/\*.*?\*/", "", css[pill_start:pill_end], flags=re.S)
+    for purple in ("#7c3aed", "124, 58, 237", "#d8b4fe", "#a855f7", "#8b5cf6"):
+        assert purple not in block.lower(), (
+            f"purple ({purple}) leaked back into the currency pill")
 
 
 def test_currency_pill_hides_when_french_locks_fcfa():

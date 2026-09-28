@@ -795,6 +795,15 @@ def _checkout_items(clean_items, currency):
 
     items = []
     subtotal = 0
+    # The promotions master switch, read once for the whole cart: OFF means
+    # NO bulk discount lands on a server total - not the per-product rule,
+    # not the shop-wide tiers. The tiers and per-product settings are kept,
+    # never deleted, so switching the programme back on restores them.
+    try:
+        import growth as _growth_mod
+        _promos_on = bool(_growth_mod.settings().get("promosEnabled", 1))
+    except Exception:
+        _promos_on = True                     # a hiccup must not gouge pricing
     total_quantity_by_product = {}
     for group in aggregated.values():
         total_quantity_by_product[group["id"]] = total_quantity_by_product.get(group["id"], 0) + group["qty"]
@@ -825,7 +834,8 @@ def _checkout_items(clean_items, currency):
                 items=[{"id": pid, "name": prod.get("name") or g["name"],
                         "variant": g["variant"]}]), 409)
         unit = _server_unit_price(prod, currency, g["variant"])
-        bulk_percent = catalog_mod.bulk_discount_for(prod, total_quantity_by_product[pid])
+        bulk_percent = (catalog_mod.bulk_discount_for(prod, total_quantity_by_product[pid])
+                        if _promos_on else 0)
         pay_unit = round(unit * (100 - bulk_percent) / 100) if bulk_percent else unit
         if bulk_percent and currency == "CFA":
             # The money path, not just display: the browser ceilings a
@@ -875,32 +885,64 @@ def _release_stock_lines(lines):
         pass
 
 
-# The cross-border delivery minimum. 5,000 F CFA is the SINGLE SOURCE OF
-# TRUTH: the Naira floor is derived from it at the live admin-set `cfaRate`
-# so the two thresholds can never drift apart when the rate is changed in the
-# admin panel. (They used to be hardcoded as 5,000 CFA / 12,000 NGN, which at
-# 0.44 meant ~11,364 vs 12,000 - a band where the same basket was accepted in
-# one currency and refused in the other.)
+# The cross-border delivery minimum. 5,000 F CFA is the house default and
+# the SINGLE SOURCE OF TRUTH: the Naira floor is derived from it at the live
+# admin-set `cfaRate` so the two thresholds can never drift apart when the
+# rate is changed in the admin panel. (They used to be hardcoded as 5,000 CFA
+# / 12,000 NGN, which at 0.44 meant ~11,364 vs 12,000 - a band where the same
+# basket was accepted in one currency and refused in the other.)
+#
+# Owner request (2026-09-28): the amount itself is now an admin setting
+# (growth_settings `minOrderCfa`, editable in Admin -> Marketing). A saved
+# value of 0 switches the rule OFF entirely; this constant stays the
+# fallback a blank/missing/broken setting heals to.
 BENIN_TOGO_MIN_CFA = 5000
 
 _BENIN_TOGO_ZONE = re.compile(r"(?i)\bbenin\b|\btogo\b|cotonou|calavi|porto|lom[ée]|lome")
 _BENIN_TOGO_COUNTRY = re.compile(r"(?i)\bbenin\b|\btogo\b")
 
 
-def benin_togo_min_ngn(rate=None):
-    """The Naira floor that is EXACTLY equivalent to BENIN_TOGO_MIN_CFA.
+def benin_togo_min_cfa():
+    """The live cross-border minimum in F CFA (0 = the rule is OFF).
+
+    Reads the admin-editable growth setting; any read failure or nonsense
+    value heals to the house default so the checkout can never lose the
+    floor to a hiccup. Never raises.
+    """
+    try:
+        import growth
+        value = growth.settings().get("minOrderCfa", BENIN_TOGO_MIN_CFA)
+        value = int(float(value))
+        if value < 0:
+            raise ValueError
+        return value
+    except Exception:
+        return BENIN_TOGO_MIN_CFA
+
+
+def benin_togo_min_ngn(rate=None, min_cfa=None):
+    """The Naira floor that is EXACTLY equivalent to the CFA floor.
 
     `cfaRate` is "1 NGN = cfaRate F CFA". The floor is defined as the
     smallest Naira basket whose converted, 50-step-rounded CFA value still
-    clears BENIN_TOGO_MIN_CFA - i.e. the smallest n where
-    currency.to_cfa(n) >= BENIN_TOGO_MIN_CFA.
+    clears the CFA floor - i.e. the smallest n where
+    currency.to_cfa(n) >= floor CFA.
 
     Deriving it this way (rather than simply dividing, or rounding to a tidy
     hundred) leaves NO band in which a basket is accepted in one currency and
     refused in the other, which is the whole point of having one source of
     truth. Never raises: a missing or nonsensical rate falls back to the
-    house default.
+    house default. `min_cfa` overrides the CFA floor (None = the live
+    admin setting); a floor of 0 means the rule is off and answers 0.
     """
+    if min_cfa is None:
+        min_cfa = benin_togo_min_cfa()
+    try:
+        min_cfa = max(0, int(min_cfa))
+    except (TypeError, ValueError):
+        min_cfa = BENIN_TOGO_MIN_CFA
+    if min_cfa <= 0:
+        return 0
     if rate is None:
         try:
             import growth
@@ -916,7 +958,7 @@ def benin_togo_min_ngn(rate=None):
     # to_cfa(n) = ceil(n * rate / STEP) * STEP, so to_cfa(n) >= FLOOR exactly
     # when n * rate > FLOOR - STEP.
     step = currency_mod.CFA_STEP
-    threshold = (BENIN_TOGO_MIN_CFA - step) / rate
+    threshold = (min_cfa - step) / rate
     floor_ngn = int(math.floor(threshold)) + 1
     return max(0, floor_ngn)
 
@@ -924,20 +966,24 @@ def benin_togo_min_ngn(rate=None):
 def _benin_togo_min(zone, country, currency, total, rate=None):
     """Enforce the Benin & Togo delivery minimum in either currency.
 
-    Both thresholds describe the SAME basket value: 5,000 F CFA, and its
-    Naira equivalent derived from the current rate.
+    Both thresholds describe the SAME basket value: the admin-set CFA floor
+    (default 5,000 F CFA), and its Naira equivalent derived from the current
+    rate. A saved minimum of 0 disables the rule entirely.
     """
     if not _BENIN_TOGO_ZONE.search(zone or "") and \
        not _BENIN_TOGO_COUNTRY.search(country or ""):
         return None
-    min_ngn = benin_togo_min_ngn(rate)
-    if currency == "CFA" and total < BENIN_TOGO_MIN_CFA:
-        return (f"Benin & Togo deliveries: minimum order {BENIN_TOGO_MIN_CFA:,} F CFA "
+    min_cfa = benin_togo_min_cfa()
+    if min_cfa <= 0:
+        return None                      # the owner switched the minimum off
+    min_ngn = benin_togo_min_ngn(rate, min_cfa)
+    if currency == "CFA" and total < min_cfa:
+        return (f"Benin & Togo deliveries: minimum order {min_cfa:,} F CFA "
                 f"(about {min_ngn:,} naira). Please add a few more items to meet "
                 "the minimum.")
     if currency == "NGN" and total < min_ngn:
         return (f"Benin & Togo deliveries: minimum order {min_ngn:,} naira "
-                f"(about {BENIN_TOGO_MIN_CFA:,} F CFA). Please add a few more items "
+                f"(about {min_cfa:,} F CFA). Please add a few more items "
                 "to meet the minimum.")
     return None
 
@@ -2776,13 +2822,27 @@ def site_config():
         site = _site_payload(_load_site())
         import growth
         _growth = growth.settings()
-        site["bulkDiscountTiers"] = _growth.get("bulkDiscountTiers") or []
         # The referral programme's master switch. The storefront needs it so a
         # disabled programme shows NO referral prompt anywhere: with the flag
         # absent the welcome pop-up kept advertising a code the server would
         # never mint, and the checkout kept offering a referral field that
         # could only ever answer "not recognised".
         site["referralEnabled"] = bool(_growth.get("referralEnabled"))
+        # The promotions master switch (promo codes, coupons, volume/bulk
+        # discounts). OFF must look identical to "no tiers configured": the
+        # storefront never quotes a bulk discount the server would not apply.
+        promos_on = bool(_growth.get("promosEnabled", 1))
+        site["promosEnabled"] = promos_on
+        site["bulkDiscountTiers"] = \
+            (_growth.get("bulkDiscountTiers") or []) if promos_on else []
+        # The admin-set Benin & Togo minimum order. The storefront needs both
+        # figures for its banner / checkout hint, and needs 0 to mean OFF:
+        # the moving banner drops the minimum line and the checkout skips the
+        # under-minimum guard entirely (the server skips it the same way).
+        min_cfa = benin_togo_min_cfa()
+        site["minOrderCfa"] = min_cfa
+        site["minOrderNgn"] = (benin_togo_min_ngn(_growth.get("cfaRate"), min_cfa)
+                               if min_cfa > 0 else 0)
         resp = jsonify(ok=True, site=site)
         # Never cacheable: the bank details on the checkout come from this
         # answer, and a CDN (or a bfcache) holding yesterday's row after an
