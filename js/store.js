@@ -181,6 +181,13 @@ const JA = (() => {
     hero_banner_title: "",
     hero_banner_subtitle: "",
     site_logo_url: "",
+    // Owner-editable social addresses (Admin -> Settings -> Social media
+    // links). Blank means "use the shipped default for that platform"; the
+    // live Supabase row always wins over this offline fallback.
+    social_whatsapp_url: "",
+    social_instagram_url: "",
+    social_tiktok_url: "",
+    social_facebook_url: "",
     shippingNote: "",
     logoUrl: "",
     shopBannerUrl: "",
@@ -2311,8 +2318,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=155";
-        const FLYER = "images/brand/logo-flyer.jpg?v=155";
+        const LOGO = "images/brand/logo.jpg?v=156";
+        const FLYER = "images/brand/logo-flyer.jpg?v=156";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2417,11 +2424,16 @@ const JA = (() => {
         "cfa_payment_instructions",
         "togo_payment_provider", "togo_payment_name", "togo_payment_account",
         "togo_payment_instructions",
+        // Social links: cached so an offline footer still shows the owner's
+        // WhatsApp / Instagram / TikTok / Facebook icons.
+        "social_whatsapp_url", "social_instagram_url",
+        "social_tiktok_url", "social_facebook_url",
       ].forEach((k) => {
         if (site[k]) saveSettings({ [k]: site[k] });
       });
     } catch (e) { /* offline cache only - never blocks the live values */ }
     paintConvBanner();
+    paintSocialLinks();
     applySiteBranding(site);
     // Fire event for other pages
     try { document.dispatchEvent(new CustomEvent('ja:site', { detail: site })); } catch (e) {}
@@ -2479,7 +2491,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=155" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=156" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -2616,12 +2628,156 @@ const JA = (() => {
       <a class="btn mini-go" href="checkout.html">${tx("mini.checkout")}</a>`;
   }
 
+  /* ==================================================================
+   * SOCIAL MEDIA LINKS (owner request 2026-09-28)
+   *
+   * WhatsApp, Instagram, TikTok and Facebook addresses are edited in
+   * Admin -> Settings -> "Social media links" and stored in the Supabase
+   * site_settings row (social_whatsapp_url, social_instagram_url,
+   * social_tiktok_url, social_facebook_url).
+   *
+   * The logo is NEVER chosen by hand: socialNetwork() reads the address
+   * itself, so a TikTok link pasted into the Instagram box still renders
+   * the TikTok logo, and any of the four platforms is recognised from any
+   * field. Facebook is a first-class platform here alongside Instagram and
+   * TikTok - its logo ships in SOCIAL_ICONS below.
+   *
+   * Blank field  -> the built-in default for that platform (so the shop's
+   *                 existing TikTok/WhatsApp links survive a fresh row).
+   * "off"/"none"/"-" -> the icon is removed from the storefront entirely.
+   * ================================================================== */
+  const SOCIAL_ICONS = {
+    whatsapp: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12.04 2C6.58 2 2.15 6.4 2.15 11.84c0 1.74.46 3.44 1.33 4.94L2 22l5.36-1.4a10 10 0 0 0 4.68 1.19h.01c5.46 0 9.89-4.4 9.89-9.85C21.94 6.4 17.5 2 12.04 2zm5.72 14.13c-.24.68-1.4 1.3-1.95 1.38-.5.07-1.12.1-1.81-.11-.42-.13-.95-.31-1.64-.6-2.89-1.25-4.77-4.16-4.92-4.35-.14-.2-1.18-1.57-1.18-3 0-1.42.75-2.12 1.01-2.41.27-.29.58-.36.78-.36h.56c.18 0 .42-.07.66.5.24.58.82 2 .89 2.15.07.15.12.32.02.52-.1.2-.14.32-.29.5-.14.17-.3.38-.43.51-.14.14-.29.29-.12.56.16.27.73 1.2 1.56 1.95 1.08.96 1.98 1.26 2.26 1.4.27.14.43.12.59-.07.16-.2.68-.79.86-1.06.18-.27.36-.22.6-.13.25.08 1.57.74 1.84.87.27.14.45.2.52.31.06.11.06.64-.18 1.32z"/></svg>`,
+    instagram: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.2c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.43.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.43.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.43-.36-1.06-.41-2.23-.06-1.27-.07-1.65-.07-4.85s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.43-.16 1.06-.36 2.23-.41C8.42 2.21 8.8 2.2 12 2.2zm0 5.1a4.7 4.7 0 1 0 0 9.4 4.7 4.7 0 0 0 0-9.4zm0 7.75a3.05 3.05 0 1 1 0-6.1 3.05 3.05 0 0 1 0 6.1zm5.99-7.94a1.1 1.1 0 1 1-2.2 0 1.1 1.1 0 0 1 2.2 0z"/></svg>`,
+    tiktok: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M14.5 3c.4 2.6 1.8 4.4 4.5 4.7v2.4c-1.5 0-2.9-.5-4.1-1.4v6.6c0 3.4-2.7 6.1-6.2 6.1S2.6 18.7 2.6 15.3c0-3.3 2.6-6 5.9-6.1v2.5c-1.8.1-3.2 1.6-3.2 3.5 0 2 1.6 3.6 3.6 3.6s3.6-1.6 3.6-3.6V3h2z"/></svg>`,
+    facebook: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M13.5 21v-8h2.69l.4-3.12H13.5V7.89c0-.9.25-1.52 1.55-1.52h1.65V3.58c-.29-.04-1.27-.12-2.41-.12-2.38 0-4.01 1.45-4.01 4.12v2.3H7.5V13h2.78v8h3.22z"/></svg>`,
+    link: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M10.5 13.5a4 4 0 0 0 5.66 0l2.5-2.5a4 4 0 1 0-5.66-5.66l-1.2 1.2M13.5 10.5a4 4 0 0 0-5.66 0l-2.5 2.5a4 4 0 1 0 5.66 5.66l1.2-1.2"/></svg>`,
+  };
+
+  const SOCIAL_NETWORKS = [
+    {
+      id: "whatsapp", label: "WhatsApp", key: "social_whatsapp_url",
+      test: /(?:^|\/\/|\.)(?:wa\.me|wa\.link|whatsapp\.com)(?:$|[/?#])/i,
+      fromHandle: (h) => {
+        const digits = h.replace(/[^0-9]/g, "");
+        return digits ? "https://wa.me/" + digits : "";
+      },
+    },
+    {
+      id: "instagram", label: "Instagram", key: "social_instagram_url",
+      test: /(?:^|\/\/|\.)(?:instagram\.com|instagr\.am|ig\.me)(?:$|[/?#])/i,
+      fromHandle: (h) => "https://www.instagram.com/" + h,
+    },
+    {
+      id: "tiktok", label: "TikTok", key: "social_tiktok_url",
+      test: /(?:^|\/\/|\.)(?:tiktok\.com)(?:$|[/?#])/i,
+      fromHandle: (h) => "https://www.tiktok.com/@" + h,
+    },
+    {
+      id: "facebook", label: "Facebook", key: "social_facebook_url",
+      test: /(?:^|\/\/|\.)(?:facebook\.com|fb\.com|fb\.me|fb\.watch|messenger\.com)(?:$|[/?#])/i,
+      fromHandle: (h) => "https://www.facebook.com/" + h,
+    },
+  ];
+
+  // Shipped defaults: what the footer showed before the admin fields
+  // existed, so an untouched (or freshly created) site_settings row never
+  // loses the shop's real accounts. WhatsApp falls back to the live chat
+  // link for the visitor's market.
+  const DEFAULT_SOCIAL = {
+    whatsapp: "",   // resolved at render time -> waInquiryUrl()
+    instagram: "",
+    tiktok: "https://www.tiktok.com/@j_aura_store?_r=1&_t=ZS-99DSPEn1NkD",
+    facebook: "",
+  };
+  // Typed into a field, any of these removes that icon from the storefront.
+  const SOCIAL_OFF = /^(off|none|hidden|hide|no|-|—)$/i;
+
+  /** Which of the four platforms an address belongs to, read from the URL.
+   *  `fallbackId` (the admin field the value came from) is used only when
+   *  the address matches no known platform. */
+  function socialNetwork(url, fallbackId) {
+    const raw = String(url || "").trim();
+    const hit = raw ? SOCIAL_NETWORKS.find((n) => n.test.test(raw)) : null;
+    if (hit) return hit.id;
+    const fb = SOCIAL_NETWORKS.find((n) => n.id === fallbackId);
+    return fb ? fb.id : "";
+  }
+
+  /** The logo for a platform id OR for a raw link (auto-detected). */
+  function socialIcon(idOrUrl, fallbackId) {
+    const key = String(idOrUrl || "");
+    if (SOCIAL_ICONS[key]) return SOCIAL_ICONS[key];
+    return SOCIAL_ICONS[socialNetwork(key, fallbackId)] || SOCIAL_ICONS.link;
+  }
+
+  /** Accept what a shop owner actually types: a full URL, a bare domain
+   *  (instagram.com/jaura), a @handle or a phone number. Dangerous schemes
+   *  (javascript:, data:) are refused outright. */
+  function normalizeSocialUrl(value, networkId) {
+    const raw = String(value == null ? "" : value).trim();
+    if (!raw || SOCIAL_OFF.test(raw)) return "";
+    if (/^[a-z][a-z0-9+.-]*:/i.test(raw) && !/^https?:/i.test(raw)) return "";
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith("//")) return "https:" + raw;
+    if (/^[\w-]+(\.[\w-]+)+(?:[/?#].*)?$/.test(raw)) return "https://" + raw;
+    const net = SOCIAL_NETWORKS.find((n) => n.id === networkId)
+      || SOCIAL_NETWORKS.find((n) => n.id === socialNetwork(raw));
+    const handle = raw.replace(/^@+/, "").trim();
+    if (net && handle) return net.fromHandle(handle) || "";
+    return "";
+  }
+
+  /** The links the storefront should show, in platform order. */
+  function socialLinks() {
+    const s = settings();
+    const out = [];
+    SOCIAL_NETWORKS.forEach((net) => {
+      const stored = String(s[net.key] == null ? "" : s[net.key]).trim();
+      if (SOCIAL_OFF.test(stored)) return;          // owner hid this one
+      let href = normalizeSocialUrl(stored, net.id);
+      const isDefault = !href && !stored;
+      if (isDefault) {
+        href = net.id === "whatsapp"
+          ? waInquiryUrl()
+          : normalizeSocialUrl(DEFAULT_SOCIAL[net.id] || "", net.id);
+      }
+      if (!href) return;
+      const id = socialNetwork(href, net.id);
+      const label = (SOCIAL_NETWORKS.find((n) => n.id === id) || net).label;
+      out.push({ id, label, href, field: net.id, isDefault });
+    });
+    return out;
+  }
+
+  function socialLinksHTML() {
+    return socialLinks().map((l) => (
+      `<a class="social-btn social-btn--${l.id}" data-social="${l.id}" href="${escape(l.href)}"` +
+      // The default WhatsApp icon follows the shopper's market (Nigeria /
+      // Benin line) exactly like every other inquiry button; a link the
+      // owner typed is left alone.
+      (l.isDefault && l.id === "whatsapp" ? ` data-wa-inquiry` : ``) +
+      ` target="_blank" rel="noopener" aria-label="${escape(l.label)}" title="${escape(l.label)}">` +
+      `${socialIcon(l.id)}<span>${escape(l.label)}</span></a>`
+    )).join("");
+  }
+
+  /** Repaint every social row (the footer is built before GET /api/site
+   *  lands, so the owner's saved links arrive a moment later). */
+  function paintSocialLinks() {
+    try {
+      document.querySelectorAll("[data-social-links]").forEach((box) => {
+        box.innerHTML = socialLinksHTML();
+      });
+    } catch (e) {}
+  }
+
   function footerHTML() {
     const s = settings();
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=155" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=156" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2643,10 +2799,11 @@ const JA = (() => {
         </div>
         <div>
           <h4>${tx("footer.follow")}</h4>
-          <a class="tiktok-btn" href="https://www.tiktok.com/@j_aura_store?_r=1&_t=ZS-99DSPEn1NkD" target="_blank" rel="noopener">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M14.5 3c.4 2.6 1.8 4.4 4.5 4.7v2.4c-1.5 0-2.9-.5-4.1-1.4v6.6c0 3.4-2.7 6.1-6.2 6.1S2.6 18.7 2.6 15.3c0-3.3 2.6-6 5.9-6.1v2.5c-1.8.1-3.2 1.6-3.2 3.5 0 2 1.6 3.6 3.6 3.6s3.6-1.6 3.6-3.6V3h2z"/></svg>
-            ${tx("footer.tiktok")}
-          </a>
+          <!-- Social row: the admin's WhatsApp / Instagram / TikTok / Facebook
+               links, each rendered with the logo auto-detected from the link
+               itself (see socialLinks / socialIcon). Repainted from the live
+               site row by paintSocialLinks() on every ja:site answer. -->
+          <div class="foot-social" data-social-links>${socialLinksHTML()}</div>
           <a class="btn foot-wa" data-wa-inquiry href="${waInquiryUrl()}" target="_blank" rel="noopener">${tx("footer.contactUs")}</a>
           <a class="wa-channel" href="https://whatsapp.com/channel/0029Vb7qNQs4yltRRkChu01k" target="_blank" rel="noopener">${tx("footer.channel")}</a>
           <div class="foot-flies" aria-hidden="true">
@@ -2746,7 +2903,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=155", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=156", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -2780,7 +2937,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=155";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=156";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2839,7 +2996,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=155");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=156");
     document.title = title;
     [
       ["name", "description", description],
@@ -3362,6 +3519,8 @@ const JA = (() => {
     galleryOf, startCardPlay, reviews, addReview, removeReview, setReviews, reviewStats, starsHTML,
     waCountry, setWaCountry, waRegionFor, waNumber, waLink, waInquiryUrl,
     waInquiryText, refreshWaLinks, WA_NG, WA_BJ,
+    SOCIAL_NETWORKS, SOCIAL_ICONS, socialNetwork, socialIcon,
+    normalizeSocialUrl, socialLinks, socialLinksHTML, paintSocialLinks,
     hydrateFromCache, readCatalogCache,
     mediaHTML, mediaKind, getSiteConfig, applySiteBranding, applySiteConfig, normalizeServerProduct,
   };

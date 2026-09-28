@@ -269,9 +269,16 @@ def test_the_floats_clear_the_bottom_dock():
             props = _decls(decl)
             if "bottom" not in props:
                 continue
+            parts = {p.strip() for p in sel.split(",")}
             if sel == '.wa-float, body[data-page="home"] .wa-float':
                 phone_wa = _px_in(props["bottom"][0])
-            elif sel == ".cur-float":
+            elif ".cur-float" in parts:
+                # The phone rule lists BOTH .cur-float and the homepage
+                # selector (2026-09-28): without the homepage twin the
+                # dock-less rule out-ranked this block on phones and dropped
+                # the pill onto the WhatsApp bubble.
+                assert 'body[data-page="home"] .cur-float' in parts, (
+                    "the <=640px pill offset must cover the homepage too")
                 phone_pill = _px_in(props["bottom"][0])
     assert phone_wa is not None and phone_pill is not None, (
         "the <=640px block must set both .wa-float and .cur-float bottom offsets")

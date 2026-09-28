@@ -339,3 +339,101 @@ def test_header_butterflies_are_untouched():
     assert hfly2 and "meetright" in hfly2[1], ".hfly2 must keep the meetRight animation"
     css = _css()
     assert "@keyframes meetLeft" in css and "@keyframes meetRight" in css
+
+
+# ---------------------------------------- the two floats can never collide
+# Owner request 2026-09-28: "the currency switch must sit clearly above or
+# completely separated from the WhatsApp button - they must never overlap,
+# collide or hide each other, and a future update must not revert it."
+#
+# Pinning the two `bottom` values as literals is not enough: the defect the
+# owner photographed came from the CASCADE, not from a missing rule. The
+# dock-less homepage rule (`body[data-page="home"] .cur-float`, specificity
+# 0-2-1, no width scope) out-ranked the phone rule (`.cur-float` inside
+# @media (max-width: 640px), specificity 0-1-0), so on a phone homepage the
+# pill dropped to the desktop homepage offset while the bubble stayed at its
+# phone offset - the pill landed ON the bubble.
+#
+# These tests therefore RESOLVE the cascade the way a browser does
+# (tools/float_geometry.py) at every page/width combination that matters and
+# require real separation, so any future rule that re-creates the collision
+# fails the build instead of reaching jaurastore.com.ng.
+
+from tools.float_geometry import geometry  # noqa: E402
+
+FLOAT_CONTEXTS = [(page, width)
+                  for width in (320, 360, 390, 414, 480, 640, 641, 768, 981,
+                                1024, 1280, 1440)
+                  for page in ("home", "shop", "product", "categories")]
+MIN_CLEAR_GAP = 14.0     # px of daylight between bubble top and pill bottom
+
+
+def test_the_currency_pill_never_overlaps_the_whatsapp_bubble():
+    """At every phone and desktop width, on the homepage and on the product
+    pages, the pill's bottom edge sits ABOVE the bubble's top edge."""
+    for page, width in FLOAT_CONTEXTS:
+        g = geometry(page, width)
+        assert g["wa_size"] > 0 and g["wa_bottom"] > 0 and g["pill_bottom"] > 0, (
+            f"{page} @{width}px: a float lost its resting geometry {g}")
+        assert g["pill_bottom"] >= g["wa_top"] + MIN_CLEAR_GAP, (
+            f"{page} @{width}px: the currency pill (bottom {g['pill_bottom']}px) "
+            f"collides with the WhatsApp bubble (top edge {g['wa_top']}px). "
+            "They must stay visibly separated.")
+
+
+def test_the_pill_clears_the_whole_whatsapp_glow_animation():
+    """The bubble pulses a glow ring out to scale(1.85). The pill stays clear
+    of that envelope too, so nothing ever appears to touch it mid-animation."""
+    for page, width in FLOAT_CONTEXTS:
+        g = geometry(page, width)
+        assert g["pill_bottom"] >= g["wa_glow_top"], (
+            f"{page} @{width}px: the pill (bottom {g['pill_bottom']}px) sits "
+            f"inside the bubble's glow envelope (top {g['wa_glow_top']:.1f}px)")
+
+
+def test_both_floats_share_the_same_right_edge_so_they_stack_not_collide():
+    """Same right edge + separated bottoms = one clean vertical stack."""
+    from tools.float_geometry import px, resolve
+    for page, width in FLOAT_CONTEXTS:
+        pill_right = px(resolve("right", ".cur-float", page, width))
+        wa_right = px(resolve("right", ".wa-float", page, width))
+        assert pill_right == wa_right == 20.0, (
+            f"{page} @{width}px: floats drifted apart horizontally "
+            f"(pill right {pill_right}px, WhatsApp right {wa_right}px)")
+
+
+def test_the_phone_block_pins_the_homepage_pill_too():
+    """The exact regression that caused the reported overlap: the <=640px
+    block must restate the offset for the homepage selector as well, or the
+    dock-less homepage rule wins there again."""
+    blocks = _media_blocks(_css(), "@media (max-width: 640px)")
+    pinned = False
+    for body in blocks:
+        for selector, decl in _blocks(body):
+            parts = {p.strip() for p in selector.split(",")}
+            if ".cur-float" in parts and "bottom" in _props(decl):
+                pinned = pinned or 'body[data-page="home"] .cur-float' in parts
+    assert pinned, (
+        'the <=640px .cur-float rule must also list '
+        'body[data-page="home"] .cur-float, otherwise the homepage pill '
+        "falls back onto the WhatsApp bubble on phones")
+
+
+def test_the_float_offsets_are_important_so_later_rules_cannot_revert_them():
+    """Every rule that positions the two floats carries !important, so an
+    unrelated stylesheet edit appended later cannot silently move them."""
+    from tools.float_geometry import declarations
+    wanted = {
+        (".cur-float", "bottom"), (".cur-float", "right"),
+        ('body[data-page="home"] .cur-float', "bottom"),
+    }
+    seen = set()
+    for media, selector, prop, value, important, order in declarations():
+        parts = {p.strip() for p in selector.split(",")}
+        for sel, name in wanted:
+            if sel in parts and prop == name:
+                assert important, (
+                    f"{selector} {{{prop}}} (@media {media}) must be "
+                    "!important so the float stack cannot be reverted")
+                seen.add((sel, name))
+    assert wanted <= seen, f"missing float pins: {wanted - seen}"

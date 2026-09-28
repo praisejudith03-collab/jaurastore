@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=155" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=156" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -2255,7 +2255,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=155" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=156" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -2309,7 +2309,7 @@ function paintDesk(tab = "analytics") {
   if (tab === "marketing") fillMarketing();
   if (tab === "account") bindAccount();
   if (tab === "settings") {
-    bindHeroVideo(); bindHomepageFeatured(); bindBanner(); bindWelcome(); bindSiteBranding();
+    bindHeroVideo(); bindHomepageFeatured(); bindBanner(); bindWelcome(); bindSocialLinks(); bindSiteBranding();
   }
   if (tab === "delivery") {
     bindDeliveryPage();
@@ -2601,7 +2601,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=155", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=156", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -2757,6 +2757,18 @@ function settingsForm() {
       <div class="field"><label>Button text (French)</label><input name="welcome_cta_label_fr" maxlength="120" /></div>
       <div class="field full"><label>Button link</label><input name="welcome_cta_href" maxlength="500" placeholder="shop.html" /></div>
       <div class="field full"><p class="admin-err" id="welcome-form-error" hidden></p><button class="btn">Save welcome pop-up</button></div>
+    </form>
+  </details>
+  <details class="admin-settings-section" open>
+    <summary>Social media links</summary>
+    <form id="social-form" class="form-grid admin-card" style="margin-top:22px">
+      <p class="admin-note full">Paste the address of each account and the storefront footer shows it with the right logo — <strong>WhatsApp, Instagram, TikTok and Facebook</strong>. The logo is detected from the link itself, so a link pasted into the wrong box still shows the correct platform. A short handle (<code>@j_aura_store</code>) or a bare address (<code>facebook.com/jaurastore</code>) works too. Leave a box empty to keep the built-in default, or type <strong>OFF</strong> to remove that icon from the site completely.</p>
+      <div class="field"><label>WhatsApp link</label><div class="social-input"><span class="social-ico" data-social-preview="social_whatsapp_url" data-social="whatsapp" aria-hidden="true"></span><input name="social_whatsapp_url" maxlength="500" placeholder="https://wa.me/2349161670236" /></div></div>
+      <div class="field"><label>Instagram link</label><div class="social-input"><span class="social-ico" data-social-preview="social_instagram_url" data-social="instagram" aria-hidden="true"></span><input name="social_instagram_url" maxlength="500" placeholder="https://www.instagram.com/j_aura_store" /></div></div>
+      <div class="field"><label>TikTok link</label><div class="social-input"><span class="social-ico" data-social-preview="social_tiktok_url" data-social="tiktok" aria-hidden="true"></span><input name="social_tiktok_url" maxlength="500" placeholder="https://www.tiktok.com/@j_aura_store" /></div></div>
+      <div class="field"><label>Facebook link</label><div class="social-input"><span class="social-ico" data-social-preview="social_facebook_url" data-social="facebook" aria-hidden="true"></span><input name="social_facebook_url" maxlength="500" placeholder="https://www.facebook.com/jaurastore" /></div></div>
+      <div class="field full"><p class="admin-note" id="social-form-preview"></p></div>
+      <div class="field full"><p class="admin-err" id="social-form-error" hidden></p><button class="btn">Save social links</button></div>
     </form>
   </details>
   <details class="admin-settings-section" open>
@@ -3238,6 +3250,89 @@ function bindWelcome() {
       repaint(saved.site || { ...loadedRow, ...patch });
       if (JA.applySiteConfig) JA.applySiteConfig(saved.site || patch);
       JA.toast("Welcome pop-up saved — changes are live on the next page load.");
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      if (errorBox) { errorBox.textContent = message; errorBox.hidden = false; }
+      JA.toast(message);
+    }
+  });
+}
+
+/* ---------------------------------------------------------------- *
+ * Social media links (owner request 2026-09-28).
+ *
+ * Four plain inputs — WhatsApp, Instagram, TikTok, Facebook — saved into
+ * the Supabase site_settings row (social_*_url) through the same
+ * only-what-changed patch every other settings form uses, so a form that
+ * has not loaded the live row yet can never blank a stored link.
+ *
+ * The logo shown next to each box is NOT hardcoded to the field: it is
+ * detected from the address as the owner types (JA.socialNetwork), which
+ * is exactly what the storefront footer does when it renders them.
+ * ---------------------------------------------------------------- */
+const SOCIAL_FIELDS = ["social_whatsapp_url", "social_instagram_url",
+  "social_tiktok_url", "social_facebook_url"];
+const SOCIAL_FIELD_NETWORK = {
+  social_whatsapp_url: "whatsapp", social_instagram_url: "instagram",
+  social_tiktok_url: "tiktok", social_facebook_url: "facebook",
+};
+function socialPreview(form) {
+  if (!form) return;
+  const names = [];
+  SOCIAL_FIELDS.forEach((name) => {
+    const input = form.elements.namedItem(name);
+    const box = form.querySelector(`[data-social-preview="${name}"]`);
+    if (!box) return;
+    const fallback = SOCIAL_FIELD_NETWORK[name];
+    const value = String((input && input.value) || "").trim();
+    // Empty box -> the platform the field stands for; a typed link -> the
+    // platform the LINK belongs to.
+    const net = value && JA.socialNetwork ? JA.socialNetwork(value, fallback) : fallback;
+    box.setAttribute("data-social", net || "");
+    box.innerHTML = JA.socialIcon ? JA.socialIcon(net || value, fallback) : "";
+    const href = JA.normalizeSocialUrl ? JA.normalizeSocialUrl(value, fallback) : value;
+    if (value && href) names.push(`${net || "link"} → ${href}`);
+    else if (value && !href) names.push(`${fallback}: hidden`);
+  });
+  const note = document.getElementById("social-form-preview");
+  if (note) {
+    note.textContent = names.length
+      ? "Recognised: " + names.join("   ·   ")
+      : "No custom links yet — the storefront shows the built-in defaults.";
+  }
+}
+function bindSocialLinks() {
+  const form = $("#social-form"); if (!form) return;
+  let loadedRow = null;
+  const repaint = (site) => {
+    loadedRow = site || {};
+    SOCIAL_FIELDS.forEach((name) => {
+      const el = form.elements.namedItem(name);
+      if (el) el.value = loadedRow[name] || "";
+    });
+    socialPreview(form);
+  };
+  repaint(JA.getSiteConfig ? (JA.getSiteConfig() || {}) : {});
+  fetch("api/site", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null))
+    .then((d) => repaint((d && d.site) || {})).catch(() => {});
+  form.addEventListener("input", () => socialPreview(form));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const errorBox = $("#social-form-error");
+    if (errorBox) { errorBox.hidden = true; errorBox.textContent = ""; }
+    const candidate = {};
+    SOCIAL_FIELDS.forEach((name) => {
+      candidate[name] = String(form.elements.namedItem(name)?.value || "").trim();
+    });
+    const patch = siteFieldPatch(candidate, loadedRow);
+    if (!Object.keys(patch).length) { JA.toast("Social links are already up to date."); return; }
+    try {
+      const saved = await saveSiteConfig(patch);
+      if (!saved || saved.ok === false) throw new Error((saved && saved.error) || "Could not save the social links.");
+      repaint(saved.site || { ...loadedRow, ...patch });
+      if (JA.applySiteConfig) JA.applySiteConfig(saved.site || patch);
+      if (JA.paintSocialLinks) JA.paintSocialLinks();
+      JA.toast("Social links saved — live on the storefront now.");
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
       if (errorBox) { errorBox.textContent = message; errorBox.hidden = false; }
