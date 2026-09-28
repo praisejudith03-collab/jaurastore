@@ -83,9 +83,11 @@ alter table site_settings add column if not exists social_tiktok_url    text not
 alter table site_settings add column if not exists social_facebook_url  text not null default '';
 ```
 
-Until it is run, the storefront simply keeps its built-in defaults — saves
-degrade gracefully (`supabase_settings.update_site_settings` drops unknown
-columns and logs the exact `ALTER`), nothing breaks.
+Until it is run, the storefront simply keeps its built-in defaults and
+nothing breaks. Saving a link before the migration does **not** silently
+vanish: the four columns are listed in `supabase_settings.CRITICAL_SETTINGS`,
+so the save fails loudly in the admin with the exact one-line `ALTER` that
+repairs the table — the honest answer, not a “saved” that lost the link.
 
 ## 4. Admin switches (verified, already live)
 
