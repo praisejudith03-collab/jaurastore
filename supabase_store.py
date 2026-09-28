@@ -1643,6 +1643,51 @@ def load_delivery_page():
         return None
 
 
+# Customer care is another small owner-editable document. It deliberately uses
+# growth_settings (an existing durable key/value table) rather than a new
+# site_settings column set: an Admin can update live contact details straight
+# away even on an older production schema, and the values survive Render's
+# ephemeral application disk.
+CUSTOMER_CARE_KEY = "customer_care_json"
+
+
+def save_customer_care(customer_care):
+    """Persist the public customer-care document. Returns True on success."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table("growth_settings").upsert([{
+            "key": CUSTOMER_CARE_KEY,
+            "value": json.dumps(customer_care, ensure_ascii=False),
+        }]).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] customer care save failed: {exc}")
+        return False
+
+
+def load_customer_care():
+    """Return the saved public customer-care document, or None when absent."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        res = (c.table("growth_settings").select("value")
+               .eq("key", CUSTOMER_CARE_KEY).limit(1).execute())
+        rows = _res_data(res)
+        if not rows:
+            return None
+        raw = (rows[0] or {}).get("value")
+        if raw is None or raw == "":
+            return None
+        value = json.loads(raw) if isinstance(raw, str) else raw
+        return value if isinstance(value, dict) and value else None
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] customer care load failed: {exc}")
+        return None
+
+
 def load_categories():
     """Return the category list stored under CATEGORIES_KEY, or None."""
     c = client()
