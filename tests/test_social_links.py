@@ -214,3 +214,42 @@ def test_the_migration_is_add_only_and_idempotent():
     schema = read("supabase_schema.sql").lower()
     for column in SOCIAL_COLUMNS:
         assert f"add column if not exists {column}" in schema
+
+
+def test_a_missing_column_fails_the_save_with_the_repair_statement():
+    """Until add_social_link_columns.sql has been run, a social link cannot
+    be stored. The save must say so - naming the column and the single ALTER
+    that fixes it - instead of answering "saved" and losing the link."""
+    import supabase_settings
+
+    for column in SOCIAL_COLUMNS:
+        assert column in supabase_settings.CRITICAL_SETTINGS, (
+            f"{column} may not be silently dropped from a save")
+
+    class _MissingColumn(Exception):
+        pass
+
+    class _Table:
+        def update(self, payload):
+            self.payload = payload
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def execute(self):
+            raise _MissingColumn(
+                "{'message': \"Could not find the 'social_facebook_url' "
+                "column of 'site_settings' in the schema cache\"}")
+
+    class _Client:
+        def table(self, name):
+            return _Table()
+
+    with pytest.raises(RuntimeError) as err:
+        supabase_settings._update_site_settings_resilient(
+            _Client(), {"social_facebook_url": "https://facebook.com/jaurastore"})
+    message = str(err.value)
+    assert "social_facebook_url" in message
+    assert ("alter table site_settings add column if not exists "
+            "social_facebook_url text not null default ''") in message

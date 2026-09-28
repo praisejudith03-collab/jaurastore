@@ -165,6 +165,13 @@ CRITICAL_SETTINGS = (
     "cfa_payment_instructions",
     "togo_payment_provider", "togo_payment_name", "togo_payment_account",
     "togo_payment_instructions",
+    # Social media links (2026-09-28). The owner types a link, presses save
+    # and expects the icon in the footer. A tolerated drop here answers
+    # "saved" while the link never reached the table - the "it disappears
+    # again" complaint. Until add_social_link_columns.sql has been run, the
+    # save fails with the exact one-line ALTER that repairs it.
+    "social_whatsapp_url", "social_instagram_url",
+    "social_tiktok_url", "social_facebook_url",
 )
 _NULL_VALUE_RE = re.compile(r'null value in column "([^"]+)"')
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
