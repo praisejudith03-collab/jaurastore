@@ -225,3 +225,34 @@ def test_store_js_exports_apply_site_config_and_stock_translation():
     # the public catalogue is translated on the way in
     assert "d.products.map(normalizeServerProduct)" in store_js
     assert "p = normalizeServerProduct(p);" in store_js
+
+
+def test_exact_legacy_delivery_document_is_upgraded_to_requested_coverage(client):
+    """The old generic production document must not mask the new page forever."""
+    legacy = {
+        "title": "Delivery Locations",
+        "lead": "Curated coverage across West Africa",
+        "blocks": [
+            {"heading": "Nigeria", "locations": [
+                {"name": name, "detail": ""}
+                for name in ("Lagos", "Ogun", "Abia", "Anambra", "Osun", "Abuja")
+            ]},
+            {"heading": "Benin Republic", "locations": [
+                {"name": name, "detail": ""}
+                for name in ("Cotonou", "Calavi", "Porto-Novo")
+            ]},
+        ],
+    }
+    tok = _login(client)
+    client.post("/api/admin/delivery-page", headers={"X-CSRF-Token": tok},
+                json={"page": legacy})
+    page = client.get("/api/site").get_json()["site"]["delivery_page"]
+    nigeria = page["blocks"][0]["locations"]
+    benin = page["blocks"][1]["locations"]
+    assert any(row["name"] == "Lagos Mainland" and "Ojodu Berger" in row["detail"]
+               for row in nigeria)
+    assert any(row["name"] == "Abuja (FCT)" and "Maitama" in row["detail"]
+               for row in nigeria)
+    assert any(row["name"] == "Cotonou" and "Haie Vive" in row["detail"]
+               for row in benin)
+    assert page["blocks"][2]["locations"][0]["name"] == "Lomé"
