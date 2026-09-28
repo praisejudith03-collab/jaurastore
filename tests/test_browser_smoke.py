@@ -233,8 +233,8 @@ def test_desktop_logo_is_centered_on_one_row_and_currency_pill_floats(mobile, li
     on_btn = mobile.locator('.cur-float button[data-cur="NGN"]')
     on_bg = on_btn.evaluate("el => getComputedStyle(el).backgroundColor")
     # Owner retheme 2026-09-28: the active currency is rich espresso brown,
-    # NOT the retired vibrant purple.
-    assert on_bg.replace(" ", "") == "rgb(51,35,26)", (
+    # NOT the retired vibrant purple. (#33251A = rgb(51, 37, 26))
+    assert on_bg.replace(" ", "") == "rgb(51,37,26)", (
         f"the active currency must be #33251A, got {on_bg}")
     wa = mobile.locator(".wa-float")
     wbox = wa.bounding_box()
