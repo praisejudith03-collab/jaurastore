@@ -85,16 +85,19 @@ with sync_playwright() as pw:
                         f"header logo not centred on {base + path}: "
                         f"logo centre {logo_mid_x} != row centre {row_mid_x}")
                 # The currency now lives in the floating pill: visible in
-                # English, hidden while French locks FCFA (bottom:85px
-                # right:20px, stacked above the WhatsApp bubble).
+                # English, hidden while French locks FCFA. It floats 150px up
+                # on desktop (162px on phones) — ALWAYS clear of the bouncing
+                # / glowing WhatsApp bubble under it (owner spec 2026-09-28).
                 pill = page.locator(".cur-float")
                 assert pill.count() == 1, f"floating currency pill missing on {base + path}"
                 if language == "en":
                     expect(pill).to_be_visible(timeout=90000)
                     pbox = pill.bounding_box()
                     bottom_gap = 900 - (pbox["y"] + pbox["height"])
-                    assert 75 <= bottom_gap <= 95, (
-                        f"currency pill not stacked at bottom:85px on {base + path}: {pbox}")
+                    want_gap = 162 if width <= 640 else 150
+                    assert want_gap - 6 <= bottom_gap <= want_gap + 8, (
+                        f"currency pill not stacked at bottom:{want_gap}px "
+                        f"on {base + path}: {pbox}")
                     assert width - (pbox["x"] + pbox["width"]) <= 24, (
                         f"currency pill not pinned right:20px on {base + path}: {pbox}")
                 else:

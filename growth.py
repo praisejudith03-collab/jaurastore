@@ -11,6 +11,16 @@ NGN_TO_CFA = 0.44          # the storefront's fixed display rate
 
 DEFAULTS = {
     "referralEnabled": 1,
+    # Promotions master switch: promo codes, coupons and volume/bulk
+    # discounts. When it is off the checkout refuses every code and no bulk
+    # discount is applied anywhere - while the OFF position never deletes a
+    # single coupon or tier (switching back on restores everything).
+    "promosEnabled": 1,
+    # The Benin & Togo delivery minimum in F CFA. The Naira floor is derived
+    # from it at the live cfaRate (api.benin_togo_min_ngn). 0 disables the
+    # minimum-order rule entirely; the storefront reads the live value from
+    # GET /api/site (minOrderCfa / minOrderNgn).
+    "minOrderCfa": 5000,
     "minSpendNgn": 20000,      # order value that earns a referral code
     "cfaRate": 0.44,           # adjustable NGN -> CFA rate (1 NGN = cfaRate F CFA)
     "buyerPercent": 5,         # discount for the referred buyer
@@ -19,7 +29,7 @@ DEFAULTS = {
     "bulkDiscountTiers": [],    # [{minQuantity, percent}], no static discount
 }
 
-INT_KEYS = ("referralEnabled", "minSpendNgn",
+INT_KEYS = ("referralEnabled", "promosEnabled", "minOrderCfa", "minSpendNgn",
             "buyerPercent", "referrerPercent", "milestone")
 FLOAT_KEYS = ("cfaRate",)
 JSON_KEYS = ("bulkDiscountTiers",)
@@ -60,6 +70,10 @@ def _cap(s):
     s["milestone"] = max(1, min(int(s.get("milestone", 2)), 100))
     s["minSpendNgn"] = max(0, min(int(s.get("minSpendNgn", 20000)), 10**9))
     s["referralEnabled"] = 1 if int(s.get("referralEnabled", 1)) else 0
+    s["promosEnabled"] = 1 if int(s.get("promosEnabled", 1)) else 0
+    # 5,000 F CFA is the house default; an admin may lower it, raise it, or
+    # set 0 to switch the Benin & Togo minimum-order rule off completely.
+    s["minOrderCfa"] = max(0, min(int(s.get("minOrderCfa", 5000)), 10**9))
     try:
         s["cfaRate"] = round(float(s.get("cfaRate", NGN_TO_CFA)), 4)
     except (TypeError, ValueError):
@@ -175,6 +189,10 @@ def check_code(raw_code):
 
     c = one("SELECT code, percent, kind, active, max_uses, uses, expires_at "
             "FROM coupons WHERE code=?", (code,))
+    if c and not s["promosEnabled"]:
+        # Promotions are OFF: a saved coupon is never deleted, but it is not
+        # redeemable until the owner switches the programme back on.
+        return {"ok": False, "error": "That code was not recognised."}
     if c:
         if not c["active"]:
             return {"ok": False, "error": "That code is no longer active."}
@@ -248,6 +266,9 @@ def record_code_use(code, buyer_email, order_id):
     # and the redemption would silently never be recorded.
     c = one("SELECT code, kind, percent, max_uses, uses, active FROM coupons WHERE code=?",
             (code,))
+    if c and not s["promosEnabled"]:
+        # Promotions OFF: never count a redemption that check_code refused.
+        return report
     if c:
         # Log the redemption FIRST and let the UNIQUE(code, order_id) index
         # decide whether it is new. INSERT OR IGNORE affects 0 rows on a

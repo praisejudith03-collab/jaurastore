@@ -1146,7 +1146,17 @@ const JA = (() => {
     const raw = _siteConfig ? _siteConfig.referralEnabled : undefined;
     return raw === undefined || raw === null ? true : !!raw;
   }
+  /** The promotions master switch (promo codes, coupons, bulk discounts).
+   *  GET /api/site -> promosEnabled. Default ON exactly like the referral
+   *  flag, so a site row that predates the switch keeps today's behaviour. */
+  function promosEnabled() {
+    const raw = _siteConfig ? _siteConfig.promosEnabled : undefined;
+    return raw === undefined || raw === null ? true : !!raw;
+  }
   function bulkDiscountTiers() {
+    // Promotions OFF (or a cached site row from before the switch): never
+    // quote a volume discount the server has stopped applying.
+    if (!promosEnabled()) return [];
     const raw = (_siteConfig && _siteConfig.bulkDiscountTiers) || [];
     return (Array.isArray(raw) ? raw : []).map((t) => ({
       minQuantity: Math.max(2, Number(t.minQuantity) || 0),
@@ -1161,6 +1171,7 @@ const JA = (() => {
     // threshold (all its variants combined) and its configured percentage
     // applies. With no per-product discount the shop-wide tiers apply - the
     // same rule the server's checkout pricing uses.
+    if (!promosEnabled()) return 0;      // promotions switched OFF in Admin
     const threshold = Math.round(Number(p && p.bulkQty) || 0);
     const percent = Math.round(Number(p && p.bulkPercent) || 0);
     if (threshold > 0 && percent > 0) {
@@ -2211,6 +2222,30 @@ const JA = (() => {
     const en = String(_bannerText.conv || "").trim();
     return (String(lang || "").toLowerCase().indexOf("fr") === 0 && fr) ? fr : en;
   }
+  /** The Benin & Togo minimum-order line for the moving banner, in the
+   *  ACTIVE language, built from the live admin setting:
+   *    site.minOrderCfa absent  -> the built-in phrase (older bundle/row)
+   *    site.minOrderCfa === 0   -> "" (the owner switched the minimum OFF -
+   *                                the banner drops the line entirely)
+   *    any other value          -> the same sentence, rebuilt around the
+   *                                admin-set amount so the banner can never
+   *                                quote a floor the server no longer uses. */
+  function minOrderLine() {
+    const site = _siteConfig || {};
+    const fr = currentLang().toLowerCase().indexOf("fr") === 0;
+    const group = fr ? " " : ",";
+    const fmt = (n) => String(Math.max(0, Math.round(Number(n) || 0)))
+      .replace(/\B(?=(\d{3})+(?!\d))/g, group);
+    if (site.minOrderCfa === undefined || site.minOrderCfa === null || site.minOrderCfa === "") {
+      return tx("ck.bjMin");
+    }
+    const cfa = Number(site.minOrderCfa) || 0;
+    if (cfa <= 0) return "";
+    const ngn = Number(site.minOrderNgn) || Math.round(cfa / 0.44);
+    return fr
+      ? `Livraisons au Bénin : commande minimum de ${fmt(cfa)} F CFA (environ ${fmt(ngn)} nairas).`
+      : `Benin deliveries: minimum order ${fmt(cfa)} F CFA (about ${fmt(ngn)} naira).`;
+  }
   function convBannerHTML() {
     const lang = currentLang();
     const conv = bannerLineFor(lang);
@@ -2223,8 +2258,8 @@ const JA = (() => {
     // No custom banner: one fixed, translated line. It carries no dates, so
     // it cannot go stale between delivery batches.
     const line = tx("conv.banner");
-    const min = tx("ck.bjMin");
-    const span = `<span>${line} · <strong>${min}</strong></span>`;
+    const min = minOrderLine();
+    const span = min ? `<span>${line} · <strong>${min}</strong></span>` : `<span>${line}</span>`;
     return span + span + span + span;
   }
   function paintConvBanner() {
@@ -2276,8 +2311,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=154";
-        const FLYER = "images/brand/logo-flyer.jpg?v=154";
+        const LOGO = "images/brand/logo.jpg?v=155";
+        const FLYER = "images/brand/logo-flyer.jpg?v=155";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2444,7 +2479,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=154" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=155" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -2586,7 +2621,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=154" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=155" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2711,7 +2746,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=154", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=155", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -2720,11 +2755,13 @@ const JA = (() => {
     el.innerHTML = `
       <div class="welcome-card">
         <button type="button" class="welcome-x" data-welcome-x aria-label="${tx("nav.close")}">×</button>
-        <img class="welcome-logo" src="${escape(img)}" alt="Jaura" />
-        <p class="welcome-hello">${escape(title)}</p>
-        ${body ? `<p class="welcome-body">${escape(body).replace(/\n/g, "<br>")}</p>` : ""}
-        ${referralEnabled() ? `<p class="welcome-referral">${tx("promo.referral")}</p>` : ""}
-        <a class="welcome-cta" href="${escape(href)}" data-welcome-shop>${escape(cta)} ›</a>
+        <div class="welcome-panel">
+          <img class="welcome-logo" src="${escape(img)}" alt="Jaura" />
+          <p class="welcome-hello">${escape(title)}</p>
+          ${body ? `<p class="welcome-body">${escape(body).replace(/\n/g, "<br>")}</p>` : ""}
+          ${referralEnabled() ? `<p class="welcome-referral">${tx("promo.referral")}</p>` : ""}
+          <a class="welcome-cta" href="${escape(href)}" data-welcome-shop>${escape(cta)} ›</a>
+        </div>
       </div>`;
     document.body.appendChild(el);
     document.body.classList.add("welcome-open");
@@ -2743,7 +2780,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=154";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=155";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2802,7 +2839,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=154");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=155");
     document.title = title;
     [
       ["name", "description", description],
@@ -3311,7 +3348,7 @@ const JA = (() => {
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     homepageFeatured, homepageFeaturedProducts, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
     currency, setCurrency, currencyLocked, money, priceOf, compareOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
-    referralEnabled,
+    referralEnabled, promosEnabled,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,
     wish, isWished, toggleWish, wishDetailed, openMini, closeMini,

@@ -216,7 +216,7 @@ def test_desktop_logo_is_centered_on_one_row_and_currency_pill_floats(mobile, li
         f"logo mid {logo_mid} != controls mid {right_mid} "
         "- the header stopped being a single row")
     # No language/currency dropdowns in the header; the currency lives in the
-    # floating pill (English storefront), white with a lavender border.
+    # floating pill (English storefront), white with a nude border.
     assert mobile.locator("#site-header .header .currency-switch").count() == 0
     assert mobile.locator("#site-header .header .lang-switch").count() == 0
     pill = mobile.locator(".cur-float")
@@ -225,15 +225,17 @@ def test_desktop_logo_is_centered_on_one_row_and_currency_pill_floats(mobile, li
     assert width - (pbox["x"] + pbox["width"]) <= 24, (
         f"the pill must hug the right edge (right:20px), box {pbox}")
     bottom_gap = 900 - (pbox["y"] + pbox["height"])
-    assert 75 <= bottom_gap <= 95, (
-        f"the pill must float 85px above the bottom (stacked over WhatsApp), "
-        f"gap {bottom_gap}")
+    assert 85 <= bottom_gap <= 100, (
+        f"the pill must float ~92px above the bottom (stacked clear over "
+        f"WhatsApp), gap {bottom_gap}")
     pill_bg = pill.evaluate("el => getComputedStyle(el).backgroundColor")
     assert pill_bg.replace(" ", "") in ("rgb(255,255,255)",), pill_bg
     on_btn = mobile.locator('.cur-float button[data-cur="NGN"]')
     on_bg = on_btn.evaluate("el => getComputedStyle(el).backgroundColor")
-    assert on_bg.replace(" ", "") == "rgb(124,58,237)", (
-        f"the active currency must be #7C3AED, got {on_bg}")
+    # Owner retheme 2026-09-28: the active currency is rich espresso brown,
+    # NOT the retired vibrant purple.
+    assert on_bg.replace(" ", "") == "rgb(51,35,26)", (
+        f"the active currency must be #33251A, got {on_bg}")
     wa = mobile.locator(".wa-float")
     wbox = wa.bounding_box()
     assert 900 - (wbox["y"] + wbox["height"]) <= 25, (
