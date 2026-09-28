@@ -170,7 +170,10 @@ def products():
 # "only N left": the exact quantity is a business secret (the admin portal,
 # with a session, still gets the numbers it needs to manage the shop).
 _FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock",
-                         "variantStock", "inventory")
+                         "variantStock", "inventory",
+                         # Supplier stock-sync mapping: internal sourcing
+                         # detail, never a shopper's business.
+                         "supplierId", "supplierSku")
 
 
 def _public_product(p):
@@ -1916,6 +1919,35 @@ def admin_job_failures():
                    pages=max(1, -(-total // limit)), limit=limit,
                    failures=items, background=health)
 
+
+@api.delete("/admin/job-failures/<int:fid>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_job_failure_delete(fid):
+    """Delete one resolved crash report from the Background Job Failures
+    panel. Owner request 2026-09-28: a report the owner has already looked
+    at should not have to sit there forever."""
+    import observability
+    removed = observability.delete_stored([fid])
+    if not removed:
+        return jsonify(ok=False, error="That crash report is no longer there."), 404
+    audit(authmod.current_admin(), "job_failure.deleted", str(fid), _ip())
+    return jsonify(ok=True, id=fid, deleted=True)
+
+
+@api.delete("/admin/job-failures")
+@authmod.require_admin
+@sec.require_csrf
+def admin_job_failures_clear():
+    """Clear every stored crash report, or only one job's reports with
+    ?job=. A bulk "Clear all" companion to the per-report delete above."""
+    import observability
+    job = sec.clean(request.args.get("job"), 120)
+    removed = observability.clear_stored(job or None)
+    audit(authmod.current_admin(), "job_failure.cleared",
+          f"job={job or 'all'} count={removed}", _ip())
+    return jsonify(ok=True, cleared=removed)
+
 # ------------------------------------------------------------ admin: sales
 @api.get("/admin/sales")
 @authmod.require_admin
@@ -2918,24 +2950,33 @@ DELIVERY_PAGE_FILE = _os.environ.get(
 # server copy also lets us make one *safe* upgrade of the old stock document
 # that is already stored in production (rather than letting that document
 # continue to mask the new fallback after a deploy).
+# Exact delivery windows the owner requested (2026-09-28), attached to every
+# region below so the Delivery page and the FAQ never disagree about how
+# long a parcel takes. Lagos is split from the rest of Nigeria because its
+# window is dramatically shorter (same city, same-day courier network).
+ETA_LAGOS = "Delivery within 24 to 72 hours."
+ETA_NG_OTHER = "Delivery within 3 to 7 business days."
+ETA_BENIN = "Delivery within 4 to 12 business days."
+ETA_TOGO = "Delivery within 4 to 12 business days."
+
 DETAILED_DELIVERY_PAGE = {
     "title": "Delivery Locations",
     "lead": "Accessible hubs and regions across Nigeria, Benin Republic and Togo",
     "blocks": [
         {"heading": "Nigeria", "locations": [
-            {"name": "Lagos Mainland", "detail": "Ikeja, Yaba, Surulere, Oshodi, Iyana-Ipaja, Ojodu Berger, Agege, Gbagada, Ketu, Ikorodu"},
-            {"name": "Lagos Island", "detail": "Victoria Island, Lekki Phase 1, Ajah, Ikoyi, Lagos Island, Epe"},
-            {"name": "Ogun State", "detail": "Abeokuta, Sagamu, Mowe/Ibafo, Ijebu-Ode, Ota"},
-            {"name": "Abuja (FCT)", "detail": "Maitama, Wuse, Garki, Jabi, Asokoro, Kubwa, Lugbe"},
-            {"name": "Regional hubs", "detail": "Rivers (Port Harcourt), Edo (Benin City), Delta (Warri, Asaba), Ekiti (Ado-Ekiti), Osun (Osogbo, Ile-Ife), Oyo (Ibadan), Kwara (Ilorin), Abia (Aba, Umuahia), Anambra (Awka, Onitsha)"},
+            {"name": "Lagos Mainland", "detail": f"Ikeja, Yaba, Surulere, Oshodi, Iyana-Ipaja, Ojodu Berger, Agege, Gbagada, Ketu, Ikorodu. {ETA_LAGOS}"},
+            {"name": "Lagos Island", "detail": f"Victoria Island, Lekki Phase 1, Ajah, Ikoyi, Lagos Island, Epe. {ETA_LAGOS}"},
+            {"name": "Ogun State", "detail": f"Abeokuta, Sagamu, Mowe/Ibafo, Ijebu-Ode, Ota. {ETA_NG_OTHER}"},
+            {"name": "Abuja (FCT)", "detail": f"Maitama, Wuse, Garki, Jabi, Asokoro, Kubwa, Lugbe. {ETA_NG_OTHER}"},
+            {"name": "Regional hubs", "detail": f"Rivers (Port Harcourt), Edo (Benin City), Delta (Warri, Asaba), Ekiti (Ado-Ekiti), Osun (Osogbo, Ile-Ife), Oyo (Ibadan), Kwara (Ilorin), Abia (Aba, Umuahia), Anambra (Awka, Onitsha). {ETA_NG_OTHER}"},
         ]},
         {"heading": "Benin Republic", "locations": [
-            {"name": "Cotonou", "detail": "Haie Vive, Ganhi, Akpakpa, Cadjehoun, Zongo, Fidjrosse"},
-            {"name": "Abomey-Calavi", "detail": "Godomey, Togoudo, Zogbadje, Arconville"},
-            {"name": "Porto-Novo", "detail": "Catchi, Ouando, Djassin"},
+            {"name": "Cotonou", "detail": f"Haie Vive, Ganhi, Akpakpa, Cadjehoun, Zongo, Fidjrosse. {ETA_BENIN}"},
+            {"name": "Abomey-Calavi", "detail": f"Godomey, Togoudo, Zogbadje, Arconville. {ETA_BENIN}"},
+            {"name": "Porto-Novo", "detail": f"Catchi, Ouando, Djassin. {ETA_BENIN}"},
         ]},
         {"heading": "Togo", "locations": [
-            {"name": "Lomé", "detail": "Deck, Hedzranawoe, Agoè, Akodesséwa"},
+            {"name": "Lomé", "detail": f"Deck, Hedzranawoe, Agoè, Akodesséwa. {ETA_TOGO}"},
         ]},
     ],
 }
@@ -3005,22 +3046,41 @@ def _load_delivery_page():
     return None
 
 
+# Known documents that are safe to silently replace with DETAILED_DELIVERY_PAGE:
+# the very old six-Nigeria/three-Benin stock starter, AND the detailed
+# document as it stood right before per-region delivery windows (owner
+# request 2026-09-28) were added to every location's detail text. Both are
+# matched on title + lead + (heading, [location names]) only - never on the
+# detail text - so an owner's own edits to the detail copy are left alone.
+_LEGACY_DELIVERY_SIGNATURES = (
+    ("Delivery Locations", "Curated coverage across West Africa", (
+        ("Nigeria", ("Lagos", "Ogun", "Abia", "Anambra", "Osun", "Abuja")),
+        ("Benin Republic", ("Cotonou", "Calavi", "Porto-Novo")),
+    )),
+    ("Delivery Locations", "Accessible hubs and regions across Nigeria, Benin Republic and Togo", (
+        ("Nigeria", ("Lagos Mainland", "Lagos Island", "Ogun State", "Abuja (FCT)", "Regional hubs")),
+        ("Benin Republic", ("Cotonou", "Abomey-Calavi", "Porto-Novo")),
+        ("Togo", ("Lomé",)),
+    )),
+)
+
+
 def _is_legacy_delivery_page(page):
-    """Only recognise the exact starter document that was live pre-update.
+    """Only recognise the exact starter documents that were live pre-update.
 
     This is deliberately narrow. A page that the owner edited in any way
-    stays theirs; only the generic six-Nigeria/three-Benin stock document is
-    upgraded so the requested locations are actually visible after deploy.
+    (a renamed heading, an added/removed location) stays theirs; only the
+    known stock documents above are upgraded so the requested locations and
+    delivery windows are actually visible after deploy.
     """
     if not isinstance(page, dict):
         return False
-    if page.get("title") != "Delivery Locations" or page.get("lead") != "Curated coverage across West Africa":
+    if page.get("title") != "Delivery Locations":
         return False
+    lead = page.get("lead")
     blocks = page.get("blocks")
-    if not isinstance(blocks, list) or len(blocks) != 2:
+    if not isinstance(blocks, list):
         return False
-    expected = [("Nigeria", ["Lagos", "Ogun", "Abia", "Anambra", "Osun", "Abuja"]),
-                ("Benin Republic", ["Cotonou", "Calavi", "Porto-Novo"])]
     actual = []
     for block in blocks:
         if not isinstance(block, dict):
@@ -3028,13 +3088,18 @@ def _is_legacy_delivery_page(page):
         locations = block.get("locations")
         if not isinstance(locations, list):
             return False
-        actual.append((block.get("heading"), [loc.get("name") for loc in locations if isinstance(loc, dict)]))
-    return actual == expected
+        actual.append((block.get("heading"),
+                       tuple(loc.get("name") for loc in locations if isinstance(loc, dict))))
+    actual = tuple(actual)
+    return any(lead == sig_lead and actual == sig_blocks
+               for _title, sig_lead, sig_blocks in _LEGACY_DELIVERY_SIGNATURES)
 
 
 def _delivery_page_for_storefront():
-    """Read the owner page, upgrading only the known legacy starter once."""
+    """Read the owner page, upgrading only the known legacy starters once."""
     page = _load_delivery_page()
+    if page == DETAILED_DELIVERY_PAGE:
+        return page
     if not _is_legacy_delivery_page(page):
         return page
     try:
@@ -4077,6 +4142,30 @@ def admin_referrals():
     rows = query("SELECT code, email, name, uses, reward_issued, reward_coupon, created_at "
                  "FROM referral_codes ORDER BY created_at DESC LIMIT 500")
     return jsonify(ok=True, referrals=[dict(r) for r in rows])
+
+@api.delete("/admin/referrals/<code>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_referral_delete(code):
+    """Remove a stale/already-used referral code so it stops being shared
+    or redeemed. The reward coupon it may already have issued (a separate
+    coupons row) is left untouched - deleting the referral only retires
+    the referral code itself."""
+    import growth
+    code = growth.normalize_code(code)
+    row = one("SELECT code FROM referral_codes WHERE code=?", (code,))
+    if not row:
+        return jsonify(ok=False, error="That referral code is no longer there."), 404
+    execute("DELETE FROM referral_codes WHERE code=?", (code,))
+    audit(authmod.current_admin(), "referral.deleted", code, _ip())
+    try:
+        from supabase_store import client as _sb_client
+        c = _sb_client()
+        if c is not None:
+            c.table("referral_codes").delete().eq("code", code).execute()
+    except Exception:                              # pragma: no cover
+        pass
+    return jsonify(ok=True, code=code)
 
 @api.get("/admin/coupons")
 @authmod.require_admin

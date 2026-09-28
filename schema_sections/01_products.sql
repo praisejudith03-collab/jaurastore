@@ -53,6 +53,8 @@ create table if not exists products (
   "placeholderImage" text,
   "usesPlaceholder"  boolean default false,
   source           text default 'admin',
+  "supplierId" text not null default '',
+  "supplierSku" text not null default '',
   updated_at       timestamptz default now(),
   constraint products_price_positive check ("priceCfa" >= 0 and "priceNgn" >= 0
     and "compareCfa" is null or "compareCfa" >= 0
@@ -97,6 +99,8 @@ alter table products add column if not exists image            text;
 alter table products add column if not exists image_url        text;
 alter table products add column if not exists description      text;
 alter table products add column if not exists stock_quantity   integer not null default 0;
+alter table products add column if not exists "supplierId" text not null default '';
+alter table products add column if not exists "supplierSku" text not null default '';
 
 -- Dead leftovers from the original hand-built table: price_cfa, price_ngn,
 -- name_fr, compare_cfa, compare_ngn, option_stock. The app reads and writes

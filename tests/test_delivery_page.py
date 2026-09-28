@@ -256,3 +256,43 @@ def test_exact_legacy_delivery_document_is_upgraded_to_requested_coverage(client
     assert any(row["name"] == "Cotonou" and "Haie Vive" in row["detail"]
                for row in benin)
     assert page["blocks"][2]["locations"][0]["name"] == "Lomé"
+
+
+# ------------------------------------------------------- delivery time windows
+def test_every_region_carries_its_exact_delivery_window(client):
+    """Owner request 2026-09-28: Lagos is fast, everywhere else is slower,
+    and Benin/Togo share the same wider window - each location must say so
+    on the live Delivery page, not just in a policy document elsewhere."""
+    tok = _login(client)
+    # Force the upgrade path even though nothing has been saved yet for
+    # this module's tmp file.
+    client.post("/api/admin/delivery-page", headers={"X-CSRF-Token": tok},
+                json={"page": {
+                    "title": "Delivery Locations",
+                    "lead": "Curated coverage across West Africa",
+                    "blocks": [
+                        {"heading": "Nigeria", "locations": [
+                            {"name": n, "detail": ""} for n in
+                            ("Lagos", "Ogun", "Abia", "Anambra", "Osun", "Abuja")
+                        ]},
+                        {"heading": "Benin Republic", "locations": [
+                            {"name": n, "detail": ""} for n in
+                            ("Cotonou", "Calavi", "Porto-Novo")
+                        ]},
+                    ],
+                }})
+    page = client.get("/api/site").get_json()["site"]["delivery_page"]
+    nigeria = page["blocks"][0]["locations"]
+    benin = page["blocks"][1]["locations"]
+    togo = page["blocks"][2]["locations"]
+
+    def detail(rows, name):
+        return next(r["detail"] for r in rows if r["name"] == name)
+
+    assert "24 to 72 hours" in detail(nigeria, "Lagos Mainland")
+    assert "24 to 72 hours" in detail(nigeria, "Lagos Island")
+    for state in ("Ogun State", "Abuja (FCT)", "Regional hubs"):
+        assert "3 to 7 business days" in detail(nigeria, state)
+    for city in ("Cotonou", "Abomey-Calavi", "Porto-Novo"):
+        assert "4 to 12 business days" in detail(benin, city)
+    assert "4 to 12 business days" in detail(togo, "Lomé")

@@ -2394,8 +2394,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=157";
-        const FLYER = "images/brand/logo-flyer.jpg?v=157";
+        const LOGO = "images/brand/logo.jpg?v=161";
+        const FLYER = "images/brand/logo-flyer.jpg?v=161";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2571,7 +2571,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=157" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=161" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -2726,9 +2726,19 @@ const JA = (() => {
    * "off"/"none"/"-" -> the icon is removed from the storefront entirely.
    * ================================================================== */
   const SOCIAL_ICONS = {
+    // Official WhatsApp glyph (the phone-in-speech-bubble mark), rendered in
+    // white on the platform's own green tile via .social-btn--whatsapp.
     whatsapp: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12.04 2C6.58 2 2.15 6.4 2.15 11.84c0 1.74.46 3.44 1.33 4.94L2 22l5.36-1.4a10 10 0 0 0 4.68 1.19h.01c5.46 0 9.89-4.4 9.89-9.85C21.94 6.4 17.5 2 12.04 2zm5.72 14.13c-.24.68-1.4 1.3-1.95 1.38-.5.07-1.12.1-1.81-.11-.42-.13-.95-.31-1.64-.6-2.89-1.25-4.77-4.16-4.92-4.35-.14-.2-1.18-1.57-1.18-3 0-1.42.75-2.12 1.01-2.41.27-.29.58-.36.78-.36h.56c.18 0 .42-.07.66.5.24.58.82 2 .89 2.15.07.15.12.32.02.52-.1.2-.14.32-.29.5-.14.17-.3.38-.43.51-.14.14-.29.29-.12.56.16.27.73 1.2 1.56 1.95 1.08.96 1.98 1.26 2.26 1.4.27.14.43.12.59-.07.16-.2.68-.79.86-1.06.18-.27.36-.22.6-.13.25.08 1.57.74 1.84.87.27.14.45.2.52.31.06.11.06.64-.18 1.32z"/></svg>`,
-    instagram: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.2c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.43.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.43.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.43-.36-1.06-.41-2.23-.06-1.27-.07-1.65-.07-4.85s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.43-.16 1.06-.36 2.23-.41C8.42 2.21 8.8 2.2 12 2.2zm0 5.1a4.7 4.7 0 1 0 0 9.4 4.7 4.7 0 0 0 0-9.4zm0 7.75a3.05 3.05 0 1 1 0-6.1 3.05 3.05 0 0 1 0 6.1zm5.99-7.94a1.1 1.1 0 1 1-2.2 0 1.1 1.1 0 0 1 2.2 0z"/></svg>`,
-    tiktok: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M14.5 3c.4 2.6 1.8 4.4 4.5 4.7v2.4c-1.5 0-2.9-.5-4.1-1.4v6.6c0 3.4-2.7 6.1-6.2 6.1S2.6 18.7 2.6 15.3c0-3.3 2.6-6 5.9-6.1v2.5c-1.8.1-3.2 1.6-3.2 3.5 0 2 1.6 3.6 3.6 3.6s3.6-1.6 3.6-3.6V3h2z"/></svg>`,
+    // Official Instagram camera glyph, carrying its own signature
+    // yellow -> pink -> purple gradient fill (not just a flat colour) so the
+    // mark reads as the real Instagram logo on its own, independent of the
+    // button's background.
+    instagram: `<svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="jaIgGrad" x1="1" y1="1" x2="23" y2="23" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F9CE34"/><stop offset=".5" stop-color="#EE2A7B"/><stop offset="1" stop-color="#6228D7"/></linearGradient></defs><path fill="url(#jaIgGrad)" stroke="#fff" stroke-width="0.4" d="M12 2.2c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.43.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.43.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.43-.36-1.06-.41-2.23-.06-1.27-.07-1.65-.07-4.85s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.43-.16 1.06-.36 2.23-.41C8.42 2.21 8.8 2.2 12 2.2zm0 5.1a4.7 4.7 0 1 0 0 9.4 4.7 4.7 0 0 0 0-9.4zm0 7.75a3.05 3.05 0 1 1 0-6.1 3.05 3.05 0 0 1 0 6.1zm5.99-7.94a1.1 1.1 0 1 1-2.2 0 1.1 1.1 0 0 1 2.2 0z"/></svg>`,
+    // Official TikTok "musical note" mark: the cyan and magenta offset
+    // layers behind the black/white note are what makes the logo instantly
+    // recognisable, not just a plain single-colour glyph.
+    tiktok: `<svg viewBox="0 0 24 24" aria-hidden="true"><path transform="translate(-0.9,0.7)" fill="#25F4EE" d="M14.5 3c.4 2.6 1.8 4.4 4.5 4.7v2.4c-1.5 0-2.9-.5-4.1-1.4v6.6c0 3.4-2.7 6.1-6.2 6.1S2.6 18.7 2.6 15.3c0-3.3 2.6-6 5.9-6.1v2.5c-1.8.1-3.2 1.6-3.2 3.5 0 2 1.6 3.6 3.6 3.6s3.6-1.6 3.6-3.6V3h2z"/><path transform="translate(0.9,-0.7)" fill="#FE2C55" d="M14.5 3c.4 2.6 1.8 4.4 4.5 4.7v2.4c-1.5 0-2.9-.5-4.1-1.4v6.6c0 3.4-2.7 6.1-6.2 6.1S2.6 18.7 2.6 15.3c0-3.3 2.6-6 5.9-6.1v2.5c-1.8.1-3.2 1.6-3.2 3.5 0 2 1.6 3.6 3.6 3.6s3.6-1.6 3.6-3.6V3h2z"/><path fill="#ffffff" d="M14.5 3c.4 2.6 1.8 4.4 4.5 4.7v2.4c-1.5 0-2.9-.5-4.1-1.4v6.6c0 3.4-2.7 6.1-6.2 6.1S2.6 18.7 2.6 15.3c0-3.3 2.6-6 5.9-6.1v2.5c-1.8.1-3.2 1.6-3.2 3.5 0 2 1.6 3.6 3.6 3.6s3.6-1.6 3.6-3.6V3h2z"/></svg>`,
+    // Official Facebook "f" mark, in white on the platform's own blue tile.
     facebook: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M13.5 21v-8h2.69l.4-3.12H13.5V7.89c0-.9.25-1.52 1.55-1.52h1.65V3.58c-.29-.04-1.27-.12-2.41-.12-2.38 0-4.01 1.45-4.01 4.12v2.3H7.5V13h2.78v8h3.22z"/></svg>`,
     link: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M10.5 13.5a4 4 0 0 0 5.66 0l2.5-2.5a4 4 0 1 0-5.66-5.66l-1.2 1.2M13.5 10.5a4 4 0 0 0-5.66 0l-2.5 2.5a4 4 0 1 0 5.66 5.66l1.2-1.2"/></svg>`,
   };
@@ -2829,6 +2839,9 @@ const JA = (() => {
     return out;
   }
 
+  // Icon-only badges: the official logo IS the button, with no spelled-out
+  // "Facebook" / "Instagram" text label riding along next to it. The
+  // platform name still reaches assistive tech via aria-label/title.
   function socialLinksHTML() {
     return socialLinks().map((l) => (
       `<a class="social-btn social-btn--${l.id}" data-social="${l.id}" href="${escape(l.href)}"` +
@@ -2837,7 +2850,7 @@ const JA = (() => {
       // owner typed is left alone.
       (l.isDefault && l.id === "whatsapp" ? ` data-wa-inquiry` : ``) +
       ` target="_blank" rel="noopener" aria-label="${escape(l.label)}" title="${escape(l.label)}">` +
-      `${socialIcon(l.id)}<span>${escape(l.label)}</span></a>`
+      `${socialIcon(l.id)}</a>`
     )).join("");
   }
 
@@ -2856,7 +2869,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=157" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=161" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -2877,11 +2890,14 @@ const JA = (() => {
         <div>
           <h4>${tx("footer.follow")}</h4>
           <!-- Social row: the admin's WhatsApp / Instagram / TikTok / Facebook
-               links, each rendered with the logo auto-detected from the link
-               itself (see socialLinks / socialIcon). Repainted from the live
-               site row by paintSocialLinks() on every ja:site answer. -->
-          <a class="btn foot-wa" data-wa-inquiry href="${waInquiryUrl()}" target="_blank" rel="noopener">${tx("footer.contactUs")}</a>
-          <!-- Keep the official social logos directly before the WhatsApp channel. -->
+               links, each rendered as its own official logo (icon only, no
+               text badge), auto-detected from the link itself (see
+               socialLinks / socialIcon). Repainted from the live site row by
+               paintSocialLinks() on every ja:site answer. The old separate
+               "Contact Us" WhatsApp button was removed here - it duplicated
+               the WhatsApp logo already in this row - so there is exactly
+               ONE WhatsApp icon plus the channel link below it, not three
+               different WhatsApp widgets stacked in the same column. -->
           <div class="foot-social" data-social-links>${socialLinksHTML()}</div>
           <a class="wa-channel" href="https://whatsapp.com/channel/0029Vb7qNQs4yltRRkChu01k" target="_blank" rel="noopener">${tx("footer.channel")}</a>
           <div class="foot-flies" aria-hidden="true">
@@ -2981,7 +2997,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=157", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=161", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3015,7 +3031,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=157";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=161";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3048,7 +3064,7 @@ const JA = (() => {
     ["How do I order?", "01 Select your items. 02 Review your bag. 03 Complete checkout. 04 Send payment in F CFA or Naira. 05 Send your payment screenshot to us on WhatsApp. 06 Jaura Store will confirm your payment and your receipt is saved."],
     ["Can I pay in CFA and Naira?", "Yes. Tap F CFA or Naira in the menu and prices switch at once. At checkout choose Direct bank transfer — F CFA or Direct bank transfer — Naira."],
     ["What is the exchange rate?", "Naira is the main price. F CFA is converted each day from the live Naira rate, then rounded."],
-    ["Where do you deliver?", "Benin (Cotonou, Calavi, Porto-Novo — 6 to 14 business days), Lagos Mainland, Lagos Island, Lome and neighbouring West African states. Shipment rates are confirmed at checkout by city."],
+    ["Where do you deliver?", "Lagos (Mainland and Island): within 24 to 72 hours. Other Nigerian states and hubs (Ogun, Abuja, Rivers, Edo, Delta, Ekiti, Osun, Oyo, Kwara, Abia, Anambra and more): within 3 to 7 business days. Benin Republic (Cotonou, Abomey-Calavi, Porto-Novo): within 4 to 12 business days. Togo (Lome): within 4 to 12 business days. Shipment rates are confirmed at checkout by city."],
     ["How do I send payment?", "Transfer using the details shown for your chosen currency, then send a screenshot of your payment to us on WhatsApp. You do not need to upload a receipt on the site. Your receipt is saved."],
     ["How do I track my order?", "Message us on WhatsApp with your order ID (for example JA-M8K2Q1) and we will tell you if it is waiting, confirmed, or declined."],
     ["How can I reach you?", careSummary()],
@@ -3074,7 +3090,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=157");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=161");
     document.title = title;
     [
       ["name", "description", description],
@@ -3256,7 +3272,7 @@ const JA = (() => {
       product: { title: "Product · Jaura Store", description: "Shop this piece at Jaura Store in Naira or F CFA." },
       about: { title: "Vision · Jaura Store", description: "Jaura Store vision — curated fashion and lifestyle from Cotonou and Lagos. Pay in F CFA or Naira." },
       faq: { title: "FAQ · Jaura Store", description: "How to order from Jaura Store, delivery to Benin, Lagos and West Africa, payment in CFA or Naira." },
-      delivery: { title: "Delivery · Jaura Store", description: "Jaura Store delivery: Benin 6–14 days, Lagos Mainland and Island, Lomé and West Africa. Fare on WhatsApp." },
+      delivery: { title: "Delivery · Jaura Store", description: "Jaura Store delivery: Lagos 24–72 hours, other Nigerian states 3–7 business days, Benin and Togo 4–12 business days. Fare on WhatsApp." },
       contact: { title: "Contact · Jaura Store", description: "Customer care: " + careSummary() + "." },
       checkout: { title: "Checkout · Jaura Store", description: "Jaura Store checkout — pay by UBA Naira, MTN MoMo CFA or Moov Togo, then upload your receipt." },
       "order-complete": { title: "Order Completed · Jaura Store", description: "Your Jaura Store order has been received." },

@@ -72,11 +72,13 @@ EXPECTED_ADMIN_ROUTES = {
     # Customer search history and background-worker crash reports.
     ("GET", "/api/admin/searches"),
     ("GET", "/api/admin/job-failures"),
+    ("DELETE", "/api/admin/job-failures"),
+    ("DELETE", "/api/admin/job-failures/<int:fid>"),
 
     ("GET", "/api/admin/products.csv"),
     ("POST", "/api/admin/products"), ("PUT", "/api/admin/products"),
     ("DELETE", "/api/admin/products/<pid>"), ("POST", "/api/admin/photos/repair"),
-    ("GET", "/api/admin/referrals"),
+    ("GET", "/api/admin/referrals"), ("DELETE", "/api/admin/referrals/<code>"),
     ("GET", "/api/admin/coupon-uses"), ("POST", "/api/admin/reviews/migrate"),
     ("GET", "/api/admin/reviews"), ("PATCH", "/api/admin/reviews"),
     ("DELETE", "/api/admin/reviews"),
@@ -375,6 +377,33 @@ def test_referrals_endpoint(admin):
     r = admin.get("/api/admin/referrals")
     assert r.status_code == 200, r.data
     assert "ok" in r.get_json()
+
+
+def test_an_admin_can_delete_a_stale_referral_code(admin):
+    """Owner request 2026-09-28: a stale/already-used referral code should
+    be individually removable, without needing to touch the master
+    referral on/off switch."""
+    code = "ITESTREF"
+    execute("DELETE FROM referral_codes WHERE code=?", (code,))
+    execute("INSERT INTO referral_codes (code, email, name) VALUES (?,?,?)",
+            (code, "friend@example.com", "A Friend"))
+
+    r = admin.get("/api/admin/referrals")
+    assert code in json.dumps(r.get_json())
+
+    r = admin.delete(f"/api/admin/referrals/{code}")
+    assert r.status_code == 200, r.data
+    assert r.get_json()["ok"] is True
+    assert one("SELECT 1 FROM referral_codes WHERE code=?", (code,)) is None
+
+    # Deleting it again reports it is already gone, not a server error.
+    r2 = admin.delete(f"/api/admin/referrals/{code}")
+    assert r2.status_code == 404
+
+
+def test_a_signed_out_visitor_cannot_delete_a_referral_code(app):
+    with app.test_client() as c:
+        assert c.delete("/api/admin/referrals/ANY").status_code in (401, 403)
 
 
 # ===========================================================================

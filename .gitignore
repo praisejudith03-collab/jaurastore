@@ -50,3 +50,9 @@ migration-*.json
 # Local verification artifacts and temporary preview configuration
 .cache/
 data/.analytics-restore.lock
+
+# Supplier stock sync (tools/supplier_stock_sync.py) run artifacts: an image
+# fingerprint cache and a per-run "needs human review" report - both are
+# regenerated every run, never source.
+supplier_sync_cache.json
+supplier_match_review.json
