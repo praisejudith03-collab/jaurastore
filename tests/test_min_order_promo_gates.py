@@ -298,3 +298,36 @@ def test_the_checkout_reads_the_live_minimum_and_programme_flags():
     assert "function promosEnabled()" in store
     assert "referralEnabled, promosEnabled," in store
     assert "site.minOrderCfa" in store or "minOrderCfa" in store
+
+
+def test_the_static_minimum_order_explainer_lines_are_repainted_live():
+    """.ck-bj-min / .ck-pay-country-note used to hardcode "5,000 F CFA"
+    forever, even after the owner raised or lowered minOrderCfa in Admin ->
+    Marketing - only the under-minimum WARNING read the live figure. Both
+    always-visible explainer lines must now be repainted from the same live
+    setting, in both languages, whenever it is available; the HTML text is
+    only the pre-JS/offline fallback.
+    """
+    app_js = read("js/app.js")
+    assert "function paintMinOrderNotices()" in app_js
+    assert "function minOrderFigures()" in app_js
+    # Both lines are painted straight from the live minOrderCfa/minOrderNgn -
+    # never a copy of the "5,000" fallback baked back in.
+    assert '".ck-bj-min"' in app_js
+    assert '".ck-pay-country-note"' in app_js
+    assert "minOrderCfa <= 0" in app_js, (
+        "a 0 (rule off) minimum must say so instead of quoting a stale floor")
+    # Painted on checkout init, on every fresh site-settings push, and again
+    # on a language switch - never only once at page load.
+    assert "paintMinOrderNotices()" in app_js
+    assert 'addEventListener("ja:lang"' in app_js
+
+    checkout = read("checkout.html")
+    # The static English copy stays as the offline/no-JS fallback, but it is
+    # no longer wired to the i18n dictionary - the dictionary's hardcoded
+    # number could disagree with a changed admin setting and would only be
+    # repainted with ANOTHER hardcoded number on a language switch.
+    assert 'class="ck-bj-min" data-i18n=' not in checkout
+    assert 'class="ck-pay-country-note" data-i18n=' not in checkout
+    assert 'class="ck-bj-min"' in checkout
+    assert 'class="ck-pay-country-note"' in checkout

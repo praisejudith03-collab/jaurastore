@@ -672,6 +672,88 @@ def test_the_crash_report_endpoint_pages_too(client):
     assert page2["count"] == 4
 
 
+def test_a_signed_out_visitor_cannot_delete_or_clear_crash_reports(client):
+    assert client.delete("/api/admin/job-failures/1").status_code in (401, 403)
+    assert client.delete("/api/admin/job-failures").status_code in (401, 403)
+
+
+def test_an_admin_can_delete_one_resolved_crash_report(client):
+    """Owner request 2026-09-28: a report already looked at should not have
+    to sit in the panel forever."""
+    execute("DELETE FROM job_failures")
+    try:
+        raise RuntimeError("keep me")
+    except RuntimeError as exc:
+        observability.record_failure("scheduler.tick", exc, payload_id="keep")
+    try:
+        raise RuntimeError("delete me")
+    except RuntimeError as exc:
+        observability.record_failure("scheduler.tick", exc, payload_id="gone")
+    csrf = _login(client)
+    rows = observability.recent_stored(limit=10)
+    assert len(rows) == 2
+    gone_id = next(r["id"] for r in rows if r["payload_id"] == "gone")
+    keep_id = next(r["id"] for r in rows if r["payload_id"] == "keep")
+
+    r = client.delete(f"/api/admin/job-failures/{gone_id}", headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+
+    remaining = observability.recent_stored(limit=10)
+    assert [row["id"] for row in remaining] == [keep_id]
+
+    # Deleting the same id again reports it is already gone, not a crash.
+    r2 = client.delete(f"/api/admin/job-failures/{gone_id}", headers={"X-CSRF-Token": csrf})
+    assert r2.status_code == 404
+
+
+def test_an_admin_can_clear_every_crash_report_at_once(client):
+    execute("DELETE FROM job_failures")
+    for i in range(5):
+        try:
+            raise RuntimeError(f"failure {i}")
+        except RuntimeError as exc:
+            observability.record_failure("scheduler.tick", exc, payload_id=str(i))
+    csrf = _login(client)
+    assert len(observability.recent_stored(limit=50)) == 5
+
+    r = client.delete("/api/admin/job-failures", headers={"X-CSRF-Token": csrf})
+    body = r.get_json()
+    assert r.status_code == 200 and body["ok"] is True and body["cleared"] == 5
+    assert observability.recent_stored(limit=50) == []
+
+    # Clearing an already-empty list is a harmless no-op, never an error.
+    r2 = client.delete("/api/admin/job-failures", headers={"X-CSRF-Token": csrf})
+    assert r2.status_code == 200 and r2.get_json()["cleared"] == 0
+
+
+def test_clearing_by_job_name_only_touches_that_jobs_reports(client):
+    execute("DELETE FROM job_failures")
+    try:
+        raise RuntimeError("a")
+    except RuntimeError as exc:
+        observability.record_failure("scheduler.tick", exc)
+    try:
+        raise RuntimeError("b")
+    except RuntimeError as exc:
+        observability.record_failure("notifications.abandoned_cart", exc)
+    csrf = _login(client)
+
+    r = client.delete("/api/admin/job-failures?job=scheduler.tick",
+                      headers={"X-CSRF-Token": csrf})
+    assert r.get_json()["cleared"] == 1
+    remaining = observability.recent_stored(limit=50)
+    assert len(remaining) == 1 and remaining[0]["job"] == "notifications.abandoned_cart"
+
+
+def test_delete_stored_and_clear_stored_never_raise_without_a_database():
+    """The same never-raise contract as every other observability helper -
+    a database problem while clearing the panel must never crash the
+    request handling it."""
+    assert observability.delete_stored(["not-a-number"]) == 0
+    assert observability.delete_stored([]) == 0
+    assert observability.delete_stored(None) == 0
+
+
 # =====================================================================
 # 5. the standalone migration file matches the canonical schema
 # =====================================================================

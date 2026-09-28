@@ -91,7 +91,15 @@ BASE_FIELDS = (
     "id", "sku", "slug", "name", "nameFr", "category", "priceCfa", "compareCfa",
     "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
     "stock", "badge", "featured", "online", "colors", "options", "optionPrices",
+    "supplierId", "supplierSku",
 )
+
+# Suppliers this shop's automated stock-mirroring tooling is allowed to read
+# from. A product is only ever eligible for supplier stock sync when its
+# supplierId is one of these AND it carries a non-empty supplierSku - every
+# other product (the default for a brand-new or hand-stocked item, e.g. an
+# Ankara waist piece) is structurally excluded, not excluded by name-matching.
+KNOWN_SUPPLIERS = ("splendall",)
 
 
 def _seed_candidates():
@@ -680,6 +688,16 @@ def normalize(product):
         # product links / order lines / reviews keep resolving. See
         # product_index().
         "legacyId": _clean_legacy_id(product.get("legacyId"), pid),
+        # Supplier stock-mirroring mapping. Both blank by default - a product
+        # keeps its own independently-managed stock until an admin explicitly
+        # opts it in here. tools/supplier_stock_sync.py only ever touches a
+        # row where supplierId matches a known supplier AND supplierSku is
+        # non-empty, so unmapped items (Ankara waist pieces, everything else)
+        # can never be altered by that script no matter what it fetches.
+        "supplierId": sec.clean(
+            product.get("supplierId") or product.get("supplier_id"), 40).lower(),
+        "supplierSku": sec.clean(
+            product.get("supplierSku") or product.get("supplier_sku"), 200),
         "updated_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
     return out

@@ -282,6 +282,51 @@ def failure_count(since_iso=None):
         return 0
 
 
+def delete_stored(ids):
+    """Delete specific crash reports by id from the Background Job Failures
+    panel. Owner request 2026-09-28: a resolved report should not have to
+    sit there forever. Only touches the local SQLite table (the table the
+    admin panel actually reads via recent_stored()) - the Supabase mirror
+    written by mirror_job_failure() is a write-only, off-box audit copy
+    with no reliable cross-store id to delete by, so a cleared report can
+    still be recovered there if it is ever genuinely needed again. Never
+    raises; returns how many rows were actually removed.
+    """
+    try:
+        clean_ids = [int(i) for i in (ids or []) if str(i).strip().lstrip("-").isdigit()]
+    except Exception:
+        clean_ids = []
+    if not clean_ids:
+        return 0
+    try:
+        from db import execute, query
+        placeholders = ",".join("?" for _ in clean_ids)
+        before = query(f"SELECT id FROM job_failures WHERE id IN ({placeholders})",
+                       tuple(clean_ids))
+        execute(f"DELETE FROM job_failures WHERE id IN ({placeholders})",
+                tuple(clean_ids))
+        return len(before)
+    except Exception:
+        return 0
+
+
+def clear_stored(job=None):
+    """Delete every stored crash report, or only those for one job name.
+    Same local-only scope as delete_stored(). Never raises; returns how
+    many rows were removed."""
+    try:
+        from db import execute, one
+        if job:
+            row = one("SELECT COUNT(*) n FROM job_failures WHERE job=?", (str(job),))
+            execute("DELETE FROM job_failures WHERE job=?", (str(job),))
+        else:
+            row = one("SELECT COUNT(*) n FROM job_failures")
+            execute("DELETE FROM job_failures")
+        return int((row or {"n": 0})["n"] or 0)
+    except Exception:
+        return 0
+
+
 def clear_recent():
     """Test helper: empty the in-memory ring and the dispatch rate limiter."""
     with _lock:

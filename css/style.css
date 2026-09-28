@@ -4918,6 +4918,22 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   color: #3a2f28;
   font-size: 15px;
 }
+/* Exact delivery window per region/hub (owner request 2026-09-28): a small
+   nude/brown pill right under the location list so the timeframe is never
+   missed and reads as data, not as more prose. */
+.del-eta {
+  display: inline-block;
+  font-style: normal;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  color: #6F5A44;
+  background: #f6ece1;
+  border: 1px solid #e8cdac;
+  border-radius: 999px;
+  padding: 3px 10px;
+  margin-top: 6px;
+}
 
 /* Footer wave */
 .footer.au-footer { padding-bottom: 0 !important; }
@@ -5296,6 +5312,21 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   color: var(--taupe);
   font-size: 13px;
 }
+/* The exact delivery window for whatever zone is currently selected
+   (owner request 2026-09-28) — painted the instant the shopper picks a
+   zone, see paintZoneEta() in js/app.js. */
+.ck-zone-eta {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #f6ece1;
+  border: 1px solid #e8cdac;
+  color: #6F5A44;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.ck-zone-eta[hidden] { display: none !important; }
 @media (max-width: 620px) {
   .au-quick { grid-template-columns: auto 64px auto 46px; min-width: 0; }
 }
@@ -6785,15 +6816,39 @@ body.au-shop .shop-banner img,
 .mv-card .mv-add { margin-top: auto; width: 100%; min-height: 34px; font-size: 11px; padding: 7px 8px; }
 
 /* Admin Homepage Featured picker ----------------------------------------- */
-.home-featured-admin-cat { border-top: 1px solid var(--line, #f2e5d5); padding-top: 12px; margin-top: 14px; }
-.home-featured-admin-cat .admin-h { display: flex; align-items: baseline; gap: 8px; }
-.home-featured-admin-cat .admin-h small { color: var(--muted, #887562); font-size: 11px; letter-spacing: 0; text-transform: none; }
+/* Each category is a collapsed-by-default accordion (owner request
+   2026-09-28) so the picker is not one long scroll of every product. */
+.home-featured-admin-cat { border: 1px solid var(--line, #f2e5d5); border-radius: 12px; margin-top: 10px; overflow: hidden; }
+.home-featured-admin-cat > summary {
+  display: flex; align-items: baseline; gap: 8px; cursor: pointer; list-style: none;
+  padding: 12px 14px; background: #fbf6f0; font: 600 15px/1.3 var(--serif, inherit); color: #342922;
+}
+.home-featured-admin-cat > summary::-webkit-details-marker { display: none; }
+.home-featured-admin-cat > summary::before { content: "＋"; width: 16px; color: #7d47bd; font: 700 15px/1 sans-serif; }
+.home-featured-admin-cat[open] > summary { background: #faf7fd; border-bottom: 1px solid #dfd1f1; }
+.home-featured-admin-cat[open] > summary::before { content: "−"; }
+.home-featured-admin-cat .admin-h, .home-featured-admin-cat > summary small { color: var(--muted, #887562); font-size: 11px; letter-spacing: 0; text-transform: none; font-family: inherit; }
+.home-featured-admin-cat .home-featured-admin-grid { padding: 12px 14px 14px; }
 .home-featured-admin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
 .home-featured-choice { display: grid; grid-template-columns: auto 46px 1fr; align-items: center; gap: 10px; border: 1px solid var(--line, #f2e5d5); border-radius: 12px; padding: 8px; background: #fff; cursor: pointer; }
 .home-featured-choice img { width: 46px; height: 46px; object-fit: cover; border-radius: 10px; background: #fbf6f0; }
 .home-featured-choice b { display: block; font-size: 13px; line-height: 1.25; }
 .home-featured-choice small { color: var(--muted, #887562); font-size: 11px; }
 .home-featured-choice input:disabled ~ span { opacity: .55; }
+
+/* Channel Broadcast Feed — owner request 2026-09-28 ----------------------- */
+.mk-bc-tabs { display: flex; gap: 6px; }
+.mk-bc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 14px; }
+.mk-bc-card { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line, #f2e5d5); border-radius: 12px; padding: 10px; background: #fff; }
+.mk-bc-card img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 10px; background: #fbf6f0; }
+.mk-bc-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted, #887562); }
+.mk-bc-body { display: flex; flex-direction: column; gap: 2px; }
+.mk-bc-body b { font-size: 13px; line-height: 1.25; }
+.mk-bc-body small { color: var(--muted, #887562); font-size: 11px; }
+.mk-bc-price { font-weight: 700; font-size: 13px; color: #342922; }
+.mk-bc-options { color: var(--muted, #887562); font-size: 11px; }
+.mk-bc-actions { display: flex; gap: 8px; margin-top: auto; }
+.mk-bc-actions .btn, .mk-bc-actions .btn-line { flex: 1 1 0; text-align: center; font-size: 12px; padding: 8px; }
 
 /* =================================================================
    SITE REDESIGN — owner request 2026-09-27 (Option A header,
@@ -7096,26 +7151,25 @@ body[data-page="home"] .home-hero-static h1 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   margin: 6px 0 12px;
 }
 .au-footer .foot-social a.social-btn,
 .social-btn {
   display: inline-flex !important;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px !important;
-  border-radius: 999px;
-  font-size: 12px !important;
-  letter-spacing: 0.08em;
-  line-height: 1;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0 !important;
+  border-radius: 12px;
   color: #ffffff !important;
   background: #6F5A44;              /* nude/brown house fallback */
-  width: fit-content;
   transition: transform .16s ease, box-shadow .16s ease, filter .16s ease;
 }
-.social-btn svg { width: 16px; height: 16px; flex: none; }
-.social-btn span { display: inline-block; }
+.social-btn svg { width: 21px; height: 21px; flex: none; }
+/* Icon-only badge: no spelled-out platform name rides next to the logo. */
+.social-btn span { display: none !important; }
 .social-btn:hover { transform: translateY(-1px); filter: brightness(1.06); box-shadow: 0 6px 16px rgba(51, 35, 26, 0.18); }
 .social-btn:active { transform: translateY(0) scale(.98); }
 .social-btn--whatsapp { background: #25D366; }
@@ -7123,8 +7177,8 @@ body[data-page="home"] .home-hero-static h1 {
 .social-btn--tiktok { background: #111111; }
 .social-btn--facebook { background: #1877F2; }
 @media (max-width: 480px) {
-  .social-btn { padding: 8px 12px !important; font-size: 11px !important; }
-  .social-btn svg { width: 15px; height: 15px; }
+  .social-btn { width: 36px; height: 36px; }
+  .social-btn svg { width: 19px; height: 19px; }
 }
 
 /* ---- Admin portal: the social-link editor (Settings -> Social media

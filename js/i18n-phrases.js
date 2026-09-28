@@ -326,9 +326,18 @@ window.I18N_PHRASES = {
   "Shipping & Delivery": "Expédition et livraison",
   "Where we deliver": "Où nous livrons",
   "Benin:": "Bénin :",
-  "Cotonou, Calavi, Porto-Novo and surrounding areas — 6 to 14 business days.":
-    "Cotonou, Calavi, Porto-Novo et environs — 6 à 14 jours ouvrés.",
+  "Benin Republic:": "République du Bénin :",
   "Nigeria:": "Nigeria :",
+  "Togo:": "Togo :",
+  "Lagos (Mainland & Island):": "Lagos (Mainland et Island) :",
+  "within 24 to 72 hours.": "sous 24 à 72 heures.",
+  "Other Nigerian states & hubs": "Autres États et pôles du Nigéria",
+  "(Ogun, Abuja, Rivers, Edo, Delta, Ekiti, Osun, Oyo, Kwara, Abia, Anambra and more): within 3 to 7 business days.":
+    "(Ogun, Abuja, Rivers, Edo, Delta, Ekiti, Osun, Oyo, Kwara, Abia, Anambra, etc.) : sous 3 à 7 jours ouvrés.",
+  "Cotonou, Abomey-Calavi, Porto-Novo and surrounding areas — within 4 to 12 business days.":
+    "Cotonou, Abomey-Calavi, Porto-Novo et environs — sous 4 à 12 jours ouvrés.",
+  "Lomé and selected West African destinations — within 4 to 12 business days.":
+    "Lomé et certaines destinations d'Afrique de l'Ouest — sous 4 à 12 jours ouvrés.",
   "Lagos Mainland, Lagos Island and other states — confirmed at checkout.":
     "Lagos Mainland, Lagos Island et autres États — confirmé lors de la commande.",
   "Neighbouring states:": "États voisins :",

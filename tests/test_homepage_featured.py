@@ -90,6 +90,46 @@ def test_admin_homepage_featured_save_updates_public_payload(admin):
     assert meta_featured[cat_b] == [prod_b["id"]]
 
 
+# =====================================================================
+# Owner request 2026-09-28: the admin picker was one long scroll of every
+# category's products. Each category must render as its own collapsed-by-
+# default accordion instead.
+# =====================================================================
+def _admin_js():
+    with open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8") as f:
+        return f.read()
+
+
+def test_the_admin_featured_picker_renders_categories_as_accordions():
+    src = _admin_js()
+    body = src[src.index("function paintHomepageFeaturedPicker("):]
+    body = body[:body.index("\nfunction ")]
+    assert "<details class=\"home-featured-admin-cat\"" in body
+    assert "<summary class=\"admin-h\">" in body
+    # Not unconditionally open - only pre-opened for a category that
+    # already has a saved pick, so most categories stay collapsed.
+    assert 'pickedHere ? "open" : ""' in body
+
+
+def test_each_featured_category_accordion_opens_independently():
+    """<details> elements toggle independently by default; this just pins
+    down that the picker uses one <details> per category rather than a
+    single shared open/close flag."""
+    src = _admin_js()
+    body = src[src.index("function paintHomepageFeaturedPicker("):]
+    body = body[:body.index("\nfunction ")]
+    assert "cats.map((c) =>" in body
+    assert body.count("<details") == 1  # one template repeated per category
+
+
+def test_the_featured_accordion_has_a_styled_toggle_marker():
+    css_path = os.path.join(ROOT, "css", "style.css")
+    with open(css_path, encoding="utf-8") as f:
+        css = f.read()
+    assert ".home-featured-admin-cat > summary::before" in css
+    assert ".home-featured-admin-cat[open] > summary::before" in css
+
+
 def test_homepage_currency_dom_updates_featured_and_most_viewed():
     node = shutil.which("node")
     if not node:

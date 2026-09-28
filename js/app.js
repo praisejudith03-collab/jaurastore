@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=157";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=157";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=161";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=161";
 }
 
 function renderCategories() {
@@ -1559,15 +1559,104 @@ function zoneGroups(list) {
   return groups.filter((g) => g.zones.length);
 }
 
+/** Which delivery-window pill a zone should show once it is picked at
+ *  checkout (owner request 2026-09-28). Lagos (any name containing "Lagos
+ *  Mainland"/"Lagos Island") is the fast lane; any other Naira zone is the
+ *  rest of Nigeria; any F CFA zone is Benin Republic or Togo, which share
+ *  the same wider window; a pickup zone has no delivery wait at all. */
+function zoneEtaKey(z) {
+  if (!z) return "";
+  if (z.kind === "pickup") return "ck.zoneEta.pickup";
+  const name = String(z.name || "").toLowerCase();
+  if (/lagos\s*mainland|lagos\s*island/.test(name)) return "ck.zoneEta.lagos";
+  if (String(z.currency || "").toUpperCase() === "NGN") return "ck.zoneEta.ngOther";
+  if (String(z.currency || "").toUpperCase() === "CFA") return "ck.zoneEta.west";
+  return "";
+}
+
+/** The Benin & Togo minimum-order figures, read live off the admin setting
+ *  (Admin -> Marketing, growth setting minOrderCfa / minOrderNgn on
+ *  GET /api/site) - never a hardcoded number. A saved 0 switches the rule
+ *  off entirely. Shared by the always-visible explainer lines below AND the
+ *  under-minimum warning shown at submit time, so the two can never disagree
+ *  about what the current floor actually is. */
+function minOrderFigures() {
+  const siteRow = (JA.getSiteConfig && JA.getSiteConfig()) || {};
+  const _minRaw = siteRow.minOrderCfa;
+  const minOrderCfa = (_minRaw === undefined || _minRaw === null || _minRaw === "")
+    ? 5000 : (Number(_minRaw) || 0);
+  const minOrderNgn = Number(siteRow.minOrderNgn) || (minOrderCfa ? Math.round(minOrderCfa / 0.44) : 0);
+  const fr = (window.I18N && I18N.lang && I18N.lang() || "en").toLowerCase().indexOf("fr") === 0;
+  const grp = (n) => String(Math.max(0, Math.round(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, fr ? " " : ",");
+  return { minOrderCfa, minOrderNgn, fr, grp };
+}
+
+/** Paint the two ALWAYS-VISIBLE Benin/Togo minimum-order explainer lines -
+ *  .ck-bj-min above the zone picker, .ck-pay-country-note above the F CFA
+ *  bank details - from the live admin setting instead of a hardcoded
+ *  "5,000 F CFA" that used to stay wrong forever once the owner changed the
+ *  minimum. Called on checkout init, again whenever a fresh "ja:site" lands,
+ *  and again on a language switch ("ja:lang") - both languages are built
+ *  here directly rather than through data-i18n, since the text depends on a
+ *  live number the static dictionary cannot hold. */
+function paintMinOrderNotices() {
+  const { minOrderCfa, minOrderNgn, fr, grp } = minOrderFigures();
+  const bjMin = document.querySelector(".ck-bj-min");
+  if (bjMin) {
+    bjMin.textContent = minOrderCfa <= 0
+      ? (fr
+          ? "Livraisons au Bénin et au Togo : aucune commande minimum. Le retrait à Cotonou est gratuit pour les articles légers."
+          : "Benin & Togo deliveries: no minimum order amount. Pickup in Cotonou is free for lighter products.")
+      : (fr
+          ? `Livraisons au Bénin : commande minimum de ${grp(minOrderCfa)} F CFA (environ ${grp(minOrderNgn)} nairas). Togo : même minimum. Le retrait à Cotonou est gratuit pour les articles légers.`
+          : `Benin deliveries: minimum order ${grp(minOrderCfa)} F CFA (about ${grp(minOrderNgn)} naira). Togo: same minimum. Pickup in Cotonou is free for lighter products.`);
+  }
+  const payNote = document.querySelector(".ck-pay-country-note");
+  if (payNote) {
+    payNote.textContent = minOrderCfa <= 0
+      ? (fr
+          ? "Clients du Bénin et du Togo : payez en F CFA via MTN MoMo (Bénin) ou Moov Money (Togo) avec les coordonnées ci-dessous."
+          : "Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below.")
+      : (fr
+          ? `Clients du Bénin et du Togo : payez en F CFA via MTN MoMo (Bénin) ou Moov Money (Togo) avec les coordonnées ci-dessous. Commande minimum : ${grp(minOrderCfa)} F CFA (₦${grp(minOrderNgn)}).`
+          : `Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below. Minimum order is ${grp(minOrderCfa)} F CFA (₦${grp(minOrderNgn)}).`);
+  }
+}
+
+/** Paint the [data-zone-eta] line for whatever zone is currently selected
+ *  in the checkout form - called right after the <select> is (re)built and
+ *  again every time the shopper changes their choice. */
+function paintZoneEta(sel) {
+  const etaEl = document.querySelector("[data-zone-eta]");
+  if (!etaEl) return;
+  const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+  const key = opt && opt.value ? zoneEtaKey({
+    name: opt.value,
+    kind: opt.dataset.zoneKind || "delivery",
+    currency: opt.dataset.currency || "",
+  }) : "";
+  if (!key) {
+    etaEl.hidden = true;
+    etaEl.textContent = "";
+    return;
+  }
+  etaEl.textContent = t(key);
+  etaEl.hidden = false;
+}
+
 /** Rebuild the zone <select> from the server's zone list.
  *  Falls back to whatever checkout.html already contains if the server gave
  *  nothing, so a static host or a failed fetch still shows a working form. */
 function paintDeliveryZones(form) {
   const sel = form.querySelector("select[name=zone], select[data-delivery-zones]");
   if (!sel) return;
+  if (!sel.dataset.etaBound) {
+    sel.dataset.etaBound = "1";
+    sel.addEventListener("change", () => paintZoneEta(sel));
+  }
   const site = (JA.getSiteConfig && JA.getSiteConfig()) || {};
   const list = Array.isArray(site.delivery_zones) ? site.delivery_zones : null;
-  if (!list || !list.length) return;
+  if (!list || !list.length) { paintZoneEta(sel); return; }
   const previous = sel.value;
   sel.textContent = "";
   const ph = document.createElement("option");
@@ -1598,6 +1687,7 @@ function paintDeliveryZones(form) {
     sel.appendChild(og);
   });
   sel.dataset.zonesFrom = "server";
+  paintZoneEta(sel);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1608,14 +1698,30 @@ function paintDeliveryZones(form) {
  * content, so the locations customers read are the ones the owner edited
  * rather than a list frozen in the HTML at deploy time.
  * ------------------------------------------------------------------ */
+// A location's saved `detail` may end with its own delivery-window sentence
+// ("... Ikorodu. Delivery within 24 to 72 hours."), attached server-side in
+// api.DETAILED_DELIVERY_PAGE (owner request 2026-09-28). Pull that sentence
+// out into its own small pill instead of leaving it buried in the prose, so
+// the exact timeframe reads as data at a glance - same treatment the static
+// delivery.html fallback gets.
+const DELIVERY_ETA_RE = /\s*(Delivery(?: is)? within [^.]*\.)\s*$/i;
+function splitDeliveryEta(detail) {
+  const raw = String(detail || "").trim();
+  const m = raw.match(DELIVERY_ETA_RE);
+  if (!m) return { rest: raw, eta: "" };
+  return { rest: raw.slice(0, m.index).trim(), eta: m[1].trim() };
+}
+
 function deliveryPageHTML(page) {
   const esc = (v) => JA.escape(String(v == null ? "" : v));
   const blocks = (Array.isArray(page.blocks) ? page.blocks : []).map((b) => {
     const rows = (Array.isArray(b.locations) ? b.locations : []).map((loc) => {
       const name = esc(loc && loc.name);
-      const detail = esc(loc && loc.detail);
+      const { rest, eta } = splitDeliveryEta(loc && loc.detail);
       if (!name) return "";
-      return `<p><strong>${name}</strong>${detail ? " \u2014 <span>" + detail + "</span>" : ""}</p>`;
+      const detailHTML = rest ? " \u2014 <span>" + esc(rest) + "</span>" : "";
+      const etaHTML = eta ? ` <em class="del-eta">${esc(eta)}</em>` : "";
+      return `<p><strong>${name}</strong>${detailHTML}${etaHTML}</p>`;
     }).join("");
     if (!esc(b && b.heading) && !rows) return "";
     return `<section class="del-block"><h2>${esc(b && b.heading)}</h2>${rows}</section>`;
@@ -1965,6 +2071,8 @@ function renderCheckout() {
   // zone it does not know - so the options are built from the data and no
   // client-side guessing is left.
   try { paintDeliveryZones(form); } catch (e) {}
+  try { paintMinOrderNotices(); } catch (e) {}
+  document.addEventListener("ja:lang", () => { try { paintMinOrderNotices(); } catch (e) {} });
   try { JA.track("checkout_start", { page: "checkout" }); } catch (e) {}
 
   // ---- Shipping note dynamic from Admin Settings ----
@@ -2003,6 +2111,7 @@ function renderCheckout() {
       // customer keeps reading the details from the previous load.
       try { paintDeliveryZones(form); } catch (e) {}
       try { paintCheckoutTotals(form); } catch (e) {}
+      try { paintMinOrderNotices(); } catch (e) {}
     });
   } catch (e) {}
 
@@ -2203,16 +2312,13 @@ function renderCheckout() {
     const zoneStr = String(data.zone || "");
     const countryStr = String(data.country || "");
     const isBeninTogo = /benin|togo|cotonou|calavi|porto|lom[ée]|lome/i.test(zoneStr) || /benin|togo/i.test(countryStr);
-    const siteRow = (JA.getSiteConfig && JA.getSiteConfig()) || {};
-    const _minRaw = siteRow.minOrderCfa;
-    const minOrderCfa = (_minRaw === undefined || _minRaw === null || _minRaw === "")
-      ? 5000 : (Number(_minRaw) || 0);
-    const minOrderNgn = Number(siteRow.minOrderNgn) || (minOrderCfa ? Math.round(minOrderCfa / 0.44) : 0);
-    const _fr = (window.I18N && I18N.lang && I18N.lang() || "en").toLowerCase().indexOf("fr") === 0;
-    const _grp = (n) => String(Math.max(0, Math.round(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, _fr ? " " : ",");
+    const { minOrderCfa, minOrderNgn, fr: _fr, grp: _grp } = minOrderFigures();
     const minOrderMsg = (cur_) => {
+      // Always built from the live figure - even when it happens to equal
+      // the original 5,000/12,000 default. A special-cased static phrase
+      // here used to silently diverge in wording (and drop the Naira
+      // equivalent / Togo) the moment anything about the live copy changed.
       if (cur_ === "CFA") {
-        if (minOrderCfa === 5000) return t("ck.minOrderCfa");
         return _fr
           ? `Bénin & Togo : commande minimum ${_grp(minOrderCfa)} F CFA (environ ${_grp(minOrderNgn)} nairas). Ajoutez quelques articles de plus.`
           : `Benin & Togo: minimum order ${_grp(minOrderCfa)} F CFA (about ${_grp(minOrderNgn)} naira). Please add more items.`;

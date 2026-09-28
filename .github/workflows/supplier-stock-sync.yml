@@ -1,0 +1,157 @@
+# Supplier stock sync: keep JauraStore's splendall.com-sourced items exactly
+# in step with the supplier's real stock, with zero manual product mapping.
+#
+# Twice a day - morning and evening - autonomously, tools/supplier_stock_sync.py:
+#   1. crawls splendall.com's ENTIRE live product catalog itself (no admin
+#      has to paste a single product link - new supplier products are
+#      discovered on their own);
+#   2. links a still-unmapped store product to a supplier product ONLY when
+#      their PHOTOS are a verified, near-exact match - never on name
+#      similarity alone, however strong (owner request 2026-09-28: no
+#      auto-link on a generic/recurring name like "bag"). Anything merely
+#      plausible EMAILS THE SHOP INBOX DIRECTLY (via mailer.py, the same
+#      transport every order alert already uses) and is written to
+#      supplier_match_review.json, instead of being guessed. No manual
+#      log-checking is required to notice a candidate needs a look.
+#   3. mirrors the supplier's EXACT stock count onto every linked product
+#      (a real number, not an on/off toggle) - retail prices are never read
+#      or written, so your markup stays entirely yours;
+#   4. marks a linked product OUT OF STOCK (never hides or deletes it) the
+#      moment it disappears from the supplier's own catalog - the owner
+#      decides by hand whether to hide or delete it from there.
+#
+# A product with no supplierId/supplierSku - everything you stock yourself,
+# e.g. the Ankara waist pieces - is never even considered. See the long
+# docstring at the top of tools/supplier_stock_sync.py for the full design
+# and every safety guardrail.
+#
+# Needs the repository secrets SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
+# (Settings -> Secrets and variables -> Actions), exactly like the catalog
+# watchdog. The MAIL_* / RESEND_API_KEY / BREVO_API_KEY / SMTP_* secrets are
+# optional and only needed for the review-needed email - already-live-site
+# values work, or leave them unset (mailer.py stays a silent no-op, same as
+# any shop without mail configured, and the GitHub issue below is still
+# opened as a fallback). Without SUPABASE_* it still runs safely against
+# the local catalogue override file and reports what it would have done.
+name: Supplier stock sync
+
+on:
+  schedule:
+    # Twice daily, West Africa Time (UTC+1, no DST):
+    #   08:00 WAT = 07:00 UTC (morning)
+    #   20:00 WAT = 19:00 UTC (evening)
+    - cron: "0 7 * * *"
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report only - write nothing (for a manual dry run)"
+        required: false
+        default: "false"
+
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: supplier-stock-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      STORE_BASE_URL: https://jaurastore.com.ng
+      # Optional: lets tools/supplier_stock_sync.py email the shop inbox the
+      # instant an uncertain match is found (see mailer.py). Any secret left
+      # unset resolves to "" and mailer.py silently stays off, exactly like
+      # local dev - this never blocks or fails the sync run either way.
+      MAIL_FROM: ${{ secrets.MAIL_FROM }}
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      SITE_ORIGIN: https://jaurastore.com.ng
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+    steps:
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      # The visual-fingerprint cache is what keeps a nightly run fast: only a
+      # NEW or CHANGED product photo (ours or the supplier's) needs
+      # re-downloading and re-hashing. It is a pure performance cache - a
+      # miss (first run, evicted cache) only makes this run slower, never
+      # wrong, since a hash is always recomputed when the cached URL differs.
+      - name: Restore the image-fingerprint cache
+        uses: actions/cache/restore@v4
+        with:
+          path: supplier_sync_cache.json
+          key: supplier-sync-image-cache
+      - name: Run the supplier stock sync
+        run: |
+          set -o pipefail
+          ARGS=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
+          timeout --signal=TERM --kill-after=15s 20m \
+            python3 tools/supplier_stock_sync.py $ARGS 2>&1 | tee supplier-sync.log
+      - name: Save the image-fingerprint cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: supplier_sync_cache.json
+          key: supplier-sync-image-cache
+      - name: Upload the review report (if anything needs a human look)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supplier-match-review
+          path: supplier_match_review.json
+          if-no-files-found: ignore
+          retention-days: 14
+      # Backup channel: the script already emails the shop inbox directly
+      # the moment it finds a candidate (see mailer.py above), so nothing
+      # here depends on anyone reading GitHub - this issue just keeps a
+      # standing, linkable record for whoever eventually does check.
+      - name: Open or update the review-needed issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -e
+          if [ ! -s supplier_match_review.json ]; then
+            NUMBER=$(gh issue list --state open --search "in:title Supplier match review" --json number --jq '.[0].number' 2>/dev/null || true)
+            if [ -n "$NUMBER" ]; then
+              gh issue comment "$NUMBER" --body "No possible matches needed review on $(date -u '+%Y-%m-%d %H:%M UTC') - closing automatically."
+              gh issue close "$NUMBER"
+            fi
+            exit 0
+          fi
+          {
+            echo "tools/supplier_stock_sync.py found product(s) that resemble a splendall.com item"
+            echo "closely enough to flag, but not closely enough to link automatically."
+            echo "Nothing was changed on the storefront for these - review and, if correct, set"
+            echo "the Supplier fields in the admin product editor yourself."
+            echo
+            echo "Run: ${RUN_URL}"
+            echo
+            echo '```json'
+            cat supplier_match_review.json
+            echo '```'
+          } > issue-body.md
+          NUMBER=$(gh issue list --state open --search "in:title Supplier match review" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$NUMBER" ]; then
+            gh issue comment "$NUMBER" --body-file issue-body.md
+          else
+            gh issue create --title "Supplier match review: possible splendall.com matches to confirm" --body-file issue-body.md
+          fi

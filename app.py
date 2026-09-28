@@ -131,8 +131,151 @@ def build_sitemap() -> str:
             + "\n".join(urls) + "\n</urlset>\n")
 
 
+def _abs_asset_url(value):
+    """A product photo (or any repo/uploads path) as an absolute URL.
+
+    Product images are either already absolute (an admin upload living in
+    Supabase Storage) or a path relative to the repo root (a seeded
+    `images/products/....jpg`, or a local `/uploads/...` file) - never a
+    private/signed one, so no storage.signed_url_for() call is needed here.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        raw = "images/products/_placeholder.jpg"
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    origin = (Config.SITE_ORIGIN or "").rstrip("/")
+    return origin + "/" + raw.lstrip("/")
+
+
+def _product_price_line(p):
+    """Active selling price only, in both currencies - never the
+    struck-through "compare at" price. The CFA figure is always derived
+    live from the NGN price at the admin's current exchange rate (see
+    toCfa() in js/admin.js / js/store.js) rather than the possibly-stale
+    priceCfa the catalogue happens to have stored, so a shared link always
+    quotes the same CFA figure the storefront itself is showing today."""
+    ngn = int(round(float(p.get("priceNgn") or 0)))
+    parts = []
+    if ngn > 0:
+        parts.append("₦{:,}".format(ngn))
+        try:
+            import growth
+            rate = float(growth.settings().get("cfaRate") or 0.44)
+        except Exception:
+            rate = 0.44
+        import math
+        cfa = int(math.ceil((ngn * rate) / 50) * 50)
+        if cfa > 0:
+            parts.append("F CFA {:,}".format(cfa).replace(",", " "))
+    elif p.get("priceCfa"):
+        cfa = int(round(float(p.get("priceCfa") or 0)))
+        if cfa > 0:
+            parts.append("F CFA {:,}".format(cfa).replace(",", " "))
+    return " · ".join(parts) if parts else ""
+
+
+def _product_options_line(p):
+    """A short, human-readable list of what the product comes in - colour
+    names and sizes only (never raw hex swatches), so a shared post tells a
+    customer what choices are in stock without them having to click
+    through first."""
+    seen, names = set(), []
+    for c in (p.get("colors") or []):
+        c = str(c or "").strip()
+        if c and not c.startswith("#") and c.lower() not in seen:
+            seen.add(c.lower())
+            names.append(c)
+    sizes = []
+    seen_sizes = set()
+    for o in (p.get("options") or []):
+        title = str((o or {}).get("title") or "").lower()
+        if "colou" in title or "scent" in title:
+            for v in (o or {}).get("values") or []:
+                v = str(v or "").strip()
+                if v and not v.startswith("#") and v.lower() not in seen:
+                    seen.add(v.lower())
+                    names.append(v)
+        elif ("size" in title or "length" in title) and "colou" not in title:
+            for v in (o or {}).get("values") or []:
+                v = str(v or "").strip()
+                if v and v.lower() not in seen_sizes:
+                    seen_sizes.add(v.lower())
+                    sizes.append(v)
+    bits = []
+    if names:
+        bits.append("Colours: " + ", ".join(names[:6]))
+    if sizes:
+        bits.append("Sizes: " + ", ".join(sizes[:8]))
+    return " · ".join(bits)
+
+
+def _product_display_name(p):
+    """English and French name together when they genuinely differ, so a
+    shared link's headline reads in both languages - never a duplicated
+    line when the catalogue has no separate French name."""
+    name = str(p.get("name") or "").strip()
+    name_fr = str(p.get("nameFr") or "").strip()
+    if name_fr and name_fr.lower() != name.lower():
+        return f"{name} / {name_fr}"
+    return name
+
+
+def inject_product_meta(html_text, product):
+    """Swap the generic Product·Jaura Store head tags for this specific
+    product's own name, price and photo.
+
+    Owner request 2026-09-28: WhatsApp (and every other link-preview
+    crawler) never runs the page's JavaScript, so the client-side meta
+    tag updates in js/store.js were invisible to them - every shared
+    product link showed the generic store cover photo. This is the
+    server-rendered fix: the exact tags a crawler reads are rewritten
+    before the response ever leaves the server, for the one request that
+    matters (?id=<product>), while every other visit to product.html
+    (no id, or an id no longer in the catalogue) keeps the generic tags
+    unchanged.
+    """
+    pid = str(product.get("id") or "").strip()
+    name = _product_display_name(p=product) or "Product"
+    image = _abs_asset_url(product.get("image"))
+    price = _product_price_line(product)
+    options = _product_options_line(product)
+    origin = (Config.SITE_ORIGIN or "").rstrip("/")
+    url = f"{origin}/product.html?id={quote(pid, safe='')}"
+    desc_bits = [b for b in (price, options) if b]
+    description = (" · ".join(desc_bits) or "Shop this piece at Jaura Store in Naira or F CFA.")
+    description = f"{description} — jaurastore.com.ng"
+    title = f"{name} · Jaura Store"
+
+    def esc(s):
+        return html.escape(str(s), quote=True)
+
+    out = html_text
+    out = re.sub(r"<title>.*?</title>", f"<title>{esc(title)}</title>", out, count=1, flags=re.S)
+    out = re.sub(r'(<meta name="description" content=")[^"]*(" />)',
+                 rf"\g<1>{esc(description)}\g<2>", out, count=1)
+    out = re.sub(r'(<link rel="canonical" href=")[^"]*(" />)',
+                 rf"\g<1>{esc(url)}\g<2>", out, count=1)
+    out = re.sub(r'(<meta property="og:title" content=")[^"]*(" />)',
+                 rf"\g<1>{esc(title)}\g<2>", out, count=1)
+    out = re.sub(r'(<meta property="og:description" content=")[^"]*(" />)',
+                 rf"\g<1>{esc(description)}\g<2>", out, count=1)
+    out = re.sub(r'(<meta property="og:url" content=")[^"]*(" />)',
+                 rf"\g<1>{esc(url)}\g<2>", out, count=1)
+    out = re.sub(r'(<meta property="og:image" content=")[^"]*(" />)',
+                 rf"\g<1>{esc(image)}\g<2>", out, count=1)
+    out = re.sub(r'(<meta name="twitter:title" content=")[^"]*(" />)',
+                 rf"\g<1>{esc(title)}\g<2>", out, count=1)
+    out = re.sub(r'(<meta name="twitter:description" content=")[^"]*(" />)',
+                 rf"\g<1>{esc(description)}\g<2>", out, count=1)
+    out = re.sub(r'(<meta name="twitter:image" content=")[^"]*(" />)',
+                 rf"\g<1>{esc(image)}\g<2>", out, count=1)
+    return out
+
+
 def create_app():
     app = Flask(__name__, static_folder=None)
+
     app.config.from_mapping(
         SECRET_KEY=Config.SECRET_KEY,
         ENV=Config.ENV,
@@ -515,6 +658,39 @@ def create_app():
     @app.route("/")
     def index():
         return static_for("index.html")
+
+    @app.route("/product.html")
+    def product_page():
+        """Same static page for everyone, except the exact product's own
+        Open Graph / Twitter tags are stamped in when ?id= names one that
+        still exists - see inject_product_meta().
+
+        static_for() is still called first (and its response returned
+        unchanged) for every other case - no id, an id that no longer
+        exists, or the file itself missing - so nothing about normal
+        serving, caching or the servable() allowlist changes. Only a
+        genuine product hit re-reads the file directly: send_file()
+        responses stream with direct_passthrough=True and cannot be
+        decoded with get_data().
+        """
+        resp = static_for("product.html")
+        pid = (request.args.get("id") or "").strip()
+        if resp is None or resp.status_code != 200 or not pid:
+            return resp
+        try:
+            products = catalog_mod.merged()
+        except Exception:
+            products = []
+        product = next((p for p in products if str((p or {}).get("id") or "") == pid), None)
+        if not product:
+            return resp
+        try:
+            with open(os.path.join(ROOT, "product.html"), "r", encoding="utf-8") as f:
+                body = inject_product_meta(f.read(), product)
+        except Exception:
+            return resp
+        out = Response(body, mimetype="text/html; charset=utf-8")
+        return out
 
     @app.route(LEGACY_PREFIX)
     @app.route(LEGACY_PREFIX + "/")

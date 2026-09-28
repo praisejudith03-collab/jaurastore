@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=157" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=161" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -814,6 +814,19 @@ function productForm(p = {}) {
     </div>
     <p class="admin-note">Optional. When a customer orders <strong>more</strong> than the unit count above of this one product, the discount % is taken off its unit price automatically at checkout — for example 10 and 15 means every unit above 10 is priced 15% off. Leave either box empty for no per-product bulk discount (shop-wide tiers, if any, still apply).</p>
     <div class="field"><label>SKU</label><input name="sku" value="${JA.escape(p.sku || "")}" /></div>
+    <h3>Supplier stock sync <small>optional</small></h3>
+    <div class="au-2">
+      <div class="field"><label>Supplier</label>
+        <select name="supplierId">
+          <option value="" ${p.supplierId ? "" : "selected"}>Not supplier-synced</option>
+          <option value="splendall" ${p.supplierId === "splendall" ? "selected" : ""}>Splendall</option>
+        </select>
+      </div>
+      <div class="field"><label>Supplier product (slug or link)</label>
+        <input name="supplierSku" value="${JA.escape(p.supplierSku || "")}" placeholder="e.g. https://www.splendall.com/product/rita-bag/" />
+      </div>
+    </div>
+    <p class="admin-note">The nightly sync now finds and links most Splendall products on its own — you do not need to fill this in by hand. Leave "Not supplier-synced" for everything you stock yourself (Ankara pieces and anything else); that is the default, and the automated tool never reads or changes a product left this way. This box is here so you can confirm a match it flagged for review, fix one it got wrong, or link one manually before its first automatic pass — once set, the nightly run keeps this product's quantity matching Splendall's exactly.</p>
     <div class="field"><label>Featured</label>
       <select name="featured"><option value="no">No</option><option value="yes" ${p.featured ? "selected" : ""}>Yes</option></select>
     </div>
@@ -931,6 +944,11 @@ async function handleProductSubmit(e, existing) {
       optionPrices,
       nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
       descriptionFr: String(fd.get("descriptionFr") || "").trim() || existing?.descriptionFr || "",
+      // Supplier stock sync mapping. Blank ("Not supplier-synced") is the
+      // default and keeps this product entirely out of reach of
+      // tools/supplier_stock_sync.py - see catalog.normalize().
+      supplierId: String(fd.get("supplierId") || "").trim(),
+      supplierSku: String(fd.get("supplierSku") || "").trim(),
   });
   if (window.__editReviews && JA.setReviews) JA.setReviews(id, window.__editReviews);
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = existing ? "Save" : "Add a Product"; }
@@ -1401,7 +1419,7 @@ function orderCardHTML(o) {
 }
 let orderFilter = "all";
 function ordersPanel() {
-  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}</div><div class="adx-filter-bar" aria-label="Filter orders"><input id="order-search" type="search" placeholder="Search order, customer, email…" autocomplete="off" value="${esc(orderSearch)}" /><label>From <input id="order-from" type="date" value="${esc(orderFrom)}" /></label><label>To <input id="order-to" type="date" value="${esc(orderTo)}" /></label><button type="button" class="btn btn-line" id="order-filter-clear">Clear</button><label class="adx-select-all"><input type="checkbox" id="orders-select-visible" /> Select visible</label><a class="au-link-btn" id="orders-csv" href="api/admin/orders.csv" download>Download CSV</a></div><div class="adx-bulkbar" id="orders-bulk" hidden><strong><span id="orders-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-order-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-order-bulk="confirm">Confirm selected</button><button type="button" class="btn btn-line btn-danger" data-order-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-order-bulk="clear">Clear selection</button></div><p class="admin-note">Search and dates apply before the list is paginated. Tap an order to see everything — customer details, items, the payment receipt and the action buttons.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><p class="admin-note" id="mail-status" role="status" aria-live="polite" style="margin-bottom:10px">Checking receipt emails…</p><button type="button" class="btn btn-line" id="mail-test" hidden>Email a test</button><div id="proofs-box"><p class="empty">Loading receipts…</p></div><div id="proofs-pager"></div><h3 class="admin-h">Background job failures</h3><p class="admin-note">Scheduler ticks and notification sends that failed, newest first — each one carries the error, the stack trace, the memory the worker was using and the record it was working on. Ten per page.</p><div id="crash-health"></div><div id="crash-box"><p class="empty">Loading crash reports…</p></div><div id="crash-pager"></div>`;
+  return `<div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}</div><div class="adx-filter-bar" aria-label="Filter orders"><input id="order-search" type="search" placeholder="Search order, customer, email…" autocomplete="off" value="${esc(orderSearch)}" /><label>From <input id="order-from" type="date" value="${esc(orderFrom)}" /></label><label>To <input id="order-to" type="date" value="${esc(orderTo)}" /></label><button type="button" class="btn btn-line" id="order-filter-clear">Clear</button><label class="adx-select-all"><input type="checkbox" id="orders-select-visible" /> Select visible</label><a class="au-link-btn" id="orders-csv" href="api/admin/orders.csv" download>Download CSV</a></div><div class="adx-bulkbar" id="orders-bulk" hidden><strong><span id="orders-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-order-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-order-bulk="confirm">Confirm selected</button><button type="button" class="btn btn-line btn-danger" data-order-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-order-bulk="clear">Clear selection</button></div><p class="admin-note">Search and dates apply before the list is paginated. Tap an order to see everything — customer details, items, the payment receipt and the action buttons.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><p class="admin-note" id="mail-status" role="status" aria-live="polite" style="margin-bottom:10px">Checking receipt emails…</p><button type="button" class="btn btn-line" id="mail-test" hidden>Email a test</button><div id="proofs-box"><p class="empty">Loading receipts…</p></div><div id="proofs-pager"></div><h3 class="admin-h">Background job failures</h3><p class="admin-note">Scheduler ticks and notification sends that failed, newest first — each one carries the error, the stack trace, the memory the worker was using and the record it was working on. Ten per page. Delete a report once you have resolved it, or clear the whole list.</p><div id="crash-health"></div><div class="adx-bulkbar" id="crash-toolbar" style="margin-bottom:10px"><button type="button" class="btn btn-line btn-danger" id="crash-clear-all">Clear all</button></div><div id="crash-box"><p class="empty">Loading crash reports…</p></div><div id="crash-pager"></div>`;
 }
 async function refreshMailStatus() {
   const note = $("#mail-status"); if (!note) return;
@@ -1574,6 +1592,7 @@ function crashCardHTML(f) {
       <p><strong>${esc(f.error_type || "Error")}</strong>: ${esc(f.message || "")}</p>
       <p class="admin-note">Worker ${esc(f.worker || "unknown")} · attempt ${esc(String(f.attempt || 1))} · host ${esc(f.host || "unknown")} · memory ${esc(String(f.rss_mb || 0))} MB${f.payload_id ? " · payload " + esc(f.payload_id) : ""}</p>
       ${f.traceback ? `<pre class="adx-trace">${esc(f.traceback)}</pre>` : `<p class="empty">No stack trace was captured for this failure.</p>`}
+      <button type="button" class="btn btn-line btn-danger" data-crash-delete="${esc(String(f.id || ""))}" style="margin-top:10px">Delete this report</button>
     </div>
   </details>`;
 }
@@ -1594,6 +1613,17 @@ function renderCrashPage() {
     return;
   }
   box.innerHTML = crashRows.map(crashCardHTML).join("");
+  box.querySelectorAll("[data-crash-delete]").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.preventDefault();
+      const id = btn.dataset.crashDelete;
+      if (!id || !confirm("Delete this crash report? This only removes it from the list.")) return;
+      try {
+        await api("api/admin/job-failures/" + encodeURIComponent(id), { method: "DELETE" });
+        fillCrashReports();
+      } catch (err) { JA.toast(err.message || "Could not delete that report."); }
+    };
+  });
   if (pager) {
     pager.innerHTML = pagerHTML("crash", crashPage, crashPages, crashTotal, "crash report");
     bindPager(pager, "crash", (n) => { crashPage = clampPage(n, crashPages); fillCrashReports(); });
@@ -1615,6 +1645,17 @@ async function fillCrashReports() {
   crashHealth = data.background || null;
   if (crashPage > crashPages) { crashPage = crashPages; return fillCrashReports(); }
   renderCrashPage();
+}
+
+async function clearAllCrashReports() {
+  if (!crashTotal) { JA.toast("There is nothing to clear."); return; }
+  if (!confirm(`Clear all ${crashTotal} crash report(s)? This only wipes this list - it does not change anything the workers already did.`)) return;
+  try {
+    await api("api/admin/job-failures", { method: "DELETE" });
+    crashPage = 1;
+    fillCrashReports();
+    JA.toast("Crash reports cleared.");
+  } catch (err) { JA.toast(err.message || "Could not clear the crash reports."); }
 }
 
 function renderOrderPage() {
@@ -1939,7 +1980,289 @@ function marketingPanel() {
     </form>
     <h4 class="mk-campaign-log-title">Past campaigns</h4><div class="adx-filter-bar mk-campaign-filters" aria-label="Filter campaigns"><input id="marketing-search" type="search" placeholder="Search campaigns…" autocomplete="off" value="${esc(marketingSearch)}" /><label>From <input id="marketing-from" type="date" value="${esc(marketingFrom)}" /></label><label>To <input id="marketing-to" type="date" value="${esc(marketingTo)}" /></label><button type="button" class="btn btn-line" id="marketing-filter-clear">Clear</button></div><div id="mk-campaign-log"><p class="empty">Loading…</p></div>
   </div>
+  ${broadcastFeedCardHTML()}
   <div class="admin-card" id="mk-settings-card"><h3 class="admin-h">Referral settings</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-coupons-card"><h3 class="admin-h">Coupons</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-referrals-card"><h3 class="admin-h">Referral codes</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-backup-card"><h3 class="admin-h">Backups</h3><p class="admin-note">Product data is backed up to GitHub automatically every night at midnight. Customer orders stay on the server. You can also run a backup right now.</p><button type="button" class="btn" id="mk-backup-now">Back up now</button><p class="admin-note" id="mk-backup-out" hidden></p></div>`;
+}
+
+// =====================================================================
+// Channel Broadcast Feed — owner request 2026-09-28.
+//
+// Rotates today's active, in-stock catalog across every category so the
+// same items are not suggested every day, lets the owner batch-select a
+// handful for a morning post and a handful for an evening post, and turns
+// each pick into a ready WhatsApp message (name, price, store link) with
+// one tap — nothing to type or copy.
+//
+// The rotation is entirely deterministic (day-of-year + slot), so it
+// needs no server storage: reloading the page on the same day shows the
+// same picks, and the picks change again tomorrow on their own.
+// =====================================================================
+let bcSlot = "morning";
+let bcShuffle = 0;
+const bcSelected = { morning: new Set(), evening: new Set() };
+// Owner request 2026-09-28: "automatically queue... twice a day" - the
+// first 4 rotated picks for a batch are pre-selected the first time it is
+// shown (or right after a reshuffle), so there is already a ready queue
+// the moment the tab opens; the owner only has to adjust it, not build it
+// from nothing.
+const BC_AUTO_QUEUE_SIZE = 4;
+const bcAutoQueued = { morning: false, evening: false };
+
+
+function broadcastEligibleProducts() {
+  const all = JA.products ? JA.products() : [];
+  return all.filter((p) => p && p.id && p.online !== false && Number(p.stock) > 0);
+}
+
+function broadcastDaySeed() {
+  // Days since the epoch, local time - changes once every calendar day.
+  return Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 86400000);
+}
+
+function broadcastFeedFor(slot) {
+  const eligible = broadcastEligibleProducts();
+  const byCat = new Map();
+  eligible.forEach((p) => {
+    const cat = String(p.category || "uncategorised");
+    if (!byCat.has(cat)) byCat.set(cat, []);
+    byCat.get(cat).push(p);
+  });
+  // Stable per-category order so "day N, slot X" always resolves to the
+  // same pick until the seed itself changes.
+  byCat.forEach((list) => list.sort((a, b) => String(a.id).localeCompare(String(b.id))));
+  const cats = [...byCat.keys()].sort();
+  const seed = broadcastDaySeed() * 2 + (slot === "evening" ? 1 : 0) + bcShuffle;
+  const picks = cats.map((cat, i) => {
+    const list = byCat.get(cat);
+    if (!list.length) return null;
+    return list[(seed + i) % list.length];
+  }).filter(Boolean);
+  if (!picks.length) return picks;
+  // Rotate which category leads the grid too, so the same categories are
+  // not always pinned at the top.
+  const start = ((seed % picks.length) + picks.length) % picks.length;
+  return picks.slice(start).concat(picks.slice(0, start));
+}
+
+function broadcastProductUrl(p) {
+  return `${location.origin}/product.html?id=${encodeURIComponent(p.id)}`;
+}
+function broadcastPriceLine(p) {
+  // Active selling price only, in both currencies - never priceCompare /
+  // compareNgn, the struck-through "was" price shown elsewhere in admin.
+  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
+  return `${JA.money(p.priceNgn || 0, "NGN")} · ${JA.money(toCfa(p.priceNgn), "CFA")}`;
+}
+function broadcastDisplayName(p) {
+  // Owner request 2026-09-28: the post's headline must read in English AND
+  // French, not whichever language the admin dashboard happens to be in.
+  const en = String(p.name || "").trim();
+  const fr = String(p.nameFr || "").trim();
+  if (fr && fr.toLowerCase() !== en.toLowerCase()) return `${en} / ${fr}`;
+  return en || (JA.displayName ? JA.displayName(p) : "Product");
+}
+function broadcastOptionsLine(p) {
+  // A short, readable list of what is in stock - colour/scent NAMES and
+  // sizes only, never a raw hex swatch a customer cannot read.
+  const seen = new Set();
+  const names = [];
+  (p.colors || []).forEach((c) => {
+    const v = String(c || "").trim();
+    if (v && !v.startsWith("#") && !seen.has(v.toLowerCase())) { seen.add(v.toLowerCase()); names.push(v); }
+  });
+  const sizes = [];
+  const seenSizes = new Set();
+  (p.options || []).forEach((o) => {
+    const title = String((o && o.title) || "").toLowerCase();
+    if (/colou?r|scent/.test(title)) {
+      (o.values || []).forEach((v) => {
+        v = String(v || "").trim();
+        if (v && !v.startsWith("#") && !seen.has(v.toLowerCase())) { seen.add(v.toLowerCase()); names.push(v); }
+      });
+    } else if (/size|length/.test(title) && !/colou?r/.test(title)) {
+      (o.values || []).forEach((v) => {
+        v = String(v || "").trim();
+        if (v && !seenSizes.has(v.toLowerCase())) { seenSizes.add(v.toLowerCase()); sizes.push(v); }
+      });
+    }
+  });
+  const bits = [];
+  if (names.length) bits.push(`Colours: ${names.slice(0, 6).join(", ")}`);
+  if (sizes.length) bits.push(`Sizes: ${sizes.slice(0, 8).join(", ")}`);
+  return bits.join(" · ");
+}
+function broadcastMessageFor(p) {
+  const optionsLine = broadcastOptionsLine(p);
+  return `🛍️ *${broadcastDisplayName(p)}*\n💰 ${broadcastPriceLine(p)}${optionsLine ? `\n🎨 ${optionsLine}` : ""}`;
+}
+function broadcastFullText(p) {
+  // Owner request 2026-09-28: the caption's link line must be the CLEAN
+  // product url on its own - never wrapped in "Shop now:" or other extra
+  // words - so WhatsApp always auto-links it and a tap goes straight to
+  // this one item's page.
+  return `${broadcastMessageFor(p)}\n\n${broadcastProductUrl(p)}`;
+}
+function broadcastShareUrl(text) {
+  return `https://wa.me/?text=${encodeURIComponent(text)}`;
+}
+
+async function broadcastImageFile(p) {
+  // The exact product photo, fetched as a real file so it can ride along
+  // with navigator.share() as a native image attachment - not just a link
+  // WhatsApp may or may not preview.
+  const src = JA.asset(p.image || "images/products/_placeholder.jpg");
+  const res = await fetch(src);
+  if (!res || !res.ok) throw new Error("Could not fetch the product photo.");
+  const blob = await res.blob();
+  const ext = ((blob.type || "").split("/")[1] || "jpg").replace("jpeg", "jpg");
+  return new File([blob], `${p.sku || p.id || "product"}.${ext}`, { type: blob.type || "image/jpeg" });
+}
+
+function broadcastCanShareFiles(files) {
+  return !!(navigator.share && navigator.canShare && navigator.canShare({ files }));
+}
+
+async function broadcastShareNative(p) {
+  const text = broadcastFullText(p);
+  try {
+    const file = await broadcastImageFile(p);
+    if (broadcastCanShareFiles([file])) {
+      await navigator.share({ files: [file], text });
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === "AbortError") return; // the owner closed the share sheet - not an error
+  }
+  // Web Share (with files) is not available here, or the photo could not
+  // be fetched - fall back to WhatsApp's own share sheet with the same
+  // text. The exact photo still shows up there because product.html?id=
+  // now carries its own Open Graph image (see app.inject_product_meta).
+  window.open(broadcastShareUrl(text), "_blank", "noopener");
+}
+
+async function broadcastShareBatchNative(chosen, heading) {
+  const text = `${heading}\n\n${chosen.map((p) => `${broadcastMessageFor(p)}\n${broadcastProductUrl(p)}`).join("\n\n")}`;
+  try {
+    const files = await Promise.all(chosen.map(broadcastImageFile));
+    if (broadcastCanShareFiles(files)) {
+      await navigator.share({ files, text });
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === "AbortError") return;
+  }
+  window.open(broadcastShareUrl(text), "_blank", "noopener");
+}
+
+
+
+function broadcastFeedCardHTML() {
+  return `<div class="admin-card" id="mk-broadcast-card">
+    <h3 class="admin-h">Channel Broadcast Feed</h3>
+    <p class="admin-note">Today's rotation across every category — the same items are not suggested again tomorrow, and a batch of ${BC_AUTO_QUEUE_SIZE} is already queued for you the moment you open a tab. Adjust the picks for the morning post and the evening post, then share the exact photo straight to your WhatsApp Channel with one tap — nothing to copy or type.</p>
+    <div class="adx-filter-bar">
+      <div class="mk-bc-tabs" role="tablist" aria-label="Broadcast batch">
+        <button type="button" class="an-rng is-on" data-bc-slot="morning">☀️ Morning batch</button>
+        <button type="button" class="an-rng" data-bc-slot="evening">🌙 Evening batch</button>
+      </div>
+      <button type="button" class="au-link-btn" id="mk-bc-reshuffle">Reshuffle today's picks</button>
+    </div>
+    <div class="adx-bulkbar" id="mk-bc-bulk" hidden>
+      <strong><span id="mk-bc-count">0</span> selected</strong>
+      <button type="button" class="btn" id="mk-bc-share-batch">Share batch to WhatsApp Channel</button>
+      <button type="button" class="au-link-btn" id="mk-bc-clear">Clear selection</button>
+    </div>
+    <div id="mk-bc-grid" class="mk-bc-grid"><p class="empty">Loading today's rotation…</p></div>
+  </div>`;
+}
+
+function broadcastCardHTML(p) {
+  const checked = bcSelected[bcSlot].has(String(p.id)) ? "checked" : "";
+  return `<article class="mk-bc-card" data-bc-pid="${esc(String(p.id))}">
+    <label class="mk-bc-pick"><input type="checkbox" data-bc-select="${esc(String(p.id))}" ${checked} /> Select</label>
+    <img src="${esc(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="" onerror="fallbackImg(event)" />
+    <div class="mk-bc-body">
+      <b>${esc(broadcastDisplayName(p))}</b>
+      <small>${esc(JA.categoryName ? JA.categoryName(p.category) : (p.category || ""))} · ${esc(p.sku || p.id || "")}</small>
+      <span class="mk-bc-price">${broadcastPriceLine(p)}</span>
+      ${broadcastOptionsLine(p) ? `<small class="mk-bc-options">${esc(broadcastOptionsLine(p))}</small>` : ""}
+    </div>
+    <div class="mk-bc-actions">
+      <a class="btn btn-line" href="${esc(broadcastProductUrl(p))}" target="_blank" rel="noopener">View</a>
+      <button type="button" class="btn" data-bc-share="${esc(String(p.id))}">Share to WhatsApp</button>
+    </div>
+  </article>`;
+}
+
+function updateBroadcastBulkUI() {
+  const bar = $("#mk-bc-bulk");
+  if (!bar) return;
+  const count = bcSelected[bcSlot].size;
+  bar.hidden = !count;
+  const label = $("#mk-bc-count");
+  if (label) label.textContent = count;
+}
+
+function paintBroadcastFeed() {
+  const grid = $("#mk-bc-grid");
+  if (!grid) return;
+  const feed = broadcastFeedFor(bcSlot);
+  // Automatically queue the first BC_AUTO_QUEUE_SIZE picks the first time
+  // this batch is shown (or right after a reshuffle) - a ready-made queue
+  // is already sitting there, not a blank list to build from scratch.
+  if (!bcAutoQueued[bcSlot] && bcSelected[bcSlot].size === 0 && feed.length) {
+    feed.slice(0, BC_AUTO_QUEUE_SIZE).forEach((p) => bcSelected[bcSlot].add(String(p.id)));
+  }
+  bcAutoQueued[bcSlot] = true;
+  grid.innerHTML = feed.length
+    ? feed.map(broadcastCardHTML).join("")
+    : `<p class="empty">No active, in-stock products are available to feature yet.</p>`;
+  const byId = new Map(feed.map((p) => [String(p.id), p]));
+  grid.querySelectorAll("[data-bc-select]").forEach((input) => {
+    input.onchange = () => {
+      const id = String(input.dataset.bcSelect);
+      if (input.checked) bcSelected[bcSlot].add(id); else bcSelected[bcSlot].delete(id);
+      updateBroadcastBulkUI();
+    };
+  });
+  grid.querySelectorAll("[data-bc-share]").forEach((btn) => {
+    btn.onclick = () => {
+      const p = byId.get(String(btn.dataset.bcShare));
+      if (p) broadcastShareNative(p);
+    };
+  });
+  updateBroadcastBulkUI();
+}
+
+function bindBroadcastFeed() {
+  const card = $("#mk-broadcast-card");
+  if (!card || card.dataset.bound === "1") return;
+  card.dataset.bound = "1";
+  paintBroadcastFeed();
+  card.querySelectorAll("[data-bc-slot]").forEach((btn) => {
+    btn.onclick = () => {
+      bcSlot = btn.dataset.bcSlot;
+      card.querySelectorAll("[data-bc-slot]").forEach((b) => b.classList.toggle("is-on", b === btn));
+      paintBroadcastFeed();
+    };
+  });
+  $("#mk-bc-reshuffle")?.addEventListener("click", () => {
+    bcShuffle += 1;
+    // A reshuffle is a fresh rotation - re-queue automatically from it too.
+    bcSelected[bcSlot].clear();
+    bcAutoQueued[bcSlot] = false;
+    paintBroadcastFeed();
+  });
+  $("#mk-bc-clear")?.addEventListener("click", () => { bcSelected[bcSlot].clear(); paintBroadcastFeed(); });
+  $("#mk-bc-share-batch")?.addEventListener("click", () => {
+    const eligible = broadcastEligibleProducts();
+    const chosen = eligible.filter((p) => bcSelected[bcSlot].has(String(p.id)));
+    if (!chosen.length) { JA.toast("Select at least one product first."); return; }
+    const heading = bcSlot === "morning"
+      ? "Good morning! Today's picks at Jaura Store 🛍️ / Bonjour ! Sélection du jour chez Jaura Store"
+      : "This evening at Jaura Store 🌙 / Ce soir chez Jaura Store";
+    broadcastShareBatchNative(chosen, heading);
+  });
 }
 async function fillMarketing() {
   const api = (path, opts) => window.JA_NET.api(path, opts);
@@ -2077,8 +2400,15 @@ async function fillMarketing() {
   try {
     const d = await api("api/admin/referrals"); const card = $("#mk-referrals-card");
     if (card) {
-      const rows = (d.referrals || []).map((r) => `<tr><td><strong>${esc(r.code)}</strong></td><td>${esc(r.name || "")}<br /><small>${esc(r.email)}</small></td><td>${num(r.uses)}</td><td>${r.reward_issued ? "Rewarded — " + esc(r.reward_coupon || "") : "Not yet"}</td><td><small>${esc(r.created_at || "")}</small></td></tr>`).join("");
-      card.innerHTML = `<h3 class="admin-h">Referral codes</h3><p class="admin-note">Codes are minted automatically for qualifying orders. When a code reaches the milestone, the referrer's reward coupon is issued and shown here.</p>${rows ? `<table class="mk-table"><thead><tr><th>Code</th><th>Customer</th><th>Uses</th><th>Reward</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">No referral codes yet.</p>`}`;
+      const rows = (d.referrals || []).map((r) => `<tr><td><strong>${esc(r.code)}</strong></td><td>${esc(r.name || "")}<br /><small>${esc(r.email)}</small></td><td>${num(r.uses)}</td><td>${r.reward_issued ? "Rewarded — " + esc(r.reward_coupon || "") : "Not yet"}</td><td><small>${esc(r.created_at || "")}</small></td><td><button type="button" class="btn btn-line btn-danger" data-mk-ref-del="${esc(r.code)}">Delete</button></td></tr>`).join("");
+      card.innerHTML = `<h3 class="admin-h">Referral codes</h3><p class="admin-note">Codes are minted automatically for qualifying orders. When a code reaches the milestone, the referrer's reward coupon is issued and shown here. Delete a code to retire it — any reward coupon it already earned keeps working.</p>${rows ? `<table class="mk-table"><thead><tr><th>Code</th><th>Customer</th><th>Uses</th><th>Reward</th><th>Created</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">No referral codes yet.</p>`}`;
+      card.querySelectorAll("[data-mk-ref-del]").forEach((b) => {
+        b.onclick = async () => {
+          if (!confirm("Delete referral code " + b.dataset.mkRefDel + "? It will no longer work for new orders.")) return;
+          try { await api("api/admin/referrals/" + encodeURIComponent(b.dataset.mkRefDel), { method: "DELETE" }); fillMarketing(); }
+          catch (err) { JA.toast(err.message || "Could not delete that referral code."); }
+        };
+      });
     }
   } catch (e) {}
   const bk = $("#mk-backup-now");
@@ -2255,7 +2585,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=157" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=161" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -2304,9 +2634,9 @@ function paintDesk(tab = "analytics") {
     };
   }
   if (tab === "analytics") { fillAnalytics(); startDashTimer(); }
-  if (tab === "orders") { proofPage = 1; crashPage = 1; fillOrders(); fillProofs(); fillCrashReports(); refreshMailStatus(); const mt = $("#mail-test"); if (mt) mt.onclick = sendTestEmail; }
+  if (tab === "orders") { proofPage = 1; crashPage = 1; fillOrders(); fillProofs(); fillCrashReports(); refreshMailStatus(); const mt = $("#mail-test"); if (mt) mt.onclick = sendTestEmail; const cc = $("#crash-clear-all"); if (cc) cc.onclick = clearAllCrashReports; }
   if (tab === "sales") fillSales();
-  if (tab === "marketing") fillMarketing();
+  if (tab === "marketing") { fillMarketing(); bindBroadcastFeed(); }
   if (tab === "account") bindAccount();
   if (tab === "settings") {
     bindHeroVideo(); bindHomepageFeatured(); bindBanner(); bindWelcome(); bindCustomerCare(); bindSocialLinks(); bindSiteBranding();
@@ -2601,7 +2931,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=157", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=161", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -2635,6 +2965,14 @@ function updateHomeFeaturedCount() {
   document.querySelectorAll('[data-home-featured-pid]:not(:checked)').forEach((el) => {
     el.disabled = count >= 12;
   });
+  document.querySelectorAll('[data-home-featured-admin-cat]').forEach((section) => {
+    const small = section.querySelector("summary small");
+    if (!small) return;
+    const boxes = section.querySelectorAll('[data-home-featured-pid]');
+    const picked = section.querySelectorAll('[data-home-featured-pid]:checked').length;
+    const total = boxes.length;
+    small.textContent = `${total} product${total === 1 ? "" : "s"}${picked ? ` · ${picked} selected` : ""}`;
+  });
 }
 function collectHomepageFeaturedSelections() {
   // The picker may be grouped for convenience, but persistence is one ordered
@@ -2652,18 +2990,24 @@ function paintHomepageFeaturedPicker() {
   const cats = JA.categories ? JA.categories() : [];
   const known = new Set(cats.map((c) => c.id));
   all.forEach((p) => { if (p.category && !known.has(p.category)) { cats.push({ id: p.category, name: JA.categoryName(p.category) }); known.add(p.category); } });
+  // Owner request 2026-09-28: this used to be one long scroll of every
+  // category's products. Each category is now its own accordion, collapsed
+  // by default so the picker fits on one screen - a category only opens
+  // automatically the first time it already has a saved pick, so existing
+  // selections stay visible without the admin having to hunt for them.
   const html = cats.map((c) => {
     const rows = all.filter((p) => String(p.category || "") === String(c.id));
     if (!rows.length) return "";
-    return `<section class="home-featured-admin-cat" data-home-featured-admin-cat="${JA.escape(c.id)}">
-      <h3 class="admin-h">${JA.escape(JA.categoryName(c.id))} <small>${rows.length} product${rows.length === 1 ? "" : "s"}</small></h3>
+    const pickedHere = rows.filter((p) => selected.has(String(p.id))).length;
+    return `<details class="home-featured-admin-cat" data-home-featured-admin-cat="${JA.escape(c.id)}" ${pickedHere ? "open" : ""}>
+      <summary class="admin-h">${JA.escape(JA.categoryName(c.id))} <small>${rows.length} product${rows.length === 1 ? "" : "s"}${pickedHere ? ` · ${pickedHere} selected` : ""}</small></summary>
       <div class="home-featured-admin-grid">${rows.map((p) => `
         <label class="home-featured-choice">
           <input type="checkbox" value="${JA.escape(p.id)}" data-home-featured-pid="${JA.escape(p.id)}" data-home-featured-cat="${JA.escape(c.id)}" ${selected.has(String(p.id)) ? "checked" : ""} />
           <img src="${JA.escape(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="" onerror="fallbackImg(event)" />
           <span><b>${JA.escape(JA.displayName ? JA.displayName(p) : p.name || "Product")}</b><small>${JA.escape(p.sku || p.id || "")}</small></span>
         </label>`).join("")}</div>
-    </section>`;
+    </details>`;
   }).join("");
   box.innerHTML = html || `<p class="empty">No products are available to feature yet.</p>`;
   updateHomeFeaturedCount();

@@ -12,25 +12,25 @@
   <meta property="og:title" content="Checkout · Jaura Store" />
   <meta property="og:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
   <meta property="og:url" content="https://jaurastore.com.ng/checkout.html" />
-  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=157" />
+  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=161" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Checkout · Jaura Store" />
   <meta name="twitter:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
-  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=157" />
+  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=161" />
   <!-- brand icons: Supabase public-assets bucket (tools/upload_brand_assets.py) -->
   <link rel="icon" type="image/png" sizes="32x32" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="48x48" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/favicon-48.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/apple-touch-180.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/icon-192.png" />
   <!-- same-origin fallback: still a legible mark if the bucket is unreachable -->
-  <link rel="icon" type="image/png" sizes="16x16" href="/images/brand/favicon-16.png?v=157" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/brand/favicon-16.png?v=161" />
   <!-- /brand icons -->
-  <link rel="stylesheet" href="css/fonts.css?v=157" />
+  <link rel="stylesheet" href="css/fonts.css?v=161" />
   <!-- product photos live in the shop's Supabase storage bucket:
        open that connection while the HTML is still parsing so the
        first photo starts the moment the grid renders -->
   <link rel="preconnect" href="https://rvkweyipqgsggcnimhxf.supabase.co" />
-  <link rel="stylesheet" href="css/style.css?v=157" />
+  <link rel="stylesheet" href="css/style.css?v=161" />
 </head>
 <body data-page="checkout">
   <div id="site-header"></div>
@@ -83,24 +83,31 @@
                  is unreachable - do not edit fares here, they will be ignored. -->
             <select name="zone" id="ck-zone" class="ck-zone-select" required data-delivery-zones>
               <option value="" selected data-i18n="ck.zonePlaceholder">Choose a delivery zone</option>
-              <option value="Lagos Mainland" data-i18n="ck.fare.mainland">Lagos Mainland (₦2,000 – ₦5,000)</option>
-              <option value="Lagos Island" data-i18n="ck.fare.island">Lagos Island (₦3,500 – ₦6,000)</option>
-              <option value="Other Nigeria" data-i18n="ck.fare.ngOther">Other states in Nigeria (confirm on WhatsApp)</option>
-              <option value="Cotonou" data-i18n="ck.fare.cotonou">Cotonou (1,000 – 3,000 CFA)</option>
-              <option value="Calavi" data-i18n="ck.fare.calavi">Calavi (1,500 – 3,500 CFA)</option>
-              <option value="Porto-Novo" data-i18n="ck.fare.porto">Porto-Novo (1,500 – 3,500 CFA)</option>
-              <option value="Other Benin" data-i18n="ck.fare.bjOther">Other places in Benin (confirm on WhatsApp)</option>
-              <option value="Lomé" data-i18n="ck.fare.lome">Lomé (2,500 – 3,500 CFA)</option>
-              <option value="Other Togo" data-i18n="ck.fare.tgOther">Other places in Togo (confirm on WhatsApp)</option>
-              <option value="Pickup in Cotonou is free for lighter products">Pickup in Cotonou is free for lighter products</option>
+              <option value="Lagos Mainland" data-currency="NGN" data-i18n="ck.fare.mainland">Lagos Mainland (₦2,000 – ₦5,000)</option>
+              <option value="Lagos Island" data-currency="NGN" data-i18n="ck.fare.island">Lagos Island (₦3,500 – ₦6,000)</option>
+              <option value="Other Nigeria" data-currency="NGN" data-i18n="ck.fare.ngOther">Other states in Nigeria (confirm on WhatsApp)</option>
+              <option value="Cotonou" data-currency="CFA" data-i18n="ck.fare.cotonou">Cotonou (1,000 – 3,000 CFA)</option>
+              <option value="Calavi" data-currency="CFA" data-i18n="ck.fare.calavi">Calavi (1,500 – 3,500 CFA)</option>
+              <option value="Porto-Novo" data-currency="CFA" data-i18n="ck.fare.porto">Porto-Novo (1,500 – 3,500 CFA)</option>
+              <option value="Other Benin" data-currency="CFA" data-i18n="ck.fare.bjOther">Other places in Benin (confirm on WhatsApp)</option>
+              <option value="Lomé" data-currency="CFA" data-i18n="ck.fare.lome">Lomé (2,500 – 3,500 CFA)</option>
+              <option value="Other Togo" data-currency="CFA" data-i18n="ck.fare.tgOther">Other places in Togo (confirm on WhatsApp)</option>
+              <option value="Pickup in Cotonou is free for lighter products" data-zone-kind="pickup">Pickup in Cotonou is free for lighter products</option>
             </select>
-            <p class="ck-bj-min" data-i18n="ck.bjMin">Benin deliveries: minimum order 5,000 F CFA (about 12,000 naira). Togo: same minimum. Pickup in Cotonou is free for lighter products.</p>
+            <p class="ck-bj-min">Benin deliveries: minimum order 5,000 F CFA (about 12,000 naira). Togo: same minimum. Pickup in Cotonou is free for lighter products.</p>
+            <!-- Filled in the instant a zone is chosen (see paintDeliveryZones /
+                 the change listener in js/app.js): the exact delivery window
+                 for that zone's region - Lagos, other Nigerian states, Benin
+                 Republic or Togo - owner request 2026-09-28. -->
+            <p class="ck-zone-eta" data-zone-eta hidden></p>
             <div class="ck-ship-note-dynamic" data-shipping-note hidden style="margin-top:10px;padding:10px 12px;background:#fdfaf7;border:1px dashed #c8ac7f;border-radius:8px;font-size:13px;line-height:1.5;"></div>
             <div data-ck-min-warn hidden style="margin-top:10px;padding:10px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;color:#664d03;font-size:13px;"></div>
           </div>
           <div class="field full ck-ship-notices">
-            <p data-i18n="ck.shipNigeria">Nigeria: 3–7 working days, according to location.</p>
-            <p data-i18n="ck.shipBenin">Benin 🇧🇯: goods come in batches to keep fare cheaper. Delivery is on the dates on the banner, unless you pay for express delivery.</p>
+            <p data-i18n="ck.shipLagos">Lagos (Mainland &amp; Island): within 24 to 72 hours.</p>
+            <p data-i18n="ck.shipNigeria">Other Nigerian states &amp; hubs (Ogun, Abuja, Rivers, Edo, Delta, Ekiti, Osun, Oyo, Kwara, Abia, Anambra and more): within 3 to 7 business days.</p>
+            <p data-i18n="ck.shipBenin">Benin Republic 🇧🇯 (Cotonou, Abomey-Calavi, Porto-Novo): within 4 to 12 business days.</p>
+            <p data-i18n="ck.shipTogo">Togo 🇹🇬 (Lomé): within 4 to 12 business days.</p>
           </div>
           <div class="field"><label for="ck-phone" data-i18n="ck.phone">Phone *</label><input id="ck-phone" name="phone" required autocomplete="tel" inputmode="tel" /></div>
           <div class="field"><label for="ck-email" data-i18n="ck.email">Email address *</label><input id="ck-email" name="email" type="email" required autocomplete="email" inputmode="email" /><small class="ck-field-hint" data-i18n="ck.guestEmailHint">Required for guest checkout confirmations and reminders. We won’t create an account.</small></div>
@@ -185,7 +192,7 @@
           </div>
           <div class="bank-sheet" data-bank-cfa hidden>
             <h4 data-i18n="ck.ourBank">Our bank details</h4>
-            <p class="ck-pay-country-note" data-i18n="ck.payCountryNote">Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below. Minimum order is 5,000 CFA (₦12,000).</p>
+            <p class="ck-pay-country-note">Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below. Minimum order is 5,000 CFA (₦12,000).</p>
             <p class="bank-name-line" data-cfa-name></p>
             <div class="bank-row" data-cfa-row hidden><span data-cfa-provider></span><strong data-cfa-acc></strong></div>
             <div class="bank-row" data-togo-row hidden><span data-togo-provider></span><strong data-togo-acc></strong></div>
@@ -215,11 +222,11 @@
   </div>
 
   <div id="site-footer"></div>
-  <script src="js/products-data.js?v=157"></script>
-  <script src="js/i18n-phrases.js?v=157"></script>
-  <script src="js/i18n.js?v=157"></script>
-  <script src="js/net.js?v=157"></script>
-  <script src="js/store.js?v=157"></script>
-  <script src="js/app.js?v=157"></script>
+  <script src="js/products-data.js?v=161"></script>
+  <script src="js/i18n-phrases.js?v=161"></script>
+  <script src="js/i18n.js?v=161"></script>
+  <script src="js/net.js?v=161"></script>
+  <script src="js/store.js?v=161"></script>
+  <script src="js/app.js?v=161"></script>
 </body>
 </html>
