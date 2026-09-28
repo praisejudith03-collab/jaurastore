@@ -41,6 +41,13 @@ DEFAULT_SETTINGS = {
     # variables WHATSAPP_NUMBER_NG / WHATSAPP_NUMBER_BJ supply the default
     # when the row carries nothing (see api._site_payload).
     "whatsapp_number_ng": "", "whatsapp_number_bj": "",
+    # Social media addresses the owner edits in Admin -> Settings ->
+    # "Social media links". Blank means the storefront keeps its built-in
+    # default for that platform; the logo shown next to each link is
+    # detected from the address itself (js/store.js socialNetwork), so
+    # Facebook, Instagram, TikTok and WhatsApp all render automatically.
+    "social_whatsapp_url": "", "social_instagram_url": "",
+    "social_tiktok_url": "", "social_facebook_url": "",
     "welcome_enabled": "", "welcome_title": "", "welcome_title_fr": "",
     "welcome_body": "", "welcome_body_fr": "", "welcome_image_url": "",
     "welcome_cta_label": "", "welcome_cta_label_fr": "",

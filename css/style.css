@@ -6836,8 +6836,18 @@ body.au-shop .shop-banner img,
    resize or reflow the pill. */
 .cur-float {
   position: fixed;
-  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
-  right: 20px;
+  /* STACKING CONTRACT (owner request 2026-09-28 — "the pill must sit clearly
+     above the WhatsApp button and never collide with it, permanently").
+     Every page that shows the bottom dock parks the bubble at bottom:84px
+     with a 58px body, so its glow ring (scale 1.85 → +24.7px) reaches 167px.
+     170px puts the pill clear of the whole animation envelope, at every
+     refresh, on every page. The two other contexts (dock-less homepage, and
+     phones ≤640px) restate the same arithmetic further down; all three are
+     !important so no later stylesheet rule can quietly undo the separation,
+     and tests/test_header_layout_lock.py recomputes the cascade and fails the
+     build if any of them ever drifts back into the bubble. */
+  bottom: calc(170px + env(safe-area-inset-bottom, 0px)) !important;
+  right: 20px !important;
   left: auto;
   z-index: 9999;
   display: flex;
@@ -6935,12 +6945,12 @@ body[data-page="home"] .wa-float {
    `bottom`, so every other property (colour, z-index, animation, the
    <=640px phone spacing) stays exactly what the shared rules already set. */
 body[data-page="home"] .wa-float { bottom: calc(20px + env(safe-area-inset-bottom, 0px)) !important; }
-/* Never crowd the bubble: at rest its top edge is ~76px up (bottom:20px +
-   56px), the wa-bounce animation lifts it 7px more, and the wa-glow ring
-   spreads another 16px beyond that. A 92px floor keeps the currency pill a
-   clear ~16px above the bubble at every point of every animation, so the
-   two floating controls can never touch, overlap or hide one another. */
-body[data-page="home"] .cur-float { bottom: calc(92px + env(safe-area-inset-bottom, 0px)) !important; }
+/* Never crowd the bubble. On the dock-less homepage the bubble rests at
+   bottom:20px with a 58px body, so its top edge is 78px up and the glow ring
+   (scale 1.85) reaches 102.7px. A 106px floor keeps the currency pill clear
+   of the whole animation envelope, so the two floating controls can never
+   touch, overlap or hide one another. */
+body[data-page="home"] .cur-float { bottom: calc(106px + env(safe-area-inset-bottom, 0px)) !important; }
 
 @media (max-width: 640px) {
   .wa-float,
@@ -6948,13 +6958,19 @@ body[data-page="home"] .cur-float { bottom: calc(92px + env(safe-area-inset-bott
     bottom: calc(86px + env(safe-area-inset-bottom, 0px)) !important;
     right: 20px !important;
   }
-  /* 86px + 56px bubble = a 142px top edge (plus the 7px bounce + 16px
-     glow). The pill used to sit at 144px - 2px above the bubble's rest
-     top - and the bounce/glow visibly collided with it on the homepage.
-     162px keeps the pill cleanly above the whole animation envelope. */
-  .cur-float {
-    bottom: calc(162px + env(safe-area-inset-bottom, 0px));
-    right: 20px;
+  /* Phones: the bubble shrinks to 50px and rests at bottom:86px, so its top
+     edge is 136px up and the glow ring reaches 157.3px. 162px clears it.
+     THE HOMEPAGE SELECTOR IS LISTED HERE ON PURPOSE: without it the
+     dock-less `body[data-page="home"] .cur-float` rule above (higher
+     specificity, not width-scoped) won the cascade on phones and dropped
+     the pill to 106px - straight on top of a bubble that occupies 86-136px.
+     That is exactly the overlap the owner reported on the mobile homepage;
+     restating the phone offset for both contexts is what makes the fix
+     permanent, and the geometry test recomputes it on every push. */
+  .cur-float,
+  body[data-page="home"] .cur-float {
+    bottom: calc(162px + env(safe-area-inset-bottom, 0px)) !important;
+    right: 20px !important;
   }
 }
 
@@ -7067,3 +7083,72 @@ body[data-page="home"] .home-hero-static h1 {
   border-color: var(--oos-deep) !important;
   color: #ffffff !important;
 }
+
+/* =================================================================
+   FOOTER SOCIAL ROW — owner request 2026-09-28
+   WhatsApp / Instagram / TikTok / Facebook, each painted from the
+   admin-editable link with its logo auto-detected from the address
+   (js/store.js socialLinks + socialIcon). Icons keep their own brand
+   colour so a shopper recognises the platform at a glance, and the
+   row wraps instead of stretching the footer column.
+   ================================================================= */
+.foot-social {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 12px;
+}
+.au-footer .foot-social a.social-btn,
+.social-btn {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px !important;
+  border-radius: 999px;
+  font-size: 12px !important;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  color: #ffffff !important;
+  background: #6F5A44;              /* nude/brown house fallback */
+  width: fit-content;
+  transition: transform .16s ease, box-shadow .16s ease, filter .16s ease;
+}
+.social-btn svg { width: 16px; height: 16px; flex: none; }
+.social-btn span { display: inline-block; }
+.social-btn:hover { transform: translateY(-1px); filter: brightness(1.06); box-shadow: 0 6px 16px rgba(51, 35, 26, 0.18); }
+.social-btn:active { transform: translateY(0) scale(.98); }
+.social-btn--whatsapp { background: #25D366; }
+.social-btn--instagram { background: linear-gradient(45deg, #F9CE34 0%, #EE2A7B 50%, #6228D7 100%); }
+.social-btn--tiktok { background: #111111; }
+.social-btn--facebook { background: #1877F2; }
+@media (max-width: 480px) {
+  .social-btn { padding: 8px 12px !important; font-size: 11px !important; }
+  .social-btn svg { width: 15px; height: 15px; }
+}
+
+/* ---- Admin portal: the social-link editor (Settings -> Social media
+   links). The live logo preview sits in front of each input and is
+   swapped as the owner types, proving the link was recognised. */
+.social-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.social-input input { flex: 1 1 auto; min-width: 0; }
+.social-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 50%;
+  background: #F3E7D7;
+  color: #6F5A44;
+}
+.social-ico svg { width: 18px; height: 18px; }
+.social-ico[data-social="whatsapp"] { background: #25D366; color: #ffffff; }
+.social-ico[data-social="instagram"] { background: linear-gradient(45deg, #F9CE34 0%, #EE2A7B 50%, #6228D7 100%); color: #ffffff; }
+.social-ico[data-social="tiktok"] { background: #111111; color: #ffffff; }
+.social-ico[data-social="facebook"] { background: #1877F2; color: #ffffff; }

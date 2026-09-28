@@ -2793,10 +2793,22 @@ SITE_KEYS = ("bank_name", "account_number", "account_name",
              # are routed to whatsapp_number_ng; Benin / Togo customers to
              # whatsapp_number_bj. Admin-editable; env vars are the floor.
              "whatsapp_number_ng", "whatsapp_number_bj",
+             # Owner-editable social media addresses (Admin -> Settings ->
+             # "Social media links"). Stored as plain URLs and sanitised by
+             # sec.safe_url like every other link column; the storefront
+             # picks the matching logo (WhatsApp / Instagram / TikTok /
+             # Facebook) from the address itself.
+             "social_whatsapp_url", "social_instagram_url",
+             "social_tiktok_url", "social_facebook_url",
              # Canonical shipping-note column. It was only reachable through
              # the legacy `shippingNote` alias, so an admin form posting the
              # real column name had it silently dropped.
              "shipping_note")
+# The four owner-editable social addresses. Always present on GET /api/site
+# (as "" when unset) so the storefront and the Admin form can rely on the
+# shape of the answer whatever age the live site_settings row is.
+SOCIAL_LINK_KEYS = ("social_whatsapp_url", "social_instagram_url",
+                    "social_tiktok_url", "social_facebook_url")
 WELCOME_POPUP_KEYS = ("welcome_enabled", "welcome_title", "welcome_title_fr",
                       "welcome_body", "welcome_body_fr", "welcome_image_url",
                       "welcome_cta_label", "welcome_cta_label_fr",
@@ -3010,7 +3022,7 @@ def admin_delivery_page_save():
 def _site_payload(site):
     """Canonical site_settings row + the legacy front-end aliases."""
     out = dict(site or {})
-    for key in WELCOME_POPUP_KEYS:
+    for key in WELCOME_POPUP_KEYS + SOCIAL_LINK_KEYS:
         out.setdefault(key, "")
     # Dual-country WhatsApp lines are pinned in Config. Do not let an older
     # site_settings row reintroduce the invalid Benin "01" prefix: /api/site is

@@ -225,8 +225,12 @@ def test_desktop_logo_is_centered_on_one_row_and_currency_pill_floats(mobile, li
     assert width - (pbox["x"] + pbox["width"]) <= 24, (
         f"the pill must hug the right edge (right:20px), box {pbox}")
     bottom_gap = 900 - (pbox["y"] + pbox["height"])
-    assert 85 <= bottom_gap <= 100, (
-        f"the pill must float ~92px above the bottom (stacked clear over "
+    # Owner request 2026-09-28: the pill sits clear ABOVE the WhatsApp
+    # bubble (bubble bottom:20px + 58px body = a 78px top edge, so the pill
+    # rests at 106px). The real non-overlap check is asserted below against
+    # the measured bubble box, not against this figure.
+    assert 100 <= bottom_gap <= 118, (
+        f"the pill must float ~106px above the bottom (stacked clear over "
         f"WhatsApp), gap {bottom_gap}")
     pill_bg = pill.evaluate("el => getComputedStyle(el).backgroundColor")
     assert pill_bg.replace(" ", "") in ("rgb(255,255,255)",), pill_bg
@@ -240,11 +244,54 @@ def test_desktop_logo_is_centered_on_one_row_and_currency_pill_floats(mobile, li
     wbox = wa.bounding_box()
     assert 900 - (wbox["y"] + wbox["height"]) <= 25, (
         f"WhatsApp must hug bottom:20px, box {wbox}")
+    # The rule the owner actually asked for: the two floating controls are
+    # measured in a real browser and must not touch.
+    assert pbox["y"] + pbox["height"] <= wbox["y"] - 10, (
+        "the currency pill must sit clearly ABOVE the WhatsApp bubble "
+        f"(pill {pbox}, WhatsApp {wbox})")
     # And the two golden butterflies still fly, exactly as the owner left them.
     assert mobile.locator("#site-header .header-flies .hfly").count() == 2
     mobile.locator('#site-header [data-open-search]').click()
     expect(mobile.locator('[data-search-input]')).to_be_visible()
     expect(mobile.locator('[data-search]')).to_have_count(1)
+
+
+@pytest.mark.parametrize("path", ["/", "/shop.html", "/product.html"])
+def test_the_floating_pill_never_covers_whatsapp_on_a_phone(mobile, live_shop, path):
+    """The defect the owner photographed: on a PHONE homepage the currency
+    pill was painted on top of the WhatsApp bubble (the dock-less homepage
+    CSS rule out-ranked the <=640px rule, so the pill dropped to the desktop
+    homepage offset while the bubble kept its phone one).
+
+    Measured in a real browser at 390x844 on the homepage AND on the product
+    grid pages: the two boxes must not intersect, the pill must sit above the
+    bubble, and both must be clickable (nothing on top of either)."""
+    mobile.set_viewport_size({"width": 390, "height": 844})
+    mobile.goto(live_shop + path)
+    pill = mobile.locator(".cur-float")
+    wa = mobile.locator(".wa-float")
+    expect(pill).to_be_visible()
+    expect(wa).to_be_visible()
+    pbox = pill.bounding_box()
+    wbox = wa.bounding_box()
+    assert pbox and wbox
+    # No intersection at all, and the pill is the one on top.
+    overlap_x = min(pbox["x"] + pbox["width"], wbox["x"] + wbox["width"]) - max(pbox["x"], wbox["x"])
+    overlap_y = min(pbox["y"] + pbox["height"], wbox["y"] + wbox["height"]) - max(pbox["y"], wbox["y"])
+    assert not (overlap_x > 0 and overlap_y > 0), (
+        f"{path}: the currency pill overlaps the WhatsApp bubble "
+        f"(pill {pbox}, WhatsApp {wbox})")
+    assert pbox["y"] + pbox["height"] <= wbox["y"] - 10, (
+        f"{path}: the pill must sit clearly above the bubble "
+        f"(pill bottom {pbox['y'] + pbox['height']}, bubble top {wbox['y']})")
+    # Both controls are genuinely reachable: the element at each centre point
+    # is the control itself (or its own child), not something covering it.
+    for name, box, selector in (("pill", pbox, ".cur-float"), ("WhatsApp", wbox, ".wa-float")):
+        hit = mobile.evaluate(
+            "([x, y, sel]) => { const el = document.elementFromPoint(x, y);"
+            " return !!(el && el.closest(sel)); }",
+            [box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, selector])
+        assert hit, f"{path}: the {name} control is covered by something else"
 
 
 def test_automatic_language_and_currency_logic(mobile, live_shop):
