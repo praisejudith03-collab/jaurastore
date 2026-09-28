@@ -1643,7 +1643,7 @@ def payment_methods():
 
 @api.get("/orders/<oid>")
 def public_order(oid):
-    """Minimal, rate-limited status lookup for the Track-order page."""
+    """Minimal order lookup used to recover an order-completion screen."""
     limited = sec.guard("order-lookup", limit=30, window=600)
     if limited: return limited
     row = one("SELECT id, payload, at, status, total, currency, items_count, customer_name, country, city "
@@ -3019,11 +3019,114 @@ def admin_delivery_page_save():
     return jsonify(ok=True, page=saved)
 
 
+# ---------------------------------------------------------- customer care
+# Public contact information is an owner-managed document, kept in the
+# existing `growth_settings` key/value table. That gives this panel durable
+# Supabase storage without requiring every deployed project to first add a
+# group of columns to site_settings.
+CUSTOMER_CARE_FILE = _os.environ.get(
+    "CUSTOMER_CARE_PATH",
+    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "customer_care.json"))
+CUSTOMER_CARE_DEFAULTS = {
+    "phone_primary": "+229 68 95 31 10",
+    "phone_secondary": "+234 916 167 0236",
+    "whatsapp": "",
+    "email": "jaurastore@gmail.com",
+    "business_contact_info": "Lagos, Nigeria\nCotonou, Benin Republic",
+    "support_hours": "Monday – Saturday, 9am – 6pm",
+    "support_details": "Our customer care team is ready to help with orders, delivery and payments.",
+}
+CUSTOMER_CARE_FIELDS = frozenset(CUSTOMER_CARE_DEFAULTS)
+
+
+def _customer_care_path():
+    # Read this on every test call: pytest swaps the path after api.py has
+    # imported, and customer-care tests must never touch a developer's file.
+    return _os.environ.get("CUSTOMER_CARE_PATH", CUSTOMER_CARE_FILE)
+
+
+def _normalize_customer_care(raw):
+    """Return safe plain text for every public customer-care field.
+
+    Phone and WhatsApp fields intentionally remain display text: customers may
+    need country prefixes or a wa.me URL. The storefront creates telephone /
+    WhatsApp hrefs itself and never injects this content as markup.
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    care = dict(CUSTOMER_CARE_DEFAULTS)
+    line_fields = ("phone_primary", "phone_secondary", "whatsapp", "support_hours")
+    for key in line_fields:
+        if key in raw:
+            care[key] = sec.clean(raw.get(key), 500 if key == "whatsapp" else 120,
+                                  allow_newlines=False)
+    if "email" in raw:
+        value = str(raw.get("email") or "").strip()
+        care["email"] = sec.clean_email(value) if value else ""
+    for key, limit in (("business_contact_info", 500), ("support_details", 900)):
+        if key in raw:
+            care[key] = sec.clean(raw.get(key), limit, allow_newlines=True)
+    return care
+
+
+def _load_customer_care():
+    raw = None
+    if Config.ENV == "testing":
+        try:
+            with open(_customer_care_path(), encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except (OSError, ValueError):
+            raw = None
+    else:
+        try:
+            from supabase_store import enabled as _sb_enabled, load_customer_care
+            if _sb_enabled():
+                raw = load_customer_care()
+        except Exception as exc:
+            print(f"[customer-care] load failed: {exc}")
+    return _normalize_customer_care(raw)
+
+
+def _save_customer_care(care):
+    if Config.ENV == "testing":
+        path = _customer_care_path()
+        _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(care, fh, ensure_ascii=False, indent=2)
+        _os.replace(tmp, path)
+        return _load_customer_care()
+    from supabase_store import enabled as _sb_enabled, save_customer_care
+    if not _sb_enabled():
+        raise RuntimeError("Supabase is not configured")
+    if not save_customer_care(care):
+        raise RuntimeError("Supabase customer-care write failed")
+    return _load_customer_care()
+
+
+@api.post("/admin/customer-care")
+@authmod.require_admin
+@sec.require_csrf
+def admin_customer_care_save():
+    data = request.get_json(silent=True) or {}
+    raw = data.get("customer_care") if isinstance(data.get("customer_care"), dict) else data
+    care = _normalize_customer_care(raw)
+    try:
+        saved = _save_customer_care(care)
+    except Exception as exc:
+        current_app.logger.exception("[customer-care] save failed")
+        return jsonify(ok=False, error="Could not save customer care details. No changes were made."), 503
+    audit(authmod.current_admin(), "customer_care.save", "customer_care", _ip())
+    return jsonify(ok=True, customer_care=saved)
+
+
 def _site_payload(site):
     """Canonical site_settings row + the legacy front-end aliases."""
     out = dict(site or {})
     for key in WELCOME_POPUP_KEYS + SOCIAL_LINK_KEYS:
         out.setdefault(key, "")
+    # One customer-care document drives the footer, contact page, FAQ and
+    # policy contact links. It is always present, including a fresh store.
+    out["customer_care"] = _load_customer_care()
     # Dual-country WhatsApp lines are pinned in Config. Do not let an older
     # site_settings row reintroduce the invalid Benin "01" prefix: /api/site is
     # consumed by both fresh and cached browser bundles, so it must always

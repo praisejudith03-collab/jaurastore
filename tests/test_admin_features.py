@@ -51,6 +51,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("POST", "/api/admin/delivery-zones"),
     ("DELETE", "/api/admin/delivery-zones/<zone_id>"),
     ("POST", "/api/admin/delivery-page"),
+    ("POST", "/api/admin/customer-care"),
     ("GET", "/api/admin/growth/settings"), ("POST", "/api/admin/growth/settings"),
     ("GET", "/api/admin/homepage-featured"), ("POST", "/api/admin/homepage-featured"),
     ("GET", "/api/admin/live"),
@@ -588,6 +589,49 @@ def test_sync_status_reports(admin):
     r = admin.get("/api/admin/sync/status")
     assert r.status_code == 200, r.data
     assert isinstance(r.get_json(), dict)
+
+
+# ===========================================================================
+# customer care & public contact details
+# ===========================================================================
+
+def test_customer_care_panel_saves_and_site_serves_one_shared_document(admin, monkeypatch, tmp_path):
+    """The Admin panel writes the exact document GET /api/site gives pages."""
+    monkeypatch.setenv("CUSTOMER_CARE_PATH", str(tmp_path / "customer_care.json"))
+    payload = {
+        "phone_primary": "+234 800 111 2222",
+        "phone_secondary": "+229 90 333 4444",
+        "whatsapp": "https://wa.me/2348001112222",
+        "email": "care@jaurastore.example",
+        "business_contact_info": "Ikeja, Lagos\nCotonou, Benin Republic",
+        "support_hours": "Every day, 8am – 7pm",
+        "support_details": "Order, payment and delivery support.",
+    }
+    r = admin.post("/api/admin/customer-care", json={"customer_care": payload})
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["customer_care"] == payload
+
+    site = admin.get("/api/site").get_json()["site"]
+    assert site["customer_care"] == payload
+
+
+def test_customer_care_route_is_csrf_protected(admin):
+    admin.drop_csrf()
+    r = admin.post("/api/admin/customer-care", json={"customer_care": {"email": "x@example.com"}})
+    assert r.status_code in (400, 403), r.data
+
+
+def test_contact_panel_and_footer_are_wired_to_live_customer_care():
+    admin_js = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
+    store_js = open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8").read()
+    contact_html = open(os.path.join(ROOT, "contact.html"), encoding="utf-8").read()
+    assert "Customer care &amp; contact information" in admin_js
+    assert "api/admin/customer-care" in admin_js
+    assert "function applyCustomerCare()" in store_js
+    for marker in ("data-care-phones", "data-care-email", "data-care-business"):
+        assert marker in store_js and marker in contact_html
 
 
 # ===========================================================================

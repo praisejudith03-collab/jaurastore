@@ -7152,3 +7152,39 @@ body[data-page="home"] .home-hero-static h1 {
 .social-ico[data-social="instagram"] { background: linear-gradient(45deg, #F9CE34 0%, #EE2A7B 50%, #6228D7 100%); color: #ffffff; }
 .social-ico[data-social="tiktok"] { background: #111111; color: #ffffff; }
 .social-ico[data-social="facebook"] { background: #1877F2; color: #ffffff; }
+
+
+/* =================================================================
+   COMPACT WELCOME CARD — owner request 2026-09-28
+   The welcome dialog is intentionally one straight, compact card. These
+   finishing rules sit after the older theme layers, so no legacy spacing can
+   make the promotion panel tall again. The Admin "Show welcome pop-up" toggle
+   controls whether the element exists at all (js/store.js welcomeEnabled).
+   ================================================================= */
+.welcome-pop { padding: 14px 16px !important; }
+.welcome-card {
+  width: min(344px, calc(100vw - 32px)) !important;
+  border-radius: 16px !important;
+  padding: 18px 18px 16px !important;
+  transform-origin: center center;
+}
+.welcome-panel { gap: 8px !important; }
+.welcome-logo { height: 42px !important; max-width: 112px !important; margin: 0 auto 2px !important; }
+.welcome-hello { font-size: clamp(20px, 5.2vw, 25px) !important; line-height: 1.1 !important; margin: 0 !important; }
+.welcome-panel .welcome-body,
+.welcome-referral { font-size: 12px !important; line-height: 1.4 !important; max-width: 34ch !important; margin: 0 !important; }
+.welcome-panel .welcome-cta { margin-top: 4px !important; padding: 10px 20px !important; font-size: 10px !important; }
+.welcome-x { top: 7px !important; right: 8px !important; width: 29px !important; height: 29px !important; font-size: 21px !important; }
+/* Straight-only entrance/exit: no rotate or skew at any keyframe. */
+@keyframes welcomeIn {
+  0% { transform: translateY(22px) scale(.98); opacity: 0; }
+  70% { transform: translateY(-2px) scale(1); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes welcomeOut {
+  0% { transform: translateY(0) scale(1); opacity: 1; }
+  100% { transform: translateY(16px) scale(.98); opacity: 0; }
+}
+@media (max-width: 640px) {
+  .welcome-pop { align-items: center !important; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)) !important; }
+}

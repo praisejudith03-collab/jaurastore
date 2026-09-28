@@ -114,8 +114,9 @@ check("an untouched shop still shows its TikTok account",
   /tiktok\.com\/@j_aura_store/.test(map.tiktok || ""), map.tiktok || "(none)");
 check("an untouched shop still shows a working WhatsApp chat link",
   /^https:\/\/wa\.me\/\d{8,}/.test(map.whatsapp || ""), map.whatsapp || "(none)");
-check("no Instagram / Facebook icon before the owner adds one",
-  !map.instagram && !map.facebook, JSON.stringify(map));
+check("an untouched shop keeps all four official social icons together",
+  links.length === 4 && map.whatsapp && map.instagram && map.tiktok && map.facebook,
+  JSON.stringify(map));
 
 // ------------------------------------------------- the owner saves 4 links
 JA.applySiteConfig({

@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=156" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=157" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -2255,7 +2255,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=156" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=157" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -2309,7 +2309,7 @@ function paintDesk(tab = "analytics") {
   if (tab === "marketing") fillMarketing();
   if (tab === "account") bindAccount();
   if (tab === "settings") {
-    bindHeroVideo(); bindHomepageFeatured(); bindBanner(); bindWelcome(); bindSocialLinks(); bindSiteBranding();
+    bindHeroVideo(); bindHomepageFeatured(); bindBanner(); bindWelcome(); bindCustomerCare(); bindSocialLinks(); bindSiteBranding();
   }
   if (tab === "delivery") {
     bindDeliveryPage();
@@ -2601,7 +2601,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=156", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=157", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -2759,6 +2759,7 @@ function settingsForm() {
       <div class="field full"><p class="admin-err" id="welcome-form-error" hidden></p><button class="btn">Save welcome pop-up</button></div>
     </form>
   </details>
+  ${customerCareSection()}
   <details class="admin-settings-section" open>
     <summary>Social media links</summary>
     <form id="social-form" class="form-grid admin-card" style="margin-top:22px">
@@ -2810,11 +2811,23 @@ let dpCache = null;
 
 const DP_FALLBACK = {
   title: "Delivery Locations",
-  lead: "Curated coverage across West Africa",
+  lead: "Accessible hubs and regions across Nigeria, Benin Republic and Togo",
   blocks: [
-    { heading: "Nigeria", locations: [{ name: "Lagos Mainland", detail: "" }] },
-    { heading: "Benin Republic", locations: [{ name: "Cotonou", detail: "" }] },
-    { heading: "Togo", locations: [{ name: "Lom\u00e9", detail: "" }] },
+    { heading: "Nigeria", locations: [
+      { name: "Lagos Mainland", detail: "Ikeja, Yaba, Surulere, Oshodi, Iyana-Ipaja, Ojodu Berger, Agege, Gbagada, Ketu, Ikorodu" },
+      { name: "Lagos Island", detail: "Victoria Island, Lekki Phase 1, Ajah, Ikoyi, Lagos Island, Epe" },
+      { name: "Ogun State", detail: "Abeokuta, Sagamu, Mowe/Ibafo, Ijebu-Ode, Ota" },
+      { name: "Abuja (FCT)", detail: "Maitama, Wuse, Garki, Jabi, Asokoro, Kubwa, Lugbe" },
+      { name: "Regional hubs", detail: "Rivers (Port Harcourt), Edo (Benin City), Delta (Warri, Asaba), Ekiti (Ado-Ekiti), Osun (Osogbo, Ile-Ife), Oyo (Ibadan), Kwara (Ilorin), Abia (Aba, Umuahia), Anambra (Awka, Onitsha)" },
+    ]},
+    { heading: "Benin Republic", locations: [
+      { name: "Cotonou", detail: "Haie Vive, Ganhi, Akpakpa, Cadjehoun, Zongo, Fidjrosse" },
+      { name: "Abomey-Calavi", detail: "Godomey, Togoudo, Zogbadje, Arconville" },
+      { name: "Porto-Novo", detail: "Catchi, Ouando, Djassin" },
+    ]},
+    { heading: "Togo", locations: [
+      { name: "Lomé", detail: "Deck, Hedzranawoe, Agoè, Akodesséwa" },
+    ]},
   ],
 };
 
@@ -3217,6 +3230,82 @@ function bindDeliveryZones() {
 async function saveSiteConfig(patch) {
   return window.JA_NET ? window.JA_NET.api("api/admin/site", { method: "POST", json: patch }) : Promise.resolve(null);
 }
+
+/* ------------------------------------------------------------------ *
+ * Customer care & contact information. This is intentionally its own admin
+ * card rather than a few retired Site-settings fields: it is the single
+ * public source for the phone numbers, email, support details and business
+ * contact information painted in the footer, Contact page, FAQ and policies.
+ * ------------------------------------------------------------------ */
+const CUSTOMER_CARE_FIELDS = [
+  "phone_primary", "phone_secondary", "whatsapp", "email",
+  "business_contact_info", "support_hours", "support_details",
+];
+function customerCareSection() {
+  return `<details class="admin-settings-section" open>
+    <summary>Customer care &amp; contact information</summary>
+    <form id="customer-care-form" class="form-grid admin-card" style="margin-top:22px">
+      <p class="admin-note full">This is the <strong>live public contact panel</strong>. Save a change here and the footer, Customer Care page, FAQ and policy contact links all use the same details. Add a full WhatsApp link, a number, or leave it blank to keep the store's standard WhatsApp button.</p>
+      <div class="field"><label>Primary customer care number</label><input name="phone_primary" maxlength="120" placeholder="+229 68 95 31 10" /></div>
+      <div class="field"><label>Additional customer care number</label><input name="phone_secondary" maxlength="120" placeholder="+234 916 167 0236" /></div>
+      <div class="field"><label>WhatsApp number or link</label><input name="whatsapp" maxlength="500" placeholder="+229 68 95 31 10 or https://wa.me/22968953110" /></div>
+      <div class="field"><label>Customer care email</label><input name="email" type="email" maxlength="254" placeholder="care@example.com" /></div>
+      <div class="field"><label>Support hours</label><input name="support_hours" maxlength="120" placeholder="Monday – Saturday, 9am – 6pm" /></div>
+      <div class="field"><label>Business contact information / locations</label><textarea name="business_contact_info" maxlength="500" rows="3" placeholder="Lagos, Nigeria&#10;Cotonou, Benin Republic"></textarea></div>
+      <div class="field full"><label>Support details</label><textarea name="support_details" maxlength="900" rows="3" placeholder="Tell customers what the care team can help with."></textarea></div>
+      <div class="field full"><p class="admin-err" id="customer-care-form-error" hidden></p><button class="btn" id="customer-care-save">Save customer care details</button></div>
+    </form>
+  </details>`;
+}
+function bindCustomerCare() {
+  const form = $("#customer-care-form"); if (!form || form.dataset.bound === "1") return;
+  form.dataset.bound = "1";
+  let current = {};
+  const repaint = (care) => {
+    current = care && typeof care === "object" ? care : {};
+    CUSTOMER_CARE_FIELDS.forEach((name) => {
+      const el = form.elements.namedItem(name);
+      if (el) el.value = current[name] == null ? "" : String(current[name]);
+    });
+  };
+  const initial = (JA.getSiteConfig && JA.getSiteConfig()) || {};
+  repaint(initial.customer_care || {});
+  fetch("api/site", { cache: "no-store" }).then((r) => r.ok ? r.json() : null)
+    .then((d) => repaint((d && d.site && d.site.customer_care) || current)).catch(() => {});
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const errorBox = $("#customer-care-form-error");
+    const button = $("#customer-care-save");
+    if (errorBox) { errorBox.hidden = true; errorBox.textContent = ""; }
+    const customer_care = {};
+    CUSTOMER_CARE_FIELDS.forEach((name) => {
+      customer_care[name] = String(form.elements.namedItem(name)?.value || "").trim();
+    });
+    if (button) { button.disabled = true; button.textContent = "Saving…"; }
+    let saved = null;
+    try {
+      saved = window.JA_NET
+        ? await window.JA_NET.api("api/admin/customer-care", { method: "POST", json: { customer_care } })
+        : null;
+    } catch (err) { saved = null; }
+    if (button) { button.disabled = false; button.textContent = "Save customer care details"; }
+    if (!saved || saved.ok === false) {
+      const message = (saved && saved.error) || "Could not save customer care details. No changes were made.";
+      if (errorBox) { errorBox.textContent = message; errorBox.hidden = false; }
+      JA.toast(message);
+      return;
+    }
+    repaint(saved.customer_care || customer_care);
+    // Keep the current Admin bundle's site object in step with the server;
+    // new storefront visits read the same object from GET /api/site.
+    try {
+      const site = { ...((JA.getSiteConfig && JA.getSiteConfig()) || {}), customer_care: saved.customer_care || customer_care };
+      if (JA.applySiteConfig) JA.applySiteConfig(site);
+    } catch (err) {}
+    JA.toast("Customer care details saved — live across the storefront now.");
+  });
+}
+
 const WELCOME_FIELDS = ["welcome_title", "welcome_title_fr", "welcome_body", "welcome_body_fr",
   "welcome_image_url", "welcome_cta_label", "welcome_cta_label_fr", "welcome_cta_href"];
 function bindWelcome() {

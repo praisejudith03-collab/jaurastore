@@ -340,7 +340,6 @@ window.I18N_PHRASES = {
   "Tracking": "Suivi",
   "Once your order is confirmed you will receive an order ID. Use it on our":
     "Une fois votre commande confirmée, vous recevrez un numéro de commande. Utilisez-le sur notre page",
-  "Track order": "Suivre la commande",
   "page, or message us on WhatsApp for a status update.":
     ", ou écrivez-nous sur WhatsApp pour connaître le statut.",
   "Delivery issues": "Problèmes de livraison",

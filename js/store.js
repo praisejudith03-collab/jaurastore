@@ -89,7 +89,6 @@ const JA = (() => {
     "nav.checkout": "Checkout",
     "nav.checkoutForm": "Checkout Form",
     "nav.bag": "Bag",
-    "nav.track": "Track order",
     "nav.pay": "Send payment receipt",
     "nav.search": "Search",
     "nav.cart": "Cart",
@@ -191,6 +190,19 @@ const JA = (() => {
     shippingNote: "",
     logoUrl: "",
     shopBannerUrl: "",
+    // Customer-care data is delivered on GET /api/site. Keeping the complete
+    // object in the offline cache lets the footer and contact page remain
+    // useful during a short connection loss, while the server row always wins
+    // when it is available.
+    customer_care: {
+      phone_primary: "+229 68 95 31 10",
+      phone_secondary: "+234 916 167 0236",
+      whatsapp: "",
+      email: "jaurastore@gmail.com",
+      business_contact_info: "Lagos, Nigeria\nCotonou, Benin Republic",
+      support_hours: "Monday – Saturday, 9am – 6pm",
+      support_details: "Our customer care team is ready to help with orders, delivery and payments.",
+    },
   };
 
   let seed = [];
@@ -220,6 +232,70 @@ const JA = (() => {
     const domain = e.slice(at + 1);
     return [user, domain].join(String.fromCharCode(64));
   };
+
+  /* ------------------------------------------------------- customer care
+   * Customer-facing details live in the Admin's dedicated Customer care &
+   * contact panel. They are returned as one `customer_care` document on
+   * GET /api/site, so a save can repaint every public page without a deploy.
+   * The simple data attributes below deliberately cover the footer, contact
+   * page, policy links and FAQ summary rather than leaving a second hardcoded
+   * phone/email behind somewhere in the storefront. */
+  const CUSTOMER_CARE_DEFAULTS = {
+    phone_primary: "+229 68 95 31 10",
+    phone_secondary: "+234 916 167 0236",
+    whatsapp: "",
+    email: "jaurastore@gmail.com",
+    business_contact_info: "Lagos, Nigeria\nCotonou, Benin Republic",
+    support_hours: "Monday – Saturday, 9am – 6pm",
+    support_details: "Our customer care team is ready to help with orders, delivery and payments.",
+  };
+  function care() {
+    const cached = (() => { try { return read(KEYS.settings, {}).customer_care || {}; } catch (e) { return {}; } })();
+    const live = (_siteConfig && _siteConfig.customer_care && typeof _siteConfig.customer_care === "object")
+      ? _siteConfig.customer_care : {};
+    return { ...CUSTOMER_CARE_DEFAULTS, ...cached, ...live };
+  }
+  function carePhones() {
+    const c = care();
+    return [c.phone_primary, c.phone_secondary].map((v) => String(v || "").trim()).filter(Boolean);
+  }
+  function carePhoneHref(phone) {
+    const value = String(phone || "").trim();
+    return "tel:" + value.replace(/[^+0-9]/g, "");
+  }
+  function carePhonesHTML() {
+    return carePhones().map((phone) => `<a href="${escape(carePhoneHref(phone))}">${escape(phone)}</a>`).join("<br>");
+  }
+  function careBusinessHTML() {
+    return escape(String(care().business_contact_info || "")).replace(/\n/g, "<br>");
+  }
+  function careSummary() {
+    const c = care();
+    const phone = carePhones().join(" / ");
+    return [c.whatsapp ? "WhatsApp " + c.whatsapp : "WhatsApp", phone && "Phone " + phone,
+      c.email, String(c.business_contact_info || "").replace(/\n+/g, ", ")].filter(Boolean).join(" · ");
+  }
+  function careWhatsAppHref() {
+    const raw = String(care().whatsapp || "").trim();
+    if (raw) {
+      const safe = normalizeSocialUrl(raw, "whatsapp");
+      if (safe) return safe;
+    }
+    return waInquiryUrl();
+  }
+  function applyCustomerCare() {
+    const c = care();
+    document.querySelectorAll("[data-care-phones]").forEach((el) => { el.innerHTML = carePhonesHTML(); });
+    document.querySelectorAll("[data-care-email]").forEach((el) => {
+      el.textContent = c.email || "";
+      el.setAttribute("href", "mailto:" + String(c.email || "").trim());
+    });
+    document.querySelectorAll("[data-care-business]").forEach((el) => { el.innerHTML = careBusinessHTML(); });
+    document.querySelectorAll("[data-care-hours]").forEach((el) => { el.textContent = c.support_hours || ""; });
+    document.querySelectorAll("[data-care-support]").forEach((el) => { el.textContent = c.support_details || ""; });
+    document.querySelectorAll("[data-care-summary]").forEach((el) => { el.textContent = careSummary(); });
+    document.querySelectorAll("[data-care-whatsapp]").forEach((el) => { el.setAttribute("href", careWhatsAppHref()); });
+  }
 
   // The live site settings (loaded from GET /api/site, Supabase-backed) are
   // the source of truth; any localStorage copy is only an offline cache for
@@ -2318,8 +2394,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=156";
-        const FLYER = "images/brand/logo-flyer.jpg?v=156";
+        const LOGO = "images/brand/logo.jpg?v=157";
+        const FLYER = "images/brand/logo-flyer.jpg?v=157";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2417,6 +2493,7 @@ const JA = (() => {
       if (site.account_name) saveSettings({ account_name: site.account_name });
       if (site.hero_banner_title) saveSettings({ hero_banner_title: site.hero_banner_title });
       if (site.hero_banner_subtitle) saveSettings({ hero_banner_subtitle: site.hero_banner_subtitle });
+      if (site.customer_care && typeof site.customer_care === "object") saveSettings({ customer_care: site.customer_care });
       [
         "naira_payment_bank", "naira_payment_name", "naira_payment_account",
         "naira_payment_instructions",
@@ -2434,7 +2511,10 @@ const JA = (() => {
     } catch (e) { /* offline cache only - never blocks the live values */ }
     paintConvBanner();
     paintSocialLinks();
+    applyCustomerCare();
     applySiteBranding(site);
+    // Contact details are also used by the Organization / ContactPage data.
+    try { pageSeo(); } catch (e) {}
     // Fire event for other pages
     try { document.dispatchEvent(new CustomEvent('ja:site', { detail: site })); } catch (e) {}
     return site;
@@ -2491,7 +2571,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=156" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=157" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -2531,7 +2611,6 @@ const JA = (() => {
         <a class="au-link ${on("delivery")}" href="delivery.html">${tx("nav.delivery")}</a>
         <a class="au-link ${on("contact")}" href="contact.html">${tx("nav.care")}</a>
         <a class="au-link ${on("checkout")}" href="checkout.html">${tx("nav.checkout")}</a>
-        <a class="au-link ${on("track-order")}" href="track-order.html">${tx("nav.track")}</a>
         <a class="au-link ${on("account")}" href="account.html">${tx("nav.account")}</a>
         <a class="au-link ${on("wishlist")}" href="wishlist.html">${tx("nav.wishlist")}</a>
       </div>
@@ -2686,9 +2765,9 @@ const JA = (() => {
   // link for the visitor's market.
   const DEFAULT_SOCIAL = {
     whatsapp: "",   // resolved at render time -> waInquiryUrl()
-    instagram: "",
+    instagram: "https://www.instagram.com/j_aura_store",
     tiktok: "https://www.tiktok.com/@j_aura_store?_r=1&_t=ZS-99DSPEn1NkD",
-    facebook: "",
+    facebook: "https://www.facebook.com/jaurastore",
   };
   // Typed into a field, any of these removes that icon from the storefront.
   const SOCIAL_OFF = /^(off|none|hidden|hide|no|-|—)$/i;
@@ -2777,23 +2856,21 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=156" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=157" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
-        <div>
+        <div data-customer-care data-no-i18n>
           <h4>${tx("footer.client")}</h4>
-          <p><a href="tel:+22968953110">+229 68 95 31 10</a></p>
-          <p><a href="tel:+2349161670236">+234 916 167 0236</a></p>
-          <p><a href="mailto:${emailText()}">${emailText()}</a></p>
-          <p>Lagos, Nigeria</p>
-          <p>Cotonou, Benin Rep.</p>
+          <p data-care-phones>${carePhonesHTML()}</p>
+          <p><a data-care-email href="mailto:${escape(care().email)}">${escape(care().email)}</a></p>
+          <p data-care-business>${careBusinessHTML()}</p>
+          <p class="foot-support" data-care-support>${escape(care().support_details)}</p>
         </div>
         <div>
           <h4>${tx("footer.visit")}</h4>
           <p><a href="shop.html">${tx("nav.shopAll")}</a></p>
           <p><a href="delivery.html">${tx("nav.delivery")}</a></p>
-          <p><a href="track-order.html">${tx("footer.track")}</a></p>
           <p><a href="contact.html">${tx("nav.care")}</a></p>
           <p><a href="faq.html">${tx("nav.faq")}</a></p>
         </div>
@@ -2803,8 +2880,9 @@ const JA = (() => {
                links, each rendered with the logo auto-detected from the link
                itself (see socialLinks / socialIcon). Repainted from the live
                site row by paintSocialLinks() on every ja:site answer. -->
-          <div class="foot-social" data-social-links>${socialLinksHTML()}</div>
           <a class="btn foot-wa" data-wa-inquiry href="${waInquiryUrl()}" target="_blank" rel="noopener">${tx("footer.contactUs")}</a>
+          <!-- Keep the official social logos directly before the WhatsApp channel. -->
+          <div class="foot-social" data-social-links>${socialLinksHTML()}</div>
           <a class="wa-channel" href="https://whatsapp.com/channel/0029Vb7qNQs4yltRRkChu01k" target="_blank" rel="noopener">${tx("footer.channel")}</a>
           <div class="foot-flies" aria-hidden="true">
             <span class="ffly ffly1">${goldFly()}</span>
@@ -2903,7 +2981,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=156", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=157", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -2937,7 +3015,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=156";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=157";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -2973,7 +3051,7 @@ const JA = (() => {
     ["Where do you deliver?", "Benin (Cotonou, Calavi, Porto-Novo — 6 to 14 business days), Lagos Mainland, Lagos Island, Lome and neighbouring West African states. Shipment rates are confirmed at checkout by city."],
     ["How do I send payment?", "Transfer using the details shown for your chosen currency, then send a screenshot of your payment to us on WhatsApp. You do not need to upload a receipt on the site. Your receipt is saved."],
     ["How do I track my order?", "Message us on WhatsApp with your order ID (for example JA-M8K2Q1) and we will tell you if it is waiting, confirmed, or declined."],
-    ["How can I reach you?", "WhatsApp +229 68 95 31 10, phone +229 68 95 31 10 or +234 916 167 0236, email jaurastore@gmail.com. Lagos, Nigeria and Cotonou, Benin."],
+    ["How can I reach you?", careSummary()],
   ];
   // Crumb trail per page so the result shows "jaurastore.com.ng › Shop"
   // instead of a bare URL.
@@ -2996,7 +3074,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=156");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=157");
     document.title = title;
     [
       ["name", "description", description],
@@ -3087,8 +3165,8 @@ const JA = (() => {
           url: SITE,
           logo: absUrl(logoPath()),
           image,
-          email: "jaurastore@gmail.com",
-          telephone: "+22968953110",
+          email: care().email,
+          telephone: carePhones()[0] || "",
           currenciesAccepted: "NGN, CFA",
           sameAs: [
             "https://www.tiktok.com/@j_aura_store",
@@ -3179,7 +3257,7 @@ const JA = (() => {
       about: { title: "Vision · Jaura Store", description: "Jaura Store vision — curated fashion and lifestyle from Cotonou and Lagos. Pay in F CFA or Naira." },
       faq: { title: "FAQ · Jaura Store", description: "How to order from Jaura Store, delivery to Benin, Lagos and West Africa, payment in CFA or Naira." },
       delivery: { title: "Delivery · Jaura Store", description: "Jaura Store delivery: Benin 6–14 days, Lagos Mainland and Island, Lomé and West Africa. Fare on WhatsApp." },
-      contact: { title: "Contact · Jaura Store", description: "WhatsApp Jaura Store +229 68 95 31 10. Email jaurastore@gmail.com. Lagos and Cotonou." },
+      contact: { title: "Contact · Jaura Store", description: "Customer care: " + careSummary() + "." },
       checkout: { title: "Checkout · Jaura Store", description: "Jaura Store checkout — pay by UBA Naira, MTN MoMo CFA or Moov Togo, then upload your receipt." },
       "order-complete": { title: "Order Completed · Jaura Store", description: "Your Jaura Store order has been received." },
       cart: { title: "Bag · Jaura Store", description: "Your Jaura Store bag." },
@@ -3521,6 +3599,7 @@ const JA = (() => {
     waInquiryText, refreshWaLinks, WA_NG, WA_BJ,
     SOCIAL_NETWORKS, SOCIAL_ICONS, socialNetwork, socialIcon,
     normalizeSocialUrl, socialLinks, socialLinksHTML, paintSocialLinks,
+    customerCare: care, careSummary, careWhatsAppHref, applyCustomerCare,
     hydrateFromCache, readCatalogCache,
     mediaHTML, mediaKind, getSiteConfig, applySiteBranding, applySiteConfig, normalizeServerProduct,
   };
