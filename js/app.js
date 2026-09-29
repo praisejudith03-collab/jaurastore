@@ -1602,10 +1602,9 @@ function minOrderFigures() {
   return { minOrderCfa, minOrderNgn, fr, grp };
 }
 
-/** Paint the two ALWAYS-VISIBLE Benin/Togo minimum-order explainer lines -
- *  .ck-bj-min above the zone picker, .ck-pay-country-note above the F CFA
- *  bank details - from the live admin setting instead of a hardcoded
- *  "5,000 F CFA" that used to stay wrong forever once the owner changed the
+/** Paint the ALWAYS-VISIBLE Benin/Togo minimum-order explainer line -
+ *  .ck-pay-country-note above the F CFA bank details - from the live admin setting
+ *  instead of a hardcoded "5,000 F CFA" that used to stay wrong forever once the owner changed the
  *  minimum. Called on checkout init, again whenever a fresh "ja:site" lands,
  *  and again on a language switch ("ja:lang") - both languages are built
  *  here directly rather than through data-i18n, since the text depends on a
@@ -1614,13 +1613,7 @@ function paintMinOrderNotices() {
   const { minOrderCfa, minOrderNgn, fr, grp } = minOrderFigures();
   const bjMin = document.querySelector(".ck-bj-min");
   if (bjMin) {
-    bjMin.textContent = minOrderCfa <= 0
-      ? (fr
-          ? "Livraisons au Bénin et au Togo : aucune commande minimum. Le retrait à Cotonou est gratuit pour les articles légers."
-          : "Benin & Togo deliveries: no minimum order amount. Pickup in Cotonou is free for lighter products.")
-      : (fr
-          ? `Livraisons au Bénin : commande minimum de ${grp(minOrderCfa)} F CFA (environ ${grp(minOrderNgn)} nairas). Togo : même minimum. Le retrait à Cotonou est gratuit pour les articles légers.`
-          : `Benin deliveries: minimum order ${grp(minOrderCfa)} F CFA (about ${grp(minOrderNgn)} naira). Togo: same minimum. Pickup in Cotonou is free for lighter products.`);
+    bjMin.remove();
   }
   const payNote = document.querySelector(".ck-pay-country-note");
   if (payNote) {

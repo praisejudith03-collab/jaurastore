@@ -5364,9 +5364,9 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   font-size: 13px;
 }
 .ck-bj-min {
-  margin-top: 8px;
-  color: var(--taupe);
-  font-size: 13px;
+  display: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
 }
 /* The exact delivery window for whatever zone is currently selected
    (owner request 2026-09-28) — painted the instant the shopper picks a
