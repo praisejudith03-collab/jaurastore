@@ -19,6 +19,9 @@ alter table if exists products
   add column if not exists "optionPrices"    jsonb;
 alter table if exists products
   add column if not exists "optionCompareAt" jsonb;
+-- Free-text physical dimensions shown on the product page / WhatsApp caption.
+alter table if exists products
+  add column if not exists dimensions       text;
 -- Kept alongside for completeness (older tables sometimes lack these too):
 alter table if exists products
   add column if not exists "optionStock"     jsonb;
@@ -26,6 +29,13 @@ alter table if exists products
   add column if not exists "compareNgn"      numeric;
 alter table if exists products
   add column if not exists "compareCfa"      numeric;
+
+-- 1b) Checkout storage decoupling: fallback status on the order row ---------
+-- Set true when a payment proof was provided but Storage was full/failed. The
+-- order still completes; the flag also rides inside the order payload JSON, so
+-- this column is optional and the order write drops it gracefully if absent.
+alter table if exists orders
+  add column if not exists proof_upload_failed boolean default false;
 
 -- 2) Abandoned-cart table (matches supabase_schema.sql) ---------------------
 create table if not exists abandoned_carts (

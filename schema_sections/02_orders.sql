@@ -20,7 +20,10 @@ create table if not exists orders (
   payload       jsonb,
   at            timestamptz,
   updated_at    timestamptz default now(),
-  customer_user_id text
+  customer_user_id text,
+  -- True when a payment proof was provided at checkout but could not be
+  -- uploaded to Storage. The sale still completes; admin re-requests the file.
+  proof_upload_failed boolean default false
 );
 -- Repair an older orders table that may be narrower. Add-only, idempotent,
 -- preserves every existing order row, ids and values. Columns are added
@@ -45,6 +48,7 @@ alter table orders add column if not exists payload       jsonb;
 alter table orders add column if not exists at            timestamptz;
 alter table orders add column if not exists updated_at    timestamptz default now();
 alter table orders add column if not exists customer_user_id text;
+alter table orders add column if not exists proof_upload_failed boolean default false;
 create index if not exists idx_orders_at on orders (at desc);
 create index if not exists idx_orders_status on orders (status);
 create index if not exists idx_orders_customer on orders (customer_user_id);

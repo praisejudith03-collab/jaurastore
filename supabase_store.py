@@ -839,6 +839,43 @@ def load_categories_table():
 # parameter raised TypeError inside the route - after the order was already
 # written to SQLite - so every live checkout answered 500 and the purchase event was skipped;
 # the order never reached the orders table.
+# Columns a completed sale cannot be recorded without. Everything else (a
+# newer optional flag like proof_upload_failed on an older, narrower orders
+# table) may be dropped so the SALE is never lost to a schema mismatch - the
+# same resilience the products upsert already has. The full order is always
+# preserved inside the payload JSON regardless.
+_CRITICAL_ORDER_COLUMNS = frozenset(
+    {"id", "total", "currency", "status", "payload", "at"})
+
+
+def _upsert_order_resilient(row, strict):
+    """Upsert one order row, dropping only non-critical unknown columns.
+
+    Returns True on success. When `strict` is False a total failure is
+    swallowed (best-effort mirror); when True the caller surfaces it.
+    """
+    c = client()
+    if c is None:
+        return False
+    pending = dict(row)
+    for _ in range(len(pending) + 1):
+        try:
+            c.table("orders").upsert(pending).execute()
+            return True
+        except Exception as exc:
+            match = _MISSING_COLUMN_RE.search(str(exc))
+            col = match.group(1) if match else ""
+            if not col or col in _CRITICAL_ORDER_COLUMNS or col not in pending:
+                print(f"[supabase] order upsert failed: {exc}")
+                return False
+            # A non-critical column the table does not have: drop and retry so
+            # the sale still lands. The dropped value survives in payload JSON.
+            pending.pop(col, None)
+            print(f"[supabase] order upsert: retrying without missing column '{col}'")
+    print("[supabase] order upsert failed: too many missing columns")
+    return False
+
+
 def create_order(order, engine=None):
     """Persist a completed checkout into Supabase (best-effort mirror)."""
     c = client()
@@ -847,17 +884,16 @@ def create_order(order, engine=None):
     row = dict(order)
     row["payload"] = json.dumps(order.get("payload", order), ensure_ascii=False)
     row["updated_at"] = _now()
-    try:
-        c.table("orders").upsert(row).execute()
-    except Exception as exc:
-        print(f"[supabase] order upsert failed: {exc}")
+    _upsert_order_resilient(row, strict=False)
 
 
 def create_order_strict(order):
     """Persist a completed checkout into Supabase; True only on success.
 
     This is the production write path: Supabase PostgreSQL is the record of
-    the sale and a failure is surfaced, never swallowed.
+    the sale and a failure is surfaced, never swallowed. A missing OPTIONAL
+    column (e.g. proof_upload_failed on an older table) never fails the sale -
+    only a genuine write failure or a missing CRITICAL column does.
     """
     c = client()
     if c is None:
@@ -865,12 +901,7 @@ def create_order_strict(order):
     row = dict(order)
     row["payload"] = json.dumps(order.get("payload", order), ensure_ascii=False)
     row["updated_at"] = _now()
-    try:
-        c.table("orders").upsert(row).execute()
-        return True
-    except Exception as exc:
-        print(f"[supabase] order upsert failed: {exc}")
-        return False
+    return _upsert_order_resilient(row, strict=True)
 
 
 def mirror_abandoned_cart(row):

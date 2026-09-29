@@ -17,11 +17,10 @@
 
 -- SECTION: products
 -- ------------------------------------------------------------ products
--- Canonical columns (source of truth): id, name, category, priceNgn,
--- priceCfa, compareNgn, compareCfa, image_url, images, stock_quantity,
--- description, descriptionFr, featured, online, updated_at. Legacy camelCase
--- columns (image, stock, ...) are compatibility aliases; production writes
--- both. camelCase MUST be quoted or Postgres folds it to lowercase (PGRST204).
+-- Canonical columns are the source of truth (priceNgn, priceCfa, image_url,
+-- stock_quantity, ...); legacy camelCase aliases (image, stock, ...) are kept
+-- and production writes both. camelCase MUST be quoted or Postgres folds it to
+-- lowercase (PGRST204).
 create table if not exists products (
   id               text primary key,
   "legacyId"       text,
@@ -49,6 +48,7 @@ create table if not exists products (
   "optionStock"    jsonb,
   "optionPrices"   jsonb,
   "optionCompareAt" jsonb,
+  dimensions       text,
   "bulkQty"        integer,
   "bulkPercent"    integer,
   "placeholderImage" text,
@@ -79,6 +79,7 @@ alter table products add column if not exists images             jsonb;
 alter table products add column if not exists "optionStock"      jsonb;
 alter table products add column if not exists "optionPrices"     jsonb;
 alter table products add column if not exists "optionCompareAt"  jsonb;
+alter table products add column if not exists dimensions         text;
 alter table products add column if not exists "bulkQty"      integer;
 alter table products add column if not exists "bulkPercent"  integer;
 alter table products add column if not exists "placeholderImage" text;

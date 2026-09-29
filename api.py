@@ -1271,6 +1271,12 @@ def create_order():
         "source": order["source"], "status": "pending",
         "payload": order, "at": order["at"], "updated_at": now,
     }
+    if proof_upload_failed:
+        # First-class fallback status on the order row (owner request). The
+        # order write is resilient: if the orders table lacks this column the
+        # value is dropped and the sale still lands, with the flag preserved in
+        # the payload JSON above.
+        sb_row["proof_upload_failed"] = True
     if owner_id:
         sb_row["customer_user_id"] = owner_id
 
@@ -2072,6 +2078,12 @@ def _order_row(r):
     out["customer_notice"] = payload.get("customer_notice") or None
     out["payment_review"] = payload.get("payment_review") or None
     out["decline_reason"] = payload.get("decline_reason") or ""
+    # A checkout whose payment proof could not be stored still completed; flag
+    # it so the admin list can ask the customer to re-send the receipt. Read
+    # from either the first-class column (when present) or the payload JSON.
+    out["proofUploadFailed"] = bool(
+        (r["proof_upload_failed"] if "proof_upload_failed" in r.keys() else None)
+        or payload.get("proofUploadFailed"))
     return out
 
 @api.get("/admin/orders")

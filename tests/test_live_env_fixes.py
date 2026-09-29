@@ -134,6 +134,99 @@ def test_option_compare_at_is_an_allowed_field():
     assert "optionCompareAt" in catalog_mod.BASE_FIELDS
 
 
+def test_whatsapp_caption_includes_stock_dimensions_and_link():
+    """The shared catalog post caption must carry name, both prices, stock
+    status, dimensions and the store link."""
+    admin_js = (ROOT and open(os.path.join(ROOT, "js", "admin.js"),
+                              encoding="utf-8").read())
+    assert "broadcastStockLine" in admin_js
+    assert "broadcastDimensionsLine" in admin_js
+    # broadcastFullText assembles name, ₦, CFA, stock, dimensions, link.
+    assert "In stock" in admin_js and "Out of stock" in admin_js
+    assert "Dimensions:" in admin_js
+    assert "broadcastProductUrl(p)" in admin_js
+
+
+def test_dimensions_field_persists_through_normalize():
+    normalized = catalog_mod.normalize({
+        "id": "jau-dims", "name": "Storage Box", "category": "beauty",
+        "priceNgn": 5000, "dimensions": "30 x 20 x 10 cm",
+    })
+    assert normalized is not None
+    assert normalized["dimensions"] == "30 x 20 x 10 cm"
+    assert "dimensions" in catalog_mod.BASE_FIELDS
+
+
+def test_checkout_flag_persists_into_order_payload(client, monkeypatch):
+    """The order row saved to the DB must carry the proof_upload_failed flag."""
+    pid = "jau-store-flag"
+    _make_orderable(pid)
+    execute("DELETE FROM rate_limits WHERE action='order'")
+
+    import storage
+    monkeypatch.setattr(storage, "save_image",
+                        lambda *a, **k: (False, "Supabase Storage upload failed.", ""))
+
+    tok = csrf(client)
+    order = {
+        "id": "JA-STOREFLAG", "currency": "NGN", "total": 5000,
+        "customer": {"name": "Buyer", "email": "flag@example.com",
+                     "phone": "+2348012345678", "city": "Lagos",
+                     "zone": "Lagos Mainland", "address": "1 Test St"},
+        "items": [{"id": pid, "name": "Flag", "qty": 1, "price": 5000}],
+    }
+    data = {
+        "order": json.dumps(order),
+        "proof": (io.BytesIO(b"\xff\xd8\xff\xe0" + b"0" * 512 + b"\xff\xd9"),
+                  "receipt.jpg"),
+    }
+    r = client.post("/api/orders", data=data, content_type="multipart/form-data",
+                    headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    # The stored payload records the fallback status for the admin.
+    from db import query as _q
+    stored = _q("SELECT payload FROM orders WHERE id=?", ("JA-STOREFLAG",))
+    assert stored, "order was not persisted"
+    payload = json.loads(stored[0]["payload"])
+    assert payload.get("proofUploadFailed") is True
+
+
+def test_order_upsert_is_resilient_to_a_missing_optional_column(monkeypatch):
+    """A narrow orders table (no proof_upload_failed column) must not fail the
+    sale: the resilient upsert drops the unknown column and retries."""
+    import supabase_store
+
+    calls = {"n": 0}
+
+    class _FakeExec:
+        def execute(self):
+            raise RuntimeError(
+                "Could not find the 'proof_upload_failed' column of 'orders'")
+
+    class _OKExec:
+        def execute(self):
+            return None
+
+    class _FakeTable:
+        def upsert(self, row):
+            calls["n"] += 1
+            # First attempt still has the unknown column -> raise; once it has
+            # been dropped, succeed.
+            return _FakeExec() if "proof_upload_failed" in row else _OKExec()
+
+    class _FakeClient:
+        def table(self, name):
+            return _FakeTable()
+
+    monkeypatch.setattr(supabase_store, "client", lambda: _FakeClient())
+    ok = supabase_store._upsert_order_resilient(
+        {"id": "JA-X", "total": 1000, "currency": "NGN", "status": "pending",
+         "payload": "{}", "at": "2026-01-01", "proof_upload_failed": True},
+        strict=True)
+    assert ok is True
+    assert calls["n"] >= 2  # it retried after dropping the column
+
+
 def test_variant_override_is_used_for_server_side_pricing(client):
     """A variant with its own override must price at the override, not the base."""
     pid = "jau-variant-checkout"

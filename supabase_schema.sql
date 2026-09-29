@@ -17,11 +17,10 @@
 
 -- SECTION: products
 -- ------------------------------------------------------------ products
--- Canonical columns (source of truth): id, name, category, priceNgn,
--- priceCfa, compareNgn, compareCfa, image_url, images, stock_quantity,
--- description, descriptionFr, featured, online, updated_at. Legacy camelCase
--- columns (image, stock, ...) are compatibility aliases; production writes
--- both. camelCase MUST be quoted or Postgres folds it to lowercase (PGRST204).
+-- Canonical columns are the source of truth (priceNgn, priceCfa, image_url,
+-- stock_quantity, ...); legacy camelCase aliases (image, stock, ...) are kept
+-- and production writes both. camelCase MUST be quoted or Postgres folds it to
+-- lowercase (PGRST204).
 create table if not exists products (
   id               text primary key,
   "legacyId"       text,
@@ -49,6 +48,7 @@ create table if not exists products (
   "optionStock"    jsonb,
   "optionPrices"   jsonb,
   "optionCompareAt" jsonb,
+  dimensions       text,
   "bulkQty"        integer,
   "bulkPercent"    integer,
   "placeholderImage" text,
@@ -79,6 +79,7 @@ alter table products add column if not exists images             jsonb;
 alter table products add column if not exists "optionStock"      jsonb;
 alter table products add column if not exists "optionPrices"     jsonb;
 alter table products add column if not exists "optionCompareAt"  jsonb;
+alter table products add column if not exists dimensions         text;
 alter table products add column if not exists "bulkQty"      integer;
 alter table products add column if not exists "bulkPercent"  integer;
 alter table products add column if not exists "placeholderImage" text;
@@ -130,7 +131,10 @@ create table if not exists orders (
   payload       jsonb,
   at            timestamptz,
   updated_at    timestamptz default now(),
-  customer_user_id text
+  customer_user_id text,
+  -- True when a payment proof was provided at checkout but could not be
+  -- uploaded to Storage. The sale still completes; admin re-requests the file.
+  proof_upload_failed boolean default false
 );
 -- Repair an older orders table that may be narrower. Add-only, idempotent,
 -- preserves every existing order row, ids and values. Columns are added
@@ -155,6 +159,7 @@ alter table orders add column if not exists payload       jsonb;
 alter table orders add column if not exists at            timestamptz;
 alter table orders add column if not exists updated_at    timestamptz default now();
 alter table orders add column if not exists customer_user_id text;
+alter table orders add column if not exists proof_upload_failed boolean default false;
 create index if not exists idx_orders_at on orders (at desc);
 create index if not exists idx_orders_status on orders (status);
 create index if not exists idx_orders_customer on orders (customer_user_id);

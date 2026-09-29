@@ -91,7 +91,7 @@ BASE_FIELDS = (
     "id", "sku", "slug", "name", "nameFr", "category", "priceCfa", "compareCfa",
     "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
     "stock", "badge", "featured", "online", "colors", "options", "optionPrices",
-    "optionCompareAt", "supplierId", "supplierSku",
+    "optionCompareAt", "dimensions", "supplierId", "supplierSku",
 )
 
 # Suppliers this shop's automated stock-mirroring tooling is allowed to read
@@ -669,6 +669,12 @@ def normalize(product):
         # the shopper rather than an unwritten field.
         "descriptionFr": sec.clean(
             product.get("descriptionFr") or product.get("description_fr"), 2000),
+        # Free-text physical dimensions (e.g. "30 x 20 x 10 cm"). Optional; a
+        # blank value is simply omitted from the storefront and WhatsApp
+        # catalog caption. Accepts camelCase (admin form) and snake_case
+        # (mirror/import) spellings.
+        "dimensions": sec.clean(
+            product.get("dimensions") or product.get("dimension"), 160),
         "stock": stock_qty,
         "stock_quantity": stock_qty,
         "badge": sec.clean(product.get("badge"), 20),

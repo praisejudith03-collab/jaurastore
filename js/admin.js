@@ -786,6 +786,7 @@ function productForm(p = {}) {
     <p class="admin-note" id="cfa-preview">CFA on the website is converted from Naira at 1 ₦ = 0.44 F CFA. You only enter ₦.</p>
     <div class="field"><label>Add a description</label><textarea name="description" rows="3">${JA.escape(p.description || "")}</textarea></div>
     <div class="field"><label>Description (French — shown when the site is in French)</label><textarea name="descriptionFr" rows="3" placeholder="Optional">${JA.escape(p.descriptionFr || "")}</textarea></div>
+    <div class="field"><label>Dimensions / size (optional — shown on the product page and WhatsApp posts)</label><input name="dimensions" maxlength="160" value="${JA.escape(p.dimensions || "")}" placeholder="e.g. 30 x 20 x 10 cm" /></div>
     <div class="field"><label>Promo display ribbon (Sale, New Arrival, Best Seller)</label>
       <select name="badge">
         <option value="">None</option>
@@ -967,6 +968,7 @@ async function handleProductSubmit(e, existing) {
       optionCompareAt,
       nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
       descriptionFr: String(fd.get("descriptionFr") || "").trim() || existing?.descriptionFr || "",
+      dimensions: String(fd.get("dimensions") || "").trim(),
       // Supplier stock sync mapping. Blank ("Not supplier-synced") is the
       // default and keeps this product entirely out of reach of
       // tools/supplier_stock_sync.py - see catalog.normalize().
@@ -2219,20 +2221,38 @@ function broadcastOptionsLine(p) {
   if (sizes.length) bits.push(`Sizes: ${sizes.slice(0, 8).join(", ")}`);
   return bits.join(" · ");
 }
+function broadcastStockLine(p) {
+  // A plain, shopper-readable availability line for the caption. A variant
+  // product is in stock when any variant has units; a simple product uses its
+  // own quantity. Numbers are never shown - only In stock / Out of stock.
+  const os = (p && p.optionStock && typeof p.optionStock === "object") ? p.optionStock : {};
+  const variantUnits = Object.values(os).reduce((n, q) => n + (Number(q) > 0 ? Number(q) : 0), 0);
+  const inStock = Object.keys(os).length ? variantUnits > 0 : Number(p.stock) > 0;
+  return inStock ? "In stock ✅" : "Out of stock ❌";
+}
+function broadcastDimensionsLine(p) {
+  const dim = String(p && p.dimensions || "").trim();
+  return dim ? `Dimensions: ${dim}` : "";
+}
 function broadcastFullText(p) {
-  // Caption format:
+  // Caption format (single high-res image carries this text):
   // [Product Name English] / [Product Name French]
   // ₦[Price Naira]
   // [Price CFA] CFA
-  // [Options / Details]
+  // In stock / Out of stock
+  // Dimensions: ...            (only when set)
+  // [Options / Details]        (only when set)
   // https://jaurastore.com.ng/product.html?id=[Product ID]
   const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   const cfa = p.priceCfa || toCfa(p.priceNgn || 0);
   const lines = [
     broadcastDisplayName(p),
     `₦${Number(p.priceNgn || 0).toLocaleString()}`,
-    `${Number(cfa || 0).toLocaleString()} CFA`
+    `${Number(cfa || 0).toLocaleString()} CFA`,
+    broadcastStockLine(p)
   ];
+  const dimensionsLine = broadcastDimensionsLine(p);
+  if (dimensionsLine) lines.push(dimensionsLine);
   const optionsLine = broadcastOptionsLine(p);
   if (optionsLine) lines.push(optionsLine);
   lines.push(broadcastProductUrl(p));
