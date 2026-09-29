@@ -7338,6 +7338,7 @@ body[data-page="home"] .home-hero-static h1 {
 .adx-sync-warning::after,.adx-title-warning::after { content:attr(data-tooltip); position:absolute; z-index:20; left:0; bottom:calc(100% + 8px); width:260px; padding:9px 11px; border-radius:8px; background:#32170c; color:#fff; font-size:12px; font-weight:600; line-height:1.35; text-align:left; opacity:0; visibility:hidden; transform:translateY(4px); transition:.15s ease; pointer-events:none; }
 .adx-title-warning::after { left:auto; right:0; }
 .adx-sync-warning:hover::after,.adx-sync-warning:focus-visible::after,.adx-title-warning:hover::after,.adx-title-warning:focus-visible::after { opacity:1; visibility:visible; transform:none; }
+.adx-badge-warn { display:inline-block; margin-left:8px; padding:2px 8px; border-radius:999px; background:#ffd34d; border:1px solid #7d320e; color:#5d2408; font-size:11px; font-weight:800; letter-spacing:.01em; vertical-align:middle; }
 .supplier-focus-pulse { border-radius:10px; animation:supplier-focus-pulse 1.2s ease 2; }
 @keyframes supplier-focus-pulse { 50% { background:#fff1b8; box-shadow:0 0 0 6px rgba(255,211,77,.35); } }
 @media(max-width:520px){.adx-sync-warning span{display:none}.adx-sync-warning{font-size:16px;padding:4px 8px}.adx-sync-warning::after{width:220px}.adx-title-warning::after{right:-45px;width:220px}}

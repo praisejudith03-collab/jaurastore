@@ -335,6 +335,16 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     assert mobile.evaluate("JA.currency()") == "CFA"
     # -- Checkout gateways follow the active/locked currency.
     mobile.goto(live_shop + "/shop.html?lang=fr")
+    # The storefront deliberately shows nothing until the authoritative
+    # /api/catalog answer lands (store.js boot clears window.JA_SEED and awaits
+    # loadSeed), so JA.products() is empty for a beat right after a navigation.
+    # Wait for the live catalogue before adding to the cart, otherwise
+    # JA.products()[0] is undefined and .id throws. NOTE: JA is a top-level
+    # `const` (a global lexical binding, NOT a property of window), so the
+    # condition must reference the bare `JA`, never `window.JA`.
+    mobile.wait_for_function(
+        "() => { try { return typeof JA !== 'undefined' && Array.isArray(JA.products())"
+        " && JA.products().length > 0; } catch (e) { return false; } }")
     mobile.evaluate(
         "() => { const p = JA.products().find(p => JA.stockFor(p, '') > 0) || JA.products()[0];"
         " JA.addToCart(p.id); }")

@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=163" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=164" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -407,9 +407,11 @@ function refreshOptionChips() {
   const stock = status === "out" ? 0 : (qty > 0 ? qty : 24);
   const typed = currentOptionStock();
   const typedPrices = currentOptionPrices();
+  const typedCompare = currentOptionCompareAt();
   const optionStock = { ...(existing.optionStock || {}), ...typed };
   const optionPrices = { ...(existing.optionPrices || {}), ...typedPrices };
-  const fake = { ...existing, options: collectOptions(box || document), stock, optionStock, optionPrices };
+  const optionCompareAt = { ...(existing.optionCompareAt || {}), ...typedCompare };
+  const fake = { ...existing, options: collectOptions(box || document), stock, optionStock, optionPrices, optionCompareAt };
   const varBox = document.getElementById("var-box");
   if (varBox) varBox.innerHTML = variantPanelsHTML(fake);
 }
@@ -659,18 +661,75 @@ function currentOptionPrices() {
   });
   return map;
 }
+function currentOptionCompareAt() {
+  const map = {};
+  document.querySelectorAll("[data-opt-compare]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-compare");
+    if (key && inp.value !== "") map[key] = Math.max(0, Number(inp.value) || 0);
+  });
+  return map;
+}
 function optionPricingHTML(p) {
   const options = p.options || [];
   const overrides = p.optionPrices || {};
+  const compares = p.optionCompareAt || {};
   const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
     const key = `${opt.title}: ${value}`;
     const inherited = Number(p.priceNgn) || 0;
+    const inheritedCompare = Number(p.compareNgn) || 0;
     const valueNgn = overrides[key] != null ? overrides[key] : (overrides[value] != null ? overrides[value] : "");
-    return `<label class="adx-var"><span class="adx-var-name"><strong>${JA.escape(key)}</strong><span>Blank inherits ${JA.money(inherited, "NGN")}</span></span><span class="adx-var-qty">Override ₦<input type="number" min="0" data-opt-price="${JA.escape(key)}" value="${valueNgn}" placeholder="${inherited}" /></span></label>`;
+    const compareNgn = compares[key] != null ? compares[key] : (compares[value] != null ? compares[value] : "");
+    return `<label class="adx-var"><span class="adx-var-name"><strong>${JA.escape(key)}</strong><span>Blank inherits ${JA.money(inherited, "NGN")}</span></span><span class="adx-var-qty">Price ₦<input type="number" min="0" data-opt-price="${JA.escape(key)}" value="${valueNgn}" placeholder="${inherited}" /> <s>Was</s> ₦<input type="number" min="0" data-opt-compare="${JA.escape(key)}" value="${compareNgn}" placeholder="${inheritedCompare || ""}" /></span></label>`;
   })).join("");
-  return `<h3>Option price overrides</h3><p class="admin-note">Leave a price blank to inherit the base product price. Add an override only when this option costs more or less.</p>${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to set individual prices.</p>`}`;
+  return `<h3>Option price overrides</h3><p class="admin-note">Leave the price blank to inherit the base product price. Set an override only when this option costs more or less. The optional "Was" price shows a crossed-out original next to it.</p>${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to set individual prices.</p>`}`;
 }
-function variantPanelsHTML(p) { return optionStockHTML(p) + optionPricingHTML(p); }
+function productHasUnlinkedOption(p) {
+  // True when a supplier-synced product has variant option values but at least
+  // one of them has no per-option Splendall link mapped. Drives the ⚠️
+  // "Missing supplier link" badge at the option level.
+  if (!p || String(p.supplierId || "").toLowerCase() !== "splendall") return false;
+  const links = (p.optionSupplierSku && typeof p.optionSupplierSku === "object") ? p.optionSupplierSku : {};
+  const options = p.options || [];
+  for (const opt of options) {
+    for (const value of (opt.values || [])) {
+      const key = `${opt.title}: ${value}`;
+      const linked = String(links[key] || links[value] || "").trim();
+      if (!linked) return true;
+    }
+  }
+  return false;
+}
+function optionSupplierLinksHTML(p) {
+  // Per-option Splendall links so each variant/component (e.g. Serum,
+  // Shampoo, Conditioner) tracks its OWN supplier stock. A ⚠ badge marks any
+  // option still missing its link while this product is supplier-synced.
+  const isSplendall = String(p.supplierId || "").toLowerCase() === "splendall";
+  const options = p.options || [];
+  const links = p.optionSupplierSku || {};
+  const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
+    const key = `${opt.title}: ${value}`;
+    const url = links[key] != null ? links[key] : (links[value] != null ? links[value] : "");
+    const missing = isSplendall && !String(url).trim();
+    return `<label class="adx-var" data-optlink-row>
+      <span class="adx-var-name"><strong>${JA.escape(key)}</strong>${
+        missing ? `<span class="adx-badge-warn" data-optlink-missing>⚠ Missing supplier link</span>` : ""}</span>
+      <span class="adx-var-qty"><input type="url" data-opt-supplier="${JA.escape(key)}" value="${JA.escape(String(url))}" placeholder="https://www.splendall.com/product/…" /></span>
+    </label>`;
+  })).join("");
+  return `<h3>Splendall link per option</h3>
+    <p class="admin-note">Paste the exact Splendall product link for each option so its stock is tracked on its own. When a component sells out on Splendall only that option is set to sold out; the others stay available. Leave blank if an option is not supplier-synced.</p>
+    ${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to map each one to a Splendall link.</p>`}`;
+}
+function currentOptionSupplierSku() {
+  const map = {};
+  document.querySelectorAll("[data-opt-supplier]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-supplier");
+    const val = String(inp.value || "").trim();
+    if (key && val) map[key] = val;
+  });
+  return map;
+}
+function variantPanelsHTML(p) { return optionStockHTML(p) + optionPricingHTML(p) + optionSupplierLinksHTML(p); }
 function optionStockHTML(p) {
   const opt = (p.options || [])[0];
   const vals = (opt && opt.values) || p.colors || [];
@@ -761,7 +820,7 @@ function productForm(p = {}) {
   return `<form id="prod-form" class="au-edit">
     <button type="button" class="au-back" id="cancel-edit">← Store Products</button>
     <h2>Product ${preCat ? `· ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
-    ${syncWarning ? `<div class="supplier-sync-alert" role="alert"><strong>Supplier stock is unconfirmed</strong><span>${JA.escape(syncWarning.reason || "The latest Splendall audit could not confirm this product.")}</span><small>No stock was guessed or changed. Check the supplier mapping/options before relying on automatic sync.</small></div>` : ""}
+    ${syncWarning ? `<div class="supplier-sync-alert" role="alert"><strong>${String(syncWarning.code || "") === "variant_color_mapping" ? "⚠️ Check Variant Color Mapping" : "Supplier stock is unconfirmed"}</strong><span>${JA.escape(syncWarning.reason || "The latest Splendall audit could not confirm this product.")}</span><small>${String(syncWarning.code || "") === "variant_color_mapping" ? "Confirm which colour each Splendall link belongs to below. Your custom option names are kept exactly as typed." : "No stock was guessed or changed. Check the supplier mapping/options before relying on automatic sync."}</small></div>` : ""}
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
     <div class="field"><label>Product Name</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
     <div class="field"><label>Product Name (French — shown when the site is in French)</label><input name="nameFr" maxlength="80" value="${JA.escape(p.nameFr || "")}" placeholder="Optional" /></div>
@@ -773,6 +832,7 @@ function productForm(p = {}) {
     <p class="admin-note" id="cfa-preview">CFA on the website is converted from Naira at 1 ₦ = 0.44 F CFA. You only enter ₦.</p>
     <div class="field"><label>Add a description</label><textarea name="description" rows="3">${JA.escape(p.description || "")}</textarea></div>
     <div class="field"><label>Description (French — shown when the site is in French)</label><textarea name="descriptionFr" rows="3" placeholder="Optional">${JA.escape(p.descriptionFr || "")}</textarea></div>
+    <div class="field"><label>Dimensions / size (optional — shown on the product page and WhatsApp posts)</label><input name="dimensions" maxlength="160" value="${JA.escape(p.dimensions || "")}" placeholder="e.g. 30 x 20 x 10 cm" /></div>
     <div class="field"><label>Promo display ribbon (Sale, New Arrival, Best Seller)</label>
       <select name="badge">
         <option value="">None</option>
@@ -909,6 +969,17 @@ async function handleProductSubmit(e, existing) {
     const key = inp.getAttribute("data-opt-price");
     if (key && inp.value !== "") optionPrices[key] = Math.max(0, Number(inp.value) || 0);
   });
+  const optionCompareAt = {};
+  e.target.querySelectorAll("[data-opt-compare]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-compare");
+    if (key && inp.value !== "") optionCompareAt[key] = Math.max(0, Number(inp.value) || 0);
+  });
+  const optionSupplierSku = {};
+  e.target.querySelectorAll("[data-opt-supplier]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-supplier");
+    const val = String(inp.value || "").trim();
+    if (key && val) optionSupplierSku[key] = val;
+  });
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
   const priceNgn = num("priceNgn") || 0;
   const compareNgn = num("compareNgn");
@@ -946,13 +1017,17 @@ async function handleProductSubmit(e, existing) {
       options,
       optionStock: hasOptionStock ? optionStock : (existing?.optionStock || {}),
       optionPrices,
+      optionCompareAt,
       nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
       descriptionFr: String(fd.get("descriptionFr") || "").trim() || existing?.descriptionFr || "",
+      dimensions: String(fd.get("dimensions") || "").trim(),
       // Supplier stock sync mapping. Blank ("Not supplier-synced") is the
       // default and keeps this product entirely out of reach of
       // tools/supplier_stock_sync.py - see catalog.normalize().
       supplierId: String(fd.get("supplierId") || "").trim(),
       supplierSku: String(fd.get("supplierSku") || "").trim(),
+      // Per-option Splendall links so each component tracks its own stock.
+      optionSupplierSku,
   });
   if (window.__editReviews && JA.setReviews) JA.setReviews(id, window.__editReviews);
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = existing ? "Save" : "Add a Product"; }
@@ -1042,15 +1117,35 @@ function renderProdGrid() {
     // A warning belongs only to an explicitly supplier-synced product. Rows
     // left as "Not supplier-synced" are in-house inventory and must never be
     // made to look broken merely because an old warning record still exists.
-    const syncWarning = String(p.supplierId || "").toLowerCase() === "splendall"
+    const isSplendall = String(p.supplierId || "").toLowerCase() === "splendall";
+    const syncWarning = isSplendall
       ? supplierWarnings.find((row) => String(row.product_id || "") === String(p.id))
       : null;
-    const warningText = "⚠️ Supplier link unverified or stock out of sync. Tap to review/link manually.";
-    const warningButton = syncWarning ? `<button type="button" class="adx-sync-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️ <span>Supplier warning</span></button>` : "";
-    return `<article class="adx-card${syncWarning ? " has-sync-warning" : ""}" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
+    // A product marked as a Splendall item but with NO supplier link yet has
+    // no automated match. Owner rule: leave the link empty and flag it with a
+    // ⚠️ badge so it can be linked manually in one click. This also fires when
+    // the product itself is linked but one of its variant OPTIONS still has no
+    // per-option Splendall link (so per-variant stock cannot be tracked).
+    const missingLink = isSplendall && (
+      !String(p.supplierSku || "").trim() || productHasUnlinkedOption(p));
+    const showWarning = !!syncWarning || missingLink;
+    // A colour-mapping ambiguity is its own, more specific alert: the sync
+    // found Splendall colours/links it could not confidently attach to a
+    // custom storefront option and needs a one-tap manual confirmation.
+    const colorMapping = syncWarning && String(syncWarning.code || "") === "variant_color_mapping";
+    const warningText = colorMapping
+      ? "⚠️ Check Variant Color Mapping. Tap to confirm which colour each Splendall link belongs to."
+      : (missingLink && !syncWarning
+        ? "⚠️ No Splendall link yet. Tap to add the supplier product link."
+        : "⚠️ Supplier link unverified or stock out of sync. Tap to review/link manually.");
+    const warningLabel = colorMapping
+      ? "Check variant colour"
+      : (missingLink && !syncWarning ? "Missing supplier link" : "Supplier warning");
+    const warningButton = showWarning ? `<button type="button" class="adx-sync-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️ <span>${warningLabel}</span></button>` : "";
+    return `<article class="adx-card${showWarning ? " has-sync-warning" : ""}" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
       <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}${warningButton}</div>
-      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong>${syncWarning ? `<button type="button" class="adx-title-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️</button>` : ""}</div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
+      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong>${showWarning ? `<button type="button" class="adx-title-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️</button>` : ""}</div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     </article>`;
   }).join("");
@@ -2078,9 +2173,19 @@ function saveBroadcastOverrides() {
   try { sessionStorage.setItem(broadcastOverrideStorageKey(), JSON.stringify(bcOverrides)); } catch (e) {}
 }
 
+function broadcastInStock(p) {
+  // Availability gate for WhatsApp sharing (owner rule: only available items
+  // may be posted). A variant product is in stock when ANY option still has
+  // units; a simple product uses its own quantity. Never shares a sold-out
+  // item or one whose every variant is 0.
+  if (!p) return false;
+  const os = (p.optionStock && typeof p.optionStock === "object") ? p.optionStock : {};
+  if (Object.keys(os).length) return Object.values(os).some((q) => Number(q) > 0);
+  return Number(p.stock) > 0;
+}
 function broadcastEligibleProducts() {
   const all = JA.products ? JA.products() : [];
-  return all.filter((p) => p && p.id && p.online !== false && Number(p.stock) > 0);
+  return all.filter((p) => p && p.id && p.online !== false && broadcastInStock(p) && Number(p.stock) > 0);
 }
 
 function broadcastDaySeed() {
@@ -2192,13 +2297,19 @@ function broadcastOptionsLine(p) {
   if (sizes.length) bits.push(`Sizes: ${sizes.slice(0, 8).join(", ")}`);
   return bits.join(" · ");
 }
+function broadcastDimensionsLine(p) {
+  // The raw dimensions/specs value (e.g. "40×60 cm"), shown only when set.
+  // No label prefix - the Jaura Channel caption lists clean values only.
+  return String(p && p.dimensions || "").trim();
+}
 function broadcastFullText(p) {
-  // Caption format:
-  // [Product Name English] / [Product Name French]
-  // ₦[Price Naira]
-  // [Price CFA] CFA
-  // [Options / Details]
-  // https://jaurastore.com.ng/product.html?id=[Product ID]
+  // Jaura Channel caption, attached to the single high-res product photo.
+  // EXACT layout (owner spec) - and NO stock labels ever appear here:
+  //   Line 1: [Product Name English] / [Product Name French]
+  //   Line 2: ₦[Price Naira]
+  //   Line 3: [Price CFA] CFA
+  //   Line 4: [Dimensions / Specs]   (only when set)
+  //   Line 5: https://jaurastore.com.ng/product.html?id=[Product ID]
   const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   const cfa = p.priceCfa || toCfa(p.priceNgn || 0);
   const lines = [
@@ -2206,8 +2317,8 @@ function broadcastFullText(p) {
     `₦${Number(p.priceNgn || 0).toLocaleString()}`,
     `${Number(cfa || 0).toLocaleString()} CFA`
   ];
-  const optionsLine = broadcastOptionsLine(p);
-  if (optionsLine) lines.push(optionsLine);
+  const dimensionsLine = broadcastDimensionsLine(p);
+  if (dimensionsLine) lines.push(dimensionsLine);
   lines.push(broadcastProductUrl(p));
   return lines.join("\n");
 }
@@ -2247,6 +2358,12 @@ function broadcastCanShareFiles(files) {
 }
 
 async function broadcastShareNative(p) {
+  // Out-of-stock guard: never post a sold-out item (or one whose every
+  // variant is 0) to WhatsApp, even if a stale card was tapped.
+  if (!broadcastInStock(p)) {
+    JA.toast("This item is out of stock — only available products can be shared to WhatsApp.");
+    return;
+  }
   const text = broadcastFullText(p);
   try {
     const file = await broadcastImageFile(p);
@@ -2828,7 +2945,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=163" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=164" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3190,7 +3307,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=163", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=164", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

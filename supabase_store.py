@@ -358,6 +358,13 @@ def _upsert_products_resilient(rows):
             if dropped:
                 print("[supabase] products upsert: stored without columns "
                       f"{sorted(set(dropped))} (table lacks them)")
+                # Silently dropping a column is how per-variant price/compare
+                # overrides "revert to defaults on catalog sync": the table is
+                # missing the column, so the value is quietly thrown away every
+                # save. Surface that as an admin warning badge so the owner
+                # knows to run the products-table migration, instead of losing
+                # the data invisibly.
+                _warn_missing_price_columns(sorted(set(dropped)))
             return True
         except Exception as exc:
             match = _MISSING_COLUMN_RE.search(str(exc))
@@ -832,6 +839,43 @@ def load_categories_table():
 # parameter raised TypeError inside the route - after the order was already
 # written to SQLite - so every live checkout answered 500 and the purchase event was skipped;
 # the order never reached the orders table.
+# Columns a completed sale cannot be recorded without. Everything else (a
+# newer optional flag like proof_upload_failed on an older, narrower orders
+# table) may be dropped so the SALE is never lost to a schema mismatch - the
+# same resilience the products upsert already has. The full order is always
+# preserved inside the payload JSON regardless.
+_CRITICAL_ORDER_COLUMNS = frozenset(
+    {"id", "total", "currency", "status", "payload", "at"})
+
+
+def _upsert_order_resilient(row, strict):
+    """Upsert one order row, dropping only non-critical unknown columns.
+
+    Returns True on success. When `strict` is False a total failure is
+    swallowed (best-effort mirror); when True the caller surfaces it.
+    """
+    c = client()
+    if c is None:
+        return False
+    pending = dict(row)
+    for _ in range(len(pending) + 1):
+        try:
+            c.table("orders").upsert(pending).execute()
+            return True
+        except Exception as exc:
+            match = _MISSING_COLUMN_RE.search(str(exc))
+            col = match.group(1) if match else ""
+            if not col or col in _CRITICAL_ORDER_COLUMNS or col not in pending:
+                print(f"[supabase] order upsert failed: {exc}")
+                return False
+            # A non-critical column the table does not have: drop and retry so
+            # the sale still lands. The dropped value survives in payload JSON.
+            pending.pop(col, None)
+            print(f"[supabase] order upsert: retrying without missing column '{col}'")
+    print("[supabase] order upsert failed: too many missing columns")
+    return False
+
+
 def create_order(order, engine=None):
     """Persist a completed checkout into Supabase (best-effort mirror)."""
     c = client()
@@ -840,17 +884,16 @@ def create_order(order, engine=None):
     row = dict(order)
     row["payload"] = json.dumps(order.get("payload", order), ensure_ascii=False)
     row["updated_at"] = _now()
-    try:
-        c.table("orders").upsert(row).execute()
-    except Exception as exc:
-        print(f"[supabase] order upsert failed: {exc}")
+    _upsert_order_resilient(row, strict=False)
 
 
 def create_order_strict(order):
     """Persist a completed checkout into Supabase; True only on success.
 
     This is the production write path: Supabase PostgreSQL is the record of
-    the sale and a failure is surfaced, never swallowed.
+    the sale and a failure is surfaced, never swallowed. A missing OPTIONAL
+    column (e.g. proof_upload_failed on an older table) never fails the sale -
+    only a genuine write failure or a missing CRITICAL column does.
     """
     c = client()
     if c is None:
@@ -858,12 +901,7 @@ def create_order_strict(order):
     row = dict(order)
     row["payload"] = json.dumps(order.get("payload", order), ensure_ascii=False)
     row["updated_at"] = _now()
-    try:
-        c.table("orders").upsert(row).execute()
-        return True
-    except Exception as exc:
-        print(f"[supabase] order upsert failed: {exc}")
-        return False
+    return _upsert_order_resilient(row, strict=True)
 
 
 def mirror_abandoned_cart(row):
@@ -1430,6 +1468,38 @@ def save_supplier_sync_warnings(warnings):
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] supplier warnings save failed: {exc}")
         return False
+
+
+# Product columns that carry per-variant pricing. If the live products table
+# is missing one of these, a save silently drops it (see
+# _upsert_products_resilient) and the override "reverts to default". We raise a
+# durable warning so the admin dashboard shows a ⚠️ badge to run the migration.
+_PRICE_PERSIST_COLUMNS = frozenset(
+    {"optionPrices", "optionCompareAt", "compareNgn", "compareCfa"})
+_SCHEMA_WARNING_KEY = "products_schema_warning"
+
+
+def _warn_missing_price_columns(dropped):
+    """Record a durable warning when a pricing column could not be persisted."""
+    price_cols = [col for col in (dropped or []) if col in _PRICE_PERSIST_COLUMNS]
+    if not price_cols:
+        return
+    try:
+        warnings = [w for w in (load_supplier_sync_warnings() or [])
+                    if isinstance(w, dict) and w.get("product_id") != _SCHEMA_WARNING_KEY]
+        warnings.append({
+            "product_id": _SCHEMA_WARNING_KEY,
+            "product_name": "Product price columns",
+            "code": "products_table_missing_columns",
+            "reason": ("The Supabase products table is missing column(s) "
+                       + ", ".join(price_cols) + ". Price / compare-at overrides "
+                       "cannot be saved and will revert to defaults until the "
+                       "products migration in supabase_schema.sql is applied."),
+            "at": _now(),
+        })
+        save_supplier_sync_warnings(warnings)
+    except Exception as exc:                        # pragma: no cover - defensive
+        print(f"[supabase] schema warning record failed: {exc}")
 
 
 def load_supplier_sync_warnings():

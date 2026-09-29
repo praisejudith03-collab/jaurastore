@@ -519,6 +519,202 @@ def fetch_supplier_variant_stock(product):
     return option_stock, audit
 
 
+def _option_link_candidates(row):
+    """Spellings a per-option link may be keyed by: the bare optionStock key
+    ("Serum"), each option value on its own, or the admin's composed
+    "Title: Value" form ("Type: Serum")."""
+    cands = [row.get("key")]
+    for opt in row.get("options") or []:
+        if isinstance(opt, dict) and opt.get("value"):
+            cands.append(opt.get("value"))
+            if opt.get("name"):
+                cands.append(f"{opt.get('name')}: {opt.get('value')}")
+    return [c for c in cands if c]
+
+
+def _label_tokens(label):
+    """Alphanumeric word tokens of an option label, lowercased."""
+    return [t for t in re.split(r"[^a-z0-9]+", str(label or "").lower()) if t]
+
+
+def _labels_match(store_label, supplier_label):
+    """Confidence that a storefront custom label and a supplier label name the
+    same option. Returns 'exact', 'partial', or None.
+
+    'exact'   - identical once folded ("Mustard Yellow" == "mustard yellow").
+    'partial' - one label's word tokens are a subset of the other's and they
+                share at least one token, so a merchant custom name like
+                "Mustard Yellow" still recognises the supplier's basic "Yellow"
+                (and vice versa) WITHOUT ever renaming the storefront option.
+    """
+    if not str(store_label or "").strip() or not str(supplier_label or "").strip():
+        return None
+    if catalog.fold_option_value(store_label) == catalog.fold_option_value(supplier_label):
+        return "exact"
+    a, b = set(_label_tokens(store_label)), set(_label_tokens(supplier_label))
+    if a and b and (a <= b or b <= a):
+        return "partial"
+    return None
+
+
+# Generic, non-colour variation labels a supplier might use when a colour is
+# not spelled out. Only these unlabelled/ambiguous cases may be assigned by
+# positional elimination - a clearly named colour ("Teal") never is.
+_AMBIGUOUS_LABEL_TOKENS = {
+    "default", "variation", "variations", "variant", "variants", "option",
+    "options", "choice", "style", "type", "na", "none", "color", "colour",
+}
+
+
+def _is_ambiguous_label(label):
+    """True when a supplier label carries no distinguishing colour/word - e.g.
+    it is blank, purely numeric/slug-like, or a generic "Variation #2"."""
+    tokens = _label_tokens(label)
+    if not tokens:
+        return True
+    return all(t.isdigit() or t in _AMBIGUOUS_LABEL_TOKENS for t in tokens)
+
+
+def infer_remaining_option_links(store_labels, candidate_links):
+    """Map remaining storefront option labels to a pool of supplier links.
+
+    Reconciliation order, each preserving the merchant's custom option NAMES
+    (only the URL is ever assigned, never the label):
+      1. fold-exact label match ("Mustard Yellow" -> a "Mustard Yellow" link),
+      2. token-subset match ("Mustard Yellow" -> a basic "Yellow" link),
+      3. positional elimination ONLY when a single storefront colour and a
+         single AMBIGUOUS/unlabelled supplier link remain (e.g. "Variation 2").
+
+    A clearly named leftover colour is never force-matched: it lands in
+    ``review`` so the merchant confirms it.
+
+    Returns ``{"links": {store_label: url}, "review": [store_label, ...]}``.
+    A label lands in ``review`` (⚠️ Check Variant Color Mapping) only when a
+    link is still available but cannot be confidently attached to it.
+    """
+    links = {}
+    remaining = {k: str(v).strip() for k, v in (candidate_links or {}).items()
+                 if str(v or "").strip()}
+    pending = list(store_labels)
+    for confidence in ("exact", "partial"):
+        for label in list(pending):
+            matches = [k for k in remaining if _labels_match(label, k) == confidence]
+            if len(matches) == 1:
+                links[label] = remaining.pop(matches[0])
+                pending.remove(label)
+    # Positional elimination - safe only when the lone leftover supplier label
+    # is ambiguous/unlabelled, so we are filling in a blank, not renaming a
+    # deliberately different colour.
+    if len(pending) == 1 and len(remaining) == 1:
+        only_label = next(iter(remaining))
+        if _is_ambiguous_label(only_label):
+            links[pending.pop()] = remaining.pop(only_label)
+    review = list(pending) if remaining else []
+    return {"links": links, "review": review}
+
+
+def resolve_option_links(store_rows, links):
+    """Attach each storefront option to a Splendall URL from the pasted pool.
+
+    Two layers, both keeping the storefront's custom labels intact:
+      * an exact spelling pass (the option key, its value, or the admin's
+        "Title: Value" form) that honours a merchant's deliberate mapping, then
+      * intelligent inference over whatever URLs are left (see
+        infer_remaining_option_links) so unlabelled/ambiguous colours are
+        assigned by token overlap and elimination.
+
+    Returns ``{"links": {store_key: url}, "missing": [...], "review": [...]}``.
+    ``missing`` are options with no link at all (⚠️ Missing supplier link);
+    ``review`` are options/colours that need a one-tap manual confirmation
+    (⚠️ Check Variant Color Mapping), including brand-new Splendall colours
+    with no storefront home.
+    """
+    folded = {}
+    for label, url in (links or {}).items():
+        clean = str(url or "").strip()
+        if clean:
+            folded[catalog.fold_option_value(label)] = (str(label), clean)
+
+    assigned, used_folds, pending = {}, set(), []
+    for row in store_rows:
+        hit = None
+        for cand in _option_link_candidates(row):
+            fk = catalog.fold_option_value(cand)
+            if fk in folded and fk not in used_folds:
+                hit = fk
+                break
+        if hit:
+            assigned[row["key"]] = folded[hit][1]
+            used_folds.add(hit)
+        else:
+            pending.append(row["key"])
+
+    remaining = {folded[fk][0]: folded[fk][1] for fk in folded if fk not in used_folds}
+    review, missing = [], []
+    if pending and remaining:
+        inferred = infer_remaining_option_links(pending, remaining)
+        assigned.update(inferred["links"])
+        review.extend(inferred["review"])
+        homed = set(inferred["links"].values())
+        # A leftover supplier link with no storefront home is a NEW colour the
+        # merchant has not created yet - flag it for manual confirmation.
+        leftover = [lab for lab, url in remaining.items() if url not in homed]
+        review.extend(leftover)
+        missing.extend([k for k in pending if k not in assigned and k not in inferred["review"]])
+    elif pending:
+        missing.extend(pending)
+
+    return {"links": assigned, "missing": missing, "review": sorted(set(review))}
+
+
+def fetch_per_option_supplier_stock(product, fetch=None):
+    """Mirror stock per variant option using each option's OWN supplier link.
+
+    Unlike fetch_supplier_variant_stock (one supplier product, many
+    variations), this reads ``optionSupplierSku`` - a pool of Splendall URLs -
+    and reconciles it to the storefront's custom option labels (see
+    resolve_option_links), then fetches each option's stock from its own
+    simple supplier product. An option whose link runs out is set to 0 while
+    the others stay active. Options with no link are left untouched and
+    reported so the Admin can raise a "Missing supplier link" badge; colours it
+    cannot confidently match raise a "Check Variant Color Mapping" alert.
+
+    Returns ``(option_stock, audit, missing_links, review_links)``.
+    ``option_stock`` only contains the options confirmed from the supplier;
+    callers merge it onto the existing map so unlinked options keep their
+    current quantity, and custom labels are never rewritten.
+    """
+    fetch = fetch or fetch_supplier_quantity
+    raw_links = product.get("optionSupplierSku")
+    links = raw_links if isinstance(raw_links, dict) else {}
+    store_rows = _store_variant_rows(product)
+    if not store_rows:
+        raise SupplierFetchError("store product has no options to map to supplier links",
+                                 code="store_options_missing")
+    resolved = resolve_option_links(store_rows, links)
+    option_stock, audit = {}, []
+    for row in store_rows:
+        key = row["key"]
+        url = resolved["links"].get(key)
+        if not url:
+            continue
+        qty, detail = fetch(url)
+        option_stock[key] = qty
+        audit.append({
+            "option": key,
+            "supplier_sku": url,
+            "quantity": qty,
+            "status": "in_stock" if qty > 0 else "out_of_stock",
+            "detail": detail,
+        })
+    missing, review = resolved["missing"], resolved["review"]
+    if not option_stock and (missing or review):
+        raise SupplierFetchError(
+            f"none of the {len(store_rows)} variant option(s) has a supplier link",
+            code="option_links_missing")
+    return option_stock, audit, missing, review
+
+
 # -------------------------------------------------- autonomous catalog crawl
 def _parse_supplier_row(row):
     if not isinstance(row, dict):
@@ -966,9 +1162,27 @@ def sync_one(product, dry_run=False, warnings=None):
         warning_map[pid] = _warning_row(product, "protected_product_mapping", reason)
         return "protected"
 
+    per_option_links = product.get("optionSupplierSku")
+    has_per_option_links = isinstance(per_option_links, dict) and any(
+        str(v or "").strip() for v in per_option_links.values())
+    missing_links, review_links = [], []
     try:
         store_variants = _store_variant_rows(product)
-        if store_variants:
+        if store_variants and has_per_option_links:
+            # Each variant option carries its OWN Splendall link: mirror stock
+            # per option so a sold-out component zeroes only itself. Confirmed
+            # options merge onto the existing map; unlinked ones stay as-is and
+            # custom option labels ("Mustard Yellow") are never rewritten.
+            confirmed, audit, missing_links, review_links = fetch_per_option_supplier_stock(product)
+            existing = product.get("optionStock") if isinstance(product.get("optionStock"), dict) else {}
+            option_stock = dict(existing)
+            option_stock.update(confirmed)
+            qty = sum(option_stock.values())
+            detail = (f"{len(confirmed)} per-option link(s) confirmed"
+                      + (f", {len(missing_links)} unlinked" if missing_links else "")
+                      + (f", {len(review_links)} to review" if review_links else "")
+                      + f", total={qty}")
+        elif store_variants:
             option_stock, audit = fetch_supplier_variant_stock(product)
             qty = sum(option_stock.values())
             detail = f"{len(option_stock)} exact option variant(s), total={qty}"
@@ -984,11 +1198,28 @@ def sync_one(product, dry_run=False, warnings=None):
         warning_map[pid] = _warning_row(product, "unexpected_supplier_reply", str(exc))
         return "uncertain"
 
+    def _note_option_warnings():
+        """Keep a non-fatal per-option alert visible in Admin even when the
+        confirmed options needed no stock change. A colour-mapping ambiguity
+        (⚠️ Check Variant Color Mapping) takes precedence over a plain missing
+        link because it needs a human decision, not just a paste."""
+        if review_links:
+            reason = ("Check Variant Color Mapping: could not confidently match "
+                      "these Splendall colours/links to a storefront option - "
+                      f"confirm manually: {', '.join(str(x) for x in review_links[:20])}")
+            warning_map[pid] = _warning_row(product, "variant_color_mapping", reason, audit)
+        elif missing_links:
+            reason = ("some variant option(s) have no Splendall link and were "
+                      f"left unchanged: {', '.join(missing_links[:20])}")
+            warning_map[pid] = _warning_row(product, "option_link_missing", reason, audit)
+        else:
+            warning_map.pop(pid, None)
+
     current = catalog.stock_of(product)
     current_options = product.get("optionStock") if isinstance(product.get("optionStock"), dict) else {}
     unchanged = current == qty and (option_stock is None or current_options == option_stock)
     if unchanged:
-        warning_map.pop(pid, None)
+        _note_option_warnings()
         print(f"ok: {name!r} ({pid}) already matches supplier ({qty}) [{detail}]")
         return "unchanged"
 
@@ -1007,7 +1238,7 @@ def sync_one(product, dry_run=False, warnings=None):
         print(f"warning: failed to write stock for {name!r} ({pid}) - left at {current}")
         warning_map[pid] = _warning_row(product, "stock_write_failed", reason, audit)
         return "write-failed"
-    warning_map.pop(pid, None)
+    _note_option_warnings()
     print(f"updated: {name!r} ({pid}) {current} -> {qty} [{detail}]")
     return "updated-out-of-stock" if qty == 0 and current != 0 else "updated"
 

@@ -91,7 +91,8 @@ BASE_FIELDS = (
     "id", "sku", "slug", "name", "nameFr", "category", "priceCfa", "compareCfa",
     "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
     "stock", "badge", "featured", "online", "colors", "options", "optionPrices",
-    "supplierId", "supplierSku",
+    "optionCompareAt", "dimensions", "supplierId", "supplierSku",
+    "optionSupplierSku",
 )
 
 # Suppliers this shop's automated stock-mirroring tooling is allowed to read
@@ -669,6 +670,12 @@ def normalize(product):
         # the shopper rather than an unwritten field.
         "descriptionFr": sec.clean(
             product.get("descriptionFr") or product.get("description_fr"), 2000),
+        # Free-text physical dimensions (e.g. "30 x 20 x 10 cm"). Optional; a
+        # blank value is simply omitted from the storefront and WhatsApp
+        # catalog caption. Accepts camelCase (admin form) and snake_case
+        # (mirror/import) spellings.
+        "dimensions": sec.clean(
+            product.get("dimensions") or product.get("dimension"), 160),
         "stock": stock_qty,
         "stock_quantity": stock_qty,
         "badge": sec.clean(product.get("badge"), 20),
@@ -678,6 +685,10 @@ def normalize(product):
         "options": list(product.get("options") or []),
         "optionStock": option_stock,
         "optionPrices": _clean_option_prices(product.get("optionPrices") or product.get("option_prices")),
+        # Per-option "was" (strike-through) prices, mirroring optionPrices.
+        # A variant with an entry here shows the original price crossed out
+        # next to its override; a blank entry inherits the product compareNgn.
+        "optionCompareAt": _clean_option_prices(product.get("optionCompareAt") or product.get("option_compare_at")),
         # Optional per-product bulk discount: order MORE than bulkQty units of
         # this product and bulkPercent is taken off its unit price at
         # checkout. Both values or neither - a lone percentage with no
@@ -698,6 +709,10 @@ def normalize(product):
             product.get("supplierId") or product.get("supplier_id"), 40).lower(),
         "supplierSku": sec.clean(
             product.get("supplierSku") or product.get("supplier_sku"), 200),
+        # Per-option supplier links (component -> Splendall URL) so the sync
+        # can mirror stock for each variant independently.
+        "optionSupplierSku": _clean_option_supplier_sku(
+            product.get("optionSupplierSku") or product.get("option_supplier_sku")),
         "updated_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
     return out
@@ -864,6 +879,25 @@ def _clean_option_prices(raw):
         price = sec.clean_int(value, None, 0, 10**9)
         if label and price is not None:
             out[label] = price
+    return out
+
+
+def _clean_option_supplier_sku(raw):
+    """Per-option supplier links, e.g. {"Serum": "https://splendall.com/...",
+    "Shampoo": "https://..."}. Each variant option (a distinct component such
+    as Serum / Shampoo / Conditioner) can point at its OWN Splendall product
+    so the automated stock sync mirrors availability per option, not per
+    product. Blank values are dropped so an unlinked option is simply absent
+    (which the admin surfaces as a "Missing supplier link" badge)."""
+    import security as sec
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, value in list(raw.items())[:200]:
+        label = sec.clean(key, 160)
+        link = sec.clean(value, 500)
+        if label and link:
+            out[label] = link
     return out
 
 

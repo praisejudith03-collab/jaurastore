@@ -48,8 +48,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=163";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=163";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=164";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=164";
 }
 
 function renderCategories() {
@@ -848,6 +848,7 @@ function paintProduct(root, p) {
       })()}
       <button type="button" class="wish-btn pdp-wish ${JA.isWished(p.id) ? "is-on" : ""}" data-wish="${p.id}"><svg class="wish-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg><span>${t("nav.wishlist")}</span></button>
       ${showDesc ? `<p class="pdp-desc">${JA.escape(desc)}</p>` : ""}
+      ${p.dimensions ? `<p class="pdp-dims"><strong>${t("pdp.dimensions") || "Dimensions"}:</strong> ${JA.escape(p.dimensions)}</p>` : ""}
       ${optHTML}
       ${extra}
       <div class="kicker">${t("pdp.qty")}</div>
@@ -1001,7 +1002,14 @@ function paintProduct(root, p) {
       chosen[oi] = b.dataset.val;
       const selectedVariant = variantPartial();
       const priceEl = root.querySelector(`[data-price-for="${p.id}"]`);
-      if (priceEl) priceEl.innerHTML = `<span class="now">${JA.money(JA.priceOf(p, JA.currency(), selectedVariant))}</span>`;
+      if (priceEl) {
+        const cur = JA.currency();
+        const now = JA.priceOf(p, cur, selectedVariant);
+        const was = JA.compareOf ? JA.compareOf(p, cur, selectedVariant) : 0;
+        priceEl.innerHTML = (was && was > now)
+          ? `<s>${JA.money(was, cur)}</s><span class="now">${JA.money(now, cur)}</span>`
+          : `<span class="now">${JA.money(now, cur)}</span>`;
+      }
       updateStockUI();
     });
   });

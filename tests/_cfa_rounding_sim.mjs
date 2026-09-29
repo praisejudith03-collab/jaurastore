@@ -58,6 +58,11 @@ function makeSandbox() {
     requestAnimationFrame: (fn) => setTimeout(fn, 0),
   };
   sandbox.window = sandbox;
+  // A real browser window exposes the event API; js/store.js registers window
+  // listeners (ja:store-status, focus, pageshow, ...) at load, so mirror it.
+  if (typeof sandbox.addEventListener !== "function") sandbox.addEventListener = () => {};
+  if (typeof sandbox.removeEventListener !== "function") sandbox.removeEventListener = () => {};
+  if (typeof sandbox.dispatchEvent !== "function") sandbox.dispatchEvent = () => true;
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(storeSrc, sandbox, { filename: "js/store.js" });
@@ -137,3 +142,6 @@ if (failures) {
   process.exit(1);
 }
 console.log("\nAll F CFA ceiling checks passed");
+// js/store.js now registers window listeners/timers at load; exit explicitly
+// so the one-shot check does not hang waiting on a live event loop.
+process.exit(0);

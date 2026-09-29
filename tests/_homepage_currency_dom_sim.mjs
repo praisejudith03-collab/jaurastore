@@ -127,6 +127,11 @@ sandbox.document = {
   createElement: () => makeEl("el"),
 };
 sandbox.window = sandbox;
+// A real browser window exposes the event API; js/store.js registers window
+// listeners (ja:store-status, focus, pageshow, ...) at load, so mirror it.
+if (typeof sandbox.addEventListener !== "function") sandbox.addEventListener = () => {};
+if (typeof sandbox.removeEventListener !== "function") sandbox.removeEventListener = () => {};
+if (typeof sandbox.dispatchEvent !== "function") sandbox.dispatchEvent = () => true;
 sandbox.globalThis = sandbox;
 sandbox.I18N = { t: (k) => ({ "card.add": "Add to cart", "card.oos": "Out of stock" }[k] || k), apply() {}, lang: () => "en" };
 sandbox.fallbackImg = () => {};
