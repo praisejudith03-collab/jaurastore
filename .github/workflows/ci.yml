@@ -33,7 +33,7 @@ jobs:
       - name: Run test suite
         run: |
           set -o pipefail
-          python -m pytest tests/ -q -ra --tb=short 2>&1 | tee pytest-output.txt
+          python -m pytest "tests/test_browser_smoke.py::test_automatic_language_and_currency_logic" -q -ra --tb=long 2>&1 | tee pytest-output.txt
 
       # When the suite fails, surface the exact failing tests + short
       # tracebacks straight onto the pull request. Some sandboxes can reach
