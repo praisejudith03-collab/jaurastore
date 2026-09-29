@@ -845,3 +845,80 @@ def test_official_splendall_target_and_audit_report_are_pinned():
     workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "supplier-stock-sync.yml").read_text()
     assert "SPLENDALL_BASE_URL: https://www.splendall.com" in workflow
     assert "--report supplier-sync-report.json" in workflow
+
+
+# ------------------------------------------------ per-option supplier links
+
+
+def test_per_option_links_mirror_each_component_independently(iso_catalog, monkeypatch):
+    """A variant product whose options each carry their OWN Splendall link
+    tracks stock per option: a sold-out component zeroes only itself while the
+    other options stay available."""
+    product = _make(
+        iso_catalog, name="Hair Care Kit", stock=30,
+        options=[{"title": "Type", "values": ["Serum", "Shampoo", "Conditioner"]}],
+        optionStock={"Serum": 10, "Shampoo": 10, "Conditioner": 10},
+        supplierId="splendall", supplierSku="hair-care-kit",
+        optionSupplierSku={
+            "Type: Serum": "https://www.splendall.com/product/serum/",
+            "Type: Shampoo": "https://www.splendall.com/product/shampoo/",
+            "Type: Conditioner": "https://www.splendall.com/product/conditioner/",
+        })
+
+    def _fetch(url):
+        if "shampoo" in url:
+            return (0, "supplier reports out of stock")
+        if "serum" in url:
+            return (4, "4 in stock")
+        return (7, "7 in stock")
+    monkeypatch.setattr(sync_mod, "fetch_supplier_quantity", _fetch)
+
+    rc = sync_mod.main(["supplier_stock_sync.py", product["id"]])
+    assert rc == 0
+
+    refreshed = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == product["id"])
+    os_map = refreshed.get("optionStock") or {}
+    assert os_map["Serum"] == 4
+    assert os_map["Shampoo"] == 0          # only this component went out of stock
+    assert os_map["Conditioner"] == 7
+    assert catalog_mod.stock_of(refreshed) == 11  # 4 + 0 + 7
+
+
+def test_unlinked_option_is_left_untouched_and_warned(iso_catalog, monkeypatch):
+    """An option with no Splendall link keeps its current quantity and raises a
+    non-fatal 'missing supplier link' warning instead of being zeroed."""
+    product = _make(
+        iso_catalog, name="Partial Kit", stock=20,
+        options=[{"title": "Type", "values": ["Serum", "Conditioner"]}],
+        optionStock={"Serum": 8, "Conditioner": 5},
+        supplierId="splendall", supplierSku="partial-kit",
+        optionSupplierSku={"Type: Serum": "https://www.splendall.com/product/serum/"})
+
+    monkeypatch.setattr(sync_mod, "fetch_supplier_quantity",
+                        lambda url: (3, "3 in stock"))
+
+    warnings = {}
+    result = sync_mod.sync_one(product, warnings=warnings)
+    assert result in ("updated", "updated-out-of-stock")
+
+    refreshed = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == product["id"])
+    os_map = refreshed.get("optionStock") or {}
+    assert os_map["Serum"] == 3           # confirmed from supplier
+    assert os_map["Conditioner"] == 5     # unlinked -> preserved
+
+    warn = warnings.get(product["id"])
+    assert warn and warn["code"] == "option_link_missing"
+    assert "Conditioner" in warn["reason"]
+
+
+def test_fetch_per_option_helper_reports_all_missing(iso_catalog):
+    """When no option has a link the helper fails closed rather than zeroing
+    every component."""
+    product = {
+        "id": "kit", "name": "Kit",
+        "options": [{"title": "Type", "values": ["A", "B"]}],
+        "optionSupplierSku": {},
+    }
+    with pytest.raises(sync_mod.SupplierFetchError) as caught:
+        sync_mod.fetch_per_option_supplier_stock(product, fetch=lambda u: (1, ""))
+    assert caught.value.code == "option_links_missing"

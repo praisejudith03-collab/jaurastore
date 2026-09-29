@@ -92,6 +92,7 @@ BASE_FIELDS = (
     "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
     "stock", "badge", "featured", "online", "colors", "options", "optionPrices",
     "optionCompareAt", "dimensions", "supplierId", "supplierSku",
+    "optionSupplierSku",
 )
 
 # Suppliers this shop's automated stock-mirroring tooling is allowed to read
@@ -708,6 +709,10 @@ def normalize(product):
             product.get("supplierId") or product.get("supplier_id"), 40).lower(),
         "supplierSku": sec.clean(
             product.get("supplierSku") or product.get("supplier_sku"), 200),
+        # Per-option supplier links (component -> Splendall URL) so the sync
+        # can mirror stock for each variant independently.
+        "optionSupplierSku": _clean_option_supplier_sku(
+            product.get("optionSupplierSku") or product.get("option_supplier_sku")),
         "updated_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
     return out
@@ -874,6 +879,25 @@ def _clean_option_prices(raw):
         price = sec.clean_int(value, None, 0, 10**9)
         if label and price is not None:
             out[label] = price
+    return out
+
+
+def _clean_option_supplier_sku(raw):
+    """Per-option supplier links, e.g. {"Serum": "https://splendall.com/...",
+    "Shampoo": "https://..."}. Each variant option (a distinct component such
+    as Serum / Shampoo / Conditioner) can point at its OWN Splendall product
+    so the automated stock sync mirrors availability per option, not per
+    product. Blank values are dropped so an unlinked option is simply absent
+    (which the admin surfaces as a "Missing supplier link" badge)."""
+    import security as sec
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, value in list(raw.items())[:200]:
+        label = sec.clean(key, 160)
+        link = sec.clean(value, 500)
+        if label and link:
+            out[label] = link
     return out
 
 

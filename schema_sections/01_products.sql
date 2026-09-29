@@ -6,13 +6,12 @@
 --
 -- Supabase PostgreSQL is the production source of truth for products,
 -- orders, receipts, categories, site settings and referral commission
--- settings. SQLite on the Render disk is only a
--- boot-time cache the app restores FROM these tables; production writes
--- go to PostgreSQL first and failures are surfaced, never swallowed.
+-- settings. SQLite on the Render disk is only a boot-time cache restored
+-- FROM these tables; production writes go to PostgreSQL first and failures
+-- are surfaced, never swallowed.
 --
--- Required environment variables (both Render services):
---   SUPABASE_URL                 https://<project>.supabase.co
---   SUPABASE_SERVICE_ROLE_KEY    the service-role key (server-side only)
+-- Required env vars (both Render services): SUPABASE_URL and
+-- SUPABASE_SERVICE_ROLE_KEY (the service-role key, server-side only).
 -- =====================================================================
 
 -- SECTION: products
@@ -48,6 +47,7 @@ create table if not exists products (
   "optionStock"    jsonb,
   "optionPrices"   jsonb,
   "optionCompareAt" jsonb,
+  "optionSupplierSku" jsonb,
   dimensions       text,
   "bulkQty"        integer,
   "bulkPercent"    integer,
@@ -79,6 +79,7 @@ alter table products add column if not exists images             jsonb;
 alter table products add column if not exists "optionStock"      jsonb;
 alter table products add column if not exists "optionPrices"     jsonb;
 alter table products add column if not exists "optionCompareAt"  jsonb;
+alter table products add column if not exists "optionSupplierSku" jsonb;
 alter table products add column if not exists dimensions         text;
 alter table products add column if not exists "bulkQty"      integer;
 alter table products add column if not exists "bulkPercent"  integer;

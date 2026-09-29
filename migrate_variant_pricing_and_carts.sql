@@ -22,6 +22,10 @@ alter table if exists products
 -- Free-text physical dimensions shown on the product page / WhatsApp caption.
 alter table if exists products
   add column if not exists dimensions       text;
+-- Per-option supplier links (component -> Splendall URL) so the automated
+-- stock sync mirrors availability per variant option, not per product.
+alter table if exists products
+  add column if not exists "optionSupplierSku" jsonb;
 -- Kept alongside for completeness (older tables sometimes lack these too):
 alter table if exists products
   add column if not exists "optionStock"     jsonb;

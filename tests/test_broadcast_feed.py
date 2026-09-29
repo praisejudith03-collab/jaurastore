@@ -152,15 +152,45 @@ def test_the_store_link_points_at_the_real_product_page():
 
 
 def test_the_caption_ends_with_the_bare_clean_link_only():
-    """The caption includes the bilingual name, Naira and CFA prices,
-    options (if any), and the clean, direct product link on its own line."""
+    """The Jaura Channel caption is EXACTLY: bilingual name, Naira price,
+    CFA price, dimensions/specs (only when set), then the clean direct
+    product link on its own line. No stock labels, no options block."""
     body = _func(ADMIN_JS, "broadcastFullText")
     code_lines = [ln for ln in body.splitlines() if not ln.strip().startswith("//")]
     code = "\n".join(code_lines)
     assert "broadcastDisplayName(p)" in code
     assert "broadcastProductUrl(p)" in code
-    assert "broadcastOptionsLine(p)" in code
+    assert "broadcastDimensionsLine(p)" in code
+    # Options and stock labels are intentionally removed from the caption.
+    assert "broadcastOptionsLine(p)" not in code
+    assert "broadcastStockLine" not in code
+    assert "In stock" not in code
+    assert "Out of stock" not in code
     assert "Shop now" not in code
+
+
+def test_the_caption_never_labels_availability_and_shows_raw_dimensions():
+    """No 'In stock'/'Out of stock' text anywhere; dimensions line is the
+    raw value (e.g. '40×60 cm') with no 'Dimensions:' prefix."""
+    dim = _func(ADMIN_JS, "broadcastDimensionsLine")
+    assert "p.dimensions" in dim
+    assert "Dimensions:" not in dim
+    stock_helper = _func(ADMIN_JS, "broadcastInStock")
+    assert "optionStock" in stock_helper
+    assert "Number(p.stock) > 0" in stock_helper
+
+
+def test_out_of_stock_items_are_blocked_from_sharing():
+    """Owner rule: before sharing, block any item/variant that is sold out;
+    only available items may post to WhatsApp."""
+    body = _func(ADMIN_JS, "broadcastShareNative")
+    assert "broadcastInStock(p)" in body
+    # The guard must run before building/sharing the caption.
+    guard = body.index("broadcastInStock(p)")
+    share = body.index("navigator.share")
+    assert guard < share
+    eligible = _func(ADMIN_JS, "broadcastEligibleProducts")
+    assert "broadcastInStock(p)" in eligible
 
 
 def test_the_message_block_itself_has_no_link_or_shop_now_wording():

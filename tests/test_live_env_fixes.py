@@ -13,6 +13,7 @@ Groups:
 import io
 import json
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -134,17 +135,24 @@ def test_option_compare_at_is_an_allowed_field():
     assert "optionCompareAt" in catalog_mod.BASE_FIELDS
 
 
-def test_whatsapp_caption_includes_stock_dimensions_and_link():
-    """The shared catalog post caption must carry name, both prices, stock
-    status, dimensions and the store link."""
+def test_whatsapp_caption_includes_dimensions_and_link_but_no_stock_label():
+    """The Jaura Channel caption carries name, both prices, dimensions and the
+    store link - and NEVER an 'In stock'/'Out of stock' label."""
     admin_js = (ROOT and open(os.path.join(ROOT, "js", "admin.js"),
                               encoding="utf-8").read())
-    assert "broadcastStockLine" in admin_js
     assert "broadcastDimensionsLine" in admin_js
-    # broadcastFullText assembles name, ₦, CFA, stock, dimensions, link.
-    assert "In stock" in admin_js and "Out of stock" in admin_js
-    assert "Dimensions:" in admin_js
-    assert "broadcastProductUrl(p)" in admin_js
+    # broadcastFullText assembles name, ₦, CFA, dimensions (when set), link.
+    match = re.search(r"function broadcastFullText\(p\)\s*\{", admin_js)
+    assert match
+    body = admin_js[match.start():admin_js.index("\n}\n", match.start())]
+    assert "broadcastDisplayName(p)" in body
+    assert "broadcastDimensionsLine(p)" in body
+    assert "broadcastProductUrl(p)" in body
+    # Availability is a share-time gate, never a caption label.
+    assert "In stock" not in body and "Out of stock" not in body
+    assert "broadcastStockLine" not in admin_js
+    # Out-of-stock items are blocked from sharing entirely.
+    assert "broadcastInStock" in admin_js
 
 
 def test_dimensions_field_persists_through_normalize():
@@ -256,3 +264,35 @@ def test_due_carts_survives_missing_table(monkeypatch):
     # Must not raise even though the local read blew up.
     rows = abandoned.due_carts(limit=5)
     assert rows == []
+
+
+# ------------------------- 5. Splendall per-option link mapping & badges
+def test_option_supplier_sku_persists_through_normalize():
+    """Per-option Splendall links (component -> URL) survive normalize so the
+    automated stock sync can mirror each variant independently."""
+    normalized = catalog_mod.normalize({
+        "id": "jau-optlink", "name": "Hair Kit", "category": "beauty",
+        "priceNgn": 5000,
+        "optionSupplierSku": {
+            "Type: Serum": "https://www.splendall.com/product/serum/",
+            "Type: Shampoo": "   ",   # blank -> dropped
+        },
+    })
+    assert normalized is not None
+    assert "optionSupplierSku" in catalog_mod.BASE_FIELDS
+    links = normalized["optionSupplierSku"]
+    assert links["Type: Serum"] == "https://www.splendall.com/product/serum/"
+    assert "Type: Shampoo" not in links   # blank links never persist
+
+
+def test_admin_renders_per_option_supplier_link_editor_and_badge():
+    admin_js = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
+    # A per-option link input exists and is included in the variant panels.
+    assert "optionSupplierLinksHTML" in admin_js
+    assert "data-opt-supplier" in admin_js
+    assert "optionSupplierLinksHTML(p)" in admin_js
+    # Missing-link badge at the option level.
+    assert "productHasUnlinkedOption" in admin_js
+    assert "Missing supplier link" in admin_js
+    # The links are collected and saved into the product payload.
+    assert "optionSupplierSku," in admin_js

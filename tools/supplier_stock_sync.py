@@ -519,6 +519,74 @@ def fetch_supplier_variant_stock(product):
     return option_stock, audit
 
 
+def _option_link_candidates(row):
+    """Spellings a per-option link may be keyed by: the bare optionStock key
+    ("Serum"), each option value on its own, or the admin's composed
+    "Title: Value" form ("Type: Serum")."""
+    cands = [row.get("key")]
+    for opt in row.get("options") or []:
+        if isinstance(opt, dict) and opt.get("value"):
+            cands.append(opt.get("value"))
+            if opt.get("name"):
+                cands.append(f"{opt.get('name')}: {opt.get('value')}")
+    return [c for c in cands if c]
+
+
+def fetch_per_option_supplier_stock(product, fetch=None):
+    """Mirror stock per variant option using each option's OWN supplier link.
+
+    Unlike fetch_supplier_variant_stock (one supplier product, many
+    variations), this reads ``optionSupplierSku`` - a map of option value ->
+    Splendall URL - and fetches each linked option's stock from its own
+    simple supplier product. An option whose link runs out is set to 0 while
+    the others stay active. Options with no link are left untouched and
+    reported so the Admin can raise a "Missing supplier link" badge.
+
+    Returns ``(option_stock, audit, missing_links)``. ``option_stock`` only
+    contains the options confirmed from the supplier; callers merge it onto the
+    existing map so unlinked options keep their current quantity.
+    """
+    fetch = fetch or fetch_supplier_quantity
+    raw_links = product.get("optionSupplierSku")
+    links = raw_links if isinstance(raw_links, dict) else {}
+    store_rows = _store_variant_rows(product)
+    if not store_rows:
+        raise SupplierFetchError("store product has no options to map to supplier links",
+                                 code="store_options_missing")
+    folded_links = {}
+    for label, url in links.items():
+        clean = str(url or "").strip()
+        if clean:
+            folded_links[catalog.fold_option_value(label)] = (str(label), clean)
+    option_stock, audit, missing = {}, [], []
+    for row in store_rows:
+        key = row["key"]
+        match = None
+        for cand in _option_link_candidates(row):
+            hit = folded_links.get(catalog.fold_option_value(cand))
+            if hit:
+                match = hit
+                break
+        if not match:
+            missing.append(key)
+            continue
+        _label, url = match
+        qty, detail = fetch(url)
+        option_stock[key] = qty
+        audit.append({
+            "option": key,
+            "supplier_sku": url,
+            "quantity": qty,
+            "status": "in_stock" if qty > 0 else "out_of_stock",
+            "detail": detail,
+        })
+    if not option_stock and missing:
+        raise SupplierFetchError(
+            f"none of the {len(missing)} variant option(s) has a supplier link",
+            code="option_links_missing")
+    return option_stock, audit, missing
+
+
 # -------------------------------------------------- autonomous catalog crawl
 def _parse_supplier_row(row):
     if not isinstance(row, dict):
@@ -966,9 +1034,25 @@ def sync_one(product, dry_run=False, warnings=None):
         warning_map[pid] = _warning_row(product, "protected_product_mapping", reason)
         return "protected"
 
+    per_option_links = product.get("optionSupplierSku")
+    has_per_option_links = isinstance(per_option_links, dict) and any(
+        str(v or "").strip() for v in per_option_links.values())
+    missing_links = []
     try:
         store_variants = _store_variant_rows(product)
-        if store_variants:
+        if store_variants and has_per_option_links:
+            # Each variant option carries its OWN Splendall link: mirror stock
+            # per option so a sold-out component zeroes only itself. Confirmed
+            # options merge onto the existing map; unlinked ones stay as-is.
+            confirmed, audit, missing_links = fetch_per_option_supplier_stock(product)
+            existing = product.get("optionStock") if isinstance(product.get("optionStock"), dict) else {}
+            option_stock = dict(existing)
+            option_stock.update(confirmed)
+            qty = sum(option_stock.values())
+            detail = (f"{len(confirmed)} per-option link(s) confirmed"
+                      + (f", {len(missing_links)} unlinked" if missing_links else "")
+                      + f", total={qty}")
+        elif store_variants:
             option_stock, audit = fetch_supplier_variant_stock(product)
             qty = sum(option_stock.values())
             detail = f"{len(option_stock)} exact option variant(s), total={qty}"
@@ -984,11 +1068,21 @@ def sync_one(product, dry_run=False, warnings=None):
         warning_map[pid] = _warning_row(product, "unexpected_supplier_reply", str(exc))
         return "uncertain"
 
+    def _note_missing_links():
+        """Keep a non-fatal 'missing supplier link' alert so the Admin badge
+        stays visible even when the confirmed options needed no stock change."""
+        if missing_links:
+            reason = ("some variant option(s) have no Splendall link and were "
+                      f"left unchanged: {', '.join(missing_links[:20])}")
+            warning_map[pid] = _warning_row(product, "option_link_missing", reason, audit)
+        else:
+            warning_map.pop(pid, None)
+
     current = catalog.stock_of(product)
     current_options = product.get("optionStock") if isinstance(product.get("optionStock"), dict) else {}
     unchanged = current == qty and (option_stock is None or current_options == option_stock)
     if unchanged:
-        warning_map.pop(pid, None)
+        _note_missing_links()
         print(f"ok: {name!r} ({pid}) already matches supplier ({qty}) [{detail}]")
         return "unchanged"
 
@@ -1007,7 +1101,7 @@ def sync_one(product, dry_run=False, warnings=None):
         print(f"warning: failed to write stock for {name!r} ({pid}) - left at {current}")
         warning_map[pid] = _warning_row(product, "stock_write_failed", reason, audit)
         return "write-failed"
-    warning_map.pop(pid, None)
+    _note_missing_links()
     print(f"updated: {name!r} ({pid}) {current} -> {qty} [{detail}]")
     return "updated-out-of-stock" if qty == 0 and current != 0 else "updated"
 

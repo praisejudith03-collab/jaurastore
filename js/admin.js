@@ -683,7 +683,53 @@ function optionPricingHTML(p) {
   })).join("");
   return `<h3>Option price overrides</h3><p class="admin-note">Leave the price blank to inherit the base product price. Set an override only when this option costs more or less. The optional "Was" price shows a crossed-out original next to it.</p>${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to set individual prices.</p>`}`;
 }
-function variantPanelsHTML(p) { return optionStockHTML(p) + optionPricingHTML(p); }
+function productHasUnlinkedOption(p) {
+  // True when a supplier-synced product has variant option values but at least
+  // one of them has no per-option Splendall link mapped. Drives the ⚠️
+  // "Missing supplier link" badge at the option level.
+  if (!p || String(p.supplierId || "").toLowerCase() !== "splendall") return false;
+  const links = (p.optionSupplierSku && typeof p.optionSupplierSku === "object") ? p.optionSupplierSku : {};
+  const options = p.options || [];
+  for (const opt of options) {
+    for (const value of (opt.values || [])) {
+      const key = `${opt.title}: ${value}`;
+      const linked = String(links[key] || links[value] || "").trim();
+      if (!linked) return true;
+    }
+  }
+  return false;
+}
+function optionSupplierLinksHTML(p) {
+  // Per-option Splendall links so each variant/component (e.g. Serum,
+  // Shampoo, Conditioner) tracks its OWN supplier stock. A ⚠ badge marks any
+  // option still missing its link while this product is supplier-synced.
+  const isSplendall = String(p.supplierId || "").toLowerCase() === "splendall";
+  const options = p.options || [];
+  const links = p.optionSupplierSku || {};
+  const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
+    const key = `${opt.title}: ${value}`;
+    const url = links[key] != null ? links[key] : (links[value] != null ? links[value] : "");
+    const missing = isSplendall && !String(url).trim();
+    return `<label class="adx-var" data-optlink-row>
+      <span class="adx-var-name"><strong>${JA.escape(key)}</strong>${
+        missing ? `<span class="adx-badge-warn" data-optlink-missing>⚠ Missing supplier link</span>` : ""}</span>
+      <span class="adx-var-qty"><input type="url" data-opt-supplier="${JA.escape(key)}" value="${JA.escape(String(url))}" placeholder="https://www.splendall.com/product/…" /></span>
+    </label>`;
+  })).join("");
+  return `<h3>Splendall link per option</h3>
+    <p class="admin-note">Paste the exact Splendall product link for each option so its stock is tracked on its own. When a component sells out on Splendall only that option is set to sold out; the others stay available. Leave blank if an option is not supplier-synced.</p>
+    ${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to map each one to a Splendall link.</p>`}`;
+}
+function currentOptionSupplierSku() {
+  const map = {};
+  document.querySelectorAll("[data-opt-supplier]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-supplier");
+    const val = String(inp.value || "").trim();
+    if (key && val) map[key] = val;
+  });
+  return map;
+}
+function variantPanelsHTML(p) { return optionStockHTML(p) + optionPricingHTML(p) + optionSupplierLinksHTML(p); }
 function optionStockHTML(p) {
   const opt = (p.options || [])[0];
   const vals = (opt && opt.values) || p.colors || [];
@@ -928,6 +974,12 @@ async function handleProductSubmit(e, existing) {
     const key = inp.getAttribute("data-opt-compare");
     if (key && inp.value !== "") optionCompareAt[key] = Math.max(0, Number(inp.value) || 0);
   });
+  const optionSupplierSku = {};
+  e.target.querySelectorAll("[data-opt-supplier]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-supplier");
+    const val = String(inp.value || "").trim();
+    if (key && val) optionSupplierSku[key] = val;
+  });
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
   const priceNgn = num("priceNgn") || 0;
   const compareNgn = num("compareNgn");
@@ -974,6 +1026,8 @@ async function handleProductSubmit(e, existing) {
       // tools/supplier_stock_sync.py - see catalog.normalize().
       supplierId: String(fd.get("supplierId") || "").trim(),
       supplierSku: String(fd.get("supplierSku") || "").trim(),
+      // Per-option Splendall links so each component tracks its own stock.
+      optionSupplierSku,
   });
   if (window.__editReviews && JA.setReviews) JA.setReviews(id, window.__editReviews);
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = existing ? "Save" : "Add a Product"; }
@@ -1069,8 +1123,11 @@ function renderProdGrid() {
       : null;
     // A product marked as a Splendall item but with NO supplier link yet has
     // no automated match. Owner rule: leave the link empty and flag it with a
-    // ⚠️ badge so it can be linked manually in one click.
-    const missingLink = isSplendall && !String(p.supplierSku || "").trim();
+    // ⚠️ badge so it can be linked manually in one click. This also fires when
+    // the product itself is linked but one of its variant OPTIONS still has no
+    // per-option Splendall link (so per-variant stock cannot be tracked).
+    const missingLink = isSplendall && (
+      !String(p.supplierSku || "").trim() || productHasUnlinkedOption(p));
     const showWarning = !!syncWarning || missingLink;
     const warningText = missingLink && !syncWarning
       ? "⚠️ No Splendall link yet. Tap to add the supplier product link."
@@ -2107,9 +2164,19 @@ function saveBroadcastOverrides() {
   try { sessionStorage.setItem(broadcastOverrideStorageKey(), JSON.stringify(bcOverrides)); } catch (e) {}
 }
 
+function broadcastInStock(p) {
+  // Availability gate for WhatsApp sharing (owner rule: only available items
+  // may be posted). A variant product is in stock when ANY option still has
+  // units; a simple product uses its own quantity. Never shares a sold-out
+  // item or one whose every variant is 0.
+  if (!p) return false;
+  const os = (p.optionStock && typeof p.optionStock === "object") ? p.optionStock : {};
+  if (Object.keys(os).length) return Object.values(os).some((q) => Number(q) > 0);
+  return Number(p.stock) > 0;
+}
 function broadcastEligibleProducts() {
   const all = JA.products ? JA.products() : [];
-  return all.filter((p) => p && p.id && p.online !== false && Number(p.stock) > 0);
+  return all.filter((p) => p && p.id && p.online !== false && broadcastInStock(p) && Number(p.stock) > 0);
 }
 
 function broadcastDaySeed() {
@@ -2221,40 +2288,28 @@ function broadcastOptionsLine(p) {
   if (sizes.length) bits.push(`Sizes: ${sizes.slice(0, 8).join(", ")}`);
   return bits.join(" · ");
 }
-function broadcastStockLine(p) {
-  // A plain, shopper-readable availability line for the caption. A variant
-  // product is in stock when any variant has units; a simple product uses its
-  // own quantity. Numbers are never shown - only In stock / Out of stock.
-  const os = (p && p.optionStock && typeof p.optionStock === "object") ? p.optionStock : {};
-  const variantUnits = Object.values(os).reduce((n, q) => n + (Number(q) > 0 ? Number(q) : 0), 0);
-  const inStock = Object.keys(os).length ? variantUnits > 0 : Number(p.stock) > 0;
-  return inStock ? "In stock ✅" : "Out of stock ❌";
-}
 function broadcastDimensionsLine(p) {
-  const dim = String(p && p.dimensions || "").trim();
-  return dim ? `Dimensions: ${dim}` : "";
+  // The raw dimensions/specs value (e.g. "40×60 cm"), shown only when set.
+  // No label prefix - the Jaura Channel caption lists clean values only.
+  return String(p && p.dimensions || "").trim();
 }
 function broadcastFullText(p) {
-  // Caption format (single high-res image carries this text):
-  // [Product Name English] / [Product Name French]
-  // ₦[Price Naira]
-  // [Price CFA] CFA
-  // In stock / Out of stock
-  // Dimensions: ...            (only when set)
-  // [Options / Details]        (only when set)
-  // https://jaurastore.com.ng/product.html?id=[Product ID]
+  // Jaura Channel caption, attached to the single high-res product photo.
+  // EXACT layout (owner spec) - and NO stock labels ever appear here:
+  //   Line 1: [Product Name English] / [Product Name French]
+  //   Line 2: ₦[Price Naira]
+  //   Line 3: [Price CFA] CFA
+  //   Line 4: [Dimensions / Specs]   (only when set)
+  //   Line 5: https://jaurastore.com.ng/product.html?id=[Product ID]
   const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   const cfa = p.priceCfa || toCfa(p.priceNgn || 0);
   const lines = [
     broadcastDisplayName(p),
     `₦${Number(p.priceNgn || 0).toLocaleString()}`,
-    `${Number(cfa || 0).toLocaleString()} CFA`,
-    broadcastStockLine(p)
+    `${Number(cfa || 0).toLocaleString()} CFA`
   ];
   const dimensionsLine = broadcastDimensionsLine(p);
   if (dimensionsLine) lines.push(dimensionsLine);
-  const optionsLine = broadcastOptionsLine(p);
-  if (optionsLine) lines.push(optionsLine);
   lines.push(broadcastProductUrl(p));
   return lines.join("\n");
 }
@@ -2294,6 +2349,12 @@ function broadcastCanShareFiles(files) {
 }
 
 async function broadcastShareNative(p) {
+  // Out-of-stock guard: never post a sold-out item (or one whose every
+  // variant is 0) to WhatsApp, even if a stale card was tapped.
+  if (!broadcastInStock(p)) {
+    JA.toast("This item is out of stock — only available products can be shared to WhatsApp.");
+    return;
+  }
   const text = broadcastFullText(p);
   try {
     const file = await broadcastImageFile(p);
