@@ -7,6 +7,9 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -28,4 +31,33 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Run test suite
-        run: python -m pytest tests/ -q
+        run: |
+          set -o pipefail
+          python -m pytest tests/ -q -ra --tb=short 2>&1 | tee pytest-output.txt
+
+      # When the suite fails, surface the exact failing tests + short
+      # tracebacks straight onto the pull request. Some sandboxes can reach
+      # api.github.com (PR comments) but NOT the Actions log-storage host, so
+      # the raw run log is undownloadable there; this comment is the reliable
+      # channel for reading what broke.
+      - name: Report test failures on the PR
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### 🔴 CI test failures (auto-report from run ${{ github.run_id }})"
+            echo ""
+            echo '```text'
+            echo "----- FAILED / ERROR lines -----"
+            grep -E "^(FAILED|ERROR) " pytest-output.txt | head -60 || echo "(none matched)"
+            echo ""
+            echo "----- short test summary -----"
+            awk '/=+ short test summary info =+/{p=1} p' pytest-output.txt | head -80
+            echo ""
+            echo "----- last 140 lines of output -----"
+            tail -140 pytest-output.txt
+            echo '```'
+          } > pr-report.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file pr-report.md || {
+            echo "PR comment failed; dumping report to log:"; cat pr-report.md; }
