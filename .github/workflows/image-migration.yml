@@ -117,7 +117,7 @@ jobs:
       # missing - cheaper than a half-applied migration.
       - name: Verify the Supabase schema is applied
         run: |
-          python3 verify_schema.py --json schema-verification.json || {
+          python3 verify_schema.py --migration-only --json schema-verification.json || {
             echo "::error::The schema is not fully applied. Run supabase_schema.sql in the Supabase SQL editor first."
             exit 1
           }

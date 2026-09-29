@@ -4293,7 +4293,11 @@ function bindSiteBranding() {
 })();
 
 async function bootAdmin() {
-  await JA.ready;
+  const root = document.getElementById("admin-root");
+  if (root) root.innerHTML = `<div class="admin-live-loading" role="status" aria-live="polite"><div class="catalog-skeleton-head"></div><div class="catalog-skeleton-grid">${"<i></i>".repeat(6)}</div><strong>Loading live catalogue and stock…</strong></div>`;
+  // JA.ready is now the uncached api/catalog request. No product title, image
+  // or stock count is rendered until that authoritative response resolves.
+  try { await JA.ready; } catch (e) {}
   JA.mountChrome();
   await (JA.loadServerCategories ? JA.loadServerCategories() : Promise.resolve());
   const ok = await JA.isAdmin();

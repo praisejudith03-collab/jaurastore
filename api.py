@@ -26,6 +26,18 @@ def _api_no_store(resp):
         resp.headers["Cache-Control"] = "no-store"
     return resp
 
+@api.get("/realtime-config")
+def realtime_config():
+    """Public, least-privilege credentials for Supabase Realtime only.
+
+    The anon key is designed to be browser-visible; the service-role key is
+    never returned. RLS remains the authority for every table operation.
+    """
+    return jsonify(ok=True, enabled=bool(Config.SUPABASE_URL and Config.SUPABASE_ANON_KEY),
+                   url=Config.SUPABASE_URL if Config.SUPABASE_ANON_KEY else "",
+                   anonKey=Config.SUPABASE_ANON_KEY or "")
+
+
 ORDER_ID = re.compile(r"^JA-[A-Z0-9]{4,16}$")
 
 def _ip():

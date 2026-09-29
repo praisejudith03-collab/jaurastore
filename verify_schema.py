@@ -88,12 +88,14 @@ SCHEMA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "supabase_schema.sql")
 
 
-def check_live(client):
+MIGRATION_COLUMNS = {"products": ("id", "image_url", "images", "online", "updated_at")}
+
+def check_live(client, required_tables=REQUIRED_TABLES, required_columns=REQUIRED_COLUMNS):
     """Probe each table for its required columns. Returns a report dict."""
     report = {"tables": {}, "missing_tables": [], "missing_columns": {},
               "ok": True}
-    for table in REQUIRED_TABLES:
-        cols = REQUIRED_COLUMNS.get(table)
+    for table in required_tables:
+        cols = required_columns.get(table)
         select = ",".join(cols) if cols else "*"
         try:
             res = client.table(table).select(select).limit(1).execute()
@@ -127,14 +129,19 @@ def check_constraints(schema_text=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--json", help="write the report to this path")
+    ap.add_argument("--migration-only", action="store_true",
+                    help="probe only columns used by the image migration")
     ap.add_argument("--dry-run", action="store_true",
                     help="skip the network probe; check the SQL file only")
     args = ap.parse_args(argv)
 
+    required_tables = ("products",) if args.migration_only else REQUIRED_TABLES
+    required_columns = MIGRATION_COLUMNS if args.migration_only else REQUIRED_COLUMNS
     report = {"schema_file": os.path.basename(SCHEMA_FILE),
-              "required_tables": list(REQUIRED_TABLES)}
+              "mode": "image-migration" if args.migration_only else "full",
+              "required_tables": list(required_tables)}
 
-    report["constraints"] = check_constraints()
+    report["constraints"] = [] if args.migration_only else check_constraints()
     bad_constraints = [c for c in report["constraints"] if not c["present"]]
     if bad_constraints:
         report["ok"] = False
@@ -157,7 +164,7 @@ def main(argv=None):
                     report["network_probe"] = "skipped: client() returned None"
                     report["ok"] = False
                 else:
-                    live = check_live(client)
+                    live = check_live(client, required_tables, required_columns)
                     report.update(live)
                     report["network_probe"] = "completed"
             except Exception as exc:
@@ -165,7 +172,7 @@ def main(argv=None):
                 report["ok"] = False
 
     print("=== SCHEMA VERIFICATION ===")
-    print(f"required tables          : {len(REQUIRED_TABLES)}")
+    print(f"required tables          : {len(required_tables)}")
     for c in report["constraints"]:
         print(f"  {'OK ' if c['present'] else 'MISSING'} {c['table']}: "
               f"{c['constraint']}  ({c['why']})")
