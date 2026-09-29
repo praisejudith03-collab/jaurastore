@@ -334,29 +334,17 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     mobile.evaluate("JA.setCurrency('NGN')")
     assert mobile.evaluate("JA.currency()") == "CFA"
     # -- Checkout gateways follow the active/locked currency.
-    _console = []
-    _reqfail = []
-    _catalog = []
-    mobile.on("console", lambda m: _console.append(f"{m.type}: {m.text}"[:300]))
-    mobile.on("pageerror", lambda e: _console.append(f"PAGEERROR: {e}"[:300]))
-    mobile.on("requestfailed", lambda r: _reqfail.append(f"{r.url} :: {r.failure}"[:300]))
-    mobile.on("response", lambda r: _catalog.append(f"{r.status} {r.url}") if "api/catalog" in r.url else None)
     mobile.goto(live_shop + "/shop.html?lang=fr")
-    _diag = None
-    for _ in range(24):  # up to ~12s
-        _diag = mobile.evaluate(
-            "() => ({ hasJA: typeof window.JA !== 'undefined',"
-            " prod: (window.JA && JA.products) ? JA.products().length : -1,"
-            " seed: Array.isArray(window.JA_SEED) ? window.JA_SEED.length : -2,"
-            " page: (document.body && document.body.dataset.page) || '',"
-            " lang: (window.I18N && I18N.lang) ? I18N.lang() : '?',"
-            " cur: (window.JA && JA.currency) ? JA.currency() : '?' })")
-        if _diag.get("prod", 0) > 0:
-            break
-        mobile.wait_for_timeout(500)
-    assert _diag and _diag.get("prod", 0) > 0, (
-        f"DIAG products never loaded on /shop.html?lang=fr: state={_diag} "
-        f"catalog_responses={_catalog[-6:]} reqfail={_reqfail[-6:]} console={_console[-12:]}")
+    # The storefront deliberately shows nothing until the authoritative
+    # /api/catalog answer lands (store.js boot clears window.JA_SEED and awaits
+    # loadSeed), so JA.products() is empty for a beat right after a navigation.
+    # Wait for the live catalogue before adding to the cart, otherwise
+    # JA.products()[0] is undefined and .id throws. NOTE: JA is a top-level
+    # `const` (a global lexical binding, NOT a property of window), so the
+    # condition must reference the bare `JA`, never `window.JA`.
+    mobile.wait_for_function(
+        "() => { try { return typeof JA !== 'undefined' && Array.isArray(JA.products())"
+        " && JA.products().length > 0; } catch (e) { return false; } }")
     mobile.evaluate(
         "() => { const p = JA.products().find(p => JA.stockFor(p, '') > 0) || JA.products()[0];"
         " JA.addToCart(p.id); }")
