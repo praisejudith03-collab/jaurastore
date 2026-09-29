@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=161" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=163" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -755,9 +755,11 @@ function productForm(p = {}) {
   window.__editImages = productImages(p);
   const opts = editorOptions(p);
   const inStock = p.id ? Number(p.stock) > 0 : true;
+  const syncWarning = supplierWarnings.find((row) => String(row.product_id || "") === String(p.id || ""));
   return `<form id="prod-form" class="au-edit">
     <button type="button" class="au-back" id="cancel-edit">← Store Products</button>
     <h2>Product ${preCat ? `· ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
+    ${syncWarning ? `<div class="supplier-sync-alert" role="alert"><strong>Supplier stock is unconfirmed</strong><span>${JA.escape(syncWarning.reason || "The latest Splendall audit could not confirm this product.")}</span><small>No stock was guessed or changed. Check the supplier mapping/options before relying on automatic sync.</small></div>` : ""}
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
     <div class="field"><label>Product Name</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
     <div class="field"><label>Product Name (French — shown when the site is in French)</label><input name="nameFr" maxlength="80" value="${JA.escape(p.nameFr || "")}" placeholder="Optional" /></div>
@@ -993,6 +995,7 @@ let marketingSearch = "";
 let marketingFrom = "";
 let marketingTo = "";
 let selectedProductIds = new Set();
+let supplierWarnings = [];
 let dashTimer = null;
 let dashCat = "";
 
@@ -1034,9 +1037,10 @@ function renderProdGrid() {
     const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN <= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;
     const rowq = JA.escape((p.name + " " + (p.nameFr || "") + " " + (p.sku || "") + " " + p.category).toLowerCase());
     const productSelected = selectedProductIds.has(String(p.id)) ? " checked" : "";
-    return `<article class="adx-card" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
+    const syncWarning = supplierWarnings.find((row) => String(row.product_id || "") === String(p.id));
+    return `<article class="adx-card${syncWarning ? " has-sync-warning" : ""}" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
-      <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
+      <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}${syncWarning ? `<span class="adx-sync-warning" title="${JA.escape(syncWarning.reason || "Supplier stock unconfirmed")}">Sync uncertain</span>` : ""}</div>
       <div class="adx-card-body"><strong>${JA.escape(p.name)}</strong><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     </article>`;
@@ -1307,14 +1311,17 @@ async function fillNeedsAttention() {
   try {
     const d = await window.JA_NET.api("api/admin/needs-attention");
     const pending = d.pending || [], stale = d.stale || [], low = d.lowStock || [];
+    supplierWarnings = d.supplierWarnings || [];
     setOrderBadge(pending.length);
-    if (!pending.length && !low.length) {
-      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders or low-stock variants need action.</span></div>`;
+    setSupplierBadge(supplierWarnings.length);
+    if (!pending.length && !low.length && !supplierWarnings.length) {
+      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders, low-stock variants or supplier-sync uncertainties need action.</span></div>`;
     } else {
       const pendingBlock = `<article class="attention-block"><div class="attention-title"><strong>Pending orders</strong><b>${pending.length}</b></div>${pending.length ? `<ul class="attention-list">${pending.slice(0, 5).map(attentionOrderLine).join("")}</ul>${pending.length > 5 ? `<small class="attention-more">+ ${pending.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Review orders →</button>` : `<p class="empty">No pending orders.</p>`}</article>`;
       const lowBlock = `<article class="attention-block"><div class="attention-title"><strong>Low stock</strong><b>${low.length}</b></div>${low.length ? `<ul class="attention-list">${low.slice(0, 5).map((r) => `<li><span><strong>${esc(r.name || r.product_id || "Product")}</strong><small>${esc(r.variant_label || r.variant_key || "Variant")}</small></span><b>${Number(r.qty || 0)} left</b></li>`).join("")}${low.length > 5 ? `<small class="attention-more">+ ${low.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Manage products →</button>` : `<p class="empty">No products at five or fewer units.</p>`}</article>`;
       const staleBlock = `<article class="attention-block ${stale.length ? "is-alert" : ""}"><div class="attention-title"><strong>Waiting over 24 hours</strong><b>${stale.length}</b></div>${stale.length ? `<ul class="attention-list">${stale.slice(0, 3).map(attentionOrderLine).join("")}</ul><button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Follow up →</button>` : `<p class="empty">No overdue pending orders.</p>`}</article>`;
-      box.innerHTML = `<div class="needs-grid">${pendingBlock}${lowBlock}${staleBlock}</div>`;
+      const supplierBlock = `<article class="attention-block supplier-warning-block ${supplierWarnings.length ? "is-alert" : ""}"><div class="attention-title"><strong>Supplier sync uncertain</strong><b>${supplierWarnings.length}</b></div>${supplierWarnings.length ? `<ul class="attention-list">${supplierWarnings.slice(0, 5).map((row) => `<li><span><strong>${esc(row.product_name || row.product_id || "Splendall catalog")}</strong><small>${esc(row.reason || "Stock could not be confirmed")}</small></span><b>Check</b></li>`).join("")}</ul>${supplierWarnings.length > 5 ? `<small class="attention-more">+ ${supplierWarnings.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Review highlighted products →</button>` : `<p class="empty">Every supplier-linked item is confirmed.</p>`}</article>`;
+      box.innerHTML = `<div class="needs-grid">${supplierBlock}${pendingBlock}${lowBlock}${staleBlock}</div>`;
     }
     box.querySelectorAll("[data-attention-tab]").forEach((button) => { button.onclick = () => paintDesk(button.dataset.attentionTab); });
   } catch (err) {
@@ -1619,7 +1626,7 @@ function renderCrashPage() {
       const id = btn.dataset.crashDelete;
       if (!id || !confirm("Delete this crash report? This only removes it from the list.")) return;
       try {
-        await api("api/admin/job-failures/" + encodeURIComponent(id), { method: "DELETE" });
+        await window.JA_NET.api("api/admin/job-failures/" + encodeURIComponent(id), { method: "DELETE" });
         fillCrashReports();
       } catch (err) { JA.toast(err.message || "Could not delete that report."); }
     };
@@ -1650,12 +1657,18 @@ async function fillCrashReports() {
 async function clearAllCrashReports() {
   if (!crashTotal) { JA.toast("There is nothing to clear."); return; }
   if (!confirm(`Clear all ${crashTotal} crash report(s)? This only wipes this list - it does not change anything the workers already did.`)) return;
+  const button = $("#crash-clear-all");
+  if (button) button.disabled = true;
   try {
-    await api("api/admin/job-failures", { method: "DELETE" });
+    await window.JA_NET.api("api/admin/job-failures", { method: "DELETE" });
     crashPage = 1;
-    fillCrashReports();
+    await fillCrashReports();
     JA.toast("Crash reports cleared.");
-  } catch (err) { JA.toast(err.message || "Could not clear the crash reports."); }
+  } catch (err) {
+    JA.toast(err.message || "Could not clear the crash reports.");
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function renderOrderPage() {
@@ -2007,7 +2020,28 @@ const bcSelected = { morning: new Set(), evening: new Set() };
 // from nothing.
 const BC_AUTO_QUEUE_SIZE = 4;
 const bcAutoQueued = { morning: false, evening: false };
+let bcPickerTarget = null;
 
+function broadcastOverrideStorageKey() {
+  // Overrides belong to today's two rotations. Tomorrow's deterministic
+  // feed starts clean while today's choices survive a refresh or lost signal.
+  return `jaura_broadcast_overrides_${broadcastDaySeed()}`;
+}
+
+function loadBroadcastOverrides() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(broadcastOverrideStorageKey()) || "{}");
+    const clean = (slot) => (Array.isArray(saved[slot]) ? saved[slot] : [])
+      .filter((row) => row && row.id)
+      .map((row) => ({ id: String(row.id), replaces: row.replaces ? String(row.replaces) : null }));
+    return { morning: clean("morning"), evening: clean("evening") };
+  } catch (e) { return { morning: [], evening: [] }; }
+}
+const bcOverrides = loadBroadcastOverrides();
+
+function saveBroadcastOverrides() {
+  try { sessionStorage.setItem(broadcastOverrideStorageKey(), JSON.stringify(bcOverrides)); } catch (e) {}
+}
 
 function broadcastEligibleProducts() {
   const all = JA.products ? JA.products() : [];
@@ -2042,6 +2076,38 @@ function broadcastFeedFor(slot) {
   // not always pinned at the top.
   const start = ((seed % picks.length) + picks.length) % picks.length;
   return picks.slice(start).concat(picks.slice(0, start));
+}
+
+function broadcastScheduledFeedFor(slot) {
+  const automatic = broadcastFeedFor(slot);
+  const eligible = broadcastEligibleProducts();
+  const byId = new Map(eligible.map((p) => [String(p.id), p]));
+  const overrides = (bcOverrides[slot] || []).filter((row) => byId.has(String(row.id)));
+  const manualIds = new Set(overrides.map((row) => String(row.id)));
+  const used = new Set();
+  const result = [];
+  automatic.forEach((product) => {
+    const replacement = overrides.find((row) => row.replaces === String(product.id));
+    const chosen = replacement ? byId.get(replacement.id) : product;
+    // If a manually chosen item also appears naturally today, keep it only
+    // in its pinned position instead of rendering a duplicate card.
+    if (!replacement && manualIds.has(String(product.id))) return;
+    if (chosen && !used.has(String(chosen.id))) {
+      result.push(chosen);
+      used.add(String(chosen.id));
+    }
+  });
+  // A custom "add" (and a replacement whose old category vanished) stays
+  // alongside the automatic rotation rather than disabling it.
+  overrides.forEach((row) => {
+    const product = byId.get(row.id);
+    if (product && !used.has(row.id)) { result.push(product); used.add(row.id); }
+  });
+  return result;
+}
+
+function broadcastOverrideForProduct(slot, id) {
+  return (bcOverrides[slot] || []).find((row) => row.id === String(id)) || null;
 }
 
 function broadcastProductUrl(p) {
@@ -2103,7 +2169,10 @@ function broadcastFullText(p) {
   return `${broadcastMessageFor(p)}\n\n${broadcastProductUrl(p)}`;
 }
 function broadcastShareUrl(text) {
-  return `https://wa.me/?text=${encodeURIComponent(text)}`;
+  // Legacy fallback only. Modern phones take the navigator.share path above,
+  // which opens the OS picker containing WhatsApp, WhatsApp Business and
+  // Channels instead of routing Safari through an intermediary web page.
+  return `whatsapp://send?text=${encodeURIComponent(text)}`;
 }
 
 async function broadcastImageFile(p) {
@@ -2137,7 +2206,7 @@ async function broadcastShareNative(p) {
   // be fetched - fall back to WhatsApp's own share sheet with the same
   // text. The exact photo still shows up there because product.html?id=
   // now carries its own Open Graph image (see app.inject_product_meta).
-  window.open(broadcastShareUrl(text), "_blank", "noopener");
+  window.location.href = broadcastShareUrl(text);
 }
 
 async function broadcastShareBatchNative(chosen, heading) {
@@ -2151,10 +2220,88 @@ async function broadcastShareBatchNative(chosen, heading) {
   } catch (e) {
     if (e && e.name === "AbortError") return;
   }
-  window.open(broadcastShareUrl(text), "_blank", "noopener");
+  window.location.href = broadcastShareUrl(text);
 }
 
 
+
+function broadcastPickerResultsHTML(query) {
+  const term = String(query || "").trim().toLowerCase();
+  const products = broadcastEligibleProducts().filter((p) => {
+    const haystack = [p.name, p.nameFr, p.sku, p.category].join(" ").toLowerCase();
+    return !term || haystack.includes(term);
+  }).slice(0, 100);
+  if (!products.length) return `<p class="empty">No in-stock product matches that search.</p>`;
+  return products.map((p) => `<button type="button" class="mk-bc-picker-item" data-bc-choose="${esc(String(p.id))}">
+    <img src="${esc(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="" onerror="fallbackImg(event)" />
+    <span><b>${esc(broadcastDisplayName(p))}</b><small>${esc(p.sku || p.id || "")} · ${broadcastPriceLine(p)}</small></span>
+  </button>`).join("");
+}
+
+function closeBroadcastPicker() {
+  const picker = $("#mk-bc-picker");
+  if (picker) picker.hidden = true;
+  bcPickerTarget = null;
+}
+
+function chooseBroadcastProduct(id) {
+  const productId = String(id || "");
+  const eligible = broadcastEligibleProducts();
+  if (!eligible.some((p) => String(p.id) === productId)) return;
+  const overrides = bcOverrides[bcSlot];
+  const visible = broadcastScheduledFeedFor(bcSlot);
+  const current = bcPickerTarget ? visible.find((p) => String(p.id) === bcPickerTarget) : null;
+
+  if (current) {
+    const prior = broadcastOverrideForProduct(bcSlot, current.id);
+    const replacementTarget = prior ? prior.replaces : String(current.id);
+    if (prior) overrides.splice(overrides.indexOf(prior), 1);
+    // Moving a product already pinned elsewhere must not leave a duplicate
+    // override that wins before this newly selected slot.
+    const duplicate = overrides.find((row) => row.id === productId);
+    if (duplicate) overrides.splice(overrides.indexOf(duplicate), 1);
+    overrides.push({ id: productId, replaces: replacementTarget || null });
+    if (bcSelected[bcSlot].delete(String(current.id))) bcSelected[bcSlot].add(productId);
+  } else if (!visible.some((p) => String(p.id) === productId)) {
+    overrides.push({ id: productId, replaces: null });
+    bcSelected[bcSlot].add(productId);
+  } else {
+    bcSelected[bcSlot].add(productId);
+  }
+  // One product can only occupy one manual slot.
+  bcOverrides[bcSlot] = overrides.filter((row, index, rows) =>
+    rows.findIndex((candidate) => candidate.id === row.id) === index
+  );
+  bcAutoQueued[bcSlot] = true;
+  saveBroadcastOverrides();
+  closeBroadcastPicker();
+  paintBroadcastFeed();
+  JA.toast(current ? "Broadcast item swapped." : "Custom product added to this batch.");
+}
+
+function openBroadcastPicker(targetId) {
+  const picker = $("#mk-bc-picker");
+  const search = $("#mk-bc-picker-search");
+  const title = $("#mk-bc-picker-title");
+  if (!picker || !search) return;
+  bcPickerTarget = targetId ? String(targetId) : null;
+  if (title) title.textContent = bcPickerTarget ? "Swap item" : "Select custom product";
+  search.value = "";
+  picker.hidden = false;
+  const results = $("#mk-bc-picker-results");
+  if (results) results.innerHTML = broadcastPickerResultsHTML("");
+  setTimeout(() => search.focus(), 0);
+}
+
+function restoreAutomaticBroadcastProduct(productId) {
+  const row = broadcastOverrideForProduct(bcSlot, productId);
+  if (!row) return;
+  bcOverrides[bcSlot].splice(bcOverrides[bcSlot].indexOf(row), 1);
+  bcSelected[bcSlot].delete(String(productId));
+  saveBroadcastOverrides();
+  paintBroadcastFeed();
+  JA.toast("Automatic rotation restored.");
+}
 
 function broadcastFeedCardHTML() {
   return `<div class="admin-card" id="mk-broadcast-card">
@@ -2165,7 +2312,16 @@ function broadcastFeedCardHTML() {
         <button type="button" class="an-rng is-on" data-bc-slot="morning">☀️ Morning batch</button>
         <button type="button" class="an-rng" data-bc-slot="evening">🌙 Evening batch</button>
       </div>
+      <button type="button" class="btn btn-line" id="mk-bc-custom">Select custom product</button>
       <button type="button" class="au-link-btn" id="mk-bc-reshuffle">Reshuffle today's picks</button>
+    </div>
+    <p class="admin-note mk-bc-override-note">Custom products are saved for today's selected batch. Automatic morning and evening rotation keeps running around them.</p>
+    <div class="mk-bc-picker" id="mk-bc-picker" hidden role="dialog" aria-modal="true" aria-labelledby="mk-bc-picker-title">
+      <div class="mk-bc-picker-panel">
+        <div class="mk-bc-picker-head"><h3 id="mk-bc-picker-title">Select custom product</h3><button type="button" class="au-link-btn" id="mk-bc-picker-close" aria-label="Close product picker">Close</button></div>
+        <input type="search" id="mk-bc-picker-search" placeholder="Search by product name, SKU or category…" autocomplete="off" />
+        <div class="mk-bc-picker-results" id="mk-bc-picker-results"></div>
+      </div>
     </div>
     <div class="adx-bulkbar" id="mk-bc-bulk" hidden>
       <strong><span id="mk-bc-count">0</span> selected</strong>
@@ -2178,7 +2334,9 @@ function broadcastFeedCardHTML() {
 
 function broadcastCardHTML(p) {
   const checked = bcSelected[bcSlot].has(String(p.id)) ? "checked" : "";
-  return `<article class="mk-bc-card" data-bc-pid="${esc(String(p.id))}">
+  const custom = broadcastOverrideForProduct(bcSlot, p.id);
+  return `<article class="mk-bc-card${custom ? " is-custom" : ""}" data-bc-pid="${esc(String(p.id))}">
+    ${custom ? `<span class="mk-bc-custom-badge">Custom pick</span>` : ""}
     <label class="mk-bc-pick"><input type="checkbox" data-bc-select="${esc(String(p.id))}" ${checked} /> Select</label>
     <img src="${esc(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="" onerror="fallbackImg(event)" />
     <div class="mk-bc-body">
@@ -2189,8 +2347,10 @@ function broadcastCardHTML(p) {
     </div>
     <div class="mk-bc-actions">
       <a class="btn btn-line" href="${esc(broadcastProductUrl(p))}" target="_blank" rel="noopener">View</a>
-      <button type="button" class="btn" data-bc-share="${esc(String(p.id))}">Share to WhatsApp</button>
+      <button type="button" class="btn btn-line" data-bc-swap="${esc(String(p.id))}">Swap item</button>
+      <button type="button" class="btn" data-bc-share="${esc(String(p.id))}">Share</button>
     </div>
+    ${custom ? `<button type="button" class="au-link-btn mk-bc-restore" data-bc-restore="${esc(String(p.id))}">Restore automatic item</button>` : ""}
   </article>`;
 }
 
@@ -2206,12 +2366,17 @@ function updateBroadcastBulkUI() {
 function paintBroadcastFeed() {
   const grid = $("#mk-bc-grid");
   if (!grid) return;
-  const feed = broadcastFeedFor(bcSlot);
+  const feed = broadcastScheduledFeedFor(bcSlot);
   // Automatically queue the first BC_AUTO_QUEUE_SIZE picks the first time
   // this batch is shown (or right after a reshuffle) - a ready-made queue
   // is already sitting there, not a blank list to build from scratch.
   if (!bcAutoQueued[bcSlot] && bcSelected[bcSlot].size === 0 && feed.length) {
-    feed.slice(0, BC_AUTO_QUEUE_SIZE).forEach((p) => bcSelected[bcSlot].add(String(p.id)));
+    // Manual choices are pinned into the ready-to-share queue; automatic
+    // products then fill the remaining places up to the normal batch size.
+    (bcOverrides[bcSlot] || []).forEach((row) => bcSelected[bcSlot].add(String(row.id)));
+    feed.forEach((p) => {
+      if (bcSelected[bcSlot].size < BC_AUTO_QUEUE_SIZE) bcSelected[bcSlot].add(String(p.id));
+    });
   }
   bcAutoQueued[bcSlot] = true;
   grid.innerHTML = feed.length
@@ -2231,6 +2396,12 @@ function paintBroadcastFeed() {
       if (p) broadcastShareNative(p);
     };
   });
+  grid.querySelectorAll("[data-bc-swap]").forEach((btn) => {
+    btn.onclick = () => openBroadcastPicker(btn.dataset.bcSwap);
+  });
+  grid.querySelectorAll("[data-bc-restore]").forEach((btn) => {
+    btn.onclick = () => restoreAutomaticBroadcastProduct(btn.dataset.bcRestore);
+  });
   updateBroadcastBulkUI();
 }
 
@@ -2239,6 +2410,19 @@ function bindBroadcastFeed() {
   if (!card || card.dataset.bound === "1") return;
   card.dataset.bound = "1";
   paintBroadcastFeed();
+  $("#mk-bc-custom")?.addEventListener("click", () => openBroadcastPicker(null));
+  $("#mk-bc-picker-close")?.addEventListener("click", closeBroadcastPicker);
+  $("#mk-bc-picker")?.addEventListener("click", (event) => {
+    if (event.target.id === "mk-bc-picker") closeBroadcastPicker();
+  });
+  $("#mk-bc-picker-search")?.addEventListener("input", (event) => {
+    const results = $("#mk-bc-picker-results");
+    if (results) results.innerHTML = broadcastPickerResultsHTML(event.target.value);
+  });
+  $("#mk-bc-picker-results")?.addEventListener("click", (event) => {
+    const choice = event.target.closest("[data-bc-choose]");
+    if (choice) chooseBroadcastProduct(choice.dataset.bcChoose);
+  });
   card.querySelectorAll("[data-bc-slot]").forEach((btn) => {
     btn.onclick = () => {
       bcSlot = btn.dataset.bcSlot;
@@ -2579,13 +2763,21 @@ function setOrderBadge(count) {
     badge.hidden = n === 0;
   });
 }
+function setSupplierBadge(count) {
+  const n = Math.max(0, Number(count) || 0);
+  document.querySelectorAll("[data-supplier-badge]").forEach((badge) => {
+    badge.textContent = n;
+    badge.hidden = n === 0;
+  });
+}
 function paintDesk(tab = "analytics") {
   const pending = orderAttentionCount;
-  const navBtn = (id, badge) => `<button type="button" data-tab="${id}" class="adx-nav-btn ${tab === id ? "is-on" : ""}">${ADX_ICONS[id]}<span>${TAB_TITLES[id]}</span>${id === "orders" ? `<em class="adx-badge" data-orders-badge${badge ? "" : " hidden"}>${badge || 0}</em>` : ""}</button>`;
+  const supplierCount = supplierWarnings.length;
+  const navBtn = (id, badge) => `<button type="button" data-tab="${id}" class="adx-nav-btn ${tab === id ? "is-on" : ""}">${ADX_ICONS[id]}<span>${TAB_TITLES[id]}</span>${id === "orders" ? `<em class="adx-badge" data-orders-badge${badge ? "" : " hidden"}>${badge || 0}</em>` : ""}${id === "products" ? `<em class="adx-badge is-warning" data-supplier-badge${supplierCount ? "" : " hidden"}>${supplierCount || 0}</em>` : ""}</button>`;
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=161" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=163" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -2604,7 +2796,7 @@ function paintDesk(tab = "analytics") {
     </div>
     <nav class="admin-app-nav" aria-label="Admin sections">
       <button type="button" data-tab="analytics" class="${tab === "analytics" ? "is-on" : ""}">${ADX_ICONS.analytics}<span>Dashboard</span></button>
-      <button type="button" data-tab="products" class="${tab === "products" ? "is-on" : ""}">${ADX_ICONS.products}<span>Products</span></button>
+      <button type="button" data-tab="products" class="${tab === "products" ? "is-on" : ""}">${ADX_ICONS.products}<span>Products</span><em class="adx-badge is-warning" data-supplier-badge${supplierCount ? "" : " hidden"}>${supplierCount || 0}</em></button>
       <button type="button" data-tab="orders" class="${tab === "orders" ? "is-on" : ""}">${ADX_ICONS.orders}<span>Orders</span><em class="adx-badge" data-orders-badge${pending ? "" : " hidden"}>${pending || 0}</em></button>
       <button type="button" data-tab="sales" class="${tab === "sales" ? "is-on" : ""}">${ADX_ICONS.sales}<span>Sales</span></button>
       <button type="button" data-tab="marketing" class="${tab === "marketing" ? "is-on" : ""}">${ADX_ICONS.marketing}<span>Marketing</span></button>
@@ -2931,7 +3123,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=161", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=163", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

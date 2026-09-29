@@ -56,3 +56,4 @@ data/.analytics-restore.lock
 # regenerated every run, never source.
 supplier_sync_cache.json
 supplier_match_review.json
+supplier_sync_warnings.json

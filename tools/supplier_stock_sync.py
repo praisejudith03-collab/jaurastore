@@ -21,10 +21,11 @@ unattended:
      run) and to rank the human review queue - it can NEVER, by itself,
      however strong, grant an auto-link. Anything not verified by photo is
      left alone and written to a review file instead of being guessed.
-  3. MIRRORS the supplier's exact stock count onto every product that ends
-     up linked (auto-linked this run, or linked earlier), the same way it
-     always has - a direct, proportional copy of their number, never a mere
-     on/off toggle.
+  3. AUDITS every linked product at option level. Variant names, colour/hex
+     codes, shade numbers and exact stock quantities are read from Splendall's
+     product/variation responses. Every local option combination must match
+     exactly one supplier variation (and vice versa) before the complete
+     optionStock map is replaced atomically. A partial match changes nothing.
 
   4. MARKS a previously-linked product OUT OF STOCK the instant it
      disappears from the supplier's live catalog - sets its stock to 0 and
@@ -32,12 +33,12 @@ unattended:
      storefront's normal "Out of stock" card is what the shopper sees).
      Nothing is auto-hidden and nothing is auto-deleted; the owner reviews a
      zeroed product and decides whether to hide or delete it themselves.
-  5. EMAILS the shop inbox directly, immediately, the moment step 2 finds a
-     match it is not fully confident about - see mailer.py, the exact same
-     transport every order alert already goes through. No manual log- or
-     GitHub-checking is required to notice a candidate needs a look; a shop
-     with no mail transport configured (MAIL_FROM + a provider) is a silent,
-     expected no-op, same as every other mailer call in this codebase.
+  5. PERSISTS every uncertainty (missing image, changed reply layout, unknown
+     quantity, ambiguous option mapping, or possible new match) to Supabase.
+     Admin shows a warning badge, a Needs attention card, highlighted product
+     cards and an editor alert. Uncertain stock is never guessed or changed.
+     Possible new matches are also emailed through the existing order-alert
+     transport as a backup notification.
 
 Usage
 -----
@@ -108,8 +109,10 @@ Config (env vars, all optional)
                            specific to set up if the shop's mail is already
                            configured (e.g. on Render).
 """
+import datetime
 import difflib
 import io
+import itertools
 import json
 import os
 import re
@@ -135,6 +138,7 @@ USER_AGENT = "JauraStoreStockSync/1.0 (+https://jaurastore.com.ng)"
 
 CACHE_FILE = os.path.join(ROOT, "supplier_sync_cache.json")
 REVIEW_FILE = os.path.join(ROOT, "supplier_match_review.json")
+WARNING_FILE = os.path.join(ROOT, "supplier_sync_warnings.json")
 
 _STOCK_NUMBER_RE = re.compile(r"([\d][\d,]*)\s*in stock", re.IGNORECASE)
 
@@ -178,7 +182,16 @@ PROTECTED_KEYWORDS = ("ankara",)
 
 
 class SupplierFetchError(Exception):
-    """Any reason the supplier's exact stock number could not be trusted."""
+    """Any reason the supplier's exact stock number could not be trusted.
+
+    ``code`` is deliberately stable: the admin badge can distinguish a
+    supplier layout break from an option-mapping ambiguity without parsing a
+    human sentence.
+    """
+    def __init__(self, message, code="supplier_unconfirmed", variants=None):
+        super().__init__(message)
+        self.code = str(code or "supplier_unconfirmed")
+        self.variants = list(variants or [])
 
 
 # ------------------------------------------------------------- scope guard
@@ -268,35 +281,195 @@ def _quantity_from_row(row):
         except ValueError:
             pass  # fall through to the next signal instead of guessing
 
-    # No parseable number in the stock text (e.g. plain "In stock" on a
-    # product without managed stock). add_to_cart.maximum mirrors the same
-    # stock_quantity WooCommerce enforces at checkout, so it is trustworthy
-    # when present and the item is confirmed purchasable and in stock.
-    cart = row.get("add_to_cart") or {}
-    maximum = cart.get("maximum")
-    if in_stock is True and row.get("is_purchasable") is True and isinstance(maximum, int) and maximum > 0:
-        return maximum, f"inferred from add_to_cart.maximum={maximum} (text: {text!r})"
+    # A plain "In stock" boolean confirms availability but not quantity.
+    # add_to_cart.maximum can be a merchant's per-order cap rather than the
+    # remaining stock, so treating it as inventory would only look precise.
+    # Fail closed unless Splendall publishes the real number.
+    raise SupplierFetchError(f"could not read an exact stock number from supplier reply: {text!r}",
+                             code="exact_quantity_unavailable")
 
-    raise SupplierFetchError(f"could not read an exact stock number from supplier reply: {text!r}")
+
+def _supplier_product_detail(supplier_sku):
+    """Fetch one exact product row, then its detail endpoint when possible."""
+    slug = _slug_from_sku(supplier_sku)
+    if not slug:
+        raise SupplierFetchError(f"could not read a product slug out of {supplier_sku!r}",
+                                 code="missing_supplier_slug")
+    url = f"{BASE_URL}/wp-json/wc/store/v1/products?" + urllib.parse.urlencode({"slug": slug})
+    data = _http_get_json(url)
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        raise SupplierFetchError(
+            f"supplier did not return one unambiguous product for slug {slug!r}",
+            code="supplier_product_ambiguous")
+    row = dict(data[0])
+    if str(row.get("slug") or "") != slug:
+        raise SupplierFetchError(f"supplier returned a different slug for {slug!r}",
+                                 code="supplier_product_mismatch")
+    product_id = row.get("id")
+    if product_id is not None:
+        detail_url = f"{BASE_URL}/wp-json/wc/store/v1/products/{urllib.parse.quote(str(product_id))}"
+        try:
+            detail = _http_get_json(detail_url)
+            if isinstance(detail, dict) and str(detail.get("slug") or "") == slug:
+                row = detail
+        except SupplierFetchError:
+            # The collection result still contains the stock contract. A
+            # variation product is stricter below and cannot use this fallback.
+            pass
+    images = row.get("images") or []
+    if not (isinstance(images, list) and any(isinstance(i, dict) and i.get("src") for i in images)):
+        raise SupplierFetchError("supplier product has no confirmable image",
+                                 code="missing_supplier_image")
+    return row
 
 
 def fetch_supplier_quantity(supplier_sku):
-    """Return (qty: int, detail: str) for one product, or raise SupplierFetchError.
-
-    Never guesses: every branch that is not confident about the exact number
-    raises instead of returning a made-up figure.
-    """
-    slug = _slug_from_sku(supplier_sku)
-    if not slug:
-        raise SupplierFetchError(f"could not read a product slug out of {supplier_sku!r}")
-    url = f"{BASE_URL}/wp-json/wc/store/v1/products?" + urllib.parse.urlencode({"slug": slug})
-    data = _http_get_json(url)
-    if not isinstance(data, list) or not data:
-        raise SupplierFetchError(f"supplier has no product at slug {slug!r} (removed/renamed?)")
-    row = data[0] or {}
-    if not isinstance(row, dict):
-        raise SupplierFetchError("unexpected supplier reply shape")
+    """Return an exact simple-product quantity; never infer an option total."""
+    row = _supplier_product_detail(supplier_sku)
+    variations = row.get("variations") or []
+    if row.get("has_variations") is True or variations:
+        raise SupplierFetchError("supplier product has variants; option-level audit is required",
+                                 code="variants_require_exact_mapping")
     return _quantity_from_row(row)
+
+
+def _attribute_name(raw):
+    name = str(raw or "").strip().lower().replace("colour", "color")
+    name = re.sub(r"^(attribute_|pa[_-])", "", name)
+    return re.sub(r"[^a-z0-9]+", "", name)
+
+
+def _attribute_value(raw):
+    # Keep the actual shade name/number/hex code in the audit payload. This
+    # folded form is used only for an exact punctuation/case-insensitive key.
+    return re.sub(r"[^a-z0-9]+", "", str(raw or "").strip().lower())
+
+
+def _variant_attributes(row):
+    attrs = row.get("attributes") if isinstance(row, dict) else None
+    pairs = []
+    if isinstance(attrs, dict):
+        attrs = [{"name": k, "value": v} for k, v in attrs.items()]
+    if not isinstance(attrs, list):
+        return []
+    for attr in attrs:
+        if not isinstance(attr, dict):
+            continue
+        title = attr.get("name") or attr.get("attribute") or attr.get("taxonomy")
+        value = attr.get("value") or attr.get("option") or attr.get("term")
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("slug")
+        clean_title, clean_value = str(title or "").strip(), str(value or "").strip()
+        if clean_title and clean_value:
+            pairs.append((clean_title, clean_value))
+    return pairs
+
+
+def _variation_detail(ref):
+    if isinstance(ref, dict) and _variant_attributes(ref) and (
+            "is_in_stock" in ref or "stock_availability" in ref or "add_to_cart" in ref):
+        return dict(ref)
+    variation_id = ref.get("id") if isinstance(ref, dict) else ref
+    if variation_id is None or str(variation_id).strip() == "":
+        raise SupplierFetchError("supplier variation has no id", code="variation_layout_changed")
+    quoted = urllib.parse.quote(str(variation_id))
+    attempts = [
+        f"{BASE_URL}/wp-json/wc/store/v1/products/{quoted}",
+        f"{BASE_URL}/wp-json/wc/store/v1/products?" + urllib.parse.urlencode({"include": variation_id}),
+    ]
+    for url in attempts:
+        try:
+            data = _http_get_json(url)
+        except SupplierFetchError:
+            continue
+        row = data[0] if isinstance(data, list) and len(data) == 1 else data
+        if isinstance(row, dict) and _variant_attributes(row):
+            return row
+    raise SupplierFetchError(f"could not fetch exact supplier variation {variation_id}",
+                             code="variation_detail_unavailable")
+
+
+def _store_variant_rows(product):
+    options = []
+    for opt in product.get("options") or []:
+        if not isinstance(opt, dict):
+            continue
+        title = str(opt.get("title") or "").strip()
+        values = [str(v).strip() for v in (opt.get("values") or []) if str(v).strip()]
+        if title and values:
+            options.append((title, values))
+    if not options and product.get("colors"):
+        values = [str(v).strip() for v in product.get("colors") if str(v).strip()]
+        if values:
+            options = [("Color", values)]
+    if not options:
+        return []
+    rows = []
+    for values in itertools.product(*(vals for _title, vals in options)):
+        raw_pairs = list(zip((title for title, _vals in options), values))
+        signature = tuple(sorted((_attribute_name(k), _attribute_value(v)) for k, v in raw_pairs))
+        key = values[0] if len(values) == 1 else " · ".join(
+            f"{title}: {value}" for (title, _vals), value in zip(options, values))
+        rows.append({"key": key, "signature": signature, "options": [
+            {"name": title, "value": value} for (title, _vals), value in zip(options, values)
+        ]})
+    return rows
+
+
+def fetch_supplier_variant_stock(product):
+    """Return an exact optionStock map plus a transparent supplier audit.
+
+    Every local option combination must map bijectively to one supplier
+    variation. Missing, duplicate or extra variants fail the entire product;
+    no partial stock update is ever written.
+    """
+    row = _supplier_product_detail(product.get("supplierSku"))
+    refs = row.get("variations") or []
+    store_rows = _store_variant_rows(product)
+    if not store_rows:
+        raise SupplierFetchError("store product has no options to map to supplier variants",
+                                 code="store_options_missing")
+    if not isinstance(refs, list) or not refs:
+        raise SupplierFetchError("supplier detail contains no variation records",
+                                 code="supplier_variations_missing")
+    supplier = {}
+    audit = []
+    for ref in refs:
+        detail = _variation_detail(ref)
+        attrs = _variant_attributes(detail)
+        signature = tuple(sorted((_attribute_name(k), _attribute_value(v)) for k, v in attrs))
+        if not signature or any(not k or not v for k, v in signature):
+            raise SupplierFetchError("supplier variation has ambiguous option attributes",
+                                     code="variant_attributes_ambiguous", variants=audit)
+        if signature in supplier:
+            raise SupplierFetchError("supplier returned duplicate option variants",
+                                     code="duplicate_supplier_variant", variants=audit)
+        qty, stock_detail = _quantity_from_row(detail)
+        item = {
+            "supplier_variant_id": detail.get("id"),
+            "name": str(detail.get("name") or row.get("name") or ""),
+            "options": [{"name": k, "value": v} for k, v in attrs],
+            "quantity": qty,
+            "status": "in_stock" if qty > 0 else "out_of_stock",
+            "detail": stock_detail,
+            "image": str(((detail.get("images") or [{}])[0] or {}).get("src") or
+                         ((row.get("images") or [{}])[0] or {}).get("src") or ""),
+        }
+        supplier[signature] = item
+        audit.append(item)
+    expected = {r["signature"] for r in store_rows}
+    if len(expected) != len(store_rows) or len({r["key"] for r in store_rows}) != len(store_rows):
+        raise SupplierFetchError("store options collapse into duplicate variant keys",
+                                 code="store_option_mapping_ambiguous", variants=audit)
+    actual = set(supplier)
+    if expected != actual:
+        missing = len(expected - actual)
+        extra = len(actual - expected)
+        raise SupplierFetchError(
+            f"option mapping is not exact ({missing} store variant(s) missing, {extra} supplier variant(s) extra)",
+            code="option_mapping_ambiguous", variants=audit)
+    option_stock = {r["key"]: supplier[r["signature"]]["quantity"] for r in store_rows}
+    return option_stock, audit
 
 
 # -------------------------------------------------- autonomous catalog crawl
@@ -657,30 +830,79 @@ def _email_review_needed(rows):
 
 
 
+def _warning_row(product, code, reason, variants=None):
+    return {
+        "product_id": str((product or {}).get("id") or ""),
+        "product_name": str((product or {}).get("name") or "Supplier catalog"),
+        "supplier_sku": str((product or {}).get("supplierSku") or ""),
+        "code": str(code or "supplier_unconfirmed"),
+        "reason": str(reason or "Supplier stock could not be confirmed."),
+        "variants": list(variants or [])[:100],
+        "at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+
+
+def _load_warnings():
+    rows = supabase_store.load_supplier_sync_warnings()
+    if rows:
+        return rows
+    try:
+        with open(WARNING_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data.get("warnings", []) if isinstance(data, dict) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _save_warnings(rows):
+    payload = list(rows or [])
+    try:
+        with open(WARNING_FILE, "w", encoding="utf-8") as fh:
+            json.dump({"generated_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                       "warnings": payload}, fh, indent=2, ensure_ascii=False)
+    except OSError as exc:
+        print(f"warning: could not write uncertainty report: {exc}")
+    if supabase_store.enabled() and not supabase_store.save_supplier_sync_warnings(payload):
+        print("warning: could not persist supplier uncertainty alerts to Supabase")
+
+
 # ------------------------------------------------------------- per-product
-def sync_one(product, dry_run=False):
-    """Refresh one already-linked product's stock. Returns a short outcome
-    string for the summary."""
+def sync_one(product, dry_run=False, warnings=None):
+    """Refresh one linked product, atomically and fail-closed at option level."""
     pid = str(product.get("id") or "")
     name = str(product.get("name") or pid)
+    warning_map = warnings if isinstance(warnings, dict) else {}
 
     if _is_protected(product):
-        print(f"warning: {name!r} ({pid}) is linked to supplier '{SUPPLIER_ID}' but "
-              f"matches a protected keyword {PROTECTED_KEYWORDS} - refusing to sync it. "
-              "Check the supplier mapping in the admin editor if this is unexpected.")
+        reason = (f"linked to supplier '{SUPPLIER_ID}' but matches protected keyword "
+                  f"{PROTECTED_KEYWORDS}; mapping must be checked")
+        print(f"warning: {name!r} ({pid}) is {reason}")
+        warning_map[pid] = _warning_row(product, "protected_product_mapping", reason)
         return "protected"
 
     try:
-        qty, detail = fetch_supplier_quantity(product.get("supplierSku"))
+        store_variants = _store_variant_rows(product)
+        if store_variants:
+            option_stock, audit = fetch_supplier_variant_stock(product)
+            qty = sum(option_stock.values())
+            detail = f"{len(option_stock)} exact option variant(s), total={qty}"
+        else:
+            qty, detail = fetch_supplier_quantity(product.get("supplierSku"))
+            option_stock, audit = None, []
     except SupplierFetchError as exc:
-        print(f"warning: skipping {name!r} ({pid}) - could not read supplier stock: {exc}")
-        return "skipped"
+        print(f"warning: skipping {name!r} ({pid}) - could not confirm supplier stock: {exc}")
+        warning_map[pid] = _warning_row(product, exc.code, str(exc), exc.variants)
+        return "uncertain"
     except Exception as exc:            # pragma: no cover - unexpected, still fail closed
         print(f"warning: skipping {name!r} ({pid}) - unexpected fetch error: {exc}")
-        return "skipped"
+        warning_map[pid] = _warning_row(product, "unexpected_supplier_reply", str(exc))
+        return "uncertain"
 
     current = catalog.stock_of(product)
-    if current == qty:
+    current_options = product.get("optionStock") if isinstance(product.get("optionStock"), dict) else {}
+    unchanged = current == qty and (option_stock is None or current_options == option_stock)
+    if unchanged:
+        warning_map.pop(pid, None)
         print(f"ok: {name!r} ({pid}) already matches supplier ({qty}) [{detail}]")
         return "unchanged"
 
@@ -688,10 +910,18 @@ def sync_one(product, dry_run=False):
         print(f"would set: {name!r} ({pid}) {current} -> {qty} [{detail}]")
         return "would-update"
 
-    result = catalog.set_variant_stock(pid, qty, actor=f"supplier-sync:{SUPPLIER_ID}")
+    if option_stock is not None:
+        result = _patch_product(pid, {"optionStock": option_stock,
+                                     "stock": qty, "stock_quantity": qty},
+                                actor=f"supplier-sync:{SUPPLIER_ID}:variants")
+    else:
+        result = catalog.set_variant_stock(pid, qty, actor=f"supplier-sync:{SUPPLIER_ID}")
     if result in (None, False):
+        reason = "exact supplier stock was confirmed but could not be saved"
         print(f"warning: failed to write stock for {name!r} ({pid}) - left at {current}")
+        warning_map[pid] = _warning_row(product, "stock_write_failed", reason, audit)
         return "write-failed"
+    warning_map.pop(pid, None)
     print(f"updated: {name!r} ({pid}) {current} -> {qty} [{detail}]")
     return "updated"
 
@@ -702,6 +932,8 @@ def main(argv):
     dry_run = "--dry-run" in args
     no_discover = "--no-discover" in args
     only_ids = {a for a in args if a not in ("--dry-run", "--no-discover") and a.strip()}
+    warning_map = {str(row.get("product_id") or f"warning:{i}"): row
+                   for i, row in enumerate(_load_warnings()) if isinstance(row, dict)}
 
     # Autonomous discovery (crawl + auto-link + discontinue) runs on a full,
     # unfiltered pass only - the single-id / --no-discover modes are for
@@ -711,6 +943,11 @@ def main(argv):
         supplier_rows = crawl_supplier_catalog()
         cache = _load_cache()
         if supplier_rows is not None and len(supplier_rows) >= MIN_CATALOG_SIZE:
+            warning_map.pop("__supplier_crawl__", None)
+            # Candidate warnings are rebuilt from this complete crawl; stale
+            # possibilities disappear immediately when they no longer match.
+            warning_map = {key: row for key, row in warning_map.items()
+                           if row.get("code") != "supplier_match_unconfirmed"}
             print(f"crawled {len(supplier_rows)} live product(s) from {BASE_URL}")
             store_products = catalog.merged(include_hidden=True)
             auto, review = discover_matches(store_products, supplier_rows, cache)
@@ -733,19 +970,34 @@ def main(argv):
                     "score": round(score, 3),
                 } for product, row, score in review]
                 _save_review(review_rows)
+                for product, row, score in review:
+                    warning_map[str(product.get("id") or row.get("slug"))] = _warning_row(
+                        product, "supplier_match_unconfirmed",
+                        f"Possible supplier match {row.get('name')!r} is only {score:.1%} certain; no mapping or stock was changed.")
                 print(f"{len(review)} possible match(es) need manual review "
                       f"(see {os.path.basename(REVIEW_FILE)})")
                 if not dry_run:
                     _email_review_needed(review_rows)
+            else:
+                _save_review([])
             zero_counts = mark_discontinued_out_of_stock(supplier_rows, dry_run=dry_run)
             if zero_counts:
                 print("discontinued check:", ", ".join(f"{k}={v}" for k, v in sorted(zero_counts.items())))
         elif supplier_rows is not None:
+            reason = (f"Supplier crawl returned only {len(supplier_rows)} products; the layout or response may be incomplete. "
+                      f"At least {MIN_CATALOG_SIZE} are required.")
+            warning_map["__supplier_crawl__"] = _warning_row(
+                {"id": "__supplier_crawl__", "name": "Splendall catalog"},
+                "supplier_catalog_incomplete", reason)
             print(f"warning: supplier crawl returned only {len(supplier_rows)} product(s) - "
                   f"too few to trust for auto-discovery or discontinued checks this run "
                   f"(needs at least {MIN_CATALOG_SIZE}); already-linked products are "
                   "still refreshed individually below.")
         else:
+            warning_map["__supplier_crawl__"] = _warning_row(
+                {"id": "__supplier_crawl__", "name": "Splendall catalog"},
+                "supplier_catalog_unavailable",
+                "The complete supplier catalog could not be confirmed; discovery and discontinued checks were not run.")
             print("warning: could not crawl the supplier's full catalog this run - "
                   "auto-discovery and discontinued checks are skipped; already-linked "
                   "products are still refreshed individually below.")
@@ -756,6 +1008,8 @@ def main(argv):
         products = [p for p in products if str(p.get("id")) in only_ids]
 
     if not products:
+        if not dry_run:
+            _save_warnings(list(warning_map.values()))
         print(f"no products are linked to supplier '{SUPPLIER_ID}' - nothing to sync.")
         return 0
 
@@ -765,9 +1019,11 @@ def main(argv):
 
     counts = {}
     for p in products:
-        outcome = sync_one(p, dry_run=dry_run)
+        outcome = sync_one(p, dry_run=dry_run, warnings=warning_map)
         counts[outcome] = counts.get(outcome, 0) + 1
 
+    if not dry_run:
+        _save_warnings(list(warning_map.values()))
     print("summary:", ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "nothing to report")
     return 0
 

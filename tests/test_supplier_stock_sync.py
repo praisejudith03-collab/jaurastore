@@ -60,6 +60,7 @@ def _iso_sync_files(tmp_path, monkeypatch):
     """The image-hash cache and review report never touch the real repo files."""
     monkeypatch.setattr(sync_mod, "CACHE_FILE", str(tmp_path / "supplier_sync_cache.json"))
     monkeypatch.setattr(sync_mod, "REVIEW_FILE", str(tmp_path / "supplier_match_review.json"))
+    monkeypatch.setattr(sync_mod, "WARNING_FILE", str(tmp_path / "supplier_sync_warnings.json"))
 
 
 @pytest.fixture()
@@ -724,3 +725,116 @@ def test_dhash_and_hamming_are_stable_and_meaningful():
     assert isinstance(h1, int) and 0 <= h1 < (1 << 64)
     assert sync_mod._hamming(h1, h1) == 0
     assert sync_mod._hamming(h1, h2) >= 0
+
+# ------------------------------------------------ precision variant auditing
+
+
+def test_exact_variant_audit_keeps_names_color_codes_shades_and_quantities(monkeypatch):
+    product = {
+        "id": "jau-shades", "name": "Shade Set", "supplierSku": "shade-set",
+        "options": [
+            {"title": "Colour", "values": ["#A52A2A", "#101010"]},
+            {"title": "Shade", "values": ["01", "02"]},
+        ],
+    }
+    variations = [
+        {"id": 1, "attributes": [{"name": "Color", "value": "#A52A2A"}, {"name": "Shade", "value": "01"}], "is_in_stock": True, "stock_availability": {"text": "3 in stock"}},
+        {"id": 2, "attributes": [{"name": "Color", "value": "#A52A2A"}, {"name": "Shade", "value": "02"}], "is_in_stock": False},
+        {"id": 3, "attributes": [{"name": "Color", "value": "#101010"}, {"name": "Shade", "value": "01"}], "is_in_stock": True, "stock_availability": {"text": "7 in stock"}},
+        {"id": 4, "attributes": [{"name": "Color", "value": "#101010"}, {"name": "Shade", "value": "02"}], "is_in_stock": True, "stock_availability": {"text": "2 in stock"}},
+    ]
+    monkeypatch.setattr(sync_mod, "_supplier_product_detail", lambda sku: {
+        "id": 99, "name": "Shade Set", "variations": variations,
+        "images": [{"src": "https://splendall.test/shades.jpg"}],
+    })
+
+    stock, audit = sync_mod.fetch_supplier_variant_stock(product)
+
+    assert stock == {
+        "Colour: #A52A2A · Shade: 01": 3,
+        "Colour: #A52A2A · Shade: 02": 0,
+        "Colour: #101010 · Shade: 01": 7,
+        "Colour: #101010 · Shade: 02": 2,
+    }
+    assert audit[0]["options"] == [
+        {"name": "Color", "value": "#A52A2A"},
+        {"name": "Shade", "value": "01"},
+    ]
+    assert {row["status"] for row in audit} == {"in_stock", "out_of_stock"}
+
+
+def test_variant_audit_rejects_any_non_bijective_option_mapping(monkeypatch):
+    product = {
+        "id": "jau-sizes", "supplierSku": "sizes",
+        "options": [{"title": "Size", "values": ["S", "M"]}],
+    }
+    monkeypatch.setattr(sync_mod, "_supplier_product_detail", lambda sku: {
+        "id": 10, "variations": [
+            {"id": 1, "attributes": [{"name": "Size", "value": "S"}],
+             "is_in_stock": True, "stock_availability": {"text": "2 in stock"}},
+        ], "images": [{"src": "https://splendall.test/sizes.jpg"}],
+    })
+
+    with pytest.raises(sync_mod.SupplierFetchError) as caught:
+        sync_mod.fetch_supplier_variant_stock(product)
+    assert caught.value.code == "option_mapping_ambiguous"
+
+
+def test_variant_uncertainty_leaves_every_option_unchanged_and_creates_warning(iso_catalog, monkeypatch):
+    product = _make(
+        iso_catalog, name="Mapped shades", supplierId="splendall", supplierSku="shades",
+        options=[{"title": "Shade", "values": ["01", "02"]}],
+        optionStock={"01": 4, "02": 5}, stock=9,
+    )
+    warning_map = {}
+
+    def _ambiguous(_product):
+        raise sync_mod.SupplierFetchError("Shade 02 missing from supplier reply",
+                                          code="option_mapping_ambiguous",
+                                          variants=[{"options": [{"name": "Shade", "value": "01"}], "quantity": 2}])
+    monkeypatch.setattr(sync_mod, "fetch_supplier_variant_stock", _ambiguous)
+
+    outcome = sync_mod.sync_one(product, warnings=warning_map)
+
+    assert outcome == "uncertain"
+    refreshed = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == product["id"])
+    assert refreshed["optionStock"] == {"01": 4, "02": 5}
+    assert warning_map[product["id"]]["code"] == "option_mapping_ambiguous"
+    assert warning_map[product["id"]]["variants"][0]["quantity"] == 2
+
+
+def test_successful_variant_audit_updates_all_options_atomically_and_clears_warning(iso_catalog, monkeypatch):
+    product = _make(
+        iso_catalog, name="Mapped sizes", supplierId="splendall", supplierSku="sizes",
+        options=[{"title": "Size", "values": ["S", "M"]}],
+        optionStock={"S": 8, "M": 8}, stock=16,
+    )
+    warning_map = {product["id"]: sync_mod._warning_row(product, "old", "old warning")}
+    monkeypatch.setattr(sync_mod, "fetch_supplier_variant_stock", lambda p: (
+        {"S": 1, "M": 0}, [{"options": [{"name": "Size", "value": "S"}], "quantity": 1}]))
+
+    assert sync_mod.sync_one(product, warnings=warning_map) == "updated"
+    refreshed = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == product["id"])
+    assert refreshed["optionStock"] == {"S": 1, "M": 0}
+    assert refreshed["stock"] == 1
+    assert product["id"] not in warning_map
+
+
+def test_missing_supplier_image_is_an_explicit_uncertainty(monkeypatch):
+    monkeypatch.setattr(sync_mod, "_http_get_json", lambda url: [{
+        "id": 1, "slug": "no-photo", "name": "No photo", "is_in_stock": True,
+        "stock_availability": {"text": "3 in stock"}, "images": [],
+    }] if "?" in url else {})
+    with pytest.raises(sync_mod.SupplierFetchError) as caught:
+        sync_mod.fetch_supplier_quantity("no-photo")
+    assert caught.value.code == "missing_supplier_image"
+
+
+def test_checkout_maximum_is_not_guessed_as_stock_quantity():
+    with pytest.raises(sync_mod.SupplierFetchError) as caught:
+        sync_mod._quantity_from_row({
+            "is_in_stock": True, "is_purchasable": True,
+            "stock_availability": {"text": "In stock"},
+            "add_to_cart": {"maximum": 5},
+        })
+    assert caught.value.code == "exact_quantity_unavailable"

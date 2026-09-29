@@ -1474,6 +1474,12 @@ def _option_stock_key_for(product, variant):
         fk = fold_option_value(k)
         if fk:
             folded[fk] = k
+    # Multi-dimensional supplier variants are stored as the complete cart
+    # label ("Color: Red · Size: M"). Prefer that exact combination before
+    # the legacy single-value fallback, otherwise Red/M could consume Red/L.
+    whole = fold_option_value(variant)
+    if whole and whole in folded:
+        return folded[whole]
     for val in vals:
         fk = fold_option_value(val)
         if fk and fk in folded:
