@@ -91,7 +91,7 @@ BASE_FIELDS = (
     "id", "sku", "slug", "name", "nameFr", "category", "priceCfa", "compareCfa",
     "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
     "stock", "badge", "featured", "online", "colors", "options", "optionPrices",
-    "supplierId", "supplierSku",
+    "optionCompareAt", "supplierId", "supplierSku",
 )
 
 # Suppliers this shop's automated stock-mirroring tooling is allowed to read
@@ -678,6 +678,10 @@ def normalize(product):
         "options": list(product.get("options") or []),
         "optionStock": option_stock,
         "optionPrices": _clean_option_prices(product.get("optionPrices") or product.get("option_prices")),
+        # Per-option "was" (strike-through) prices, mirroring optionPrices.
+        # A variant with an entry here shows the original price crossed out
+        # next to its override; a blank entry inherits the product compareNgn.
+        "optionCompareAt": _clean_option_prices(product.get("optionCompareAt") or product.get("option_compare_at")),
         # Optional per-product bulk discount: order MORE than bulkQty units of
         # this product and bulkPercent is taken off its unit price at
         # checkout. Both values or neither - a lone percentage with no

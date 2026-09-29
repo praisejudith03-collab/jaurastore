@@ -1177,11 +1177,21 @@ const JA = (() => {
     if (overridden || ngn > 0) return cur === "NGN" ? ngn : toCfa(ngn);
     return cur === "NGN" ? (Number(p && p.priceCfa) || 0) : roundCfa(p && p.priceCfa);
   }
-  function compareOf(p, cur = currency()) {
+  function compareOf(p, cur = currency(), variant = "") {
+    // Per-option "was" (strike-through) price wins when the chosen variant has
+    // one set; otherwise the product-level compareNgn/compareCfa applies.
+    let wasNgn = Number(p && p.compareNgn) || 0;
+    const compares = (p && p.optionCompareAt && typeof p.optionCompareAt === "object") ? p.optionCompareAt : {};
+    if (variant && Object.keys(compares).length) {
+      const fold = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const indexed = Object.fromEntries(Object.entries(compares).map(([k, v]) => [fold(k), Number(v)]));
+      const candidates = [variant, ...String(variant).split("·"), ...String(variant).split("·").map((x) => String(x).split(":").pop())];
+      const match = candidates.map((x) => indexed[fold(x)]).find((v) => Number.isFinite(v) && v >= 0);
+      if (match != null) wasNgn = match;
+    }
     if (hasNgn(p)) {
-      const was = Number(p.compareNgn) || 0;
-      if (cur === "NGN") return was;
-      return was > 0 ? toCfa(was) : 0;
+      if (cur === "NGN") return wasNgn;
+      return wasNgn > 0 ? toCfa(wasNgn) : 0;
     }
     return roundCfa(p.compareCfa);
   }

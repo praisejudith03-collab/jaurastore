@@ -69,11 +69,19 @@ def due_carts(limit=25, offset=0):
         offset = max(0, int(offset))
     except (TypeError, ValueError):
         offset = 0
-    rows = [dict(r) for r in query(
-        "SELECT * FROM abandoned_carts "
-        "WHERE reminder_sent=0 AND converted_at IS NULL AND last_activity_at <= ? "
-        "ORDER BY last_activity_at ASC LIMIT ? OFFSET ?",
-        (_cutoff(), limit, offset))]
+    # A missing/uninitialised `abandoned_carts` table (fresh disk, a dropped
+    # migration, or Supabase answering PGRST205 "table not found") must never
+    # crash the background worker. Read what we can; on any error fall back to
+    # an empty page and let the Supabase supplement below fill in.
+    try:
+        rows = [dict(r) for r in query(
+            "SELECT * FROM abandoned_carts "
+            "WHERE reminder_sent=0 AND converted_at IS NULL AND last_activity_at <= ? "
+            "ORDER BY last_activity_at ASC LIMIT ? OFFSET ?",
+            (_cutoff(), limit, offset))]
+    except Exception as exc:
+        print(f"[abandoned] local due-cart read skipped: {exc}")
+        rows = []
     try:
         from supabase_store import load_due_abandoned_carts
         remote_rows = load_due_abandoned_carts(_cutoff(), limit=limit,

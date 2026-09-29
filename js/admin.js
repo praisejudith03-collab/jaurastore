@@ -407,9 +407,11 @@ function refreshOptionChips() {
   const stock = status === "out" ? 0 : (qty > 0 ? qty : 24);
   const typed = currentOptionStock();
   const typedPrices = currentOptionPrices();
+  const typedCompare = currentOptionCompareAt();
   const optionStock = { ...(existing.optionStock || {}), ...typed };
   const optionPrices = { ...(existing.optionPrices || {}), ...typedPrices };
-  const fake = { ...existing, options: collectOptions(box || document), stock, optionStock, optionPrices };
+  const optionCompareAt = { ...(existing.optionCompareAt || {}), ...typedCompare };
+  const fake = { ...existing, options: collectOptions(box || document), stock, optionStock, optionPrices, optionCompareAt };
   const varBox = document.getElementById("var-box");
   if (varBox) varBox.innerHTML = variantPanelsHTML(fake);
 }
@@ -659,16 +661,27 @@ function currentOptionPrices() {
   });
   return map;
 }
+function currentOptionCompareAt() {
+  const map = {};
+  document.querySelectorAll("[data-opt-compare]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-compare");
+    if (key && inp.value !== "") map[key] = Math.max(0, Number(inp.value) || 0);
+  });
+  return map;
+}
 function optionPricingHTML(p) {
   const options = p.options || [];
   const overrides = p.optionPrices || {};
+  const compares = p.optionCompareAt || {};
   const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
     const key = `${opt.title}: ${value}`;
     const inherited = Number(p.priceNgn) || 0;
+    const inheritedCompare = Number(p.compareNgn) || 0;
     const valueNgn = overrides[key] != null ? overrides[key] : (overrides[value] != null ? overrides[value] : "");
-    return `<label class="adx-var"><span class="adx-var-name"><strong>${JA.escape(key)}</strong><span>Blank inherits ${JA.money(inherited, "NGN")}</span></span><span class="adx-var-qty">Override ₦<input type="number" min="0" data-opt-price="${JA.escape(key)}" value="${valueNgn}" placeholder="${inherited}" /></span></label>`;
+    const compareNgn = compares[key] != null ? compares[key] : (compares[value] != null ? compares[value] : "");
+    return `<label class="adx-var"><span class="adx-var-name"><strong>${JA.escape(key)}</strong><span>Blank inherits ${JA.money(inherited, "NGN")}</span></span><span class="adx-var-qty">Price ₦<input type="number" min="0" data-opt-price="${JA.escape(key)}" value="${valueNgn}" placeholder="${inherited}" /> <s>Was</s> ₦<input type="number" min="0" data-opt-compare="${JA.escape(key)}" value="${compareNgn}" placeholder="${inheritedCompare || ""}" /></span></label>`;
   })).join("");
-  return `<h3>Option price overrides</h3><p class="admin-note">Leave a price blank to inherit the base product price. Add an override only when this option costs more or less.</p>${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to set individual prices.</p>`}`;
+  return `<h3>Option price overrides</h3><p class="admin-note">Leave the price blank to inherit the base product price. Set an override only when this option costs more or less. The optional "Was" price shows a crossed-out original next to it.</p>${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to set individual prices.</p>`}`;
 }
 function variantPanelsHTML(p) { return optionStockHTML(p) + optionPricingHTML(p); }
 function optionStockHTML(p) {
@@ -909,6 +922,11 @@ async function handleProductSubmit(e, existing) {
     const key = inp.getAttribute("data-opt-price");
     if (key && inp.value !== "") optionPrices[key] = Math.max(0, Number(inp.value) || 0);
   });
+  const optionCompareAt = {};
+  e.target.querySelectorAll("[data-opt-compare]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-compare");
+    if (key && inp.value !== "") optionCompareAt[key] = Math.max(0, Number(inp.value) || 0);
+  });
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
   const priceNgn = num("priceNgn") || 0;
   const compareNgn = num("compareNgn");
@@ -946,6 +964,7 @@ async function handleProductSubmit(e, existing) {
       options,
       optionStock: hasOptionStock ? optionStock : (existing?.optionStock || {}),
       optionPrices,
+      optionCompareAt,
       nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
       descriptionFr: String(fd.get("descriptionFr") || "").trim() || existing?.descriptionFr || "",
       // Supplier stock sync mapping. Blank ("Not supplier-synced") is the
@@ -1042,15 +1061,23 @@ function renderProdGrid() {
     // A warning belongs only to an explicitly supplier-synced product. Rows
     // left as "Not supplier-synced" are in-house inventory and must never be
     // made to look broken merely because an old warning record still exists.
-    const syncWarning = String(p.supplierId || "").toLowerCase() === "splendall"
+    const isSplendall = String(p.supplierId || "").toLowerCase() === "splendall";
+    const syncWarning = isSplendall
       ? supplierWarnings.find((row) => String(row.product_id || "") === String(p.id))
       : null;
-    const warningText = "⚠️ Supplier link unverified or stock out of sync. Tap to review/link manually.";
-    const warningButton = syncWarning ? `<button type="button" class="adx-sync-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️ <span>Supplier warning</span></button>` : "";
-    return `<article class="adx-card${syncWarning ? " has-sync-warning" : ""}" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
+    // A product marked as a Splendall item but with NO supplier link yet has
+    // no automated match. Owner rule: leave the link empty and flag it with a
+    // ⚠️ badge so it can be linked manually in one click.
+    const missingLink = isSplendall && !String(p.supplierSku || "").trim();
+    const showWarning = !!syncWarning || missingLink;
+    const warningText = missingLink && !syncWarning
+      ? "⚠️ No Splendall link yet. Tap to add the supplier product link."
+      : "⚠️ Supplier link unverified or stock out of sync. Tap to review/link manually.";
+    const warningButton = showWarning ? `<button type="button" class="adx-sync-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️ <span>${missingLink && !syncWarning ? "Missing supplier link" : "Supplier warning"}</span></button>` : "";
+    return `<article class="adx-card${showWarning ? " has-sync-warning" : ""}" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
       <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}${warningButton}</div>
-      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong>${syncWarning ? `<button type="button" class="adx-title-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️</button>` : ""}</div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
+      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong>${showWarning ? `<button type="button" class="adx-title-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️</button>` : ""}</div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     </article>`;
   }).join("");

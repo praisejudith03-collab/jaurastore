@@ -11,6 +11,13 @@ import catalog as catalog_mod
 import analytics as analytics_mod
 import currency as currency_mod
 import delivery
+# Imported at module scope so routes can reference it directly (e.g. the
+# /admin/needs-attention supplier-warning queue). Historically most call
+# sites used inline `from supabase_store import ...`; a lone module-level
+# reference (supabase_store.load_supplier_sync_warnings) therefore raised
+# NameError and 500'd the whole dashboard. supabase_store imports nothing
+# from api, so this is import-cycle safe.
+import supabase_store
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
@@ -1185,20 +1192,36 @@ def create_order():
     proof_url = ""
     data = b""
     ext = ""
+    # Did the shopper attach a receipt whose file could NOT be stored? A
+    # storage outage must never fail an otherwise-valid order (owner rule:
+    # "customers must be able to complete checkout instantly and reliably
+    # without storage errors failing their orders"). We record the miss on
+    # the order so the admin can request the receipt again, but the sale
+    # goes through and stock is committed normally.
+    proof_upload_failed = False
     if proof_file:
         data = proof_file.read(storage.MAX_BYTES + 1)
+        # A genuinely INVALID file (wrong type, too big, corrupt) is still a
+        # hard 400: that is user error, not an infrastructure failure, and
+        # letting it through would only store a useless attachment.
         ok, msg, ext = storage.validate_upload(data, proof_file.filename or "",
                                                allow_pdf=True,
                                                max_bytes=storage.MAX_RECEIPT_BYTES)
         if not ok:
             return jsonify(ok=False, error=msg), 400
-        ok, msg, proof_url = storage.save_image(
-            data, "proofs", proof_file.filename or "",
-            allow_pdf=True, max_bytes=storage.MAX_RECEIPT_BYTES)
-        if not ok:
-            return jsonify(ok=False, error=msg), 400
-        if not ok:
-            return jsonify(ok=False, error="Could not save the payment screenshot. Try again."), 500
+        # The file is valid; only the UPLOAD can fail from here on (Supabase
+        # Storage down/misconfigured). That must not block the sale — we log
+        # it, flag the order, and continue with an empty proof URL.
+        try:
+            stored, up_msg, proof_url = storage.save_image(
+                data, "proofs", proof_file.filename or "",
+                allow_pdf=True, max_bytes=storage.MAX_RECEIPT_BYTES)
+        except Exception as exc:                    # never let storage crash checkout
+            stored, up_msg, proof_url = False, f"{exc.__class__.__name__}: {exc}", ""
+        if not stored:
+            proof_upload_failed = True
+            proof_url = ""
+            print(f"[checkout] payment proof upload failed (order continues): {up_msg}")
     elif d.get("proofUrl"):
         candidate = sec.clean(d.get("proofUrl"), 500)
         if candidate.startswith("https://") and "/storage/v1/object/public/" in candidate:
@@ -1229,6 +1252,13 @@ def create_order():
         order["bulkDiscount"] = bulk_discount_lines
     if promo:
         order["promo"] = promo
+    if proof_upload_failed:
+        # The buyer attached a receipt but Storage could not keep it. Flag the
+        # order so the admin dashboard can ask the customer to re-send it — the
+        # sale itself is complete and stock is committed.
+        order["proofUploadFailed"] = True
+        order["proofUploadNote"] = ("Payment proof was provided but could not be "
+                                    "saved to storage; ask the customer to re-send it.")
 
     sb_row = {
         "id": oid, "email": email,
@@ -1413,6 +1443,7 @@ def create_order():
         pass
 
     resp = make_response(jsonify(ok=True, id=oid, status="pending", proofUrl=proof_url,
+                                 proofUploadFailed=proof_upload_failed,
                                  referralCode=referral_code,
                                  promo=promo or None,
                                  bulkDiscount=bulk_discount_lines or None,

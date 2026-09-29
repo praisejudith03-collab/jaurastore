@@ -1001,7 +1001,14 @@ function paintProduct(root, p) {
       chosen[oi] = b.dataset.val;
       const selectedVariant = variantPartial();
       const priceEl = root.querySelector(`[data-price-for="${p.id}"]`);
-      if (priceEl) priceEl.innerHTML = `<span class="now">${JA.money(JA.priceOf(p, JA.currency(), selectedVariant))}</span>`;
+      if (priceEl) {
+        const cur = JA.currency();
+        const now = JA.priceOf(p, cur, selectedVariant);
+        const was = JA.compareOf ? JA.compareOf(p, cur, selectedVariant) : 0;
+        priceEl.innerHTML = (was && was > now)
+          ? `<s>${JA.money(was, cur)}</s><span class="now">${JA.money(now, cur)}</span>`
+          : `<span class="now">${JA.money(now, cur)}</span>`;
+      }
       updateStockUI();
     });
   });

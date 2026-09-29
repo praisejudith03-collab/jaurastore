@@ -15,6 +15,7 @@ Never raises and never blocks a sale: any failure is reported back as
 (False, reason) and written to the audit log by the caller.
 """
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
 from config import Config
@@ -71,13 +72,28 @@ def _via_callmebot(text):
 
 def send_text(text):
     """Send an optional plain text order alert to the owner's WhatsApp.
-    Returns (sent, detail). Never raises."""
+    Returns (sent, detail). Never raises.
+
+    A provider that answers with an HTTP error (expired token, bad phone id,
+    unverified recipient, rate limit) has its response BODY read back into the
+    detail so the audit log names the real reason instead of a bare status
+    code — that is what makes a broken channel diagnosable rather than merely
+    "failed".
+    """
     try:
         if Config.WHATSAPP_TOKEN and Config.WHATSAPP_PHONE_ID:
             return _via_cloud_api(text), "cloud-api"
         if Config.WHATSAPP_CALLMEBOT_KEY:
             return _via_callmebot(text), "callmebot"
         return False, "not configured (set WHATSAPP_TOKEN + WHATSAPP_PHONE_ID or WHATSAPP_CALLMEBOT_KEY)"
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", "replace")[:400]
+        except Exception:
+            body = ""
+        return False, f"HTTP {exc.code} {exc.reason} {body}".strip()
+    except urllib.error.URLError as exc:
+        return False, f"network error: {exc.reason}"
     except Exception as exc:
         return False, f"{exc.__class__.__name__}: {exc}"
 

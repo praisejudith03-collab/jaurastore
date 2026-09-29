@@ -48,6 +48,7 @@ create table if not exists products (
   options          jsonb,
   "optionStock"    jsonb,
   "optionPrices"   jsonb,
+  "optionCompareAt" jsonb,
   "bulkQty"        integer,
   "bulkPercent"    integer,
   "placeholderImage" text,
@@ -77,6 +78,7 @@ alter table products add column if not exists stock              integer default
 alter table products add column if not exists images             jsonb;
 alter table products add column if not exists "optionStock"      jsonb;
 alter table products add column if not exists "optionPrices"     jsonb;
+alter table products add column if not exists "optionCompareAt"  jsonb;
 alter table products add column if not exists "bulkQty"      integer;
 alter table products add column if not exists "bulkPercent"  integer;
 alter table products add column if not exists "placeholderImage" text;
@@ -102,11 +104,9 @@ alter table products add column if not exists stock_quantity   integer not null 
 alter table products add column if not exists "supplierId" text not null default '';
 alter table products add column if not exists "supplierSku" text not null default '';
 
--- Dead leftovers from the original hand-built table: price_cfa, price_ngn,
--- name_fr, compare_cfa, compare_ngn, option_stock. The app reads and writes
--- the camelCase columns only, so these are never used. NEVER drop them and
--- never rename them - they are harmless legacy junk, but live rows still
--- exist in the production table.
+-- Dead leftovers (price_cfa, price_ngn, name_fr, compare_cfa, compare_ngn,
+-- option_stock) are harmless legacy junk. Never drop them and never rename
+-- them - the app uses camelCase only; live production rows still exist.
 
 -- SECTION: orders
 -- -------------------------------------------------------------- orders

@@ -358,6 +358,13 @@ def _upsert_products_resilient(rows):
             if dropped:
                 print("[supabase] products upsert: stored without columns "
                       f"{sorted(set(dropped))} (table lacks them)")
+                # Silently dropping a column is how per-variant price/compare
+                # overrides "revert to defaults on catalog sync": the table is
+                # missing the column, so the value is quietly thrown away every
+                # save. Surface that as an admin warning badge so the owner
+                # knows to run the products-table migration, instead of losing
+                # the data invisibly.
+                _warn_missing_price_columns(sorted(set(dropped)))
             return True
         except Exception as exc:
             match = _MISSING_COLUMN_RE.search(str(exc))
@@ -1430,6 +1437,38 @@ def save_supplier_sync_warnings(warnings):
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] supplier warnings save failed: {exc}")
         return False
+
+
+# Product columns that carry per-variant pricing. If the live products table
+# is missing one of these, a save silently drops it (see
+# _upsert_products_resilient) and the override "reverts to default". We raise a
+# durable warning so the admin dashboard shows a ⚠️ badge to run the migration.
+_PRICE_PERSIST_COLUMNS = frozenset(
+    {"optionPrices", "optionCompareAt", "compareNgn", "compareCfa"})
+_SCHEMA_WARNING_KEY = "products_schema_warning"
+
+
+def _warn_missing_price_columns(dropped):
+    """Record a durable warning when a pricing column could not be persisted."""
+    price_cols = [col for col in (dropped or []) if col in _PRICE_PERSIST_COLUMNS]
+    if not price_cols:
+        return
+    try:
+        warnings = [w for w in (load_supplier_sync_warnings() or [])
+                    if isinstance(w, dict) and w.get("product_id") != _SCHEMA_WARNING_KEY]
+        warnings.append({
+            "product_id": _SCHEMA_WARNING_KEY,
+            "product_name": "Product price columns",
+            "code": "products_table_missing_columns",
+            "reason": ("The Supabase products table is missing column(s) "
+                       + ", ".join(price_cols) + ". Price / compare-at overrides "
+                       "cannot be saved and will revert to defaults until the "
+                       "products migration in supabase_schema.sql is applied."),
+            "at": _now(),
+        })
+        save_supplier_sync_warnings(warnings)
+    except Exception as exc:                        # pragma: no cover - defensive
+        print(f"[supabase] schema warning record failed: {exc}")
 
 
 def load_supplier_sync_warnings():
