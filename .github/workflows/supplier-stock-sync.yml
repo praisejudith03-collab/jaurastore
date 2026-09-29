@@ -66,6 +66,9 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Pin every crawl, slug lookup, product audit and image comparison to
+      # Splendall's official WooCommerce storefront (never a mirror/feed).
+      SPLENDALL_BASE_URL: https://www.splendall.com
       STORE_BASE_URL: https://jaurastore.com.ng
       # Optional: lets tools/supplier_stock_sync.py email the shop inbox the
       # instant an uncertain match is found (see mailer.py). Any secret left
@@ -104,7 +107,7 @@ jobs:
           ARGS=""
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
           timeout --signal=TERM --kill-after=15s 20m \
-            python3 tools/supplier_stock_sync.py $ARGS 2>&1 | tee supplier-sync.log
+            python3 tools/supplier_stock_sync.py $ARGS --report supplier-sync-report.json 2>&1 | tee supplier-sync.log
       - name: Save the image-fingerprint cache
         if: always()
         uses: actions/cache/save@v4
@@ -119,6 +122,8 @@ jobs:
           path: |
             supplier_match_review.json
             supplier_sync_warnings.json
+            supplier-sync-report.json
+            supplier-sync.log
           if-no-files-found: ignore
           retention-days: 14
       # Backup channel: the script already emails the shop inbox directly

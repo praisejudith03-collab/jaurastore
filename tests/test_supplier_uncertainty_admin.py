@@ -22,7 +22,7 @@ def test_admin_has_alert_badges_and_a_supplier_warning_queue():
 
 def test_uncertain_product_cards_and_editor_are_highlighted():
     assert "has-sync-warning" in ADMIN
-    assert "Sync uncertain" in ADMIN
+    assert "Supplier warning" in ADMIN
     assert "Supplier stock is unconfirmed" in ADMIN
     assert ".adx-card.has-sync-warning" in (ROOT / "css" / "style.css").read_text(encoding="utf-8")
 

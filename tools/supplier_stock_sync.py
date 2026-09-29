@@ -132,6 +132,7 @@ assert SUPPLIER_ID in catalog.KNOWN_SUPPLIERS, (
     "supplier_stock_sync.SUPPLIER_ID must be one of catalog.KNOWN_SUPPLIERS")
 
 BASE_URL = os.environ.get("SPLENDALL_BASE_URL", "https://www.splendall.com").rstrip("/")
+SHOP_URL = f"{BASE_URL}/shop/"
 STORE_BASE_URL = os.environ.get("STORE_BASE_URL", "https://jaurastore.com.ng").rstrip("/")
 TIMEOUT = float(os.environ.get("SUPPLIER_SYNC_TIMEOUT", "12") or 12)
 USER_AGENT = "JauraStoreStockSync/1.0 (+https://jaurastore.com.ng)"
@@ -235,6 +236,29 @@ def _http_get_json(url):
         raise SupplierFetchError(f"could not parse supplier reply as JSON: {exc}") from exc
 
 
+def _http_get_text(url):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            if getattr(resp, "status", 200) != 200:
+                raise SupplierFetchError(f"HTTP {getattr(resp, 'status', 0)}")
+            return resp.read(4 * 1024 * 1024).decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise SupplierFetchError(f"network error: {exc}") from exc
+
+
+def _html_meta(html, prop):
+    match = re.search(r'<meta[^>]+(?:property|name)=["\']' + re.escape(prop) +
+                      r'["\'][^>]+content=["\']([^"\']+)', html, re.I)
+    if not match:
+        match = re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+'
+                          r'(?:property|name)=["\']' + re.escape(prop) + r'["\']', html, re.I)
+    return match.group(1).replace("&amp;", "&") if match else ""
+
+
 def _fetch_bytes(ref):
     """Best-effort binary fetch for a photo. Never raises - returns None."""
     ref = str(ref or "").strip()
@@ -296,7 +320,30 @@ def _supplier_product_detail(supplier_sku):
         raise SupplierFetchError(f"could not read a product slug out of {supplier_sku!r}",
                                  code="missing_supplier_slug")
     url = f"{BASE_URL}/wp-json/wc/store/v1/products?" + urllib.parse.urlencode({"slug": slug})
-    data = _http_get_json(url)
+    try:
+        data = _http_get_json(url)
+    except SupplierFetchError:
+        # Some WooCommerce/WAF configurations block Store API clients while
+        # the official product pages remain public. Parse the canonical page
+        # directly so a visible Sold out badge still zeroes Jaura inventory.
+        product_url = f"{BASE_URL}/product/{urllib.parse.quote(slug)}/"
+        html = _http_get_text(product_url)
+        low = html.lower()
+        sold_out = ("out-of-stock" in low or "sold out" in low or
+                    "stock out" in low)
+        image = _html_meta(html, "og:image")
+        title = _html_meta(html, "og:title") or slug.replace("-", " ")
+        row = {"slug": slug, "name": title, "permalink": product_url,
+               "is_in_stock": not sold_out,
+               "stock_availability": {"text": "Out of stock" if sold_out else "In stock"},
+               "images": [{"src": image}] if image else []}
+        if sold_out:
+            return row
+        # In-stock HTML does not disclose an exact quantity. Keep existing
+        # Jaura stock rather than inventing one; the uncertainty badge asks for
+        # review while the API is unavailable.
+        raise SupplierFetchError("product page confirms in stock but does not publish an exact quantity",
+                                 code="exact_quantity_unavailable")
     if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
         raise SupplierFetchError(
             f"supplier did not return one unambiguous product for slug {slug!r}",
@@ -494,6 +541,30 @@ def _parse_supplier_row(row):
     }
 
 
+def _crawl_shop_html(max_pages=60):
+    """Fallback crawler for Splendall's official WooCommerce /shop/ layout."""
+    found = {}
+    for page in range(1, max_pages + 1):
+        url = SHOP_URL if page == 1 else f"{SHOP_URL}page/{page}/"
+        html = _http_get_text(url)
+        page_slugs = set()
+        for match in re.finditer(r'href=["\'](' + re.escape(BASE_URL) +
+                                 r'/product/([^/"\']+)/?)["\']', html, re.I):
+            permalink, slug = match.group(1).rstrip("/") + "/", urllib.parse.unquote(match.group(2))
+            page_slugs.add(slug)
+            window = html[max(0, match.start() - 900):min(len(html), match.end() + 1400)]
+            image_match = re.search(r'(?:src|data-src)=["\']([^"\']+(?:jpg|jpeg|png|webp)[^"\']*)', window, re.I)
+            title_match = re.search(r'<h[23][^>]*>.*?<a[^>]*>(.*?)</a>', window, re.I | re.S)
+            title = re.sub(r'<[^>]+>', '', title_match.group(1)).strip() if title_match else slug.replace('-', ' ')
+            found.setdefault(slug, {"slug": slug, "name": title,
+                                    "image_url": image_match.group(1).replace("&amp;", "&") if image_match else "",
+                                    "permalink": permalink, "qty": None,
+                                    "detail": "WooCommerce /shop/ listing"})
+        if not page_slugs:
+            break
+    return list(found.values())
+
+
 def crawl_supplier_catalog(max_pages=60, per_page=100):
     """Autonomously fetch splendall's ENTIRE live catalog. None on any failure.
 
@@ -512,6 +583,12 @@ def crawl_supplier_catalog(max_pages=60, per_page=100):
         try:
             data = _http_get_json(url)
         except SupplierFetchError as exc:
+            if page == 1:
+                try:
+                    print(f"Store API unavailable ({exc}); falling back to {SHOP_URL}")
+                    return _crawl_shop_html(max_pages=max_pages)
+                except SupplierFetchError as html_exc:
+                    print(f"warning: supplier /shop/ crawl also failed: {html_exc}")
             print(f"warning: supplier catalog crawl failed on page {page}: {exc}")
             return None
         if not isinstance(data, list):
@@ -691,12 +768,21 @@ def _patch_product(pid, changes, actor):
 
 
 def apply_auto_match(product, supplier_row, actor):
-    """Link one product to the supplier. Only supplierId/supplierSku change -
-    name, photo, category and (always) price stay exactly as the owner set
-    them."""
+    """Bind to the canonical splendall.com product URL.
+
+    Storing the full official link (rather than a bare/blank slug) makes the
+    Admin mapping directly reviewable while _slug_from_sku keeps lookups
+    backward compatible with older rows.
+    """
+    slug = str(supplier_row.get("slug") or "").strip()
+    permalink = str(supplier_row.get("permalink") or "").strip()
+    if not permalink and slug:
+        permalink = f"{BASE_URL}/product/{urllib.parse.quote(slug)}/"
+    if not slug or not permalink.startswith(BASE_URL + "/product/"):
+        return None
     return _patch_product(str(product.get("id")), {
         "supplierId": SUPPLIER_ID,
-        "supplierSku": supplier_row["slug"],
+        "supplierSku": permalink,
     }, actor=actor)
 
 
@@ -908,7 +994,7 @@ def sync_one(product, dry_run=False, warnings=None):
 
     if dry_run:
         print(f"would set: {name!r} ({pid}) {current} -> {qty} [{detail}]")
-        return "would-update"
+        return "would-update-out-of-stock" if qty == 0 and current != 0 else "would-update"
 
     if option_stock is not None:
         result = _patch_product(pid, {"optionStock": option_stock,
@@ -923,7 +1009,7 @@ def sync_one(product, dry_run=False, warnings=None):
         return "write-failed"
     warning_map.pop(pid, None)
     print(f"updated: {name!r} ({pid}) {current} -> {qty} [{detail}]")
-    return "updated"
+    return "updated-out-of-stock" if qty == 0 and current != 0 else "updated"
 
 
 # ------------------------------------------------------------------- main
@@ -931,7 +1017,26 @@ def main(argv):
     args = argv[1:]
     dry_run = "--dry-run" in args
     no_discover = "--no-discover" in args
-    only_ids = {a for a in args if a not in ("--dry-run", "--no-discover") and a.strip()}
+    report_path = "supplier-sync-report.json"
+    if "--report" in args:
+        try: report_path = args[args.index("--report") + 1]
+        except IndexError: report_path = "supplier-sync-report.json"
+    value_args = {report_path} if "--report" in args else set()
+    only_ids = {a for a in args if a not in ("--dry-run", "--no-discover", "--report")
+                and a not in value_args and a.strip()}
+    audit = {"generated_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+             "supplier_base_url": BASE_URL, "dry_run": dry_run, "catalog_items_checked": 0,
+             "auto_linked": 0, "would_auto_link": 0, "updated_out_of_stock": 0,
+             "would_update_out_of_stock": 0, "unlinked_warning_count": 0,
+             "outcomes": {}, "complete": False}
+    def save_audit():
+        audit["unlinked_warning_count"] = sum(
+            1 for row in warning_map.values()
+            if isinstance(row, dict) and row.get("code") == "supplier_match_unconfirmed")
+        try:
+            with open(report_path, "w", encoding="utf-8") as fh:
+                json.dump(audit, fh, indent=2, ensure_ascii=False)
+        except OSError as exc: print(f"warning: could not write audit report: {exc}")
     warning_map = {str(row.get("product_id") or f"warning:{i}"): row
                    for i, row in enumerate(_load_warnings()) if isinstance(row, dict)}
 
@@ -950,15 +1055,19 @@ def main(argv):
                            if row.get("code") != "supplier_match_unconfirmed"}
             print(f"crawled {len(supplier_rows)} live product(s) from {BASE_URL}")
             store_products = catalog.merged(include_hidden=True)
+            audit["catalog_items_checked"] = len(store_products)
+            audit["supplier_items_crawled"] = len(supplier_rows)
             auto, review = discover_matches(store_products, supplier_rows, cache)
             for product, row, score in auto:
                 pname = product.get("name")
                 if dry_run:
+                    audit["would_auto_link"] += 1
                     print(f"would auto-link: {pname!r} -> {row['name']!r} "
                           f"({row['slug']}) score={score:.2f}")
                     continue
                 linked = apply_auto_match(product, row, actor=f"supplier-sync:{SUPPLIER_ID}:auto-link")
                 if linked:
+                    audit["auto_linked"] += 1
                     print(f"auto-linked: {pname!r} -> {row['name']!r} "
                           f"({row['slug']}) score={score:.2f}")
                 else:
@@ -981,6 +1090,8 @@ def main(argv):
             else:
                 _save_review([])
             zero_counts = mark_discontinued_out_of_stock(supplier_rows, dry_run=dry_run)
+            audit["updated_out_of_stock"] += zero_counts.get("zeroed", 0)
+            audit["would_update_out_of_stock"] += zero_counts.get("would-zero", 0)
             if zero_counts:
                 print("discontinued check:", ", ".join(f"{k}={v}" for k, v in sorted(zero_counts.items())))
         elif supplier_rows is not None:
@@ -1010,6 +1121,8 @@ def main(argv):
     if not products:
         if not dry_run:
             _save_warnings(list(warning_map.values()))
+        audit["complete"] = bool(audit.get("supplier_items_crawled"))
+        save_audit()
         print(f"no products are linked to supplier '{SUPPLIER_ID}' - nothing to sync.")
         return 0
 
@@ -1024,7 +1137,14 @@ def main(argv):
 
     if not dry_run:
         _save_warnings(list(warning_map.values()))
+    audit["outcomes"] = counts
+    audit["updated_out_of_stock"] += counts.get("updated-out-of-stock", 0)
+    audit["would_update_out_of_stock"] += counts.get("would-update-out-of-stock", 0)
+    audit["linked_items_checked"] = len(products)
+    audit["complete"] = bool(audit.get("supplier_items_crawled"))
+    save_audit()
     print("summary:", ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "nothing to report")
+    print(f"audit report: {report_path}")
     return 0
 
 

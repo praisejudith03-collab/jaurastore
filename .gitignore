@@ -57,3 +57,5 @@ data/.analytics-restore.lock
 supplier_sync_cache.json
 supplier_match_review.json
 supplier_sync_warnings.json
+# One-time/scheduled supplier audit report
+supplier-sync-report.json
