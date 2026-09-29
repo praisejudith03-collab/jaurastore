@@ -152,18 +152,15 @@ def test_the_store_link_points_at_the_real_product_page():
 
 
 def test_the_caption_ends_with_the_bare_clean_link_only():
-    """Owner request 2026-09-28: "the caption includes only the clean,
-    direct product link... rather than cluttered site text" - the link
-    line itself must never be prefixed with "Shop now:" or similar."""
+    """The caption includes the bilingual name, Naira and CFA prices,
+    options (if any), and the clean, direct product link on its own line."""
     body = _func(ADMIN_JS, "broadcastFullText")
     code_lines = [ln for ln in body.splitlines() if not ln.strip().startswith("//")]
     code = "\n".join(code_lines)
-    assert "broadcastMessageFor(p)" in code
+    assert "broadcastDisplayName(p)" in code
     assert "broadcastProductUrl(p)" in code
+    assert "broadcastOptionsLine(p)" in code
     assert "Shop now" not in code
-    # The message block and the bare link are two distinct pieces, not one
-    # sentence the link is buried inside of.
-    assert "\\n\\n${broadcastProductUrl(p)}" in code
 
 
 def test_the_message_block_itself_has_no_link_or_shop_now_wording():
@@ -173,7 +170,7 @@ def test_the_message_block_itself_has_no_link_or_shop_now_wording():
 
 
 def test_the_exact_product_photo_is_fetched_as_a_real_file():
-    """Owner request 2026-09-28: native navigator.share() needs the actual
+    """Owner request: native navigator.share() needs the actual
     image bytes, not just a link WhatsApp may or may not unfurl."""
     body = _func(ADMIN_JS, "broadcastImageFile")
     assert "JA.asset(p.image" in body
@@ -191,18 +188,18 @@ def test_native_share_is_only_attempted_when_the_browser_actually_supports_files
 def test_share_native_attaches_the_photo_and_falls_back_to_whatsapps_share_sheet():
     body = _func(ADMIN_JS, "broadcastShareNative")
     assert "broadcastImageFile(p)" in body
-    assert "navigator.share({ files: [file], text })" in body
+    assert "navigator.share({ files: [file], text" in body
     assert "broadcastShareUrl(text)" in body
     # Cancelling the native share sheet is not an error worth falling back
     # from - only a genuinely unsupported/failed share is.
     assert 'e.name === "AbortError"' in body
 
 
-def test_a_batch_share_also_attaches_every_selected_photo():
+def test_each_item_in_the_broadcast_queue_shares_as_a_single_photo_card():
     body = _func(ADMIN_JS, "broadcastShareBatchNative")
-    assert "Promise.all(chosen.map(broadcastImageFile))" in body
-    assert "navigator.share({ files, text })" in body
-    assert "broadcastShareUrl(text)" in body
+    assert "broadcastShareNative(chosen[0])" in body
+    # Multi-product text bundling is eliminated
+    assert "map" not in body
 
 
 def test_share_opens_whatsapps_own_share_sheet_as_the_fallback_with_no_copy_paste():
@@ -218,13 +215,11 @@ def test_share_opens_whatsapps_own_share_sheet_as_the_fallback_with_no_copy_past
     assert "broadcastShareNative(p)" in paint_body
 
 
-def test_a_batch_of_selected_products_is_combined_into_one_message():
+def test_multi_product_bundling_is_eliminated_in_queue_sharing():
     body = _func(ADMIN_JS, "bindBroadcastFeed")
     assert '"#mk-bc-share-batch"' in body
     assert "bcSelected[bcSlot]" in body
-    assert "broadcastShareBatchNative(chosen, heading)" in body
-    # Bilingual heading too, matching the per-item message.
-    assert "Bonjour" in body and "Ce soir" in body
+    assert "broadcastShareBatchNative(chosen)" in body
 
 
 def test_the_morning_and_evening_batches_keep_independent_selections():
@@ -269,6 +264,4 @@ def test_morning_and_evening_custom_overrides_are_independent_and_daily():
 
 def test_legacy_share_fallback_launches_the_native_whatsapp_uri():
     one = _func(ADMIN_JS, "broadcastShareNative")
-    batch = _func(ADMIN_JS, "broadcastShareBatchNative")
     assert "window.location.href = broadcastShareUrl(text)" in one
-    assert "window.location.href = broadcastShareUrl(text)" in batch
