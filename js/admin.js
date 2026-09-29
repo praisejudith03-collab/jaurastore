@@ -820,7 +820,7 @@ function productForm(p = {}) {
   return `<form id="prod-form" class="au-edit">
     <button type="button" class="au-back" id="cancel-edit">← Store Products</button>
     <h2>Product ${preCat ? `· ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
-    ${syncWarning ? `<div class="supplier-sync-alert" role="alert"><strong>Supplier stock is unconfirmed</strong><span>${JA.escape(syncWarning.reason || "The latest Splendall audit could not confirm this product.")}</span><small>No stock was guessed or changed. Check the supplier mapping/options before relying on automatic sync.</small></div>` : ""}
+    ${syncWarning ? `<div class="supplier-sync-alert" role="alert"><strong>${String(syncWarning.code || "") === "variant_color_mapping" ? "⚠️ Check Variant Color Mapping" : "Supplier stock is unconfirmed"}</strong><span>${JA.escape(syncWarning.reason || "The latest Splendall audit could not confirm this product.")}</span><small>${String(syncWarning.code || "") === "variant_color_mapping" ? "Confirm which colour each Splendall link belongs to below. Your custom option names are kept exactly as typed." : "No stock was guessed or changed. Check the supplier mapping/options before relying on automatic sync."}</small></div>` : ""}
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
     <div class="field"><label>Product Name</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
     <div class="field"><label>Product Name (French — shown when the site is in French)</label><input name="nameFr" maxlength="80" value="${JA.escape(p.nameFr || "")}" placeholder="Optional" /></div>
@@ -1129,10 +1129,19 @@ function renderProdGrid() {
     const missingLink = isSplendall && (
       !String(p.supplierSku || "").trim() || productHasUnlinkedOption(p));
     const showWarning = !!syncWarning || missingLink;
-    const warningText = missingLink && !syncWarning
-      ? "⚠️ No Splendall link yet. Tap to add the supplier product link."
-      : "⚠️ Supplier link unverified or stock out of sync. Tap to review/link manually.";
-    const warningButton = showWarning ? `<button type="button" class="adx-sync-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️ <span>${missingLink && !syncWarning ? "Missing supplier link" : "Supplier warning"}</span></button>` : "";
+    // A colour-mapping ambiguity is its own, more specific alert: the sync
+    // found Splendall colours/links it could not confidently attach to a
+    // custom storefront option and needs a one-tap manual confirmation.
+    const colorMapping = syncWarning && String(syncWarning.code || "") === "variant_color_mapping";
+    const warningText = colorMapping
+      ? "⚠️ Check Variant Color Mapping. Tap to confirm which colour each Splendall link belongs to."
+      : (missingLink && !syncWarning
+        ? "⚠️ No Splendall link yet. Tap to add the supplier product link."
+        : "⚠️ Supplier link unverified or stock out of sync. Tap to review/link manually.");
+    const warningLabel = colorMapping
+      ? "Check variant colour"
+      : (missingLink && !syncWarning ? "Missing supplier link" : "Supplier warning");
+    const warningButton = showWarning ? `<button type="button" class="adx-sync-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️ <span>${warningLabel}</span></button>` : "";
     return `<article class="adx-card${showWarning ? " has-sync-warning" : ""}" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
       <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}${warningButton}</div>

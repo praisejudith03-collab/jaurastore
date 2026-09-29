@@ -296,3 +296,13 @@ def test_admin_renders_per_option_supplier_link_editor_and_badge():
     assert "Missing supplier link" in admin_js
     # The links are collected and saved into the product payload.
     assert "optionSupplierSku," in admin_js
+
+
+def test_admin_shows_check_variant_color_mapping_alert():
+    """A syncWarning with code 'variant_color_mapping' surfaces the dedicated
+    ⚠️ Check Variant Color Mapping alert (list badge + in-editor banner)."""
+    admin_js = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
+    assert "variant_color_mapping" in admin_js
+    assert "Check Variant Color Mapping" in admin_js
+    # The custom-label promise is reflected in the editor guidance.
+    assert "custom option names are kept" in admin_js

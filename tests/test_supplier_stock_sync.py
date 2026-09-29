@@ -922,3 +922,147 @@ def test_fetch_per_option_helper_reports_all_missing(iso_catalog):
     with pytest.raises(sync_mod.SupplierFetchError) as caught:
         sync_mod.fetch_per_option_supplier_stock(product, fetch=lambda u: (1, ""))
     assert caught.value.code == "option_links_missing"
+
+
+# ------------------------------- consolidated multi-colour variant matching
+
+
+def test_consolidated_colours_mirror_per_option_link(iso_catalog, monkeypatch):
+    """Multiple distinct Splendall URLs (Black, Brown) map into ONE storefront
+    product with Colour options: a sold-out colour zeroes only itself."""
+    product = _make(
+        iso_catalog, name="Men Gift Set", stock=20,
+        options=[{"title": "Color", "values": ["Black", "Brown"]}],
+        optionStock={"Black": 8, "Brown": 12},
+        supplierId="splendall", supplierSku="men-gift-set-black",
+        optionSupplierSku={
+            "Color: Black": "https://www.splendall.com/product/men-gift-set-black/",
+            "Color: Brown": "https://www.splendall.com/product/men-gift-set-brown/",
+        })
+
+    def _fetch(url):
+        return (0, "supplier reports out of stock") if "black" in url else (5, "5 in stock")
+    monkeypatch.setattr(sync_mod, "fetch_supplier_quantity", _fetch)
+
+    rc = sync_mod.main(["supplier_stock_sync.py", product["id"]])
+    assert rc == 0
+    refreshed = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == product["id"])
+    os_map = refreshed.get("optionStock") or {}
+    assert os_map["Black"] == 0     # only Black went out of stock
+    assert os_map["Brown"] == 5     # Brown stays active/purchasable
+
+
+def test_custom_option_labels_are_never_overwritten_by_sync(iso_catalog, monkeypatch):
+    """A merchant custom colour name ("Mustard Yellow") stays intact after a
+    sync run - only its stock number changes, never the label."""
+    product = _make(
+        iso_catalog, name="Ankara Set", stock=10,
+        options=[{"title": "Color", "values": ["Mustard Yellow", "Burnt Orange"]}],
+        optionStock={"Mustard Yellow": 5, "Burnt Orange": 5},
+        supplierId="splendall", supplierSku="ankara-set",
+        optionSupplierSku={
+            "Mustard Yellow": "https://www.splendall.com/product/ankara-yellow/",
+            "Burnt Orange": "https://www.splendall.com/product/ankara-orange/",
+        })
+    monkeypatch.setattr(sync_mod, "fetch_supplier_quantity", lambda url: (3, "3 in stock"))
+
+    rc = sync_mod.main(["supplier_stock_sync.py", product["id"]])
+    assert rc == 0
+    refreshed = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == product["id"])
+    labels = (refreshed.get("options") or [{}])[0].get("values") or []
+    assert "Mustard Yellow" in labels and "Burnt Orange" in labels
+    assert set(refreshed.get("optionStock", {})) == {"Mustard Yellow", "Burnt Orange"}
+
+
+def test_supplier_basic_colour_infers_onto_custom_storefront_label(iso_catalog, monkeypatch):
+    """A link keyed by the supplier's basic colour ("Yellow") is inferred onto
+    the storefront's custom "Mustard Yellow" option WITHOUT renaming it."""
+    product = _make(
+        iso_catalog, name="Scarf", stock=6,
+        options=[{"title": "Color", "values": ["Mustard Yellow"]}],
+        optionStock={"Mustard Yellow": 6},
+        supplierId="splendall", supplierSku="scarf-yellow",
+        optionSupplierSku={"Yellow": "https://www.splendall.com/product/scarf-yellow/"})
+    monkeypatch.setattr(sync_mod, "fetch_supplier_quantity", lambda url: (0, "out of stock"))
+
+    warnings = {}
+    result = sync_mod.sync_one(product, warnings=warnings)
+    assert result in ("updated", "updated-out-of-stock")
+    refreshed = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == product["id"])
+    assert refreshed["optionStock"]["Mustard Yellow"] == 0   # inferred + mirrored
+    labels = (refreshed.get("options") or [{}])[0].get("values") or []
+    assert labels == ["Mustard Yellow"]                       # label untouched
+    assert product["id"] not in warnings                      # confident match, no alert
+
+
+def test_unmatched_supplier_colour_flags_variant_color_mapping(iso_catalog, monkeypatch):
+    """A Splendall colour/link that cannot be confidently matched raises the
+    ⚠️ Check Variant Color Mapping alert instead of guessing."""
+    product = _make(
+        iso_catalog, name="Tote", stock=10,
+        options=[{"title": "Color", "values": ["Black", "Brown"]}],
+        optionStock={"Black": 5, "Brown": 5},
+        supplierId="splendall", supplierSku="tote-black",
+        optionSupplierSku={
+            "Color: Black": "https://www.splendall.com/product/tote-black/",
+            "Teal": "https://www.splendall.com/product/tote-teal/",
+        })
+    monkeypatch.setattr(sync_mod, "fetch_supplier_quantity", lambda url: (4, "4 in stock"))
+
+    warnings = {}
+    result = sync_mod.sync_one(product, warnings=warnings)
+    assert result in ("updated", "updated-out-of-stock", "unchanged")
+    warn = warnings.get(product["id"])
+    assert warn and warn["code"] == "variant_color_mapping"
+    assert "Check Variant Color Mapping" in warn["reason"]
+
+
+# ------------------------------------------------ pure inference/match helpers
+
+
+def test_labels_match_exact_partial_and_none():
+    assert sync_mod._labels_match("Black", "black") == "exact"
+    assert sync_mod._labels_match("Mustard Yellow", "Yellow") == "partial"
+    assert sync_mod._labels_match("Yellow", "Mustard Yellow") == "partial"
+    assert sync_mod._labels_match("Black", "Brown") is None
+    assert sync_mod._labels_match("", "Black") is None
+
+
+def test_infer_remaining_option_links_by_token_and_elimination():
+    store = ["Black", "Brown", "Mustard Yellow"]
+    cand = {"Black": "u_black", "Yellow": "u_yellow", "Brown": "u_brown"}
+    out = sync_mod.infer_remaining_option_links(store, cand)
+    assert out["links"] == {"Black": "u_black", "Brown": "u_brown",
+                            "Mustard Yellow": "u_yellow"}
+    assert out["review"] == []
+
+
+def test_infer_flags_review_when_ambiguous():
+    # Two storefront colours, one leftover supplier link that fits neither.
+    out = sync_mod.infer_remaining_option_links(
+        ["Brown", "Mustard Yellow"], {"Teal": "u_teal"})
+    assert out["links"] == {}
+    assert set(out["review"]) == {"Brown", "Mustard Yellow"}
+
+
+def test_infer_does_not_force_match_a_named_leftover_colour():
+    # A single leftover NAMED colour that clearly differs is not auto-paired.
+    out = sync_mod.infer_remaining_option_links(["Brown"], {"Teal": "u_teal"})
+    assert out["links"] == {}
+    assert out["review"] == ["Brown"]
+
+
+def test_infer_positional_elimination_only_for_unlabelled_supplier():
+    # An unlabelled/ambiguous leftover ("Variation 2") IS filled in by position.
+    out = sync_mod.infer_remaining_option_links(["Brown"], {"Variation 2": "u2"})
+    assert out["links"] == {"Brown": "u2"}
+    assert out["review"] == []
+
+
+def test_resolve_option_links_new_supplier_colour_needs_review():
+    rows = sync_mod._store_variant_rows(
+        {"options": [{"title": "Color", "values": ["Black", "Brown", "Mustard Yellow"]}]})
+    links = {"Color: Black": "u_black", "Teal": "u_teal"}
+    out = sync_mod.resolve_option_links(rows, links)
+    assert out["links"]["Black"] == "u_black"
+    assert "Teal" in out["review"]        # new supplier colour with no home
