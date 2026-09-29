@@ -2157,16 +2157,36 @@ function broadcastOptionsLine(p) {
   if (sizes.length) bits.push(`Sizes: ${sizes.slice(0, 8).join(", ")}`);
   return bits.join(" · ");
 }
-function broadcastMessageFor(p) {
-  const optionsLine = broadcastOptionsLine(p);
-  return `🛍️ *${broadcastDisplayName(p)}*\n💰 ${broadcastPriceLine(p)}${optionsLine ? `\n🎨 ${optionsLine}` : ""}`;
-}
 function broadcastFullText(p) {
-  // Owner request 2026-09-28: the caption's link line must be the CLEAN
-  // product url on its own - never wrapped in "Shop now:" or other extra
-  // words - so WhatsApp always auto-links it and a tap goes straight to
-  // this one item's page.
-  return `${broadcastMessageFor(p)}\n\n${broadcastProductUrl(p)}`;
+  // Caption format:
+  // [Product Name English] / [Product Name French]
+  // ₦[Price Naira]
+  // [Price CFA] CFA
+  // [Options / Details]
+  // https://jaurastore.com.ng/product.html?id=[Product ID]
+  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
+  const cfa = p.priceCfa || toCfa(p.priceNgn || 0);
+  const lines = [
+    broadcastDisplayName(p),
+    `₦${Number(p.priceNgn || 0).toLocaleString()}`,
+    `${Number(cfa || 0).toLocaleString()} CFA`
+  ];
+  const optionsLine = broadcastOptionsLine(p);
+  if (optionsLine) lines.push(optionsLine);
+  lines.push(broadcastProductUrl(p));
+  return lines.join("\n");
+}
+function broadcastMessageFor(p) {
+  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
+  const cfa = p.priceCfa || toCfa(p.priceNgn || 0);
+  const lines = [
+    broadcastDisplayName(p),
+    `₦${Number(p.priceNgn || 0).toLocaleString()}`,
+    `${Number(cfa || 0).toLocaleString()} CFA`
+  ];
+  const optionsLine = broadcastOptionsLine(p);
+  if (optionsLine) lines.push(optionsLine);
+  return lines.join("\n");
 }
 function broadcastShareUrl(text) {
   // Legacy fallback only. Modern phones take the navigator.share path above,
@@ -2196,7 +2216,7 @@ async function broadcastShareNative(p) {
   try {
     const file = await broadcastImageFile(p);
     if (broadcastCanShareFiles([file])) {
-      await navigator.share({ files: [file], text });
+      await navigator.share({ files: [file], text, title: broadcastDisplayName(p) });
       return;
     }
   } catch (e) {
@@ -2209,18 +2229,12 @@ async function broadcastShareNative(p) {
   window.location.href = broadcastShareUrl(text);
 }
 
-async function broadcastShareBatchNative(chosen, heading) {
-  const text = `${heading}\n\n${chosen.map((p) => `${broadcastMessageFor(p)}\n${broadcastProductUrl(p)}`).join("\n\n")}`;
-  try {
-    const files = await Promise.all(chosen.map(broadcastImageFile));
-    if (broadcastCanShareFiles(files)) {
-      await navigator.share({ files, text });
-      return;
-    }
-  } catch (e) {
-    if (e && e.name === "AbortError") return;
+async function broadcastShareBatchNative(chosen) {
+  // Multi-product text bundling is eliminated. Each item in the queue is shared
+  // individually as a single image card with its own photo and caption.
+  if (chosen && chosen.length) {
+    await broadcastShareNative(chosen[0]);
   }
-  window.location.href = broadcastShareUrl(text);
 }
 
 
@@ -2442,10 +2456,12 @@ function bindBroadcastFeed() {
     const eligible = broadcastEligibleProducts();
     const chosen = eligible.filter((p) => bcSelected[bcSlot].has(String(p.id)));
     if (!chosen.length) { JA.toast("Select at least one product first."); return; }
-    const heading = bcSlot === "morning"
-      ? "Good morning! Today's picks at Jaura Store 🛍️ / Bonjour ! Sélection du jour chez Jaura Store"
-      : "This evening at Jaura Store 🌙 / Ce soir chez Jaura Store";
-    broadcastShareBatchNative(chosen, heading);
+    // Multi-product text bundling is eliminated. Each item in the broadcast queue is shared
+    // individually as a single image card with its photo and formatted caption.
+    broadcastShareBatchNative(chosen);
+    if (chosen.length > 1) {
+      JA.toast(`Sharing 1 of ${chosen.length}. Tap Share on remaining items to share individually.`);
+    }
   });
 }
 async function fillMarketing() {
@@ -3182,17 +3198,18 @@ function paintHomepageFeaturedPicker() {
   const cats = JA.categories ? JA.categories() : [];
   const known = new Set(cats.map((c) => c.id));
   all.forEach((p) => { if (p.category && !known.has(p.category)) { cats.push({ id: p.category, name: JA.categoryName(p.category) }); known.add(p.category); } });
-  // Owner request 2026-09-28: this used to be one long scroll of every
-  // category's products. Each category is now its own accordion, collapsed
-  // by default so the picker fits on one screen - a category only opens
-  // automatically the first time it already has a saved pick, so existing
-  // selections stay visible without the admin having to hunt for them.
+  // Each category is a compact, collapsible accordion selector, collapsed
+  // by default so the admin sees a clean list of category headers with selection counters.
   const html = cats.map((c) => {
     const rows = all.filter((p) => String(p.category || "") === String(c.id));
     if (!rows.length) return "";
     const pickedHere = rows.filter((p) => selected.has(String(p.id))).length;
-    return `<details class="home-featured-admin-cat" data-home-featured-admin-cat="${JA.escape(c.id)}" ${pickedHere ? "open" : ""}>
-      <summary class="admin-h">${JA.escape(JA.categoryName(c.id))} <small>${rows.length} product${rows.length === 1 ? "" : "s"}${pickedHere ? ` · ${pickedHere} selected` : ""}</small></summary>
+    const catName = JA.categoryName(c.id);
+    return `<details class="home-featured-admin-cat" name="home-featured-cat-accordion" data-home-featured-admin-cat="${JA.escape(c.id)}">
+      <summary class="admin-h">${JA.escape(catName)} <small>${rows.length} product${rows.length === 1 ? "" : "s"}${pickedHere ? ` · ${pickedHere} selected` : ""}</small></summary>
+      <div class="home-featured-cat-filter-wrap">
+        <input type="search" class="admin-input home-featured-cat-search" placeholder="Filter ${JA.escape(catName)}…" data-home-featured-filter="${JA.escape(c.id)}" autocomplete="off" />
+      </div>
       <div class="home-featured-admin-grid">${rows.map((p) => `
         <label class="home-featured-choice">
           <input type="checkbox" value="${JA.escape(p.id)}" data-home-featured-pid="${JA.escape(p.id)}" data-home-featured-cat="${JA.escape(c.id)}" ${selected.has(String(p.id)) ? "checked" : ""} />
@@ -3219,6 +3236,24 @@ function bindHomepageFeatured() {
     }
     updateHomeFeaturedCount();
   });
+  root.addEventListener("input", (e) => {
+    const filterInput = e.target.closest && e.target.closest('[data-home-featured-filter]');
+    if (!filterInput) return;
+    const q = String(filterInput.value || "").trim().toLowerCase();
+    const section = filterInput.closest('[data-home-featured-admin-cat]');
+    if (!section) return;
+    section.querySelectorAll('.home-featured-choice').forEach((choice) => {
+      const text = (choice.textContent || "").toLowerCase();
+      choice.hidden = q ? !text.includes(q) : false;
+    });
+  });
+  root.addEventListener("toggle", (e) => {
+    if (e.target && e.target.tagName === "DETAILS" && e.target.classList.contains("home-featured-admin-cat") && e.target.open) {
+      root.querySelectorAll('details.home-featured-admin-cat[open]').forEach((other) => {
+        if (other !== e.target) other.open = false;
+      });
+    }
+  }, true);
   document.getElementById("home-featured-refresh")?.addEventListener("click", async () => {
     if (JA.loadHomepageFeatured) await JA.loadHomepageFeatured();
     paintHomepageFeaturedPicker();

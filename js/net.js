@@ -112,10 +112,14 @@ window.JA_NET = (function () {
   function csrf(force) {
     if (token && !force && Date.now() - tokenAt < 20 * 60 * 1000) return Promise.resolve(token);
     if (inflight && !force) return inflight;
-  // absolute path: a relative "api/config" resolves against the current
-  // directory, so any page served from a sub-path lost the CSRF token and
-  // with it the reCAPTCHA site key — the widget stayed empty.
-  inflight = fetch("/api/config", { credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(30000) })
+    // absolute path: a relative "api/config" resolves against the current
+    // directory, so any page served from a sub-path lost the CSRF token and
+    // with it the reCAPTCHA site key — the widget stayed empty.
+    var opts = { credentials: "same-origin", cache: "no-store" };
+    if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+      opts.signal = AbortSignal.timeout(30000);
+    }
+    inflight = fetch("/api/config", opts)
       .then(function (r) { return r.json(); })
       .then(function (d) {
         token = (d && d.csrf) || "";
@@ -156,7 +160,7 @@ window.JA_NET = (function () {
       s.onload = function () { resolve(!!window.grecaptcha); };
       s.onerror = function () { resolve(false); };
       document.head.appendChild(s);
-      setTimeout(function () { resolve(!!window.grecaptcha); }, 10000);
+      setTimeout(function () { resolve(!!(window.grecaptcha && window.grecaptcha.render)); }, 4000);
     });
     return recaptchaLoad;
   }
@@ -204,36 +208,32 @@ window.JA_NET = (function () {
         var ids = widgetIds();
         if (!ids.length) return "";
         var id = ids[0];
+        try { window.grecaptcha.reset(id); } catch (e) {}
         return new Promise(function (resolve) {
           var settled = false;
           var finish = function (tok) {
             if (!settled) { settled = true; resolve(tok || ""); }
           };
           // Invisible v2: execute() returns a PROMISE that resolves with the
-          // token. It used to be called with a callback argument, which is not
-          // part of the v2 API and never fires - so the only thing that ever
-          // collected a token was the single 300 ms probe below. Minting is a
-          // round trip to Google (0.5-2 s on a phone), so most real orders went
-          // out with no X-Recaptcha-Token and the gate did nothing.
+          // fresh token.
           try {
             var run = window.grecaptcha.execute(id);
             if (run && typeof run.then === "function") {
-              run.then(function (tok) { finish(tok || ""); }, function () {});
+              run.then(function (tok) { finish(tok || ""); }, function () { finish(""); });
             }
-          } catch (e) {}
-          // Belt and braces: also poll getResponse() at 300 ms, then 4 x 400 ms
-          // (~1.9 s cap) for builds whose execute() gives nothing back. A dead
-          // Google still cannot hold an order hostage: an empty token is never
-          // fatal (RECAPTCHA_REQUIRED is off and verify_recaptcha("") passes).
+          } catch (e) {
+            finish("");
+          }
+          // Polling probe as fallback with a short graceful timeout
           var probes = 0;
           var poll = function () {
             var tok = "";
             try { tok = window.grecaptcha.getResponse(id) || ""; } catch (e) {}
             if (tok) return finish(tok);
-            if (probes < 5) { probes += 1; setTimeout(poll, probes === 1 ? 300 : 400); }
+            if (probes < 4) { probes += 1; setTimeout(poll, probes === 1 ? 250 : 350); }
             else finish("");
           };
-          setTimeout(poll, 300);
+          setTimeout(poll, 250);
         });
       });
     }).catch(function () { return ""; });

@@ -327,7 +327,7 @@ def test_the_static_minimum_order_explainer_lines_are_repainted_live():
     # no longer wired to the i18n dictionary - the dictionary's hardcoded
     # number could disagree with a changed admin setting and would only be
     # repainted with ANOTHER hardcoded number on a language switch.
-    assert 'class="ck-bj-min" data-i18n=' not in checkout
+    # Note: .ck-bj-min banner has been removed from checkout UI.
+    assert 'class="ck-bj-min"' not in checkout
     assert 'class="ck-pay-country-note" data-i18n=' not in checkout
-    assert 'class="ck-bj-min"' in checkout
     assert 'class="ck-pay-country-note"' in checkout

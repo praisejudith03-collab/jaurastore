@@ -1533,26 +1533,37 @@ function zoneLabel(z) {
   const sym = z.currency === "NGN" ? "\u20A6" : "";
   const suf = z.currency === "CFA" ? " CFA" : "";
   const fmt = (n) => sym + Number(n || 0).toLocaleString("en-US") + suf;
-  if (z.kind === "pickup") return z.name;
+  if (z.kind === "pickup" || /pickup|retrait/i.test(z.name)) {
+    return "📍 Cotonou Local Pickup (House Address) — FREE";
+  }
+  const name = String(z.name || "");
+  if (/lagos\s*mainland/i.test(name)) {
+    return `🇳🇬 Lagos State (Express Delivery) — Lagos Mainland (${fmt(z.fare_min || 2000)} – ${fmt(z.fare_max || 5000)})`;
+  }
+  if (/lagos\s*island/i.test(name)) {
+    return `🇳🇬 Lagos State (Express Delivery) — Lagos Island (${fmt(z.fare_min || 3500)} – ${fmt(z.fare_max || 6000)})`;
+  }
+  if (/other\s*nigeria|other\s*states\s*in\s*nigeria/i.test(name)) {
+    return "🇳🇬 Other States in Nigeria (Inter-State Dispatch)";
+  }
   if (z.kind === "quote") return z.name + " \u2014 fare agreed on WhatsApp";
   return z.name + " \u2014 " + fmt(z.fare_min) + " to " + fmt(z.fare_max);
 }
 
-/** The zone list, split into the three groups a customer actually thinks in:
- *  where they are (Nigeria / Benin & Togo) and whether they are collecting.
- *  A flat list of every city in two currencies was the single most confusing
- *  part of the checkout. Order is fixed - Nigeria, then Benin & Togo, then
- *  pickup - and an empty group is dropped. */
+/** The zone list, split into the three groups with clean hierarchy:
+ *  1. Top: Pickup / collection (📍 Cotonou Local Pickup)
+ *  2. Nigeria Options: Lagos (Express Delivery) & Other States (Inter-State Dispatch)
+ *  3. Benin Republic & Togo options intact following Nigeria. */
 function zoneGroups(list) {
   const zones = Array.isArray(list) ? list.filter((z) => z && z.name) : [];
   const groups = [
-    { id: "ngn", label: t("ck.zoneGroupNaira"), zones: [] },
-    { id: "cfa", label: t("ck.zoneGroupCfa"), zones: [] },
-    { id: "pickup", label: t("ck.zoneGroupPickup"), zones: [] },
+    { id: "pickup", label: t("ck.zoneGroupPickup") || "Pickup / collection", zones: [] },
+    { id: "ngn", label: t("ck.zoneGroupNaira") || "Nigeria (₦ Naira)", zones: [] },
+    { id: "cfa", label: t("ck.zoneGroupCfa") || "Benin & Togo (F CFA)", zones: [] },
   ];
-  const by = { ngn: groups[0], cfa: groups[1], pickup: groups[2] };
+  const by = { pickup: groups[0], ngn: groups[1], cfa: groups[2] };
   zones.forEach((z) => {
-    if (z.kind === "pickup") { by.pickup.zones.push(z); return; }
+    if (z.kind === "pickup" || /pickup|retrait/i.test(z.name)) { by.pickup.zones.push(z); return; }
     if (String(z.currency).toUpperCase() === "NGN") { by.ngn.zones.push(z); return; }
     by.cfa.zones.push(z);
   });
@@ -1591,10 +1602,9 @@ function minOrderFigures() {
   return { minOrderCfa, minOrderNgn, fr, grp };
 }
 
-/** Paint the two ALWAYS-VISIBLE Benin/Togo minimum-order explainer lines -
- *  .ck-bj-min above the zone picker, .ck-pay-country-note above the F CFA
- *  bank details - from the live admin setting instead of a hardcoded
- *  "5,000 F CFA" that used to stay wrong forever once the owner changed the
+/** Paint the ALWAYS-VISIBLE Benin/Togo minimum-order explainer line -
+ *  .ck-pay-country-note above the F CFA bank details - from the live admin setting
+ *  instead of a hardcoded "5,000 F CFA" that used to stay wrong forever once the owner changed the
  *  minimum. Called on checkout init, again whenever a fresh "ja:site" lands,
  *  and again on a language switch ("ja:lang") - both languages are built
  *  here directly rather than through data-i18n, since the text depends on a
@@ -1603,13 +1613,7 @@ function paintMinOrderNotices() {
   const { minOrderCfa, minOrderNgn, fr, grp } = minOrderFigures();
   const bjMin = document.querySelector(".ck-bj-min");
   if (bjMin) {
-    bjMin.textContent = minOrderCfa <= 0
-      ? (fr
-          ? "Livraisons au Bénin et au Togo : aucune commande minimum. Le retrait à Cotonou est gratuit pour les articles légers."
-          : "Benin & Togo deliveries: no minimum order amount. Pickup in Cotonou is free for lighter products.")
-      : (fr
-          ? `Livraisons au Bénin : commande minimum de ${grp(minOrderCfa)} F CFA (environ ${grp(minOrderNgn)} nairas). Togo : même minimum. Le retrait à Cotonou est gratuit pour les articles légers.`
-          : `Benin deliveries: minimum order ${grp(minOrderCfa)} F CFA (about ${grp(minOrderNgn)} naira). Togo: same minimum. Pickup in Cotonou is free for lighter products.`);
+    bjMin.remove();
   }
   const payNote = document.querySelector(".ck-pay-country-note");
   if (payNote) {
@@ -1623,10 +1627,21 @@ function paintMinOrderNotices() {
   }
 }
 
-/** Paint the [data-zone-eta] line for whatever zone is currently selected
+function updateInterStateNotice(sel) {
+  const notice = document.querySelector("[data-interstate-notice]");
+  if (!notice) return;
+  const val = String(sel?.value || "").toLowerCase();
+  const opt = sel?.selectedOptions && sel.selectedOptions[0];
+  const text = String(opt?.textContent || "").toLowerCase();
+  const isInterState = /other\s*nigeria|other\s*states\s*in\s*nigeria/i.test(val) || /other\s*states\s*in\s*nigeria|inter-state/i.test(text);
+  notice.hidden = !isInterState;
+}
+
+/** Paint the [data-zone-eta] line and toggle inter-state banner for whatever zone is currently selected
  *  in the checkout form - called right after the <select> is (re)built and
  *  again every time the shopper changes their choice. */
 function paintZoneEta(sel) {
+  updateInterStateNotice(sel);
   const etaEl = document.querySelector("[data-zone-eta]");
   if (!etaEl) return;
   const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
@@ -1810,42 +1825,43 @@ function validateCheckoutForm(form, options = {}) {
   const failures = [];
   const value = (name) => String(form.querySelector(`[name="${name}"]`)?.value || "").trim();
   const add = (name, message) => failures.push({ name, message });
+  const requiredMsg = checkoutValidationMessage("ck.errorRequired", "Please fill in this detail to complete your order.");
   const namePattern = /^[\p{L}][\p{L} .'-]*$/u;
   const phonePattern = /^\+?[0-9][0-9 ()-]{6,24}$/;
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
   const first = value("firstName");
-  if (!first) add("firstName", checkoutValidationMessage("ck.errorFirstName", "Enter your first name."));
+  if (!first) add("firstName", requiredMsg);
   else if (first.length < 2 || !namePattern.test(first)) add("firstName", checkoutValidationMessage("ck.errorFirstNameInvalid", "Enter a valid first name using letters only."));
 
   const last = value("lastName");
-  if (!last) add("lastName", checkoutValidationMessage("ck.errorLastName", "Enter your last name."));
+  if (!last) add("lastName", requiredMsg);
   else if (last.length < 2 || !namePattern.test(last)) add("lastName", checkoutValidationMessage("ck.errorLastNameInvalid", "Enter a valid last name using letters only."));
 
-  if (!value("country")) add("country", checkoutValidationMessage("ck.errorCountry", "Choose your country or region."));
+  if (!value("country")) add("country", requiredMsg);
 
   const address = value("address");
-  if (!address) add("address", checkoutValidationMessage("ck.errorAddress", "Enter your street address."));
+  if (!address) add("address", requiredMsg);
   else if (address.length < 5) add("address", checkoutValidationMessage("ck.errorAddressInvalid", "Enter a little more detail for your street address."));
 
   const city = value("city");
-  if (!city) add("city", checkoutValidationMessage("ck.errorCity", "Enter your town or city."));
+  if (!city) add("city", requiredMsg);
   else if (city.length < 2) add("city", checkoutValidationMessage("ck.errorCityInvalid", "Enter a valid town or city."));
 
-  if (!value("zone")) add("zone", checkoutValidationMessage("ck.errorZone", "Choose a delivery zone."));
+  if (!value("zone")) add("zone", requiredMsg);
 
   const phone = value("phone");
   const phoneDigits = phone.replace(/\D/g, "");
-  if (!phone) add("phone", checkoutValidationMessage("ck.errorPhone", "Enter your phone number."));
+  if (!phone) add("phone", requiredMsg);
   else if (!phonePattern.test(phone) || phoneDigits.length < 7) add("phone", checkoutValidationMessage("ck.errorPhoneInvalid", "Enter a valid phone number, including the country code if possible."));
 
   const email = value("email");
-  if (!email) add("email", checkoutValidationMessage("ck.errorEmail", "Enter your email address."));
+  if (!email) add("email", requiredMsg);
   else if (!emailPattern.test(email)) add("email", checkoutValidationMessage("ck.errorEmailInvalid", "Enter a valid email address, for example name@example.com."));
 
   const proof = form.querySelector("[name=proof]");
   if (proof && !form.dataset.proof && !options.proofReady && !(proof.files && proof.files.length)) {
-    add("proof", checkoutValidationMessage("ck.errorProof", "Upload your payment receipt before placing the order."));
+    add("proof", requiredMsg);
   }
 
   // Keep this guard future-proof: any newly added required control gets a
@@ -1855,7 +1871,7 @@ function validateCheckoutForm(form, options = {}) {
     const name = control.name;
     if (!name || known.has(name) || name === "proof") return;
     if (!String(control.value || "").trim()) {
-      add(name, checkoutValidationMessage("ck.errorRequired", "Complete this required field."));
+      add(name, requiredMsg);
     } else if (typeof control.checkValidity === "function" && !control.checkValidity()) {
       add(name, checkoutValidationMessage("ck.errorRequiredInvalid", "Check this required field and try again."));
     }
@@ -1872,9 +1888,10 @@ function validateCheckoutForm(form, options = {}) {
     const host = checkoutFieldErrorHost(control);
     host?.classList.add("has-error");
     control.setAttribute("aria-invalid", "true");
+    control.classList.add("field-input-error");
     const errorId = `${control.id || name}-error`;
     const error = document.createElement("p");
-    error.className = "field-error";
+    error.className = "field-error ck-inline-tooltip";
     error.id = errorId;
     error.setAttribute("role", "alert");
     error.textContent = message;
@@ -1894,11 +1911,12 @@ function validateCheckoutForm(form, options = {}) {
   });
   if (summary) {
     summary.hidden = false;
-    summary.scrollIntoView?.({ behavior: "smooth", block: "start" });
   }
   const firstControl = checkoutFieldControl(form, failures[0].name);
-  firstControl?.focus?.({ preventScroll: true });
-  firstControl?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  if (firstControl) {
+    firstControl.focus?.({ preventScroll: true });
+    firstControl.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  }
   return { ok: false, failures };
 }
 
@@ -2262,6 +2280,21 @@ function renderCheckout() {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const btn = form.querySelector(".ck-place");
+    const resetButton = () => {
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove("is-loading");
+        btn.textContent = t("ck.place");
+      }
+    };
+    const setButtonLoading = (msgKey, fallback) => {
+      if (btn) {
+        btn.disabled = true;
+        btn.classList.add("is-loading");
+        btn.innerHTML = `<span class="ck-spinner" aria-hidden="true"></span> ${JA.escape(t(msgKey) || fallback)}`;
+      }
+    };
+
     const data = Object.fromEntries(new FormData(form).entries());
     const cur = data.currency || JA.currency();
     const liveItems = JA.cartDetailed();
@@ -2277,7 +2310,10 @@ function renderCheckout() {
       // camera photo can still be running and is awaited below.
       proofReady: !!(form.dataset.proof || proofFile || form.querySelector("[name=proof]")?.files?.length),
     });
-    if (!validation.ok) return;
+    if (!validation.ok) {
+      resetButton();
+      return;
+    }
     if (JA.stockProblems) {
       const probs = JA.stockProblems();
       if (probs.length) {
@@ -2294,7 +2330,7 @@ function renderCheckout() {
           warn.textContent = msg;
           warn.hidden = false;
         } catch (e) {}
-        if (btn) { btn.disabled = false; btn.textContent = t("ck.place"); }
+        resetButton();
         return;
       } else {
         try {
@@ -2344,6 +2380,7 @@ function renderCheckout() {
         warn.textContent = msg;
         warn.hidden = false;
       } catch (e) {}
+      resetButton();
       shot?.focus?.();
     };
     const totalNow = JA.cartTotal(cur);
@@ -2358,19 +2395,16 @@ function renderCheckout() {
     // A big phone photo can still be compressing when the customer taps
     // "Place order". Wait for it instead of refusing the order.
     if (!form.dataset.proof && proofJob) {
-      if (btn) { btn.disabled = true; btn.textContent = t("ck.preparing"); }
+      setButtonLoading("ck.preparing", "Preparing your photo…");
       await proofJob.catch(() => null);
     }
     if (!form.dataset.proof && !proofFile) {
-      if (btn) { btn.disabled = false; btn.textContent = t("ck.place"); }
+      resetButton();
       JA.toast(proofFailed ? t("toast.badImg") : t("toast.needShot"));
       shot?.focus();
       return;
     }
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = t("ck.placing");
-    }
+    setButtonLoading("ck.placing", "Placing your order…");
     const clean = (v) => String(v || "").replace(/[<>]/g, "").trim().slice(0, 400);
     const fullName = [clean(data.firstName), clean(data.lastName)].filter(Boolean).join(" ") || clean(data.name);
     const proofBlob = proofFile
@@ -2445,7 +2479,7 @@ function renderCheckout() {
         warn.textContent = msg;
         warn.hidden = false;
       } catch (e) {}
-      if (btn) { btn.disabled = false; btn.textContent = t("ck.place"); }
+      resetButton();
     };
     if (submission && typeof submission.then === "function") {
       submission.then((result) => {

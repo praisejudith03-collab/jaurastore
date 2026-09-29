@@ -7,11 +7,11 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 TOKEN = "163"
 ASSETS = {
-    "css/style.css": "576bd48f3b54b0bd04af5cf66f8644a8b8b42f4b0c6353a203be4f22eab41530",
+    "css/style.css": "9a8d21d91087bd6e714b5cbf3efebd3c628ca02bfffdd06791d1bd955418953a",
     "css/fonts.css": "377c6561da56f99cf44296e4006947daf680075b4a64ff64e0db5dea548c7282",
     "js/store.js": "8102aebfffc251496e008754bdf09235b8b80d932d2b7d9c92d56477ce877186",
     "js/app.js": "19212155a34befc02c3fe322a40d524e0846b926ef629858f1c573309ac6901f",
-    "js/admin.js": "31974afdf88c331ee6d211710591566bc618416d45134f67ef872c01d8f83eb7",
+    "js/admin.js": "d33c0725188d38ea9f3fd114443dddb2d2494ea0125c77e803a435da57836b00",
     "js/i18n.js": "c23d56cf53b5ec01a096697aea2f08f1bfc31039e30bb8cb75062688ca329c22",
     "js/net.js": "d5de1bfd2f068d96c91332fdeee422dfff88b641d6c19e07bf903b374510f840",
     "sw.js": "a53d7d9ee883dd864265f33ab27312151adc3bb642cb00af881a3d32023a5f59",

@@ -106,13 +106,26 @@ def test_the_admin_featured_picker_renders_categories_as_accordions():
     body = body[:body.index("\nfunction ")]
     assert "<details class=\"home-featured-admin-cat\"" in body
     assert "<summary class=\"admin-h\">" in body
-    # Not unconditionally open - only pre-opened for a category that
-    # already has a saved pick, so most categories stay collapsed.
-    assert 'pickedHere ? "open" : ""' in body
+    # All categories are collapsed by default on render
+    assert "data-home-featured-admin-cat=" in body
+    assert 'pickedHere ? "open" : ""' not in body
+    assert "<details class=\"home-featured-admin-cat\" name=\"home-featured-cat-accordion\"" in body
+
+
+def test_the_admin_featured_picker_includes_category_filter_input():
+    src = _admin_js()
+    body = src[src.index("function paintHomepageFeaturedPicker("):]
+    body = body[:body.index("\nfunction ")]
+    assert "data-home-featured-filter=" in body
+    assert "home-featured-cat-search" in body
+    bind_body = src[src.index("function bindHomepageFeatured("):]
+    bind_body = bind_body[:bind_body.index("\nfunction ")]
+    assert "data-home-featured-filter" in bind_body
+    assert "choice.hidden" in bind_body
 
 
 def test_each_featured_category_accordion_opens_independently():
-    """<details> elements toggle independently by default; this just pins
+    """<details> elements toggle independently by default; this pins
     down that the picker uses one <details> per category rather than a
     single shared open/close flag."""
     src = _admin_js()
