@@ -83,16 +83,22 @@
                  is unreachable - do not edit fares here, they will be ignored. -->
             <select name="zone" id="ck-zone" class="ck-zone-select" required data-delivery-zones>
               <option value="" selected data-i18n="ck.zonePlaceholder">Choose a delivery zone</option>
-              <option value="Lagos Mainland" data-currency="NGN" data-i18n="ck.fare.mainland">Lagos Mainland (₦2,000 – ₦5,000)</option>
-              <option value="Lagos Island" data-currency="NGN" data-i18n="ck.fare.island">Lagos Island (₦3,500 – ₦6,000)</option>
-              <option value="Other Nigeria" data-currency="NGN" data-i18n="ck.fare.ngOther">Other states in Nigeria (confirm on WhatsApp)</option>
-              <option value="Cotonou" data-currency="CFA" data-i18n="ck.fare.cotonou">Cotonou (1,000 – 3,000 CFA)</option>
-              <option value="Calavi" data-currency="CFA" data-i18n="ck.fare.calavi">Calavi (1,500 – 3,500 CFA)</option>
-              <option value="Porto-Novo" data-currency="CFA" data-i18n="ck.fare.porto">Porto-Novo (1,500 – 3,500 CFA)</option>
-              <option value="Other Benin" data-currency="CFA" data-i18n="ck.fare.bjOther">Other places in Benin (confirm on WhatsApp)</option>
-              <option value="Lomé" data-currency="CFA" data-i18n="ck.fare.lome">Lomé (2,500 – 3,500 CFA)</option>
-              <option value="Other Togo" data-currency="CFA" data-i18n="ck.fare.tgOther">Other places in Togo (confirm on WhatsApp)</option>
-              <option value="Pickup in Cotonou is free for lighter products" data-zone-kind="pickup">Pickup in Cotonou is free for lighter products</option>
+              <optgroup label="Pickup / collection" data-i18n-label="ck.zoneGroupPickup">
+                <option value="Pickup in Cotonou is free for lighter products" data-zone-kind="pickup">📍 Cotonou Local Pickup (House Address) — FREE</option>
+              </optgroup>
+              <optgroup label="Nigeria (₦ Naira)" data-i18n-label="ck.zoneGroupNaira">
+                <option value="Lagos Mainland" data-currency="NGN" data-i18n="ck.fare.mainland">🇳🇬 Lagos State (Express Delivery) — Lagos Mainland (₦2,000 – ₦5,000)</option>
+                <option value="Lagos Island" data-currency="NGN" data-i18n="ck.fare.island">🇳🇬 Lagos State (Express Delivery) — Lagos Island (₦3,500 – ₦6,000)</option>
+                <option value="Other Nigeria" data-currency="NGN" data-i18n="ck.fare.ngOther">🇳🇬 Other States in Nigeria (Inter-State Dispatch)</option>
+              </optgroup>
+              <optgroup label="Benin &amp; Togo (F CFA)" data-i18n-label="ck.zoneGroupCfa">
+                <option value="Cotonou" data-currency="CFA" data-i18n="ck.fare.cotonou">Cotonou (1,000 – 3,000 CFA)</option>
+                <option value="Calavi" data-currency="CFA" data-i18n="ck.fare.calavi">Calavi (1,500 – 3,500 CFA)</option>
+                <option value="Porto-Novo" data-currency="CFA" data-i18n="ck.fare.porto">Porto-Novo (1,500 – 3,500 CFA)</option>
+                <option value="Other Benin" data-currency="CFA" data-i18n="ck.fare.bjOther">Other places in Benin (confirm on WhatsApp)</option>
+                <option value="Lomé" data-currency="CFA" data-i18n="ck.fare.lome">Lomé (2,500 – 3,500 CFA)</option>
+                <option value="Other Togo" data-currency="CFA" data-i18n="ck.fare.tgOther">Other places in Togo (confirm on WhatsApp)</option>
+              </optgroup>
             </select>
             <p class="ck-bj-min">Benin deliveries: minimum order 5,000 F CFA (about 12,000 naira). Togo: same minimum. Pickup in Cotonou is free for lighter products.</p>
             <!-- Filled in the instant a zone is chosen (see paintDeliveryZones /
@@ -100,6 +106,7 @@
                  for that zone's region - Lagos, other Nigerian states, Benin
                  Republic or Togo - owner request 2026-09-28. -->
             <p class="ck-zone-eta" data-zone-eta hidden></p>
+            <div class="ck-interstate-notice" data-interstate-notice data-i18n="ck.interstateNotice" hidden role="status">🚚 Inter-State Delivery: Your order will be dispatched via courier. Tracking &amp; dispatch updates will be sent directly to your phone/WhatsApp.</div>
             <div class="ck-ship-note-dynamic" data-shipping-note hidden style="margin-top:10px;padding:10px 12px;background:#fdfaf7;border:1px dashed #c8ac7f;border-radius:8px;font-size:13px;line-height:1.5;"></div>
             <div data-ck-min-warn hidden style="margin-top:10px;padding:10px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;color:#664d03;font-size:13px;"></div>
           </div>
@@ -215,7 +222,7 @@
         <div class="ck-recaptcha-anchor" aria-hidden="true">
           <div class="g-recaptcha" data-recaptcha-widget></div>
         </div>
-        <button class="btn ck-place" type="submit" data-i18n="ck.place">Place order</button>
+        <button class="btn ck-place" type="submit" data-i18n="ck.place">Place Your Order</button>
         <p class="ck-recaptcha-note" data-recaptcha-note data-i18n-html="ck.recaptcha" style="font-size:11.5px;color:#95795c;margin-top:10px;line-height:1.5;">This site is protected by reCAPTCHA and the Google <a href="https://policies.google.com/privacy">Privacy Policy</a> and <a href="https://policies.google.com/terms">Terms of Service</a> apply.</p>
       </aside>
     </form>

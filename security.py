@@ -388,12 +388,27 @@ def verify_recaptcha(token, action=""):
     return True, "ok"
 
 def recaptcha_gate(action=""):
-    """Drop-in guard for a route: returns an error response to bounce the
-    request, or None to let it through."""
-    ok, _why = verify_recaptcha(_recaptcha_token(), action)
-    if ok:
-        return None
-    return jsonify(ok=False, error="Checkout security could not be verified. Please try again."), 400
+    """Drop-in guard for a route: verifies the token, logs warnings silently
+    to analytics without blocking valid customers on mobile networks, and returns
+    an error response only when strict reCAPTCHA is explicitly required."""
+    ok, why = verify_recaptcha(_recaptcha_token(), action)
+    if not ok:
+        try:
+            import analytics as analytics_mod
+            vid, _is_new = analytics_mod.visitor_id()
+            analytics_mod.record([{
+                "kind": "security_warning",
+                "page": request.path,
+                "ref": f"recaptcha_{why}",
+                "detail": f"action={action} reason={why}",
+            }], vid=vid)
+            analytics_mod.bump_counter("recaptcha_warnings_total", 1)
+        except Exception:
+            pass
+        from config import Config
+        if Config.RECAPTCHA_REQUIRED:
+            return jsonify(ok=False, error="Checkout security could not be verified. Please try again."), 400
+    return None
 
 # ------------------------------------------------------------------- headers
 CSP = (

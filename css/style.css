@@ -1425,15 +1425,44 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #f8f0e2; }
 .field.has-error input,
 .field.has-error select,
 .field.has-error textarea,
-.ck-upload.has-error input {
-  border-color: #b52f2a;
-  box-shadow: 0 0 0 2px rgba(181, 47, 42, 0.12);
+.ck-upload.has-error input,
+.fare-field.has-error select,
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: #dc2626 !important;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15) !important;
+  outline: none;
 }
-.field-error {
+.field-error,
+.ck-inline-tooltip {
   margin: 6px 0 0;
-  color: #a32621;
+  color: #dc2626;
   font-size: 12px;
+  font-weight: 500;
   line-height: 1.4;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.field-error::before,
+.ck-inline-tooltip::before {
+  content: "⚠️";
+  font-size: 11px;
+}
+.ck-interstate-notice {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: #f0f7ff;
+  border: 1px solid #90cdf4;
+  border-radius: 8px;
+  color: #1a365d;
+  font-size: 13.5px;
+  line-height: 1.5;
+  animation: fadeIn 0.2s ease-in-out;
+}
+.ck-interstate-notice[hidden] {
+  display: none !important;
 }
 .empty-cart-redirect-notice {
   margin: 18px 0;
@@ -1485,7 +1514,34 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #f8f0e2; }
   font-weight: 600;
   line-height: 1.5;
 }
-.ck-place { width: 100%; }
+.ck-place {
+  width: 100%;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  font-weight: 600;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+.ck-place.is-loading {
+  pointer-events: none;
+  opacity: 0.85;
+}
+.ck-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  border-top-color: #ffffff;
+  animation: ck-spin 0.65s linear infinite;
+  vertical-align: middle;
+}
+@keyframes ck-spin {
+  to { transform: rotate(360deg); }
+}
 .woo-meta {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
