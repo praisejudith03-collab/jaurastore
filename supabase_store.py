@@ -1409,6 +1409,48 @@ def mirror_growth_settings(settings_dict):
         print(f"[supabase] growth settings upsert failed: {exc}")
 
 
+# Supplier-sync uncertainty warnings use the existing durable key/value table
+# so the scheduled GitHub runner and the Render admin dashboard share one
+# source of truth without requiring a new production table migration.
+SUPPLIER_SYNC_WARNINGS_KEY = "supplier_sync_warnings_json"
+
+
+def save_supplier_sync_warnings(warnings):
+    """Replace the current supplier uncertainty queue. True on persistence."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        payload = json.dumps(list(warnings or [])[:1000], ensure_ascii=False,
+                             separators=(",", ":"))
+        c.table("growth_settings").upsert([
+            {"key": SUPPLIER_SYNC_WARNINGS_KEY, "value": payload}
+        ]).execute()
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] supplier warnings save failed: {exc}")
+        return False
+
+
+def load_supplier_sync_warnings():
+    """Return the current supplier uncertainty queue; [] if absent/unavailable."""
+    c = client()
+    if c is None:
+        return []
+    try:
+        res = (c.table("growth_settings").select("value")
+               .eq("key", SUPPLIER_SYNC_WARNINGS_KEY).limit(1).execute())
+        rows = _res_data(res)
+        if not rows:
+            return []
+        raw = (rows[0] or {}).get("value")
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        return [dict(row) for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] supplier warnings load failed: {exc}")
+        return []
+
+
 # Durable product-delete tombstones. Soft-deleting a seed product (source=
 # "deleted" on its products-table row) only hides rows that live in the
 # products table. catalog.merged() still unions the 258 bundled seed rows on

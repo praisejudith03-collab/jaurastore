@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=162" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=163" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -755,9 +755,11 @@ function productForm(p = {}) {
   window.__editImages = productImages(p);
   const opts = editorOptions(p);
   const inStock = p.id ? Number(p.stock) > 0 : true;
+  const syncWarning = supplierWarnings.find((row) => String(row.product_id || "") === String(p.id || ""));
   return `<form id="prod-form" class="au-edit">
     <button type="button" class="au-back" id="cancel-edit">← Store Products</button>
     <h2>Product ${preCat ? `· ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
+    ${syncWarning ? `<div class="supplier-sync-alert" role="alert"><strong>Supplier stock is unconfirmed</strong><span>${JA.escape(syncWarning.reason || "The latest Splendall audit could not confirm this product.")}</span><small>No stock was guessed or changed. Check the supplier mapping/options before relying on automatic sync.</small></div>` : ""}
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
     <div class="field"><label>Product Name</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
     <div class="field"><label>Product Name (French — shown when the site is in French)</label><input name="nameFr" maxlength="80" value="${JA.escape(p.nameFr || "")}" placeholder="Optional" /></div>
@@ -993,6 +995,7 @@ let marketingSearch = "";
 let marketingFrom = "";
 let marketingTo = "";
 let selectedProductIds = new Set();
+let supplierWarnings = [];
 let dashTimer = null;
 let dashCat = "";
 
@@ -1034,9 +1037,10 @@ function renderProdGrid() {
     const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN <= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;
     const rowq = JA.escape((p.name + " " + (p.nameFr || "") + " " + (p.sku || "") + " " + p.category).toLowerCase());
     const productSelected = selectedProductIds.has(String(p.id)) ? " checked" : "";
-    return `<article class="adx-card" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
+    const syncWarning = supplierWarnings.find((row) => String(row.product_id || "") === String(p.id));
+    return `<article class="adx-card${syncWarning ? " has-sync-warning" : ""}" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
-      <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
+      <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}${syncWarning ? `<span class="adx-sync-warning" title="${JA.escape(syncWarning.reason || "Supplier stock unconfirmed")}">Sync uncertain</span>` : ""}</div>
       <div class="adx-card-body"><strong>${JA.escape(p.name)}</strong><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     </article>`;
@@ -1307,14 +1311,17 @@ async function fillNeedsAttention() {
   try {
     const d = await window.JA_NET.api("api/admin/needs-attention");
     const pending = d.pending || [], stale = d.stale || [], low = d.lowStock || [];
+    supplierWarnings = d.supplierWarnings || [];
     setOrderBadge(pending.length);
-    if (!pending.length && !low.length) {
-      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders or low-stock variants need action.</span></div>`;
+    setSupplierBadge(supplierWarnings.length);
+    if (!pending.length && !low.length && !supplierWarnings.length) {
+      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders, low-stock variants or supplier-sync uncertainties need action.</span></div>`;
     } else {
       const pendingBlock = `<article class="attention-block"><div class="attention-title"><strong>Pending orders</strong><b>${pending.length}</b></div>${pending.length ? `<ul class="attention-list">${pending.slice(0, 5).map(attentionOrderLine).join("")}</ul>${pending.length > 5 ? `<small class="attention-more">+ ${pending.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Review orders →</button>` : `<p class="empty">No pending orders.</p>`}</article>`;
       const lowBlock = `<article class="attention-block"><div class="attention-title"><strong>Low stock</strong><b>${low.length}</b></div>${low.length ? `<ul class="attention-list">${low.slice(0, 5).map((r) => `<li><span><strong>${esc(r.name || r.product_id || "Product")}</strong><small>${esc(r.variant_label || r.variant_key || "Variant")}</small></span><b>${Number(r.qty || 0)} left</b></li>`).join("")}${low.length > 5 ? `<small class="attention-more">+ ${low.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Manage products →</button>` : `<p class="empty">No products at five or fewer units.</p>`}</article>`;
       const staleBlock = `<article class="attention-block ${stale.length ? "is-alert" : ""}"><div class="attention-title"><strong>Waiting over 24 hours</strong><b>${stale.length}</b></div>${stale.length ? `<ul class="attention-list">${stale.slice(0, 3).map(attentionOrderLine).join("")}</ul><button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Follow up →</button>` : `<p class="empty">No overdue pending orders.</p>`}</article>`;
-      box.innerHTML = `<div class="needs-grid">${pendingBlock}${lowBlock}${staleBlock}</div>`;
+      const supplierBlock = `<article class="attention-block supplier-warning-block ${supplierWarnings.length ? "is-alert" : ""}"><div class="attention-title"><strong>Supplier sync uncertain</strong><b>${supplierWarnings.length}</b></div>${supplierWarnings.length ? `<ul class="attention-list">${supplierWarnings.slice(0, 5).map((row) => `<li><span><strong>${esc(row.product_name || row.product_id || "Splendall catalog")}</strong><small>${esc(row.reason || "Stock could not be confirmed")}</small></span><b>Check</b></li>`).join("")}</ul>${supplierWarnings.length > 5 ? `<small class="attention-more">+ ${supplierWarnings.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Review highlighted products →</button>` : `<p class="empty">Every supplier-linked item is confirmed.</p>`}</article>`;
+      box.innerHTML = `<div class="needs-grid">${supplierBlock}${pendingBlock}${lowBlock}${staleBlock}</div>`;
     }
     box.querySelectorAll("[data-attention-tab]").forEach((button) => { button.onclick = () => paintDesk(button.dataset.attentionTab); });
   } catch (err) {
@@ -2756,13 +2763,21 @@ function setOrderBadge(count) {
     badge.hidden = n === 0;
   });
 }
+function setSupplierBadge(count) {
+  const n = Math.max(0, Number(count) || 0);
+  document.querySelectorAll("[data-supplier-badge]").forEach((badge) => {
+    badge.textContent = n;
+    badge.hidden = n === 0;
+  });
+}
 function paintDesk(tab = "analytics") {
   const pending = orderAttentionCount;
-  const navBtn = (id, badge) => `<button type="button" data-tab="${id}" class="adx-nav-btn ${tab === id ? "is-on" : ""}">${ADX_ICONS[id]}<span>${TAB_TITLES[id]}</span>${id === "orders" ? `<em class="adx-badge" data-orders-badge${badge ? "" : " hidden"}>${badge || 0}</em>` : ""}</button>`;
+  const supplierCount = supplierWarnings.length;
+  const navBtn = (id, badge) => `<button type="button" data-tab="${id}" class="adx-nav-btn ${tab === id ? "is-on" : ""}">${ADX_ICONS[id]}<span>${TAB_TITLES[id]}</span>${id === "orders" ? `<em class="adx-badge" data-orders-badge${badge ? "" : " hidden"}>${badge || 0}</em>` : ""}${id === "products" ? `<em class="adx-badge is-warning" data-supplier-badge${supplierCount ? "" : " hidden"}>${supplierCount || 0}</em>` : ""}</button>`;
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=162" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=163" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -2781,7 +2796,7 @@ function paintDesk(tab = "analytics") {
     </div>
     <nav class="admin-app-nav" aria-label="Admin sections">
       <button type="button" data-tab="analytics" class="${tab === "analytics" ? "is-on" : ""}">${ADX_ICONS.analytics}<span>Dashboard</span></button>
-      <button type="button" data-tab="products" class="${tab === "products" ? "is-on" : ""}">${ADX_ICONS.products}<span>Products</span></button>
+      <button type="button" data-tab="products" class="${tab === "products" ? "is-on" : ""}">${ADX_ICONS.products}<span>Products</span><em class="adx-badge is-warning" data-supplier-badge${supplierCount ? "" : " hidden"}>${supplierCount || 0}</em></button>
       <button type="button" data-tab="orders" class="${tab === "orders" ? "is-on" : ""}">${ADX_ICONS.orders}<span>Orders</span><em class="adx-badge" data-orders-badge${pending ? "" : " hidden"}>${pending || 0}</em></button>
       <button type="button" data-tab="sales" class="${tab === "sales" ? "is-on" : ""}">${ADX_ICONS.sales}<span>Sales</span></button>
       <button type="button" data-tab="marketing" class="${tab === "marketing" ? "is-on" : ""}">${ADX_ICONS.marketing}<span>Marketing</span></button>
@@ -3108,7 +3123,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=162", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=163", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

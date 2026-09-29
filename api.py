@@ -1846,8 +1846,12 @@ def admin_needs_attention():
             item["name"] = product.get("name") or row.get("variant_label") or row.get("product_id")
             low_stock.append(item)
     low_stock.sort(key=lambda row: (int(row.get("qty") or 0), str(row.get("name") or "")))
+    supplier_warnings = supabase_store.load_supplier_sync_warnings()
     return jsonify(ok=True, pending=pending, stale=stale, lowStock=low_stock,
-                   counts={"pending": len(pending), "stale": len(stale), "lowStock": len(low_stock)})
+                   supplierWarnings=supplier_warnings,
+                   counts={"pending": len(pending), "stale": len(stale),
+                           "lowStock": len(low_stock),
+                           "supplierWarnings": len(supplier_warnings)})
 
 
 # --------------------------------------------------------- admin: analytics

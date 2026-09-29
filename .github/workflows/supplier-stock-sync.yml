@@ -13,9 +13,10 @@
 #      transport every order alert already uses) and is written to
 #      supplier_match_review.json, instead of being guessed. No manual
 #      log-checking is required to notice a candidate needs a look.
-#   3. mirrors the supplier's EXACT stock count onto every linked product
-#      (a real number, not an on/off toggle) - retail prices are never read
-#      or written, so your markup stays entirely yours;
+#   3. audits exact supplier option combinations (variant names, colour codes,
+#      shade numbers and quantities) and atomically mirrors them only after a
+#      complete one-to-one mapping; ambiguity changes nothing and creates a
+#      durable Admin warning badge/highlight;
 #   4. marks a linked product OUT OF STOCK (never hides or deletes it) the
 #      moment it disappears from the supplier's own catalog - the owner
 #      decides by hand whether to hide or delete it from there.
@@ -110,12 +111,14 @@ jobs:
         with:
           path: supplier_sync_cache.json
           key: supplier-sync-image-cache
-      - name: Upload the review report (if anything needs a human look)
+      - name: Upload uncertainty reports (if anything needs attention)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: supplier-match-review
-          path: supplier_match_review.json
+          name: supplier-sync-uncertainty
+          path: |
+            supplier_match_review.json
+            supplier_sync_warnings.json
           if-no-files-found: ignore
           retention-days: 14
       # Backup channel: the script already emails the shop inbox directly
@@ -129,7 +132,9 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -e
-          if [ ! -s supplier_match_review.json ]; then
+          REVIEW_COUNT=$(jq -r '.candidates | length' supplier_match_review.json 2>/dev/null || echo 0)
+          WARNING_COUNT=$(jq -r '.warnings | length' supplier_sync_warnings.json 2>/dev/null || echo 0)
+          if [ "$REVIEW_COUNT" = "0" ] && [ "$WARNING_COUNT" = "0" ]; then
             NUMBER=$(gh issue list --state open --search "in:title Supplier match review" --json number --jq '.[0].number' 2>/dev/null || true)
             if [ -n "$NUMBER" ]; then
               gh issue comment "$NUMBER" --body "No possible matches needed review on $(date -u '+%Y-%m-%d %H:%M UTC') - closing automatically."
@@ -138,15 +143,15 @@ jobs:
             exit 0
           fi
           {
-            echo "tools/supplier_stock_sync.py found product(s) that resemble a splendall.com item"
-            echo "closely enough to flag, but not closely enough to link automatically."
-            echo "Nothing was changed on the storefront for these - review and, if correct, set"
-            echo "the Supplier fields in the admin product editor yourself."
+            echo "tools/supplier_stock_sync.py found supplier product or variant stock it could not"
+            echo "confirm with complete certainty. Nothing uncertain was guessed or written."
+            echo "The same warnings are visible in Admin -> Needs attention and on product cards."
             echo
             echo "Run: ${RUN_URL}"
             echo
             echo '```json'
-            cat supplier_match_review.json
+            [ -s supplier_sync_warnings.json ] && cat supplier_sync_warnings.json
+            [ -s supplier_match_review.json ] && cat supplier_match_review.json
             echo '```'
           } > issue-body.md
           NUMBER=$(gh issue list --state open --search "in:title Supplier match review" --json number --jq '.[0].number' 2>/dev/null || true)
