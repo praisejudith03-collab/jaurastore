@@ -86,6 +86,19 @@ def main():
             # Safety invariant: an unreadable reference table aborts, rather
             # than turning all its active assets into apparent orphans.
             sys.exit(f"ABORT: could not scan reference table {table}: {exc}")
+    # Static HTML/CSS/JS references (favicons and branded public assets) are
+    # active too, even when an older site_settings row does not contain them.
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for base, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv")]
+        for filename in files:
+            if not filename.endswith((".html", ".css", ".js", ".json", ".md")): continue
+            try:
+                text = open(os.path.join(base, filename), encoding="utf-8").read()
+                for candidate in URL_RE.findall(text):
+                    found = storage_ref(candidate, url)
+                    if found: refs.add(found)
+            except (OSError, UnicodeError): pass
     buckets = sb.storage.list_buckets() or []
     report = {"project": project, "mode": "apply" if args.apply else "dry-run",
               "tables": table_results, "referenced": len(refs), "buckets": {}, "deleted": []}
@@ -93,7 +106,7 @@ def main():
         name = item.name if hasattr(item, "name") else item.get("name")
         bucket = sb.storage.from_(name)
         objects = list_objects(bucket)
-        orphaned, broken, hashes = [], [], {}
+        orphaned, broken, hashes, sizes = [], [], {}, {}
         for obj in objects:
             path = obj["path"]
             if (name, path) in refs: continue
@@ -103,6 +116,7 @@ def main():
             orphaned.append(path)
             try:
                 data = bucket.download(path)
+                sizes[path] = len(data)
                 digest = hashlib.sha256(data).hexdigest()
                 hashes.setdefault(digest, []).append(path)
                 if ext in VIDEO_EXT and not (data[4:8] == b"ftyp" or data[:4] == b"\x1aE\xdf\xa3"):
@@ -113,11 +127,14 @@ def main():
         candidates = sorted(set(orphaned) | set(broken))
         report["buckets"][name] = {"objects": len(objects), "orphaned": orphaned,
                                     "broken_videos": broken, "duplicate_groups": duplicates,
-                                    "delete_candidates": candidates}
+                                    "delete_candidates": candidates,
+                                    "candidate_bytes": sum(sizes.get(p, 0) for p in candidates)}
         if args.apply:
             for start in range(0, len(candidates), 100):
                 batch = candidates[start:start+100]
                 if batch: bucket.remove(batch); report["deleted"].extend(f"{name}/{p}" for p in batch)
+    report["freed_bytes"] = sum(v["candidate_bytes"] for v in report["buckets"].values()) if args.apply else 0
+    report["freed_mb"] = round(report["freed_bytes"] / 1048576, 3)
     with open(args.report, "w", encoding="utf-8") as fh: json.dump(report, fh, indent=2)
     print(json.dumps({"mode": report["mode"], "referenced": len(refs),
                       "candidates": sum(len(x["delete_candidates"]) for x in report["buckets"].values()),

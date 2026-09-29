@@ -1,0 +1,55 @@
+name: Supabase storage maintenance
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Type APPLY to delete unreferenced media and overwrite active product images'
+        required: true
+        default: 'DRY-RUN'
+permissions:
+  contents: read
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+    environment: image-migration
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Validate credentials and mode
+        run: |
+          test -n "$SUPABASE_URL" && test -n "$SUPABASE_SERVICE_ROLE_KEY"
+          echo "::add-mask::$SUPABASE_SERVICE_ROLE_KEY"
+          test "${{ inputs.apply }}" = "APPLY"
+          PROJECT="$(printf '%s' "$SUPABASE_URL" | sed -E 's#https?://([^./]+).*#\1#')"
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+      - name: Remove unreferenced non-catalog media
+        run: python tools/cleanup_supabase_storage.py --apply --confirm-project "$PROJECT" --report storage-cleanup-report.json
+      - name: Compress and verify active product images
+        run: python tools/batch_compress_active_images.py --apply --confirm-project "$PROJECT" --report batch-compression-report.json
+      - name: Build summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          summary=[]
+          for fn in ('storage-cleanup-report.json','batch-compression-report.json'):
+            if os.path.exists(fn):
+              d=json.load(open(fn)); summary.append({'report':fn,'deleted':len(d.get('deleted',[])),'freed_mb':d.get('freed_mb',0),'valid_links':d.get('valid_links')})
+          summary.append({'total_freed_mb':round(sum(float(x.get('freed_mb') or 0) for x in summary),3)})
+          open('maintenance-summary.json','w').write(json.dumps(summary,indent=2))
+          print(json.dumps(summary,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: storage-maintenance-reports
+          path: |
+            *-report.json
+            maintenance-summary.json
+          if-no-files-found: warn
