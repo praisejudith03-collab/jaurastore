@@ -207,8 +207,9 @@ def test_a_batch_share_also_attaches_every_selected_photo():
 
 def test_share_opens_whatsapps_own_share_sheet_as_the_fallback_with_no_copy_paste():
     body = _func(ADMIN_JS, "broadcastShareUrl")
-    assert "https://wa.me/?text=" in body
+    assert "whatsapp://send?text=" in body
     assert "encodeURIComponent(text)" in body
+    assert "api.whatsapp.com" not in body
     # The per-card action is a real control the owner taps once - not a
     # link they have to notice and click twice - wired through
     # paintBroadcastFeed to the native-share flow.
@@ -234,3 +235,40 @@ def test_selecting_nothing_and_sharing_a_batch_is_refused_not_a_blank_message():
     body = _func(ADMIN_JS, "bindBroadcastFeed")
     assert "if (!chosen.length)" in body
     assert "Select at least one product first" in body
+
+
+def test_custom_products_can_be_added_or_swapped_without_stopping_rotation():
+    scheduled = _func(ADMIN_JS, "broadcastScheduledFeedFor")
+    assert "broadcastFeedFor(slot)" in scheduled
+    assert "bcOverrides[slot]" in scheduled
+    assert "result.push" in scheduled
+    choose = _func(ADMIN_JS, "chooseBroadcastProduct")
+    assert "replaces" in choose
+    assert "saveBroadcastOverrides()" in choose
+
+
+def test_custom_product_picker_is_searchable_and_only_uses_in_stock_catalog():
+    card = _func(ADMIN_JS, "broadcastFeedCardHTML")
+    assert "Select custom product" in card
+    assert 'type="search"' in card
+    picker = _func(ADMIN_JS, "broadcastPickerResultsHTML")
+    assert "broadcastEligibleProducts()" in picker
+    assert "haystack.includes(term)" in picker
+    product_card = _func(ADMIN_JS, "broadcastCardHTML")
+    assert "Swap item" in product_card
+
+
+def test_morning_and_evening_custom_overrides_are_independent_and_daily():
+    assert "const bcOverrides = loadBroadcastOverrides()" in ADMIN_JS
+    storage = _func(ADMIN_JS, "broadcastOverrideStorageKey")
+    assert "broadcastDaySeed()" in storage
+    loader = _func(ADMIN_JS, "loadBroadcastOverrides")
+    assert 'morning: clean("morning")' in loader
+    assert 'evening: clean("evening")' in loader
+
+
+def test_legacy_share_fallback_launches_the_native_whatsapp_uri():
+    one = _func(ADMIN_JS, "broadcastShareNative")
+    batch = _func(ADMIN_JS, "broadcastShareBatchNative")
+    assert "window.location.href = broadcastShareUrl(text)" in one
+    assert "window.location.href = broadcastShareUrl(text)" in batch
