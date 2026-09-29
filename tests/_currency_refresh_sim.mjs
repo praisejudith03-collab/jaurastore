@@ -120,6 +120,11 @@ function makeSandbox(served, opts = {}) {
   };
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
+  // A real browser window exposes the event API; js/store.js registers window
+  // listeners (ja:store-status, focus, pageshow, ...) at load, so mirror it.
+  if (typeof sandbox.addEventListener !== "function") sandbox.addEventListener = () => {};
+  if (typeof sandbox.removeEventListener !== "function") sandbox.removeEventListener = () => {};
+  if (typeof sandbox.dispatchEvent !== "function") sandbox.dispatchEvent = () => true;
   vm.createContext(sandbox);
   vm.runInContext(storeSrc, sandbox, { filename: "js/store.js" });
   const JA = vm.runInContext("JA", sandbox);

@@ -46,6 +46,11 @@ const fs = require("fs");
 const vm = require("vm");
 const ROOT = process.cwd();
 
+// A browser only logs an unhandled promise rejection; it never aborts the page.
+// js/store.js boots with loadSeed(true) whose offline fetch rejects here, so
+// mirror the browser and keep this one-shot harness alive.
+process.on("unhandledRejection", () => {});
+
 function mkEl(tag) {
   const cls = new Set();
   const el = {
@@ -84,6 +89,7 @@ const sandbox = {
     clear: () => store.clear(),
   },
   console, URL, URLSearchParams, Response, Request, Headers, TextEncoder, TextDecoder,
+  AbortSignal, AbortController,
   CustomEvent: class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
   fetch: () => Promise.reject(new Error("offline")),
   navigator: { onLine: true, sendBeacon: () => true, userAgent: "node-harness" },
@@ -100,7 +106,11 @@ sandbox.globalThis = sandbox;
 const ctx = vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(ROOT + "/js/store.js", "utf8") + "\n;globalThis.__JA = JA;", ctx, { filename: "js/store.js" });
 
-global.emit = (o) => console.log("__RESULT__" + JSON.stringify(o));
+// Emit the single result, then exit explicitly: js/store.js registers a
+// setInterval(syncLiveCatalog, 5000) at boot which would otherwise keep the
+// Node event loop alive and hang the check. The write callback flushes first.
+global.emit = (o) => process.stdout.write(
+  "__RESULT__" + JSON.stringify(o) + "\n", () => process.exit(0));
 global.sandbox = sandbox;
 global.el = mkEl;
 global.JA = sandbox.__JA;

@@ -67,6 +67,11 @@ sandbox.document = {
 };
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
+// A real browser window exposes the event API; js/store.js registers window
+// listeners (ja:store-status, focus, pageshow, ...) at load, so mirror it.
+if (typeof sandbox.addEventListener !== "function") sandbox.addEventListener = () => {};
+if (typeof sandbox.removeEventListener !== "function") sandbox.removeEventListener = () => {};
+if (typeof sandbox.dispatchEvent !== "function") sandbox.dispatchEvent = () => true;
 sandbox.I18N = { t: (k) => k, apply() {}, lang: () => "en" };
 sandbox.JA_NET = { api: () => Promise.resolve({ ok: true }) };
 

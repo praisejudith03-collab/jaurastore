@@ -63,7 +63,11 @@ function makeSandbox(servedProducts, opts = {}) {
     },
     localStorage,
     sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-    document: { body: { dataset: { page: opts.adminPage ? "admin" : "" } }, addEventListener: () => {}, createElement: () => ({ style: {}, setAttribute: () => {}, appendChild: () => {} }) },
+    document: { body: { dataset: { page: opts.adminPage ? "admin" : "" } }, addEventListener: () => {}, removeEventListener: () => {}, createElement: () => ({ style: {}, setAttribute: () => {}, appendChild: () => {} }) },
+    // The simulated window (sandbox is aliased to window below) must expose the
+    // same event API a real browser does, since js/store.js registers listeners
+    // (ja:store-status, focus, pageshow, scroll, pagehide) at load time.
+    addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
     navigator: { onLine: true, language: "en" },
     location: { href: "https://jaurastore.com.ng/shop.html", origin: "https://jaurastore.com.ng", protocol: "https:", host: "jaurastore.com.ng", pathname: "/shop.html", search: "" },
     requestAnimationFrame: (fn) => setTimeout(fn, 0),

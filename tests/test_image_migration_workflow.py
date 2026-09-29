@@ -207,8 +207,11 @@ def test_every_flag_the_workflow_passes_exists():
 def test_the_workflow_file_is_valid_yaml(wf):
     data = wf[1]
     assert data["name"]
-    assert set(data["jobs"]) == {"migrate"}
+    # The workflow carries the read-only migrate job plus an opt-in
+    # storage-maintenance job (cleanup/compress, gated behind APPLY inputs).
+    assert set(data["jobs"]) == {"migrate", "storage-maintenance"}
     assert data["jobs"]["migrate"]["runs-on"] == "ubuntu-latest"
+    assert data["jobs"]["storage-maintenance"]["runs-on"] == "ubuntu-latest"
 
 
 # --------------------------------------------------------------------------
