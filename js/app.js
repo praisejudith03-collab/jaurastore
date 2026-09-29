@@ -2837,14 +2837,28 @@ async function boot() {
     } catch (e) {}
   }
 
-  try { JA.hydrateFromCache && JA.hydrateFromCache(); } catch (e) {}
+  // Never paint cached catalogue rows or stock. A short skeleton is honest;
+  // a stale in-stock card that disappears a second later is not.
+  const catalogPages = new Set(["home", "shop", "categories", "product", "cart", "checkout", "wishlist"]);
+  let loading = null;
+  if (catalogPages.has(page)) {
+    loading = document.createElement("div");
+    loading.className = "catalog-live-loading";
+    loading.setAttribute("role", "status");
+    loading.setAttribute("aria-live", "polite");
+    loading.innerHTML = `<div class="catalog-skeleton-head"></div><div class="catalog-skeleton-grid">${"<i></i>".repeat(8)}</div><span>Loading live products and stock…</span>`;
+    document.body.appendChild(loading);
+  }
 
-  // Catalogue: only block when there is nothing cached to paint yet.
   let catalogReady = null;
   try {
     catalogReady = JA.ready;
-    if (!(JA.products && JA.products().length)) await catalogReady;
-  } catch (e) {}
+    await catalogReady;
+  } catch (e) {
+    // The ordinary empty/error states below remain usable when offline.
+  } finally {
+    if (loading) loading.remove();
+  }
 
   try { JA.mountChrome(); } catch (e) { console.error(e); }
 

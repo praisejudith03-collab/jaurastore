@@ -667,24 +667,14 @@ const JA = (() => {
     return out;
   }
 
-  /** Paint-ready catalogue with NO network wait.
+  /** Catalogue rows are deliberately never hydrated from localStorage.
    *
-   * Returns the cached rows synchronously when there are any, so the first
-   * paint of every page happens immediately; loadSeed() then refreshes in
-   * the background and fires "ja:rerender" if anything actually changed. */
+   * Stock and publication state are operational data: showing yesterday's
+   * quantity for even one paint is worse than showing a small loading state.
+   * Keep this compatibility method for older app bundles, but make it a
+   * no-op and remove any legacy stale-first box it encounters. */
   function hydrateFromCache() {
-    if (seed.length) return seed;
-    const box = readCatalogCache();
-    if (box) {
-      seed = dedupeProducts(box.products.map(normalizeServerProduct));
-      if (box.meta && box.meta.homepageFeatured) setHomepageFeatured(box.meta.homepageFeatured);
-      window.JA_SEED = seed;
-      return seed;
-    }
-    if (Array.isArray(window.JA_SEED) && window.JA_SEED.length) {
-      seed = dedupeProducts(window.JA_SEED);
-      return seed;
-    }
+    invalidateCatalogCache();
     return seed;
   }
 
@@ -1391,6 +1381,7 @@ const JA = (() => {
     return cur === "CFA" ? roundCfa(discounted) : Math.round(discounted);
   }
   function addToCart(id, qty = 1, color = "") {
+    if (_siteConfig.store_active === false) { paintStoreStatus(false); toast("The store is temporarily paused. Please chat with us on WhatsApp."); return; }
     const p = product(id);
     const want = Math.max(1, Math.round(Number(qty) || 1));
     if (!p) {
@@ -2458,8 +2449,18 @@ const JA = (() => {
    *  is a plain synchronous function rather than something buried inside the
    *  banner fetch: boot() awaits api/site once and calls this before drawing.
    *  It is also what the ja:site listeners repaint from. */
+  function paintStoreStatus(active) {
+    const paused = active === false;
+    document.body.classList.toggle("store-paused", paused);
+    let overlay = document.getElementById("store-maintenance-overlay");
+    if (!paused) { if (overlay) overlay.remove(); return; }
+    if (!overlay) { overlay = document.createElement("div"); overlay.id = "store-maintenance-overlay"; overlay.setAttribute("role", "dialog"); overlay.setAttribute("aria-modal", "true"); overlay.innerHTML = `<div class="store-maintenance-card"><div class="store-maintenance-icon">🛍️</div><h2>Jaura Store is Temporarily Paused</h2><p>We are currently updating our catalog and stock. We will be back online shortly! For urgent inquiries or orders, reach out to us on WhatsApp.</p><a class="btn" data-maintenance-wa target="_blank" rel="noopener">Chat on WhatsApp</a></div>`; document.body.appendChild(overlay); }
+    const wa = overlay.querySelector("[data-maintenance-wa]"); if (wa) wa.href = waInquiryUrl("Hello Jaura Store, I have an urgent inquiry while the store is paused.");
+  }
+
   function applySiteConfig(site) {
     site = site || {};
+    paintStoreStatus(site.store_active !== false);
     // The live row carries the two WhatsApp lines; re-point the buttons that
     // were painted before this answer arrived.
     setTimeout(() => { try { refreshWaLinks(); } catch (e) {} }, 0);
@@ -2530,6 +2531,9 @@ const JA = (() => {
    *  is what makes a banner the owner just saved visible on the very next
    *  paint: no CDN copy, no bfcache copy, no service-worker copy (sw.js does
    *  not cache /api/ apart from the catalogue). */
+  window.addEventListener("ja:store-status", (e) => { const active = !(e.detail && e.detail.active === false); _siteConfig.store_active = active; paintStoreStatus(active); });
+  setInterval(() => { if (document.visibilityState !== "hidden") loadSiteRow(); }, 15000);
+
   function loadSiteRow() {
     return fetch("api/site", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
@@ -3591,11 +3595,54 @@ const JA = (() => {
     try { paintConvBanner(); } catch (e) {}
   });
 
-  // Paint from the cache immediately; refresh over the network in the
-  // background. This is what makes a product tap feel instant.
-  hydrateFromCache();
-  ready = Promise.resolve(seed.length ? seed : loadSeed());
-  if (seed.length) { setTimeout(() => { loadSeed().catch(() => {}); }, 0); }
+  // First paint always waits for the authoritative API/Supabase catalogue.
+  // Do not expose bundled or localStorage product rows while this is pending.
+  seed = [];
+  window.JA_SEED = [];
+  invalidateCatalogCache();
+  ready = loadSeed(true, { fresh: true });
+
+  // Supabase Realtime is not exposed to browsers with a service credential.
+  // This no-store change feed is the safe equivalent for this server-backed
+  // app: check while visible, repaint only when the canonical rows differ,
+  // and refresh immediately on focus/pageshow. Admin saves already dispatch
+  // ja:catalog synchronously; this keeps other open devices in step too.
+  let liveSyncBusy = false;
+  const syncLiveCatalog = () => {
+    if (liveSyncBusy || document.visibilityState === "hidden") return;
+    liveSyncBusy = true;
+    loadSeed(false, { fresh: true }).catch(() => {}).finally(() => { liveSyncBusy = false; });
+  };
+  setInterval(syncLiveCatalog, 5000); // fallback when Realtime is unavailable
+  window.addEventListener("focus", syncLiveCatalog);
+  window.addEventListener("pageshow", syncLiveCatalog);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) syncLiveCatalog(); });
+
+  // Subscribe directly to Supabase postgres_changes with the public anon key.
+  // The service-role key never reaches the browser. Any INSERT/UPDATE/DELETE
+  // triggers a canonical API reload, which preserves the server's visibility
+  // filtering while delivering stock changes to open pages immediately.
+  (async () => {
+    try {
+      const cfgRes = await fetch("api/realtime-config", { cache: "no-store" });
+      const cfg = cfgRes.ok ? await cfgRes.json() : null;
+      if (!cfg || !cfg.enabled || !cfg.url || !cfg.anonKey) return;
+      if (!window.supabase || !window.supabase.createClient) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+          script.onload = resolve; script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+      const realtime = window.supabase.createClient(cfg.url, cfg.anonKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      realtime.channel("jaura-live-catalog")
+        .on("postgres_changes", { event: "*", schema: "public", table: "products" }, syncLiveCatalog)
+        .subscribe();
+    } catch (e) { /* five-second no-store fallback above remains active */ }
+  })();
 
   return {
     ready, CATEGORIES: [], categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,

@@ -16,6 +16,7 @@ supplier_stock_sync.fetch_supplier_quantity instead of calling splendall.com.
 import io
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DB_PATH", "/tmp/jaura_test.db")
@@ -464,7 +465,7 @@ def test_apply_auto_match_only_changes_supplier_fields_price_untouched(iso_catal
 
     linked = sync_mod.apply_auto_match(product, row, actor="test")
     assert linked["supplierId"] == "splendall"
-    assert linked["supplierSku"] == "rita-bag"
+    assert linked["supplierSku"] == "https://www.splendall.com/product/rita-bag/"
     assert linked["priceNgn"] == 12345
     assert linked["name"] == "Splendall Bag"
     assert catalog_mod.stock_of(linked) == 10          # stock is untouched by linking alone
@@ -535,7 +536,7 @@ def test_main_end_to_end_autonomous_discovery_links_and_syncs_in_one_run(iso_cat
 
     linked = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == product["id"])
     assert linked["supplierId"] == "splendall"
-    assert linked["supplierSku"] == "5in1-mini-towel"
+    assert linked["supplierSku"] == "https://www.splendall.com/product/5in1-mini-towel/"
     assert catalog_mod.stock_of(linked) == 6
 
     untouched_ankara = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == ankara["id"])
@@ -838,3 +839,9 @@ def test_checkout_maximum_is_not_guessed_as_stock_quantity():
             "add_to_cart": {"maximum": 5},
         })
     assert caught.value.code == "exact_quantity_unavailable"
+
+def test_official_splendall_target_and_audit_report_are_pinned():
+    assert sync_mod.BASE_URL == "https://www.splendall.com"
+    workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "supplier-stock-sync.yml").read_text()
+    assert "SPLENDALL_BASE_URL: https://www.splendall.com" in workflow
+    assert "--report supplier-sync-report.json" in workflow

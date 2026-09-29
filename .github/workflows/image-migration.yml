@@ -59,6 +59,7 @@ permissions:
 
 jobs:
   migrate:
+    if: ${{ inputs.limit != 'maintenance' }}
     runs-on: ubuntu-latest
     # Gates the whole job behind required reviewers configured on the
     # "image-migration" environment.
@@ -116,7 +117,7 @@ jobs:
       # missing - cheaper than a half-applied migration.
       - name: Verify the Supabase schema is applied
         run: |
-          python3 verify_schema.py --json schema-verification.json || {
+          python3 verify_schema.py --migration-only --json schema-verification.json || {
             echo "::error::The schema is not fully applied. Run supabase_schema.sql in the Supabase SQL editor first."
             exit 1
           }
@@ -511,3 +512,38 @@ jobs:
           from public.products
           where id in ('wix-001', 'wix-012');
           SQL
+
+  storage-maintenance:
+    if: ${{ inputs.limit == 'maintenance' && inputs.dry_run == 'false' && inputs.confirm_apply == 'APPLY' }}
+    runs-on: ubuntu-latest
+    environment: image-migration
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Cleanup, compress, and verify
+        run: |
+          test -n "$SUPABASE_URL" && test -n "$SUPABASE_SERVICE_ROLE_KEY"
+          echo "::add-mask::$SUPABASE_SERVICE_ROLE_KEY"
+          PROJECT="$(printf '%s' "$SUPABASE_URL" | sed -E 's#https?://([^./]+).*#\1#')"
+          python tools/cleanup_supabase_storage.py --apply --confirm-project "$PROJECT" --report storage-cleanup-report.json
+          python tools/batch_compress_active_images.py --apply --confirm-project "$PROJECT" --report batch-compression-report.json
+          python - <<'PYREPORT'
+          import json
+          cleanup=json.load(open('storage-cleanup-report.json')); compression=json.load(open('batch-compression-report.json'))
+          result={'total_freed_mb':round(cleanup.get('freed_mb',0)+compression.get('freed_mb',0),3),'active_links_valid':compression['valid_links'],'deleted_objects':len(cleanup.get('deleted',[]))}
+          open('maintenance-summary.json','w').write(json.dumps(result,indent=2)); print(json.dumps(result,indent=2))
+          PYREPORT
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: storage-maintenance-reports
+          path: |
+            storage-cleanup-report.json
+            batch-compression-report.json
+            maintenance-summary.json

@@ -26,6 +26,18 @@ def _api_no_store(resp):
         resp.headers["Cache-Control"] = "no-store"
     return resp
 
+@api.get("/realtime-config")
+def realtime_config():
+    """Public, least-privilege credentials for Supabase Realtime only.
+
+    The anon key is designed to be browser-visible; the service-role key is
+    never returned. RLS remains the authority for every table operation.
+    """
+    return jsonify(ok=True, enabled=bool(Config.SUPABASE_URL and Config.SUPABASE_ANON_KEY),
+                   url=Config.SUPABASE_URL if Config.SUPABASE_ANON_KEY else "",
+                   anonKey=Config.SUPABASE_ANON_KEY or "")
+
+
 ORDER_ID = re.compile(r"^JA-[A-Z0-9]{4,16}$")
 
 def _ip():
@@ -1003,6 +1015,14 @@ def create_order():
     from the live catalogue (Supabase in production), prices are recomputed,
     duplicate lines are aggregated, stock is validated (and atomically
     reserved in production) and the totals stored are the server's."""
+    # Enforce maintenance server-side as well as in the browser: stale tabs or
+    # direct API clients cannot place an order while the owner has paused sales.
+    try:
+        if _load_site().get("store_active") is False:
+            return jsonify(ok=False, error="Jaura Store is temporarily paused. Please contact us on WhatsApp."), 503
+    except Exception:
+        pass  # existing availability policy handles a transient settings read
+
     # 30/hour: plenty for a real shopper, and mobile networks share one IP
     limited = sec.guard("order", limit=30, window=3600)
     if limited: return limited
@@ -2813,7 +2833,7 @@ def admin_upload_hero():
 # ----------------------------------------------------------- site settings
 # Site configuration is deliberately not cached on disk. Every read comes from
 # Supabase and every admin write is an immediate SQL/PostgREST update.
-SITE_KEYS = ("bank_name", "account_number", "account_name",
+SITE_KEYS = ("store_active", "bank_name", "account_number", "account_name",
              "referral_commission_percentage", "hero_banner_title",
              "hero_banner_subtitle", "contact_email", "contact_phone",
              "site_logo_url",
@@ -3351,7 +3371,9 @@ def admin_site_update():
         if column in SITE_WRITABLE_COLUMNS:
             values.setdefault(column, "")
     for k in list(values):
-        if k == "referral_commission_percentage":
+        if k == "store_active":
+            values[k] = values[k] is True or str(values[k]).lower() in ("true", "1", "yes", "on")
+        elif k == "referral_commission_percentage":
             try: values[k] = max(0, min(100, float(values[k])))
             except (TypeError, ValueError): return jsonify(ok=False, error="Invalid referral percentage."), 400
         elif k in _SITE_URL_KEYS:

@@ -7330,9 +7330,25 @@ body[data-page="home"] .home-hero-static h1 {
 /* Supplier-sync certainty alerts ----------------------------------------- */
 .adx-badge.is-warning { background: #c54c28; color: #fff; }
 .attention-block.supplier-warning-block.is-alert { border-color: #dc7c5e; background: #fff5f1; }
-.adx-card.has-sync-warning { border-color: #d85f39; box-shadow: 0 0 0 2px rgba(216, 95, 57, .16); }
-.adx-sync-warning { position: absolute; left: 8px; bottom: 8px; z-index: 2; border-radius: 999px; padding: 5px 8px; background: #b83f20; color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .02em; }
+.adx-card.has-sync-warning { border-color: #d88b19; box-shadow: 0 0 0 2px rgba(216, 139, 25, .2); }
+.adx-card-title { display:flex; align-items:center; gap:7px; }
+.adx-sync-warning,.adx-title-warning { border:1px solid #7d320e; background:#ffd34d; color:#5d2408; font-weight:900; cursor:pointer; box-shadow:0 2px 8px rgba(93,36,8,.25); }
+.adx-sync-warning { position:absolute; left:8px; bottom:8px; z-index:2; border-radius:999px; padding:6px 9px; font-size:11px; letter-spacing:.01em; }
+.adx-title-warning { position:relative; flex:0 0 auto; border-radius:50%; width:27px; height:27px; padding:0; font-size:15px; line-height:25px; }
+.adx-sync-warning::after,.adx-title-warning::after { content:attr(data-tooltip); position:absolute; z-index:20; left:0; bottom:calc(100% + 8px); width:260px; padding:9px 11px; border-radius:8px; background:#32170c; color:#fff; font-size:12px; font-weight:600; line-height:1.35; text-align:left; opacity:0; visibility:hidden; transform:translateY(4px); transition:.15s ease; pointer-events:none; }
+.adx-title-warning::after { left:auto; right:0; }
+.adx-sync-warning:hover::after,.adx-sync-warning:focus-visible::after,.adx-title-warning:hover::after,.adx-title-warning:focus-visible::after { opacity:1; visibility:visible; transform:none; }
+.supplier-focus-pulse { border-radius:10px; animation:supplier-focus-pulse 1.2s ease 2; }
+@keyframes supplier-focus-pulse { 50% { background:#fff1b8; box-shadow:0 0 0 6px rgba(255,211,77,.35); } }
+@media(max-width:520px){.adx-sync-warning span{display:none}.adx-sync-warning{font-size:16px;padding:4px 8px}.adx-sync-warning::after{width:220px}.adx-title-warning::after{right:-45px;width:220px}}
 .supplier-sync-alert { display: grid; gap: 4px; margin: 0 0 16px; padding: 13px 15px; border: 1px solid #dc7c5e; border-radius: 11px; background: #fff5f1; color: #6f2817; }
 .supplier-sync-alert strong { font-size: 14px; }
 .supplier-sync-alert span { font-size: 13px; }
 .supplier-sync-alert small { color: #8c5445; }
+/* Live maintenance gate. It is mounted by store.js on every storefront page. */
+#store-maintenance-overlay{position:fixed;inset:0;z-index:100000;background:rgba(20,15,13,.86);backdrop-filter:blur(8px);display:grid;place-items:center;padding:20px}
+.store-maintenance-card{width:min(560px,100%);background:#fffaf5;color:#2c211d;border:1px solid #c8ac7f;border-radius:22px;padding:38px 28px;text-align:center;box-shadow:0 24px 80px #0008}
+.store-maintenance-card h2{font-family:Georgia,serif;margin:8px 0 14px}.store-maintenance-card p{line-height:1.65;margin:0 auto 24px;max-width:470px}.store-maintenance-icon{font-size:3rem}
+body.store-paused{overflow:hidden}
+/* Authoritative-catalog first paint: skeleton replaces stale local rows. */
+.catalog-live-loading{max-width:1180px;margin:100px auto 40px;padding:0 20px;color:#765c4b;text-align:center}.catalog-skeleton-head{height:34px;width:min(310px,70%);margin:0 auto 24px;border-radius:9px;background:#eee4dc}.catalog-skeleton-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-bottom:20px}.catalog-skeleton-grid i{display:block;aspect-ratio:.78;border-radius:14px;background:linear-gradient(100deg,#eee4dc 20%,#faf5f0 40%,#eee4dc 60%);background-size:220% 100%;animation:catalog-shimmer 1.15s linear infinite}.admin-live-loading{max-width:1050px;margin:70px auto;padding:24px;text-align:center;color:#765c4b}.admin-live-loading strong{display:block;margin-top:16px}@keyframes catalog-shimmer{to{background-position:-220% 0}}@media(max-width:700px){.catalog-skeleton-grid{grid-template-columns:repeat(2,1fr);gap:12px}.catalog-live-loading{margin-top:70px}}
