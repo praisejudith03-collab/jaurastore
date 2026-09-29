@@ -2848,6 +2848,16 @@ function paintDesk(tab = "analytics") {
   if (tab === "account") bindAccount();
   if (tab === "settings") {
     bindHeroVideo(); bindHomepageFeatured(); bindBanner(); bindWelcome(); bindCustomerCare(); bindSocialLinks(); bindSiteBranding();
+    const statusToggle = $("#store-active-toggle");
+    if (statusToggle) statusToggle.addEventListener("change", async () => {
+      const wanted = statusToggle.checked; statusToggle.disabled = true;
+      const label = $("#store-active-label"), err = $("#store-active-error");
+      try { const saved = await saveSiteConfig({ store_active: wanted }); if (!saved || saved.ok === false) throw new Error((saved && saved.error) || "Could not update store status.");
+        if (label) label.textContent = `Store Status: ${wanted ? "ONLINE 🟢" : "PAUSED 🔴"}`;
+        if (err) err.hidden = true; window.dispatchEvent(new CustomEvent("ja:store-status", { detail: { active: wanted } })); JA.toast("Store status updated.");
+      } catch (e) { statusToggle.checked = !wanted; if (err) { err.textContent = e.message; err.hidden = false; } }
+      statusToggle.disabled = false;
+    });
   }
   if (tab === "delivery") {
     bindDeliveryPage();
@@ -3342,6 +3352,10 @@ function settingsForm() {
       <div class="field full"><p class="admin-note" id="social-form-preview"></p></div>
       <div class="field full"><p class="admin-err" id="social-form-error" hidden></p><button class="btn">Save social links</button></div>
     </form>
+  </details>
+  <details class="admin-settings-section" open>
+    <summary>Store availability</summary>
+    <div class="admin-card"><label class="mk-toggle" style="font-size:1.05rem"><input id="store-active-toggle" type="checkbox" ${s.store_active === false ? "" : "checked"} /> <strong id="store-active-label">Store Status: ${s.store_active === false ? "PAUSED 🔴" : "ONLINE 🟢"}</strong></label><p class="admin-note">Pausing immediately blocks browsing, cart additions and checkout. Customers can still contact you on WhatsApp.</p><p class="admin-err" id="store-active-error" hidden></p></div>
   </details>
   <details class="admin-settings-section" open>
     <summary>Site settings — live from Supabase</summary>

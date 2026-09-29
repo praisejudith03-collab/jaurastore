@@ -5,6 +5,7 @@ import time
 from supabase_store import client, enabled
 
 DEFAULT_SETTINGS = {
+    "store_active": True,
     "bank_name": "", "account_number": "", "account_name": "",
     "referral_commission_percentage": 0,
     "hero_banner_title": "", "hero_banner_subtitle": "",

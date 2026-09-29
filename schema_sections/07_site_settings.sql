@@ -3,6 +3,7 @@
 -- These are the source of truth for runtime configuration.
 create table if not exists site_settings (
   id bigint primary key check (id = 1),
+  store_active boolean not null default true,
   bank_name text not null default '',
   account_number text not null default '',
   account_name text not null default '',
@@ -27,6 +28,7 @@ create table if not exists site_settings (
 insert into site_settings (id) values (1) on conflict (id) do nothing;
 -- Repair an older site_settings table that predates newer columns. Add-only,
 -- preserves the single id=1 row and all Admin-edited settings.
+alter table site_settings add column if not exists store_active boolean not null default true;
 alter table site_settings add column if not exists bank_name text not null default '';
 alter table site_settings add column if not exists account_number text not null default '';
 alter table site_settings add column if not exists account_name text not null default '';

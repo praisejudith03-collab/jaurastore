@@ -1391,6 +1391,7 @@ const JA = (() => {
     return cur === "CFA" ? roundCfa(discounted) : Math.round(discounted);
   }
   function addToCart(id, qty = 1, color = "") {
+    if (_siteConfig.store_active === false) { paintStoreStatus(false); toast("The store is temporarily paused. Please chat with us on WhatsApp."); return; }
     const p = product(id);
     const want = Math.max(1, Math.round(Number(qty) || 1));
     if (!p) {
@@ -2458,8 +2459,18 @@ const JA = (() => {
    *  is a plain synchronous function rather than something buried inside the
    *  banner fetch: boot() awaits api/site once and calls this before drawing.
    *  It is also what the ja:site listeners repaint from. */
+  function paintStoreStatus(active) {
+    const paused = active === false;
+    document.body.classList.toggle("store-paused", paused);
+    let overlay = document.getElementById("store-maintenance-overlay");
+    if (!paused) { if (overlay) overlay.remove(); return; }
+    if (!overlay) { overlay = document.createElement("div"); overlay.id = "store-maintenance-overlay"; overlay.setAttribute("role", "dialog"); overlay.setAttribute("aria-modal", "true"); overlay.innerHTML = `<div class="store-maintenance-card"><div class="store-maintenance-icon">🛍️</div><h2>Jaura Store is Temporarily Paused</h2><p>We are currently updating our catalog and stock. We will be back online shortly! For urgent inquiries or orders, reach out to us on WhatsApp.</p><a class="btn" data-maintenance-wa target="_blank" rel="noopener">Chat on WhatsApp</a></div>`; document.body.appendChild(overlay); }
+    const wa = overlay.querySelector("[data-maintenance-wa]"); if (wa) wa.href = waInquiryUrl("Hello Jaura Store, I have an urgent inquiry while the store is paused.");
+  }
+
   function applySiteConfig(site) {
     site = site || {};
+    paintStoreStatus(site.store_active !== false);
     // The live row carries the two WhatsApp lines; re-point the buttons that
     // were painted before this answer arrived.
     setTimeout(() => { try { refreshWaLinks(); } catch (e) {} }, 0);
@@ -2530,6 +2541,9 @@ const JA = (() => {
    *  is what makes a banner the owner just saved visible on the very next
    *  paint: no CDN copy, no bfcache copy, no service-worker copy (sw.js does
    *  not cache /api/ apart from the catalogue). */
+  window.addEventListener("ja:store-status", (e) => { const active = !(e.detail && e.detail.active === false); _siteConfig.store_active = active; paintStoreStatus(active); });
+  setInterval(() => { if (document.visibilityState !== "hidden") loadSiteRow(); }, 15000);
+
   function loadSiteRow() {
     return fetch("api/site", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))

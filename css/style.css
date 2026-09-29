@@ -7336,3 +7336,8 @@ body[data-page="home"] .home-hero-static h1 {
 .supplier-sync-alert strong { font-size: 14px; }
 .supplier-sync-alert span { font-size: 13px; }
 .supplier-sync-alert small { color: #8c5445; }
+/* Live maintenance gate. It is mounted by store.js on every storefront page. */
+#store-maintenance-overlay{position:fixed;inset:0;z-index:100000;background:rgba(20,15,13,.86);backdrop-filter:blur(8px);display:grid;place-items:center;padding:20px}
+.store-maintenance-card{width:min(560px,100%);background:#fffaf5;color:#2c211d;border:1px solid #c8ac7f;border-radius:22px;padding:38px 28px;text-align:center;box-shadow:0 24px 80px #0008}
+.store-maintenance-card h2{font-family:Georgia,serif;margin:8px 0 14px}.store-maintenance-card p{line-height:1.65;margin:0 auto 24px;max-width:470px}.store-maintenance-icon{font-size:3rem}
+body.store-paused{overflow:hidden}
