@@ -755,7 +755,9 @@ function productForm(p = {}) {
   window.__editImages = productImages(p);
   const opts = editorOptions(p);
   const inStock = p.id ? Number(p.stock) > 0 : true;
-  const syncWarning = supplierWarnings.find((row) => String(row.product_id || "") === String(p.id || ""));
+  const syncWarning = String(p.supplierId || "").toLowerCase() === "splendall"
+    ? supplierWarnings.find((row) => String(row.product_id || "") === String(p.id || ""))
+    : null;
   return `<form id="prod-form" class="au-edit">
     <button type="button" class="au-back" id="cancel-edit">← Store Products</button>
     <h2>Product ${preCat ? `· ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
@@ -1037,11 +1039,18 @@ function renderProdGrid() {
     const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN <= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;
     const rowq = JA.escape((p.name + " " + (p.nameFr || "") + " " + (p.sku || "") + " " + p.category).toLowerCase());
     const productSelected = selectedProductIds.has(String(p.id)) ? " checked" : "";
-    const syncWarning = supplierWarnings.find((row) => String(row.product_id || "") === String(p.id));
+    // A warning belongs only to an explicitly supplier-synced product. Rows
+    // left as "Not supplier-synced" are in-house inventory and must never be
+    // made to look broken merely because an old warning record still exists.
+    const syncWarning = String(p.supplierId || "").toLowerCase() === "splendall"
+      ? supplierWarnings.find((row) => String(row.product_id || "") === String(p.id))
+      : null;
+    const warningText = "⚠️ Supplier link unverified or stock out of sync. Tap to review/link manually.";
+    const warningButton = syncWarning ? `<button type="button" class="adx-sync-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️ <span>Supplier warning</span></button>` : "";
     return `<article class="adx-card${syncWarning ? " has-sync-warning" : ""}" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
-      <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}${syncWarning ? `<span class="adx-sync-warning" title="${JA.escape(syncWarning.reason || "Supplier stock unconfirmed")}">Sync uncertain</span>` : ""}</div>
-      <div class="adx-card-body"><strong>${JA.escape(p.name)}</strong><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
+      <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}${warningButton}</div>
+      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong>${syncWarning ? `<button type="button" class="adx-title-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️</button>` : ""}</div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     </article>`;
   }).join("");
@@ -1137,6 +1146,24 @@ function bindProductBulk() {
   });
 }
 function bindProdGridEvents() {
+  document.querySelectorAll("#prod-grid [data-review-supplier]").forEach((badge) => {
+    badge.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      editingId = badge.dataset.reviewSupplier;
+      paintDesk("products");
+      // paintDesk creates a fresh editor synchronously. Focus the mapping
+      // field on the next frame so keyboard and mobile users land directly on
+      // the requested quick action rather than at the top of a long form.
+      requestAnimationFrame(() => {
+        const field = document.querySelector('#prod-form [name="supplierSku"]');
+        if (!field) return;
+        field.closest(".field")?.classList.add("supplier-focus-pulse");
+        field.scrollIntoView({ behavior: "smooth", block: "center" });
+        field.focus({ preventScroll: true });
+      });
+    };
+  });
   document.querySelectorAll("#prod-grid [data-edit]").forEach((b) => {
     const open = () => { editingId = b.dataset.edit; paintDesk("products"); window.scrollTo({ top: 0, behavior: "smooth" }); };
     b.onclick = open;
@@ -1304,6 +1331,14 @@ async function fillLiveFeed() {
 function attentionOrderLine(o) {
   const customer = o.customer || {};
   return `<li><span><strong>${esc(o.id || "Order")}</strong><small>${esc(customer.name || customer.email || "Customer")} · ${esc(timeAgo(o.at) || "date unavailable")}</small></span><b>${esc(JA.money(o.total, o.currency))}</b></li>`;
+}
+async function loadSupplierWarnings() {
+  try {
+    const d = await window.JA_NET.api("api/admin/needs-attention");
+    supplierWarnings = d.supplierWarnings || [];
+    setSupplierBadge(supplierWarnings.length);
+    return supplierWarnings;
+  } catch (err) { return supplierWarnings; }
 }
 async function fillNeedsAttention() {
   const box = $("#needs-attention-box");
@@ -2894,6 +2929,12 @@ function paintDesk(tab = "analytics") {
 
   if (tab === "products" && !editingId) {
     renderProdGrid(); bindProdGridEvents();
+    // The Products tab can be the admin's first destination, before the
+    // Dashboard queue has loaded. Fetch its durable warning feed here too and
+    // repaint once so badges are never dependent on visiting Dashboard first.
+    loadSupplierWarnings().then(() => {
+      if (document.querySelector("#panel-products.is-on") && !editingId) { renderProdGrid(); bindProdGridEvents(); }
+    });
   }
 
   $("#prod-search")?.addEventListener("input", applyProductFilter);
