@@ -2240,7 +2240,10 @@ async function copyProductDetails(p) {
 
 function broadcastPickerResultsHTML(query) {
   const term = String(query || "").trim().toLowerCase();
-  const products = broadcastEligibleProducts().filter((p) => {
+  // Manual picks are deliberately sourced from the entire online catalogue,
+  // not only today's in-stock rotation: a merchant may prepare a card for
+  // any item and decide when to publish it.
+  const products = (JA.products ? JA.products() : []).filter((p) => p && p.id && p.online !== false).filter((p) => {
     const haystack = [p.name, p.nameFr, p.sku, p.category].join(" ").toLowerCase();
     return !term || haystack.includes(term);
   }).slice(0, 100);
@@ -2259,7 +2262,7 @@ function closeBroadcastPicker() {
 
 function chooseBroadcastProduct(id) {
   const productId = String(id || "");
-  const eligible = broadcastEligibleProducts();
+  const eligible = (JA.products ? JA.products() : []).filter((p) => p && p.id && p.online !== false);
   if (!eligible.some((p) => String(p.id) === productId)) return;
   const overrides = bcOverrides[bcSlot];
   const visible = broadcastScheduledFeedFor(bcSlot);
