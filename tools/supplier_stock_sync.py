@@ -131,6 +131,20 @@ SUPPLIER_ID = "splendall"
 assert SUPPLIER_ID in catalog.KNOWN_SUPPLIERS, (
     "supplier_stock_sync.SUPPLIER_ID must be one of catalog.KNOWN_SUPPLIERS")
 
+# Keep automatic restocks conservative by default. Only positive, confirmed
+# quantities are capped; a confirmed zero remains zero and existing unlinked
+# variants are never touched by the sync.
+SUPPLIER_STOCK_CAP = max(0, int(os.environ.get("SUPPLIER_STOCK_CAP", "20") or 20))
+
+
+def capped_supplier_qty(quantity):
+    """Cap positive confirmed supplier quantities, leaving zero unchanged."""
+    try:
+        quantity = max(0, int(quantity))
+    except (TypeError, ValueError):
+        return 0
+    return min(quantity, SUPPLIER_STOCK_CAP) if quantity > 0 else 0
+
 BASE_URL = os.environ.get("SPLENDALL_BASE_URL", "https://www.splendall.com").rstrip("/")
 SHOP_URL = f"{BASE_URL}/shop/"
 STORE_BASE_URL = os.environ.get("STORE_BASE_URL", "https://jaurastore.com.ng").rstrip("/")
@@ -687,6 +701,11 @@ def fetch_per_option_supplier_stock(product, fetch=None):
     fetch = fetch or fetch_supplier_quantity
     raw_links = product.get("optionSupplierSku")
     links = raw_links if isinstance(raw_links, dict) else {}
+
+    def supplier_urls(value):
+        """Return every listing for one option, including legacy scalars."""
+        values = value if isinstance(value, (list, tuple)) else [value]
+        return [str(v).strip() for v in values[:20] if str(v or "").strip()]
     store_rows = _store_variant_rows(product)
     if not store_rows:
         raise SupplierFetchError("store product has no options to map to supplier links",
@@ -698,15 +717,25 @@ def fetch_per_option_supplier_stock(product, fetch=None):
         url = resolved["links"].get(key)
         if not url:
             continue
-        qty, detail = fetch(url)
-        option_stock[key] = qty
-        audit.append({
-            "option": key,
-            "supplier_sku": url,
-            "quantity": qty,
-            "status": "in_stock" if qty > 0 else "out_of_stock",
-            "detail": detail,
-        })
+        urls = supplier_urls(url)
+        quantities = []
+        details = []
+        for listing in urls:
+            qty, detail = fetch(listing)
+            quantities.append(capped_supplier_qty(qty))
+            details.append(detail)
+            audit.append({
+                "option": key,
+                "supplier_sku": listing,
+                "quantity": quantities[-1],
+                "status": "in_stock" if quantities[-1] > 0 else "out_of_stock",
+                "detail": detail,
+            })
+        # Multiple listings are independent sources for the same storefront
+        # option: sum confirmed availability, but do not let an unconfirmed
+        # or failed listing invent stock (the exception is intentionally
+        # allowed to fail closed before this point).
+        option_stock[key] = sum(quantities)
     missing, review = resolved["missing"], resolved["review"]
     if not option_stock and (missing or review):
         raise SupplierFetchError(
@@ -1184,10 +1213,13 @@ def sync_one(product, dry_run=False, warnings=None):
                       + f", total={qty}")
         elif store_variants:
             option_stock, audit = fetch_supplier_variant_stock(product)
+            option_stock = {key: capped_supplier_qty(value)
+                            for key, value in option_stock.items()}
             qty = sum(option_stock.values())
             detail = f"{len(option_stock)} exact option variant(s), total={qty}"
         else:
             qty, detail = fetch_supplier_quantity(product.get("supplierSku"))
+            qty = capped_supplier_qty(qty)
             option_stock, audit = None, []
     except SupplierFetchError as exc:
         print(f"warning: skipping {name!r} ({pid}) - could not confirm supplier stock: {exc}")

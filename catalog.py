@@ -869,8 +869,14 @@ def bulk_discount_for(product, quantity):
 
 
 def _clean_option_prices(raw):
-    """Per-option NGN price overrides; omitted values inherit base price."""
+    """Per-option prices from dicts or legacy JSON-string mappings."""
+    import json
     import security as sec
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
     if not isinstance(raw, dict):
         return {}
     out = {}
@@ -889,15 +895,29 @@ def _clean_option_supplier_sku(raw):
     so the automated stock sync mirrors availability per option, not per
     product. Blank values are dropped so an unlinked option is simply absent
     (which the admin surfaces as a "Missing supplier link" badge)."""
+    import json
     import security as sec
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
     if not isinstance(raw, dict):
         return {}
     out = {}
     for key, value in list(raw.items())[:200]:
         label = sec.clean(key, 160)
-        link = sec.clean(value, 500)
-        if label and link:
-            out[label] = link
+        # A component may be fulfilled by more than one Splendall listing.
+        # Keep the list intact so the sync can audit each URL independently;
+        # legacy scalar mappings remain scalar for backwards compatibility.
+        values = value if isinstance(value, (list, tuple)) else [value]
+        links = []
+        for item in values[:20]:
+            link = sec.clean(item, 500)
+            if link and link not in links:
+                links.append(link)
+        if label and links:
+            out[label] = links if isinstance(value, (list, tuple)) else links[0]
     return out
 
 
