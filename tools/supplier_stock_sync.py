@@ -645,7 +645,15 @@ def resolve_option_links(store_rows, links):
     """
     folded = {}
     for label, url in (links or {}).items():
-        clean = str(url or "").strip()
+        # Preserve a list of listings as a list. Converting it with str() here
+        # produces one invalid URL like "['https://a', 'https://b']" and
+        # prevents independent auditing of each source.
+        if isinstance(url, (list, tuple)):
+            clean = [str(item).strip() for item in url[:20]
+                     if str(item or "").strip()]
+        else:
+            value = str(url or "").strip()
+            clean = value if value else []
         if clean:
             folded[catalog.fold_option_value(label)] = (str(label), clean)
 
@@ -669,9 +677,10 @@ def resolve_option_links(store_rows, links):
         inferred = infer_remaining_option_links(pending, remaining)
         assigned.update(inferred["links"])
         review.extend(inferred["review"])
-        homed = set(inferred["links"].values())
+        homed = list(inferred["links"].values())
         # A leftover supplier link with no storefront home is a NEW colour the
         # merchant has not created yet - flag it for manual confirmation.
+        # Lists are deliberately compared by value, never stringified.
         leftover = [lab for lab, url in remaining.items() if url not in homed]
         review.extend(leftover)
         missing.extend([k for k in pending if k not in assigned and k not in inferred["review"]])
@@ -719,23 +728,24 @@ def fetch_per_option_supplier_stock(product, fetch=None):
             continue
         urls = supplier_urls(url)
         quantities = []
-        details = []
         for listing in urls:
             qty, detail = fetch(listing)
-            quantities.append(capped_supplier_qty(qty))
-            details.append(detail)
+            try:
+                confirmed_qty = max(0, int(qty or 0))
+            except (TypeError, ValueError):
+                confirmed_qty = 0
+            quantities.append(confirmed_qty)
             audit.append({
                 "option": key,
                 "supplier_sku": listing,
-                "quantity": quantities[-1],
-                "status": "in_stock" if quantities[-1] > 0 else "out_of_stock",
+                "quantity": confirmed_qty,
+                "status": "in_stock" if confirmed_qty > 0 else "out_of_stock",
                 "detail": detail,
             })
         # Multiple listings are independent sources for the same storefront
-        # option: sum confirmed availability, but do not let an unconfirmed
-        # or failed listing invent stock (the exception is intentionally
-        # allowed to fail closed before this point).
-        option_stock[key] = sum(quantities)
+        # option. Combine confirmed quantities first, then apply ONE cap to
+        # the aggregate so several URLs cannot bypass the default limit.
+        option_stock[key] = capped_supplier_qty(sum(quantities))
     missing, review = resolved["missing"], resolved["review"]
     if not option_stock and (missing or review):
         raise SupplierFetchError(

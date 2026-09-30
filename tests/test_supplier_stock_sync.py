@@ -176,7 +176,8 @@ def test_mapped_product_mirrors_a_different_low_count_too(iso_catalog, monkeypat
                          lambda sku: (30, "30 in stock"))
     sync_mod.main(["supplier_stock_sync.py", product["id"]])
     refreshed = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == product["id"])
-    assert catalog_mod.stock_of(refreshed) == 30
+    # Automatic positive restocks use the conservative default cap.
+    assert catalog_mod.stock_of(refreshed) == 20
 
 
 def test_mapped_product_can_mirror_down_to_zero(iso_catalog, monkeypatch):
