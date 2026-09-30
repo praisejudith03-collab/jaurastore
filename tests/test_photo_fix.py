@@ -421,7 +421,7 @@ def test_admin_media_row_says_how_many_photos_and_points_at_the_tiles():
 
 
 # ---------------------------------------------------------------------------
-# 8 + 9 - unlink-only: bucket objects die with a receipt, never with a photo
+# 8 + 9 - hard deletion: removed media/receipts purge bucket objects
 # ---------------------------------------------------------------------------
 def _function_body(source, name):
     m = re.search(r"^def " + re.escape(name) + r"\(.*?(?=^def |^@|\Z)",
@@ -430,30 +430,30 @@ def _function_body(source, name):
     return m.group(0)
 
 
-def test_replacing_or_removing_a_product_photo_never_deletes_bucket_objects():
-    """Swapping a product photo, or pressing x, unlinks it - the file stays put."""
+def test_replacing_or_removing_product_media_purges_bucket_objects():
+    """Swapping a product photo or pressing x permanently deletes the old file."""
     api = _read("api.py")
-    for fn in ("admin_product_upsert", "admin_product_delete", "admin_products_replace"):
-        body = _function_body(api, fn)
-        assert "delete_upload" not in body, \
-            f"{fn} must never delete a bucket object - a replaced photo is only unlinked"
-    assert "delete_upload" not in _read("catalog.py"), \
-        "catalog.upsert/remove/replace_all must never delete a bucket object"
+    assert "admin_upload_purge" in api
+    assert "api.delete(\"/admin/uploads/purge\")" in api
+    assert "storage.delete_upload(url)" in _function_body(api, "admin_upload_purge")
+    catalog = _read("catalog.py")
+    assert "def _purge_removed_media(" in catalog
+    assert "delete_upload(ref)" in catalog
     admin = _read(os.path.join("js", "admin.js"))
     block = admin.split('e.target.closest("[data-del-img]")', 1)
     assert len(block) == 2, "the x (data-del-img) handler still exists in js/admin.js"
-    handler = block[1][:600]
+    handler = block[1][:900]
     assert "__editImages.splice" in handler, "x removes the photo from the editor's list"
-    assert "api(" not in handler and "DELETE" not in handler, \
-        f"x must not call a delete endpoint: {handler!r}"
+    assert "purgeRemovedMedia(removed)" in handler
+    assert "api/admin/uploads/purge" in admin and 'method: "DELETE"' in admin
 
 
 def test_receipt_deletion_still_removes_the_bucket_object():
     """Deleting a receipt (or its order) still deletes the file - and a
     receipt whose Supabase RECORD failed to save removes its orphan object."""
     api = _read("api.py")
-    assert api.count("storage.delete_upload(") == 4, \
-        "four delete_upload call sites: orphan cleanup, production/local receipt deletes and the order"
+    assert api.count("storage.delete_upload(") >= 4, \
+        "receipt/order deletes and media purge endpoints must remove bucket objects"
     assert "delete_upload" in _function_body(api, "payment_proof"), \
         "a failed strict receipt write removes the orphan storage object"
     assert "delete_upload" in _function_body(api, "admin_payment_proof_delete"), \

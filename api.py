@@ -190,9 +190,13 @@ def products():
 # with a session, still gets the numbers it needs to manage the shop).
 _FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock",
                          "variantStock", "inventory",
-                         # Supplier stock-sync mapping: internal sourcing
-                         # detail, never a shopper's business.
-                         "supplierId", "supplierSku")
+                         # Supplier and per-option sourcing/SKU notes are
+                         # internal admin reference data, never a shopper's
+                         # business.
+                         "supplierId", "supplierSku", "supplierUrl",
+                         "supplier_url", "optionSupplierSku",
+                         "optionSupplierUrls", "option_supplier_urls",
+                         "optionSku", "option_sku")
 
 
 def _public_product(p):
@@ -560,8 +564,7 @@ CUSTOMER_FIELDS = ("firstName", "lastName", "name", "phone", "email", "country",
                    "city", "zone", "address", "note")
 STATUSES = ("pending", "confirmed", "declined")
 INVALID_RECEIPT_NOTICE = "Order declined: Invalid payment image uploaded"
-PROOF_UPLOAD_FAILURE_NOTE = ("Payment proof was provided but could not be saved to "
-                           "storage; ask the customer to re-send it.")
+RECEIPT_UPLOAD_FAILED_MESSAGE = "Receipt upload failed. Please try choosing the photo again."
 PENDING_BALANCE_NOTICE = ("You have a pending balance. Please contact us on WhatsApp "
                           "to balance up your payment before your order is confirmed.")
 
@@ -576,14 +579,62 @@ def upload_proof():
     f = request.files.get("file") or request.files.get("proof")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_BYTES + 1)
-    ok, msg, _ext = storage.validate_image(data, f.filename or "")
+    data = f.read(storage.MAX_RECEIPT_BYTES + 1)
+    ok, msg, _ext = storage.validate_upload(data, f.filename or "", allow_pdf=True,
+                                            max_bytes=storage.MAX_RECEIPT_BYTES)
     if not ok:
         return jsonify(ok=False, error=msg), 400
-    ok, msg, url = storage.save_image(data, "proofs", f.filename or "")
+    ok, msg, url = storage.save_image(data, "proofs", f.filename or "",
+                                      allow_pdf=True,
+                                      max_bytes=storage.MAX_RECEIPT_BYTES)
     if not ok:
         return jsonify(ok=False, error=msg), 500
     return jsonify(ok=True, url=url)
+
+
+def _receipt_upload_error(status=422):
+    return jsonify(ok=False, error=RECEIPT_UPLOAD_FAILED_MESSAGE,
+                   code="receipt_upload_failed", field="proof"), status
+
+
+def _order_receipt_row(order, data, ext, original_name, url):
+    """Build the receipts-table row for a checkout attachment."""
+    oid = sec.clean(order.get("id"), 24).upper()
+    customer = order.get("customer") or {}
+    items = order.get("items") or []
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "-", (original_name or f"receipt.{ext or 'jpg'}"))[:80]
+    if not safe_name.lower().startswith("payment-"):
+        safe_name = f"payment-{oid}-{safe_name}"[:110]
+    else:
+        safe_name = safe_name[:110]
+    quantity = sum(int(i.get("qty") or 0) for i in items if isinstance(i, dict))
+    item_text = "; ".join(
+        f"{int(i.get('qty') or 0)}× {sec.clean(i.get('name'), 120)}"
+        for i in items[:40] if isinstance(i, dict))
+    amount = f"{order.get('currency') or ''} {order.get('total') or 0}".strip()
+    return {
+        "id": oid, "order_id": oid,
+        "name": sec.clean(customer.get("name") or (str(customer.get("firstName") or "") + " " + str(customer.get("lastName") or "")).strip(), 120),
+        "phone": sec.clean(customer.get("phone"), 60),
+        "email": sec.clean_email(customer.get("email")),
+        "method": sec.clean(order.get("payment") or order.get("currency"), 80) or "Other bank transfer",
+        "items": item_text[:600], "quantity": str(quantity or ""),
+        "amount": amount[:60], "note": "Checkout receipt",
+        "file_url": url, "file_name": safe_name,
+        "file_size": len(data or b""), "file_type": storage.mime_for(ext),
+    }
+
+
+def _insert_payment_proof_cache(row):
+    execute(
+        "INSERT INTO payment_proofs (order_id, name, phone, email, method, items, quantity, "
+        "amount, note, file_url, file_name, file_size, mime) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (row.get("order_id"), row.get("name"), row.get("phone"), row.get("email"),
+         row.get("method"), row.get("items"), row.get("quantity"), row.get("amount"),
+         row.get("note"), row.get("file_url"), row.get("file_name"),
+         row.get("file_size"), row.get("file_type")),
+    )
 
 
 def _fold(value):
@@ -1195,41 +1246,20 @@ def create_order():
         return jsonify(ok=False, error=min_error), 400
 
     proof_url = ""
-    data = b""
-    ext = ""
-    # Did the shopper attach a receipt whose file could NOT be stored? A
-    # storage outage must never fail an otherwise-valid order (owner rule:
-    # "customers must be able to complete checkout instantly and reliably
-    # without storage errors failing their orders"). We record the miss on
-    # the order so the admin can request the receipt again, but the sale
-    # goes through and stock is committed normally.
-    proof_upload_failed = False
+    proof_data = b""
+    proof_ext = ""
+    proof_original_name = ""
     if proof_file:
-        data = proof_file.read(storage.MAX_BYTES + 1)
-        # A genuinely INVALID file (wrong type, too big, corrupt) is still a
-        # hard 400: that is user error, not an infrastructure failure, and
-        # letting it through would only store a useless attachment.
-        ok, msg, ext = storage.validate_upload(data, proof_file.filename or "",
-                                               allow_pdf=True,
-                                               max_bytes=storage.MAX_RECEIPT_BYTES)
+        proof_original_name = proof_file.filename or "receipt"
+        proof_data = proof_file.read(storage.MAX_RECEIPT_BYTES + 1)
+        ok, msg, proof_ext = storage.validate_upload(
+            proof_data, proof_original_name, allow_pdf=True,
+            max_bytes=storage.MAX_RECEIPT_BYTES)
         if not ok:
-            return jsonify(ok=False, error=msg), 400
-        # The file is valid; only the UPLOAD can fail from here on (Supabase
-        # Storage down/misconfigured). That must not block the sale — we log
-        # it, flag the order, and continue with an empty proof URL.
-        try:
-            stored, up_msg, proof_url = storage.save_image(
-                data, "proofs", proof_file.filename or "",
-                allow_pdf=True, max_bytes=storage.MAX_RECEIPT_BYTES)
-        except Exception as exc:                    # never let storage crash checkout
-            stored, up_msg, proof_url = False, f"{exc.__class__.__name__}: {exc}", ""
-        if not stored:
-            proof_upload_failed = True
-            proof_url = ""
-            print(f"[checkout] payment proof upload failed (order continues): {up_msg}")
+            return jsonify(ok=False, error=msg, field="proof"), 400
     elif d.get("proofUrl"):
         candidate = sec.clean(d.get("proofUrl"), 500)
-        if candidate.startswith("https://") and "/storage/v1/object/public/" in candidate:
+        if candidate.startswith("https://") and "/storage/v1/object/" in candidate:
             proof_url = candidate
 
     now = _utcnow()
@@ -1257,12 +1287,6 @@ def create_order():
         order["bulkDiscount"] = bulk_discount_lines
     if promo:
         order["promo"] = promo
-    if proof_upload_failed:
-        # The buyer attached a receipt but Storage could not keep it. Flag the
-        # order so the admin dashboard can ask the customer to re-send it — the
-        # sale itself is complete and stock is committed.
-        order["proofUploadFailed"] = True
-        order["proofUploadNote"] = PROOF_UPLOAD_FAILURE_NOTE
 
     sb_row = {
         "id": oid, "email": email,
@@ -1275,12 +1299,6 @@ def create_order():
         "source": order["source"], "status": "pending",
         "payload": order, "at": order["at"], "updated_at": now,
     }
-    if proof_upload_failed:
-        # First-class fallback status on the order row (owner request). The
-        # order write is resilient: if the orders table lacks this column the
-        # value is dropped and the sale still lands, with the flag preserved in
-        # the payload JSON above.
-        sb_row["proof_upload_failed"] = True
     if owner_id:
         sb_row["customer_user_id"] = owner_id
 
@@ -1325,6 +1343,26 @@ def create_order():
             # on the payload keeps confirm from decrementing a second time
             # and lets decline / reopen / delete give exactly it back.
             order["stockApplied"] = reservation_moves
+    sb_row["payload"] = order
+
+    if proof_data:
+        try:
+            stored, up_msg, proof_url = storage.save_image(
+                proof_data, "proofs", proof_original_name,
+                allow_pdf=True, max_bytes=storage.MAX_RECEIPT_BYTES)
+        except Exception as exc:
+            stored, up_msg, proof_url = False, f"{exc.__class__.__name__}: {exc}", ""
+        if not stored or not proof_url:
+            print(f"[checkout] payment proof upload failed; order blocked: {up_msg}")
+            _release_stock_lines(reserved)
+            return _receipt_upload_error(422)
+        order["proofUrl"] = proof_url
+        sb_row["proof_url"] = proof_url
+        sb_row["payload"] = order
+
+    receipt_row = (_order_receipt_row(order, proof_data, proof_ext,
+                                      proof_original_name, proof_url)
+                   if proof_data and proof_url else None)
 
     if prod_source:
         # Supabase PostgreSQL is the record of the sale. A failed write is a
@@ -1337,9 +1375,27 @@ def create_order():
             saved = False
         if not saved:
             _release_stock_lines(reserved)
+            if proof_url:
+                try: storage.delete_upload(proof_url)
+                except Exception: pass
             return jsonify(ok=False, error=(
                 "Your order could not be saved right now. Please try again "
                 "in a moment — nothing was charged.")), 503
+        if receipt_row:
+            try:
+                from supabase_store import create_receipt_strict, delete_order as _sb_delete_order
+                receipt_saved = bool(create_receipt_strict(receipt_row))
+            except Exception as exc:
+                print(f"[supabase] checkout receipt write failed: {exc}")
+                receipt_saved = False
+            if not receipt_saved:
+                try: _sb_delete_order(oid)
+                except Exception: pass
+                _release_stock_lines(reserved)
+                if proof_url:
+                    try: storage.delete_upload(proof_url)
+                    except Exception: pass
+                return _receipt_upload_error(422)
         # SQLite stays only a cache for the admin portal / fast reads.
         try:
             execute(
@@ -1353,6 +1409,11 @@ def create_order():
                  order["payment"], proof_url, len(clean_items), total, currency,
                  order["source"], "pending", order["at"], now),
             )
+            if receipt_row:
+                try:
+                    _insert_payment_proof_cache(receipt_row)
+                except Exception as exc:
+                    print(f"[sqlite] receipt cache write skipped: {exc}")
         except Exception as exc:
             print(f"[sqlite] order cache write skipped: {exc}")
     else:
@@ -1368,11 +1429,25 @@ def create_order():
                  order["payment"], proof_url, len(clean_items), total, currency,
                  order["source"], "pending", order["at"], now),
             )
+            if receipt_row:
+                try:
+                    _insert_payment_proof_cache(receipt_row)
+                except Exception as exc:
+                    print(f"[sqlite] receipt write failed: {exc}")
+                    execute("DELETE FROM orders WHERE id=?", (oid,))
+                    _release_stock_lines(reserved)
+                    if proof_url:
+                        try: storage.delete_upload(proof_url)
+                        except Exception: pass
+                    return _receipt_upload_error(422)
         except Exception as exc:
             # The order is NOT saved: holding the reservation would strand the
             # units forever, so give them back and fail loudly.
             print(f"[sqlite] order write failed: {exc}")
             _release_stock_lines(reserved)
+            if proof_url:
+                try: storage.delete_upload(proof_url)
+                except Exception: pass
             return jsonify(ok=False, error=(
                 "Your order could not be saved right now. Please try again "
                 "in a moment — nothing was charged.")), 503
@@ -1384,6 +1459,12 @@ def create_order():
                 _sb_create_order(sb_row)
             except Exception as exc:
                 print(f"[supabase] order mirror skipped: {exc}")
+            if receipt_row:
+                try:
+                    from supabase_store import create_receipt as _sb_create_receipt
+                    _sb_create_receipt(receipt_row)
+                except Exception as exc:
+                    print(f"[supabase] receipt mirror skipped: {exc}")
     if owner_id:
         try:
             execute("UPDATE orders SET customer_user_id=? WHERE id=?", (owner_id, oid))
@@ -1453,7 +1534,7 @@ def create_order():
         pass
 
     resp = make_response(jsonify(ok=True, id=oid, status="pending", proofUrl=proof_url,
-                                 proofUploadFailed=proof_upload_failed,
+                                 proofUploadFailed=False,
                                  referralCode=referral_code,
                                  promo=promo or None,
                                  bulkDiscount=bulk_discount_lines or None,
@@ -2373,9 +2454,14 @@ def admin_order_update(oid):
     if Config.SUPABASE_ENABLED:
         try:
             from supabase_store import update_order as _sb_update_order
-            _sb_update_order(oid, status=status, payload=payload)
+            mirrored = bool(_sb_update_order(oid, status=status, payload=payload))
         except Exception:
-            pass
+            mirrored = False
+        if not mirrored:
+            return jsonify(ok=False, error=(
+                "The order update could not be confirmed in Supabase. Refresh "
+                "and retry so the status, customer notice and payment review "
+                "do not silently revert.")), 503
 
     # Build one complete customer copy, with a fallback for legacy rows whose
     # payload predates the nested customer email field.
@@ -2412,7 +2498,7 @@ def admin_order_delete(oid):
     """Delete an order (with its uploaded payment receipt). Used only from the
     admin portal's explicit Delete button; it never runs on a status change."""
     oid = sec.clean(oid, 24).upper()
-    row = one("SELECT id, status, payload FROM orders WHERE id=?", (oid,))
+    row = one("SELECT id, status, payload, proof_url FROM orders WHERE id=?", (oid,))
     if not row:
         return jsonify(ok=False, error="Order not found."), 404
     try:
@@ -2434,11 +2520,20 @@ def admin_order_delete(oid):
     # can no longer be downloaded from its old URL (and cannot be restored
     # from Supabase at the next boot, which is how they used to come back)
     proofs = query("SELECT id, file_url FROM payment_proofs WHERE order_id=?", (oid,)) or []
-    files_removed = 0
+    urls = []
     for p in proofs:
         url = (p["file_url"] or "") if "file_url" in p.keys() else ""
-        if not url:
+        if url:
+            urls.append(url)
+    for url in (row["proof_url"] or "", payload.get("proofUrl") or "", payload.get("proof_url") or ""):
+        if url:
+            urls.append(url)
+    seen_urls = set()
+    files_removed = 0
+    for url in urls:
+        if url in seen_urls:
             continue
+        seen_urls.add(url)
         try:
             if storage.delete_upload(url):
                 files_removed += 1
@@ -2510,10 +2605,14 @@ def admin_product_upsert():
             return jsonify(ok=False, error=(
                 "That is a test product from the test suite, not a shop piece. "
                 "It cannot be added to the storefront. Delete it instead.")), 400
-        if action == "error" or (mirrored is False and catalog_mod._prod_source()):
+        if action == "error" or mirrored is False:
             return jsonify(ok=False, error=(
                 "The product could not be saved to Supabase. No changes were made.")), 503
         return jsonify(ok=False, error="A product needs at least a name."), 400
+    if mirrored is False:
+        return jsonify(ok=False, error=(
+            "The product could not be saved to Supabase. No changes were made."),
+            product=product, action=action, mirrored=False, meta=catalog_mod.meta()), 503
     return jsonify(ok=True, product=product, action=action, mirrored=mirrored,
                    meta=catalog_mod.meta())
 
@@ -2531,28 +2630,31 @@ def admin_product_delete(pid):
     written too (see catalog.remove / supabase_store.add_deleted_id).
     """
     pid = sec.clean(pid, 64)
+    files_removed = 0
     if catalog_mod._prod_source():
-        from supabase_store import delete_products_strict, add_deleted_id
-        if not delete_products_strict([pid]):
+        from supabase_store import hard_delete_products
+        report = hard_delete_products([pid])
+        files_removed = int(report.get("files") or 0)
+        if pid not in set(report.get("deleted") or []):
             return jsonify(ok=False, error=(
-                "The product could not be deleted from Supabase. "
-                "No changes were made.")), 503
-        # Durable tombstone so a seed product stays gone across redeploys.
-        # A swallowed failure here used to report "deleted" while the
-        # growth_settings write never landed - the product then came back
-        # after the next deploy. Surface the failure so the admin retries
-        # instead of believing the product is gone for good.
-        if not add_deleted_id(pid):
+                "The product and its media could not be permanently deleted "
+                "from Supabase. No changes were made."), report=report), 503
+        if report.get("errors"):
             return jsonify(ok=False, error=(
-                "The product was removed from the catalogue, but its "
-                "deletion could not be recorded in the durable tombstone "
-                "list (Supabase growth_settings write failed). Tap Delete "
-                "again so it stays gone.")), 503
+                "The product row was removed, but one or more media/tombstone "
+                "cleanup steps failed. Retry so no media or tombstones are left behind."),
+                report=report), 503
         catalog_mod._sync_repo_async()
     else:
+        before = catalog_mod.merged(include_hidden=True)
         catalog_mod.remove(pid, authmod.current_admin())
-    audit(authmod.current_admin(), "product.delete", pid, _ip())
-    return jsonify(ok=True, id=pid, meta=catalog_mod.meta())
+        after = catalog_mod.merged(include_hidden=True)
+        # catalog.remove() already purges; this count is informational.
+        before_keys = {storage._key_from_url(u) for p in before if str((p or {}).get("id") or "") == pid for u in getattr(catalog_mod, "_media_refs")(p)}
+        after_keys = {storage._key_from_url(u) for p in after for u in getattr(catalog_mod, "_media_refs")(p)}
+        files_removed = len([k for k in before_keys if k and k not in after_keys])
+    audit(authmod.current_admin(), "product.delete", f"{pid} files_removed={files_removed}", _ip())
+    return jsonify(ok=True, id=pid, filesRemoved=files_removed, meta=catalog_mod.meta())
 
 @api.put("/admin/products")
 @authmod.require_admin
@@ -2563,8 +2665,16 @@ def admin_products_replace():
     products = d.get("products")
     if not isinstance(products, list):
         return jsonify(ok=False, error="Send {products: [...]}."), 400
-    kept, rejected = catalog_mod.replace_all(products, authmod.current_admin())
-    return jsonify(ok=True, saved=len(kept), rejected=rejected, meta=catalog_mod.meta())
+    result = catalog_mod.replace_all(products, authmod.current_admin())
+    kept, rejected = result[0], result[1]
+    mirrored = result[2] if len(result) > 2 else True
+    if mirrored is False:
+        return jsonify(ok=False, error=(
+            "The bulk product import could not be confirmed in Supabase. No "
+            "fields were silently dropped; run the products migration and retry."),
+            saved=0, rejected=rejected, mirrored=False, meta=catalog_mod.meta()), 503
+    return jsonify(ok=True, saved=len(kept), rejected=rejected, mirrored=mirrored,
+                   meta=catalog_mod.meta())
 
 # ---------------------------------------------------- admin: repo / dual sync
 @api.post("/admin/photos/repair")
@@ -2855,6 +2965,76 @@ def admin_upload_product():
         return jsonify(ok=False, error=msg), 500
     audit(authmod.current_admin(), "site.product_media_upload", url, _ip())
     return jsonify(ok=True, url=url, kind=kind)
+
+
+def _same_upload_ref(a, b):
+    ka = storage._key_from_url(str(a or ""))
+    kb = storage._key_from_url(str(b or ""))
+    if ka or kb:
+        return bool(ka and kb and ka == kb)
+    return str(a or "").split("?", 1)[0] == str(b or "").split("?", 1)[0]
+
+
+def _unlink_product_media(product_id, url):
+    product_id = sec.clean(product_id, 64)
+    if not product_id or not url:
+        return False
+    product = None
+    try:
+        for row in catalog_mod.merged(include_hidden=True):
+            if str((row or {}).get("id") or "") == product_id:
+                product = dict(row)
+                break
+    except Exception:
+        product = None
+    if not product:
+        return False
+    changed = False
+    images = []
+    raw_images = product.get("images") or []
+    if isinstance(raw_images, str):
+        try: raw_images = json.loads(raw_images)
+        except Exception: raw_images = []
+    for item in raw_images if isinstance(raw_images, list) else []:
+        ref = item if isinstance(item, str) else (item.get("url") or item.get("src") or item.get("image") if isinstance(item, dict) else "")
+        if ref and _same_upload_ref(ref, url):
+            changed = True
+            continue
+        if item:
+            images.append(item)
+    for key in ("image", "image_url", "imageUrl", "video", "video_url"):
+        if product.get(key) and _same_upload_ref(product.get(key), url):
+            product[key] = ""
+            changed = True
+    if changed:
+        string_images = [i for i in images if isinstance(i, str)]
+        product["images"] = string_images
+        product["image"] = string_images[0] if string_images else catalog_mod.PLACEHOLDER_IMG
+        product["image_url"] = product["image"]
+        saved, action, mirrored = catalog_mod.upsert(product, authmod.current_admin())
+        if not saved or mirrored is False:
+            raise RuntimeError("Product media unlink could not be saved.")
+    return changed
+
+
+@api.delete("/admin/uploads/purge")
+@authmod.require_admin
+@sec.require_csrf
+def admin_upload_purge():
+    """Immediately unlink and permanently delete an uploaded media object."""
+    d = request.get_json(silent=True) or {}
+    url = sec.safe_url(d.get("url") or d.get("fileUrl") or "", 500)
+    if not url:
+        return jsonify(ok=False, error="A media URL is required."), 400
+    product_id = sec.clean(d.get("productId") or "", 64)
+    try:
+        unlinked = _unlink_product_media(product_id, url) if product_id else False
+    except Exception as exc:
+        return jsonify(ok=False, error=str(exc) or "Could not unlink that media."), 503
+    removed = storage.delete_upload(url)
+    audit(authmod.current_admin(), "upload.purge",
+          f"product={product_id or '-'} removed={removed} {url[:180]}", _ip())
+    return jsonify(ok=True, removed=bool(removed), unlinked=bool(unlinked))
 
 
 @api.post("/admin/uploads/hero")
@@ -3375,6 +3555,37 @@ _SITE_TEXT_KEYS = frozenset({"conv_banner", "conv_banner_fr", "conv_bold",
                              "welcome_cta_label", "welcome_cta_label_fr"})
 
 
+_SITE_MEDIA_COLUMNS = ("site_logo_url", "hero_video_url", "hero_poster_url",
+                       "hero_doc_url", "shop_banner_url", "welcome_image_url")
+
+
+def _site_media_map(site):
+    site = dict(site or {})
+    out = {}
+    for col in _SITE_MEDIA_COLUMNS:
+        alias = SITE_LEGACY_ALIASES.get(col)
+        value = site.get(col) or (site.get(alias) if alias else "")
+        key = storage._key_from_url(str(value or ""))
+        if key and value:
+            out.setdefault(key, value)
+    return out
+
+
+def _purge_replaced_site_media(before, after):
+    before_map = _site_media_map(before)
+    after_keys = set(_site_media_map(after))
+    removed = 0
+    for key, url in before_map.items():
+        if key in after_keys:
+            continue
+        try:
+            if storage.delete_upload(url):
+                removed += 1
+        except Exception:
+            pass
+    return removed
+
+
 def _site_clear_list(d):
     """Columns the client says it is deliberately emptying.
 
@@ -3438,6 +3649,10 @@ def admin_site_update():
     # show - the bank details included.
     values = {k: v for k, v in values.items()
               if str(v if v is not None else "").strip() or k in clear}
+    try:
+        previous_site = _load_site()
+    except Exception:
+        previous_site = {}
     if Config.ENV == "testing":
         path = os.environ.get("SITE_CONFIG_PATH", "")
         current = _load_site()
@@ -3466,7 +3681,8 @@ def admin_site_update():
             current[k] = v
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(current, fh)
-        return jsonify(ok=True, site=_site_payload(current))
+        files_removed = _purge_replaced_site_media(previous_site, current)
+        return jsonify(ok=True, site=_site_payload(current), filesRemoved=files_removed)
     try:
         site = __import__("supabase_settings", fromlist=["update_site_settings"]).update_site_settings(values)
     except Exception as exc:
@@ -3486,8 +3702,9 @@ def admin_site_update():
             ok=False,
             error=("Could not update Supabase site settings. No changes were "
                    "made." + (f" {detail}" if detail else ""))), 503
-    audit(authmod.current_admin(), "site.update", json.dumps(values)[:200], _ip())
-    return jsonify(ok=True, site=_site_payload(site))
+    files_removed = _purge_replaced_site_media(previous_site, site)
+    audit(authmod.current_admin(), "site.update", (json.dumps(values)[:180] + f" files_removed={files_removed}"), _ip())
+    return jsonify(ok=True, site=_site_payload(site), filesRemoved=files_removed)
 
 # ==================================================== admin: delivery zones
 # Delivery zones and their fare ranges are admin-editable, and the storefront

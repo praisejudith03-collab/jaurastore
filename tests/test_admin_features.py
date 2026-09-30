@@ -89,7 +89,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("GET", "/api/admin/mail/status"), ("POST", "/api/admin/mail/test"),
     ("POST", "/api/admin/uploads/category"), ("POST", "/api/admin/uploads/hero"),
     ("POST", "/api/admin/uploads/image"), ("POST", "/api/admin/uploads/product"),
-    ("POST", "/api/admin/uploads/video"),
+    ("DELETE", "/api/admin/uploads/purge"), ("POST", "/api/admin/uploads/video"),
 }
 
 

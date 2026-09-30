@@ -52,4 +52,4 @@ def test_abandoned_worker_retries_without_leaking_an_exception(monkeypatch):
         send_due_reminders=send_due_reminders))
     monkeypatch.setattr(scheduler.time, "sleep", lambda _seconds: None)
     assert scheduler._abandoned_tick(attempts=3) == {"sent": 1, "failed": 0}
-    assert calls == [25, 25]
+    assert calls == [20, 20]

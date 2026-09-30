@@ -36,7 +36,7 @@ from security import clean
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 MAX_BYTES = 6 * 1024 * 1024              # 6 MB: product photos
-MAX_RECEIPT_BYTES = 8 * 1024 * 1024      # 8 MB: payment receipts / PDFs / docs
+MAX_RECEIPT_BYTES = 16 * 1024 * 1024     # 16 MB: payment receipts / PDFs / docs
 MAX_VIDEO_BYTES = 50 * 1024 * 1024       # 50 MB: product + homepage hero video
 
 # Upload-time image optimisation (see optimize_image_bytes). A phone original

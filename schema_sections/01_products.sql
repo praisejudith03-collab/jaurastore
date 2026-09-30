@@ -1,18 +1,7 @@
--- =====================================================================
--- Jaura Store — Supabase (PostgreSQL) schema
--- =====================================================================
--- Run this once in the Supabase SQL editor (Dashboard → SQL → New query).
--- Every statement is idempotent (IF NOT EXISTS), so re-running is safe.
---
--- Supabase PostgreSQL is the production source of truth for products,
--- orders, receipts, categories, site settings and referral commission
--- settings. SQLite on the Render disk is only a boot-time cache restored
--- FROM these tables; production writes go to PostgreSQL first and failures
--- are surfaced, never swallowed.
---
--- Required env vars (both Render services): SUPABASE_URL and
--- SUPABASE_SERVICE_ROLE_KEY (the service-role key, server-side only).
--- =====================================================================
+-- Jaura Store — Supabase schema. Run once in the Supabase SQL editor.
+-- Idempotent: re-running is safe. PostgreSQL is the production source of
+-- truth; SQLite on Render is only a boot cache restored from these tables.
+-- Required env vars: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.
 
 -- SECTION: products
 -- ------------------------------------------------------------ products
@@ -48,6 +37,8 @@ create table if not exists products (
   "optionPrices"   jsonb,
   "optionCompareAt" jsonb,
   "optionSupplierSku" jsonb,
+  "optionSku"      jsonb,
+  reviews          jsonb,
   dimensions       text,
   "bulkQty"        integer,
   "bulkPercent"    integer,
@@ -80,6 +71,8 @@ alter table products add column if not exists "optionStock"      jsonb;
 alter table products add column if not exists "optionPrices"     jsonb;
 alter table products add column if not exists "optionCompareAt"  jsonb;
 alter table products add column if not exists "optionSupplierSku" jsonb;
+alter table products add column if not exists "optionSku"         jsonb;
+alter table products add column if not exists reviews             jsonb;
 alter table products add column if not exists dimensions         text;
 alter table products add column if not exists "bulkQty"      integer;
 alter table products add column if not exists "bulkPercent"  integer;

@@ -2,24 +2,43 @@ function param(name) {
   return new URLSearchParams(location.search).get(name);
 }
 
-function compressImage(file, max = 1100, quality = 0.72) {
+function compressImage(file, max = 1400, quality = 0.82, targetBytes = 950 * 1024) {
   return new Promise((resolve, reject) => {
     if (!file) {
       reject(new Error("Please upload an image screenshot."));
       return;
     }
+    const dataUrlSize = (url) => {
+      const b64 = String(url || "").split(",")[1] || "";
+      return Math.floor(b64.length * 3 / 4);
+    };
     const reader = new FileReader();
     reader.onerror = reject;
     reader.onload = () => {
       const img = new Image();
       img.onload = () => {
-        const scale = Math.min(1, max / Math.max(img.width, img.height));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", quality));
+        let longest = Math.min(max, Math.max(img.width, img.height) || max);
+        let best = "";
+        for (let pass = 0; pass < 8; pass += 1) {
+          const scale = Math.min(1, longest / Math.max(img.width, img.height));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = canvas.getContext("2d", { alpha: false });
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const q = Math.max(0.46, quality - pass * 0.06);
+          const candidate = canvas.toDataURL("image/jpeg", q);
+          best = candidate;
+          if (dataUrlSize(candidate) <= targetBytes) {
+            resolve(candidate);
+            return;
+          }
+          longest = Math.max(480, Math.floor(longest * 0.84));
+        }
+        // If a pathological screenshot is still slightly over target, submit
+        // the smallest version we produced rather than the original multi-MB
+        // camera file. The server's receipt cap remains the final guard.
+        resolve(best);
       };
       img.onerror = reject;
       img.src = reader.result;
@@ -48,8 +67,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=166";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=166";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=168";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=168";
 }
 
 function renderCategories() {
@@ -1801,6 +1820,7 @@ function clearCheckoutFieldError(form, name) {
   const host = checkoutFieldErrorHost(control);
   host?.classList.remove("has-error");
   control.removeAttribute("aria-invalid");
+  control.classList.remove("field-input-error");
   const error = host?.querySelector(".field-error");
   if (error) error.remove();
   const describedBy = (control.getAttribute("aria-describedby") || "").split(/\s+/)
@@ -1940,6 +1960,34 @@ function validateCheckoutForm(form, options = {}) {
   return { ok: false, failures };
 }
 
+function showCheckoutFieldError(form, name, message) {
+  if (!form || !name || !message) return;
+  const control = checkoutFieldControl(form, name);
+  if (!control) return;
+  clearCheckoutFieldError(form, name);
+  const host = checkoutFieldErrorHost(control);
+  host?.classList.add("has-error");
+  control.setAttribute("aria-invalid", "true");
+  control.classList.add("field-input-error");
+  const errorId = `${control.id || name}-error`;
+  const error = document.createElement("p");
+  error.className = "field-error ck-inline-tooltip";
+  error.id = errorId;
+  error.setAttribute("role", "alert");
+  error.textContent = message;
+  host?.appendChild(error);
+  const describedBy = (control.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+  if (!describedBy.includes(errorId)) describedBy.push(errorId);
+  control.setAttribute("aria-describedby", describedBy.join(" "));
+}
+
+function showProofUploadFailure(form, message = RECEIPT_UPLOAD_FAILED_MESSAGE) {
+  showCheckoutFieldError(form, "proof", message);
+  try { JA.toast(message); } catch (e) {}
+  const proof = checkoutFieldControl(form, "proof");
+  proof?.focus?.();
+}
+
 function rememberEmptyCartCheckout() {
   const message = checkoutValidationMessage("ck.emptyRedirect", "Your cart is empty. Add items to your cart first. Taking you to the shop now.");
   try { sessionStorage.setItem("jaura_checkout_notice", message); } catch (e) {}
@@ -1967,6 +2015,7 @@ function showEmptyCartShopNotice() {
 
 const CHECKOUT_CART_TOKEN_KEY = "jaura_checkout_cart_token";
 const CHECKOUT_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const RECEIPT_UPLOAD_FAILED_MESSAGE = "Receipt upload failed. Please try choosing the photo again.";
 
 function checkoutCartToken() {
   try {
@@ -2262,9 +2311,9 @@ function renderCheckout() {
     // A PDF cannot be drawn on a canvas, and shrinking it would mean the shop
     // no longer holds the customer's real receipt - send it untouched.
     if (isPdf(file)) {
-      if (file.size > 8 * 1024 * 1024) {
+      if (file.size > 16 * 1024 * 1024) {
         proofFailed = true;
-        JA.toast("That PDF is over 8 MB. Please send a smaller file.");
+        showProofUploadFailure(form, RECEIPT_UPLOAD_FAILED_MESSAGE);
         return;
       }
       proofFile = file;
@@ -2293,6 +2342,7 @@ function renderCheckout() {
       return data;
     }).catch(() => {
       proofFailed = true;         // a camera photo can be huge - wait for it
+      showProofUploadFailure(form, RECEIPT_UPLOAD_FAILED_MESSAGE);
       return null;
     });
   });
@@ -2420,8 +2470,13 @@ function renderCheckout() {
     }
     if (!form.dataset.proof && !proofFile) {
       resetButton();
-      JA.toast(proofFailed ? t("toast.badImg") : t("toast.needShot"));
-      shot?.focus();
+      if (proofFailed) showProofUploadFailure(form, RECEIPT_UPLOAD_FAILED_MESSAGE);
+      else {
+        const msg = t("toast.needShot");
+        JA.toast(msg);
+        showCheckoutFieldError(form, "proof", msg);
+        shot?.focus();
+      }
       return;
     }
     setButtonLoading("ck.placing", "Placing your order…");
@@ -2485,9 +2540,12 @@ function renderCheckout() {
     // never look like a completed order: the cart stays, the shopper is told
     // exactly what the server said, and the Place order button comes back.
     const rejectOrder = (err) => {
-      const msg = (err && err.message) || "Your order could not be placed. Please try again.";
+      const data = (err && err.data) || {};
+      const isReceiptError = data.code === "receipt_upload_failed" || data.field === "proof" || /receipt upload failed/i.test(String((err && err.message) || ""));
+      const msg = isReceiptError ? RECEIPT_UPLOAD_FAILED_MESSAGE : ((err && err.message) || "Your order could not be placed. Please try again.");
       try { JA.updateOrder(order.id, { failed: true, error: String(msg).slice(0, 300) }); } catch (e) {}
-      JA.toast(msg);
+      if (isReceiptError) showProofUploadFailure(form, msg);
+      else JA.toast(msg);
       try {
         let warn = document.querySelector("[data-ck-order-error]");
         if (!warn) {

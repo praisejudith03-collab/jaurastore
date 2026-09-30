@@ -8,6 +8,7 @@ reminder can be sent.
 """
 import datetime
 import json
+import re
 
 from db import execute, one, query
 
@@ -49,8 +50,9 @@ def _row_from_supabase(row):
     }
 
 
-PAGE_SIZE = 25          # rows held in memory at once
+PAGE_SIZE = 20          # rows held in memory at once
 MAX_PER_TICK = 200      # hard ceiling on one worker tick
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 def due_carts(limit=25, offset=0):
@@ -212,6 +214,24 @@ def _send_one(row):
     token = str((row or {}).get("token") or "").strip()
     if not token or row.get("reminder_sent") or row.get("converted_at"):
         return 0, 0
+    email = str((row or {}).get("email") or "").strip().lower()
+    if not _EMAIL_RE.fullmatch(email):
+        # Bad imported/partial rows should not be retried forever and must not
+        # reach the mail provider. Mark the reminder closed with a failure log;
+        # a real customer can create a fresh cart with a valid address.
+        now = _now()
+        try:
+            execute("UPDATE abandoned_carts SET reminder_sent=1, reminder_sent_at=?, updated_at=? "
+                    "WHERE token=?", (now, now, token))
+        except Exception as exc:
+            print(f"[abandoned] invalid-email close failed for {token}: {exc}")
+        try:
+            from supabase_store import mark_abandoned_reminder_sent
+            mark_abandoned_reminder_sent(token, now)
+        except Exception as exc:
+            print(f"[abandoned] Supabase invalid-email mark skipped: {exc}")
+        print(f"[abandoned] reminder skipped for {token}: invalid email")
+        return 0, 1
     try:
         # Claim locally before dispatch so two scheduler ticks/workers cannot
         # send the same cart. A failed provider call releases the claim.

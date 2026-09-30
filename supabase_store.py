@@ -321,26 +321,57 @@ def _canonicalize_product(row, _c=None):
         p["stock_quantity"] = int(p.get("stock_quantity") or 0)
     except (TypeError, ValueError):
         p["stock_quantity"] = 0
+    supplier = (p.get("supplierSku") or p.get("supplier_sku") or
+                p.get("supplierUrl") or p.get("supplier_url") or "")
+    p["supplierSku"] = supplier
+    p["supplierUrl"] = supplier
+    p["supplier_url"] = supplier
+    if p.get("compareNgn") is None:
+        p["compareNgn"] = (p.get("compare_ngn") or p.get("compareAtPrice") or
+                            p.get("compare_at_price") or p.get("strikeThroughPrice") or
+                            p.get("strike_through_price"))
+    if p.get("compareCfa") is None:
+        p["compareCfa"] = p.get("compare_cfa")
+    p["optionPrices"] = (p.get("optionPrices") or p.get("option_prices") or
+                          p.get("variantPrices") or p.get("variant_prices") or {})
+    p["optionCompareAt"] = (p.get("optionCompareAt") or p.get("option_compare_at") or
+                             p.get("variantCompareAt") or p.get("variant_compare_at") or {})
+    p["optionSupplierSku"] = (p.get("optionSupplierSku") or p.get("option_supplier_sku") or
+                               p.get("optionSupplierUrls") or p.get("option_supplier_urls") or {})
+    p["optionSku"] = (p.get("optionSku") or p.get("option_sku") or
+                       p.get("optionSkus") or p.get("option_skus") or {})
+    p["bulkQty"] = (p.get("bulkQty") if p.get("bulkQty") is not None else
+                    p.get("bulk_qty") if p.get("bulk_qty") is not None else
+                    p.get("bulkQuantity") if p.get("bulkQuantity") is not None else
+                    p.get("bulk_quantity") if p.get("bulk_quantity") is not None else
+                    p.get("bulkDiscountQty") if p.get("bulkDiscountQty") is not None else
+                    p.get("bulk_discount_qty"))
+    p["bulkPercent"] = (p.get("bulkPercent") if p.get("bulkPercent") is not None else
+                        p.get("bulk_percent") if p.get("bulk_percent") is not None else
+                        p.get("bulkDiscountPercent") if p.get("bulkDiscountPercent") is not None else
+                        p.get("bulk_discount_percent"))
+    if not isinstance(p.get("reviews"), list):
+        p["reviews"] = p.get("customerReviews") if isinstance(p.get("customerReviews"), list) else (
+            p.get("customer_reviews") if isinstance(p.get("customer_reviews"), list) else [])
     return p
 
 
-# The products table was hand-built and is NARROWER than the row the app
-# writes, so a full-row upsert used to be rejected outright: PostgREST answers
-# PGRST204 "Could not find the 'compareCfa' column of 'products' in the schema
-# cache" and EVERY product save died on it (the message only names the first
-# missing column - more lurk behind it). Reads kept working, so the shop looked
-# healthy while saves landed server-local-only and were wiped by the next
-# deploy, invisible to the other phone.
-#
-# The helper below writes the row the table can actually accept: try the full
-# row, and on that exact "missing column" error drop the named column and
-# retry - bounded, one drop per column. The five columns a product cannot be
-# sold without are never dropped: if the table rejects one of those, the write
-# fails loudly so the caller reports mirrored=False instead of quietly
-# losing the product.
-_CRITICAL_PRODUCT_COLUMNS = frozenset(
-    {"id", "name", "priceCfa", "priceNgn", "stock",
-     "stock_quantity", "image_url"})
+# Every field the admin editor can collect must either reach PostgreSQL or the
+# save must fail loudly. A retry that drops a "non-critical" column is data
+# loss: after reload the owner sees blanks/defaults even though the portal said
+# "saved". Keep this list broad and explicit so schema drift blocks the save
+# instead of silently discarding supplier URLs, variant prices/SKUs, reviews,
+# bulk tiers, media, availability or publication flags.
+_CRITICAL_PRODUCT_COLUMNS = frozenset({
+    "id", "legacyId", "sku", "slug", "name", "nameFr", "descriptionFr",
+    "category", "priceCfa", "compareCfa", "priceNgn", "compareNgn",
+    "image", "image_url", "images", "description", "stock",
+    "stock_quantity", "badge", "featured", "online", "colors", "options",
+    "optionStock", "optionPrices", "optionCompareAt", "optionSupplierSku",
+    "optionSku", "reviews", "dimensions", "bulkQty", "bulkPercent",
+    "placeholderImage", "usesPlaceholder", "source", "supplierId",
+    "supplierSku", "updated_at",
+})
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
 
 
@@ -351,35 +382,20 @@ def _upsert_products_resilient(rows):
     c = client()
     if c is None:
         return False
-    dropped = []
-    for _ in range(len(pending[0]) + 1):
-        try:
-            c.table("products").upsert(pending).execute()
-            if dropped:
-                print("[supabase] products upsert: stored without columns "
-                      f"{sorted(set(dropped))} (table lacks them)")
-                # Silently dropping a column is how per-variant price/compare
-                # overrides "revert to defaults on catalog sync": the table is
-                # missing the column, so the value is quietly thrown away every
-                # save. Surface that as an admin warning badge so the owner
-                # knows to run the products-table migration, instead of losing
-                # the data invisibly.
-                _warn_missing_price_columns(sorted(set(dropped)))
-            return True
-        except Exception as exc:
-            match = _MISSING_COLUMN_RE.search(str(exc))
-            col = match.group(1) if match else ""
-            if not col or col in _CRITICAL_PRODUCT_COLUMNS:
-                print(f"[supabase] products upsert failed: {exc}")
-                return False
-            if all(col not in r for r in pending):
-                print(f"[supabase] products upsert failed: {exc}")
-                return False
-            dropped.append(col)
-            for r in pending:
-                r.pop(col, None)
-    print("[supabase] products upsert failed: too many missing columns")
-    return False
+    try:
+        c.table("products").upsert(pending).execute()
+        return True
+    except Exception as exc:
+        match = _MISSING_COLUMN_RE.search(str(exc))
+        col = match.group(1) if match else ""
+        if col:
+            _warn_missing_product_columns([col])
+            print("[supabase] products upsert refused: products table is missing "
+                  f"column {col!r}; no retry was attempted because that would "
+                  "silently discard admin-entered data. Run supabase_schema.sql.")
+        else:
+            print(f"[supabase] products upsert failed: {exc}")
+        return False
 
 
 def upsert_products(products):
@@ -489,27 +505,26 @@ def hard_delete_products(ids):
         report["errors"].append("supabase not configured")
         return report
 
-    # 1. purge the Storage objects the rows point at, while we can still read
-    #    them (once the row is gone the URLs are lost).
+    # 1. collect the Storage objects the rows point at while we can still read
+    #    them. The bytes are purged after the row is gone so storage.delete_upload
+    #    can still protect media shared by another live product.
+    urls = []
     for pid in ids:
         try:
             res = c.table("products").select("*").eq("id", pid).execute()
             for row in (getattr(res, "data", None) or []):
-                for url in _product_media_urls(row):
-                    try:
-                        if _delete_storage_object_from_url(url):
-                            report["files"] += 1
-                    except Exception as exc:
-                        report["errors"].append(f"storage {pid}: {exc}")
+                urls.extend(_product_media_urls(row))
         except Exception as exc:
             report["errors"].append(f"read {pid}: {exc}")
 
-    # 2. delete the rows themselves.
+    # 2. delete the rows themselves. If this fails, do NOT purge media: the
+    #    product is still live and would be left with broken files.
     try:
         c.table("products").delete().in_("id", ids).execute()
         report["deleted"] = list(ids)
     except Exception as exc:
         report["errors"].append(f"delete: {exc}")
+        return report
 
     # 3. durable tombstone, so the bundled seed copy stays suppressed too.
     for pid in ids:
@@ -523,20 +538,34 @@ def hard_delete_products(ids):
         c.table("variant_stock").delete().in_("product_id", ids).execute()
     except Exception:
         pass
+
+    # 5. purge unreferenced files. storage.delete_upload() refuses to remove an
+    #    object still used by another product, but does delete receipts/videos
+    #    and already-unlinked product media immediately.
+    seen = set()
+    for url in urls:
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        try:
+            import storage as _storage
+            if _storage.delete_upload(url):
+                report["files"] += 1
+        except Exception as exc:
+            report["errors"].append(f"storage: {exc}")
     return report
 
 
 def replace_all_products(products):
     """Replace the admin product set in Supabase (bulk import).
 
-    The bulk write goes through the same resilient path as a single save, so a
-    narrower products table no longer wipes the whole catalogue mirror: the
-    tombstone pass still runs, and the import lands with whatever columns the
-    table actually has.
+    Returns True only when the tombstone pass and every replacement row land.
+    Bulk import is also zero-data-loss: a missing products column refuses the
+    import instead of acknowledging a catalogue with fields removed.
     """
     c = client()
     if c is None:
-        return
+        return False
     rows = []
     for p in products:
         r = dict(p)
@@ -544,12 +573,23 @@ def replace_all_products(products):
         r.setdefault("updated_at", _now())
         rows.append(r)
     try:
-        c.table("products").update({"source": "replaced"}).eq("source", "admin").execute()
+        existing = c.table("products").select("id").eq("source", "admin").execute()
+        existing_ids = {str((r or {}).get("id") or "") for r in (_res_data(existing) or [])
+                        if str((r or {}).get("id") or "")}
     except Exception as exc:
-        print(f"[supabase] products replace failed: {exc}")
-        return
-    if rows:
-        _upsert_products_resilient(rows)
+        print(f"[supabase] products replace read failed: {exc}")
+        return False
+    if rows and not _upsert_products_resilient(rows):
+        return False
+    incoming_ids = {str((r or {}).get("id") or "") for r in rows if str((r or {}).get("id") or "")}
+    stale = sorted(existing_ids - incoming_ids)
+    if stale:
+        try:
+            c.table("products").update({"source": "replaced"}).in_("id", stale).execute()
+        except Exception as exc:
+            print(f"[supabase] products replace tombstone failed: {exc}")
+            return False
+    return True
 
 
 def reserve_product_stock(product_id, qty, option=None):
@@ -1130,10 +1170,15 @@ def load_order_for_customer(order_id, customer_id):
 
 
 def update_order(order_id, status=None, payload=None):
-    """Mirror an order status / payload change into Supabase."""
+    """Mirror an order status / payload change into Supabase.
+
+    Returns True only after Supabase accepts the update. Admin order actions use
+    this as a durability gate so a status/note/payment-review edit is never
+    acknowledged while production will reload the old value.
+    """
     c = client()
     if c is None:
-        return
+        return False
     row = {}
     if status is not None:
         row["status"] = status
@@ -1141,11 +1186,13 @@ def update_order(order_id, status=None, payload=None):
         row["payload"] = json.dumps(payload, ensure_ascii=False)
     row["updated_at"] = _now()
     if not row:
-        return
+        return False
     try:
         c.table("orders").update(row).eq("id", order_id).execute()
+        return True
     except Exception as exc:
         print(f"[supabase] order update failed: {exc}")
+        return False
 
 
 def create_receipt(receipt):
@@ -1470,31 +1517,28 @@ def save_supplier_sync_warnings(warnings):
         return False
 
 
-# Product columns that carry per-variant pricing. If the live products table
-# is missing one of these, a save silently drops it (see
-# _upsert_products_resilient) and the override "reverts to default". We raise a
-# durable warning so the admin dashboard shows a ⚠️ badge to run the migration.
-_PRICE_PERSIST_COLUMNS = frozenset(
-    {"optionPrices", "optionCompareAt", "compareNgn", "compareCfa"})
+# Product columns are an all-or-nothing persistence surface: when Supabase says
+# one is missing, the save is refused instead of retrying with that field
+# removed. The durable warning drives the admin ⚠️ badge to run the migration.
 _SCHEMA_WARNING_KEY = "products_schema_warning"
 
 
-def _warn_missing_price_columns(dropped):
-    """Record a durable warning when a pricing column could not be persisted."""
-    price_cols = [col for col in (dropped or []) if col in _PRICE_PERSIST_COLUMNS]
-    if not price_cols:
+def _warn_missing_product_columns(dropped):
+    """Record a durable warning when any product column could not persist."""
+    cols = sorted({str(col or "").strip() for col in (dropped or []) if str(col or "").strip()})
+    if not cols:
         return
     try:
         warnings = [w for w in (load_supplier_sync_warnings() or [])
                     if isinstance(w, dict) and w.get("product_id") != _SCHEMA_WARNING_KEY]
         warnings.append({
             "product_id": _SCHEMA_WARNING_KEY,
-            "product_name": "Product price columns",
+            "product_name": "Product table columns",
             "code": "products_table_missing_columns",
             "reason": ("The Supabase products table is missing column(s) "
-                       + ", ".join(price_cols) + ". Price / compare-at overrides "
-                       "cannot be saved and will revert to defaults until the "
-                       "products migration in supabase_schema.sql is applied."),
+                       + ", ".join(cols) + ". The admin save was refused so "
+                       "entered data cannot be silently dropped. Run the "
+                       "products migration in supabase_schema.sql, then save again."),
             "at": _now(),
         })
         save_supplier_sync_warnings(warnings)
