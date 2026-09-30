@@ -2291,7 +2291,7 @@ function broadcastPriceLine(p) {
   // Active selling price only, in both currencies - never priceCompare /
   // compareNgn, the struck-through "was" price shown elsewhere in admin.
   const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
-  return `${JA.money(p.priceNgn || 0, "NGN")} · ${JA.money(toCfa(p.priceNgn), "CFA")}`;
+  return `${JA.money(p.priceNgn || 0, "NGN")} • ${JA.money(toCfa(p.priceNgn), "CFA")}`;
 }
 function broadcastDisplayName(p) {
   // Owner request 2026-09-28: the post's headline must read in English AND

@@ -11,7 +11,7 @@ ASSETS = {
     "css/fonts.css": "628aa799bb2f4ebdbe1ad348a7af4c6d9a52df5287e7bedea6c66cb40d390174",
     "js/store.js": "ce33d5ce892183970c38db012bacab44e3eec4b7872942e1ba90ac4e3e5c4283",
     "js/app.js": "a4c3a23248ff4d60dd2c975d8f3c28509edc10b47ece0c7ccd5a5e9d07f4ef5f",
-    "js/admin.js": "630ec3698023e9a5f01ee8219670ed3c21556da9014acd98871fcf54981f0ec5",
+    "js/admin.js": "58d748f46f33ecabb2f68175db65495a838298aacc3a85f85767580b85daad50",
     "js/i18n.js": "0c718910647618eebdadba3ff6f5d9b09dac3373e6d067d2a0f2684008f9a711",
     "js/net.js": "ef9635c7280b8f9bc54fe3a653c5822d739195b7006c3fcd5e791612ccc6250e",
     "sw.js": "213fb2a07c1a26166950637a58bc038776d3d6bdb9d74a028721e30908ef069f",
