@@ -102,10 +102,8 @@ def bulk_discount_percent(quantity, tiers=None):
     """Highest configured volume tier reached by one product quantity."""
     if tiers is None:
         tiers = settings().get("bulkDiscountTiers") or []
-    # Store-wide production rule: fifteen or more units always earns 10%.
-    # Configured tiers remain supported and may override this default.
     if not tiers:
-        tiers = [{"minQuantity": 15, "percent": 10}]
+        return 0
     try:
         quantity = int(quantity)
     except (TypeError, ValueError):

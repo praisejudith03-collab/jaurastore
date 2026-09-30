@@ -415,7 +415,8 @@ def test_renamed_executable_is_rejected(client):
 
 
 def test_oversized_receipt_is_rejected(client):
-    body = b"%PDF-1.4\n" + (b"A" * (8 * 1024 * 1024 + 10)) + b"\n%%EOF\n"
+    import storage
+    body = b"%PDF-1.4\n" + (b"A" * (storage.MAX_RECEIPT_BYTES + 10)) + b"\n%%EOF\n"
     r = post_proof(client, body, "big.pdf")
     assert r.status_code == 400
     assert "MB" in r.get_json()["error"]
@@ -1353,6 +1354,48 @@ def test_admin_order_delete(client):
     assert one("SELECT id FROM orders WHERE id='JA-DELETE1'") is None
     # deleting twice is a 404, never a crash
     assert client.delete("/api/admin/orders/JA-DELETE1", headers={"X-CSRF-Token": tok}).status_code == 404
+
+
+def test_admin_upload_purge_unlinks_product_media_and_deletes_file(client):
+    import catalog
+    import storage
+    pid = "jau-purge-media"
+    ok, _msg, url = storage.save_image(b"\xff\xd8\xff\xe0" + b"0" * 512 + b"\xff\xd9",
+                                       "products", "photo.jpg")
+    assert ok and url
+    key = storage._key_from_url(url)
+    assert storage.resolve_local(key)
+    catalog.upsert({"id": pid, "name": "Purge Media", "category": "beauty",
+                    "priceNgn": 1000, "stock": 3, "online": True,
+                    "image": url, "images": [url]})
+    tok = login(client)
+    r = client.delete("/api/admin/uploads/purge", json={"url": url, "productId": pid},
+                      headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    assert storage.resolve_local(key) is None
+    product = next(p for p in catalog.merged(include_hidden=True) if p["id"] == pid)
+    assert storage._key_from_url(product.get("image") or "") != key
+    assert all(storage._key_from_url(i) != key for i in (product.get("images") or []))
+
+
+def test_admin_order_delete_purges_checkout_proof_url(client):
+    import storage
+    tok = login(client)
+    ok, _msg, url = storage.save_image(b"\xff\xd8\xff\xe0" + b"0" * 512 + b"\xff\xd9",
+                                       "proofs", "receipt.jpg",
+                                       allow_pdf=True,
+                                       max_bytes=storage.MAX_RECEIPT_BYTES)
+    assert ok and url
+    key = storage._key_from_url(url)
+    assert storage.resolve_local(key), "proof file should exist before deletion"
+    payload = json.dumps({"id": "JA-DELETE2", "proofUrl": url})
+    execute("INSERT INTO orders (id,payload,proof_url,total,currency,status) VALUES (?,?,?,?,?,?)",
+            ("JA-DELETE2", payload, url, 100, "NGN", "pending"))
+    r = client.delete("/api/admin/orders/JA-DELETE2", headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    assert r.get_json()["filesRemoved"] >= 1
+    assert one("SELECT id FROM orders WHERE id='JA-DELETE2'") is None
+    assert storage.resolve_local(key) is None
 
 
 def test_category_merge_is_idempotent(tmp_path, client, monkeypatch):

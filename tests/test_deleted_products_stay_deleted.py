@@ -237,15 +237,19 @@ def test_remove_writes_both_local_and_durable(monkeypatch, tmp_path):
 
 
 def test_remove_on_prod_source_still_tombs(monkeypatch):
-    """Production path: products-table soft-delete + durable tombstone."""
+    """Production path: hard-delete row/media + durable tombstone."""
     pid = "jau-del-test-2"
     monkeypatch.setattr(catmod, "_prod_source", lambda: True)
     monkeypatch.setattr(catmod, "_sync_repo_async", lambda: None)
     called = {"delete": False}
-    monkeypatch.setattr(supabase_store, "delete_products",
-                        lambda ids: called.__setitem__("delete", True) or True)
     mem = _MemGrowth()
     _wire(monkeypatch, mem)
+    def _hard(ids):
+        called["delete"] = True
+        for item in ids:
+            mem.add(item)
+        return {"deleted": list(ids), "files": 0, "errors": []}
+    monkeypatch.setattr(supabase_store, "hard_delete_products", _hard)
 
     catmod.remove(pid, actor="test")
     assert called["delete"] is True
@@ -300,10 +304,13 @@ def test_admin_delete_records_durable_tombstone(monkeypatch):
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake")
     monkeypatch.setattr(catmod, "_prod_source", lambda: True)
     monkeypatch.setattr(catmod, "_sync_repo_async", lambda: None)
-    monkeypatch.setattr(supabase_store, "delete_products_strict",
-                        lambda ids: True)
     mem = _MemGrowth()
     _wire(monkeypatch, mem)
+    def _hard(ids):
+        for pid in ids:
+            mem.add(pid)
+        return {"deleted": list(ids), "files": 0, "errors": []}
+    monkeypatch.setattr(supabase_store, "hard_delete_products", _hard)
 
     email = "jaurastore@gmail.com"
     with a.test_client() as c:
@@ -499,10 +506,13 @@ def test_admin_delete_surfaces_a_tombstone_write_failure(monkeypatch):
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake")
     monkeypatch.setattr(catmod, "_prod_source", lambda: True)
     monkeypatch.setattr(catmod, "_sync_repo_async", lambda: None)
-    monkeypatch.setattr(supabase_store, "delete_products_strict",
-                        lambda ids: True)
     mem = _MemGrowth(fail_save=True)
     _wire(monkeypatch, mem)
+    def _hard(ids):
+        for pid in ids:
+            mem.add(pid)
+        return {"deleted": list(ids), "files": 0, "errors": ["tombstone failed"]}
+    monkeypatch.setattr(supabase_store, "hard_delete_products", _hard)
 
     email = "jaurastore@gmail.com"
     with a.test_client() as c:

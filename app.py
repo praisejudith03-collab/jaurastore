@@ -284,8 +284,9 @@ def create_app():
         SESSION_COOKIE_SECURE=(Config.ENV == "production"),
         SESSION_COOKIE_NAME="jaura_session",
         PERMANENT_SESSION_LIFETIME=Config.PERMANENT_SESSION_LIFETIME,
-        # allows a 50 MB video plus multipart/form-data envelope
-        MAX_CONTENT_LENGTH=52 * 1024 * 1024,
+        # Allows a 50 MB video plus multipart/form-data overhead,
+        # and gives receipt/PDF uploads enough headroom before validation.
+        MAX_CONTENT_LENGTH=80 * 1024 * 1024,
     )
     import customers as customers_mod
     customers_mod.register_routes(api)

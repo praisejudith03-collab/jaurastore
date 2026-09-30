@@ -1879,6 +1879,84 @@ def _own_photo_ref(value):
     return _own_upload_path(value)
 
 
+def _media_refs(product):
+    """Every upload URL a product row currently points at."""
+    p = dict(product or {})
+    refs = []
+    for key in ("image", "image_url", "imageUrl", "video", "video_url"):
+        value = p.get(key)
+        if isinstance(value, str) and value.strip():
+            refs.append(value.strip())
+    images = p.get("images")
+    if isinstance(images, str):
+        try:
+            images = json.loads(images)
+        except Exception:
+            images = []
+    if isinstance(images, (list, tuple)):
+        for value in images:
+            if isinstance(value, str) and value.strip():
+                refs.append(value.strip())
+            elif isinstance(value, dict):
+                for key in ("url", "src", "image", "video"):
+                    if isinstance(value.get(key), str) and value[key].strip():
+                        refs.append(value[key].strip())
+    out, seen = [], set()
+    for ref in refs:
+        if ref not in seen:
+            seen.add(ref)
+            out.append(ref)
+    return out
+
+
+def _upload_key(value):
+    try:
+        import storage as _storage
+        return _storage._key_from_url(str(value or ""))
+    except Exception:                                   # pragma: no cover
+        return ""
+
+
+def _purge_removed_media(before, after=None):
+    """Hard-delete uploaded media that an edit/delete has unlinked.
+
+    The row is saved first, then this runs. storage.delete_upload() refuses to
+    delete an object still referenced by another live product, so shared media
+    is not purged out from under the remaining product.
+    """
+    before_map = {}
+    for ref in _media_refs(before):
+        key = _upload_key(ref)
+        if key:
+            before_map.setdefault(key, ref)
+    after_keys = {_upload_key(ref) for ref in _media_refs(after)} if after else set()
+    removed = 0
+    if not before_map:
+        return removed
+    try:
+        import storage as _storage
+    except Exception:                                   # pragma: no cover
+        return 0
+    for key, ref in before_map.items():
+        if key in after_keys:
+            continue
+        try:
+            if _storage.delete_upload(ref):
+                removed += 1
+        except Exception:
+            pass
+    return removed
+
+
+def _purge_catalog_media_diff(before_rows, after_rows):
+    after_by_id = {str((p or {}).get("id") or ""): p for p in (after_rows or [])}
+    removed = 0
+    for before in (before_rows or []):
+        pid = str((before or {}).get("id") or "")
+        removed += _purge_removed_media(before, after_by_id.get(pid))
+    return removed
+
+
 def repair_dead_photos(limit=60, actor="photo_repair", dry_run=False):
     """Re-point products whose stored photo is missing from the bucket.
 
@@ -2060,8 +2138,8 @@ def upsert(product, actor=None):
     wanted = str(clean.get("slug") or "")
     clean["slug"] = _free_slug(wanted, clean["id"], taken)
 
-    action = "updated" if any(str((p or {}).get("id") or "") == clean["id"]
-                              for p in live) else "created"
+    previous = next((p for p in live if str((p or {}).get("id") or "") == clean["id"]), None)
+    action = "updated" if previous else "created"
 
     if _prod_source():
         try:
@@ -2083,6 +2161,8 @@ def upsert(product, actor=None):
         if row is None:
             return None, "error", False
         clean = row
+        if previous:
+            _purge_removed_media(previous, clean)
         _sync_repo_async()
         return clean, action, True
 
@@ -2106,6 +2186,8 @@ def upsert(product, actor=None):
         clear_deleted_id(clean["id"])
     except Exception:
         pass
+    if previous:
+        _purge_removed_media(previous, clean)
     mirrored = True
     try:
         from supabase_store import upsert_products, enabled
@@ -2131,6 +2213,12 @@ def remove(pid, actor=None):
     pid = str(pid or "").strip()
     if not pid:
         return None
+    existing_product = None
+    try:
+        existing_product = next((p for p in merged(include_hidden=True)
+                                 if str((p or {}).get("id") or "") == pid), None)
+    except Exception:
+        existing_product = None
 
     def _tombstone():
         try:
@@ -2140,8 +2228,13 @@ def remove(pid, actor=None):
             pass
 
     if _prod_source():
-        from supabase_store import delete_products
-        delete_products([pid])
+        try:
+            from supabase_store import hard_delete_products
+            hard_delete_products([pid])
+        except Exception:
+            from supabase_store import delete_products
+            delete_products([pid])
+            _purge_removed_media(existing_product, None)
         _tombstone()
         _sync_repo_async()
         return None
@@ -2157,8 +2250,13 @@ def remove(pid, actor=None):
         return data
 
     _mutate(actor, _apply)
-    from supabase_store import delete_products
-    delete_products([pid])
+    _purge_removed_media(existing_product, None)
+    try:
+        from supabase_store import hard_delete_products
+        hard_delete_products([pid])
+    except Exception:
+        from supabase_store import delete_products
+        delete_products([pid])
     _tombstone()
     _sync_repo_async()
     return None
@@ -2198,6 +2296,7 @@ def replace_all(products, actor=None):
     if _prod_source():
         from supabase_store import replace_all_products
         replace_all_products(kept)
+        _purge_catalog_media_diff(live, kept)
         _sync_repo_async()
         return kept, rejected
 
@@ -2209,6 +2308,7 @@ def replace_all(products, actor=None):
         return data
 
     _mutate(actor, _apply)
+    _purge_catalog_media_diff(live, kept)
     from supabase_store import replace_all_products
     replace_all_products(kept)
     _sync_repo_async()

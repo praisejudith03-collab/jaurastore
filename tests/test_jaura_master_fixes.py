@@ -19,10 +19,12 @@ def test_master_fix_sources_are_present():
                  "css/style.css"):
         assert (ROOT / path).is_file()
 
-def test_proof_failure_is_persisted_and_shown():
-    assert "PROOF_UPLOAD_FAILURE_NOTE" in text("api.py")
-    assert "proofUploadFailed" in text("js/admin.js")
-    assert "proof-upload-failed" in text("css/style.css")
+def test_receipt_upload_failure_blocks_checkout_inline():
+    assert "RECEIPT_UPLOAD_FAILED_MESSAGE" in text("api.py")
+    assert "receipt_upload_failed" in text("api.py")
+    app_js = text("js/app.js")
+    assert "Receipt upload failed. Please try choosing the photo again." in app_js
+    assert "showProofUploadFailure" in app_js
 
 def test_browser_and_catalog_accept_legacy_option_maps():
     assert "JSON.parse(raw)" in text("js/store.js")

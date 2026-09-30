@@ -489,27 +489,26 @@ def hard_delete_products(ids):
         report["errors"].append("supabase not configured")
         return report
 
-    # 1. purge the Storage objects the rows point at, while we can still read
-    #    them (once the row is gone the URLs are lost).
+    # 1. collect the Storage objects the rows point at while we can still read
+    #    them. The bytes are purged after the row is gone so storage.delete_upload
+    #    can still protect media shared by another live product.
+    urls = []
     for pid in ids:
         try:
             res = c.table("products").select("*").eq("id", pid).execute()
             for row in (getattr(res, "data", None) or []):
-                for url in _product_media_urls(row):
-                    try:
-                        if _delete_storage_object_from_url(url):
-                            report["files"] += 1
-                    except Exception as exc:
-                        report["errors"].append(f"storage {pid}: {exc}")
+                urls.extend(_product_media_urls(row))
         except Exception as exc:
             report["errors"].append(f"read {pid}: {exc}")
 
-    # 2. delete the rows themselves.
+    # 2. delete the rows themselves. If this fails, do NOT purge media: the
+    #    product is still live and would be left with broken files.
     try:
         c.table("products").delete().in_("id", ids).execute()
         report["deleted"] = list(ids)
     except Exception as exc:
         report["errors"].append(f"delete: {exc}")
+        return report
 
     # 3. durable tombstone, so the bundled seed copy stays suppressed too.
     for pid in ids:
@@ -523,6 +522,21 @@ def hard_delete_products(ids):
         c.table("variant_stock").delete().in_("product_id", ids).execute()
     except Exception:
         pass
+
+    # 5. purge unreferenced files. storage.delete_upload() refuses to remove an
+    #    object still used by another product, but does delete receipts/videos
+    #    and already-unlinked product media immediately.
+    seen = set()
+    for url in urls:
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        try:
+            import storage as _storage
+            if _storage.delete_upload(url):
+                report["files"] += 1
+        except Exception as exc:
+            report["errors"].append(f"storage: {exc}")
     return report
 
 

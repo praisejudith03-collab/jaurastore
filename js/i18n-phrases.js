@@ -35,6 +35,8 @@ window.I18N_PHRASES = {
     "Tout ce que nous devons savoir sur ce paiement",
   "Your receipt — JPG, PNG or PDF (max 8 MB) *":
     "Votre reçu — JPG, PNG ou PDF (max 8 Mo) *",
+  "Photo from your gallery or camera, or a PDF/DOC — up to 16 MB. Large images are compressed under 1 MB before upload.":
+    "Photo depuis votre galerie ou appareil, ou PDF/DOC — jusqu’à 16 Mo. Les grandes images sont compressées sous 1 Mo avant l’envoi.",
   "The original file is saved exactly as you upload it.":
     "Le fichier original est enregistré exactement comme vous l'envoyez.",
   "Send receipt to Jaura Store": "Envoyer le reçu à Jaura Store",

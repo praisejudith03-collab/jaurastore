@@ -3,8 +3,8 @@
 Groups:
   1. /api/admin/needs-attention no longer 500s on a bare module-level
      `supabase_store` reference (NameError).
-  2. A payment-proof storage upload failure must never fail an otherwise
-     valid checkout.
+  2. A payment-proof storage upload failure blocks checkout with an inline-safe
+     receipt error, so no completed order is missing its receipt.
   3. Per-option price overrides AND per-option compare-at ("was") prices
      survive catalog.normalize() so they persist instead of reverting.
   4. The abandoned-cart reader degrades gracefully when its table is
@@ -23,7 +23,7 @@ import pytest  # noqa: E402
 
 import app as appmod  # noqa: E402
 import catalog as catalog_mod  # noqa: E402
-from db import execute, init_db  # noqa: E402
+from db import execute, init_db, one  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 from _pw import PW  # noqa: E402
@@ -79,7 +79,7 @@ def _make_orderable(pid):
     return saved
 
 
-def test_checkout_completes_when_proof_upload_fails(client, monkeypatch):
+def test_checkout_blocks_when_proof_upload_fails(client, monkeypatch):
     pid = "jau-store-fail"
     _make_orderable(pid)
     execute("DELETE FROM rate_limits WHERE action='order'")
@@ -105,13 +105,13 @@ def test_checkout_completes_when_proof_upload_fails(client, monkeypatch):
     }
     r = client.post("/api/orders", data=data, content_type="multipart/form-data",
                     headers={"X-CSRF-Token": tok})
-    assert r.status_code == 200, r.data
+    assert r.status_code == 422, r.data
     body = r.get_json()
-    assert body["ok"] is True
-    assert body["id"] == "JA-STOREFAIL"
-    # The sale went through with an empty proof and a clear flag for admin.
-    assert body.get("proofUploadFailed") is True
-    assert body.get("proofUrl") in ("", None)
+    assert body["ok"] is False
+    assert body["code"] == "receipt_upload_failed"
+    assert body["field"] == "proof"
+    assert body["error"] == "Receipt upload failed. Please try choosing the photo again."
+    assert one("SELECT id FROM orders WHERE id=?", ("JA-STOREFAIL",)) is None
 
 
 # -------------------------------------------- 3. variant pricing persistence
@@ -166,23 +166,21 @@ def test_dimensions_field_persists_through_normalize():
     assert "dimensions" in catalog_mod.BASE_FIELDS
 
 
-def test_checkout_flag_persists_into_order_payload(client, monkeypatch):
-    """The order row saved to the DB must carry the proof_upload_failed flag."""
-    pid = "jau-store-flag"
+def test_successful_checkout_receipt_is_attached_to_order_and_receipts(client):
+    """A completed checkout stores both orders.proof_url and a receipt row."""
+    pid = "jau-store-proof"
     _make_orderable(pid)
     execute("DELETE FROM rate_limits WHERE action='order'")
-
-    import storage
-    monkeypatch.setattr(storage, "save_image",
-                        lambda *a, **k: (False, "Supabase Storage upload failed.", ""))
+    execute("DELETE FROM payment_proofs WHERE order_id='JA-STOREPROOF'")
+    execute("DELETE FROM orders WHERE id='JA-STOREPROOF'")
 
     tok = csrf(client)
     order = {
-        "id": "JA-STOREFLAG", "currency": "NGN", "total": 5000,
-        "customer": {"name": "Buyer", "email": "flag@example.com",
+        "id": "JA-STOREPROOF", "currency": "NGN", "total": 5000,
+        "customer": {"name": "Buyer", "email": "proof@example.com",
                      "phone": "+2348012345678", "city": "Lagos",
                      "zone": "Lagos Mainland", "address": "1 Test St"},
-        "items": [{"id": pid, "name": "Flag", "qty": 1, "price": 5000}],
+        "items": [{"id": pid, "name": "Proof", "qty": 1, "price": 5000}],
     }
     data = {
         "order": json.dumps(order),
@@ -192,12 +190,16 @@ def test_checkout_flag_persists_into_order_payload(client, monkeypatch):
     r = client.post("/api/orders", data=data, content_type="multipart/form-data",
                     headers={"X-CSRF-Token": tok})
     assert r.status_code == 200, r.data
-    # The stored payload records the fallback status for the admin.
-    from db import query as _q
-    stored = _q("SELECT payload FROM orders WHERE id=?", ("JA-STOREFLAG",))
-    assert stored, "order was not persisted"
-    payload = json.loads(stored[0]["payload"])
-    assert payload.get("proofUploadFailed") is True
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body.get("proofUploadFailed") is False
+    assert body.get("proofUrl")
+    stored = one("SELECT proof_url, payload FROM orders WHERE id=?", ("JA-STOREPROOF",))
+    assert stored and stored["proof_url"] == body["proofUrl"]
+    payload = json.loads(stored["payload"])
+    assert payload.get("proofUrl") == body["proofUrl"]
+    receipt = one("SELECT file_url FROM payment_proofs WHERE order_id=?", ("JA-STOREPROOF",))
+    assert receipt and receipt["file_url"] == body["proofUrl"]
 
 
 def test_order_upsert_is_resilient_to_a_missing_optional_column(monkeypatch):

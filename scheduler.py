@@ -33,7 +33,7 @@ TICK_SECONDS = 300
 # more than one page of rows in memory. Both ceilings exist so the worker's
 # resident memory stays far below the 50MB budget that used to be blown by
 # "SELECT everything" batches (the cause of scheduler.worker_died).
-REMINDER_PAGE_SIZE = 25
+REMINDER_PAGE_SIZE = 20
 REMINDER_MAX_PER_TICK = 200
 MAINTENANCE_THREAD = "jaura-maintenance"
 REMINDERS_THREAD = "jaura-abandoned-carts"

@@ -349,13 +349,13 @@ def test_referral_payout_skips_when_site_settings_unreachable(sb, monkeypatch):
 
 # ------------------------------------------------ product delete (strict)
 def test_admin_product_delete_503_when_supabase_delete_fails(client, monkeypatch):
-    """A failed Supabase tombstone must never be reported as a successful
-    delete: the portal answers 503 and the product stays live."""
+    """A failed Supabase hard delete must never be reported as successful."""
     monkeypatch.setattr(Config, "ENV", "production")
     monkeypatch.setattr(Config, "SUPABASE_URL", FAKE_ORIGIN)
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
     import supabase_store
-    monkeypatch.setattr(supabase_store, "delete_products_strict", lambda ids: False)
+    monkeypatch.setattr(supabase_store, "hard_delete_products",
+                        lambda ids: {"deleted": [], "files": 0, "errors": ["down"]})
     tok = _login(client)
     r = client.delete("/api/admin/products/jau-nope",
                       headers={"X-CSRF-Token": tok})
@@ -369,15 +369,15 @@ def test_admin_product_delete_ok_when_supabase_confirms(client, monkeypatch):
     monkeypatch.setattr(Config, "SUPABASE_URL", FAKE_ORIGIN)
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
     import supabase_store
-    monkeypatch.setattr(supabase_store, "delete_products_strict", lambda ids: True)
-    # The durable tombstone write is now honest (not swallowed): the delete
-    # only reports success when BOTH Supabase writes landed.
-    monkeypatch.setattr(supabase_store, "add_deleted_id", lambda pid: True)
+    monkeypatch.setattr(supabase_store, "hard_delete_products",
+                        lambda ids: {"deleted": list(ids), "files": 2, "errors": []})
     tok = _login(client)
     r = client.delete("/api/admin/products/jau-001",
                       headers={"X-CSRF-Token": tok})
     assert r.status_code == 200
-    assert r.get_json()["ok"] is True
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["filesRemoved"] == 2
 
 
 def _login(client):
