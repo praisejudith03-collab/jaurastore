@@ -2,7 +2,7 @@
    Pages are network-first so a visitor with a connection always sees the
    newest store; when the connection drops, the last copy is served instead of
    an error. Saving is handled separately by js/net.js (outbox + retry). */
-const VERSION = "jaura-v167";
+const VERSION = "jaura-v168";
 const CORE = [
   "./",
   "./index.html",
@@ -11,31 +11,31 @@ const CORE = [
   "./cart.html",
   "./checkout.html",
   "./order-complete.html",
-  "./css/style.css?v=167",
-  "./js/products-data.js?v=167",
-  "./js/i18n.js?v=167",
-  "./js/net.js?v=167",
-  "./js/store.js?v=167",
-  "./js/app.js?v=167",
-  "./images/brand/logo.jpg?v=167",
-  "./images/brand/favicon.png?v=167",
-  "./images/brand/apple-touch.png?v=167",
-  "./images/brand/og-cover.jpg?v=167",
+  "./css/style.css?v=168",
+  "./js/products-data.js?v=168",
+  "./js/i18n.js?v=168",
+  "./js/net.js?v=168",
+  "./js/store.js?v=168",
+  "./js/app.js?v=168",
+  "./images/brand/logo.jpg?v=168",
+  "./images/brand/favicon.png?v=168",
+  "./images/brand/apple-touch.png?v=168",
+  "./images/brand/og-cover.jpg?v=168",
   // The same-origin favicon fallback. The 32/48/180/192 icons the <head>
   // points at are Supabase objects on another origin: they are immutable at
   // their key and served by that CDN, so the worker never precaches them.
-  "./images/brand/favicon-16.png?v=167",
+  "./images/brand/favicon-16.png?v=168",
   "./static/logo.png",
-  "./static/fonts/allura-latin-400-normal.woff2?v=167",
-  "./static/fonts/cormorant-garamond-latin-400-normal.woff2?v=167",
-  "./static/fonts/cormorant-garamond-latin-500-normal.woff2?v=167",
-  "./static/fonts/cormorant-garamond-latin-600-normal.woff2?v=167",
-  "./static/fonts/cormorant-garamond-latin-700-normal.woff2?v=167",
-  "./static/fonts/cormorant-garamond-latin-400-italic.woff2?v=167",
-  "./static/fonts/outfit-latin-300-normal.woff2?v=167",
-  "./static/fonts/outfit-latin-400-normal.woff2?v=167",
-  "./static/fonts/outfit-latin-500-normal.woff2?v=167",
-  "./static/fonts/outfit-latin-600-normal.woff2?v=167",
+  "./static/fonts/allura-latin-400-normal.woff2?v=168",
+  "./static/fonts/cormorant-garamond-latin-400-normal.woff2?v=168",
+  "./static/fonts/cormorant-garamond-latin-500-normal.woff2?v=168",
+  "./static/fonts/cormorant-garamond-latin-600-normal.woff2?v=168",
+  "./static/fonts/cormorant-garamond-latin-700-normal.woff2?v=168",
+  "./static/fonts/cormorant-garamond-latin-400-italic.woff2?v=168",
+  "./static/fonts/outfit-latin-300-normal.woff2?v=168",
+  "./static/fonts/outfit-latin-400-normal.woff2?v=168",
+  "./static/fonts/outfit-latin-500-normal.woff2?v=168",
+  "./static/fonts/outfit-latin-600-normal.woff2?v=168",
 ];
 const MAX_ASSETS = 140;
 

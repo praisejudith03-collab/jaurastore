@@ -190,9 +190,13 @@ def products():
 # with a session, still gets the numbers it needs to manage the shop).
 _FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock",
                          "variantStock", "inventory",
-                         # Supplier stock-sync mapping: internal sourcing
-                         # detail, never a shopper's business.
-                         "supplierId", "supplierSku")
+                         # Supplier and per-option sourcing/SKU notes are
+                         # internal admin reference data, never a shopper's
+                         # business.
+                         "supplierId", "supplierSku", "supplierUrl",
+                         "supplier_url", "optionSupplierSku",
+                         "optionSupplierUrls", "option_supplier_urls",
+                         "optionSku", "option_sku")
 
 
 def _public_product(p):
@@ -2450,9 +2454,14 @@ def admin_order_update(oid):
     if Config.SUPABASE_ENABLED:
         try:
             from supabase_store import update_order as _sb_update_order
-            _sb_update_order(oid, status=status, payload=payload)
+            mirrored = bool(_sb_update_order(oid, status=status, payload=payload))
         except Exception:
-            pass
+            mirrored = False
+        if not mirrored:
+            return jsonify(ok=False, error=(
+                "The order update could not be confirmed in Supabase. Refresh "
+                "and retry so the status, customer notice and payment review "
+                "do not silently revert.")), 503
 
     # Build one complete customer copy, with a fallback for legacy rows whose
     # payload predates the nested customer email field.
@@ -2596,10 +2605,14 @@ def admin_product_upsert():
             return jsonify(ok=False, error=(
                 "That is a test product from the test suite, not a shop piece. "
                 "It cannot be added to the storefront. Delete it instead.")), 400
-        if action == "error" or (mirrored is False and catalog_mod._prod_source()):
+        if action == "error" or mirrored is False:
             return jsonify(ok=False, error=(
                 "The product could not be saved to Supabase. No changes were made.")), 503
         return jsonify(ok=False, error="A product needs at least a name."), 400
+    if mirrored is False:
+        return jsonify(ok=False, error=(
+            "The product could not be saved to Supabase. No changes were made."),
+            product=product, action=action, mirrored=False, meta=catalog_mod.meta()), 503
     return jsonify(ok=True, product=product, action=action, mirrored=mirrored,
                    meta=catalog_mod.meta())
 
@@ -2652,8 +2665,16 @@ def admin_products_replace():
     products = d.get("products")
     if not isinstance(products, list):
         return jsonify(ok=False, error="Send {products: [...]}."), 400
-    kept, rejected = catalog_mod.replace_all(products, authmod.current_admin())
-    return jsonify(ok=True, saved=len(kept), rejected=rejected, meta=catalog_mod.meta())
+    result = catalog_mod.replace_all(products, authmod.current_admin())
+    kept, rejected = result[0], result[1]
+    mirrored = result[2] if len(result) > 2 else True
+    if mirrored is False:
+        return jsonify(ok=False, error=(
+            "The bulk product import could not be confirmed in Supabase. No "
+            "fields were silently dropped; run the products migration and retry."),
+            saved=0, rejected=rejected, mirrored=False, meta=catalog_mod.meta()), 503
+    return jsonify(ok=True, saved=len(kept), rejected=rejected, mirrored=mirrored,
+                   meta=catalog_mod.meta())
 
 # ---------------------------------------------------- admin: repo / dual sync
 @api.post("/admin/photos/repair")

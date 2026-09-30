@@ -1,20 +1,10 @@
-"""A product save must survive a narrower Supabase products table.
+"""Admin saves must never survive by dropping Supabase columns.
 
-The incident: the hand-built products table has fewer columns than the row the
-app writes, so PostgREST answered PGRST204 ("Could not find the 'compareCfa'
-column of 'products' in the schema cache") and *every* product save was
-rejected. Reads kept working, so the shop looked fine while the owner's save
-sat in the server's local override file - invisible to the other phone and
-wiped by the next deploy.
-
-These tests hold the two halves of the fix:
-
-* supabase_store writes whatever row the table actually accepts (drop the
-  rejected column, retry), and reports the write as failed - mirrored=False -
-  when the table rejects a column the product cannot exist without, or when it
-  fails for any other reason.
-* the admin save then really goes live: the product reaches the fake Supabase
-  table and /api/catalog-level reads see it.
+The current zero-data-loss rule is stricter than the old narrow-table fallback:
+if PostgREST says a product column is missing, the writer must refuse the save
+instead of retrying with that key removed. A successful response means every
+admin-entered field was accepted by the products table and will be available
+after a hard reload.
 
 Run with:  python3 -m pytest tests -q
 No real Supabase is needed: supabase_store.client() is monkeypatched to an
@@ -204,15 +194,18 @@ class _BoomSupabase:
         raise RuntimeError(f"connection reset while writing {name}")
 
 
-# The exact shape migrate_supabase.py creates in Supabase. The app writes more
-# keys than this (images, optionStock, usesPlaceholder, ...) and production
-# historically lacked compareCfa - that mismatch is what killed every save.
-MIGRATE_COLUMNS = {"id", "sku", "slug", "name", "nameFr", "category",
-                   "priceCfa", "compareCfa", "priceNgn", "compareNgn",
-                   "image", "image_url", "placeholderImage", "description",
-                   "stock", "stock_quantity",
-                   "badge", "featured", "online", "colors", "options",
-                   "source", "updated_at"}
+# The exact products-table shape the app now requires. A fake table missing any
+# one of these columns rejects the write and the admin route must surface 503,
+# never silently drop the field.
+MIGRATE_COLUMNS = {"id", "legacyId", "sku", "slug", "name", "nameFr",
+                   "descriptionFr", "category", "priceCfa", "compareCfa",
+                   "priceNgn", "compareNgn", "image", "image_url", "images",
+                   "description", "stock", "stock_quantity", "badge",
+                   "featured", "online", "colors", "options", "optionStock",
+                   "optionPrices", "optionCompareAt", "optionSupplierSku",
+                   "optionSku", "reviews", "dimensions", "bulkQty",
+                   "bulkPercent", "placeholderImage", "usesPlaceholder",
+                   "source", "supplierId", "supplierSku", "updated_at"}
 
 
 class _StrictTable(_FakeTable):
@@ -265,20 +258,43 @@ def _row(pid="jau-visible-1", **over):
 
 
 # ------------------------------------------------------------------- writes
-def test_upsert_adapts_to_narrow_table(monkeypatch):
-    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
+def test_catalog_normalize_preserves_admin_alias_fields():
+    row = catalog_mod.normalize({
+        "id": "jau-alias", "name": "Alias", "priceNgn": 1000,
+        "supplier_url": "https://supplier.example/main",
+        "compare_at_price": 1500,
+        "variant_prices": {"Colour: Rose": 1100},
+        "variant_compare_at": {"Colour: Rose": 1600},
+        "option_supplier_urls": {"Colour: Rose": "https://supplier.example/rose"},
+        "variant_skus": {"Colour: Rose": "ROSE-1"},
+        "bulk_quantity": 10,
+        "bulk_discount_percent": 15,
+        "customer_reviews": [{"name": "Ada", "body": "Loved it", "rating": 5,
+                              "created_at": "2026-09-30T10:00:00Z"}],
+    })
+    assert row["supplierSku"] == "https://supplier.example/main"
+    assert row["compareNgn"] == 1500
+    assert row["optionPrices"]["Colour: Rose"] == 1100
+    assert row["optionCompareAt"]["Colour: Rose"] == 1600
+    assert row["optionSupplierSku"]["Colour: Rose"] == "https://supplier.example/rose"
+    assert row["optionSku"]["Colour: Rose"] == "ROSE-1"
+    assert row["bulkQty"] == 10 and row["bulkPercent"] == 15
+    assert row["reviews"][0]["body"] == "Loved it"
+
+
+def test_upsert_accepts_complete_products_table(monkeypatch):
+    fake = _StrictSupabase(MIGRATE_COLUMNS)
     monkeypatch.setattr(supabase_store, "client", lambda: fake)
     assert supabase_store.upsert_products([_full_row()]) is True
     stored = [x for x in fake.tables["products"]
               if x.get("id") == "jau-narrow-1"][0]
     assert stored["stock"] == 7 and stored["priceNgn"] == 10000
     assert stored["name"] == "Vis jau-narrow-1"
-    assert "compareCfa" not in stored
-    assert "images" not in stored and "optionStock" not in stored
+    assert "compareCfa" in stored
 
 
-def test_upsert_refuses_critical_column_drop(monkeypatch):
-    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa", "stock"})
+def test_upsert_refuses_any_product_column_drop(monkeypatch):
+    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
     monkeypatch.setattr(supabase_store, "client", lambda: fake)
     assert supabase_store.upsert_products([_full_row()]) is False
     assert fake.tables.get("products", []) == []
@@ -289,37 +305,27 @@ def test_upsert_false_on_other_errors(monkeypatch):
     assert supabase_store.upsert_products([_full_row()]) is False
 
 
-def test_bulk_replace_adapts_to_narrow_table(monkeypatch):
-    """The CSV / bulk import mirrors through the same resilient path.
-
-    A rejected column must not cost the whole catalogue: the tombstone pass
-    still runs and every row lands with the columns the table has. The caller's
-    own dicts stay untouched (a retry edits a copy, not the product the
-    request will hand back).
-    """
+def test_bulk_replace_refuses_narrow_table(monkeypatch):
+    """CSV / bulk import must not be acknowledged if a column would be lost."""
     fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
     monkeypatch.setattr(supabase_store, "client", lambda: fake)
     first = _full_row("jau-narrow-3")
     supabase_store.replace_all_products([first, _full_row("jau-narrow-4")])
-    stored = fake.tables["products"]
-    assert {"jau-narrow-3", "jau-narrow-4"} <= {x.get("id") for x in stored}
-    assert all("compareCfa" not in x and x["stock"] == 7 for x in stored)
-    assert all(x["source"] == "admin" for x in stored)
+    assert fake.tables.get("products", []) == []
     assert "compareCfa" in first and first["stock"] == 7
 
 
 # ---------------------------------------------------------------- end to end
-def test_save_goes_live_on_narrow_table(client, iso_catalog, monkeypatch):
+def test_save_is_blocked_on_narrow_table(client, iso_catalog, monkeypatch):
     fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
     monkeypatch.setattr(supabase_store, "client", lambda: fake)
     tok = login(client)
     r = client.post("/api/admin/products",
                     json={"product": _row("jau-narrow-2")},
                     headers={"X-CSRF-Token": tok})
-    assert r.status_code == 200, r.data
-    assert r.get_json()["mirrored"] is True
-    ids = {str(p.get("id")) for p in catalog_mod.merged(include_hidden=True)}
-    assert "jau-narrow-2" in ids
+    assert r.status_code == 503, r.data
+    assert r.get_json()["ok"] is False
+    assert fake.tables.get("products", []) == []
 
 
 # ------------------------------------------------- each kind in its own table
@@ -346,7 +352,7 @@ def _fresh_order(*oids):
 
 def test_each_kind_of_data_lands_in_its_own_table(client, iso_catalog, monkeypatch):
     """Products -> products, an order -> orders, categories -> growth_settings."""
-    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
+    fake = _StrictSupabase(MIGRATE_COLUMNS)
     monkeypatch.setattr(supabase_store, "client", lambda: fake)
     monkeypatch.setattr(Config, "SUPABASE_ENABLED", True)   # mirrors on
     # the category table lives in the repo; point the PUT at /tmp so the
@@ -396,6 +402,24 @@ def test_each_kind_of_data_lands_in_its_own_table(client, iso_catalog, monkeypat
     assert {c["id"] for c in json.loads(settings["categories_json"])} == {
         "beauty", "gift-set"}
     assert not [x for x in fake.tables["products"] if x.get("id") == "JA-VIS01"]
+
+
+def test_admin_order_update_refuses_unmirrored_supabase_write(client, iso_catalog, monkeypatch):
+    """Order admin edits must not say saved when Supabase will reload old data."""
+    monkeypatch.setattr(Config, "SUPABASE_ENABLED", False)
+    _fresh_order("JA-UPD1")
+    csrf = client.get("/api/csrf").get_json()["token"]
+    created = client.post("/api/orders", json=_order_body("JA-UPD1"),
+                          headers={"X-CSRF-Token": csrf})
+    assert created.status_code == 200, created.data
+
+    tok = login(client)
+    monkeypatch.setattr(Config, "SUPABASE_ENABLED", True)
+    monkeypatch.setattr(supabase_store, "client", lambda: _BoomSupabase())
+    r = client.patch("/api/admin/orders/JA-UPD1", json={"status": "confirmed"},
+                     headers={"X-CSRF-Token": tok})
+    assert r.status_code == 503, r.data
+    assert r.get_json()["ok"] is False
 
 
 def test_a_broken_mirror_never_loses_a_sale(client, iso_catalog, monkeypatch):
@@ -519,25 +543,47 @@ def test_no_supabase_store_call_site_is_out_of_date():
 
 
 # ------------------------------------------------------------ TASK 3: catalog
-def test_narrow_row_shadows_no_fields(client, iso_catalog, monkeypatch):
-    """A dropped column must not hide what this server still holds."""
-    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
+def test_full_save_reload_preserves_admin_product_fields(client, iso_catalog, monkeypatch):
+    """A successful admin save pre-populates every high-risk field on reload."""
+    fake = _StrictSupabase(MIGRATE_COLUMNS)
     monkeypatch.setattr(supabase_store, "client", lambda: fake)
     tok = login(client)
-    r = client.post("/api/admin/products", json={"product": _row(
-        "jau-fill", images=["images/brand/logo.jpg", "images/products/shoes.jpg"],
-        optionStock={"Small": 2, "Large": 3})}, headers={"X-CSRF-Token": tok})
+    payload = _row(
+        "jau-fill",
+        images=["images/brand/logo.jpg", "images/products/shoes.jpg"],
+        compareNgn=12000, supplier_url="https://supplier.example/item",
+        supplierSku="https://supplier.example/item",
+        options=[{"title": "Colour", "values": ["Rose custom"]}],
+        colors=["Rose custom"], optionStock={"Rose custom": 3},
+        optionPrices={"Colour: Rose custom": 9100},
+        optionCompareAt={"Colour: Rose custom": 12000},
+        optionSupplierSku={"Colour: Rose custom": "https://supplier.example/rose"},
+        optionSku={"Colour: Rose custom": "ROSE-CUSTOM-1"},
+        bulkQty=10, bulkPercent=15, featured=True, online=True,
+        reviews=[{"name": "Ada", "body": "Loved the scent", "rating": 5,
+                  "created_at": "2026-09-30T10:00:00Z"}],
+    )
+    r = client.post("/api/admin/products", json={"product": payload},
+                    headers={"X-CSRF-Token": tok})
     assert r.status_code == 200, r.data
     stored = [x for x in fake.tables["products"] if x.get("id") == "jau-fill"][0]
-    assert "images" not in stored and "optionStock" not in stored   # table lacks them
-    p = {str(x["id"]): x for x in catalog_mod.merged(include_hidden=True)}["jau-fill"]
-    assert len(p.get("images") or []) == 2, "the gallery was shadowed"
-    assert (p.get("optionStock") or {}).get("Large") == 3, "variant stock was shadowed"
+    assert len(stored.get("images") or []) == 2
+    served = {str(x["id"]): x for x in catalog_mod.merged(include_hidden=True)}["jau-fill"]
+    assert served["supplierSku"] == "https://supplier.example/item"
+    assert served["compareNgn"] == 12000
+    assert served["optionPrices"]["Colour: Rose custom"] == 9100
+    assert served["optionCompareAt"]["Colour: Rose custom"] == 12000
+    assert served["optionSupplierSku"]["Colour: Rose custom"] == "https://supplier.example/rose"
+    assert served["optionSku"]["Colour: Rose custom"] == "ROSE-CUSTOM-1"
+    assert served["optionStock"]["Rose custom"] == 3
+    assert served["bulkQty"] == 10 and served["bulkPercent"] == 15
+    assert served["featured"] is True and served["online"] is True
+    assert served["reviews"][0]["body"] == "Loved the scent"
 
 
 def test_same_named_products_from_two_phones_both_show(client, iso_catalog, monkeypatch):
     """Two different pieces called the same thing are not one product."""
-    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
+    fake = _StrictSupabase(MIGRATE_COLUMNS)
     monkeypatch.setattr(supabase_store, "client", lambda: fake)
     tok = login(client)
     # explicit slugs: the _row helper defaults slug to the id, and the whole
@@ -568,7 +614,7 @@ def test_same_named_products_from_two_phones_both_show(client, iso_catalog, monk
 def test_reimporting_the_same_batch_does_not_rename_slugs(client, iso_catalog,
                                                           monkeypatch):
     """PUTting the same CSV twice must not churn every slug to -2, -3, ..."""
-    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
+    fake = _StrictSupabase(MIGRATE_COLUMNS)
     monkeypatch.setattr(supabase_store, "client", lambda: fake)
     tok = login(client)
     batch = [{"id": "jau-shea-a", "name": "Shea Butter", "slug": "shea-butter",

@@ -92,7 +92,7 @@ BASE_FIELDS = (
     "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
     "stock", "badge", "featured", "online", "colors", "options", "optionPrices",
     "optionCompareAt", "dimensions", "supplierId", "supplierSku",
-    "optionSupplierSku",
+    "optionSupplierSku", "optionSku", "reviews",
 )
 
 # Historical constant, kept only for backward-compatible imports. There is no
@@ -607,16 +607,24 @@ def normalize(product):
         return None
     # Per-product bulk discount: both values or neither (a lone half-config
     # pair can never fire and would only confuse the admin editor).
-    _bulk_qty = _clean_bulk_qty(product.get("bulkQty"), product.get("bulk_qty"))
-    _bulk_pct = _clean_bulk_percent(product.get("bulkPercent"), product.get("bulk_percent"))
+    _bulk_qty = _clean_bulk_qty(
+        product.get("bulkQty"), product.get("bulk_qty"),
+        product.get("bulkQuantity"), product.get("bulk_quantity"),
+        product.get("bulkDiscountQty"), product.get("bulk_discount_qty"))
+    _bulk_pct = _clean_bulk_percent(
+        product.get("bulkPercent"), product.get("bulk_percent"),
+        product.get("bulkDiscountPercent"), product.get("bulk_discount_percent"))
     if not (_bulk_qty and _bulk_pct):
         _bulk_qty = None
         _bulk_pct = None
     raw_id = sec.clean(product.get("id"), 64)
     pid = raw_id or ("jau-" + secrets.token_hex(5))
     ngn, cfa = _derive_cfa(product)
-    compare_cfa = _int_or_none(product.get("compareCfa"))
-    compare_ngn = _int_or_none(product.get("compareNgn"))
+    compare_cfa = _int_or_none(product.get("compareCfa") or product.get("compare_cfa"))
+    compare_ngn = _int_or_none(
+        product.get("compareNgn") or product.get("compare_ngn")
+        or product.get("compareAtPrice") or product.get("compare_at_price")
+        or product.get("strikeThroughPrice") or product.get("strike_through_price"))
     compare_cfa = max(0, compare_cfa) if compare_cfa is not None else None
     compare_ngn = max(0, compare_ngn) if compare_ngn is not None else None
     # "Was" prices follow the same rule: a converted figure is rounded up,
@@ -684,11 +692,17 @@ def normalize(product):
         "colors": list(product.get("colors") or []),
         "options": list(product.get("options") or []),
         "optionStock": option_stock,
-        "optionPrices": _clean_option_prices(product.get("optionPrices") or product.get("option_prices")),
+        "optionPrices": _clean_option_prices(
+            product.get("optionPrices") or product.get("option_prices")
+            or product.get("variantPrices") or product.get("variant_prices")
+            or product.get("priceOverrides") or product.get("price_overrides")),
         # Per-option "was" (strike-through) prices, mirroring optionPrices.
         # A variant with an entry here shows the original price crossed out
         # next to its override; a blank entry inherits the product compareNgn.
-        "optionCompareAt": _clean_option_prices(product.get("optionCompareAt") or product.get("option_compare_at")),
+        "optionCompareAt": _clean_option_prices(
+            product.get("optionCompareAt") or product.get("option_compare_at")
+            or product.get("variantCompareAt") or product.get("variant_compare_at")
+            or product.get("variantComparePrices") or product.get("variant_compare_prices")),
         # Optional per-product bulk discount: order MORE than bulkQty units of
         # this product and bulkPercent is taken off its unit price at
         # checkout. Both values or neither - a lone percentage with no
@@ -706,11 +720,21 @@ def normalize(product):
         "supplierId": sec.clean(
             product.get("supplierId") or product.get("supplier_id"), 40).lower(),
         "supplierSku": sec.clean(
-            product.get("supplierSku") or product.get("supplier_sku"), 200),
-        # Per-option supplier reference links (component -> URL), manual only
-        # can mirror stock for each variant independently.
+            product.get("supplierSku") or product.get("supplier_sku")
+            or product.get("supplierUrl") or product.get("supplier_url")
+            or product.get("supplierURL"), 500),
+        # Per-option supplier reference links (component -> URL), manual and
+        # informational only; no automated supplier sync reads them.
         "optionSupplierSku": _clean_option_supplier_sku(
-            product.get("optionSupplierSku") or product.get("option_supplier_sku")),
+            product.get("optionSupplierSku") or product.get("option_supplier_sku")
+            or product.get("optionSupplierUrls") or product.get("option_supplier_urls")
+            or product.get("variantSupplierUrls") or product.get("variant_supplier_urls")),
+        "optionSku": _clean_option_sku(
+            product.get("optionSku") or product.get("option_sku")
+            or product.get("optionSkus") or product.get("option_skus")
+            or product.get("variantSku") or product.get("variant_sku")
+            or product.get("variantSkus") or product.get("variant_skus")),
+        "reviews": _clean_admin_reviews(product.get("reviews") or product.get("customerReviews") or product.get("customer_reviews")),
         "updated_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
     return out
@@ -854,8 +878,11 @@ def bulk_discount_for(product, quantity):
     if qty <= 0:
         return 0
     p = product if isinstance(product, dict) else {}
-    threshold = _clean_bulk_qty(p.get("bulkQty"), p.get("bulk_qty"))
-    percent = _clean_bulk_percent(p.get("bulkPercent"), p.get("bulk_percent"))
+    threshold = _clean_bulk_qty(p.get("bulkQty"), p.get("bulk_qty"),
+                                p.get("bulkQuantity"), p.get("bulk_quantity"),
+                                p.get("bulkDiscountQty"), p.get("bulk_discount_qty"))
+    percent = _clean_bulk_percent(p.get("bulkPercent"), p.get("bulk_percent"),
+                                  p.get("bulkDiscountPercent"), p.get("bulk_discount_percent"))
     if threshold and percent:
         return percent if qty > int(threshold) else 0
     try:
@@ -916,6 +943,63 @@ def _clean_option_supplier_sku(raw):
                 links.append(link)
         if label and links:
             out[label] = links if isinstance(value, (list, tuple)) else links[0]
+    return out
+
+
+def _clean_option_sku(raw):
+    """Per-option merchant/SKU identifiers. Blank values are dropped."""
+    import json
+    import security as sec
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, value in list(raw.items())[:200]:
+        label = sec.clean(key, 160)
+        sku = sec.clean(value, 120)
+        if label and sku:
+            out[label] = sku
+    return out
+
+
+def _clean_admin_reviews(raw):
+    """Admin-entered display reviews stored with a product row.
+
+    Verified customer reviews still live in product_reviews; this field keeps
+    owner-entered notes from the product editor from being only localStorage.
+    """
+    import json
+    import security as sec
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for row in raw[:80]:
+        if not isinstance(row, dict):
+            continue
+        body = sec.clean(row.get("body") if row.get("body") is not None else row.get("note"), 600)
+        if not body:
+            continue
+        name = sec.clean(row.get("name"), 60) or "Customer"
+        title = sec.clean(row.get("title"), 120)
+        rating = sec.clean_int(row.get("rating") if row.get("rating") is not None else row.get("stars"), 5, 1, 5)
+        created = sec.clean(row.get("created_at") or row.get("at"), 40)
+        item = {"name": name, "body": body, "rating": rating, "created_at": created}
+        if title:
+            item["title"] = title
+        # Deprecated aliases keep older browser bundles rendering the note.
+        item["note"] = body
+        item["stars"] = rating
+        item["at"] = created
+        out.append(item)
     return out
 
 
@@ -2265,7 +2349,7 @@ def remove(pid, actor=None):
 def replace_all(products, actor=None):
     """Replace the whole admin catalogue (bulk / CSV import).
 
-    Returns (kept, rejected). Invalid rows are rejected, never silently dropped.
+    Returns (kept, rejected, mirrored). Invalid rows are rejected, never silently dropped.
     In production the replacement lands in Supabase only - the local override
     file is never written.
     """
@@ -2295,10 +2379,11 @@ def replace_all(products, actor=None):
 
     if _prod_source():
         from supabase_store import replace_all_products
-        replace_all_products(kept)
+        if not replace_all_products(kept):
+            return kept, rejected, False
         _purge_catalog_media_diff(live, kept)
         _sync_repo_async()
-        return kept, rejected
+        return kept, rejected, True
 
     def _apply(data, _path):
         data["products"] = kept
@@ -2310,9 +2395,9 @@ def replace_all(products, actor=None):
     _mutate(actor, _apply)
     _purge_catalog_media_diff(live, kept)
     from supabase_store import replace_all_products
-    replace_all_products(kept)
+    mirrored = replace_all_products(kept)
     _sync_repo_async()
-    return kept, rejected
+    return kept, rejected, bool(mirrored)
 
 
 def _name_or(p):

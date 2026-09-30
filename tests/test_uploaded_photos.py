@@ -79,7 +79,7 @@ fake = None
 def _supabase_upload(monkeypatch):
     """Pretend Supabase is configured and hand the fake a storage bucket."""
     global fake
-    fake = _StrictSupabase(MIGRATE_COLUMNS - {"compareCfa"})
+    fake = _StrictSupabase(MIGRATE_COLUMNS)
     fake.objects = {}
     fake.storage = _Storage(fake)
     monkeypatch.setattr(Config, "UPLOAD_MODE", "supabase")

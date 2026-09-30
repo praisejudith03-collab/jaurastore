@@ -432,16 +432,49 @@ const JA = (() => {
   function normalizeServerProduct(p) {
     if (!p || typeof p !== "object") return p;
     p = foldFrenchAliases(p);
-    // An admin row (?all=1) already carries the real number: keep it exactly.
-    if (typeof p.stock === "number") return p;
+    const hasOwn = (k) => Object.prototype.hasOwnProperty.call(p, k) && p[k] != null && p[k] !== "";
+    const hasAltAliases = [
+      "compare_ngn", "compare_cfa", "compareAtPrice", "compare_at_price",
+      "strikeThroughPrice", "strike_through_price", "supplier_sku",
+      "supplierUrl", "supplier_url", "supplierURL", "option_prices",
+      "variantPrices", "variant_prices", "priceOverrides", "price_overrides",
+      "option_compare_at", "variantCompareAt", "variant_compare_at",
+      "variantComparePrices", "variant_compare_prices", "option_supplier_sku",
+      "optionSupplierUrls", "option_supplier_urls", "variantSupplierUrls",
+      "variant_supplier_urls", "option_sku", "optionSkus", "option_skus",
+      "variantSku", "variant_sku", "variantSkus", "variant_skus",
+      "bulk_qty", "bulkQuantity", "bulk_quantity", "bulkDiscountQty",
+      "bulk_discount_qty", "bulk_percent", "bulkDiscountPercent",
+      "bulk_discount_percent", "customerReviews", "customer_reviews",
+    ].some(hasOwn);
+    // Fast path used by tests and hot admin catalogue renders: when a row is
+    // already canonical and already carries its numeric admin stock, keep the
+    // exact object identity.
+    if (typeof p.stock === "number" && !hasAltAliases) return p;
     const out = { ...p };
+    const pick = (...vals) => vals.find((v) => v != null && v !== "");
+    const objectAlias = (...vals) => vals.find((v) => v && typeof v === "object" && !Array.isArray(v));
+    out.compareNgn = pick(out.compareNgn, out.compare_ngn, out.compareAtPrice, out.compare_at_price, out.strikeThroughPrice, out.strike_through_price);
+    out.compareCfa = pick(out.compareCfa, out.compare_cfa);
+    out.supplierSku = pick(out.supplierSku, out.supplier_sku, out.supplierUrl, out.supplier_url, out.supplierURL) || "";
+    out.supplierUrl = out.supplierSku;
+    out.supplier_url = out.supplierSku;
+    out.optionPrices = objectAlias(out.optionPrices, out.option_prices, out.variantPrices, out.variant_prices, out.priceOverrides, out.price_overrides) || out.optionPrices || {};
+    out.optionCompareAt = objectAlias(out.optionCompareAt, out.option_compare_at, out.variantCompareAt, out.variant_compare_at, out.variantComparePrices, out.variant_compare_prices) || out.optionCompareAt || {};
+    out.optionSupplierSku = objectAlias(out.optionSupplierSku, out.option_supplier_sku, out.optionSupplierUrls, out.option_supplier_urls, out.variantSupplierUrls, out.variant_supplier_urls) || out.optionSupplierSku || {};
+    out.optionSku = objectAlias(out.optionSku, out.option_sku, out.optionSkus, out.option_skus, out.variantSku, out.variant_sku, out.variantSkus, out.variant_skus) || out.optionSku || {};
+    out.bulkQty = pick(out.bulkQty, out.bulk_qty, out.bulkQuantity, out.bulk_quantity, out.bulkDiscountQty, out.bulk_discount_qty);
+    out.bulkPercent = pick(out.bulkPercent, out.bulk_percent, out.bulkDiscountPercent, out.bulk_discount_percent);
+    out.reviews = Array.isArray(out.reviews) ? out.reviews : (Array.isArray(out.customerReviews) ? out.customerReviews : (Array.isArray(out.customer_reviews) ? out.customer_reviews : []));
+    // An admin row (?all=1) already carries the real number: keep it exactly.
+    if (typeof out.stock === "number") return out;
     // Public per-variant availability (the server never ships the numbers):
     // {"Red": "out", "Black": "in"}. Translate it into the shape stockFor()
     // reads - a variant marked "out" has 0 available, an "in" variant a high
     // sentinel (the server re-checks the real quantity when the order is
     // placed). Without this the storefront could not tell a sold-out colour
     // from an available one at all.
-    const oss = p.option_stock_status;
+    const oss = out.option_stock_status;
     if (oss && typeof oss === "object" && !Array.isArray(oss) && Object.keys(oss).length) {
       const status = {};
       Object.keys(oss).forEach((k) => {
@@ -449,7 +482,7 @@ const JA = (() => {
       });
       out.optionStockStatus = status;
     }
-    const os = p.option_stock;
+    const os = out.option_stock;
     if (os && typeof os === "object" && !Array.isArray(os) && Object.keys(os).length) {
       // Per-variant stock: the map IS the truth, and the total is its sum, so
       // a product whose every variant is 0 still reads as sold out.
@@ -464,7 +497,7 @@ const JA = (() => {
       out.stock = sum;
       return out;
     }
-    if (String(p.stock_status || "").toLowerCase() === "out") {
+    if (String(out.stock_status || "").toLowerCase() === "out") {
       out.stock = 0;
       return out;
     }
@@ -2198,32 +2231,50 @@ const JA = (() => {
     const all = read(KEYS.reviews, {});
     return all && typeof all === "object" && !Array.isArray(all) ? all : {};
   }
+  function normalizeReview(rec) {
+    if (!rec || typeof rec !== "object") return null;
+    const body = String(rec.body != null ? rec.body : (rec.note || "")).trim().slice(0, 600);
+    if (!body) return null;
+    const name = String(rec.name || "Customer").trim().slice(0, 60) || "Customer";
+    const stars = Math.min(5, Math.max(1, Math.round(Number(rec.rating != null ? rec.rating : rec.stars) || 5)));
+    const at = String(rec.created_at || rec.at || "");
+    const out = { ...rec, name, body, note: body, rating: stars, stars, created_at: at, at };
+    return out;
+  }
   function reviews(id) {
-    const list = reviewsAll()[id];
-    return Array.isArray(list) ? list : [];
+    const local = reviewsAll()[id];
+    const p = products().find((x) => String(x.id) === String(id));
+    const embedded = Array.isArray(p && p.reviews) ? p.reviews : [];
+    const merged = [];
+    const seen = new Set();
+    embedded.concat(Array.isArray(local) ? local : []).forEach((row) => {
+      const r = normalizeReview(row);
+      if (!r) return;
+      const key = [r.created_at || r.at || "", r.name || "", r.body || r.note || ""].join("\u0000");
+      if (seen.has(key)) return;
+      seen.add(key); merged.push(r);
+    });
+    return merged;
   }
   function setReviews(id, list) {
     if (!id) return;
     const all = reviewsAll();
-    all[id] = Array.isArray(list) ? list : [];
+    all[id] = (Array.isArray(list) ? list : []).map(normalizeReview).filter(Boolean);
     write(KEYS.reviews, all);
   }
   function addReview(id, rec) {
-    const name = String(rec && rec.name ? rec.name : "").trim().slice(0, 60);
-    const note = String(rec && rec.note ? rec.note : "").trim().slice(0, 600);
-    const stars = Math.min(5, Math.max(1, Math.round(Number(rec && rec.stars) || 5)));
-    if (!id || !note) return null;
-    const item = { name: name || "Customer", stars, note, at: new Date().toISOString() };
+    const item = normalizeReview({ ...(rec || {}), created_at: new Date().toISOString() });
+    if (!id || !item) return null;
     setReviews(id, [item].concat(reviews(id)).slice(0, 80));
     return item;
   }
   function removeReview(id, at) {
-    setReviews(id, reviews(id).filter((r) => r.at !== at));
+    setReviews(id, reviews(id).filter((r) => String(r.created_at || r.at || "") !== String(at || "")));
   }
   function reviewStats(id) {
     const list = reviews(id);
     if (!list.length) return { n: 0, avg: 0 };
-    const avg = list.reduce((s, r) => s + (Number(r.stars) || 0), 0) / list.length;
+    const avg = list.reduce((s, r) => s + (Number(r.rating != null ? r.rating : r.stars) || 0), 0) / list.length;
     return { n: list.length, avg };
   }
   function starSvg() {
@@ -2412,8 +2463,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=167";
-        const FLYER = "images/brand/logo-flyer.jpg?v=167";
+        const LOGO = "images/brand/logo.jpg?v=168";
+        const FLYER = "images/brand/logo-flyer.jpg?v=168";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2602,7 +2653,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=167" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=168" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -2900,7 +2951,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=167" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=168" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3028,7 +3079,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=167", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=168", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3062,7 +3113,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=167";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=168";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3121,7 +3172,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=167");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=168");
     document.title = title;
     [
       ["name", "description", description],
