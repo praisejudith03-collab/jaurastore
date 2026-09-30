@@ -135,23 +135,24 @@ def test_option_compare_at_is_an_allowed_field():
     assert "optionCompareAt" in catalog_mod.BASE_FIELDS
 
 
-def test_whatsapp_caption_includes_dimensions_and_link_but_no_stock_label():
-    """The Jaura Channel caption carries name, both prices, dimensions and the
-    store link - and NEVER an 'In stock'/'Out of stock' label."""
+def test_whatsapp_copy_details_caption_is_three_lines_no_url_no_stock_label():
+    """The one-tap "Copy Details" caption carries EXACTLY: bilingual name,
+    both prices, and colours/options (when present) - never a website URL
+    and never an 'In stock'/'Out of stock' label."""
     admin_js = (ROOT and open(os.path.join(ROOT, "js", "admin.js"),
                               encoding="utf-8").read())
-    assert "broadcastDimensionsLine" in admin_js
-    # broadcastFullText assembles name, ₦, CFA, dimensions (when set), link.
+    # broadcastFullText assembles name, ₦/CFA prices, and options only.
     match = re.search(r"function broadcastFullText\(p\)\s*\{", admin_js)
     assert match
     body = admin_js[match.start():admin_js.index("\n}\n", match.start())]
     assert "broadcastDisplayName(p)" in body
-    assert "broadcastDetailsLine(p)" in body
+    assert "broadcastPriceLine(p)" in body
+    assert "broadcastOptionsLine(p)" in body
     assert "broadcastProductUrl(p)" not in body
     # Availability is a share-time gate, never a caption label.
     assert "In stock" not in body and "Out of stock" not in body
     assert "broadcastStockLine" not in admin_js
-    # Out-of-stock items are blocked from sharing entirely.
+    # Out-of-stock items are excluded from the eligible feed entirely.
     assert "broadcastInStock" in admin_js
 
 
@@ -285,24 +286,17 @@ def test_option_supplier_sku_persists_through_normalize():
     assert "Type: Shampoo" not in links   # blank links never persist
 
 
-def test_admin_renders_per_option_supplier_link_editor_and_badge():
+def test_admin_renders_per_option_supplier_link_editor():
     admin_js = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
-    # A per-option link input exists and is included in the variant panels.
+    # A per-option, plain manual link input exists and is included in the
+    # variant panels - no automation, no missing-link nagging badge.
     assert "optionSupplierLinksHTML" in admin_js
     assert "data-opt-supplier" in admin_js
     assert "optionSupplierLinksHTML(p)" in admin_js
-    # Missing-link badge at the option level.
-    assert "productHasUnlinkedOption" in admin_js
-    assert "Missing supplier link" in admin_js
+    assert "productHasUnlinkedOption" not in admin_js
+    assert "Missing supplier link" not in admin_js
     # The links are collected and saved into the product payload.
     assert "optionSupplierSku," in admin_js
 
 
-def test_admin_shows_check_variant_color_mapping_alert():
-    """A syncWarning with code 'variant_color_mapping' surfaces the dedicated
-    ⚠️ Check Variant Color Mapping alert (list badge + in-editor banner)."""
-    admin_js = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
-    assert "variant_color_mapping" in admin_js
-    assert "Check Variant Color Mapping" in admin_js
-    # The custom-label promise is reflected in the editor guidance.
-    assert "custom option names are kept" in admin_js
+

@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=165" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=166" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -683,44 +683,23 @@ function optionPricingHTML(p) {
   })).join("");
   return `<h3>Option price overrides</h3><p class="admin-note">Leave the price blank to inherit the base product price. Set an override only when this option costs more or less. The optional "Was" price shows a crossed-out original next to it.</p>${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to set individual prices.</p>`}`;
 }
-function productHasUnlinkedOption(p) {
-  // True when a supplier-synced product has variant option values but at least
-  // one of them has no per-option Splendall link mapped. Drives the ⚠️
-  // "Missing supplier link" badge at the option level.
-  if (!p || String(p.supplierId || "").toLowerCase() !== "splendall") return false;
-  const links = (p.optionSupplierSku && typeof p.optionSupplierSku === "object") ? p.optionSupplierSku : {};
-  const options = p.options || [];
-  for (const opt of options) {
-    for (const value of (opt.values || [])) {
-      const key = `${opt.title}: ${value}`;
-      const raw = links[key] != null ? links[key] : links[value];
-      const linked = Array.isArray(raw) ? raw.some((url) => String(url || "").trim()) : String(raw || "").trim();
-      if (!linked) return true;
-    }
-  }
-  return false;
-}
 function optionSupplierLinksHTML(p) {
-  // Per-option Splendall links so each variant/component (e.g. Serum,
-  // Shampoo, Conditioner) tracks its OWN supplier stock. A ⚠ badge marks any
-  // option still missing its link while this product is supplier-synced.
-  const isSplendall = String(p.supplierId || "").toLowerCase() === "splendall";
+  // Per-option Supplier URL: a plain, manual field per variant/component
+  // (e.g. Serum, Shampoo, Conditioner) so each one can point at its own
+  // supplier listing. Purely informational reference data - nothing reads
+  // or writes these automatically, and a blank field is never flagged.
   const options = p.options || [];
   const links = p.optionSupplierSku || {};
   const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
     const key = `${opt.title}: ${value}`;
     const url = links[key] != null ? links[key] : (links[value] != null ? links[value] : "");
     const urlText = Array.isArray(url) ? url.join("\n") : String(url || "");
-    const missing = isSplendall && !urlText.trim();
     return `<label class="adx-var" data-optlink-row>
-      <span class="adx-var-name"><strong>${JA.escape(key)}</strong>${
-        missing ? `<span class="adx-badge-warn" data-optlink-missing>⚠ Missing supplier link</span>` : ""}</span>
-      <span class="adx-var-qty"><textarea rows="2" data-opt-supplier="${JA.escape(key)}" placeholder="One Splendall URL per line">${JA.escape(urlText)}</textarea></span>
+      <span class="adx-var-name"><strong>${JA.escape(key)}</strong></span>
+      <span class="adx-var-qty"><input type="text" data-opt-supplier="${JA.escape(key)}" placeholder="Supplier URL (optional)" value="${JA.escape(urlText)}" /></span>
     </label>`;
   })).join("");
-  return `<h3>Splendall link per option</h3>
-    <p class="admin-note">Paste the exact Splendall product link for each option so its stock is tracked on its own. When a component sells out on Splendall only that option is set to sold out; the others stay available. Leave blank if an option is not supplier-synced.</p>
-    ${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to map each one to a Splendall link.</p>`}`;
+  return rows ? `<h3>Supplier URL per option</h3><div class="adx-vars">${rows}</div>` : "";
 }
 function currentOptionSupplierSku() {
   const map = {};
@@ -816,13 +795,9 @@ function productForm(p = {}) {
   window.__editImages = productImages(p);
   const opts = editorOptions(p);
   const inStock = p.id ? Number(p.stock) > 0 : true;
-  const syncWarning = String(p.supplierId || "").toLowerCase() === "splendall"
-    ? supplierWarnings.find((row) => String(row.product_id || "") === String(p.id || ""))
-    : null;
   return `<form id="prod-form" class="au-edit">
     <button type="button" class="au-back" id="cancel-edit">← Store Products</button>
     <h2>Product ${preCat ? `· ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
-    ${syncWarning ? `<div class="supplier-sync-alert" role="alert"><strong>${String(syncWarning.code || "") === "variant_color_mapping" ? "⚠️ Check Variant Color Mapping" : "Supplier stock is unconfirmed"}</strong><span>${JA.escape(syncWarning.reason || "The latest Splendall audit could not confirm this product.")}</span><small>${String(syncWarning.code || "") === "variant_color_mapping" ? "Confirm which colour each Splendall link belongs to below. Your custom option names are kept exactly as typed." : "No stock was guessed or changed. Check the supplier mapping/options before relying on automatic sync."}</small></div>` : ""}
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
     <div class="field"><label>Product Name</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
     <div class="field"><label>Product Name (French — shown when the site is in French)</label><input name="nameFr" maxlength="80" value="${JA.escape(p.nameFr || "")}" placeholder="Optional" /></div>
@@ -880,19 +855,9 @@ function productForm(p = {}) {
     </div>
     <p class="admin-note">Optional. When a customer orders <strong>more</strong> than the unit count above of this one product, the discount % is taken off its unit price automatically at checkout — for example 10 and 15 means every unit above 10 is priced 15% off. Leave either box empty for no per-product bulk discount (shop-wide tiers, if any, still apply).</p>
     <div class="field"><label>SKU</label><input name="sku" value="${JA.escape(p.sku || "")}" /></div>
-    <h3>Supplier stock sync <small>optional</small></h3>
-    <div class="au-2">
-      <div class="field"><label>Supplier</label>
-        <select name="supplierId">
-          <option value="" ${p.supplierId ? "" : "selected"}>Not supplier-synced</option>
-          <option value="splendall" ${p.supplierId === "splendall" ? "selected" : ""}>Splendall</option>
-        </select>
-      </div>
-      <div class="field"><label>Supplier product (slug or link)</label>
-        <input name="supplierSku" value="${JA.escape(p.supplierSku || "")}" placeholder="e.g. https://www.splendall.com/product/rita-bag/" />
-      </div>
+    <div class="field"><label>Supplier URL <small>optional</small></label>
+      <input name="supplierSku" value="${JA.escape(p.supplierSku || "")}" placeholder="https://…" />
     </div>
-    <p class="admin-note">The nightly sync now finds and links most Splendall products on its own — you do not need to fill this in by hand. Leave "Not supplier-synced" for everything you stock yourself (Ankara pieces and anything else); that is the default, and the automated tool never reads or changes a product left this way. This box is here so you can confirm a match it flagged for review, fix one it got wrong, or link one manually before its first automatic pass — once set, the nightly run keeps this product's quantity matching Splendall's exactly.</p>
     <div class="field"><label>Featured</label>
       <select name="featured"><option value="no">No</option><option value="yes" ${p.featured ? "selected" : ""}>Yes</option></select>
     </div>
@@ -985,7 +950,17 @@ async function handleProductSubmit(e, existing) {
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
   const priceNgn = num("priceNgn") || 0;
   const compareNgn = num("compareNgn");
-  if (!(priceNgn > 0)) { JA.toast("Enter the ₦ price."); return; }
+  // The base price is only mandatory when at least one option/variant is not
+  // already covered by its own price override. A product where every option
+  // (e.g. Shampoo / Serum / Conditioner) has its own ₦ override sets its own
+  // price entirely and must never be blocked from saving just because the
+  // shared base-price box is empty/0 - the storefront already ignores the
+  // base price for any variant that carries an override (see JA.priceOf in
+  // js/store.js).
+  const allOptionKeys = options.flatMap((opt) => (opt.values || []).map((value) => `${opt.title}: ${value}`));
+  const everyOptionPriced = allOptionKeys.length > 0
+    && allOptionKeys.every((key) => optionPrices[key] != null && optionPrices[key] > 0);
+  if (!(priceNgn > 0) && !everyOptionPriced) { JA.toast("Enter the ₦ price, or set a price for every option."); return; }
   const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
   const savedCategory = String(fd.get("category") || "").trim();
@@ -1023,12 +998,11 @@ async function handleProductSubmit(e, existing) {
       nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
       descriptionFr: String(fd.get("descriptionFr") || "").trim() || existing?.descriptionFr || "",
       dimensions: String(fd.get("dimensions") || "").trim(),
-      // Supplier stock sync mapping. Blank ("Not supplier-synced") is the
-      // default and keeps this product entirely out of reach of
-      // tools/supplier_stock_sync.py - see catalog.normalize().
-      supplierId: String(fd.get("supplierId") || "").trim(),
+      // Manual, owner-entered supplier reference link only. Nothing reads or
+      // writes this automatically - see catalog.normalize().
       supplierSku: String(fd.get("supplierSku") || "").trim(),
-      // Per-option Splendall links so each component tracks its own stock.
+      // Per-option supplier URLs so each component (e.g. Serum / Shampoo /
+      // Conditioner) can carry its own reference link.
       optionSupplierSku,
   });
   if (window.__editReviews && JA.setReviews) JA.setReviews(id, window.__editReviews);
@@ -1074,7 +1048,6 @@ let marketingSearch = "";
 let marketingFrom = "";
 let marketingTo = "";
 let selectedProductIds = new Set();
-let supplierWarnings = [];
 let dashTimer = null;
 let dashCat = "";
 
@@ -1116,38 +1089,10 @@ function renderProdGrid() {
     const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN <= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;
     const rowq = JA.escape((p.name + " " + (p.nameFr || "") + " " + (p.sku || "") + " " + p.category).toLowerCase());
     const productSelected = selectedProductIds.has(String(p.id)) ? " checked" : "";
-    // A warning belongs only to an explicitly supplier-synced product. Rows
-    // left as "Not supplier-synced" are in-house inventory and must never be
-    // made to look broken merely because an old warning record still exists.
-    const isSplendall = String(p.supplierId || "").toLowerCase() === "splendall";
-    const syncWarning = isSplendall
-      ? supplierWarnings.find((row) => String(row.product_id || "") === String(p.id))
-      : null;
-    // A product marked as a Splendall item but with NO supplier link yet has
-    // no automated match. Owner rule: leave the link empty and flag it with a
-    // ⚠️ badge so it can be linked manually in one click. This also fires when
-    // the product itself is linked but one of its variant OPTIONS still has no
-    // per-option Splendall link (so per-variant stock cannot be tracked).
-    const missingLink = isSplendall && (
-      !String(p.supplierSku || "").trim() || productHasUnlinkedOption(p));
-    const showWarning = !!syncWarning || missingLink;
-    // A colour-mapping ambiguity is its own, more specific alert: the sync
-    // found Splendall colours/links it could not confidently attach to a
-    // custom storefront option and needs a one-tap manual confirmation.
-    const colorMapping = syncWarning && String(syncWarning.code || "") === "variant_color_mapping";
-    const warningText = colorMapping
-      ? "⚠️ Check Variant Color Mapping. Tap to confirm which colour each Splendall link belongs to."
-      : (missingLink && !syncWarning
-        ? "⚠️ No Splendall link yet. Tap to add the supplier product link."
-        : "⚠️ Supplier link unverified or stock out of sync. Tap to review/link manually.");
-    const warningLabel = colorMapping
-      ? "Check variant colour"
-      : (missingLink && !syncWarning ? "Missing supplier link" : "Supplier warning");
-    const warningButton = showWarning ? `<button type="button" class="adx-sync-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️ <span>${warningLabel}</span></button>` : "";
-    return `<article class="adx-card${showWarning ? " has-sync-warning" : ""}" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
+    return `<article class="adx-card" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
-      <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}${warningButton}</div>
-      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong>${showWarning ? `<button type="button" class="adx-title-warning" data-review-supplier="${JA.escape(p.id)}" title="${warningText}" aria-label="${warningText}" data-tooltip="${warningText}">⚠️</button>` : ""}</div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
+      <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
+      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong></div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     </article>`;
   }).join("");
@@ -1243,24 +1188,6 @@ function bindProductBulk() {
   });
 }
 function bindProdGridEvents() {
-  document.querySelectorAll("#prod-grid [data-review-supplier]").forEach((badge) => {
-    badge.onclick = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      editingId = badge.dataset.reviewSupplier;
-      paintDesk("products");
-      // paintDesk creates a fresh editor synchronously. Focus the mapping
-      // field on the next frame so keyboard and mobile users land directly on
-      // the requested quick action rather than at the top of a long form.
-      requestAnimationFrame(() => {
-        const field = document.querySelector('#prod-form [name="supplierSku"]');
-        if (!field) return;
-        field.closest(".field")?.classList.add("supplier-focus-pulse");
-        field.scrollIntoView({ behavior: "smooth", block: "center" });
-        field.focus({ preventScroll: true });
-      });
-    };
-  });
   document.querySelectorAll("#prod-grid [data-edit]").forEach((b) => {
     const open = () => { editingId = b.dataset.edit; paintDesk("products"); window.scrollTo({ top: 0, behavior: "smooth" }); };
     b.onclick = open;
@@ -1425,37 +1352,9 @@ async function fillLiveFeed() {
     renderLive(d.visitors || [], d.activity || []);
   } catch (e) {}
 }
-function reviewSupplierProduct(productId) {
-  const id = String(productId || "").trim();
-  if (!id) return;
-  const product = JA.product(id);
-  prodSearchQ = product ? String(product.name || id) : id;
-  prodPage = 1;
-  paintDesk("products");
-  requestAnimationFrame(() => {
-    const card = document.querySelector(`#prod-grid [data-edit="${CSS.escape(id)}"]`);
-    if (!card) return;
-    card.classList.add("supplier-focus-pulse");
-    card.scrollIntoView({ behavior: "smooth", block: "center" });
-    setTimeout(() => card.classList.remove("supplier-focus-pulse"), 2400);
-  });
-}
-function supplierAttentionLine(row) {
-  const id = row.product_id || row.productId || "";
-  return `<li><button type="button" class="attention-item attention-supplier-item" data-review-attention-supplier="${esc(id)}"><span><strong>${esc(row.product_name || id || "Splendall catalog")}</strong><small>${esc(row.reason || "Stock could not be confirmed")}</small></span><b>Check</b></button></li>`;
-}
-
 function attentionOrderLine(o) {
   const customer = o.customer || {};
   return `<li><span><strong>${esc(o.id || "Order")}</strong><small>${esc(customer.name || customer.email || "Customer")} · ${esc(timeAgo(o.at) || "date unavailable")}</small></span><b>${esc(JA.money(o.total, o.currency))}</b></li>`;
-}
-async function loadSupplierWarnings() {
-  try {
-    const d = await window.JA_NET.api("api/admin/needs-attention");
-    supplierWarnings = d.supplierWarnings || [];
-    setSupplierBadge(supplierWarnings.length);
-    return supplierWarnings;
-  } catch (err) { return supplierWarnings; }
 }
 async function fillNeedsAttention() {
   const box = $("#needs-attention-box");
@@ -1463,31 +1362,16 @@ async function fillNeedsAttention() {
   try {
     const d = await window.JA_NET.api("api/admin/needs-attention");
     const pending = d.pending || [], stale = d.stale || [], low = d.lowStock || [];
-    supplierWarnings = d.supplierWarnings || [];
     setOrderBadge(pending.length);
-    setSupplierBadge(supplierWarnings.length);
-    if (!pending.length && !low.length && !supplierWarnings.length) {
-      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders, low-stock variants or supplier-sync uncertainties need action.</span></div>`;
+    if (!pending.length && !low.length) {
+      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders or low-stock variants need action.</span></div>`;
     } else {
       const pendingBlock = `<article class="attention-block"><div class="attention-title"><strong>Pending orders</strong><b>${pending.length}</b></div>${pending.length ? `<ul class="attention-list">${pending.slice(0, 5).map(attentionOrderLine).join("")}</ul>${pending.length > 5 ? `<small class="attention-more">+ ${pending.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Review orders →</button>` : `<p class="empty">No pending orders.</p>`}</article>`;
       const lowBlock = `<article class="attention-block"><div class="attention-title"><strong>Low stock</strong><b>${low.length}</b></div>${low.length ? `<ul class="attention-list">${low.slice(0, 5).map((r) => `<li><span><strong>${esc(r.name || r.product_id || "Product")}</strong><small>${esc(r.variant_label || r.variant_key || "Variant")}</small></span><b>${Number(r.qty || 0)} left</b></li>`).join("")}${low.length > 5 ? `<small class="attention-more">+ ${low.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Manage products →</button>` : `<p class="empty">No products at five or fewer units.</p>`}</article>`;
       const staleBlock = `<article class="attention-block ${stale.length ? "is-alert" : ""}"><div class="attention-title"><strong>Waiting over 24 hours</strong><b>${stale.length}</b></div>${stale.length ? `<ul class="attention-list">${stale.slice(0, 3).map(attentionOrderLine).join("")}</ul><button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Follow up →</button>` : `<p class="empty">No overdue pending orders.</p>`}</article>`;
-      const supplierBlock = `<article class="attention-block supplier-warning-block ${supplierWarnings.length ? "is-alert" : ""}"><div class="attention-title"><strong>Supplier sync uncertain</strong><b>${supplierWarnings.length}</b></div>${supplierWarnings.length ? `<ul class="attention-list supplier-warning-list">${supplierWarnings.slice(0, 5).map(supplierAttentionLine).join("")}</ul>${supplierWarnings.length > 5 ? `<button type="button" class="au-link-btn attention-more" data-expand-supplier-warnings>+ ${supplierWarnings.length - 5} more</button>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Review highlighted products →</button>` : `<p class="empty">Every supplier-linked item is confirmed.</p>`}</article>`;
-      box.innerHTML = `<div class="needs-grid">${supplierBlock}${pendingBlock}${lowBlock}${staleBlock}</div>`;
+      box.innerHTML = `<div class="needs-grid">${pendingBlock}${lowBlock}${staleBlock}</div>`;
     }
     box.querySelectorAll("[data-attention-tab]").forEach((button) => { button.onclick = () => paintDesk(button.dataset.attentionTab); });
-    box.querySelectorAll("[data-review-attention-supplier]").forEach((button) => {
-      button.onclick = () => reviewSupplierProduct(button.dataset.reviewAttentionSupplier);
-    });
-    const expand = box.querySelector("[data-expand-supplier-warnings]");
-    if (expand) expand.onclick = () => {
-      const list = box.querySelector(".supplier-warning-list");
-      if (list) list.innerHTML = supplierWarnings.map(supplierAttentionLine).join("");
-      expand.remove();
-      box.querySelectorAll("[data-review-attention-supplier]").forEach((button) => {
-        button.onclick = () => reviewSupplierProduct(button.dataset.reviewAttentionSupplier);
-      });
-    };
   } catch (err) {
     box.innerHTML = `<p class="empty">Could not load this queue. Try Refresh.</p>`;
   }
@@ -2158,7 +2042,7 @@ function marketingPanel() {
     <h4 class="mk-campaign-log-title">Past campaigns</h4><div class="adx-filter-bar mk-campaign-filters" aria-label="Filter campaigns"><input id="marketing-search" type="search" placeholder="Search campaigns…" autocomplete="off" value="${esc(marketingSearch)}" /><label>From <input id="marketing-from" type="date" value="${esc(marketingFrom)}" /></label><label>To <input id="marketing-to" type="date" value="${esc(marketingTo)}" /></label><button type="button" class="btn btn-line" id="marketing-filter-clear">Clear</button></div><div id="mk-campaign-log"><p class="empty">Loading…</p></div>
   </div>
   ${broadcastFeedCardHTML()}
-  <div class="admin-card" id="mk-settings-card"><h3 class="admin-h">Referral settings</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-coupons-card"><h3 class="admin-h">Coupons</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-referrals-card"><h3 class="admin-h">Referral codes</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-backup-card"><h3 class="admin-h">Backups</h3><p class="admin-note">Product data is backed up to GitHub automatically every night at midnight. Customer orders stay on the server. You can also run a backup right now.</p><button type="button" class="btn" id="mk-backup-now">Back up now</button><p class="admin-note" id="mk-backup-out" hidden></p></div>`;
+  <div class="admin-card" id="mk-settings-card"><h3 class="admin-h">Referral settings</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-coupons-card"><h3 class="admin-h">Coupons</h3><p class="admin-note">Loading…</p></div><div class="admin-card mk-referrals-card" id="mk-referrals-card"><h3 class="admin-h">Referral codes</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-backup-card"><h3 class="admin-h">Backups</h3><p class="admin-note">Product data is backed up to GitHub automatically every night at midnight. Customer orders stay on the server. You can also run a backup right now.</p><button type="button" class="btn" id="mk-backup-now">Back up now</button><p class="admin-note" id="mk-backup-out" hidden></p></div>`;
 }
 
 // =====================================================================
@@ -2331,100 +2215,27 @@ function broadcastOptionsLine(p) {
   if (sizes.length) bits.push(`Sizes: ${sizes.slice(0, 8).join(", ")}`);
   return bits.join(" · ");
 }
-function broadcastDimensionsLine(p) {
-  // The raw dimensions/specs value (e.g. "40×60 cm"), shown only when set.
-  // No label prefix - the Jaura Channel caption lists clean values only.
-  return String(p && p.dimensions || "").trim();
-}
-function broadcastDetailsLine(p) {
-  const details = [broadcastOptionsLine(p), broadcastDimensionsLine(p)].filter(Boolean);
-  return details.join(" · ");
-}
 function broadcastFullText(p) {
-  // One URL-free caption format for both WhatsApp sharing and catalog export.
-  // The image attachment is the product context; the caption contains only
-  // the bilingual name, active prices, and optional readable details.
-  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
-  const cfa = p.priceCfa || toCfa(p.priceNgn || 0);
+  // One-tap "Copy Details" caption for WhatsApp Channels - exactly three
+  // lines, no image-export clutter and never a website URL:
+  //   1. Product name (EN / FR)
+  //   2. Prices (₦ NGN / F CFA)
+  //   3. Colours / options, when the product has any
   const lines = [broadcastDisplayName(p), broadcastPriceLine(p)];
-  const details = broadcastDetailsLine(p);
-  if (details) lines.push(details);
+  const options = broadcastOptionsLine(p);
+  if (options) lines.push(options);
   return lines.join("\n");
 }
-function broadcastMessageFor(p) {
-  return broadcastFullText(p);
-}
-function broadcastShareUrl(text) {
-  // Legacy fallback destination only; `text` itself is deliberately URL-free.
-  return `whatsapp://send?text=${encodeURIComponent(text)}`;
-}
 
-async function broadcastDownloadAndCopy(p) {
-  if (!broadcastInStock(p)) {
-    JA.toast("This item is out of stock — only available products can be shared.");
-    return;
-  }
-  const file = await broadcastImageFile(p);
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(file);
-  link.download = file.name;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-  try {
-    await navigator.clipboard.writeText(broadcastFullText(p));
-    JA.toast("Catalog image downloaded and caption copied.");
-  } catch (e) {
-    JA.toast("Catalog image downloaded. Copy the caption manually: " + broadcastFullText(p));
-  }
-}
-
-async function broadcastImageFile(p) {
-  // The exact product photo, fetched as a real file so it can ride along
-  // with navigator.share() as a native image attachment - not just a link
-  // WhatsApp may or may not preview.
-  const src = JA.asset(p.image || "images/products/_placeholder.jpg");
-  const res = await fetch(src);
-  if (!res || !res.ok) throw new Error("Could not fetch the product photo.");
-  const blob = await res.blob();
-  const ext = ((blob.type || "").split("/")[1] || "jpg").replace("jpeg", "jpg");
-  return new File([blob], `${p.sku || p.id || "product"}.${ext}`, { type: blob.type || "image/jpeg" });
-}
-
-function broadcastCanShareFiles(files) {
-  return !!(navigator.share && navigator.canShare && navigator.canShare({ files }));
-}
-
-async function broadcastShareNative(p) {
-  // Out-of-stock guard: never post a sold-out item (or one whose every
-  // variant is 0) to WhatsApp, even if a stale card was tapped.
-  if (!broadcastInStock(p)) {
-    JA.toast("This item is out of stock — only available products can be shared to WhatsApp.");
-    return;
-  }
+async function copyProductDetails(p) {
   const text = broadcastFullText(p);
   try {
-    const file = await broadcastImageFile(p);
-    if (broadcastCanShareFiles([file])) {
-      await navigator.share({ files: [file], text, title: broadcastDisplayName(p) });
-      return;
-    }
+    await navigator.clipboard.writeText(text);
+    JA.toast("Details copied — paste into your WhatsApp Channel.");
   } catch (e) {
-    if (e && e.name === "AbortError") return; // the owner closed the share sheet - not an error
-  }
-  // File sharing is unavailable: keep the caption URL-free and open the
-  // native WhatsApp text composer. The visible download/copy fallback on the
-  // card lets the merchant attach the exact image manually.
-  window.location.href = broadcastShareUrl(text);
-}
-
-async function broadcastShareBatchNative(chosen) {
-  // Multi-product text bundling is eliminated. Each item in the queue is shared
-  // individually as a single image card with its own photo and caption.
-  if (chosen && chosen.length) {
-    await broadcastShareNative(chosen[0]);
+    JA.toast("Could not copy automatically. Details: " + text);
   }
 }
-
 
 
 function broadcastPickerResultsHTML(query) {
@@ -2527,7 +2338,7 @@ function broadcastFeedCardHTML() {
     </div>
     <div class="adx-bulkbar" id="mk-bc-bulk" hidden>
       <strong><span id="mk-bc-count">0</span> selected</strong>
-      <button type="button" class="btn" id="mk-bc-share-batch">Share batch to WhatsApp Channel</button>
+      <button type="button" class="btn" id="mk-bc-copy-batch">Copy details for selected</button>
       <button type="button" class="au-link-btn" id="mk-bc-clear">Clear selection</button>
     </div>
     <div id="mk-bc-grid" class="mk-bc-grid"><p class="empty">Loading today's rotation…</p></div>
@@ -2550,8 +2361,7 @@ function broadcastCardHTML(p) {
     <div class="mk-bc-actions">
       <a class="btn btn-line" href="${esc(broadcastProductUrl(p))}" target="_blank" rel="noopener">View</a>
       <button type="button" class="btn btn-line" data-bc-swap="${esc(String(p.id))}">Swap item</button>
-      <button type="button" class="btn" data-bc-share="${esc(String(p.id))}">Share</button>
-      <button type="button" class="btn btn-line" data-bc-download="${esc(String(p.id))}">Download Catalog Image &amp; Copy Text</button>
+      <button type="button" class="btn" data-bc-copy="${esc(String(p.id))}">Copy Details</button>
     </div>
     ${custom ? `<button type="button" class="au-link-btn mk-bc-restore" data-bc-restore="${esc(String(p.id))}">Restore automatic item</button>` : ""}
   </article>`;
@@ -2593,17 +2403,14 @@ function paintBroadcastFeed() {
       updateBroadcastBulkUI();
     };
   });
-  grid.querySelectorAll("[data-bc-share]").forEach((btn) => {
-    btn.onclick = () => {
-      const p = byId.get(String(btn.dataset.bcShare));
-      if (p) broadcastShareNative(p);
-    };
-  });
   grid.querySelectorAll("[data-bc-swap]").forEach((btn) => {
     btn.onclick = () => openBroadcastPicker(btn.dataset.bcSwap);
   });
-  grid.querySelectorAll("[data-bc-download]").forEach((btn) => {
-    btn.onclick = async () => { const p = byId.get(String(btn.dataset.bcDownload)); if (p) { try { await broadcastDownloadAndCopy(p); } catch (e) { JA.toast(e.message || "Could not download the catalog image."); } } };
+  grid.querySelectorAll("[data-bc-copy]").forEach((btn) => {
+    btn.onclick = async () => {
+      const p = byId.get(String(btn.dataset.bcCopy));
+      if (p) await copyProductDetails(p);
+    };
   });
   grid.querySelectorAll("[data-bc-restore]").forEach((btn) => {
     btn.onclick = () => restoreAutomaticBroadcastProduct(btn.dataset.bcRestore);
@@ -2644,15 +2451,16 @@ function bindBroadcastFeed() {
     paintBroadcastFeed();
   });
   $("#mk-bc-clear")?.addEventListener("click", () => { bcSelected[bcSlot].clear(); paintBroadcastFeed(); });
-  $("#mk-bc-share-batch")?.addEventListener("click", () => {
+  $("#mk-bc-copy-batch")?.addEventListener("click", async () => {
     const eligible = broadcastEligibleProducts();
     const chosen = eligible.filter((p) => bcSelected[bcSlot].has(String(p.id)));
     if (!chosen.length) { JA.toast("Select at least one product first."); return; }
-    // Multi-product text bundling is eliminated. Each item in the broadcast queue is shared
-    // individually as a single image card with its photo and formatted caption.
-    broadcastShareBatchNative(chosen);
-    if (chosen.length > 1) {
-      JA.toast(`Sharing 1 of ${chosen.length}. Tap Share on remaining items to share individually.`);
+    const text = chosen.map(broadcastFullText).join("\n\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      JA.toast(`Details for ${chosen.length} product${chosen.length === 1 ? "" : "s"} copied.`);
+    } catch (e) {
+      JA.toast("Could not copy automatically. Details: " + text);
     }
   });
 }
@@ -2792,8 +2600,15 @@ async function fillMarketing() {
   try {
     const d = await api("api/admin/referrals"); const card = $("#mk-referrals-card");
     if (card) {
-      const rows = (d.referrals || []).map((r) => `<tr><td><strong>${esc(r.code)}</strong></td><td>${esc(r.name || "")}<br /><small>${esc(r.email)}</small></td><td>${num(r.uses)}</td><td>${r.reward_issued ? "Rewarded — " + esc(r.reward_coupon || "") : "Not yet"}</td><td><small>${esc(r.created_at || "")}</small></td><td><button type="button" class="btn btn-line btn-danger" data-mk-ref-del="${esc(r.code)}">Delete</button></td></tr>`).join("");
-      card.innerHTML = `<h3 class="admin-h">Referral codes</h3><p class="admin-note">Codes are minted automatically for qualifying orders. When a code reaches the milestone, the referrer's reward coupon is issued and shown here. Delete a code to retire it — any reward coupon it already earned keeps working.</p>${rows ? `<table class="mk-table"><thead><tr><th>Code</th><th>Customer</th><th>Uses</th><th>Reward</th><th>Created</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">No referral codes yet.</p>`}`;
+      const rows = (d.referrals || []).map((r) => `<tr>
+        <td data-label="Code"><strong>${esc(r.code)}</strong></td>
+        <td data-label="Customer">${esc(r.name || "")}<br /><small>${esc(r.email)}</small></td>
+        <td data-label="Uses">${num(r.uses)}</td>
+        <td data-label="Reward">${r.reward_issued ? "Rewarded — " + esc(r.reward_coupon || "") : "Not yet"}</td>
+        <td data-label="Created"><small>${esc(r.created_at || "")}</small></td>
+        <td data-label="Action" class="referrals-table-action"><button type="button" class="btn btn-line btn-danger" data-mk-ref-del="${esc(r.code)}">Delete</button></td>
+      </tr>`).join("");
+      card.innerHTML = `<h3 class="admin-h">Referral codes</h3><p class="admin-note">Delete a code to retire it — any reward coupon it already earned keeps working.</p>${rows ? `<table class="mk-table referrals-table"><thead><tr><th>Code</th><th>Customer</th><th>Uses</th><th>Reward</th><th>Created</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">No referral codes yet.</p>`}`;
       card.querySelectorAll("[data-mk-ref-del]").forEach((b) => {
         b.onclick = async () => {
           if (!confirm("Delete referral code " + b.dataset.mkRefDel + "? It will no longer work for new orders.")) return;
@@ -2971,21 +2786,13 @@ function setOrderBadge(count) {
     badge.hidden = n === 0;
   });
 }
-function setSupplierBadge(count) {
-  const n = Math.max(0, Number(count) || 0);
-  document.querySelectorAll("[data-supplier-badge]").forEach((badge) => {
-    badge.textContent = n;
-    badge.hidden = n === 0;
-  });
-}
 function paintDesk(tab = "analytics") {
   const pending = orderAttentionCount;
-  const supplierCount = supplierWarnings.length;
-  const navBtn = (id, badge) => `<button type="button" data-tab="${id}" class="adx-nav-btn ${tab === id ? "is-on" : ""}">${ADX_ICONS[id]}<span>${TAB_TITLES[id]}</span>${id === "orders" ? `<em class="adx-badge" data-orders-badge${badge ? "" : " hidden"}>${badge || 0}</em>` : ""}${id === "products" ? `<em class="adx-badge is-warning" data-supplier-badge${supplierCount ? "" : " hidden"}>${supplierCount || 0}</em>` : ""}</button>`;
+  const navBtn = (id, badge) => `<button type="button" data-tab="${id}" class="adx-nav-btn ${tab === id ? "is-on" : ""}">${ADX_ICONS[id]}<span>${TAB_TITLES[id]}</span>${id === "orders" ? `<em class="adx-badge" data-orders-badge${badge ? "" : " hidden"}>${badge || 0}</em>` : ""}</button>`;
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=165" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=166" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3004,7 +2811,7 @@ function paintDesk(tab = "analytics") {
     </div>
     <nav class="admin-app-nav" aria-label="Admin sections">
       <button type="button" data-tab="analytics" class="${tab === "analytics" ? "is-on" : ""}">${ADX_ICONS.analytics}<span>Dashboard</span></button>
-      <button type="button" data-tab="products" class="${tab === "products" ? "is-on" : ""}">${ADX_ICONS.products}<span>Products</span><em class="adx-badge is-warning" data-supplier-badge${supplierCount ? "" : " hidden"}>${supplierCount || 0}</em></button>
+      <button type="button" data-tab="products" class="${tab === "products" ? "is-on" : ""}">${ADX_ICONS.products}<span>Products</span></button>
       <button type="button" data-tab="orders" class="${tab === "orders" ? "is-on" : ""}">${ADX_ICONS.orders}<span>Orders</span><em class="adx-badge" data-orders-badge${pending ? "" : " hidden"}>${pending || 0}</em></button>
       <button type="button" data-tab="sales" class="${tab === "sales" ? "is-on" : ""}">${ADX_ICONS.sales}<span>Sales</span></button>
       <button type="button" data-tab="marketing" class="${tab === "marketing" ? "is-on" : ""}">${ADX_ICONS.marketing}<span>Marketing</span></button>
@@ -3086,12 +2893,6 @@ function paintDesk(tab = "analytics") {
 
   if (tab === "products" && !editingId) {
     renderProdGrid(); bindProdGridEvents();
-    // The Products tab can be the admin's first destination, before the
-    // Dashboard queue has loaded. Fetch its durable warning feed here too and
-    // repaint once so badges are never dependent on visiting Dashboard first.
-    loadSupplierWarnings().then(() => {
-      if (document.querySelector("#panel-products.is-on") && !editingId) { renderProdGrid(); bindProdGridEvents(); }
-    });
   }
 
   $("#prod-search")?.addEventListener("input", applyProductFilter);
@@ -3347,7 +3148,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=165", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=166", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

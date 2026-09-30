@@ -1,4 +1,5 @@
-"""Channel Broadcast Feed (admin panel) — owner requests 2026-09-28.
+"""Channel Broadcast Feed (admin panel) — owner requests 2026-09-28, revised
+2026-09-30 (one-tap "Copy Details" for WhatsApp).
 
 A "Smart Rotation & Selection" section in Marketing that:
   * auto-cycles active, in-stock products across every category, twice a
@@ -7,13 +8,11 @@ A "Smart Rotation & Selection" section in Marketing that:
   * automatically queues the first few picks for each batch the moment it
     is opened (or reshuffled), so there is already a ready-to-post set
     rather than a blank list to build from scratch;
-  * turns each pick (and each batch) into a WhatsApp share carrying the
-    EXACT product photo as a native image attachment (navigator.share with
-    files), a bilingual name, clean active-price-only pricing in both
-    currencies, the in-stock colour/size options, and the bare product
-    link on its own line - never wrapped in extra words - with a graceful
-    fallback to WhatsApp's own text share sheet wherever the browser
-    cannot attach a file directly.
+  * gives each card (and the batch as a whole) a single, one-tap
+    "Copy Details" action that copies a plain, URL-free caption to the
+    clipboard - exactly the bilingual product name, the active prices in
+    both currencies, and the in-stock colour/size options when present -
+    with no image-export buttons, no native share sheet and no link.
 
 The rotation and message-building logic lives entirely in js/admin.js and
 runs in the browser against data already loaded into the admin page
@@ -21,8 +20,8 @@ runs in the browser against data already loaded into the admin page
 admin UI is covered in this test suite (see
 test_receipts_and_crash_reports_render_as_collapsible_cards and the
 Homepage Featured accordion tests) - it is pinned down at the source
-level: the right filters, the right rotation inputs and the right message/
-share behaviour are all present, and cannot silently drift.
+level: the right filters, the right rotation inputs and the right
+copy-to-clipboard behaviour are all present, and cannot silently drift.
 
 Run with:  python3 -m pytest tests/test_broadcast_feed.py -q
 """
@@ -101,13 +100,28 @@ def test_the_first_few_picks_are_automatically_queued_per_batch():
     assert "BC_AUTO_QUEUE_SIZE" in body
 
 
-def test_each_card_carries_name_price_options_and_a_working_store_link():
+def test_each_card_carries_name_price_options_and_a_single_copy_button():
     body = _func(ADMIN_JS, "broadcastCardHTML")
-    assert "broadcastProductUrl(p)" in body  # View control may link; caption does not
+    assert "broadcastProductUrl(p)" in body  # the plain "View" link may still point at the store page
     assert "broadcastPriceLine(p)" in body
     assert "broadcastDisplayName(p)" in body
     assert "broadcastOptionsLine(p)" in body
-    assert 'data-bc-share="${esc(String(p.id))}"' in body
+    assert 'data-bc-copy="${esc(String(p.id))}"' in body
+    assert "Copy Details" in body
+
+
+def test_the_image_export_clutter_buttons_are_gone():
+    """Owner request 2026-09-30: no more multi-button image-export clutter -
+    Share / Download Catalog Image are removed entirely, replaced by one
+    "Copy Details" action."""
+    body = _func(ADMIN_JS, "broadcastCardHTML")
+    assert "data-bc-share" not in body
+    assert "data-bc-download" not in body
+    assert "Download Catalog Image" not in body
+    assert ">Share<" not in body
+    for name in ("broadcastShareNative", "broadcastDownloadAndCopy", "broadcastImageFile",
+                 "broadcastCanShareFiles", "broadcastShareBatchNative", "broadcastShareUrl"):
+        assert f"function {name}(" not in ADMIN_JS, f"{name} should have been removed"
 
 
 def test_the_broadcast_name_is_bilingual_when_a_french_name_exists():
@@ -141,8 +155,6 @@ def test_the_broadcast_message_mentions_available_colours_and_sizes():
     assert "p.colors" in body
     assert 'startsWith("#")' in body  # hex swatches are never shown as text
     assert re.search(r"size\|length", body)
-    message_body = _func(ADMIN_JS, "broadcastMessageFor")
-    assert "broadcastFullText(p)" in message_body
 
 
 def test_the_store_link_points_at_the_real_product_page():
@@ -151,112 +163,61 @@ def test_the_store_link_points_at_the_real_product_page():
     assert "location.origin" in body
 
 
-def test_the_caption_ends_with_the_bare_clean_link_only():
-    """The Jaura Channel caption is EXACTLY: bilingual name, Naira price,
-    CFA price, dimensions/specs (only when set), then the clean direct
-    product link on its own line. No stock labels, no options block."""
+def test_the_copied_caption_is_exactly_three_lines_name_price_options_no_url():
+    """Owner request 2026-09-30: Copy Details produces EXACTLY: line 1 the
+    bilingual product name, line 2 the NGN/CFA prices, line 3 the
+    colours/options (only when the product has any) - and never a website
+    URL."""
     body = _func(ADMIN_JS, "broadcastFullText")
     code_lines = [ln for ln in body.splitlines() if not ln.strip().startswith("//")]
     code = "\n".join(code_lines)
     assert "broadcastDisplayName(p)" in code
+    assert "broadcastPriceLine(p)" in code
+    assert "broadcastOptionsLine(p)" in code
     assert "broadcastProductUrl(p)" not in code
-    assert "broadcastDetailsLine(p)" in code
-    # Options and stock labels are intentionally removed from the caption.
-    assert "broadcastOptionsLine(p)" not in code
-    assert "broadcastStockLine" not in code
-    assert "In stock" not in code
-    assert "Out of stock" not in code
+    assert "location.origin" not in code
+    assert "http" not in code.lower()
+    assert "compare" not in code.lower()
+    assert "stock" not in code.lower()
     assert "Shop now" not in code
 
 
-def test_the_caption_never_labels_availability_and_shows_raw_dimensions():
-    """No 'In stock'/'Out of stock' text anywhere; dimensions line is the
-    raw value (e.g. '40×60 cm') with no 'Dimensions:' prefix."""
-    dim = _func(ADMIN_JS, "broadcastDimensionsLine")
-    assert "p.dimensions" in dim
-    assert "Dimensions:" not in dim
-    stock_helper = _func(ADMIN_JS, "broadcastInStock")
-    assert "optionStock" in stock_helper
-    assert "Number(p.stock) > 0" in stock_helper
+def test_copy_details_writes_the_caption_to_the_clipboard():
+    body = _func(ADMIN_JS, "copyProductDetails")
+    assert "broadcastFullText(p)" in body
+    assert "navigator.clipboard.writeText(text)" in body
 
 
-def test_out_of_stock_items_are_blocked_from_sharing():
-    """Owner rule: before sharing, block any item/variant that is sold out;
-    only available items may post to WhatsApp."""
-    body = _func(ADMIN_JS, "broadcastShareNative")
-    assert "broadcastInStock(p)" in body
-    # The guard must run before building/sharing the caption.
-    guard = body.index("broadcastInStock(p)")
-    share = body.index("navigator.share")
-    assert guard < share
+def test_out_of_stock_items_are_still_excluded_from_the_eligible_feed():
+    """Owner rule: sold-out items (or ones whose every variant is 0) never
+    appear in the rotation to be copied/posted in the first place."""
     eligible = _func(ADMIN_JS, "broadcastEligibleProducts")
     assert "broadcastInStock(p)" in eligible
 
 
-def test_the_message_block_itself_has_no_link_or_shop_now_wording():
-    body = _func(ADMIN_JS, "broadcastMessageFor")
-    assert "broadcastProductUrl" not in body
-    assert "Shop now" not in body
-
-
-def test_the_exact_product_photo_is_fetched_as_a_real_file():
-    """Owner request: native navigator.share() needs the actual
-    image bytes, not just a link WhatsApp may or may not unfurl."""
-    body = _func(ADMIN_JS, "broadcastImageFile")
-    assert "JA.asset(p.image" in body
-    assert "await fetch(src)" in body
-    assert "new File([blob]" in body
-
-
-def test_native_share_is_only_attempted_when_the_browser_actually_supports_files():
-    body = _func(ADMIN_JS, "broadcastCanShareFiles")
-    assert "navigator.share" in body
-    assert "navigator.canShare" in body
-    assert "{ files }" in body
-
-
-def test_share_native_attaches_the_photo_and_falls_back_to_whatsapps_share_sheet():
-    body = _func(ADMIN_JS, "broadcastShareNative")
-    assert "broadcastImageFile(p)" in body
-    assert "navigator.share({ files: [file], text" in body
-    assert "broadcastShareUrl(text)" in body
-    # Cancelling the native share sheet is not an error worth falling back
-    # from - only a genuinely unsupported/failed share is.
-    assert 'e.name === "AbortError"' in body
-
-
-def test_each_item_in_the_broadcast_queue_shares_as_a_single_photo_card():
-    body = _func(ADMIN_JS, "broadcastShareBatchNative")
-    assert "broadcastShareNative(chosen[0])" in body
-    # Multi-product text bundling is eliminated
-    assert "map" not in body
-
-
-def test_share_opens_whatsapps_own_share_sheet_as_the_fallback_with_no_copy_paste():
-    body = _func(ADMIN_JS, "broadcastShareUrl")
-    assert "whatsapp://send?text=" in body
-    assert "encodeURIComponent(text)" in body
-    assert "api.whatsapp.com" not in body
-    # The per-card action is a real control the owner taps once - not a
-    # link they have to notice and click twice - wired through
-    # paintBroadcastFeed to the native-share flow.
+def test_each_card_copy_button_is_wired_to_copy_product_details():
     paint_body = _func(ADMIN_JS, "paintBroadcastFeed")
-    assert "[data-bc-share]" in paint_body
-    assert "broadcastShareNative(p)" in paint_body
+    assert "[data-bc-copy]" in paint_body
+    assert "copyProductDetails(p)" in paint_body
 
 
-def test_multi_product_bundling_is_eliminated_in_queue_sharing():
+def test_the_bulk_bar_copies_details_for_every_selected_product():
+    """Owner request 2026-09-30: the old "Share batch to WhatsApp Channel"
+    multi-product bundling is gone; selecting several products now copies
+    all of their captions (still URL-free, still no image) in one tap."""
+    assert '"#mk-bc-copy-batch"' in ADMIN_JS
+    assert "mk-bc-share-batch" not in ADMIN_JS
     body = _func(ADMIN_JS, "bindBroadcastFeed")
-    assert '"#mk-bc-share-batch"' in body
-    assert "bcSelected[bcSlot]" in body
-    assert "broadcastShareBatchNative(chosen)" in body
+    copy_batch = body[body.index('"#mk-bc-copy-batch"'):]
+    assert "bcSelected[bcSlot]" in copy_batch
+    assert "navigator.clipboard.writeText(text)" in copy_batch
 
 
 def test_the_morning_and_evening_batches_keep_independent_selections():
     assert "const bcSelected = { morning: new Set(), evening: new Set() }" in ADMIN_JS
 
 
-def test_selecting_nothing_and_sharing_a_batch_is_refused_not_a_blank_message():
+def test_selecting_nothing_and_copying_a_batch_is_refused_not_a_blank_message():
     body = _func(ADMIN_JS, "bindBroadcastFeed")
     assert "if (!chosen.length)" in body
     assert "Select at least one product first" in body
@@ -290,26 +251,3 @@ def test_morning_and_evening_custom_overrides_are_independent_and_daily():
     loader = _func(ADMIN_JS, "loadBroadcastOverrides")
     assert 'morning: clean("morning")' in loader
     assert 'evening: clean("evening")' in loader
-
-
-def test_legacy_share_fallback_launches_the_native_whatsapp_uri():
-    one = _func(ADMIN_JS, "broadcastShareNative")
-    assert "window.location.href = broadcastShareUrl(text)" in one
-    assert "broadcastDownloadAndCopy" in ADMIN_JS
-
-
-def test_catalog_caption_is_exactly_url_free_and_uses_one_optional_details_line():
-    body = _func(ADMIN_JS, "broadcastFullText")
-    assert "broadcastPriceLine(p)" in body
-    assert "broadcastDetailsLine(p)" in body
-    assert "broadcastProductUrl(p)" not in body
-    assert "compare" not in body.lower()
-    assert "stock" not in body.lower()
-
-
-def test_download_copy_fallback_attaches_the_real_file_and_copies_caption():
-    body = _func(ADMIN_JS, "broadcastDownloadAndCopy")
-    assert "broadcastImageFile(p)" in body
-    assert "URL.createObjectURL(file)" in body
-    assert "navigator.clipboard.writeText(broadcastFullText(p))" in body
-    assert "broadcastInStock(p)" in body

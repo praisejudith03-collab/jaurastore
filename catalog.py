@@ -95,11 +95,11 @@ BASE_FIELDS = (
     "optionSupplierSku",
 )
 
-# Suppliers this shop's automated stock-mirroring tooling is allowed to read
-# from. A product is only ever eligible for supplier stock sync when its
-# supplierId is one of these AND it carries a non-empty supplierSku - every
-# other product (the default for a brand-new or hand-stocked item, e.g. an
-# Ankara waist piece) is structurally excluded, not excluded by name-matching.
+# Historical constant, kept only for backward-compatible imports. There is no
+# automated supplier discovery/stock-sync worker any more (owner directive
+# 2026-09-30) - supplierId/supplierSku/optionSupplierSku are plain,
+# owner-entered reference fields that nothing in this codebase reads to
+# guess a match or mirror stock automatically.
 KNOWN_SUPPLIERS = ("splendall",)
 
 
@@ -699,17 +699,15 @@ def normalize(product):
         # product links / order lines / reviews keep resolving. See
         # product_index().
         "legacyId": _clean_legacy_id(product.get("legacyId"), pid),
-        # Supplier stock-mirroring mapping. Both blank by default - a product
-        # keeps its own independently-managed stock until an admin explicitly
-        # opts it in here. tools/supplier_stock_sync.py only ever touches a
-        # row where supplierId matches a known supplier AND supplierSku is
-        # non-empty, so unmapped items (Ankara waist pieces, everything else)
-        # can never be altered by that script no matter what it fetches.
+        # Plain, owner-entered supplier reference fields. Nothing automated
+        # reads or writes these - there is no background discovery/sync
+        # worker (owner directive 2026-09-30), so a link can never be
+        # silently guessed, mirrored or reset back to blank.
         "supplierId": sec.clean(
             product.get("supplierId") or product.get("supplier_id"), 40).lower(),
         "supplierSku": sec.clean(
             product.get("supplierSku") or product.get("supplier_sku"), 200),
-        # Per-option supplier links (component -> Splendall URL) so the sync
+        # Per-option supplier reference links (component -> URL), manual only
         # can mirror stock for each variant independently.
         "optionSupplierSku": _clean_option_supplier_sku(
             product.get("optionSupplierSku") or product.get("option_supplier_sku")),
@@ -889,12 +887,12 @@ def _clean_option_prices(raw):
 
 
 def _clean_option_supplier_sku(raw):
-    """Per-option supplier links, e.g. {"Serum": "https://splendall.com/...",
-    "Shampoo": "https://..."}. Each variant option (a distinct component such
-    as Serum / Shampoo / Conditioner) can point at its OWN Splendall product
-    so the automated stock sync mirrors availability per option, not per
-    product. Blank values are dropped so an unlinked option is simply absent
-    (which the admin surfaces as a "Missing supplier link" badge)."""
+    """Per-option supplier reference links, e.g. {"Serum":
+    "https://supplier.example/serum", "Shampoo": "https://..."}. Each variant
+    option (a distinct component such as Serum / Shampoo / Conditioner) can
+    carry its own plain, owner-entered reference URL. Purely informational -
+    nothing reads or writes it automatically. Blank values are dropped so an
+    unlinked option is simply absent."""
     import json
     import security as sec
     if isinstance(raw, str):
