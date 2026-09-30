@@ -39,3 +39,10 @@ def test_warning_badge_is_interactive_and_excludes_in_house_inventory():
     assert 'String(p.supplierId || "").toLowerCase() === "splendall"' in ADMIN
     assert 'field.scrollIntoView' in ADMIN
     assert 'field.focus({ preventScroll: true })' in ADMIN
+
+
+def test_supplier_attention_rows_and_expanded_link_navigate_to_exact_products():
+    assert "data-review-attention-supplier" in ADMIN
+    assert "data-expand-supplier-warnings" in ADMIN
+    assert "reviewSupplierProduct" in ADMIN
+    assert "scrollIntoView" in ADMIN

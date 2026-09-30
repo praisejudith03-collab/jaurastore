@@ -935,7 +935,10 @@ def benin_togo_min_cfa():
     """
     try:
         import growth
-        value = growth.settings().get("minOrderCfa", BENIN_TOGO_MIN_CFA)
+        settings = growth.settings()
+        if not int(settings.get("minimumOrderEnabled", 1)):
+            return 0
+        value = settings.get("minOrderCfa", BENIN_TOGO_MIN_CFA)
         value = int(float(value))
         if value < 0:
             raise ValueError
@@ -2952,6 +2955,7 @@ def site_config():
         # the moving banner drops the minimum line and the checkout skips the
         # under-minimum guard entirely (the server skips it the same way).
         min_cfa = benin_togo_min_cfa()
+        site["minimumOrderEnabled"] = bool(_growth.get("minimumOrderEnabled", 1))
         site["minOrderCfa"] = min_cfa
         site["minOrderNgn"] = (benin_togo_min_ngn(_growth.get("cfaRate"), min_cfa)
                                if min_cfa > 0 else 0)

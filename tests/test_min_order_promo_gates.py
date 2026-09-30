@@ -44,7 +44,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Switches are global state: every test hands the house defaults back to the
 # files that run after this one (the floors module reads the LIVE setting).
-HOUSE_DEFAULTS = {"referralEnabled": 1, "promosEnabled": 1, "minOrderCfa": 5000,
+HOUSE_DEFAULTS = {"referralEnabled": 1, "promosEnabled": 1, "minOrderCfa": 5000, "minimumOrderEnabled": 1,
                   "minSpendNgn": 20000, "buyerPercent": 5, "milestone": 2,
                   "bulkDiscountTiers": []}
 
@@ -331,3 +331,14 @@ def test_the_static_minimum_order_explainer_lines_are_repainted_live():
     assert 'class="ck-bj-min"' not in checkout
     assert 'class="ck-pay-country-note" data-i18n=' not in checkout
     assert 'class="ck-pay-country-note"' in checkout
+
+
+def test_minimum_order_has_a_durable_explicit_toggle(client):
+    saved = set_growth(client, {"minimumOrderEnabled": False, "minOrderCfa": 5000})
+    assert saved["minimumOrderEnabled"] == 0
+    site = client.get("/api/site").get_json()["site"]
+    assert site["minimumOrderEnabled"] is False
+    assert site["minOrderCfa"] == 0
+    saved = set_growth(client, {"minimumOrderEnabled": True, "minOrderCfa": 5000})
+    assert saved["minimumOrderEnabled"] == 1
+    assert client.get("/api/site").get_json()["site"]["minimumOrderEnabled"] is True

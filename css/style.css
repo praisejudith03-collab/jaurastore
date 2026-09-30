@@ -7363,3 +7363,16 @@ body.store-paused{overflow:hidden}
 .attention-list li { min-width: 0; overflow-wrap: anywhere; }
 .proof-upload-failed { margin: 10px 0; padding: 10px 12px; border-radius: 9px;
   background: #fff1b8; color: #6f2817; font-weight: 800; overflow-wrap: anywhere; }
+
+/* Variant supplier mapping accepts one URL per line without widening the
+   editor on phones. Alert rows remain full-width, keyboard-accessible buttons. */
+.adx-var-qty textarea[data-opt-supplier] { width: min(100%, 420px); min-width: 0; box-sizing: border-box; resize: vertical; overflow-wrap: anywhere; }
+.attention-item { width: 100%; min-width: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; border: 0; background: transparent; color: inherit; padding: 8px 0; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.attention-item span { min-width: 0; max-width: 100%; }
+.attention-item strong, .attention-item small { display: block; overflow-wrap: anywhere; word-break: break-word; }
+.attention-item:hover, .attention-item:focus-visible { background: #fff1b8; outline: 2px solid #d88b19; outline-offset: 2px; }
+@media (max-width: 520px) {
+  .attention-item b { flex: 0 0 auto; }
+  .attention-more, .attention-action, #needs-attention-refresh, #an-refresh { max-width: 100%; min-height: 44px; white-space: normal; overflow-wrap: anywhere; line-height: 1.2; }
+  .adx-var-qty textarea[data-opt-supplier] { width: 100%; }
+}

@@ -693,7 +693,8 @@ function productHasUnlinkedOption(p) {
   for (const opt of options) {
     for (const value of (opt.values || [])) {
       const key = `${opt.title}: ${value}`;
-      const linked = String(links[key] || links[value] || "").trim();
+      const raw = links[key] != null ? links[key] : links[value];
+      const linked = Array.isArray(raw) ? raw.some((url) => String(url || "").trim()) : String(raw || "").trim();
       if (!linked) return true;
     }
   }
@@ -709,11 +710,12 @@ function optionSupplierLinksHTML(p) {
   const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
     const key = `${opt.title}: ${value}`;
     const url = links[key] != null ? links[key] : (links[value] != null ? links[value] : "");
-    const missing = isSplendall && !String(url).trim();
+    const urlText = Array.isArray(url) ? url.join("\n") : String(url || "");
+    const missing = isSplendall && !urlText.trim();
     return `<label class="adx-var" data-optlink-row>
       <span class="adx-var-name"><strong>${JA.escape(key)}</strong>${
         missing ? `<span class="adx-badge-warn" data-optlink-missing>⚠ Missing supplier link</span>` : ""}</span>
-      <span class="adx-var-qty"><input type="url" data-opt-supplier="${JA.escape(key)}" value="${JA.escape(String(url))}" placeholder="https://www.splendall.com/product/…" /></span>
+      <span class="adx-var-qty"><textarea rows="2" data-opt-supplier="${JA.escape(key)}" placeholder="One Splendall URL per line">${JA.escape(urlText)}</textarea></span>
     </label>`;
   })).join("");
   return `<h3>Splendall link per option</h3>
@@ -724,8 +726,8 @@ function currentOptionSupplierSku() {
   const map = {};
   document.querySelectorAll("[data-opt-supplier]").forEach((inp) => {
     const key = inp.getAttribute("data-opt-supplier");
-    const val = String(inp.value || "").trim();
-    if (key && val) map[key] = val;
+    const values = String(inp.value || "").split(/[\n,]+/).map((v) => v.trim()).filter(Boolean);
+    if (key && values.length) map[key] = values.length === 1 ? values[0] : values;
   });
   return map;
 }
@@ -1423,6 +1425,26 @@ async function fillLiveFeed() {
     renderLive(d.visitors || [], d.activity || []);
   } catch (e) {}
 }
+function reviewSupplierProduct(productId) {
+  const id = String(productId || "").trim();
+  if (!id) return;
+  const product = JA.product(id);
+  prodSearchQ = product ? String(product.name || id) : id;
+  prodPage = 1;
+  paintDesk("products");
+  requestAnimationFrame(() => {
+    const card = document.querySelector(`#prod-grid [data-edit="${CSS.escape(id)}"]`);
+    if (!card) return;
+    card.classList.add("supplier-focus-pulse");
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(() => card.classList.remove("supplier-focus-pulse"), 2400);
+  });
+}
+function supplierAttentionLine(row) {
+  const id = row.product_id || row.productId || "";
+  return `<li><button type="button" class="attention-item attention-supplier-item" data-review-attention-supplier="${esc(id)}"><span><strong>${esc(row.product_name || id || "Splendall catalog")}</strong><small>${esc(row.reason || "Stock could not be confirmed")}</small></span><b>Check</b></button></li>`;
+}
+
 function attentionOrderLine(o) {
   const customer = o.customer || {};
   return `<li><span><strong>${esc(o.id || "Order")}</strong><small>${esc(customer.name || customer.email || "Customer")} · ${esc(timeAgo(o.at) || "date unavailable")}</small></span><b>${esc(JA.money(o.total, o.currency))}</b></li>`;
@@ -1450,10 +1472,22 @@ async function fillNeedsAttention() {
       const pendingBlock = `<article class="attention-block"><div class="attention-title"><strong>Pending orders</strong><b>${pending.length}</b></div>${pending.length ? `<ul class="attention-list">${pending.slice(0, 5).map(attentionOrderLine).join("")}</ul>${pending.length > 5 ? `<small class="attention-more">+ ${pending.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Review orders →</button>` : `<p class="empty">No pending orders.</p>`}</article>`;
       const lowBlock = `<article class="attention-block"><div class="attention-title"><strong>Low stock</strong><b>${low.length}</b></div>${low.length ? `<ul class="attention-list">${low.slice(0, 5).map((r) => `<li><span><strong>${esc(r.name || r.product_id || "Product")}</strong><small>${esc(r.variant_label || r.variant_key || "Variant")}</small></span><b>${Number(r.qty || 0)} left</b></li>`).join("")}${low.length > 5 ? `<small class="attention-more">+ ${low.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Manage products →</button>` : `<p class="empty">No products at five or fewer units.</p>`}</article>`;
       const staleBlock = `<article class="attention-block ${stale.length ? "is-alert" : ""}"><div class="attention-title"><strong>Waiting over 24 hours</strong><b>${stale.length}</b></div>${stale.length ? `<ul class="attention-list">${stale.slice(0, 3).map(attentionOrderLine).join("")}</ul><button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Follow up →</button>` : `<p class="empty">No overdue pending orders.</p>`}</article>`;
-      const supplierBlock = `<article class="attention-block supplier-warning-block ${supplierWarnings.length ? "is-alert" : ""}"><div class="attention-title"><strong>Supplier sync uncertain</strong><b>${supplierWarnings.length}</b></div>${supplierWarnings.length ? `<ul class="attention-list">${supplierWarnings.slice(0, 5).map((row) => `<li><span><strong>${esc(row.product_name || row.product_id || "Splendall catalog")}</strong><small>${esc(row.reason || "Stock could not be confirmed")}</small></span><b>Check</b></li>`).join("")}</ul>${supplierWarnings.length > 5 ? `<small class="attention-more">+ ${supplierWarnings.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Review highlighted products →</button>` : `<p class="empty">Every supplier-linked item is confirmed.</p>`}</article>`;
+      const supplierBlock = `<article class="attention-block supplier-warning-block ${supplierWarnings.length ? "is-alert" : ""}"><div class="attention-title"><strong>Supplier sync uncertain</strong><b>${supplierWarnings.length}</b></div>${supplierWarnings.length ? `<ul class="attention-list supplier-warning-list">${supplierWarnings.slice(0, 5).map(supplierAttentionLine).join("")}</ul>${supplierWarnings.length > 5 ? `<button type="button" class="au-link-btn attention-more" data-expand-supplier-warnings>+ ${supplierWarnings.length - 5} more</button>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Review highlighted products →</button>` : `<p class="empty">Every supplier-linked item is confirmed.</p>`}</article>`;
       box.innerHTML = `<div class="needs-grid">${supplierBlock}${pendingBlock}${lowBlock}${staleBlock}</div>`;
     }
     box.querySelectorAll("[data-attention-tab]").forEach((button) => { button.onclick = () => paintDesk(button.dataset.attentionTab); });
+    box.querySelectorAll("[data-review-attention-supplier]").forEach((button) => {
+      button.onclick = () => reviewSupplierProduct(button.dataset.reviewAttentionSupplier);
+    });
+    const expand = box.querySelector("[data-expand-supplier-warnings]");
+    if (expand) expand.onclick = () => {
+      const list = box.querySelector(".supplier-warning-list");
+      if (list) list.innerHTML = supplierWarnings.map(supplierAttentionLine).join("");
+      expand.remove();
+      box.querySelectorAll("[data-review-attention-supplier]").forEach((button) => {
+        button.onclick = () => reviewSupplierProduct(button.dataset.reviewAttentionSupplier);
+      });
+    };
   } catch (err) {
     box.innerHTML = `<p class="empty">Could not load this queue. Try Refresh.</p>`;
   }
@@ -2715,7 +2749,7 @@ async function fillMarketing() {
     const d = await api("api/admin/growth/settings"); const s = d.settings || {}; mkGrowthSettings = s; const card = $("#mk-settings-card");
     if (card) {
       const tierRows = (s.bulkDiscountTiers || []).map((tier) => `<div class="mk-tier-row" data-bulk-tier><label>Minimum quantity<input type="number" min="2" name="bulkMin" value="${num(tier.minQuantity)}" required /></label><label>Discount %<input type="number" min="1" max="90" name="bulkPercent" value="${num(tier.percent)}" required /></label><button type="button" class="btn btn-line" data-remove-tier>Remove</button></div>`).join("");
-      card.innerHTML = `<h3 class="admin-h">Discounts, promos & referral settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="promosEnabled" ${s.promosEnabled === 0 || s.promosEnabled === false ? "" : "checked"} /> Promotions ON — promo codes, coupons and volume discounts are live at checkout</label><p class="admin-note">Master switch for every discount: when it is OFF, the checkout promo box disappears, no coupon can be redeemed, and no bulk discount is applied — your coupons and tiers are kept intact and come back the moment you switch it back ON.</p><h4>Flexible bulk / volume discounts</h4><p class="admin-note">Create quantity tiers such as 10 units = 5%, 15 units = 10%, or 30 units = 20%. With no tiers, no automatic volume discount is applied.</p><div id="mk-bulk-tiers">${tierRows || `<p class="admin-note" data-no-tiers>No volume discount tiers configured.</p>`}</div><button class="btn btn-line" type="button" id="mk-add-tier">+ Add discount tier</button><hr /><h4>Minimum order rule — Benin &amp; Togo deliveries</h4><div class="admin-grid"><label>Minimum order (F CFA)<input name="minOrderCfa" type="number" min="0" step="50" value="${num(s.minOrderCfa === undefined || s.minOrderCfa === null ? 5000 : s.minOrderCfa)}" /></label></div><p class="admin-note">Deliveries to Benin &amp; Togo must reach this basket total. Type <strong>0</strong> to switch the rule OFF completely. The naira floor follows automatically from the exchange rate below: <span id="mk-min-note"></span></p><hr /><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? F CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's promo discount %<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><button class="btn" type="submit">Save settings</button></form>`;
+      card.innerHTML = `<h3 class="admin-h">Discounts, promos & referral settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="promosEnabled" ${s.promosEnabled === 0 || s.promosEnabled === false ? "" : "checked"} /> Promotions ON — promo codes, coupons and volume discounts are live at checkout</label><p class="admin-note">Master switch for every discount: when it is OFF, the checkout promo box disappears, no coupon can be redeemed, and no bulk discount is applied — your coupons and tiers are kept intact and come back the moment you switch it back ON.</p><h4>Flexible bulk / volume discounts</h4><p class="admin-note">Create quantity tiers such as 10 units = 5%, 15 units = 10%, or 30 units = 20%. With no tiers, no automatic volume discount is applied.</p><div id="mk-bulk-tiers">${tierRows || `<p class="admin-note" data-no-tiers>No volume discount tiers configured.</p>`}</div><button class="btn btn-line" type="button" id="mk-add-tier">+ Add discount tier</button><hr /><h4>Minimum order rule — Benin &amp; Togo deliveries</h4><label class="mk-toggle"><input type="checkbox" name="minimumOrderEnabled" ${s.minimumOrderEnabled === 0 || s.minimumOrderEnabled === false ? "" : "checked"} /> Minimum order requirement ON</label><div class="admin-grid"><label>Minimum order (F CFA)<input name="minOrderCfa" type="number" min="0" step="50" value="${num(s.minOrderCfa === undefined || s.minOrderCfa === null ? 5000 : s.minOrderCfa)}" /></label></div><p class="admin-note">Deliveries to Benin &amp; Togo must reach this basket total. Type <strong>0</strong> to switch the rule OFF completely. The naira floor follows automatically from the exchange rate below: <span id="mk-min-note"></span></p><hr /><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? F CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's promo discount %<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><button class="btn" type="submit">Save settings</button></form>`;
       const cfaNote = () => { const f = $("#mk-set-form"); const note = $("#mk-cfa-note"); if (!f || !note) return; const spend = Number(f.minSpendNgn.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = rate > 0 ? `CFA shoppers qualify from ${Math.round(spend * rate).toLocaleString()} F CFA (₦${spend.toLocaleString()} × ${rate}).` : ""; };
       const minNote = () => { const f = $("#mk-set-form"); const note = $("#mk-min-note"); if (!f || !note) return; const minCfa = Number(f.minOrderCfa.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = minCfa <= 0 ? "the rule is OFF — any basket total is accepted." : rate > 0 ? `${Math.round(minCfa).toLocaleString()} F CFA ≈ ₦${Math.round(minCfa / rate).toLocaleString()}.` : ""; };
       cfaNote(); minNote(); ["minSpendNgn", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", cfaNote); });
@@ -2730,7 +2764,7 @@ async function fillMarketing() {
       $("#mk-set-form").onsubmit = async (e) => {
         e.preventDefault(); const fd = new FormData(e.target);
         const bulkDiscountTiers = [...e.target.querySelectorAll("[data-bulk-tier]")].map((row) => ({ minQuantity: Number(row.querySelector('[name="bulkMin"]')?.value), percent: Number(row.querySelector('[name="bulkPercent"]')?.value) }));
-        const patch = { referralEnabled: e.target.referralEnabled.checked, promosEnabled: e.target.promosEnabled.checked, minOrderCfa: Math.max(0, Math.round(Number(fd.get("minOrderCfa")) || 0)), minSpendNgn: Number(fd.get("minSpendNgn")), cfaRate: Number(fd.get("cfaRate")), buyerPercent: Number(fd.get("buyerPercent")), referrerPercent: Number(fd.get("referrerPercent")), milestone: Number(fd.get("milestone")), bulkDiscountTiers };
+        const patch = { referralEnabled: e.target.referralEnabled.checked, promosEnabled: e.target.promosEnabled.checked, minimumOrderEnabled: e.target.minimumOrderEnabled.checked, minOrderCfa: Math.max(0, Math.round(Number(fd.get("minOrderCfa")) || 0)), minSpendNgn: Number(fd.get("minSpendNgn")), cfaRate: Number(fd.get("cfaRate")), buyerPercent: Number(fd.get("buyerPercent")), referrerPercent: Number(fd.get("referrerPercent")), milestone: Number(fd.get("milestone")), bulkDiscountTiers };
         try { await api("api/admin/growth/settings", { method: "POST", json: patch }); JA.toast("Marketing settings saved."); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not save."); }
       };
     }
