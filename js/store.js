@@ -1163,10 +1163,22 @@ const JA = (() => {
     return "F CFA " + val.toLocaleString("fr-FR");
   }
 
+  // Live Supabase rows and older mirrors may deliver option maps as JSON
+  // strings. Normalize both spellings at the browser boundary as a final
+  // guard; catalog.py performs the same normalization on the server.
+  function optionMap(raw) {
+    if (raw && typeof raw === "object") return raw;
+    if (typeof raw === "string") {
+      try { const parsed = JSON.parse(raw); return parsed && typeof parsed === "object" ? parsed : {}; }
+      catch (e) { return {}; }
+    }
+    return {};
+  }
+
   function priceOf(p, cur = currency(), variant = "") {
     let ngn = Number(p && p.priceNgn) || 0;
     let overridden = false;
-    const overrides = (p && p.optionPrices && typeof p.optionPrices === "object") ? p.optionPrices : {};
+    const overrides = optionMap(p && (p.optionPrices ?? p.option_prices));
     if (variant && Object.keys(overrides).length) {
       const fold = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       const indexed = Object.fromEntries(Object.entries(overrides).map(([k, v]) => [fold(k), Number(v)]));
@@ -1181,7 +1193,7 @@ const JA = (() => {
     // Per-option "was" (strike-through) price wins when the chosen variant has
     // one set; otherwise the product-level compareNgn/compareCfa applies.
     let wasNgn = Number(p && p.compareNgn) || 0;
-    const compares = (p && p.optionCompareAt && typeof p.optionCompareAt === "object") ? p.optionCompareAt : {};
+    const compares = optionMap(p && (p.optionCompareAt ?? p.option_compare_at));
     if (variant && Object.keys(compares).length) {
       const fold = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       const indexed = Object.fromEntries(Object.entries(compares).map(([k, v]) => [fold(k), Number(v)]));

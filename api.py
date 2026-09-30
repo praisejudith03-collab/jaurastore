@@ -560,6 +560,8 @@ CUSTOMER_FIELDS = ("firstName", "lastName", "name", "phone", "email", "country",
                    "city", "zone", "address", "note")
 STATUSES = ("pending", "confirmed", "declined")
 INVALID_RECEIPT_NOTICE = "Order declined: Invalid payment image uploaded"
+PROOF_UPLOAD_FAILURE_NOTE = ("Payment proof was provided but could not be saved to "
+                           "storage; ask the customer to re-send it.")
 PENDING_BALANCE_NOTICE = ("You have a pending balance. Please contact us on WhatsApp "
                           "to balance up your payment before your order is confirmed.")
 
@@ -1257,8 +1259,7 @@ def create_order():
         # order so the admin dashboard can ask the customer to re-send it — the
         # sale itself is complete and stock is committed.
         order["proofUploadFailed"] = True
-        order["proofUploadNote"] = ("Payment proof was provided but could not be "
-                                    "saved to storage; ask the customer to re-send it.")
+        order["proofUploadNote"] = PROOF_UPLOAD_FAILURE_NOTE
 
     sb_row = {
         "id": oid, "email": email,
