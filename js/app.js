@@ -1834,42 +1834,54 @@ function validateCheckoutForm(form, options = {}) {
   const value = (name) => String(form.querySelector(`[name="${name}"]`)?.value || "").trim();
   const add = (name, message) => failures.push({ name, message });
   const requiredMsg = checkoutValidationMessage("ck.errorRequired", "Please fill in this detail to complete your order.");
+  const fieldRequired = {
+    firstName: "Please fill in your first name to complete your order.",
+    lastName: "Please fill in your last name to complete your order.",
+    country: "Please select your country to complete your order.",
+    address: "Please fill in your delivery address to complete your order.",
+    city: "Please fill in your town or city to complete your order.",
+    zone: "Please select a delivery zone to complete your order.",
+    phone: "Please fill in your phone number to complete your order.",
+    email: "Please fill in your email address to complete your order.",
+    proof: "Please upload your payment proof to complete your order."
+  };
+  const requiredFor = (name) => fieldRequired[name] || requiredMsg;
   const namePattern = /^[\p{L}][\p{L} .'-]*$/u;
   const phonePattern = /^\+?[0-9][0-9 ()-]{6,24}$/;
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
   const first = value("firstName");
-  if (!first) add("firstName", requiredMsg);
+  if (!first) add("firstName", requiredFor("firstName"));
   else if (first.length < 2 || !namePattern.test(first)) add("firstName", checkoutValidationMessage("ck.errorFirstNameInvalid", "Enter a valid first name using letters only."));
 
   const last = value("lastName");
-  if (!last) add("lastName", requiredMsg);
+  if (!last) add("lastName", requiredFor("lastName"));
   else if (last.length < 2 || !namePattern.test(last)) add("lastName", checkoutValidationMessage("ck.errorLastNameInvalid", "Enter a valid last name using letters only."));
 
-  if (!value("country")) add("country", requiredMsg);
+  if (!value("country")) add("country", requiredFor("country"));
 
   const address = value("address");
-  if (!address) add("address", requiredMsg);
+  if (!address) add("address", requiredFor("address"));
   else if (address.length < 5) add("address", checkoutValidationMessage("ck.errorAddressInvalid", "Enter a little more detail for your street address."));
 
   const city = value("city");
-  if (!city) add("city", requiredMsg);
+  if (!city) add("city", requiredFor("city"));
   else if (city.length < 2) add("city", checkoutValidationMessage("ck.errorCityInvalid", "Enter a valid town or city."));
 
-  if (!value("zone")) add("zone", requiredMsg);
+  if (!value("zone")) add("zone", requiredFor("zone"));
 
   const phone = value("phone");
   const phoneDigits = phone.replace(/\D/g, "");
-  if (!phone) add("phone", requiredMsg);
+  if (!phone) add("phone", requiredFor("phone"));
   else if (!phonePattern.test(phone) || phoneDigits.length < 7) add("phone", checkoutValidationMessage("ck.errorPhoneInvalid", "Enter a valid phone number, including the country code if possible."));
 
   const email = value("email");
-  if (!email) add("email", requiredMsg);
+  if (!email) add("email", requiredFor("email"));
   else if (!emailPattern.test(email)) add("email", checkoutValidationMessage("ck.errorEmailInvalid", "Enter a valid email address, for example name@example.com."));
 
   const proof = form.querySelector("[name=proof]");
   if (proof && !form.dataset.proof && !options.proofReady && !(proof.files && proof.files.length)) {
-    add("proof", requiredMsg);
+    add("proof", requiredFor("proof"));
   }
 
   // Keep this guard future-proof: any newly added required control gets a
