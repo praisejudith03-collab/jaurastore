@@ -1274,10 +1274,8 @@ function analyticsPanel() {
     <h3 class="admin-h">Sales over time</h3><div class="an-chart" id="an-sales"><p class="empty">Loading…</p></div>
     <h3 class="admin-h">Visitors &amp; page views</h3><div class="an-chart" id="an-chart"><p class="empty">Loading…</p></div>
     <div class="adx-2col"><div><h3 class="admin-h">Top viewed products</h3><div id="an-products" class="empty">Loading…</div></div><div><h3 class="admin-h">Top selling products</h3><div id="an-sellers" class="empty">Loading…</div></div></div>
-    <h3 class="admin-h">Most visited pages</h3><div id="an-pages" class="empty">Loading…</div>
     <h3 class="admin-h">Conversion</h3><div class="stats" id="an-conv"></div><div id="an-revenue"></div>
     <h3 class="admin-h">Visitor locations</h3><p class="admin-note">Resolved from the visitor's own IP address at the CDN edge (never the server's), with crawlers and datacentre traffic filtered out — so this is where real customers are.</p><div id="an-loc" class="empty">Loading…</div>
-    <h3 class="admin-h">What customers searched for</h3><p class="admin-note">Stored permanently. Terms with no results are the products shoppers wanted and did not find.</p><div id="an-searches" class="empty">Loading…</div>
     <h3 class="admin-h">Latest orders</h3><div id="an-orders" class="empty">Loading…</div>`;
 }
 function dayLabel(day) { const d = new Date(day + "T00:00:00Z"); return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
@@ -1388,8 +1386,6 @@ async function fillAnalytics() {
   renderLive(data.live || [], data.activity || []);
   $("#an-sales").innerHTML = salesChart(data.sales || []);
   $("#an-chart").innerHTML = trafficChart(data.series || []);
-  const pages = data.topPages || [];
-  $("#an-pages").innerHTML = pages.length ? tableHTML(["Page", "Views", "Visitors"], pages.map((p) => `<tr><td>${esc(p.path)}</td><td>${p.views}</td><td>${p.visitors}</td></tr>`).join("")) : `<p class="empty">No page views yet.</p>`;
   const prods = data.topProducts || [];
   $("#an-products").innerHTML = prods.length ? tableHTML(["Product", "Views", "In carts"], prods.slice().sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 8).map((p) => `<tr><td>${esc(p.name || p.productId)}</td><td>${p.views || 0}</td><td>${p.carts || 0}</td></tr>`).join("")) : `<p class="empty">No product activity yet.</p>`;
   const sellers = prods.filter((p) => (p.purchases || 0) > 0 || (p.carts || 0) > 0).sort((a, b) => (b.purchases || 0) - (a.purchases || 0) || (b.carts || 0) - (a.carts || 0)).slice(0, 8);
@@ -1399,9 +1395,6 @@ async function fillAnalytics() {
   $("#an-revenue").innerHTML = status.length ? `<p class="admin-note">${status.map((s) => `${esc(s.status)}: ${s.n}`).join(" · ")}</p>` : "";
   const locs = data.locations || [];
   $("#an-loc").innerHTML = locs.length ? tableHTML(["Location", "Sessions"], locs.map((l) => `<tr><td><span class="an-flag">${countryFlag(l.country)}</span>${esc([l.city, l.country].filter(Boolean).join(", "))}</td><td>${l.sessions || l.visitors}</td></tr>`).join("")) : `<p class="empty">No locations recorded yet.</p>`;
-  const searches = data.searches || [];
-  const anSearch = $("#an-searches");
-  if (anSearch) anSearch.innerHTML = searches.length ? tableHTML(["Search term", "Searches", "Visitors", "Found nothing"], searches.map((sq) => `<tr><td>${esc(sq.term || "")}</td><td>${Number(sq.searches || 0)}</td><td>${Number(sq.visitors || 0)}</td><td>${Number(sq.empty || 0)}</td></tr>`).join("")) : `<p class="empty">No searches recorded yet.</p>`;
   const orders = data.recentOrders || [];
   $("#an-orders").innerHTML = orders.length ? tableHTML(["Order", "Customer", "Total", "Status"], orders.map((o) => `<tr><td>${esc(o.id)}</td><td>${esc(o.customer_name || "")}</td><td>${esc(JA.money(o.total, o.currency))}</td><td><span class="status-pill ${esc(o.status || "pending")}">${esc(orderStatusLabel(o.status))}</span></td></tr>`).join("")) : `<p class="empty">No orders yet.</p>`;
   document.querySelectorAll("[data-range]").forEach((b) => { b.onclick = () => { dashRange = Number(b.dataset.range); paintDesk("analytics"); }; });
@@ -2216,14 +2209,15 @@ function broadcastOptionsLine(p) {
   return bits.join(" · ");
 }
 function broadcastFullText(p) {
-  // One-tap "Copy Details" caption for WhatsApp Channels - exactly three
-  // lines, no image-export clutter and never a website URL:
+  // One-tap "Copy Details" caption: three product lines followed by the
+  // direct product URL for customers to open.
   //   1. Product name (EN / FR)
   //   2. Prices (₦ NGN / F CFA)
   //   3. Colours / options, when the product has any
   const lines = [broadcastDisplayName(p), broadcastPriceLine(p)];
   const options = broadcastOptionsLine(p);
   if (options) lines.push(options);
+  lines.push(broadcastProductUrl(p));
   return lines.join("\n");
 }
 
@@ -2240,14 +2234,15 @@ async function copyProductDetails(p) {
 
 function broadcastPickerResultsHTML(query) {
   const term = String(query || "").trim().toLowerCase();
+  const category = String($("#mk-bc-picker-category")?.value || "");
   // Manual picks are deliberately sourced from the entire online catalogue,
   // not only today's in-stock rotation: a merchant may prepare a card for
   // any item and decide when to publish it.
   const products = (JA.products ? JA.products() : []).filter((p) => p && p.id && p.online !== false).filter((p) => {
     const haystack = [p.name, p.nameFr, p.sku, p.category].join(" ").toLowerCase();
-    return !term || haystack.includes(term);
+    return (!term || haystack.includes(term)) && (!category || String(p.category || "") === category);
   }).slice(0, 100);
-  if (!products.length) return `<p class="empty">No in-stock product matches that search.</p>`;
+  if (!products.length) return `<p class="empty">No catalogue product matches that search.</p>`;
   return products.map((p) => `<button type="button" class="mk-bc-picker-item" data-bc-choose="${esc(String(p.id))}">
     <img src="${esc(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="" onerror="fallbackImg(event)" />
     <span><b>${esc(broadcastDisplayName(p))}</b><small>${esc(p.sku || p.id || "")} · ${broadcastPriceLine(p)}</small></span>
@@ -2335,7 +2330,7 @@ function broadcastFeedCardHTML() {
     <div class="mk-bc-picker" id="mk-bc-picker" hidden role="dialog" aria-modal="true" aria-labelledby="mk-bc-picker-title">
       <div class="mk-bc-picker-panel">
         <div class="mk-bc-picker-head"><h3 id="mk-bc-picker-title">Select custom product</h3><button type="button" class="au-link-btn" id="mk-bc-picker-close" aria-label="Close product picker">Close</button></div>
-        <input type="search" id="mk-bc-picker-search" placeholder="Search by product name, SKU or category…" autocomplete="off" />
+        <div class="mk-bc-picker-filters"><input type="search" id="mk-bc-picker-search" placeholder="Search by product name or SKU…" autocomplete="off" /><select id="mk-bc-picker-category" aria-label="Filter products by category"><option value="">All Categories</option>${[...new Set((JA.products ? JA.products() : []).map((p) => p.category).filter(Boolean))].sort().map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></div>
         <div class="mk-bc-picker-results" id="mk-bc-picker-results"></div>
       </div>
     </div>
@@ -2431,10 +2426,12 @@ function bindBroadcastFeed() {
   $("#mk-bc-picker")?.addEventListener("click", (event) => {
     if (event.target.id === "mk-bc-picker") closeBroadcastPicker();
   });
-  $("#mk-bc-picker-search")?.addEventListener("input", (event) => {
+  const refreshPicker = () => {
     const results = $("#mk-bc-picker-results");
-    if (results) results.innerHTML = broadcastPickerResultsHTML(event.target.value);
-  });
+    if (results) results.innerHTML = broadcastPickerResultsHTML($("#mk-bc-picker-search")?.value || "");
+  };
+  $("#mk-bc-picker-search")?.addEventListener("input", refreshPicker);
+  $("#mk-bc-picker-category")?.addEventListener("change", refreshPicker);
   $("#mk-bc-picker-results")?.addEventListener("click", (event) => {
     const choice = event.target.closest("[data-bc-choose]");
     if (choice) chooseBroadcastProduct(choice.dataset.bcChoose);

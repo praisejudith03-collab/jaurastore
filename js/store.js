@@ -1253,7 +1253,8 @@ const JA = (() => {
     // quote a volume discount the server has stopped applying.
     if (!promosEnabled()) return [];
     const raw = (_siteConfig && _siteConfig.bulkDiscountTiers) || [];
-    return (Array.isArray(raw) ? raw : []).map((t) => ({
+    const source = Array.isArray(raw) && raw.length ? raw : [{ minQuantity: 15, percent: 10 }];
+    return source.map((t) => ({
       minQuantity: Math.max(2, Number(t.minQuantity) || 0),
       percent: Math.max(1, Math.min(90, Number(t.percent) || 0)),
     })).filter((t) => t.minQuantity > 1 && t.percent > 0).sort((a, b) => a.minQuantity - b.minQuantity);
