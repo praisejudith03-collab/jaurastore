@@ -46,3 +46,10 @@ def test_supplier_attention_rows_and_expanded_link_navigate_to_exact_products():
     assert "data-expand-supplier-warnings" in ADMIN
     assert "reviewSupplierProduct" in ADMIN
     assert "scrollIntoView" in ADMIN
+
+
+def test_manual_variant_urls_are_editor_owned_and_auto_matching_is_disabled():
+    assert "textarea" in ADMIN and "data-opt-supplier" in ADMIN
+    sync = (ROOT / "tools" / "supplier_stock_sync.py").read_text(encoding="utf-8")
+    assert "AUTO_LINK_ENABLED = False" in sync
+    assert "no mapping was changed" in sync

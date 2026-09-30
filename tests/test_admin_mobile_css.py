@@ -222,3 +222,19 @@ def test_mobile_switch_buttons_keep_a_comfortable_tap_size():
         "36px tap height is within the 36-44px requirement"
     assert re.match(r"0\s+8px", _prop(rule, "padding")), \
         "8-12px horizontal padding on a fixed-height button"
+
+
+def test_supplier_alert_and_referral_regions_are_bounded_on_mobile():
+    css = _css()
+    assert ".attention-item" in css
+    assert ".mk-referrals-card" in css
+    assert "-webkit-overflow-scrolling: touch" in css
+    assert "#needs-attention-refresh" in css and "#an-refresh" in css
+
+
+def test_referral_codes_table_keeps_actions_in_a_touch_scroll_region():
+    css = _css()
+    assert ".mk-referrals-card" in css
+    assert "overflow-x: auto" in css
+    assert "min-width: 0" in css
+    assert "data-mk-ref-del" in open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()

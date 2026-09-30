@@ -66,7 +66,7 @@ def test_the_broadcast_card_is_mounted_in_the_marketing_panel():
 def test_only_active_in_stock_products_are_eligible_for_the_feed():
     body = _func(ADMIN_JS, "broadcastEligibleProducts")
     assert 'p.online !== false' in body
-    assert 'Number(p.stock) > 0' in body
+    assert 'broadcastInStock(p)' in body
 
 
 def test_the_rotation_depends_on_the_day_and_the_slot_not_just_the_name():
@@ -103,7 +103,7 @@ def test_the_first_few_picks_are_automatically_queued_per_batch():
 
 def test_each_card_carries_name_price_options_and_a_working_store_link():
     body = _func(ADMIN_JS, "broadcastCardHTML")
-    assert "broadcastProductUrl(p)" in body
+    assert "broadcastProductUrl(p)" in body  # View control may link; caption does not
     assert "broadcastPriceLine(p)" in body
     assert "broadcastDisplayName(p)" in body
     assert "broadcastOptionsLine(p)" in body
@@ -142,7 +142,7 @@ def test_the_broadcast_message_mentions_available_colours_and_sizes():
     assert 'startsWith("#")' in body  # hex swatches are never shown as text
     assert re.search(r"size\|length", body)
     message_body = _func(ADMIN_JS, "broadcastMessageFor")
-    assert "broadcastOptionsLine(p)" in message_body
+    assert "broadcastFullText(p)" in message_body
 
 
 def test_the_store_link_points_at_the_real_product_page():
@@ -159,8 +159,8 @@ def test_the_caption_ends_with_the_bare_clean_link_only():
     code_lines = [ln for ln in body.splitlines() if not ln.strip().startswith("//")]
     code = "\n".join(code_lines)
     assert "broadcastDisplayName(p)" in code
-    assert "broadcastProductUrl(p)" in code
-    assert "broadcastDimensionsLine(p)" in code
+    assert "broadcastProductUrl(p)" not in code
+    assert "broadcastDetailsLine(p)" in code
     # Options and stock labels are intentionally removed from the caption.
     assert "broadcastOptionsLine(p)" not in code
     assert "broadcastStockLine" not in code
@@ -295,3 +295,21 @@ def test_morning_and_evening_custom_overrides_are_independent_and_daily():
 def test_legacy_share_fallback_launches_the_native_whatsapp_uri():
     one = _func(ADMIN_JS, "broadcastShareNative")
     assert "window.location.href = broadcastShareUrl(text)" in one
+    assert "broadcastDownloadAndCopy" in ADMIN_JS
+
+
+def test_catalog_caption_is_exactly_url_free_and_uses_one_optional_details_line():
+    body = _func(ADMIN_JS, "broadcastFullText")
+    assert "broadcastPriceLine(p)" in body
+    assert "broadcastDetailsLine(p)" in body
+    assert "broadcastProductUrl(p)" not in body
+    assert "compare" not in body.lower()
+    assert "stock" not in body.lower()
+
+
+def test_download_copy_fallback_attaches_the_real_file_and_copies_caption():
+    body = _func(ADMIN_JS, "broadcastDownloadAndCopy")
+    assert "broadcastImageFile(p)" in body
+    assert "URL.createObjectURL(file)" in body
+    assert "navigator.clipboard.writeText(broadcastFullText(p))" in body
+    assert "broadcastInStock(p)" in body

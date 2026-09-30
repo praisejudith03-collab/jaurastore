@@ -536,9 +536,10 @@ def test_main_end_to_end_autonomous_discovery_links_and_syncs_in_one_run(iso_cat
     assert rc == 0
 
     linked = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == product["id"])
-    assert linked["supplierId"] == "splendall"
-    assert linked["supplierSku"] == "https://www.splendall.com/product/5in1-mini-towel/"
-    assert catalog_mod.stock_of(linked) == 6
+    # Discovery is report-only; no automatic mapping or stock sync occurs.
+    assert linked["supplierId"] == ""
+    assert linked["supplierSku"] == ""
+    assert catalog_mod.stock_of(linked) == 99
 
     untouched_ankara = next(p for p in catalog_mod.merged(include_hidden=True) if p["id"] == ankara["id"])
     assert untouched_ankara["supplierId"] == ""
@@ -1067,3 +1068,11 @@ def test_resolve_option_links_new_supplier_colour_needs_review():
     out = sync_mod.resolve_option_links(rows, links)
     assert out["links"]["Black"] == "u_black"
     assert "Teal" in out["review"]        # new supplier colour with no home
+
+
+def test_option_only_manual_mapping_is_in_sync_scope(iso_catalog, monkeypatch):
+    product = _make(iso_catalog, name="Option-only Splendall", stock=0,
+                    supplierId="splendall", options=[{"title": "Color", "values": ["Black"]}],
+                    optionSupplierSku={"Black": "https://supplier/black"})
+    found = next(p for p in sync_mod.mapped_products() if p["id"] == product["id"])
+    assert found["optionSupplierSku"]["Black"] == "https://supplier/black"

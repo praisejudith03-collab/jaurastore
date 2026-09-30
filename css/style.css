@@ -7376,3 +7376,15 @@ body.store-paused{overflow:hidden}
   .attention-more, .attention-action, #needs-attention-refresh, #an-refresh { max-width: 100%; min-height: 44px; white-space: normal; overflow-wrap: anywhere; line-height: 1.2; }
   .adx-var-qty textarea[data-opt-supplier] { width: 100%; }
 }
+
+/* Referral codes remain a bounded, touch-scrollable region on phones. Keep
+   long emails/codes from widening the admin dashboard and keep actions in the
+   scrollable table rather than hiding the last column. */
+.mk-referrals-card { min-width: 0; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.mk-referrals-card .mk-table { max-width: none; }
+.mk-referrals-card .mk-table td { overflow-wrap: anywhere; word-break: break-word; }
+.mk-referrals-card .mk-table td:last-child { white-space: nowrap; min-width: 92px; }
+@media (max-width: 640px) {
+  .mk-referrals-card .mk-table { min-width: 560px; }
+  .mk-referrals-card .mk-table .btn { min-height: 44px; white-space: nowrap; }
+}

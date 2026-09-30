@@ -2219,7 +2219,7 @@ function broadcastInStock(p) {
 }
 function broadcastEligibleProducts() {
   const all = JA.products ? JA.products() : [];
-  return all.filter((p) => p && p.id && p.online !== false && broadcastInStock(p) && Number(p.stock) > 0);
+  return all.filter((p) => p && p.id && p.online !== false && broadcastInStock(p));
 }
 
 function broadcastDaySeed() {
@@ -2336,43 +2336,46 @@ function broadcastDimensionsLine(p) {
   // No label prefix - the Jaura Channel caption lists clean values only.
   return String(p && p.dimensions || "").trim();
 }
+function broadcastDetailsLine(p) {
+  const details = [broadcastOptionsLine(p), broadcastDimensionsLine(p)].filter(Boolean);
+  return details.join(" · ");
+}
 function broadcastFullText(p) {
-  // Jaura Channel caption, attached to the single high-res product photo.
-  // EXACT layout (owner spec) - and NO stock labels ever appear here:
-  //   Line 1: [Product Name English] / [Product Name French]
-  //   Line 2: ₦[Price Naira]
-  //   Line 3: [Price CFA] CFA
-  //   Line 4: [Dimensions / Specs]   (only when set)
-  //   Line 5: https://jaurastore.com.ng/product.html?id=[Product ID]
+  // One URL-free caption format for both WhatsApp sharing and catalog export.
+  // The image attachment is the product context; the caption contains only
+  // the bilingual name, active prices, and optional readable details.
   const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   const cfa = p.priceCfa || toCfa(p.priceNgn || 0);
-  const lines = [
-    broadcastDisplayName(p),
-    `₦${Number(p.priceNgn || 0).toLocaleString()}`,
-    `${Number(cfa || 0).toLocaleString()} CFA`
-  ];
-  const dimensionsLine = broadcastDimensionsLine(p);
-  if (dimensionsLine) lines.push(dimensionsLine);
-  lines.push(broadcastProductUrl(p));
+  const lines = [broadcastDisplayName(p), broadcastPriceLine(p)];
+  const details = broadcastDetailsLine(p);
+  if (details) lines.push(details);
   return lines.join("\n");
 }
 function broadcastMessageFor(p) {
-  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
-  const cfa = p.priceCfa || toCfa(p.priceNgn || 0);
-  const lines = [
-    broadcastDisplayName(p),
-    `₦${Number(p.priceNgn || 0).toLocaleString()}`,
-    `${Number(cfa || 0).toLocaleString()} CFA`
-  ];
-  const optionsLine = broadcastOptionsLine(p);
-  if (optionsLine) lines.push(optionsLine);
-  return lines.join("\n");
+  return broadcastFullText(p);
 }
 function broadcastShareUrl(text) {
-  // Legacy fallback only. Modern phones take the navigator.share path above,
-  // which opens the OS picker containing WhatsApp, WhatsApp Business and
-  // Channels instead of routing Safari through an intermediary web page.
+  // Legacy fallback destination only; `text` itself is deliberately URL-free.
   return `whatsapp://send?text=${encodeURIComponent(text)}`;
+}
+
+async function broadcastDownloadAndCopy(p) {
+  if (!broadcastInStock(p)) {
+    JA.toast("This item is out of stock — only available products can be shared.");
+    return;
+  }
+  const file = await broadcastImageFile(p);
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(file);
+  link.download = file.name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  try {
+    await navigator.clipboard.writeText(broadcastFullText(p));
+    JA.toast("Catalog image downloaded and caption copied.");
+  } catch (e) {
+    JA.toast("Catalog image downloaded. Copy the caption manually: " + broadcastFullText(p));
+  }
 }
 
 async function broadcastImageFile(p) {
@@ -2408,10 +2411,9 @@ async function broadcastShareNative(p) {
   } catch (e) {
     if (e && e.name === "AbortError") return; // the owner closed the share sheet - not an error
   }
-  // Web Share (with files) is not available here, or the photo could not
-  // be fetched - fall back to WhatsApp's own share sheet with the same
-  // text. The exact photo still shows up there because product.html?id=
-  // now carries its own Open Graph image (see app.inject_product_meta).
+  // File sharing is unavailable: keep the caption URL-free and open the
+  // native WhatsApp text composer. The visible download/copy fallback on the
+  // card lets the merchant attach the exact image manually.
   window.location.href = broadcastShareUrl(text);
 }
 
@@ -2549,6 +2551,7 @@ function broadcastCardHTML(p) {
       <a class="btn btn-line" href="${esc(broadcastProductUrl(p))}" target="_blank" rel="noopener">View</a>
       <button type="button" class="btn btn-line" data-bc-swap="${esc(String(p.id))}">Swap item</button>
       <button type="button" class="btn" data-bc-share="${esc(String(p.id))}">Share</button>
+      <button type="button" class="btn btn-line" data-bc-download="${esc(String(p.id))}">Download Catalog Image &amp; Copy Text</button>
     </div>
     ${custom ? `<button type="button" class="au-link-btn mk-bc-restore" data-bc-restore="${esc(String(p.id))}">Restore automatic item</button>` : ""}
   </article>`;
@@ -2598,6 +2601,9 @@ function paintBroadcastFeed() {
   });
   grid.querySelectorAll("[data-bc-swap]").forEach((btn) => {
     btn.onclick = () => openBroadcastPicker(btn.dataset.bcSwap);
+  });
+  grid.querySelectorAll("[data-bc-download]").forEach((btn) => {
+    btn.onclick = async () => { const p = byId.get(String(btn.dataset.bcDownload)); if (p) { try { await broadcastDownloadAndCopy(p); } catch (e) { JA.toast(e.message || "Could not download the catalog image."); } } };
   });
   grid.querySelectorAll("[data-bc-restore]").forEach((btn) => {
     btn.onclick = () => restoreAutomaticBroadcastProduct(btn.dataset.bcRestore);

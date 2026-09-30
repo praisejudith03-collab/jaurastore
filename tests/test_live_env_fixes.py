@@ -146,8 +146,8 @@ def test_whatsapp_caption_includes_dimensions_and_link_but_no_stock_label():
     assert match
     body = admin_js[match.start():admin_js.index("\n}\n", match.start())]
     assert "broadcastDisplayName(p)" in body
-    assert "broadcastDimensionsLine(p)" in body
-    assert "broadcastProductUrl(p)" in body
+    assert "broadcastDetailsLine(p)" in body
+    assert "broadcastProductUrl(p)" not in body
     # Availability is a share-time gate, never a caption label.
     assert "In stock" not in body and "Out of stock" not in body
     assert "broadcastStockLine" not in admin_js

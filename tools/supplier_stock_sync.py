@@ -135,6 +135,9 @@ assert SUPPLIER_ID in catalog.KNOWN_SUPPLIERS, (
 # quantities are capped; a confirmed zero remains zero and existing unlinked
 # variants are never touched by the sync.
 SUPPLIER_STOCK_CAP = max(0, int(os.environ.get("SUPPLIER_STOCK_CAP", "20") or 20))
+# Discovery is report-only. Supplier mappings are merchant-owned data and may
+# only be created or changed through the Admin product editor.
+AUTO_LINK_ENABLED = False
 
 
 def capped_supplier_qty(quantity):
@@ -1029,7 +1032,14 @@ def mapped_products():
             continue
         if str(p.get("supplierId") or "").strip().lower() != SUPPLIER_ID:
             continue
-        if not str(p.get("supplierSku") or "").strip():
+        # A variant-only product may intentionally have no product-level URL;
+        # its explicit optionSupplierSku links are sufficient scope.
+        option_links = p.get("optionSupplierSku")
+        has_option_link = isinstance(option_links, dict) and any(
+            (isinstance(value, (list, tuple)) and any(str(url or "").strip() for url in value))
+            or (not isinstance(value, (list, tuple)) and str(value or "").strip())
+            for value in option_links.values())
+        if not str(p.get("supplierSku") or "").strip() and not has_option_link:
             continue
         out.append(p)
     return out
@@ -1331,20 +1341,14 @@ def main(argv):
             audit["catalog_items_checked"] = len(store_products)
             audit["supplier_items_crawled"] = len(supplier_rows)
             auto, review = discover_matches(store_products, supplier_rows, cache)
-            for product, row, score in auto:
-                pname = product.get("name")
-                if dry_run:
-                    audit["would_auto_link"] += 1
-                    print(f"would auto-link: {pname!r} -> {row['name']!r} "
-                          f"({row['slug']}) score={score:.2f}")
-                    continue
-                linked = apply_auto_match(product, row, actor=f"supplier-sync:{SUPPLIER_ID}:auto-link")
-                if linked:
-                    audit["auto_linked"] += 1
-                    print(f"auto-linked: {pname!r} -> {row['name']!r} "
-                          f"({row['slug']}) score={score:.2f}")
-                else:
-                    print(f"warning: failed to save auto-link for {pname!r}")
+            # Even an exact image match is report-only now. Never call the
+            # mapping writer from the background worker; the merchant must
+            # paste and save every supplier URL manually in Admin.
+            if auto:
+                review.extend(auto)
+                for product, row, score in auto:
+                    print(f"possible manual supplier mapping: {product.get('name')!r} -> {row['name']!r} "
+                          f"({row['slug']}) score={score:.2f}; no mapping was changed")
             if review:
                 review_rows = [{
                     "product_id": product.get("id"), "product_name": product.get("name"),
