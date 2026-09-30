@@ -131,6 +131,23 @@ SUPPLIER_ID = "splendall"
 assert SUPPLIER_ID in catalog.KNOWN_SUPPLIERS, (
     "supplier_stock_sync.SUPPLIER_ID must be one of catalog.KNOWN_SUPPLIERS")
 
+# Keep automatic restocks conservative by default. Only positive, confirmed
+# quantities are capped; a confirmed zero remains zero and existing unlinked
+# variants are never touched by the sync.
+SUPPLIER_STOCK_CAP = max(0, int(os.environ.get("SUPPLIER_STOCK_CAP", "20") or 20))
+# Discovery is report-only. Supplier mappings are merchant-owned data and may
+# only be created or changed through the Admin product editor.
+AUTO_LINK_ENABLED = False
+
+
+def capped_supplier_qty(quantity):
+    """Cap positive confirmed supplier quantities, leaving zero unchanged."""
+    try:
+        quantity = max(0, int(quantity))
+    except (TypeError, ValueError):
+        return 0
+    return min(quantity, SUPPLIER_STOCK_CAP) if quantity > 0 else 0
+
 BASE_URL = os.environ.get("SPLENDALL_BASE_URL", "https://www.splendall.com").rstrip("/")
 SHOP_URL = f"{BASE_URL}/shop/"
 STORE_BASE_URL = os.environ.get("STORE_BASE_URL", "https://jaurastore.com.ng").rstrip("/")
@@ -631,7 +648,15 @@ def resolve_option_links(store_rows, links):
     """
     folded = {}
     for label, url in (links or {}).items():
-        clean = str(url or "").strip()
+        # Preserve a list of listings as a list. Converting it with str() here
+        # produces one invalid URL like "['https://a', 'https://b']" and
+        # prevents independent auditing of each source.
+        if isinstance(url, (list, tuple)):
+            clean = [str(item).strip() for item in url[:20]
+                     if str(item or "").strip()]
+        else:
+            value = str(url or "").strip()
+            clean = value if value else []
         if clean:
             folded[catalog.fold_option_value(label)] = (str(label), clean)
 
@@ -655,9 +680,10 @@ def resolve_option_links(store_rows, links):
         inferred = infer_remaining_option_links(pending, remaining)
         assigned.update(inferred["links"])
         review.extend(inferred["review"])
-        homed = set(inferred["links"].values())
+        homed = list(inferred["links"].values())
         # A leftover supplier link with no storefront home is a NEW colour the
         # merchant has not created yet - flag it for manual confirmation.
+        # Lists are deliberately compared by value, never stringified.
         leftover = [lab for lab, url in remaining.items() if url not in homed]
         review.extend(leftover)
         missing.extend([k for k in pending if k not in assigned and k not in inferred["review"]])
@@ -687,6 +713,11 @@ def fetch_per_option_supplier_stock(product, fetch=None):
     fetch = fetch or fetch_supplier_quantity
     raw_links = product.get("optionSupplierSku")
     links = raw_links if isinstance(raw_links, dict) else {}
+
+    def supplier_urls(value):
+        """Return every listing for one option, including legacy scalars."""
+        values = value if isinstance(value, (list, tuple)) else [value]
+        return [str(v).strip() for v in values[:20] if str(v or "").strip()]
     store_rows = _store_variant_rows(product)
     if not store_rows:
         raise SupplierFetchError("store product has no options to map to supplier links",
@@ -698,15 +729,26 @@ def fetch_per_option_supplier_stock(product, fetch=None):
         url = resolved["links"].get(key)
         if not url:
             continue
-        qty, detail = fetch(url)
-        option_stock[key] = qty
-        audit.append({
-            "option": key,
-            "supplier_sku": url,
-            "quantity": qty,
-            "status": "in_stock" if qty > 0 else "out_of_stock",
-            "detail": detail,
-        })
+        urls = supplier_urls(url)
+        quantities = []
+        for listing in urls:
+            qty, detail = fetch(listing)
+            try:
+                confirmed_qty = max(0, int(qty or 0))
+            except (TypeError, ValueError):
+                confirmed_qty = 0
+            quantities.append(confirmed_qty)
+            audit.append({
+                "option": key,
+                "supplier_sku": listing,
+                "quantity": confirmed_qty,
+                "status": "in_stock" if confirmed_qty > 0 else "out_of_stock",
+                "detail": detail,
+            })
+        # Multiple listings are independent sources for the same storefront
+        # option. Combine confirmed quantities first, then apply ONE cap to
+        # the aggregate so several URLs cannot bypass the default limit.
+        option_stock[key] = capped_supplier_qty(sum(quantities))
     missing, review = resolved["missing"], resolved["review"]
     if not option_stock and (missing or review):
         raise SupplierFetchError(
@@ -990,7 +1032,14 @@ def mapped_products():
             continue
         if str(p.get("supplierId") or "").strip().lower() != SUPPLIER_ID:
             continue
-        if not str(p.get("supplierSku") or "").strip():
+        # A variant-only product may intentionally have no product-level URL;
+        # its explicit optionSupplierSku links are sufficient scope.
+        option_links = p.get("optionSupplierSku")
+        has_option_link = isinstance(option_links, dict) and any(
+            (isinstance(value, (list, tuple)) and any(str(url or "").strip() for url in value))
+            or (not isinstance(value, (list, tuple)) and str(value or "").strip())
+            for value in option_links.values())
+        if not str(p.get("supplierSku") or "").strip() and not has_option_link:
             continue
         out.append(p)
     return out
@@ -1184,10 +1233,13 @@ def sync_one(product, dry_run=False, warnings=None):
                       + f", total={qty}")
         elif store_variants:
             option_stock, audit = fetch_supplier_variant_stock(product)
+            option_stock = {key: capped_supplier_qty(value)
+                            for key, value in option_stock.items()}
             qty = sum(option_stock.values())
             detail = f"{len(option_stock)} exact option variant(s), total={qty}"
         else:
             qty, detail = fetch_supplier_quantity(product.get("supplierSku"))
+            qty = capped_supplier_qty(qty)
             option_stock, audit = None, []
     except SupplierFetchError as exc:
         print(f"warning: skipping {name!r} ({pid}) - could not confirm supplier stock: {exc}")
@@ -1289,20 +1341,14 @@ def main(argv):
             audit["catalog_items_checked"] = len(store_products)
             audit["supplier_items_crawled"] = len(supplier_rows)
             auto, review = discover_matches(store_products, supplier_rows, cache)
-            for product, row, score in auto:
-                pname = product.get("name")
-                if dry_run:
-                    audit["would_auto_link"] += 1
-                    print(f"would auto-link: {pname!r} -> {row['name']!r} "
-                          f"({row['slug']}) score={score:.2f}")
-                    continue
-                linked = apply_auto_match(product, row, actor=f"supplier-sync:{SUPPLIER_ID}:auto-link")
-                if linked:
-                    audit["auto_linked"] += 1
-                    print(f"auto-linked: {pname!r} -> {row['name']!r} "
-                          f"({row['slug']}) score={score:.2f}")
-                else:
-                    print(f"warning: failed to save auto-link for {pname!r}")
+            # Even an exact image match is report-only now. Never call the
+            # mapping writer from the background worker; the merchant must
+            # paste and save every supplier URL manually in Admin.
+            if auto:
+                review.extend(auto)
+                for product, row, score in auto:
+                    print(f"possible manual supplier mapping: {product.get('name')!r} -> {row['name']!r} "
+                          f"({row['slug']}) score={score:.2f}; no mapping was changed")
             if review:
                 review_rows = [{
                     "product_id": product.get("id"), "product_name": product.get("name"),

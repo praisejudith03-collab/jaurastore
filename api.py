@@ -560,6 +560,8 @@ CUSTOMER_FIELDS = ("firstName", "lastName", "name", "phone", "email", "country",
                    "city", "zone", "address", "note")
 STATUSES = ("pending", "confirmed", "declined")
 INVALID_RECEIPT_NOTICE = "Order declined: Invalid payment image uploaded"
+PROOF_UPLOAD_FAILURE_NOTE = ("Payment proof was provided but could not be saved to "
+                           "storage; ask the customer to re-send it.")
 PENDING_BALANCE_NOTICE = ("You have a pending balance. Please contact us on WhatsApp "
                           "to balance up your payment before your order is confirmed.")
 
@@ -933,7 +935,10 @@ def benin_togo_min_cfa():
     """
     try:
         import growth
-        value = growth.settings().get("minOrderCfa", BENIN_TOGO_MIN_CFA)
+        settings = growth.settings()
+        if not int(settings.get("minimumOrderEnabled", 1)):
+            return 0
+        value = settings.get("minOrderCfa", BENIN_TOGO_MIN_CFA)
         value = int(float(value))
         if value < 0:
             raise ValueError
@@ -1257,8 +1262,7 @@ def create_order():
         # order so the admin dashboard can ask the customer to re-send it — the
         # sale itself is complete and stock is committed.
         order["proofUploadFailed"] = True
-        order["proofUploadNote"] = ("Payment proof was provided but could not be "
-                                    "saved to storage; ask the customer to re-send it.")
+        order["proofUploadNote"] = PROOF_UPLOAD_FAILURE_NOTE
 
     sb_row = {
         "id": oid, "email": email,
@@ -2951,6 +2955,7 @@ def site_config():
         # the moving banner drops the minimum line and the checkout skips the
         # under-minimum guard entirely (the server skips it the same way).
         min_cfa = benin_togo_min_cfa()
+        site["minimumOrderEnabled"] = bool(_growth.get("minimumOrderEnabled", 1))
         site["minOrderCfa"] = min_cfa
         site["minOrderNgn"] = (benin_togo_min_ngn(_growth.get("cfaRate"), min_cfa)
                                if min_cfa > 0 else 0)

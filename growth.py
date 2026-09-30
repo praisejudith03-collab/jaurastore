@@ -21,6 +21,8 @@ DEFAULTS = {
     # minimum-order rule entirely; the storefront reads the live value from
     # GET /api/site (minOrderCfa / minOrderNgn).
     "minOrderCfa": 5000,
+    # Explicit switch; minOrderCfa=0 remains a backwards-compatible OFF value.
+    "minimumOrderEnabled": 1,
     "minSpendNgn": 20000,      # order value that earns a referral code
     "cfaRate": 0.44,           # adjustable NGN -> CFA rate (1 NGN = cfaRate F CFA)
     "buyerPercent": 5,         # discount for the referred buyer
@@ -29,7 +31,7 @@ DEFAULTS = {
     "bulkDiscountTiers": [],    # [{minQuantity, percent}], no static discount
 }
 
-INT_KEYS = ("referralEnabled", "promosEnabled", "minOrderCfa", "minSpendNgn",
+INT_KEYS = ("referralEnabled", "promosEnabled", "minimumOrderEnabled", "minOrderCfa", "minSpendNgn",
             "buyerPercent", "referrerPercent", "milestone")
 FLOAT_KEYS = ("cfaRate",)
 JSON_KEYS = ("bulkDiscountTiers",)
@@ -71,6 +73,7 @@ def _cap(s):
     s["minSpendNgn"] = max(0, min(int(s.get("minSpendNgn", 20000)), 10**9))
     s["referralEnabled"] = 1 if int(s.get("referralEnabled", 1)) else 0
     s["promosEnabled"] = 1 if int(s.get("promosEnabled", 1)) else 0
+    s["minimumOrderEnabled"] = 1 if int(s.get("minimumOrderEnabled", 1)) else 0
     # 5,000 F CFA is the house default; an admin may lower it, raise it, or
     # set 0 to switch the Benin & Togo minimum-order rule off completely.
     s["minOrderCfa"] = max(0, min(int(s.get("minOrderCfa", 5000)), 10**9))
