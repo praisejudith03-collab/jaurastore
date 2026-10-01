@@ -49,6 +49,10 @@ DEFAULT_SETTINGS = {
     # Facebook, Instagram, TikTok and WhatsApp all render automatically.
     "social_whatsapp_url": "", "social_instagram_url": "",
     "social_tiktok_url": "", "social_facebook_url": "",
+    # Canonical boolean for the storefront promotional/welcome pop-up. The
+    # older text welcome_enabled field is retained below for rollout/backward
+    # compatibility with a browser bundle that has not refreshed yet.
+    "popup_banner_active": True,
     "welcome_enabled": "", "welcome_title": "", "welcome_title_fr": "",
     "welcome_body": "", "welcome_body_fr": "", "welcome_image_url": "",
     "welcome_cta_label": "", "welcome_cta_label_fr": "",
@@ -173,6 +177,9 @@ CRITICAL_SETTINGS = (
     # save fails with the exact one-line ALTER that repairs it.
     "social_whatsapp_url", "social_instagram_url",
     "social_tiktok_url", "social_facebook_url",
+    # A save must never claim the popup is OFF while an older table silently
+    # dropped the boolean and keeps rendering it for customers.
+    "popup_banner_active",
 )
 _NULL_VALUE_RE = re.compile(r'null value in column "([^"]+)"')
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
@@ -181,6 +188,9 @@ _TYPED_FILL_CHAIN = (0, False, "")
 
 
 def _site_repair_statement(column):
+    if column == "popup_banner_active":
+        return ("alter table site_settings add column if not exists "
+                "popup_banner_active boolean not null default true")
     return f"alter table site_settings add column if not exists {column} text not null default ''"
 
 
@@ -322,6 +332,9 @@ def update_site_settings(values):
     clean = {k: v for k, v in values.items() if k in allowed}
     if "referral_commission_percentage" in clean:
         clean["referral_commission_percentage"] = max(0, min(100, float(clean["referral_commission_percentage"])))
+    if "popup_banner_active" in clean:
+        value = clean["popup_banner_active"]
+        clean["popup_banner_active"] = value is True or str(value).strip().lower() in ("1", "true", "yes", "on")
     if not enabled() or client() is None:
         raise RuntimeError("Supabase is required for site settings")
     c = client()

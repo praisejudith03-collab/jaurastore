@@ -729,8 +729,11 @@ const JA = (() => {
       if (opts.fresh) url += (url.indexOf("?") >= 0 ? "&" : "?") + "_fresh=" + Date.now();
       const res = await fetch(url, {
         credentials: "same-origin",
-        cache: opts.fresh ? "reload" : "no-store",
-        headers: { "Cache-Control": "no-cache", "Pragma": "no-cache" },
+        // Normal page transitions may reuse the short private HTTP response
+        // cache (ETag revalidation after 20 seconds). A user-requested fresh
+        // refresh still bypasses every intermediary and gets a unique URL.
+        cache: opts.fresh ? "reload" : "default",
+        headers: opts.fresh ? { "Cache-Control": "no-cache", "Pragma": "no-cache" } : {},
         signal: AbortSignal.timeout(30000),
       });
       if (res.ok) {
@@ -1017,7 +1020,10 @@ const JA = (() => {
     // included), not just the store management — the public storefront is where
     // shoppers see them.
     try {
-      const r = await fetch("api/categories", { credentials: "same-origin", cache: "no-store" });
+      // Category names/images change far less often than products. Use the
+      // endpoint's short ETag cache for instant navigation; the admin save
+      // invalidates the server cache and a browser revalidates on expiry.
+      const r = await fetch("api/categories", { credentials: "same-origin", cache: "default" });
       const d = await r.json();
       if (d && Array.isArray(d.categories)) {
         write(KEYS.cats, d.categories.map((c) => ({
@@ -1244,6 +1250,56 @@ const JA = (() => {
     return hasNgn(p) ? cur : "CFA";
   }
 
+  function foldedVariantKey(value) {
+    return String(value == null ? "" : value).toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
+  /**
+   * Price candidates a shopper can actually select.  An option-price map can
+   * arrive under several historic aliases and keys may be either the raw
+   * value ("Black") or the full selection ("Colour: Black").  Include the
+   * base price only when an option is not explicitly priced; this makes a
+   * fully priced Red/Black product show its real ₦1,800 – ₦2,500 range rather
+   * than an unrelated fallback price.
+   */
+  function variantPriceValues(p, cur = displayCur(p)) {
+    const overrides = optionMap(p && (p.optionPrices ?? p.option_prices));
+    const entries = Object.entries(overrides || []).filter(([, value]) => {
+      const n = Number(value);
+      return Number.isFinite(n) && n >= 0;
+    });
+    if (!entries.length) return [priceOf(p, cur)];
+
+    const indexed = Object.fromEntries(entries.map(([key, value]) => [foldedVariantKey(key), Number(value)]));
+    const opts = (p && Array.isArray(p.options) && p.options.length)
+      ? p.options : ((p && Array.isArray(p.colors) && p.colors.length)
+        ? [{ title: "Colour", values: p.colors }] : []);
+    const values = [];
+    let needsBase = !opts.length;
+    opts.forEach((opt) => {
+      (opt.values || []).forEach((value) => {
+        const raw = String(value == null ? "" : value).trim();
+        const titled = String(opt.title || "").trim() + ": " + raw;
+        const found = indexed[foldedVariantKey(titled)] ?? indexed[foldedVariantKey(raw)];
+        if (Number.isFinite(found)) values.push(cur === "NGN" ? found : toCfa(found));
+        else needsBase = true;
+      });
+    });
+    // Explicit full-combination overrides cannot always be inferred from the
+    // individual option values. Include them too, then keep the base price for
+    // any combination that did not have a direct override.
+    entries.forEach(([key]) => values.push(priceOf(p, cur, key)));
+    if (needsBase) values.push(priceOf(p, cur));
+    return [...new Set(values.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value >= 0))];
+  }
+
+  function priceRangeOf(p, cur = displayCur(p)) {
+    const values = variantPriceValues(p, cur);
+    if (values.length < 2) return null;
+    const min = Math.min(...values), max = Math.max(...values);
+    return max > min ? { min, max, cur } : null;
+  }
+
   function priceBits(now, was, cur) {
     return was && was > now
       ? `<s>${money(was, cur)}</s><span class="now">${money(now, cur)}</span>`
@@ -1251,9 +1307,13 @@ const JA = (() => {
   }
   function priceHTML(p) {
     const cur = displayCur(p);
+    const range = priceRangeOf(p, cur);
+    if (range) {
+      return `<span class="price" data-price-for="${p.id}" data-price-state="range"><span class="now price-range">${money(range.min, cur)}<span class="range-separator" aria-hidden="true">–</span>${money(range.max, cur)}</span></span>`;
+    }
     const now = priceOf(p, cur);
     const was = compareOf(p, cur);
-    return `<span class="price" data-price-for="${p.id}">${priceBits(now, was, cur)}</span>`;
+    return `<span class="price" data-price-for="${p.id}" data-price-state="exact">${priceBits(now, was, cur)}</span>`;
   }
 
   function cart() {
@@ -2482,8 +2542,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=170";
-        const FLYER = "images/brand/logo-flyer.jpg?v=170";
+        const LOGO = "images/brand/logo.jpg?v=171";
+        const FLYER = "images/brand/logo-flyer.jpg?v=171";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2560,6 +2620,13 @@ const JA = (() => {
     // Server row (Supabase site_settings) is the truth; the copy used by
     // settings() and the checkout keeps ALL canonical fields live.
     _siteConfig = site;
+    // A live settings refresh can arrive while a previous page's dialog is
+    // open. Remove it immediately when the master toggle is OFF; this makes
+    // the OFF state authoritative even without a reload.
+    if (!welcomeEnabled()) {
+      document.querySelectorAll("[data-welcome]").forEach((node) => node.remove());
+      document.body.classList.remove("welcome-open");
+    }
     // Keyed on presence (not truthiness): an EMPTY save is a real value
     // meaning "restore the default banner". The old `if (site.convBanner)`
     // never cleared the previous text, so the moving banner kept showing
@@ -2672,7 +2739,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=170" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=171" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -2970,7 +3037,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=170" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=171" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3078,6 +3145,14 @@ const JA = (() => {
   }
 
   function welcomeEnabled() {
+    // popup_banner_active is the durable boolean controlled by the Admin
+    // Settings switch. Fall back to the legacy text flag only for a site row
+    // that predates the migration, so an OFF switch means no modal element or
+    // script work is rendered at all.
+    const active = _siteConfig && _siteConfig.popup_banner_active;
+    if (active !== undefined && active !== null && active !== "") {
+      return active === true || String(active).trim().toLowerCase() === "true" || String(active).trim() === "1";
+    }
     return String((_siteConfig && _siteConfig.welcome_enabled) || "") !== "0";
   }
 
@@ -3098,7 +3173,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=170", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=171", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3132,7 +3207,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=170";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=171";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3191,7 +3266,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=170");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=171");
     document.title = title;
     [
       ["name", "description", description],
@@ -3688,12 +3763,14 @@ const JA = (() => {
     try { paintConvBanner(); } catch (e) {}
   });
 
-  // First paint always waits for the authoritative API/Supabase catalogue.
-  // Do not expose bundled or localStorage product rows while this is pending.
+  // First paint always waits for the authoritative API catalogue (never the
+  // bundled/localStorage product list). The browser may reuse its short-lived
+  // validated response, making a back-to-shop transition substantially faster
+  // while the server cache is invalidated on every stock/product write.
   seed = [];
   window.JA_SEED = [];
   invalidateCatalogCache();
-  ready = loadSeed(true, { fresh: true });
+  ready = loadSeed(true);
 
   // Supabase Realtime is not exposed to browsers with a service credential.
   // This no-store change feed is the safe equivalent for this server-backed
@@ -3701,15 +3778,18 @@ const JA = (() => {
   // and refresh immediately on focus/pageshow. Admin saves already dispatch
   // ja:catalog synchronously; this keeps other open devices in step too.
   let liveSyncBusy = false;
-  const syncLiveCatalog = () => {
+  const syncLiveCatalog = (force = false) => {
     if (liveSyncBusy || document.visibilityState === "hidden") return;
     liveSyncBusy = true;
-    loadSeed(false, { fresh: true }).catch(() => {}).finally(() => { liveSyncBusy = false; });
+    loadSeed(false, force ? { fresh: true } : {}).catch(() => {}).finally(() => { liveSyncBusy = false; });
   };
-  setInterval(syncLiveCatalog, 5000); // fallback when Realtime is unavailable
-  window.addEventListener("focus", syncLiveCatalog);
-  window.addEventListener("pageshow", syncLiveCatalog);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) syncLiveCatalog(); });
+  // Realtime updates force a read immediately. The fallback is intentionally
+  // gentle and cache-aware; polling every five seconds forced a full catalogue
+  // query on every open phone even when nothing had changed.
+  setInterval(() => syncLiveCatalog(false), 30000);
+  window.addEventListener("focus", () => syncLiveCatalog(true));
+  window.addEventListener("pageshow", () => syncLiveCatalog(true));
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) syncLiveCatalog(true); });
 
   // Subscribe directly to Supabase postgres_changes with the public anon key.
   // The service-role key never reaches the browser. Any INSERT/UPDATE/DELETE
@@ -3742,7 +3822,7 @@ const JA = (() => {
     products, product, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     homepageFeatured, homepageFeaturedProducts, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
-    currency, setCurrency, currencyLocked, money, priceOf, compareOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
+    currency, setCurrency, currencyLocked, money, priceOf, compareOf, priceRangeOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
     referralEnabled, promosEnabled,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,

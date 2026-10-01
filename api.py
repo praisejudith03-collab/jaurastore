@@ -1,5 +1,5 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
-import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, re
+import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, re, threading, time
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
 from campaign_types import CAMPAIGN_TYPES, campaign_type_from, serialize_campaign
@@ -51,6 +51,59 @@ def _ip():
     """The shopper's own address behind Cloudflare/Render (see security)."""
     return sec.client_ip()
 
+
+# ------------------------------------------------------------------- hot reads
+# The catalogue and category menu are requested on every storefront navigation
+# and used to rebuild their Supabase-backed lists for every request.  Keep a
+# *very short*, process-local response snapshot so a busy shop does not repeat
+# the same remote queries for each visitor.  Every local mutation below
+# invalidates these entries synchronously; the small TTL is only a safety net
+# for writes made by another worker/process (for example, a stock reservation).
+#
+# Flask's test environment deliberately skips these process-wide caches: tests
+# swap scratch files and monkeypatch data sources between cases, while the
+# production benefit comes from sharing live Supabase reads between requests.
+_CATALOG_CACHE_TTL = 20.0
+_CATEGORY_CACHE_TTL = 60.0
+_catalog_cache_lock = threading.RLock()
+_category_cache_lock = threading.RLock()
+_catalog_cache = {"expires": 0.0, "snapshot": None}
+_category_cache = {"expires": 0.0, "payload": None}
+
+
+def _cache_enabled():
+    return Config.ENV != "testing"
+
+
+def _invalidate_catalog_cache():
+    """Drop every catalogue representation after a product/stock write."""
+    with _catalog_cache_lock:
+        _catalog_cache["expires"] = 0.0
+        _catalog_cache["snapshot"] = None
+
+
+def _invalidate_category_cache():
+    """Drop the public category menu after an admin category save."""
+    with _category_cache_lock:
+        _category_cache["expires"] = 0.0
+        _category_cache["payload"] = None
+        _category_cache["source"] = None
+
+
+def _etag_response(body, etag, cache_control, *, vary_cookie=False):
+    """Build a conditional JSON response from a pre-serialized snapshot."""
+    if request.headers.get("If-None-Match") == etag:
+        resp = make_response("", 304)
+    else:
+        resp = make_response(body, 200)
+    resp.headers["Content-Type"] = "application/json; charset=utf-8"
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = cache_control
+    if vary_cookie:
+        resp.headers.add("Vary", "Cookie")
+    return resp
+
+
 # -------------------------------------------------------------- categories
 import os as _os
 CATEGORIES_FILE = _os.environ.get(
@@ -67,7 +120,7 @@ def _ordered_categories(categories):
     return sorted(categories, key=key)
 
 
-def _categories_data():
+def _categories_data_uncached():
     """Read categories from Supabase (production), disk (test/dev) or defaults.
 
     In production there is NO silent local fallback: when the Supabase
@@ -119,6 +172,41 @@ def _categories_data():
     return {"categories": [], "updatedAt": "", "updatedBy": ""}
 
 
+def _categories_cache_key():
+    """Identity of the current category source (also keeps monkeypatched tests safe)."""
+    key = (Config.ENV, os.path.abspath(CATEGORIES_FILE))
+    try:
+        import supabase_store as _sb
+        return key + (id(_sb.enabled), id(_sb.load_categories_table), id(_sb.load_categories))
+    except Exception:
+        return key
+
+
+def _categories_data():
+    """Read-through cache for the navigation/category list.
+
+    Return copies so a caller which adds a display-only field cannot mutate the
+    next request's cache entry.  Holding the lock during a cold fetch prevents
+    a burst of page loads from fanning out into identical Supabase queries.
+    """
+    if not _cache_enabled():
+        return _categories_data_uncached()
+    now = time.monotonic()
+    source = _categories_cache_key()
+    with _category_cache_lock:
+        cached = _category_cache.get("payload")
+        if (cached is not None and _category_cache.get("source") == source
+                and now < float(_category_cache.get("expires") or 0)):
+            return {**cached, "categories": [dict(c) for c in cached.get("categories") or []]}
+        payload = _categories_data_uncached()
+        normalized = {**dict(payload or {}),
+                      "categories": [dict(c) for c in (payload or {}).get("categories") or []]}
+        _category_cache["payload"] = normalized
+        _category_cache["source"] = source
+        _category_cache["expires"] = time.monotonic() + _CATEGORY_CACHE_TTL
+        return {**normalized, "categories": [dict(c) for c in normalized["categories"]]}
+
+
 def _save_categories(categories, actor=None):
     payload = {
         "categories": categories,
@@ -138,6 +226,7 @@ def _save_categories(categories, actor=None):
                 from supabase_store import save_categories
                 if not save_categories(categories):
                     raise RuntimeError("Category details could not be saved; please retry")
+                _invalidate_category_cache()
                 return payload
         except RuntimeError:
             raise
@@ -153,6 +242,7 @@ def _save_categories(categories, actor=None):
         save_categories(categories)
     except Exception:
         pass
+    _invalidate_category_cache()
     return payload
 
 def _utcnow():
@@ -222,53 +312,76 @@ def _public_product(p):
     return out
 
 
+def _catalog_response_snapshot():
+    """Return pre-serialized public and admin catalogue responses.
+
+    ``catalog_mod.merged`` can involve multiple Supabase reads and image
+    normalization.  Build the full admin list once, derive the public list
+    from it, and reuse the resulting response bytes for a short window.  The
+    cache is invalidated after every known product/stock write below, so it
+    speeds reads without making an admin save wait for a TTL to become live.
+    """
+    if _cache_enabled():
+        with _catalog_cache_lock:
+            cached = _catalog_cache.get("snapshot")
+            if cached is not None and time.monotonic() < float(_catalog_cache.get("expires") or 0):
+                return cached
+
+            all_products = catalog_mod.merged(include_hidden=True)
+            public_products = [_public_product(p) for p in all_products if p.get("online") is not False]
+            try:
+                local_meta = catalog_mod.overrides()
+            except Exception:
+                local_meta = {}
+            featured = catalog_mod.homepage_featured(all_products)
+            latest_update = max((str(p.get("updated_at") or "") for p in all_products), default="")
+            meta = {
+                "updatedAt": max(str(local_meta.get("updatedAt") or ""), latest_update,
+                                 str(featured.get("updatedAt") or "")),
+                "updatedBy": local_meta.get("updatedBy") or "",
+                "count": len(all_products),
+                "homepageFeatured": featured,
+            }
+            snapshot = {}
+            for key, products in (("public", public_products), ("admin", all_products)):
+                body = json.dumps({"ok": True, "products": products, "meta": meta,
+                                   "homepageFeatured": featured}, ensure_ascii=False,
+                                  separators=(",", ":"))
+                snapshot[key] = (body, 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:28] + '"')
+            _catalog_cache["snapshot"] = snapshot
+            _catalog_cache["expires"] = time.monotonic() + _CATALOG_CACHE_TTL
+            return snapshot
+
+    # Isolated test/dev reads intentionally remain uncached, as they are often
+    # backed by a scratch JSON file changed during the same process.
+    all_products = catalog_mod.merged(include_hidden=True)
+    public_products = [_public_product(p) for p in all_products if p.get("online") is not False]
+    featured = catalog_mod.homepage_featured(all_products)
+    meta = catalog_mod.meta()
+    meta["homepageFeatured"] = featured
+    snapshot = {}
+    for key, products in (("public", public_products), ("admin", all_products)):
+        body = json.dumps({"ok": True, "products": products, "meta": meta,
+                           "homepageFeatured": featured}, ensure_ascii=False,
+                          separators=(",", ":"))
+        snapshot[key] = (body, 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:28] + '"')
+    return snapshot
+
+
 @api.get("/catalog")
 def catalog():
-    """Seed products + every admin edit, merged. This is the live catalogue."""
+    """Live catalogue with a short browser + server response cache.
+
+    Public rows never expose numerical stock.  Admin ``?all=1`` remains a
+    private browser response and is varied by Cookie, preventing the full
+    inventory from entering a shared cache.
+    """
     admin = bool(authmod.current_admin())
     include_hidden = admin and request.args.get("all") == "1"
-    products = catalog_mod.merged(include_hidden=include_hidden)
-    if not admin:
-        products = [_public_product(p) for p in products]
-    meta = catalog_mod.meta()
-    featured = meta.get("homepageFeatured") or catalog_mod.homepage_featured()
-    meta["homepageFeatured"] = featured
-    body = json.dumps({
-        "ok": True,
-        "products": products,
-        "meta": meta,
-        "homepageFeatured": featured,
-    }, ensure_ascii=False, separators=(",", ":"))
-    etag = 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:28] + '"'
-    if request.headers.get("If-None-Match") == etag:
-        resp = make_response("", 304)
-    else:
-        resp = make_response(body, 200)
-    resp.headers["Content-Type"] = "application/json; charset=utf-8"
-    resp.headers["ETag"] = etag
-    # The live catalogue is never served from a cache: a shared/CDN copy held
-    # for even 30s is a product the owner just saved (or just took offline)
-    # that some phones still show - and it is what made a currency switch
-    # repaint a short, stale product list instead of the full catalogue. The
-    # browser and the service worker each refetch with cache:no-store, and the
-    # ETag keeps revalidation cheap.
-    #
-    # no-cache is spelled out alongside no-store because they are not the same
-    # instruction: no-store forbids writing the answer down, no-cache forbids
-    # REUSING a stored answer without revalidating it first - which is the one
-    # that reaches caches (bfcache, an old service-worker entry, a corporate
-    # proxy) that already hold a copy from before this header shipped.
-    # must-revalidate + max-age=0 and the legacy Pragma/Expires pair close the
-    # same door for HTTP/1.0 intermediaries.
-    resp.headers["Cache-Control"] = (
-        "no-store, no-cache, must-revalidate, max-age=0")
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
-    # Content negotiation aside, the answer also varies with the caller's
-    # session (an admin sees hidden rows): never let a shared cache hand an
-    # admin catalogue to a shopper, or the public one back to an admin.
-    resp.headers.add("Vary", "Cookie")
-    return resp
+    body, etag = _catalog_response_snapshot()["admin" if include_hidden else "public"]
+    policy = ("private, max-age=5, must-revalidate" if include_hidden else
+              "private, max-age=20, stale-while-revalidate=30, must-revalidate")
+    return _etag_response(body, etag, policy, vary_cookie=True)
 
 
 def _featured_group_payload(group, public=True):
@@ -317,6 +430,7 @@ def admin_homepage_featured_save():
     if saved is None:
         return jsonify(ok=False, error="Homepage featured products could not be saved. No changes were made."), 503
     audit(authmod.current_admin(), "homepage_featured.save", json.dumps(saved.get("featured_products") or [])[:300], _ip())
+    _invalidate_catalog_cache()
     products = catalog_mod.merged(include_hidden=True)
     groups = catalog_mod.homepage_featured_groups(products)
     return jsonify(ok=True, featured=saved, featured_products=saved.get("featured_products", []),
@@ -327,7 +441,15 @@ def admin_homepage_featured_save():
 def categories_public():
     """The category list used by the shop, filters and admin manager."""
     try:
-        return jsonify(ok=True, categories=_ordered_categories(_categories_data().get("categories") or []))
+        payload = {"ok": True,
+                   "categories": _ordered_categories(_categories_data().get("categories") or [])}
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        etag = 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:28] + '"'
+        # Categories carry no private data, so the browser can reuse a menu
+        # while the in-process read-through cache eliminates repeat database
+        # work.  Admin saves call _invalidate_category_cache() immediately.
+        return _etag_response(body, etag,
+                              "public, max-age=60, s-maxage=60, stale-while-revalidate=120")
     except Exception as exc:
         print(f"[supabase] categories serve failed: {exc}")
         return jsonify(ok=False, error="Categories are temporarily unavailable. Please refresh in a moment."), 503
@@ -734,6 +856,8 @@ def _apply_stock_moves(moves, sign, actor=None):
         except Exception:
             continue
         applied.append(m)
+    if applied:
+        _invalidate_catalog_cache()
     return applied
 
 
@@ -958,6 +1082,8 @@ def _release_stock_lines(lines):
                 pass
     except Exception:
         pass
+    if lines:
+        _invalidate_catalog_cache()
 
 
 # The cross-border delivery minimum. 5,000 F CFA is the house default and
@@ -1346,6 +1472,7 @@ def create_order():
             # on the payload keeps confirm from decrementing a second time
             # and lets decline / reopen / delete give exactly it back.
             order["stockApplied"] = reservation_moves
+            _invalidate_catalog_cache()
     sb_row["payload"] = order
 
     if proof_data:
@@ -1536,6 +1663,11 @@ def create_order():
     except Exception:
         pass
 
+    # A successful reservation changes public stock status.  Drop the compact
+    # catalogue snapshot now; subsequent product/stock reads rebuild it from
+    # the authoritative row instead of waiting for the fallback TTL.
+    if reserved:
+        _invalidate_catalog_cache()
     resp = make_response(jsonify(ok=True, id=oid, status="pending", proofUrl=proof_url,
                                  proofUploadFailed=False,
                                  referralCode=referral_code,
@@ -1934,6 +2066,7 @@ def admin_stock_set():
             except Exception:
                 pass
     audit(authmod.current_admin(), "stock.set", f"{pid}/{variant} = {qty}", _ip())
+    _invalidate_catalog_cache()
     return jsonify(ok=True, item=next((r for r in items if r.get("product_id") == pid and
                                        (r.get("variant_key") or "__default__") == variant), None),
                    items=items,
@@ -2688,6 +2821,7 @@ def _product_save_response(payload):
         return jsonify(ok=False, error=(
             "The product could not be saved to Supabase. No changes were made."),
             product=product, action=action, mirrored=False, meta=catalog_mod.meta()), 503
+    _invalidate_catalog_cache()
     return jsonify(ok=True, product=product, action=action, mirrored=mirrored,
                    meta=catalog_mod.meta())
 
@@ -2809,6 +2943,7 @@ def admin_product_delete(pid):
         files_removed = len([k for k in before_keys if k and k not in after_keys])
         abandoned_removed = _purge_local_abandoned_carts_for_product(pid, product_name_for_purge)
     audit(authmod.current_admin(), "product.delete", f"{pid} files_removed={files_removed} abandoned_carts={abandoned_removed}", _ip())
+    _invalidate_catalog_cache()
     return jsonify(ok=True, id=pid, filesRemoved=files_removed, abandonedCartsRemoved=abandoned_removed, meta=catalog_mod.meta())
 
 @api.put("/admin/products")
@@ -2828,6 +2963,7 @@ def admin_products_replace():
             "The bulk product import could not be confirmed in Supabase. No "
             "fields were silently dropped; run the products migration and retry."),
             saved=0, rejected=rejected, mirrored=False, meta=catalog_mod.meta()), 503
+    _invalidate_catalog_cache()
     return jsonify(ok=True, saved=len(kept), rejected=rejected, mirrored=mirrored,
                    meta=catalog_mod.meta())
 
@@ -3247,7 +3383,9 @@ SITE_KEYS = ("store_active", "bank_name", "account_number", "account_name",
 # shape of the answer whatever age the live site_settings row is.
 SOCIAL_LINK_KEYS = ("social_whatsapp_url", "social_instagram_url",
                     "social_tiktok_url", "social_facebook_url")
-WELCOME_POPUP_KEYS = ("welcome_enabled", "welcome_title", "welcome_title_fr",
+# popup_banner_active is the canonical boolean. welcome_enabled remains in
+# the response/write surface for old storefront bundles during the rollout.
+WELCOME_POPUP_KEYS = ("popup_banner_active", "welcome_enabled", "welcome_title", "welcome_title_fr",
                       "welcome_body", "welcome_body_fr", "welcome_image_url",
                       "welcome_cta_label", "welcome_cta_label_fr",
                       "welcome_cta_href")
@@ -3262,7 +3400,8 @@ def _load_site():
             return {"heroVideo": "", "heroPoster": "", "heroDoc": "",
                     "logoUrl": "", "shopBannerUrl": "", "convBanner": "",
                     "convBannerFr": "", "convBold": "", "shippingNote": "",
-                    **{key: "" for key in WELCOME_POPUP_KEYS}}
+                    "popup_banner_active": True,
+                    **{key: "" for key in WELCOME_POPUP_KEYS if key != "popup_banner_active"}}
     from supabase_settings import get_site_settings
     return get_site_settings()
 
@@ -3665,8 +3804,12 @@ def admin_customer_care_save():
 def _site_payload(site):
     """Canonical site_settings row + the legacy front-end aliases."""
     out = dict(site or {})
+    # New stores default to ON.  A legacy row has no boolean, so its existing
+    # welcome_enabled="0" remains the fallback the browser checks.
+    out.setdefault("popup_banner_active", True)
     for key in WELCOME_POPUP_KEYS + SOCIAL_LINK_KEYS:
-        out.setdefault(key, "")
+        if key != "popup_banner_active":
+            out.setdefault(key, "")
     # One customer-care document drives the footer, contact page, FAQ and
     # policy contact links. It is always present, including a fresh store.
     out["customer_care"] = _load_customer_care()
@@ -3785,7 +3928,7 @@ def admin_site_update():
         if column in SITE_WRITABLE_COLUMNS:
             values.setdefault(column, "")
     for k in list(values):
-        if k == "store_active":
+        if k in ("store_active", "popup_banner_active"):
             values[k] = values[k] is True or str(values[k]).lower() in ("true", "1", "yes", "on")
         elif k == "referral_commission_percentage":
             try: values[k] = max(0, min(100, float(values[k])))

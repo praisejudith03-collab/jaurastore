@@ -10,8 +10,9 @@ both client-side, both covered here:
     of the grid the moment the shopper switched to CFA.
 
 The browser half runs in tests/_currency_refresh_sim.mjs, which boots the real
-js/store.js in a stubbed browser. The server half is asserted here directly:
-/api/catalog must forbid every form of cache reuse.
+js/store.js in a stubbed browser. The server half asserts the short private
+HTTP cache + ETag contract: product saves invalidate the server snapshot, while
+normal page transitions can reuse a verified catalogue response.
 
 Run with:  python3 -m pytest tests/test_currency_refresh.py -q
 """
@@ -49,22 +50,16 @@ def test_currency_switch_refetches_the_full_catalogue():
 
 # ------------------------------------------------------------- server half
 
-def test_catalog_answer_forbids_every_kind_of_cache_reuse(client):
-    """no-store alone does not evict a copy a cache already holds.
-
-    no-store forbids WRITING the answer down; no-cache forbids REUSING a
-    stored one without revalidating. A shopper whose browser (or service
-    worker, or a proxy) kept a catalogue from before this shipped needs the
-    second instruction, or the currency switch keeps repainting from it.
-    """
+def test_catalog_answer_has_a_short_private_browser_cache(client):
+    """Catalogues are safe to reuse briefly, never shared between sessions."""
     resp = client.get("/api/catalog")
     assert resp.status_code == 200
     cache = resp.headers.get("Cache-Control", "")
-    for directive in ("no-store", "no-cache", "must-revalidate", "max-age=0"):
+    for directive in ("private", "max-age=20", "must-revalidate"):
         assert directive in cache, \
             f"/api/catalog serves Cache-Control={cache!r}; missing {directive!r}"
-    assert resp.headers.get("Pragma") == "no-cache"
-    assert resp.headers.get("Expires") == "0"
+    assert "no-store" not in cache
+    assert resp.headers.get("ETag"), "an ETag makes stale transitions cheap"
 
 
 def test_catalog_answer_varies_by_session(client):
@@ -80,7 +75,7 @@ def test_a_forced_refresh_is_still_served_normally(client):
     fresh = client.get("/api/catalog?_fresh=1700000000000")
     assert fresh.status_code == 200
     assert fresh.get_json()["products"] == plain.get_json()["products"]
-    assert "no-cache" in fresh.headers.get("Cache-Control", "")
+    assert "max-age=20" in fresh.headers.get("Cache-Control", "")
 
 
 # ---------------------------------------------------- the shipped JS itself
@@ -100,11 +95,11 @@ def test_store_exposes_a_cache_invalidating_refresh():
         "the ja:currency listener must refetch the catalogue, not just repaint"
 
 
-def test_the_refresh_really_bypasses_the_browser_cache():
+def test_normal_navigation_uses_the_browser_catalogue_cache_but_refresh_bypasses_it():
     store = _read(os.path.join("js", "store.js"))
     load = store.split("async function loadSeed(", 1)[1][:2000]
-    assert 'cache: opts.fresh ? "reload" : "no-store"' in load
-    assert '"Cache-Control": "no-cache"' in load
+    assert 'cache: opts.fresh ? "reload" : "default"' in load
+    assert 'headers: opts.fresh ? { "Cache-Control": "no-cache", "Pragma": "no-cache" } : {}' in load
     assert "_fresh=" in load
 
 

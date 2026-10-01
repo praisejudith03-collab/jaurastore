@@ -67,8 +67,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=170";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=170";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=171";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=171";
 }
 
 function renderCategories() {
@@ -636,7 +636,12 @@ function paintMostViewed(host, items) {
         <a class="mv-card-link" href="product.html?id=${encodeURIComponent(p.id)}">
           <img src="${JA.asset(p.image)}" alt="" loading="lazy" onerror="fallbackImg(event)" />
           <strong>${JA.escape(JA.displayName(p))}</strong>
-          <span data-mv-price-for="${JA.escape(p.id)}">${JA.escape(JA.money(JA.priceOf(p, cur), cur))}</span>
+          ${(() => {
+            const displayCur = Number(p.priceNgn) > 0 ? cur : "CFA";
+            const range = JA.priceRangeOf && JA.priceRangeOf(p, displayCur);
+            const text = range ? `${JA.money(range.min, displayCur)} – ${JA.money(range.max, displayCur)}` : JA.money(JA.priceOf(p, displayCur), displayCur);
+            return `<span class="price" data-mv-price-for="${JA.escape(p.id)}"><span class="now">${JA.escape(text)}</span></span>`;
+          })()}
         </a>
         <button class="add-mini mv-add" ${sold ? "disabled" : ""} data-add="${JA.escape(p.id)}">${sold ? t("card.oos") : t("card.add")}</button>
       </article>`;
@@ -854,7 +859,7 @@ function paintProduct(root, p) {
       <h1>${JA.escape(JA.displayName(p))}</h1>
       ${JA.priceHTML(p)}
       ${stockN > 0 ? "" : `<p class="pdp-stock">${t("pdp.oos")}</p>`}
-      <p class="stock-line" data-stock-line></p>
+      <p class="stock-line" data-stock-line role="status" aria-live="polite"></p>
       ${(() => {
         const tiers = JA.bulkDiscountTiers ? JA.bulkDiscountTiers() : [];
         const ownQty = Math.round(Number(p.bulkQty) || 0);
@@ -983,17 +988,19 @@ function paintProduct(root, p) {
     }
     const left = Math.max(0, avail - inCart);
     if (avail <= 0) {
-      stockLine.textContent = t("pdp.oos");
-      stockLine.classList.add("is-low");
+      stockLine.textContent = "Out of Stock";
+      stockLine.classList.add("is-low", "is-out-of-stock");
+      stockLine.classList.remove("is-in-stock");
     } else if (left <= 0) {
-      stockLine.textContent = "This item is unavailable in the requested quantity.";
-      stockLine.classList.add("is-low");
-    } else if (left <= 5) {
-      stockLine.textContent = left > 0 ? "In Stock" : "Out of Stock";
-      stockLine.classList.add("is-low");
+      stockLine.textContent = "Out of Stock";
+      stockLine.classList.add("is-low", "is-out-of-stock");
+      stockLine.classList.remove("is-in-stock");
     } else {
+      // Never expose the numerical shelf count; the variant's live state is
+      // enough for a shopper and is updated on every option selection.
       stockLine.textContent = "In Stock";
-      stockLine.classList.remove("is-low");
+      stockLine.classList.remove("is-low", "is-out-of-stock");
+      stockLine.classList.add("is-in-stock");
     }
     if (qty) {
       const cur = parseInt(qty.value, 10) || 1;
@@ -1022,9 +1029,12 @@ function paintProduct(root, p) {
       const selectedVariant = variantPartial();
       const priceEl = root.querySelector(`[data-price-for="${p.id}"]`);
       if (priceEl) {
-        const cur = JA.currency();
+        // A selection is an exact purchasable variant (or a configured option
+        // override), so replace the initial product range with its own price.
+        const cur = Number(p.priceNgn) > 0 ? JA.currency() : "CFA";
         const now = JA.priceOf(p, cur, selectedVariant);
         const was = JA.compareOf ? JA.compareOf(p, cur, selectedVariant) : 0;
+        priceEl.dataset.priceState = "exact";
         priceEl.innerHTML = (was && was > now)
           ? `<s>${JA.money(was, cur)}</s><span class="now">${JA.money(now, cur)}</span>`
           : `<span class="now">${JA.money(now, cur)}</span>`;

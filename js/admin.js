@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=170" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=171" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1139,13 +1139,13 @@ async function handleProductSubmit(e, existing) {
   } else {
     JA.toast(status === "out" ? "Live now · Out of stock." : "Live on the store now · " + images.length + " photo(s).");
   }
-  editingId = null;
-  // KEEP same category after save — don't reset to all products
-  if (savedCategory) {
-    dashCat = savedCategory;
-    prodCatSel = savedCategory;
-    prodPage = 1;
-  }
+  // Preserve the administrator's context. A save used to clear editingId and
+  // repaint the category list (often at page one), which felt like an
+  // unexpected redirect and made consecutive edits slow. Stay in this editor;
+  // the success toast above confirms the write and the fresh server row is
+  // what the re-render reads. Search/filter/page state remains untouched for
+  // the explicit Cancel/back action.
+  editingId = String((res && res.data && res.data.product && res.data.product.id) || id);
   paintDesk("products");
 }
 
@@ -2908,7 +2908,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=170" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=171" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3264,7 +3264,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=170", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=171", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -3443,7 +3443,10 @@ function settingsForm() {
     <summary>Welcome pop-up</summary>
     <form id="welcome-form" class="form-grid admin-card" style="margin-top:22px">
       <p class="admin-note full">Customize the greeting shown once per visit. Empty fields use the built-in storefront defaults. <strong>No promotion running?</strong> Untick the switch below and the pop-up is removed from the storefront completely — no empty banner, no box, nothing renders at all.</p>
-      <div class="field full"><label><input type="checkbox" id="welcome-enabled" /> Show welcome pop-up — untick to turn it OFF everywhere</label></div>
+      <div class="field full welcome-active-row">
+        <span><strong>Pop-up banner Active</strong><small>Turn OFF to remove the promotional pop-up everywhere on the storefront.</small></span>
+        <label class="admin-switch" for="welcome-enabled"><input type="checkbox" id="welcome-enabled" role="switch" aria-label="Pop-up banner active" /><i aria-hidden="true"></i><b id="welcome-active-label">ON</b></label>
+      </div>
       <div class="field"><label>Heading (English)</label><input name="welcome_title" maxlength="200" /></div>
       <div class="field"><label>Heading (French)</label><input name="welcome_title_fr" maxlength="200" /></div>
       <div class="field"><label>Message (English)</label><textarea name="welcome_body" maxlength="500"></textarea></div>
@@ -4011,12 +4014,24 @@ const WELCOME_FIELDS = ["welcome_title", "welcome_title_fr", "welcome_body", "we
 function bindWelcome() {
   const form = $("#welcome-form"); if (!form) return;
   const enabled = $("#welcome-enabled");
+  const activeLabel = $("#welcome-active-label");
   const preview = $("#welcome-image-preview");
   let loadedRow = null;
+  const setActiveLabel = () => {
+    if (!activeLabel || !enabled) return;
+    activeLabel.textContent = enabled.checked ? "ON" : "OFF";
+    activeLabel.classList.toggle("is-off", !enabled.checked);
+  };
   const repaint = (site) => {
     loadedRow = site || {};
     WELCOME_FIELDS.forEach((name) => { const el = form.elements.namedItem(name); if (el) el.value = loadedRow[name] || ""; });
-    if (enabled) enabled.checked = loadedRow.welcome_enabled !== "0";
+    if (enabled) {
+      const active = loadedRow.popup_banner_active;
+      enabled.checked = active === undefined || active === null || active === ""
+        ? loadedRow.welcome_enabled !== "0"
+        : (active === true || String(active) === "1" || String(active).toLowerCase() === "true");
+      setActiveLabel();
+    }
     const url = loadedRow.welcome_image_url || "";
     if (preview) preview.innerHTML = url ? `<img src="${JA.escape(url)}" alt="Welcome preview" style="max-width:96px;max-height:96px;margin-top:8px" />` : "";
   };
@@ -4025,6 +4040,7 @@ function bindWelcome() {
   form.elements.namedItem("welcome_image_url")?.addEventListener("input", (e) => {
     if (preview) preview.innerHTML = e.target.value ? `<img src="${JA.escape(e.target.value)}" alt="Welcome preview" style="max-width:96px;max-height:96px;margin-top:8px" />` : "";
   });
+  enabled?.addEventListener("change", setActiveLabel);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const errorBox = $("#welcome-form-error");
@@ -4032,7 +4048,11 @@ function bindWelcome() {
     const candidate = {};
     WELCOME_FIELDS.forEach((name) => { candidate[name] = String(form.elements.namedItem(name)?.value || "").trim(); });
     const patch = siteFieldPatch(candidate, loadedRow);
+    // Keep the legacy text flag in step with the canonical boolean while old
+    // storefront bundles roll over. The browser reads popup_banner_active
+    // first, so an OFF save prevents the modal from being rendered at all.
     patch.welcome_enabled = enabled && enabled.checked ? "1" : "0";
+    patch.popup_banner_active = !!(enabled && enabled.checked);
     try {
       const saved = await saveSiteConfig(patch);
       if (!saved || saved.ok === false) throw new Error((saved && saved.error) || "Could not save welcome pop-up.");
