@@ -84,15 +84,62 @@ scroll position — is captured as a canonical return URL
 * Asset cache token bumped `v171 → v172` so every browser and the service
   worker pick up the new build immediately.
 
+## 5. Channel Broadcast Feed — searchable product picker (Marketing)
+
+The "Select custom product" flow in /admin → Marketing no longer dumps every
+catalogue row into the page. It is now a proper picker over the **whole**
+catalogue (owner request 2026-10-01):
+
+* **Searchable modal.** A real dialog (`#mk-bc-picker`, aria-modal) with a
+  search box ("Search by title, SKU or category…") and a category filter.
+  Matches span name / French name / SKU / category id / category display
+  name — including hidden and out-of-stock items, with an
+  `In stock` / `Out of stock` / `Hidden` badge on every row.
+* **Smooth scroll pagination.** Only the first 24 matches are rendered
+  (`BC_PICKER_PAGE_SIZE`); the next page is appended as the admin scrolls
+  near the bottom (rAF-throttled, passive listener) or taps "Show more" —
+  a 250-product catalogue never paints 250 rows at once, and the scroll
+  position is kept while pages append. Ready-to-post (online + in-stock)
+  items always rank above the rest.
+* **ANY catalogue product can be pinned.** A custom pick is no longer
+  rejected for being outside the auto-rotation pool: sold-out or hidden
+  pieces can be deliberately featured (the pick is confirmed with a
+  "— note: out of stock/hidden" toast), and `broadcastScheduledFeedFor`
+  builds its lookup from the full catalogue so custom picks render. The
+  automatic morning/evening rotation itself still uses in-stock + online
+  products only.
+* **COPY DETAILS extracts caption AND photos.** "Copy details for selected"
+  (and the per-card "Copy Details") now writes the formatted, URL-free
+  caption to the clipboard for every selected product, then copies the
+  product photos to the clipboard too (up to 10 images, single-image retry),
+  and opens a "Photos for your post" drawer as the universal fallback with
+  a per-photo Download link and a staggered "Download all photos" button.
+* Asset cache token bumped `v172 → v173`.
+
 ## Verification
 
-* `tests/test_product_persistence_instant_sync.py` (new) — persistence of
-  every field, online-by-default, instant visibility + ETag change on both
-  public and admin endpoints, category-cache purge, audited failures,
+* `tests/test_product_persistence_instant_sync.py` — persistence of every
+  field, online-by-default, instant visibility + ETag change on both public
+  and admin endpoints, category-cache purge, audited failures,
   revalidation policy, return-navigation and price-range UI contracts.
-* Full suite: **1539 passed**.
-* Live run: created 3 products (LV bag + 2 bags, one multi-variant with
-  per-variant prices), confirmed on `/api/catalog` and `/api/catalog?all=1`
-  on the very next request, revalidated an old ETag to a fresh `200`, edited
-  variant tiers through `/api/products/variants`, restarted the server, and
-  all 3 products (with the variant edit) were still live.
+* `tests/test_broadcast_feed.py` — re-pinned for the new picker spec
+  (searchable modal over the whole catalogue, scroll pagination, any-product
+  pinning, caption + photo extraction) **plus a functional Node-VM test that
+  executes the real `js/admin.js` picker functions** (63-product fake
+  catalogue: whole-catalogue matching, ready-first ranking, 24-per-page
+  rendering, scroll/show-more pagination, SKU and category-name search, and
+  pinning a sold-out product into the scheduled batch).
+* Full suite: **1564 passed**.
+* Live run (production-mode instance, catalog cache active — plus a
+  testing-mode instance for the Supabase-backed upload/site-settings paths
+  which are unreachable from the offline sandbox): **28/28 end-to-end checks
+  in a real browser**, covering — the picker modal (paged 24-at-a-time with
+  "Showing 24 of 258", search, scroll pagination, show-more, badges),
+  pinning a sold-out product with its badge + note, bulk COPY DETAILS with
+  the caption verified on the clipboard and the photo drawer with working
+  download links; the full admin form save with a real uploaded photo,
+  persisting across full browser reloads; instant storefront visibility
+  (uncached `/api/catalog` + shop search + the product page); exact
+  admin list-state restoration (search + page + count) after the editor;
+  the variant min–max price range with enlarged fonts; and the pop-up
+  banner ON/OFF toggle rendering/removing the storefront modal.

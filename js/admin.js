@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=172" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=173" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -2361,8 +2361,11 @@ function broadcastFeedFor(slot) {
 
 function broadcastScheduledFeedFor(slot) {
   const automatic = broadcastFeedFor(slot);
-  const eligible = broadcastEligibleProducts();
-  const byId = new Map(eligible.map((p) => [String(p.id), p]));
+  // Overrides may point at ANY catalogue row (an out-of-stock or hidden
+  // piece the owner deliberately chose), so resolve them against the full
+  // catalogue - only the AUTOMATIC rotation stays inside the eligible pool.
+  const catalogue = JA.products ? JA.products() : [];
+  const byId = new Map(catalogue.map((p) => [String(p && p.id), p]));
   const overrides = (bcOverrides[slot] || []).filter((row) => byId.has(String(row.id)));
   const manualIds = new Set(overrides.map((row) => String(row.id)));
   const used = new Set();
@@ -2449,30 +2452,178 @@ function broadcastFullText(p) {
   return lines.join("\n");
 }
 
-async function copyProductDetails(p) {
-  const text = broadcastFullText(p);
+
+/** Cover photo URL for a broadcast post (falls back to the placeholder). */
+function broadcastPhotoUrl(p) {
+  const raw = (p && (p.image || (Array.isArray(p.images) && p.images[0]))) || "";
+  return raw ? JA.asset(raw) : JA.asset("images/products/_placeholder.jpg");
+}
+
+/** Fetch one product photo as a PNG-ready blob (null when unreachable). */
+async function broadcastPhotoBlob(p) {
   try {
-    await navigator.clipboard.writeText(text);
-    JA.toast("Details copied — paste into your WhatsApp Channel.");
+    const res = await fetch(broadcastPhotoUrl(p), { credentials: "same-origin" });
+    if (!res.ok) return null;
+    return await res.blob();
+  } catch (e) { return null; }
+}
+
+/** Best-effort native copy of the selected products' photos (Chromium/Safari
+ *  support image ClipboardItems; Firefox and older browsers fall back to the
+ *  photo drawer, which always works). Returns how many photos were copied. */
+async function broadcastCopyPhotos(products) {
+  if (!navigator.clipboard || typeof ClipboardItem === "undefined" || !products.length) return 0;
+  const capped = products.slice(0, 10);
+  const blobs = (await Promise.all(capped.map((p) => broadcastPhotoBlob(p)))).filter(Boolean);
+  if (!blobs.length) return 0;
+  try {
+    await navigator.clipboard.write(blobs.map((blob) => new ClipboardItem({ [blob.type || "image/png"]: blob })));
+    return blobs.length;
   } catch (e) {
-    JA.toast("Could not copy automatically. Details: " + text);
+    if (blobs.length === 1) return 0;
+    try {
+      // Some browsers only accept a single image at a time.
+      await navigator.clipboard.write([new ClipboardItem({ [blobs[0].type || "image/png"]: blobs[0] })]);
+      return 1;
+    } catch (e2) { return 0; }
   }
 }
 
+/** The grid of downloadable photos for a selection. */
+function broadcastPhotosGridHTML(products) {
+  return products.map((p) => `<figure class="mk-bc-photo">
+    <img src="${esc(broadcastPhotoUrl(p))}" alt="${esc(broadcastDisplayName(p))}" loading="lazy" onerror="fallbackImg(event)" />
+    <figcaption>
+      <b>${esc(broadcastDisplayName(p))}</b>
+      <a class="btn btn-line" href="${esc(broadcastPhotoUrl(p))}" download target="_blank" rel="noopener">Download photo</a>
+    </figcaption>
+  </figure>`).join("");
+}
 
-function broadcastPickerResultsHTML(query) {
-  const term = String(query || "").trim().toLowerCase();
+/** Copy the caption for a selection AND extract its photos: the text lands
+ *  on the clipboard, the photos are best-effort copied natively and always
+ *  offered in a download drawer. Used by both "Copy Details" (one product)
+ *  and "Copy details for selected" (the batch), for custom picks and
+ *  automatic suggestions alike. */
+async function copyBroadcastSelection(products) {
+  const list = (products || []).filter(Boolean);
+  if (!list.length) { JA.toast("Select at least one product first."); return; }
+  const text = list.map(broadcastFullText).join("\n\n");
+  let textCopied = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    textCopied = true;
+    JA.toast(`Caption for ${list.length} product${list.length === 1 ? "" : "s"} copied.`);
+  } catch (e) {
+    JA.toast("Could not copy automatically. Details: " + text);
+  }
+  const photosCopied = await broadcastCopyPhotos(list);
+  if (photosCopied) {
+    JA.toast(photosCopied === 1
+      ? "Photo copied to the clipboard too — paste it with the caption."
+      : `${photosCopied} photos copied to the clipboard too — paste them with the caption.`);
+  }
+  // The drawer is the universal fallback: every photo, one tap to download.
+  openBroadcastPhotosDrawer(list);
+}
+
+function openBroadcastPhotosDrawer(products) {
+  const drawer = $("#mk-bc-photos");
+  if (!drawer) return;
+  const grid = drawer.querySelector(".mk-bc-photos-grid");
+  if (grid) grid.innerHTML = broadcastPhotosGridHTML(products);
+  const note = drawer.querySelector(".mk-bc-photos-note");
+  if (note) note.textContent = `The caption is already on your clipboard. These are the photos for the ${products.length} selected product${products.length === 1 ? "" : "s"} — download them (or copy one straight from the page) and attach them to the same WhatsApp Channel post.`;
+  drawer.hidden = false;
+}
+
+async function copyProductDetails(p) {
+  // One product, same extraction as the batch button: formatted caption on
+  // the clipboard plus its photo (native copy where supported, download
+  // drawer always).
+  await copyBroadcastSelection([p]);
+}
+
+
+function broadcastPickerStatus(p) {
+  // Small availability badges so the owner can tell at a glance whether a
+  // pick is ready to post (the rotation only suggests ready items, but ANY
+  // catalogue product may be chosen deliberately).
+  if (p && p.online === false) return { label: "Hidden", cls: "is-hidden" };
+  if (!broadcastInStock(p)) return { label: "Out of stock", cls: "is-oos" };
+  return { label: "In stock", cls: "is-in" };
+}
+
+function broadcastPickerMatches() {
+  // The picker searches the WHOLE catalogue (owner request 2026-10-01:
+  // "selecting ANY custom product"), not just today's rotation pool.
+  // Matches are ranked ready-to-post first (online + in stock), everything
+  // else after, so the top of the list is still the safest to post.
+  const term = String($("#mk-bc-picker-search")?.value || "").trim().toLowerCase();
   const category = String($("#mk-bc-picker-category")?.value || "");
-  // Manual picks stay inside the eligible feed: online and in stock only.
-  const products = broadcastEligibleProducts().filter((p) => {
-    const haystack = [p.name, p.nameFr, p.sku, p.category].join(" ").toLowerCase();
-    return (!term || haystack.includes(term)) && (!category || String(p.category || "") === category);
-  }).slice(0, 100);
-  if (!products.length) return `<p class="empty">No catalogue product matches that search.</p>`;
-  return products.map((p) => `<button type="button" class="mk-bc-picker-item" data-bc-choose="${esc(String(p.id))}">
-    <img src="${esc(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="" onerror="fallbackImg(event)" />
-    <span><b>${esc(broadcastDisplayName(p))}</b><small>${esc(p.sku || p.id || "")} · ${broadcastPriceLine(p)}</small></span>
-  </button>`).join("");
+  const all = JA.products ? JA.products() : [];
+  const matches = all.filter((p) => {
+    if (!p || !p.id) return false;
+    if (category && String(p.category || "") !== category) return false;
+    if (!term) return true;
+    const haystack = [p.name, p.nameFr, p.sku, p.category,
+      JA.categoryName ? JA.categoryName(p.category) : ""].join(" ").toLowerCase();
+    return haystack.includes(term);
+  });
+  const rank = (p) => (p.online !== false && broadcastInStock(p) ? 0 : 1);
+  return matches.sort((a, b) => rank(a) - rank(b)
+    || String(a.name || "").localeCompare(String(b.name || "")));
+}
+
+function broadcastPickerItemHTML(p) {
+  const status = broadcastPickerStatus(p);
+  return `<button type="button" class="mk-bc-picker-item" data-bc-choose="${esc(String(p.id))}">
+    <img src="${esc(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="" loading="lazy" onerror="fallbackImg(event)" />
+    <span><b>${esc(broadcastDisplayName(p))}</b><small>${esc(p.sku || p.id || "")} · ${esc(JA.categoryName ? JA.categoryName(p.category) : (p.category || ""))} · ${broadcastPriceLine(p)}</small><em class="mk-bc-status ${status.cls}">${status.label}</em></span>
+  </button>`;
+}
+
+// Smooth scroll pagination: only the first page of matches is rendered, and
+// the next page is APPENDED as the admin scrolls near the bottom (or taps
+// "Show more") - a 300-product catalogue never paints 300 rows at once.
+const BC_PICKER_PAGE_SIZE = 24;
+let bcPickerMatches = [];
+let bcPickerShown = 0;
+
+function broadcastPickerResultsHTML() {
+  if (!bcPickerMatches.length) return `<p class="empty">No catalogue product matches that search.</p>`;
+  return bcPickerMatches.slice(0, bcPickerShown).map(broadcastPickerItemHTML).join("")
+    + broadcastPickerMoreHTML();
+}
+
+function broadcastPickerMoreHTML() {
+  if (!bcPickerMatches.length || bcPickerShown >= bcPickerMatches.length) return "";
+  return `<div class="mk-bc-picker-more" data-bc-picker-more>
+    <span class="mk-bc-picker-count">Showing ${bcPickerShown} of ${bcPickerMatches.length}</span>
+    <button type="button" class="btn btn-line" data-bc-picker-more-btn>Show more</button>
+  </div>`;
+}
+
+function broadcastPickerRefresh(reset) {
+  if (reset) { bcPickerMatches = broadcastPickerMatches(); bcPickerShown = BC_PICKER_PAGE_SIZE; }
+  if (bcPickerShown > bcPickerMatches.length) bcPickerShown = bcPickerMatches.length;
+  const results = $("#mk-bc-picker-results");
+  if (results) results.innerHTML = broadcastPickerResultsHTML();
+}
+
+function broadcastPickerShowMore() {
+  if (bcPickerShown >= bcPickerMatches.length) return;
+  const results = $("#mk-bc-picker-results");
+  if (!results) { broadcastPickerRefresh(false); return; }
+  // Append the next page instead of re-rendering: the list keeps its scroll
+  // position, so loading more while scrolling is seamless.
+  const from = bcPickerShown;
+  bcPickerShown = Math.min(bcPickerShown + BC_PICKER_PAGE_SIZE, bcPickerMatches.length);
+  const more = results.querySelector("[data-bc-picker-more]");
+  if (more) more.remove();
+  results.insertAdjacentHTML("beforeend",
+    bcPickerMatches.slice(from, bcPickerShown).map(broadcastPickerItemHTML).join("")
+    + broadcastPickerMoreHTML());
 }
 
 function closeBroadcastPicker() {
@@ -2483,8 +2634,13 @@ function closeBroadcastPicker() {
 
 function chooseBroadcastProduct(id) {
   const productId = String(id || "");
-  const eligible = broadcastEligibleProducts();
-  if (!eligible.some((p) => String(p.id) === productId)) return;
+  // ANY catalogue product may be pinned into a batch (owner request
+  // 2026-10-01); the availability badges in the picker make the state
+  // obvious, and a not-ready pick is confirmed with a note rather than
+  // silently refused.
+  const catalogue = JA.products ? JA.products() : [];
+  const chosenProduct = catalogue.find((p) => p && String(p.id) === productId);
+  if (!chosenProduct) return;
   const overrides = bcOverrides[bcSlot];
   const visible = broadcastScheduledFeedFor(bcSlot);
   const current = bcPickerTarget ? visible.find((p) => String(p.id) === bcPickerTarget) : null;
@@ -2513,7 +2669,10 @@ function chooseBroadcastProduct(id) {
   saveBroadcastOverrides();
   closeBroadcastPicker();
   paintBroadcastFeed();
-  JA.toast(current ? "Broadcast item swapped." : "Custom product added to this batch.");
+  const status = broadcastPickerStatus(chosenProduct);
+  JA.toast(status.cls === "is-in"
+    ? (current ? "Broadcast item swapped." : "Custom product added to this batch.")
+    : `${current ? "Broadcast item swapped" : "Custom product added"} — note: ${status.label.toLowerCase()}.`);
 }
 
 function openBroadcastPicker(targetId) {
@@ -2524,9 +2683,10 @@ function openBroadcastPicker(targetId) {
   bcPickerTarget = targetId ? String(targetId) : null;
   if (title) title.textContent = bcPickerTarget ? "Swap item" : "Select custom product";
   search.value = "";
+  const cat = $("#mk-bc-picker-category");
+  if (cat) cat.value = "";
   picker.hidden = false;
-  const results = $("#mk-bc-picker-results");
-  if (results) results.innerHTML = broadcastPickerResultsHTML("");
+  broadcastPickerRefresh(true);
   setTimeout(() => search.focus(), 0);
 }
 
@@ -2556,8 +2716,17 @@ function broadcastFeedCardHTML() {
     <div class="mk-bc-picker" id="mk-bc-picker" hidden role="dialog" aria-modal="true" aria-labelledby="mk-bc-picker-title">
       <div class="mk-bc-picker-panel">
         <div class="mk-bc-picker-head"><h3 id="mk-bc-picker-title">Select custom product</h3><button type="button" class="au-link-btn" id="mk-bc-picker-close" aria-label="Close product picker">Close</button></div>
-        <div class="mk-bc-picker-filters"><input type="search" id="mk-bc-picker-search" placeholder="Search by product name or SKU…" autocomplete="off" /><select id="mk-bc-picker-category" aria-label="Filter products by category"><option value="">All Categories</option>${[...new Set((JA.products ? JA.products() : []).map((p) => p.category).filter(Boolean))].sort().map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></div>
-        <div class="mk-bc-picker-results" id="mk-bc-picker-results"></div>
+        <div class="mk-bc-picker-filters"><input type="search" id="mk-bc-picker-search" placeholder="Search by title, SKU or category…" autocomplete="off" /><select id="mk-bc-picker-category" aria-label="Filter products by category"><option value="">All Categories</option>${[...new Set((JA.products ? JA.products() : []).map((p) => p.category).filter(Boolean))].sort().map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></div>
+        <p class="admin-note mk-bc-picker-hint">Every catalogue product is listed — ready-to-post items first. Scroll for more; the list loads as you scroll.</p>
+        <div class="mk-bc-picker-results" id="mk-bc-picker-results" tabindex="0"></div>
+      </div>
+    </div>
+    <div class="mk-bc-photos" id="mk-bc-photos" hidden role="dialog" aria-modal="true" aria-labelledby="mk-bc-photos-title">
+      <div class="mk-bc-picker-panel mk-bc-photos-panel">
+        <div class="mk-bc-picker-head"><h3 id="mk-bc-photos-title">Photos for your post</h3><button type="button" class="au-link-btn" id="mk-bc-photos-close" aria-label="Close photos drawer">Close</button></div>
+        <p class="admin-note mk-bc-photos-note">The caption is already on your clipboard.</p>
+        <div class="mk-bc-photos-grid"></div>
+        <div class="mk-bc-photos-actions"><button type="button" class="btn" id="mk-bc-photos-download-all">Download all photos</button></div>
       </div>
     </div>
     <div class="adx-bulkbar" id="mk-bc-bulk" hidden>
@@ -2652,15 +2821,42 @@ function bindBroadcastFeed() {
   $("#mk-bc-picker")?.addEventListener("click", (event) => {
     if (event.target.id === "mk-bc-picker") closeBroadcastPicker();
   });
-  const refreshPicker = () => {
-    const results = $("#mk-bc-picker-results");
-    if (results) results.innerHTML = broadcastPickerResultsHTML($("#mk-bc-picker-search")?.value || "");
-  };
+  // Searchable picker: filter by title, SKU or category; the result list
+  // renders one page at a time and appends more as the admin scrolls.
+  const refreshPicker = () => broadcastPickerRefresh(true);
   $("#mk-bc-picker-search")?.addEventListener("input", refreshPicker);
   $("#mk-bc-picker-category")?.addEventListener("change", refreshPicker);
   $("#mk-bc-picker-results")?.addEventListener("click", (event) => {
     const choice = event.target.closest("[data-bc-choose]");
-    if (choice) chooseBroadcastProduct(choice.dataset.bcChoose);
+    if (choice) { chooseBroadcastProduct(choice.dataset.bcChoose); return; }
+    if (event.target.closest("[data-bc-picker-more-btn]")) broadcastPickerShowMore();
+  });
+  // Smooth scroll pagination: nearing the bottom of the results appends the
+  // next page in place (throttled to one frame at a time).
+  const pickerResults = $("#mk-bc-picker-results");
+  if (pickerResults) {
+    let pickerScrollBusy = false;
+    pickerResults.addEventListener("scroll", () => {
+      if (pickerScrollBusy) return;
+      pickerScrollBusy = true;
+      requestAnimationFrame(() => {
+        pickerScrollBusy = false;
+        const nearBottom = pickerResults.scrollTop + pickerResults.clientHeight
+          >= pickerResults.scrollHeight - 180;
+        if (nearBottom) broadcastPickerShowMore();
+      });
+    }, { passive: true });
+  }
+  // Photos drawer: close on the button or the backdrop.
+  $("#mk-bc-photos-close")?.addEventListener("click", () => { const d = $("#mk-bc-photos"); if (d) d.hidden = true; });
+  $("#mk-bc-photos")?.addEventListener("click", (event) => {
+    if (event.target.id === "mk-bc-photos") event.currentTarget.hidden = true;
+  });
+  $("#mk-bc-photos-download-all")?.addEventListener("click", () => {
+    document.querySelectorAll("#mk-bc-photos .mk-bc-photo a[download]").forEach((link, i) => {
+      setTimeout(() => link.click(), i * 350);   // browsers throttle simultaneous downloads
+    });
+    JA.toast("Downloading the photos — attach them to the same post.");
   });
   card.querySelectorAll("[data-bc-slot]").forEach((btn) => {
     btn.onclick = () => {
@@ -2678,16 +2874,12 @@ function bindBroadcastFeed() {
   });
   $("#mk-bc-clear")?.addEventListener("click", () => { bcSelected[bcSlot].clear(); paintBroadcastFeed(); });
   $("#mk-bc-copy-batch")?.addEventListener("click", async () => {
-    const eligible = broadcastEligibleProducts();
-    const chosen = eligible.filter((p) => bcSelected[bcSlot].has(String(p.id)));
+    // Whichever items the admin selected - custom picks (including
+    // deliberately chosen out-of-stock pieces) or batch suggestions.
+    const catalogue = JA.products ? JA.products() : [];
+    const chosen = catalogue.filter((p) => p && bcSelected[bcSlot].has(String(p.id)));
     if (!chosen.length) { JA.toast("Select at least one product first."); return; }
-    const text = chosen.map(broadcastFullText).join("\n\n");
-    try {
-      await navigator.clipboard.writeText(text);
-      JA.toast(`Details for ${chosen.length} product${chosen.length === 1 ? "" : "s"} copied.`);
-    } catch (e) {
-      JA.toast("Could not copy automatically. Details: " + text);
-    }
+    await copyBroadcastSelection(chosen);
   });
 }
 async function fillMarketing() {
@@ -3018,7 +3210,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=172" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=173" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3373,7 +3565,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=172", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=173", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
