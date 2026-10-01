@@ -570,6 +570,41 @@ def _product_media_urls(row):
     return unique
 
 
+# Every table that hangs off a product row and must go with it. `products`
+# itself is deleted by the cascade; these are listed so the explicit fallback
+# (used when the hard_delete_products SQL function is not installed yet) still
+# leaves nothing behind. Tables that do not exist are skipped silently - the
+# list is a superset, not a manifest.
+PRODUCT_CHILD_TABLES = (
+    ("product_variants", "product_id"),
+    ("product_prices", "product_id"),
+    ("product_options", "product_id"),
+    ("variant_stock", "product_id"),
+    ("product_reviews", "product_id"),
+    ("product_views", "product_id"),
+    ("featured_products", "product_id"),
+)
+
+
+def _purge_product_children(c, ids):
+    """Delete every child row of these products. Returns a list of errors.
+
+    A table that is not part of the schema (PostgREST answers 404 / "relation
+    does not exist") is not an error - it is simply not there to purge.
+    """
+    errors = []
+    for table, column in PRODUCT_CHILD_TABLES:
+        try:
+            c.table(table).delete().in_(column, ids).execute()
+        except Exception as exc:
+            text = str(exc or "")
+            missing = ("does not exist" in text or "not found" in text.lower()
+                       or "PGRST205" in text or "404" in text)
+            if not missing:
+                errors.append(f"{table}: {exc}")
+    return errors
+
+
 def hard_delete_products(ids):
     """PERMANENTLY delete product rows from PostgreSQL and purge their files.
 
@@ -579,6 +614,12 @@ def hard_delete_products(ids):
     re-import or a redeploy. The id is also recorded in the durable
     deleted-ids list, which is what stops the bundled seed copy from being
     served again.
+
+    The deletion is a single SQL CASCADE: the ``hard_delete_products`` Postgres
+    function (see hard_delete_products.sql) deletes from ``products`` and lets
+    ``ON DELETE CASCADE`` take every child table with it. When that function is
+    not installed yet the same work is done table by table, so the behaviour is
+    identical either way.
 
     Returns {"deleted": [ids], "files": n, "errors": [str]}. Never raises.
     """
@@ -605,8 +646,18 @@ def hard_delete_products(ids):
 
     # 2. delete the rows themselves. If this fails, do NOT purge media: the
     #    product is still live and would be left with broken files.
+    #    Preferred path is one SQL statement that cascades every child table.
+    deleted_by_sql = False
     try:
-        c.table("products").delete().in_("id", ids).execute()
+        res = c.rpc("hard_delete_products", {"product_ids": ids}).execute()
+        deleted_by_sql = True
+    except Exception as exc:
+        report.setdefault("cascadeFallback", True)
+        print(f"[supabase] cascade delete unavailable ({exc}); "
+              f"deleting row-by-row with the same effect")
+    try:
+        if not deleted_by_sql:
+            c.table("products").delete().in_("id", ids).execute()
         report["deleted"] = list(ids)
         invalidate_read_cache()
     except Exception as exc:
@@ -614,35 +665,19 @@ def hard_delete_products(ids):
         return report
 
     # 3. durable tombstone, so the bundled seed copy stays suppressed too.
+    #    This is what makes the deletion ABSOLUTE: no mirror, watchdog, cache
+    #    re-hydration or redeploy can serve the id again.
     for pid in ids:
         try:
             add_deleted_id(pid)
         except Exception as exc:
             report["errors"].append(f"tombstone {pid}: {exc}")
 
-    # 4. drop any per-variant stock rows left behind.
-    try:
-        c.table("variant_stock").delete().in_("product_id", ids).execute()
-    except Exception:
-        pass
-
-    # 4b. reviews and view counters belong to the product: hard-deleting the
-    # row must not leave orphaned rows behind (an orphaned review would also
-    # keep "referencing" nothing while confusing the storage cleanup scan).
-    try:
-        c.table("product_reviews").delete().in_("product_id", ids).execute()
-    except Exception:
-        pass
-    try:
-        c.table("product_views").delete().in_("product_id", ids).execute()
-    except Exception:
-        pass
-    # 4c. legacy featured_products rows (if that table exists) must not pin a
-    # deleted product on the homepage.
-    try:
-        c.table("featured_products").delete().in_("product_id", ids).execute()
-    except Exception:
-        pass
+    # 4. child rows. With the SQL function installed the CASCADE already took
+    #    product_variants / product_prices / product_options / variant_stock /
+    #    reviews / views / featured_products with it; without it we sweep them
+    #    here so nothing is orphaned either way.
+    report["errors"].extend(_purge_product_children(c, ids))
 
     # 5. purge unreferenced files. storage.delete_upload() refuses to remove an
     #    object still used by another product, but does delete receipts/videos

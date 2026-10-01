@@ -400,8 +400,21 @@ window.JA_NET = (function () {
           rec.tries = (rec.tries || 0) + 1;
           rec.nextAt = Date.now() + Math.min(300000, Math.pow(2, rec.tries) * 5000);
           if (!err.retryable || rec.tries >= MAX_ATTEMPTS) {
+            // A permanently failed change is dropped here on purpose. It used
+            // to be flagged `dead` and KEPT in the queue, where nothing ever
+            // removed it: the pill kept counting it and sat there reading
+            // "Syncing 1 change" for the rest of the session, long after the
+            // admin had moved on. The admin is told once, in a toast, and the
+            // queue returns to empty so the indicator closes immediately.
+            var label = rec.label || "Change";
             rec.dead = true;
-            if (window.JA && JA.toast) JA.toast((rec.label || "Change") + " could not be saved. Check your connection.");
+            if (window.JA && JA.toast) {
+              JA.toast(err && err.error
+                ? label + " was not saved — " + err.error
+                : label + " could not be saved. Check your connection.");
+            }
+            drop(rec);
+            return;
           }
           return idbPut(rec).then(function () { lsPut(rec); });
         });
@@ -467,6 +480,14 @@ window.JA_NET = (function () {
   // ------------------------------------------------------- status indicator
   function paintPill() {
     var el = document.getElementById("ja-sync-pill");
+    // Dead jobs are dropped on failure, so anything left here is either
+    // actually in flight or waiting out a retry backoff. Count the second
+    // kind separately: a job sleeping out its backoff is not "Syncing", and
+    // saying so made the pill look frozen on "Syncing 1 change".
+    var now = Date.now();
+    var waiting = 0;
+    jobs.forEach(function (j) { if (j.dead || (j.nextAt && j.nextAt > now)) waiting++; });
+    var live = jobs.length - waiting;
     if (!jobs.length) {
       if (el) el.remove();
       return;
@@ -481,8 +502,20 @@ window.JA_NET = (function () {
     }
     var offline = navigator.onLine === false;
     el.className = "sync-pill" + (offline ? " is-offline" : "");
-    el.innerHTML = '<span class="sync-dot"></span>' +
-      (offline ? "Offline · " + jobs.length + " waiting" : "Syncing " + jobs.length + " change" + (jobs.length === 1 ? "" : "s"));
+    var many = function (n) { return n + " change" + (n === 1 ? "" : "s"); };
+    var label;
+    if (offline) {
+      label = "Offline · " + jobs.length + " waiting";
+    } else if (live === 0) {
+      // Everything queued is sleeping on a retry timer. Say so, and say when
+      // it will try again, so the indicator reads as "waiting", not "stuck".
+      var dueIn = 0;
+      jobs.forEach(function (j) { if (j.nextAt && j.nextAt > now) dueIn = Math.max(dueIn, j.nextAt - now); });
+      label = "Retrying " + many(waiting) + (dueIn ? " in " + Math.max(1, Math.round(dueIn / 1000)) + "s" : "");
+    } else {
+      label = "Syncing " + many(live) + (waiting ? " · " + waiting + " waiting" : "");
+    }
+    el.innerHTML = '<span class="sync-dot"></span>' + label;
   }
 
   window.addEventListener("online", function () { online = true; emit(); setTimeout(flush, 400); });

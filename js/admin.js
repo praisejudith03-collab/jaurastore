@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=178" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=179" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -909,19 +909,107 @@ function bindCfaPreview() {
   form.addEventListener("input", paint);
   paint();
 }
+/* ------------------------------------------------ which fields did we edit?
+ * Maps a form control to the product fields its value ends up on, so the
+ * server can merge per field. Only the controls whose meaning is unambiguous
+ * are listed: an unlisted control simply is not reported as edited, and the
+ * server falls back to comparing against the row as it was opened - which is
+ * the behaviour that already shipped.
+ *
+ * `slug` is deliberately absent: the server re-derives it on every save, so
+ * it is never merged from the editor's copy.
+ */
+const EDIT_FIELD_MAP = {
+  name: ["name"],
+  nameFr: ["nameFr"],
+  description: ["description"],
+  descriptionFr: ["descriptionFr"],
+  dimensions: ["dimensions"],
+  badge: ["badge"],
+  category: ["category"],
+  online: ["online"],
+  featured: ["featured"],
+  sku: ["sku"],
+  supplierSku: ["supplierSku", "supplierUrl", "supplier_url"],
+  // Money: priceCfa / compareCfa are derived from these by the editor, so they
+  // travel with them - a price typed on the phone must not be reverted by a
+  // photo swap made elsewhere.
+  priceNgn: ["priceNgn", "priceCfa", "compareCfa"],
+  compareNgn: ["compareNgn", "compareCfa"],
+  stock: ["stock", "stock_quantity"],
+  stockStatus: ["stockStatus", "stock", "stock_quantity"],
+  bulkQty: ["bulkQty"],
+  bulkPercent: ["bulkPercent"],
+};
+// The media strip, the option editor and the variant rows are built from
+// data-* controls rather than named inputs.
+const EDIT_DATA_PREFIXES = [
+  ["data-img-i", ["image", "image_url", "imageUrl", "images"]],
+  ["data-opt-row", ["options", "optionPrices", "optionCompareAt", "optionStock",
+                    "optionSupplierSku", "optionSupplierUrls", "option_supplier_urls",
+                    "optionSku", "option_sku", "stock", "stock_quantity"]],
+  ["data-opt-sku", ["optionSku", "option_sku"]],
+  ["data-var-row", ["stock", "stock_quantity", "stockStatus"]],
+  ["data-var-state", ["stock", "stock_quantity", "stockStatus"]],
+];
+
+/** Record that the admin edited the field(s) behind a form control. */
+function trackEditedField(el) {
+  if (!el || !el.tagName) return;
+  if (typeof window.__editDirty !== "object" || window.__editDirty === null) {
+    window.__editDirty = new Set();
+  }
+  const byName = EDIT_FIELD_MAP[el.getAttribute && el.getAttribute("name")];
+  if (byName) byName.forEach((f) => window.__editDirty.add(f));
+  for (const [attr, fields] of EDIT_DATA_PREFIXES) {
+    if (el.closest && el.closest("[" + attr + "]")) {
+      fields.forEach((f) => window.__editDirty.add(f));
+    }
+  }
+  // Adding or removing a review changes the stored list, not a field.
+  if (el.id && /^rev-/.test(el.id)) {
+    ["reviews", "customerReviews", "customer_reviews"].forEach((f) => window.__editDirty.add(f));
+  }
+  if (el.getAttribute && el.getAttribute("data-rev-del") != null) {
+    ["reviews", "customerReviews", "customer_reviews"].forEach((f) => window.__editDirty.add(f));
+  }
+}
+
 function productForm(p = {}) {
-  const allCats = (JA.categories ? JA.categories() : JA.CATEGORIES);
+  const allCats = (JA.categories ? JA.categories() : JA.CATEGORIES) || [];
   // Preserve current filter category when adding new product
   const preCat = p.category || dashCat || prodCatSel || "";
-  const cats = allCats.map((c) =>
-    `<option value="${c.id}" ${preCat === c.id ? "selected" : (p.category === c.id ? "selected" : "")}>${JA.escape(c.name)}</option>`
+  // A product's OWN category must always be selectable, even when it is not
+  // in the list the page currently holds. If the category table came back
+  // empty or incomplete (a slow/failed load, a category hidden from this
+  // view), the select used to render with no options at all - and saving then
+  // wrote an EMPTY category, quietly taking the product out of its category
+  // and out of every category-filtered list the owner had set up. Offering
+  // the stored value keeps the form honest about what the row actually is.
+  const known = allCats.some((c) => c.id === preCat)
+    ? allCats
+    : (preCat ? allCats.concat([{ id: preCat, name: preCat }]) : allCats);
+  const cats = known.map((c) =>
+    `<option value="${c.id}" ${preCat === c.id ? "selected" : ""}>${JA.escape(c.name)}</option>`
   ).join("");
   window.__editImages = productImages(p);
-  // Freshness token for the save-time conflict guard: the row's updated_at
-  // as it was when THIS editor was opened. If the stored row moves on
-  // before the admin saves (another admin, another tab, an API write), the
-  // server answers 409 instead of silently reverting those changes.
+  // The row's updated_at as it was when THIS editor was opened. It is NOT a
+  // lock and can never block a save: it rides along so the server can tell us
+  // afterwards whether we overwrote a newer row (see _product_save_response).
+  // Saves are last-write-wins, so this is a receipt, not a guard.
   window.__editBaseUpdatedAt = String((p && p.updated_at) || "");
+  // A DEEP COPY of the row as it was when the editor opened. The save ships
+  // it so the server can do a three-way merge per field: what this admin
+  // changed wins, and what they did not touch keeps whatever another admin
+  // (or the supplier watchdog) has written since. Without it two admins
+  // editing the same product silently undo each other - one typing a price,
+  // the other swapping a photo. Cleared with the other per-editor state
+  // below, so it can never leak from one product's editor into another's.
+  window.__editBase = p && p.id ? JSON.parse(JSON.stringify(p)) : null;
+  // ...and the per-editor record of which boxes this admin actually touched,
+  // reset here with the rest of the per-editor state so it can never leak
+  // from one product's editor into another's.
+  window.__editDirty = new Set();
   // Per-editor-session memory of the variant quantities that were live
   // before the admin last flipped "Out of stock". It lives on window (not
   // on the inputs) because refreshOptionChips repaints the variant boxes
@@ -1150,12 +1238,29 @@ async function handleProductSubmit(e, existing) {
   if (!(priceNgn > 0) && !everyOptionPriced) { JA.toast("Enter the ₦ price, or set a price for every option."); return; }
   const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
-  const savedCategory = String(fd.get("category") || "").trim();
+  // Never let a save blank a category the row already has. The select is
+  // populated from the category table, and that table can be empty or
+  // incomplete for a moment (a reload that raced the category load, a
+  // category hidden from this view). Writing "" in that case removed the
+  // product from its category for good - and, because the admin is returned
+  // to the list they came from, it looked like the save had thrown their
+  // filters away. An absent selection means "leave it as it is".
+  const formCategory = String(fd.get("category") || "").trim();
+  const savedCategory = formCategory || String((existing && existing.category) || "").trim();
   const res = await JA.upsertProduct({
       ...(existing || {}),
-      // opt-in freshness token (see productForm); stripped from the local
-      // copy by upsertProduct and never persisted by catalog.normalize
+      // Non-blocking opened-at receipt (see productForm); stripped from the
+      // local copy by upsertProduct and never persisted by catalog.normalize
       baseUpdatedAt: window.__editBaseUpdatedAt || "",
+      // The row as it was when the editor opened, so the server can merge
+      // field by field instead of letting this save revert the other admin's
+      // work. It rides on the REQUEST only - never in the local copy, or an
+      // outbox retry would carry a base that is hours old.
+      mergeBase: window.__editBase || null,
+      // Which boxes this admin actually touched. Without this the server
+      // cannot distinguish "left alone" from "deliberately set back to the
+      // same value", and a real edit would be silently discarded.
+      mergeFields: window.__editDirty ? Array.from(window.__editDirty) : null,
       id,
       sku: fd.get("sku") || existing?.sku || ("JAU-" + Date.now().toString(36).toUpperCase().slice(-6)),
       slug: existing?.slug || slugify(name) || id,
@@ -1219,15 +1324,23 @@ async function handleProductSubmit(e, existing) {
   // Only a server-confirmed save leaves this editor. A queued retry or a
   // Supabase failure keeps the form open with the error, so the admin never
   // believes a product is live when PostgreSQL rejected it.
+  //
+  // There is deliberately NO concurrency failure here any more: saves are
+  // last-write-wins, so a save built on a copy the editor opened before the
+  // row moved on still lands. The server hands back a quiet `notice` when it
+  // overwrote a newer row, which we show as information, never as an error.
   if (res && res.ok === false) {
     JA.toast((res && res.error) || "Could not save the product. No changes are live.");
     return;
   }
+  let savedMsg;
   if (res && res.mirrored === false) {
-    JA.toast("Saved on the server only — not yet on the cloud copy. Tap Retry now.");
+    savedMsg = "Saved on the server only — not yet on the cloud copy. Tap Retry now.";
   } else {
-    JA.toast(status === "out" ? "Live now · Out of stock." : "Live on the store now · " + images.length + " photo(s).");
+    savedMsg = status === "out" ? "Saved · Live now · Out of stock." : "Saved · Live on the store now · " + images.length + " photo(s).";
   }
+  const data = res && res.data;
+  if (data && data.notice) savedMsg = savedMsg + " " + data.notice;
   // Return THIS admin to their exact source page. The list position they
   // came from (category, search, page, scroll) was captured in
   // rememberProductsReturn() when the editor was opened and is stored in
@@ -1235,6 +1348,9 @@ async function handleProductSubmit(e, existing) {
   // back on their own list - nobody is bounced to page one of "All
   // products" and nobody sees another admin's filters.
   restoreProductsReturn();
+  // The success banner is raised AFTER the redirect, so it lands on the list
+  // view the admin was sent back to rather than on the editor that is gone.
+  JA.toast(savedMsg);
 }
 
 let prodPage = 1;
@@ -1352,6 +1468,15 @@ function restoreProductsReturn(scrollToSaved) {
     dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1;
   }
   paintDesk("products");
+  // paintDesk() rebuilds the filters from HTML but does not set their current
+  // values - bootAdmin does that for a deep link, and the editor's exit has to
+  // do it here. Without this the admin lands back on the right list while the
+  // category box and search box read as if nothing were filtered: the first
+  // tap on either of them jumped the list somewhere they did not ask for.
+  const sel = document.getElementById("prod-cat");
+  if (sel) sel.value = dashCat || prodCatSel || "";
+  const qEl = document.getElementById("prod-search");
+  if (qEl) qEl.value = prodSearchQ || "";
   // Clean the address bar: refreshing the restored list must not replay an
   // editor return_url forever.
   try { history.replaceState(null, "", "admin.html"); } catch (e) {}
@@ -3347,7 +3472,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=178" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=179" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3427,6 +3552,13 @@ function paintDesk(tab = "analytics") {
   if (form) {
     form.addEventListener("submit", (e) => handleProductSubmit(e, existing));
     form.dataset.submitBound = "1";
+    // Remember WHICH fields this admin actually touched. Without it the
+    // server cannot tell "never opened this box" from "deliberately set it
+    // back to what it already was", and guessing wrong there silently throws
+    // away a real edit. Delegated so it also covers the option rows, variant
+    // rows and gallery strip, which are re-rendered as the admin types.
+    form.addEventListener("input", (e) => trackEditedField(e.target), true);
+    form.addEventListener("change", (e) => trackEditedField(e.target), true);
     // "Delete this product" inside the editor: clear the Tombstone FIRST so
     // a failed delete is never reported as done.
     $(".au-del-prod", form)?.addEventListener("click", async () => {
@@ -3702,7 +3834,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=178", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=179", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -4884,9 +5016,9 @@ document.addEventListener("DOMContentLoaded", bootAdmin);
  * (or any API integration) never appear in a tab that stays open - the
  * desk keeps rendering a frozen catalogue until someone reloads. When the
  * tab comes back to the foreground, quietly refetch it. Never while an
- * editor is open (a repaint would discard the admin's in-progress edits -
- * the save-time freshness guard covers that window), and throttled to one
- * refetch per minute so a fidgety tab-switcher cannot hammer the API.
+ * editor is open - a repaint would throw away the admin's in-progress edits -
+ * and throttled to one refetch per minute so a fidgety tab-switcher cannot
+ * hammer the API.
  */
 let __lastCatalogRefetchAt = 0;
 document.addEventListener("visibilitychange", () => {

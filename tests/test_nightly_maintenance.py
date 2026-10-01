@@ -188,18 +188,45 @@ def test_remirror_never_pushes_a_hard_deleted_id(monkeypatch):
 
 def test_hard_delete_tables_pin():
     """The absolute-delete inventory: every Supabase surface a product row
-    touches. Variants, prices and options are jsonb columns ON the products
-    row (optionStock / optionPrices / optionCompareAt / optionSku), so
-    deleting the row removes them; variant_stock holds the per-variant
-    counters and is deleted alongside."""
+    touches.
+
+    The shop keeps variants, prices and options as jsonb columns ON the
+    products row (optionStock / optionPrices / optionCompareAt / optionSku),
+    so deleting the row takes them with it. Where a deployment has normalised
+    them into their own tables instead, they are named explicitly so those
+    rows are purged too - either by the SQL CASCADE (hard_delete_products.sql)
+    or by the explicit sweep below, whichever the database supports.
+    """
     src = open(os.path.join(ROOT, "supabase_store.py"), encoding="utf-8").read()
     fn = src[src.index("def hard_delete_products"):]
     fn = fn[:fn.index("\ndef ")]
-    for table in ("products", "variant_stock", "product_reviews",
-                  "product_views", "featured_products"):
-        assert f'c.table("{table}").delete()' in fn, table
+    # the row itself
+    assert 'c.table("products").delete()' in fn
+    # and the child tables, declared once and swept in a loop
+    for table in ("product_variants", "product_prices", "product_options",
+                  "variant_stock", "product_reviews", "product_views",
+                  "featured_products"):
+        assert f'("{table}", "product_id")' in src, table
+    assert "def _purge_product_children(c, ids)" in src
+    assert "_purge_product_children(c, ids)" in fn
+    # a table that is simply not in this deployment is skipped, not failed
+    assert "does not exist" in src
     # and the durable tombstone that stops the seed copy coming back
     assert "add_deleted_id" in fn
+
+
+def test_hard_delete_prefers_the_sql_cascade_and_falls_back_safely():
+    """One SQL CASCADE when the function is installed, an identical
+    table-by-table delete when it is not - and never a silent no-op."""
+    src = open(os.path.join(ROOT, "supabase_store.py"), encoding="utf-8").read()
+    fn = src[src.index("def hard_delete_products"):]
+    fn = fn[:fn.index("\ndef ")]
+    assert 'c.rpc("hard_delete_products", {"product_ids": ids}).execute()' in fn
+    assert "deleted_by_sql = True" in fn
+    # a missing function must NOT look like a successful delete: the explicit
+    # delete still has to run before the ids are reported gone
+    assert "if not deleted_by_sql:" in fn
+    assert "report[\"deleted\"] = list(ids)" in fn
 
 
 # --------------------------------------------------------- supplier prices
