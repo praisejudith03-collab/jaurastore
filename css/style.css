@@ -7451,30 +7451,37 @@ body.store-paused{overflow:hidden}
 
 /* Prominent, readable prices across cards, PDP and mobile pop-up contexts.
    Range labels inherit the same hierarchy and wrap cleanly instead of forcing
-   a two-column card wider than the viewport. */
+   a two-column card wider than the viewport. Prices are the single most
+   scanned line on a commerce card, so they carry the heaviest weight and the
+   largest size the card rhythm allows. */
 .price,
 .price .now,
 [data-mv-price-for],
 .modal .price,
 .welcome-pop .price {
-  font-size: clamp(15px, 3.9vw, 19px) !important;
-  font-weight: 750 !important;
+  font-size: clamp(16px, 4.2vw, 21px) !important;
+  font-weight: 800 !important;
   line-height: 1.25;
   letter-spacing: .01em !important;
   font-variant-numeric: tabular-nums;
 }
-.price .range-separator { padding: 0 .16em; font-weight: 600; color: var(--taupe); }
+.price .range-separator { padding: 0 .16em; font-weight: 800; color: var(--taupe); }
 .price .price-range { white-space: normal; }
-.price .alt { font-size: .72em !important; font-weight: 600 !important; }
+.price .alt { font-size: .72em !important; font-weight: 700 !important; }
 .pdp .price,
-.pdp .price .now { font-size: clamp(21px, 6vw, 29px) !important; font-weight: 800 !important; }
+.pdp .price .now { font-size: clamp(22px, 6.4vw, 31px) !important; font-weight: 800 !important; }
+/* Admin catalogue cards: the same prominent hierarchy, including the
+   multi-variant "₦1,800.00 – ₦2,500.00" range label. */
+.adx-card-price { font-size: 15px !important; font-weight: 800 !important; color: #342922; letter-spacing: .01em; }
+.adx-card-price.adx-price-range { font-size: 13.5px !important; white-space: normal; }
+.adx-card-price s { color: #ae4729 !important; margin-right: 4px; }
 @media (max-width: 480px) {
   .just-in-grid .price,
   .just-in-grid .price .now,
   body[data-page="home"] .just-in-grid .price,
   body[data-page="home"] .just-in-grid .price .now {
     font-size: 12px !important;
-    font-weight: 750 !important;
+    font-weight: 800 !important;
   }
   .just-in-grid .price .range-separator { padding: 0 .05em; }
 }

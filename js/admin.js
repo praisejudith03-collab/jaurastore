@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=171" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=172" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -949,7 +949,7 @@ function productForm(p = {}) {
     </div>
     <div class="field"><label>Customer note</label><textarea id="rev-note" rows="2" maxlength="600" placeholder="Their comment"></textarea></div>
     <button type="button" class="au-link-btn" id="rev-add">+ Add review to this product</button>
-    <button class="btn au-save" type="submit">${p.id ? "Save" : "Add a Product"}</button>
+    <button class="btn au-save" type="submit">Save Product</button>
     ${p.id ? `<button type="button" class="au-del-prod" data-del="${JA.escape(p.id)}">Delete this product</button>` : ""}
   </form>`;
 }
@@ -1126,7 +1126,7 @@ async function handleProductSubmit(e, existing) {
       customer_reviews: manualReviews,
   });
   if (window.__editReviews && JA.setReviews) JA.setReviews(id, manualReviews);
-  if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = existing ? "Save" : "Add a Product"; }
+  if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save Product"; }
   // Only a server-confirmed save leaves this editor. A queued retry or a
   // Supabase failure keeps the form open with the error, so the admin never
   // believes a product is live when PostgreSQL rejected it.
@@ -1139,14 +1139,13 @@ async function handleProductSubmit(e, existing) {
   } else {
     JA.toast(status === "out" ? "Live now · Out of stock." : "Live on the store now · " + images.length + " photo(s).");
   }
-  // Preserve the administrator's context. A save used to clear editingId and
-  // repaint the category list (often at page one), which felt like an
-  // unexpected redirect and made consecutive edits slow. Stay in this editor;
-  // the success toast above confirms the write and the fresh server row is
-  // what the re-render reads. Search/filter/page state remains untouched for
-  // the explicit Cancel/back action.
-  editingId = String((res && res.data && res.data.product && res.data.product.id) || id);
-  paintDesk("products");
+  // Return THIS admin to their exact source page. The list position they
+  // came from (category, search, page, scroll) was captured in
+  // rememberProductsReturn() when the editor was opened and is stored in
+  // THIS TAB's sessionStorage, so several admins saving at once each land
+  // back on their own list - nobody is bounced to page one of "All
+  // products" and nobody sees another admin's filters.
+  restoreProductsReturn();
 }
 
 let prodPage = 1;
@@ -1170,6 +1169,113 @@ let marketingTo = "";
 let selectedProductIds = new Set();
 let dashTimer = null;
 let dashCat = "";
+
+/* ================================================== isolated return navigation
+ *
+ * When an admin opens a product to edit or create, the products list they
+ * came from (its category filter, search box, page number and scroll) is
+ * captured as a return URL. Saving (or cancelling) sends THEM back to that
+ * exact page.
+ *
+ * The state lives in sessionStorage, which the browser scopes PER TAB: two
+ * admins working at the same time - even on the same machine - each keep
+ * their own list position and never overwrite each other's view. Nothing is
+ * written to a store shared across tabs, nor to the server, so no other
+ * admin's screen is affected by one admin's save.
+ */
+const PRODUCTS_RETURN_KEY = "jaura_admin_products_return";
+
+/** The canonical list URL for the products desk's CURRENT state, e.g.
+ *  "/admin/products?category=bags&page=2&q=tote". */
+function productsReturnUrl() {
+  const params = new URLSearchParams();
+  const category = dashCat || prodCatSel || "";
+  if (category) params.set("category", category);
+  if (prodPage > 1) params.set("page", String(prodPage));
+  if (prodSearchQ) params.set("q", prodSearchQ);
+  const qs = params.toString();
+  return "/admin/products" + (qs ? "?" + qs : "");
+}
+
+/** Read the captured return state for THIS tab (null when none). */
+function readProductsReturn() {
+  try {
+    const raw = sessionStorage.getItem(PRODUCTS_RETURN_KEY);
+    if (!raw) return null;
+    const box = JSON.parse(raw);
+    if (!box || typeof box !== "object" || !box.url) return null;
+    return box;
+  } catch (e) { return null; }
+}
+
+/** Capture where THIS admin is standing before an editor replaces the list. */
+function rememberProductsReturn() {
+  const box = {
+    url: productsReturnUrl(),
+    category: dashCat || prodCatSel || "",
+    q: prodSearchQ || "",
+    page: Math.max(1, prodPage || 1),
+    scrollTop: Math.max(0, window.scrollY || 0),
+    at: Date.now(),
+  };
+  try { sessionStorage.setItem(PRODUCTS_RETURN_KEY, JSON.stringify(box)); } catch (e) {}
+  // Mirror the state into the address bar so the position survives a reload
+  // and is visible/shareable: admin.html?return_url=<encoded list url>
+  try {
+    history.replaceState(null, "", "admin.html?return_url=" + encodeURIComponent(box.url));
+  } catch (e) {}
+  return box;
+}
+
+/** Parse a return URL ("/admin/products?category=bags&page=2") or a bare
+ *  query string into products-desk state. Returns {} when nothing matches. */
+function productsStateFromUrl(raw) {
+  let qs = String(raw || "");
+  const qmark = qs.indexOf("?");
+  if (qmark >= 0) qs = qs.slice(qmark + 1);
+  qs = qs.split("#")[0];
+  const params = new URLSearchParams(qs);
+  const state = {};
+  const cat = (params.get("category") || params.get("cat") || "").trim();
+  const page = parseInt(params.get("page"), 10);
+  const q = (params.get("q") || params.get("search") || "").trim();
+  if (cat) state.category = cat;
+  if (Number.isFinite(page) && page >= 1) state.page = page;
+  if (q) state.q = q;
+  return state;
+}
+
+/** Apply a captured/linked list state to the products desk module vars. */
+function applyProductsState(state) {
+  const s = state || {};
+  if (typeof s.category === "string") { dashCat = s.category; prodCatSel = s.category; }
+  if (typeof s.q === "string") prodSearchQ = s.q;
+  if (Number.isFinite(s.page) && s.page >= 1) prodPage = s.page; else prodPage = 1;
+}
+
+/** Leave the editor and land back on THIS admin's captured list position.
+ *  Falls back to the plain products list when nothing was captured. */
+function restoreProductsReturn(scrollToSaved) {
+  const box = readProductsReturn();
+  editingId = null;
+  if (box) applyProductsState(productsStateFromUrl(box.url));
+  else {
+    dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1;
+  }
+  paintDesk("products");
+  // Clean the address bar: refreshing the restored list must not replay an
+  // editor return_url forever.
+  try { history.replaceState(null, "", "admin.html"); } catch (e) {}
+  if (scrollToSaved !== false) {
+    requestAnimationFrame(() => {
+      try {
+        if (box && box.scrollTop) { window.scrollTo({ top: box.scrollTop, behavior: "auto" }); return; }
+        window.scrollTo({ top: 0, behavior: "auto" });
+      } catch (e) {}
+    });
+  }
+  return box;
+}
 
 function getFilteredProducts() {
   const all = JA.products();
@@ -1201,18 +1307,22 @@ function renderProdGrid() {
   const cards = slice.map((p) => {
     const ngnNow = Number(p.priceNgn) || 0;
     const ngnWas = Number(p.compareNgn) || 0;
-    const ngn = ngnNow > 0 ? JA.money(ngnNow, "NGN") : "";
-    const ngnStrike = ngnWas > ngnNow ? JA.money(ngnWas, "NGN") : "";
+    // Multi-variant items show their real ₦ price range (e.g.
+    // "₦1,800.00 – ₦2,500.00") instead of an unrelated base price.
+    const range = ngnNow > 0 && JA.priceRangeOf ? JA.priceRangeOf(p, "NGN") : null;
+    const rangeText = range && JA.moneyRange ? JA.moneyRange(range, "NGN") : "";
+    const ngn = rangeText ? rangeText : (ngnNow > 0 ? JA.money(ngnNow, "NGN") : "");
+    const ngnStrike = !rangeText && ngnWas > ngnNow ? JA.money(ngnWas, "NGN") : "";
     const cfaNowN = ngnNow > 0 ? (JA.toCfa ? JA.toCfa(ngnNow) : Math.ceil((ngnNow * 0.44) / 50) * 50) : (Number(p.priceCfa) || 0);
     const cfaNow = JA.money(cfaNowN, "CFA");
     const stockN = Number(p.stock) || 0;
-    const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN <= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;
+    const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN<= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;
     const rowq = JA.escape((p.name + " " + (p.nameFr || "") + " " + (p.sku || "") + " " + p.category).toLowerCase());
     const productSelected = selectedProductIds.has(String(p.id)) ? " checked" : "";
     return `<article class="adx-card" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
       <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
-      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong></div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
+      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong></div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price${rangeText ? " adx-price-range" : ""}">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn && !rangeText ? cfaNow : ""}</span>${pill}</div>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     </article>`;
   }).join("");
@@ -2908,7 +3018,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=171" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=172" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -2999,12 +3109,11 @@ function paintDesk(tab = "analytics") {
         return;
       }
       JA.toast("Deleted from the website.");
-      editingId = null;
-      paintDesk("products");
+      restoreProductsReturn();
     });
   }
-  $("#cancel-edit")?.addEventListener("click", () => { editingId = null; paintDesk("products"); });
-  $("#add-product")?.addEventListener("click", () => { editingId = "new"; paintDesk("products"); });
+  $("#cancel-edit")?.addEventListener("click", () => { restoreProductsReturn(); });
+  $("#add-product")?.addEventListener("click", () => { rememberProductsReturn(); editingId = "new"; paintDesk("products"); });
   bindMedia(); bindOptions(); bindCategories(); bindCfaPreview(); bindReviewsAdmin(existing ? existing.id : "");
 
   if (tab === "products" && !editingId) {
@@ -3264,7 +3373,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=171", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=172", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -4386,6 +4495,39 @@ function bindSiteBranding() {
   });
 })();
 
+/** Apply a ?return_url=/admin/products?category=bags&page=2 deep link (or the
+ *  loose un-encoded spelling) so a reload / shared link reopens the exact
+ *  products list position. Returns the requested desk, if any. */
+function applyAdminDeepLink() {
+  let desk = "";
+  let state = {};
+  try {
+    const search = new URLSearchParams(window.location.search);
+    let target = search.get("return_url") || search.get("returnUrl") || "";
+    // Loose spelling: ?return_url=/admin/products?category=bags&page=2 - the
+    // inner "&" split off into sibling params. Re-attach any list-state
+    // siblings so the full position survives.
+    if (target && !target.includes("page") && search.get("page")) {
+      target += "&page=" + search.get("page");
+    }
+    if (target && !target.includes("category") && !target.includes("cat") && search.get("category")) {
+      target += "&category=" + search.get("category");
+    }
+    if (target && !target.includes("q=") && search.get("q")) {
+      target += "&q=" + search.get("q");
+    }
+    desk = search.get("desk") || search.get("tab") || "";
+    if (target) {
+      const parsed = productsStateFromUrl(target);
+      if (Object.keys(parsed).length) { state = parsed; desk = desk || "products"; }
+    } else if (desk === "products") {
+      state = productsStateFromUrl(window.location.search);
+    }
+  } catch (e) { return ""; }
+  if (Object.keys(state).length) applyProductsState(state);
+  return desk;
+}
+
 async function bootAdmin() {
   const root = document.getElementById("admin-root");
   if (root) root.innerHTML = `<div class="admin-live-loading" role="status" aria-live="polite"><div class="catalog-skeleton-head"></div><div class="catalog-skeleton-grid">${"<i></i>".repeat(6)}</div><strong>Loading live catalogue and stock…</strong></div>`;
@@ -4395,6 +4537,15 @@ async function bootAdmin() {
   JA.mountChrome();
   await (JA.loadServerCategories ? JA.loadServerCategories() : Promise.resolve());
   const ok = await JA.isAdmin();
-  if (ok) paintDesk(); else paintLogin();
+  if (ok) {
+    const desk = applyAdminDeepLink();
+    paintDesk(desk === "products" ? "products" : "analytics");
+    // A deep-linked products desk must show its filters, not just carry them.
+    if (desk === "products" && !editingId) {
+      const sel = document.getElementById("prod-cat");
+      if (sel && (dashCat || prodCatSel)) sel.value = dashCat || prodCatSel;
+    }
+  } else paintLogin();
 }
 document.addEventListener("DOMContentLoaded", bootAdmin);
+;

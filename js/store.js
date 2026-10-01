@@ -664,6 +664,10 @@ const JA = (() => {
       const j = window.JA_SEED.findIndex((x) => x.id === p.id);
       if (j >= 0) window.JA_SEED[j] = p; else window.JA_SEED.unshift(p);
     }
+    // The server just confirmed this row: announce it so any listening page
+    // (admin grid, storefront grids) repaints from the fresh row immediately
+    // instead of waiting for the next poll.
+    try { document.dispatchEvent(new CustomEvent("ja:catalog")); } catch (e) {}
   }
 
   // One copy of every product, ever. The same piece can reach the browser
@@ -1202,6 +1206,26 @@ const JA = (() => {
     return "F CFA " + val.toLocaleString("fr-FR");
   }
 
+  /** Money with exact kobo/centimes, used for multi-variant price ranges.
+   *
+   * A range describes several DIFFERENT prices, not one rounded figure, so
+   * it is formatted precisely ("₦1,800.00 – ₦2,500.00") while single prices
+   * stay clean whole amounts. */
+  function moneyExact(n, cur = currency()) {
+    const val = Number(n) || 0;
+    if (cur === "NGN") return "₦" + val.toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return "F CFA " + val.toLocaleString("fr-FR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  }
+
+  /** The formatted "₦1,800.00 – ₦2,500.00" label for a multi-variant item.
+   *  Plain text on purpose: safe to escape and reuse on cards, the admin
+   *  grid and aria labels alike. */
+  function moneyRange(range, cur) {
+    if (!range || !(range.max > range.min)) return "";
+    const c = cur || range.cur || currency();
+    return moneyExact(range.min, c) + " – " + moneyExact(range.max, c);
+  }
+
   // Live Supabase rows and older mirrors may deliver option maps as JSON
   // strings. Normalize both spellings at the browser boundary as a final
   // guard; catalog.py performs the same normalization on the server.
@@ -1309,7 +1333,9 @@ const JA = (() => {
     const cur = displayCur(p);
     const range = priceRangeOf(p, cur);
     if (range) {
-      return `<span class="price" data-price-for="${p.id}" data-price-state="range"><span class="now price-range">${money(range.min, cur)}<span class="range-separator" aria-hidden="true">–</span>${money(range.max, cur)}</span></span>`;
+      // "₦1,800.00 – ₦2,500.00": the exact, per-variant price span for a
+      // multi-variant item (see moneyExact / moneyRange).
+      return `<span class="price" data-price-for="${p.id}" data-price-state="range"><span class="now price-range">${moneyExact(range.min, cur)}<span class="range-separator" aria-hidden="true">–</span>${moneyExact(range.max, cur)}</span></span>`;
     }
     const now = priceOf(p, cur);
     const was = compareOf(p, cur);
@@ -2542,8 +2568,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=171";
-        const FLYER = "images/brand/logo-flyer.jpg?v=171";
+        const LOGO = "images/brand/logo.jpg?v=172";
+        const FLYER = "images/brand/logo-flyer.jpg?v=172";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2739,7 +2765,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=171" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=172" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3037,7 +3063,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=171" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=172" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3173,7 +3199,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=171", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=172", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3207,7 +3233,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=171";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=172";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3266,7 +3292,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=171");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=172");
     document.title = title;
     [
       ["name", "description", description],
@@ -3783,10 +3809,11 @@ const JA = (() => {
     liveSyncBusy = true;
     loadSeed(false, force ? { fresh: true } : {}).catch(() => {}).finally(() => { liveSyncBusy = false; });
   };
-  // Realtime updates force a read immediately. The fallback is intentionally
-  // gentle and cache-aware; polling every five seconds forced a full catalogue
-  // query on every open phone even when nothing had changed.
-  setInterval(() => syncLiveCatalog(false), 30000);
+  // Realtime updates force a read immediately. The fallback poll is
+  // intentionally gentle: the catalogue response is served with
+  // no-cache + ETag, so an unchanged shop answers with a cheap 304 and a
+  // changed one delivers the new rows - every 15 seconds while visible.
+  setInterval(() => syncLiveCatalog(false), 15000);
   window.addEventListener("focus", () => syncLiveCatalog(true));
   window.addEventListener("pageshow", () => syncLiveCatalog(true));
   document.addEventListener("visibilitychange", () => { if (!document.hidden) syncLiveCatalog(true); });
@@ -3822,7 +3849,7 @@ const JA = (() => {
     products, product, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     homepageFeatured, homepageFeaturedProducts, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
-    currency, setCurrency, currencyLocked, money, priceOf, compareOf, priceRangeOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
+    currency, setCurrency, currencyLocked, money, moneyExact, moneyRange, priceOf, compareOf, priceRangeOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
     referralEnabled, promosEnabled,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,

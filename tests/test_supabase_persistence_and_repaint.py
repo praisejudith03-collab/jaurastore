@@ -335,7 +335,10 @@ def test_upload_url_is_what_the_dom_paints_and_the_row_carries(client, iso_catal
     # stale local copy
     store = open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8").read()
     assert "if (d && d.product) applyServerProduct(d.product);" in store
-    assert "paintDesk(\"products\");" in body
+    # Save Product returns the admin to their captured list page, which is
+    # repainted from the server-confirmed rows (restoreProductsReturn paints
+    # the products desk with the saved filters/page).
+    assert "restoreProductsReturn();" in body
 
     # the endpoint flow: upload, stamp (exactly like the browser), save
     fake = _live_supabase(monkeypatch)

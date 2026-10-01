@@ -67,8 +67,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=171";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=171";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=172";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=172";
 }
 
 function renderCategories() {
@@ -639,7 +639,7 @@ function paintMostViewed(host, items) {
           ${(() => {
             const displayCur = Number(p.priceNgn) > 0 ? cur : "CFA";
             const range = JA.priceRangeOf && JA.priceRangeOf(p, displayCur);
-            const text = range ? `${JA.money(range.min, displayCur)} – ${JA.money(range.max, displayCur)}` : JA.money(JA.priceOf(p, displayCur), displayCur);
+            const text = range ? (JA.moneyRange ? JA.moneyRange(range, displayCur) : `${JA.money(range.min, displayCur)} – ${JA.money(range.max, displayCur)}`) : JA.money(JA.priceOf(p, displayCur), displayCur);
             return `<span class="price" data-mv-price-for="${JA.escape(p.id)}"><span class="now">${JA.escape(text)}</span></span>`;
           })()}
         </a>

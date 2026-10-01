@@ -76,8 +76,15 @@ def test_variant_range_helper_and_exact_variant_stock_contract():
         if (!range || range.min !== 1800 || range.max !== 2500 ||
             result.red !== 1800 || result.blue !== 2500 ||
             result.redStock !== 0 || result.blueStock <= 0 ||
+            !html.includes("₦1,800.00") || !html.includes("₦2,500.00") ||
             !html.includes("₦1,800") || !html.includes("₦2,500") || !html.includes("data-price-state=\"range\"")) {
           console.error(JSON.stringify(result)); process.exit(1);
+        }
+        // The plain-text range label is exactly the formatted requirement:
+        // "₦1,800.00 – ₦2,500.00".
+        const label = JA.moneyRange(range, "NGN");
+        if (label !== "₦1,800.00 – ₦2,500.00") {
+          console.error("moneyRange: " + label); process.exit(1);
         }
     """)
     proc = _node(script)
@@ -115,7 +122,7 @@ def test_catalog_and_category_read_through_caches_eliminate_repeat_queries(monke
         # the second response must add zero database/catalogue reads.
         assert calls_after_first >= 1
         assert merged.call_count == calls_after_first
-        assert "max-age=20" in first.headers["Cache-Control"]
+        assert "no-cache" in first.headers["Cache-Control"]
         assert first.headers["ETag"] == second.headers["ETag"]
 
     original_categories = api._categories_data_uncached
@@ -161,9 +168,32 @@ def test_popup_active_toggle_persists_and_storefront_guard_uses_it(tmp_path, mon
     assert 'role="switch"' in admin_js
 
 
-def test_product_save_keeps_the_editor_and_list_state_instead_of_redirecting():
+def test_product_save_returns_admin_to_their_captured_list_state():
+    """"Save Product" sends each admin back to THEIR exact source page.
+
+    The list position (category, search, page, scroll) is captured in
+    sessionStorage when an editor is opened - the browser scopes that store
+    PER TAB, so several admins working simultaneously each return to their
+    own list instead of sharing one global view.
+    """
     admin_js = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
     submit = admin_js.split("async function handleProductSubmit(e, existing) {", 1)[1].split("\nlet prodPage", 1)[0]
-    assert "editingId = String((res && res.data && res.data.product && res.data.product.id) || id);" in submit
-    assert "paintDesk(\"products\");" in submit
-    assert "prodPage = 1;" not in submit
+    # A successful save leaves the editor and restores the captured position.
+    assert "restoreProductsReturn();" in submit
+    assert "editingId = String((res && res.data" not in submit
+    # The capture is per-tab, not a shared cookie/localStorage slot.
+    assert 'sessionStorage.setItem(PRODUCTS_RETURN_KEY' in admin_js
+    assert 'sessionStorage.getItem(PRODUCTS_RETURN_KEY)' in admin_js
+    assert "localStorage" not in admin_js.split("PRODUCTS_RETURN_KEY =")[1].split("function productsStateFromUrl")[0]
+    # Opening an editor captures the current list URL state.
+    assert "rememberProductsReturn();" in admin_js
+    assert "editingId = b.dataset.edit;" in admin_js
+    assert 'editingId = "new";' in admin_js
+    # The canonical state URL matches /admin/products?category=...&page=...
+    assert 'return "/admin/products" + (qs ? "?" + qs : "");' in admin_js
+    # A deep-linked return_url (or its loose un-encoded spelling) reopens the
+    # exact list position after a reload.
+    assert "applyAdminDeepLink" in admin_js
+    assert 'search.get("return_url")' in admin_js
+    # Cancel and in-editor delete return to the same captured position.
+    assert '$("#cancel-edit")?.addEventListener("click", () => { restoreProductsReturn(); });' in admin_js
