@@ -1,4 +1,5 @@
 import os
+import secrets
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -17,7 +18,21 @@ def _emails():
     return out or ["jaurastore@gmail.com"]
 
 class Config:
-    SECRET_KEY = os.environ.get("SECRET_KEY") or "dev-insecure-key-change-me"
+    # Insecure development default: ONLY ever used outside production. A
+    # production deployment without SECRET_KEY set used to boot silently
+    # with this repository-public string - and that key signs admin session
+    # cookies, so anyone could forge one. In production an unset key now
+    # becomes a random per-boot secret (sessions simply require signing in
+    # again after a restart) and the boot log screams about it, so a
+    # forgotten environment variable can never become a forgeable store.
+    _INSECURE_DEFAULT_KEY = "dev-insecure-key-change-me"
+    _env_secret_key = (os.environ.get("SECRET_KEY") or "").strip()
+    if _env_secret_key:
+        SECRET_KEY = _env_secret_key
+        SECRET_KEY_IS_RANDOM_FALLBACK = False
+    else:
+        SECRET_KEY_IS_RANDOM_FALLBACK = (os.environ.get("FLASK_ENV", "development") == "production")
+        SECRET_KEY = secrets.token_hex(32) if SECRET_KEY_IS_RANDOM_FALLBACK else _INSECURE_DEFAULT_KEY
     ENV = os.environ.get("FLASK_ENV", "development")
     DB_PATH = os.environ.get("DB_PATH", os.path.join(ROOT, "data", "jaura.db"))
     # Every product an admin adds or edits lives here. On a host with an

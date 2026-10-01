@@ -182,10 +182,14 @@ def test_the_copied_caption_is_exactly_three_lines_name_price_options_no_url():
     assert "Shop now" not in code
 
 
-def test_copy_details_writes_the_caption_to_the_clipboard():
+def test_copy_details_extracts_the_caption_and_the_photo():
     body = _func(ADMIN_JS, "copyProductDetails")
-    assert "broadcastFullText(p)" in body
-    assert "navigator.clipboard.writeText(text)" in body
+    assert "copyBroadcastSelection([p])" in body
+    shared = _func(ADMIN_JS, "copyBroadcastSelection")
+    assert "broadcastFullText" in shared
+    assert "navigator.clipboard.writeText(text)" in shared
+    assert "broadcastCopyPhotos(list)" in shared
+    assert "openBroadcastPhotosDrawer(list)" in shared
 
 
 def test_out_of_stock_items_are_still_excluded_from_the_eligible_feed():
@@ -201,16 +205,48 @@ def test_each_card_copy_button_is_wired_to_copy_product_details():
     assert "copyProductDetails(p)" in paint_body
 
 
-def test_the_bulk_bar_copies_details_for_every_selected_product():
-    """Owner request 2026-09-30: the old "Share batch to WhatsApp Channel"
-    multi-product bundling is gone; selecting several products now copies
-    all of their captions (still URL-free, still no image) in one tap."""
+def test_the_bulk_bar_extracts_caption_and_photos_for_every_selected_product():
+    """Owner request 2026-10-01: "COPY DETAILS FOR SELECTED" extracts the
+    formatted caption AND the images for whichever items the admin selected
+    - custom picks and batch suggestions alike (the old native-share
+    bundling stays gone)."""
     assert '"#mk-bc-copy-batch"' in ADMIN_JS
     assert "mk-bc-share-batch" not in ADMIN_JS
     body = _func(ADMIN_JS, "bindBroadcastFeed")
     copy_batch = body[body.index('"#mk-bc-copy-batch"'):]
     assert "bcSelected[bcSlot]" in copy_batch
-    assert "navigator.clipboard.writeText(text)" in copy_batch
+    # resolution against the FULL catalogue, so a custom out-of-stock pick
+    # is copied exactly like an automatic suggestion
+    assert "JA.products()" in copy_batch
+    assert "copyBroadcastSelection(chosen)" in copy_batch
+    shared = _func(ADMIN_JS, "copyBroadcastSelection")
+    assert "navigator.clipboard.writeText(text)" in shared
+    assert 'join("\\n\\n")' in shared
+
+
+def test_photo_extraction_downloads_and_clipboard_copies():
+    """Images are extracted for the selection: a native multi-image
+    clipboard copy where the browser supports it, and a download drawer
+    (one tap per photo, or "Download all") that works everywhere."""
+    url = _func(ADMIN_JS, "broadcastPhotoUrl")
+    assert "JA.asset" in url
+    blob = _func(ADMIN_JS, "broadcastPhotoBlob")
+    assert "broadcastPhotoUrl(p)" in blob
+    assert "res.blob()" in blob
+    photos = _func(ADMIN_JS, "broadcastCopyPhotos")
+    assert "new ClipboardItem" in photos
+    grid = _func(ADMIN_JS, "broadcastPhotosGridHTML")
+    assert 'download' in grid
+    assert 'onerror="fallbackImg(event)"' in grid
+    drawer = _func(ADMIN_JS, "openBroadcastPhotosDrawer")
+    assert 'mk-bc-photos-grid' in drawer
+    assert "broadcastPhotosGridHTML(products)" in drawer
+    card = _func(ADMIN_JS, "broadcastFeedCardHTML")
+    assert 'id="mk-bc-photos" hidden role="dialog"' in card
+    assert 'id="mk-bc-photos-download-all"' in card
+    bind = _func(ADMIN_JS, "bindBroadcastFeed")
+    assert '"#mk-bc-photos-download-all"' in bind
+    assert '"#mk-bc-photos-close"' in bind
 
 
 def test_the_morning_and_evening_batches_keep_independent_selections():
@@ -233,15 +269,69 @@ def test_custom_products_can_be_added_or_swapped_without_stopping_rotation():
     assert "saveBroadcastOverrides()" in choose
 
 
-def test_custom_product_picker_is_searchable_and_only_uses_in_stock_catalog():
+def test_custom_product_picker_is_a_searchable_modal_over_the_whole_catalog():
+    """Owner request 2026-10-01: SELECT CUSTOM PRODUCT opens a searchable
+    modal (never dumps the catalogue on screen), filters by title, SKU or
+    category, and lists ANY catalogue product - ready-to-post items ranked
+    first, with availability badges so a deliberate out-of-stock pick is
+    obvious rather than impossible."""
     card = _func(ADMIN_JS, "broadcastFeedCardHTML")
     assert "Select custom product" in card
     assert 'type="search"' in card
-    picker = _func(ADMIN_JS, "broadcastPickerResultsHTML")
-    assert "broadcastEligibleProducts()" in picker
-    assert "haystack.includes(term)" in picker
+    # it is a modal dialog, not an inline dump of every product
+    assert 'id="mk-bc-picker" hidden role="dialog" aria-modal="true"' in card
+    assert 'id="mk-bc-picker-category"' in card
+    bind = _func(ADMIN_JS, "bindBroadcastFeed")
+    assert 'openBroadcastPicker(null)' in bind
+    opener = _func(ADMIN_JS, "openBroadcastPicker")
+    assert "broadcastPickerRefresh(true)" in opener
+    matches = _func(ADMIN_JS, "broadcastPickerMatches")
+    assert "JA.products()" in matches
+    assert "haystack.includes(term)" in matches          # title / SKU / category search
+    assert "JA.categoryName" in matches                  # category display name too
+    assert "rank(a) - rank(b)" in matches                # ready-to-post items first
+    # the automatic rotation pool itself still excludes sold-out items
+    eligible = _func(ADMIN_JS, "broadcastEligibleProducts")
+    assert "broadcastInStock(p)" in eligible
+    status = _func(ADMIN_JS, "broadcastPickerStatus")
+    assert '"In stock"' in status and '"Out of stock"' in status and '"Hidden"' in status
     product_card = _func(ADMIN_JS, "broadcastCardHTML")
     assert "Swap item" in product_card
+
+
+def test_the_picker_pages_results_with_smooth_scroll_pagination():
+    """Only the first page of matches renders; the rest append in place as
+    the admin scrolls (or taps Show more) - a 300-product catalogue never
+    paints 300 rows at once."""
+    assert re.search(r"BC_PICKER_PAGE_SIZE\s*=\s*24", ADMIN_JS)
+    assert "let bcPickerMatches = []" in ADMIN_JS
+    assert "let bcPickerShown = 0" in ADMIN_JS
+    results = _func(ADMIN_JS, "broadcastPickerResultsHTML")
+    assert "bcPickerMatches.slice(0, bcPickerShown)" in results
+    more = _func(ADMIN_JS, "broadcastPickerMoreHTML")
+    assert "Showing ${bcPickerShown} of ${bcPickerMatches.length}" in more
+    assert 'data-bc-picker-more-btn' in more
+    show_more = _func(ADMIN_JS, "broadcastPickerShowMore")
+    assert "insertAdjacentHTML" in show_more       # appends, keeps scroll position
+    bind = _func(ADMIN_JS, "bindBroadcastFeed")
+    scroll = bind[bind.index('pickerResults.addEventListener("scroll"'):]
+    assert "scrollHeight - 180" in scroll
+    assert "{ passive: true }" in scroll
+    assert "broadcastPickerShowMore()" in scroll
+    assert 'closest("[data-bc-picker-more-btn]")' in bind
+
+
+def test_any_catalogue_product_can_be_pinned_into_a_batch():
+    """A custom pick is no longer rejected when it is outside the eligible
+    (online + in stock) pool: the owner may deliberately feature a
+    sold-out or hidden piece, and the scheduled feed still shows it."""
+    choose = _func(ADMIN_JS, "chooseBroadcastProduct")
+    assert "broadcastEligibleProducts()" not in choose
+    assert "catalogue.find" in choose
+    assert "broadcastPickerStatus(chosenProduct)" in choose   # note, not refusal
+    scheduled = _func(ADMIN_JS, "broadcastScheduledFeedFor")
+    assert "JA.products()" in scheduled
+    assert "byId.has(String(row.id))" in scheduled
 
 
 def test_morning_and_evening_custom_overrides_are_independent_and_daily():
@@ -251,3 +341,173 @@ def test_morning_and_evening_custom_overrides_are_independent_and_daily():
     loader = _func(ADMIN_JS, "loadBroadcastOverrides")
     assert 'morning: clean("morning")' in loader
     assert 'evening: clean("evening")' in loader
+
+
+# --- functional check: the shipped picker logic actually runs -----------------
+#
+# The source-level pins above prove the right code is present; the test below
+# goes one step further and executes the real functions from js/admin.js in a
+# Node VM with a small fake DOM, so the search / ranking / pagination / any-
+# product-pinning behaviour is verified behaviourally, not just textually.
+
+PICKER_VM_SCRIPT = r"""
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+const src = readFileSync("js/admin.js", "utf8");
+const grab = (name) => {
+  for (const prefix of ["async function ", "function "]) {
+    const start = src.indexOf(prefix + name + "(");
+    if (start < 0) continue;
+    let depth = 0, i = src.indexOf("{", start);
+    for (; i < src.length; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}") { depth--; if (!depth) break; }
+    }
+    return src.slice(start, i + 1);
+  }
+  throw new Error(name + " not found");
+};
+class FakeEl {
+  constructor() { this._html = ""; this.value = ""; this.scrollTop = 0;
+                  this.clientHeight = 400; this.scrollHeight = 400; }
+  get innerHTML() { return this._html; }
+  set innerHTML(v) { this._html = v; }
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+  insertAdjacentHTML(_pos, html) { this._html += html; }
+  addEventListener() {}
+  focus() {}
+}
+const els = {};
+const sandbox = {
+  URLSearchParams, parseInt, Number, Math, Date, JSON, Promise, Array, Object,
+  String, Set, Map, console,
+  setTimeout: (fn) => fn(), clearTimeout() {}, requestAnimationFrame: (fn) => fn(),
+  sessionStorage: { store: {}, getItem(k) { return this.store[k] ?? null; },
+                    setItem(k, v) { this.store[k] = v; },
+                    removeItem(k) { delete this.store[k]; } },
+  history: { replaceState() {} },
+  navigator: { clipboard: { writeText: async () => {} } },
+  location: { origin: "https://jaurastore.example" },
+};
+sandbox.window = { location: sandbox.location };
+sandbox.$ = (sel) => (els[sel] = els[sel] || new FakeEl());
+const $ = sandbox.$;
+const TOTAL = 63;  // 60 in-stock bags + a sold-out one + a hidden one + an accessory
+const PRODUCTS = [];
+for (let i = 1; i <= 60; i++) {
+  PRODUCTS.push({ id: "p" + i, name: "Bag " + i, sku: "SKU-" + i, category: "bags",
+                  priceNgn: 1000 + i, stock: i, online: true,
+                  image: "images/products/x" + i + ".jpg" });
+}
+PRODUCTS.push({ id: "oos1", name: "Sold Out Clutch", sku: "SKU-OOS", category: "bags",
+                priceNgn: 5000, stock: 0, online: true });
+PRODUCTS.push({ id: "hid1", name: "Hidden Wallet", sku: "SKU-HID", category: "accessories",
+                priceNgn: 300, stock: 5, online: false });
+PRODUCTS.push({ id: "acc1", name: "Gold ChainAccessory", sku: "ACC-9", category: "accessories",
+                priceNgn: 700, stock: 2, online: true });
+sandbox.JA = {
+  products: () => PRODUCTS,
+  categoryName: (id) => (id === "bags" ? "Bags" : "Accessories"),
+  money: (n, cur) => (cur === "NGN" ? "N " + n : "F CFA " + n),
+  toCfa: (n) => n,
+  displayName: (p) => p.name,
+  asset: (p) => p,
+  toast: (m) => { sandbox.__toasts.push(m); },
+};
+sandbox.__toasts = [];
+sandbox.esc = (v) => String(v);
+vm.createContext(sandbox);
+const pieces = [
+  'let bcSlot = "morning"; let bcShuffle = 0;',
+  "const bcSelected = { morning: new Set(), evening: new Set() };",
+  "const BC_AUTO_QUEUE_SIZE = 4;",
+  "const bcAutoQueued = { morning: false, evening: false };",
+  "let bcPickerTarget = null;",
+  "let bcOverrides = { morning: [], evening: [] };",
+  "const BC_PICKER_PAGE_SIZE = 24; let bcPickerMatches = []; let bcPickerShown = 0;",
+  "function paintBroadcastFeed() {}",
+];
+for (const fn of ["broadcastInStock", "broadcastEligibleProducts", "broadcastDaySeed",
+                  "broadcastFeedFor", "broadcastScheduledFeedFor",
+                  "broadcastOverrideForProduct", "broadcastProductUrl",
+                  "broadcastPriceLine", "broadcastDisplayName", "broadcastOptionsLine",
+                  "broadcastFullText", "broadcastPickerStatus", "broadcastPickerMatches",
+                  "broadcastPickerItemHTML", "broadcastPickerResultsHTML",
+                  "broadcastPickerMoreHTML", "broadcastPickerRefresh",
+                  "broadcastPickerShowMore", "closeBroadcastPicker",
+                  "chooseBroadcastProduct", "saveBroadcastOverrides",
+                  "broadcastPhotoUrl", "broadcastPhotosGridHTML",
+                  "openBroadcastPhotosDrawer"]) {
+  pieces.push(grab(fn));
+}
+vm.runInContext(pieces.join("\n"), sandbox);
+const run = (code) => vm.runInContext(code, sandbox);
+const assert = (cond, msg) => { if (!cond) { console.error("FAIL: " + msg); process.exit(1); } };
+
+$("#mk-bc-picker-search").value = "";
+$("#mk-bc-picker-category").value = "";
+run("broadcastPickerRefresh(true)");
+assert(run("bcPickerMatches.length") === TOTAL,
+       "whole catalogue matched (" + TOTAL + ")");
+assert(run("bcPickerShown") === 24, "only the first page (24) is shown");
+assert(run("bcPickerMatches.slice(0, 61).every(p => p.online !== false && Number(p.stock) > 0)"),
+       "all ready-to-post items ranked before sold-out/hidden ones");
+let html = run("broadcastPickerResultsHTML()");
+assert(html.includes("Showing 24 of 63"), "pagination footer shows progress");
+assert((html.match(/data-bc-choose/g) || []).length === 24,
+       "one page of rows rendered, not the whole list dumped");
+
+$("#mk-bc-picker-search").value = "sku-oos";
+run("broadcastPickerRefresh(true)");
+assert(run("bcPickerMatches.length") === 1 && run("bcPickerMatches[0].id") === "oos1",
+       "search by SKU finds the sold-out item");
+$("#mk-bc-picker-search").value = "accessor";
+run("broadcastPickerRefresh(true)");
+assert(run("bcPickerMatches.length") === 2, "search by category display name works");
+
+$("#mk-bc-picker-search").value = "";
+run("broadcastPickerRefresh(true)");
+run("broadcastPickerShowMore()");
+assert(run("bcPickerShown") === 48, "show-more appends the next page (24 -> 48)");
+run("broadcastPickerShowMore()");
+run("broadcastPickerShowMore()");
+assert(run("bcPickerShown") === TOTAL, "pagination clamps at the match count");
+html = run("broadcastPickerResultsHTML()");
+assert(!html.includes("Showing"), "no footer once everything is shown");
+
+run('bcPickerTarget = null; chooseBroadcastProduct("oos1")');
+assert(run("bcOverrides.morning.length") === 1 && run("bcOverrides.morning[0].id") === "oos1",
+       "an out-of-stock product can be pinned");
+assert(sandbox.__toasts.some((t) => t.includes("out of stock")),
+       "the pick is confirmed with an out-of-stock note");
+assert(run("broadcastScheduledFeedFor('morning')").some((p) => p.id === "oos1"),
+       "the scheduled batch renders the custom out-of-stock pick");
+
+assert(run("broadcastPickerStatus({online: true, stock: 5}).label") === "In stock", "In stock badge");
+assert(run("broadcastPickerStatus({online: true, stock: 0}).label") === "Out of stock", "Out of stock badge");
+assert(run("broadcastPickerStatus({online: false, stock: 5}).label") === "Hidden", "Hidden badge");
+assert(run('broadcastPhotoUrl({ image: "images/products/x1.jpg" })') === "images/products/x1.jpg",
+       "photo URL resolves the cover image");
+assert(run("broadcastPhotoUrl({})").includes("_placeholder"),
+       "photo URL falls back to the placeholder");
+console.log("ALL FUNCTIONAL CHECKS PASSED");
+"""
+
+
+def test_the_picker_search_ranking_and_pagination_behaviour_runs():
+    """Executes the real js/admin.js picker functions in a Node VM with a
+    63-product fake catalogue and a fake DOM: the picker must match the whole
+    catalogue (not just eligible products), rank ready-to-post items first,
+    render one page at a time with a working show-more, find products by SKU
+    or category name, and let ANY product - including a sold-out one - be
+    pinned into the scheduled batch."""
+    import subprocess
+    import textwrap
+
+    script = textwrap.dedent(PICKER_VM_SCRIPT)
+    result = subprocess.run(["node", "--input-type=module", "-e", script],
+                            cwd=ROOT, text=True, capture_output=True, timeout=60)
+    assert result.returncode == 0, (
+        "picker VM run failed:\n" + result.stdout + "\n" + result.stderr)
+    assert "ALL FUNCTIONAL CHECKS PASSED" in result.stdout

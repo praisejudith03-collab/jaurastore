@@ -60,10 +60,10 @@ def test_household_and_explicit_category_order_in_real_store():
 @pytest.mark.parametrize("path, directives", [
     ("/healthz", ("no-store",)),
     ("/api/site", ("no-store",)),
-    # Catalogue reads are explicitly short-lived and private: an admin write
-    # invalidates the server snapshot and a user-triggered refresh bypasses
-    # the browser cache. This avoids an expensive products query per visit.
-    ("/api/catalog", ("private", "max-age=20", "must-revalidate")),
+    # Catalogue reads are private and ALWAYS revalidated: an admin write
+    # invalidates the server snapshot, the ETag makes an unchanged shop a
+    # cheap 304, and no browser disk-cache window can hide a fresh save.
+    ("/api/catalog", ("private", "no-cache", "must-revalidate")),
     ("/api/products", ("no-store",)),
     # Categories are anonymous public navigation content and can use a small
     # shared cache window; category writes clear the server snapshot.

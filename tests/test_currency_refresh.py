@@ -55,7 +55,7 @@ def test_catalog_answer_has_a_short_private_browser_cache(client):
     resp = client.get("/api/catalog")
     assert resp.status_code == 200
     cache = resp.headers.get("Cache-Control", "")
-    for directive in ("private", "max-age=20", "must-revalidate"):
+    for directive in ("private", "no-cache", "must-revalidate"):
         assert directive in cache, \
             f"/api/catalog serves Cache-Control={cache!r}; missing {directive!r}"
     assert "no-store" not in cache
@@ -75,7 +75,7 @@ def test_a_forced_refresh_is_still_served_normally(client):
     fresh = client.get("/api/catalog?_fresh=1700000000000")
     assert fresh.status_code == 200
     assert fresh.get_json()["products"] == plain.get_json()["products"]
-    assert "max-age=20" in fresh.headers.get("Cache-Control", "")
+    assert "no-cache" in fresh.headers.get("Cache-Control", "")
 
 
 # ---------------------------------------------------- the shipped JS itself

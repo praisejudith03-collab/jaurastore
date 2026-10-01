@@ -63,7 +63,14 @@ def _ip():
 # Flask's test environment deliberately skips these process-wide caches: tests
 # swap scratch files and monkeypatch data sources between cases, while the
 # production benefit comes from sharing live Supabase reads between requests.
-_CATALOG_CACHE_TTL = 20.0
+#
+# The TTL is a SAFETY NET only: every product/variant/category write below
+# invalidates the entries synchronously, so in the single-worker production
+# deployment the next request always rebuilds from the database. The net
+# exists purely for a second worker/process that did not see the write
+# (e.g. a stock reservation), which is why it is as short as it is:
+# anything longer and "I saved it, where is it?" comes back on the phone.
+_CATALOG_CACHE_TTL = 5.0
 _CATEGORY_CACHE_TTL = 60.0
 _catalog_cache_lock = threading.RLock()
 _category_cache_lock = threading.RLock()
@@ -88,6 +95,21 @@ def _invalidate_category_cache():
         _category_cache["expires"] = 0.0
         _category_cache["payload"] = None
         _category_cache["source"] = None
+
+
+def _invalidate_all_catalog_caches():
+    """Purge every server-side catalogue representation after ANY admin
+    product/variant write.
+
+    A product save changes more than the product list: the category menu
+    payload is derived next to the catalogue, and a brand-new product in a
+    category nobody had before must appear in the storefront filters on the
+    very next request. Purging both entries keeps the /admin dashboard and
+    jaurastore.com.ng reading fresh database rows immediately - no TTL, no
+    waiting for the next deploy.
+    """
+    _invalidate_catalog_cache()
+    _invalidate_category_cache()
 
 
 def _etag_response(body, etag, cache_control, *, vary_cookie=False):
@@ -370,17 +392,26 @@ def _catalog_response_snapshot():
 
 @api.get("/catalog")
 def catalog():
-    """Live catalogue with a short browser + server response cache.
+    """Live catalogue, revalidated on EVERY request.
 
     Public rows never expose numerical stock.  Admin ``?all=1`` remains a
     private browser response and is varied by Cookie, preventing the full
     inventory from entering a shared cache.
+
+    The response carries ``no-cache, must-revalidate`` with a strong-ish
+    ETag: the browser always revalidates (an unchanged catalogue answers
+    with a cheap 304), so an admin save is visible on the storefront and
+    the /admin dashboard on the NEXT request - never after a 20-second
+    disk-cache window. The server-side snapshot is dropped synchronously
+    on every product/variant/category write (see
+    _invalidate_all_catalog_caches), which is what makes the revalidation
+    see the fresh rows.
     """
     admin = bool(authmod.current_admin())
     include_hidden = admin and request.args.get("all") == "1"
     body, etag = _catalog_response_snapshot()["admin" if include_hidden else "public"]
-    policy = ("private, max-age=5, must-revalidate" if include_hidden else
-              "private, max-age=20, stale-while-revalidate=30, must-revalidate")
+    policy = ("private, no-cache, must-revalidate" if include_hidden else
+              "private, no-cache, must-revalidate, max-age=0")
     return _etag_response(body, etag, policy, vary_cookie=True)
 
 
@@ -2751,6 +2782,12 @@ def admin_order_delete(oid):
                 "The order could not be deleted from Supabase. "
                 "No changes were made.")), 503
     execute("DELETE FROM payment_proofs WHERE order_id=?", (oid,))
+    # coupon redemptions belong to the order: a hard delete must not leave
+    # their rows behind a gone order id (they would keep counting as uses).
+    try:
+        execute("DELETE FROM coupon_uses WHERE order_id=?", (oid,))
+    except Exception:
+        pass
     abandoned_removed = _purge_local_abandoned_carts_for_order(
         email=(row["email"] or payload.get("customer", {}).get("email") or payload.get("email") or ""),
         token=(payload.get("cartToken") or payload.get("cart_token") or ""))
@@ -2788,15 +2825,63 @@ def admin_products_csv():
     return response
 
 def _product_save_response(payload):
-    """Shared zero-data-loss product save surface for admin API aliases."""
+    """Shared zero-data-loss product save surface for admin API aliases.
+
+    Every path through here is explicit about persistence: the row must be
+    confirmed written by the storage backend (Supabase in production, the
+    locked override file locally) before ``ok:true`` is ever answered, a
+    failure is surfaced as a 503 with the reason (never swallowed), and the
+    write is recorded in the audit trail so a "my product disappeared"
+    report can be traced to the exact save, actor and time. Successful
+    writes purge every server-side catalogue representation (product list
+    AND category menu), so both the storefront and /admin read fresh
+    database rows on the very next request.
+    """
+    # ---- last-write-wins guard -------------------------------------------
+    # The admin editor sends baseUpdatedAt = the row's updated_at as it was
+    # when the editor was OPENED. When the stored row has moved on since
+    # then (another admin, another tab, an API integration saved first),
+    # this save is built on a stale copy and would silently revert those
+    # changes - answer 409 instead and let the admin re-open the row.
+    # Opt-in: payloads without the token (API clients, imports, mirrors)
+    # keep the previous behaviour, so nothing that exists today breaks.
+    payload = dict(payload or {})
+    base_updated_at = str(payload.pop("baseUpdatedAt", "") or "").strip()
+    if base_updated_at:
+        pid = str(payload.get("id") or "").strip()
+        if pid:
+            try:
+                current = catalog_mod.product_index(include_hidden=True).get(pid)
+            except Exception:
+                current = None          # a failed read never blocks a save
+            if current is not None:
+                current_updated_at = str(current.get("updated_at") or "").strip()
+                if current_updated_at and current_updated_at != base_updated_at:
+                    try:
+                        audit(authmod.current_admin(), "product.save_conflict",
+                              f"id={pid} editor_seen={base_updated_at} "
+                              f"stored={current_updated_at}", _ip())
+                    except Exception:
+                        pass
+                    return jsonify(ok=False, conflict=True, error=(
+                        "This product was changed by someone else while you "
+                        "were editing. Your changes were NOT saved - close "
+                        "this editor, reopen the product and re-apply them.")), 409
+    pid_probe = str((payload or {}).get("id") or "")[:80]
+    name_probe = str((payload or {}).get("name") or "")[:120]
     try:
         result = catalog_mod.upsert(payload, authmod.current_admin())
     except Exception as exc:
         try:
             import observability
             observability.record_failure("admin.product_save", exc,
-                                         payload_id=str((payload or {}).get("id") or "")[:80],
+                                         payload_id=pid_probe,
                                          logger=current_app.logger)
+        except Exception:
+            pass
+        try:
+            audit(authmod.current_admin(), "product.save_failed",
+                  f"error={exc!r} id={pid_probe} name={name_probe}", _ip())
         except Exception:
             pass
         return jsonify(ok=False, error=(
@@ -2814,6 +2899,11 @@ def _product_save_response(payload):
                 "That is a test product from the test suite, not a shop piece. "
                 "It cannot be added to the storefront. Delete it instead.")), 400
         if action == "error" or mirrored is False:
+            try:
+                audit(authmod.current_admin(), "product.save_failed",
+                      f"backend rejected id={pid_probe} name={name_probe}", _ip())
+            except Exception:
+                pass
             return jsonify(ok=False, error=(
                 "The product could not be saved to Supabase. No changes were made.")), 503
         return jsonify(ok=False, error="A product needs at least a name."), 400
@@ -2821,7 +2911,16 @@ def _product_save_response(payload):
         return jsonify(ok=False, error=(
             "The product could not be saved to Supabase. No changes were made."),
             product=product, action=action, mirrored=False, meta=catalog_mod.meta()), 503
-    _invalidate_catalog_cache()
+    try:
+        audit(authmod.current_admin(), f"product.{'create' if action == 'created' else 'update'}",
+              f"{product.get('id')} «{product.get('name','')}» online={product.get('online')} "
+              f"stock={product.get('stock')} priceNgn={product.get('priceNgn')}", _ip())
+    except Exception:
+        pass
+    # Purge EVERY catalogue representation (list snapshot + category menu)
+    # so the storefront and the /admin dashboard both read fresh database
+    # rows on the next request.
+    _invalidate_all_catalog_caches()
     return jsonify(ok=True, product=product, action=action, mirrored=mirrored,
                    meta=catalog_mod.meta())
 
@@ -2864,11 +2963,27 @@ def admin_product_variants_upsert_alias():
     pid = sec.clean(d.get("productId") or d.get("id"), 64)
     if not pid:
         return jsonify(ok=False, error="productId is required."), 400
+    read_error = None
     try:
         product = catalog_mod.product_index(include_hidden=True).get(pid)
-    except Exception:
+    except Exception as exc:
         product = None
+        read_error = exc
     if not product:
+        # A catalogue read that blew up is NOT "product not found": saying
+        # 404 here made a temporarily unreachable database look like the
+        # product had vanished. Only a clean read that genuinely cannot
+        # find the row answers 404.
+        if read_error is not None:
+            try:
+                import observability
+                observability.record_failure("admin.variant_save", read_error,
+                                             payload_id=pid, logger=current_app.logger)
+            except Exception:
+                pass
+            return jsonify(ok=False, error=(
+                "The catalogue could not be read to load that product. "
+                "Nothing was changed - please retry.")), 503
         return jsonify(ok=False, error="Product not found."), 404
     patch = dict(product)
     # Explicitly collect every variant/admin field this endpoint may own.
@@ -2886,6 +3001,7 @@ def admin_product_variants_upsert_alias():
         "compareNgn": ("compareNgn", "compare_ngn", "compareAtPrice", "compare_at_price"),
         "bulkQty": ("bulkQty", "bulk_qty", "bulkQuantity", "bulk_quantity", "bulkDiscountQty", "bulk_discount_qty"),
         "bulkPercent": ("bulkPercent", "bulk_percent", "bulkDiscountPercent", "bulk_discount_percent"),
+        "stockStatus": ("stockStatus", "stock_status"),
     }
     for canonical, names in aliases.items():
         for name in names:
@@ -2895,6 +3011,53 @@ def admin_product_variants_upsert_alias():
                     patch["supplierUrl"] = d.get(name)
                     patch["supplier_url"] = d.get(name)
                 break
+    # Availability flags an API client may send instead of stockStatus.
+    for name in ("is_in_stock", "in_stock"):
+        if name in d:
+            flag = d.get(name)
+            off = (flag is False
+                   or (isinstance(flag, (int, float)) and flag == 0)
+                   or (not isinstance(flag, (dict, list))
+                       and str(flag).strip().lower()
+                       in ("false", "0", "out", "no", "off")))
+            patch["stockStatus"] = "out" if off else "in"
+            break
+    # A plain `stock: 0` on a product that tracks per-variant quantities
+    # means "the whole product is switched off" (the reported "out of stock
+    # does not save" case): without the explicit flag, catalog.normalize's
+    # variant sum would silently re-stock the row from the stored variant
+    # numbers. Only infer the flag when this payload does not manage the
+    # per-variant numbers itself - a caller that sends optionStock is
+    # deliberately setting availability per variant and wins.
+    variant_payload_keys = ("optionStock", "option_stock",
+                            "variantStock", "variant_stock")
+    if not any(k in d for k in variant_payload_keys):
+        explicit_qty = None
+        for name in ("stock", "stock_quantity"):
+            if name not in d:
+                continue
+            raw = d.get(name)
+            try:
+                if raw is not None and str(raw).strip() != "":
+                    explicit_qty = float(raw)
+                    break
+            except (TypeError, ValueError):
+                pass
+        if explicit_qty is not None:
+            current_map = patch.get("optionStock") \
+                if isinstance(patch.get("optionStock"), dict) else {}
+            map_sum = sum(int(v or 0) for v in current_map.values()) \
+                if current_map else 0
+            if explicit_qty == 0:
+                patch["stockStatus"] = "out"
+            elif current_map and map_sum == 0:
+                # The mirror image: re-stocking a product whose variants were
+                # all sold out with a plain whole-product quantity. The typed
+                # number is the new availability, so the all-zero variant map
+                # must not pin the row (and the public badge) to "out"
+                # forever. Per-variant tracking simply resumes the next time
+                # variant quantities are saved.
+                patch["optionStock"] = {}
     return _product_save_response(patch)
 
 @api.delete("/admin/products/<pid>")
@@ -2943,7 +3106,10 @@ def admin_product_delete(pid):
         files_removed = len([k for k in before_keys if k and k not in after_keys])
         abandoned_removed = _purge_local_abandoned_carts_for_product(pid, product_name_for_purge)
     audit(authmod.current_admin(), "product.delete", f"{pid} files_removed={files_removed} abandoned_carts={abandoned_removed}", _ip())
-    _invalidate_catalog_cache()
+    # A deleted product leaves both the catalogue and the category lists:
+    # purge every representation so the storefront grid AND the category
+    # menu reflect the removal on the next request.
+    _invalidate_all_catalog_caches()
     return jsonify(ok=True, id=pid, filesRemoved=files_removed, abandonedCartsRemoved=abandoned_removed, meta=catalog_mod.meta())
 
 @api.put("/admin/products")
@@ -2963,7 +3129,9 @@ def admin_products_replace():
             "The bulk product import could not be confirmed in Supabase. No "
             "fields were silently dropped; run the products migration and retry."),
             saved=0, rejected=rejected, mirrored=False, meta=catalog_mod.meta()), 503
-    _invalidate_catalog_cache()
+    # Bulk import rewrites the catalogue and can add products to categories
+    # that had none: purge both caches so lists and menus are fresh.
+    _invalidate_all_catalog_caches()
     return jsonify(ok=True, saved=len(kept), rejected=rejected, mirrored=mirrored,
                    meta=catalog_mod.meta())
 
@@ -3306,6 +3474,57 @@ def _unlink_product_media(product_id, url):
         if not saved or mirrored is False:
             raise RuntimeError("Product media unlink could not be saved.")
     return changed
+
+
+@api.post("/admin/storage/cleanup")
+@authmod.require_admin
+@sec.require_csrf
+def admin_storage_cleanup():
+    """Scan the upload storage for orphaned / duplicate files and purge them.
+
+    Dry-run by default: POST {apply: false} (or no body) returns the report
+    with delete_candidates and the bytes they would free. POST {apply: true}
+    deletes them - every key is re-validated against the LIVE reference set
+    immediately before removal, and nothing younger than minAgeDays (default
+    2) is ever a candidate, so an upload that lands while the report is being
+    read can not be purged out from under its product.
+    """
+    limited = sec.guard("storage-cleanup", limit=12, window=3600)
+    if limited: return limited
+    d = request.get_json(silent=True) or {}
+    apply_changes = bool(d.get("apply"))
+    try:
+        min_age = float(d.get("minAgeDays") or 2)
+    except (TypeError, ValueError):
+        min_age = 2.0
+    min_age = max(0.0, min(90.0, min_age))
+    import storage_cleanup
+    try:
+        report = storage_cleanup.build_plan(min_age_days=min_age)
+    except Exception as exc:
+        # A reference source that cannot be read must never look like "zero
+        # references" - the scan is refused, nothing is deleted.
+        return jsonify(ok=False, error=(
+            "The storage scan could not read every reference source, so "
+            f"nothing was deleted. {exc}")), 503
+    if not apply_changes:
+        audit(authmod.current_admin(), "storage.cleanup",
+              f"dry-run candidates={report['candidate_count']} "
+              f"objects={report['objects']} referenced={report['referenced']}", _ip())
+        return jsonify(ok=True, applied=False, **{
+            k: v for k, v in report.items() if k != "ok"})
+    result = storage_cleanup.apply_plan(report=report, min_age_days=min_age)
+    audit(authmod.current_admin(), "storage.cleanup",
+          f"apply deleted={len(result['deleted'])} "
+          f"freed_bytes={result['freed_bytes']} "
+          f"errors={len(result['errors'])}", _ip())
+    ok = not result["errors"]
+    return jsonify(ok=ok, applied=True,
+                   deleted=result["deleted"], freedBytes=result["freed_bytes"],
+                   freedMb=round(result["freed_bytes"] / 1048576.0, 3),
+                   errors=result["errors"][:20],
+                   **{k: v for k, v in report.items()
+                      if k not in ("ok", "delete_candidates")}), (200 if ok else 503)
 
 
 @api.delete("/admin/uploads/purge")

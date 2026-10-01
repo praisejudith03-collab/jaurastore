@@ -683,6 +683,19 @@ def normalize(product):
         # that said stock=24 while every variant was 0 still showed
         # "In Stock" on the storefront and stayed orderable.
         stock_qty = sum(int(v or 0) for v in option_stock.values())
+    # ... UNLESS the admin explicitly switched the whole product off. An
+    # "Out of stock" toggle (stockStatus / stock_status in the admin form,
+    # is_in_stock / in_stock in an API write) is a final decision: it zeroes
+    # the product quantity AND every per-variant quantity, so stale variant
+    # numbers travelling in the same payload can never re-sum the row back
+    # to "in stock". This was the "out of stock does not save" bug: the
+    # editor wrote stock=0, the variant sum silently reverted it, and the
+    # storefront kept showing the product as orderable.
+    if _explicit_out_of_stock(product):
+        stock_qty = 0
+        if option_stock:
+            option_stock = {k: 0 for k in option_stock}
+
     out = {
         "id": pid,
         "sku": sec.valid_sku(product.get("sku") or ""),
@@ -817,6 +830,41 @@ def _clean_option_stock(raw):
             continue
         out[key] = sec.clean_int(v, 0, 0, 10**7) or 0
     return out
+
+
+_OUT_WORDS = ("out", "sold out", "soldout", "sold-out", "unavailable",
+              "false", "0", "no", "off")
+
+
+def _explicit_out_of_stock(product):
+    """True when the payload itself switches the WHOLE product off.
+
+    Recognised spellings: the admin editor's ``stockStatus`` / API clients'
+    ``stock_status`` set to "out", or an explicit ``is_in_stock`` /
+    ``in_stock`` of false. Anything else - including the fields being absent
+    entirely - means "no opinion", and availability then follows the
+    quantity rules exactly as before (so plain patch writes and seed rows
+    are untouched). Only a deliberate OFF is a hard override.
+    """
+    p = product if isinstance(product, dict) else {}
+    for key in ("stockStatus", "stock_status"):
+        raw = p.get(key)
+        if raw is None or isinstance(raw, bool):
+            continue
+        if str(raw).strip().lower() in _OUT_WORDS:
+            return True
+    for key in ("is_in_stock", "in_stock"):
+        raw = p.get(key)
+        if raw is None or raw is True:
+            continue
+        if raw is False:
+            return True
+        if isinstance(raw, (int, float)) and raw == 0:
+            return True
+        if not isinstance(raw, (dict, list)) and str(raw).strip().lower() in _OUT_WORDS:
+            return True
+    return False
+
 
 
 def fold_option_value(value):
@@ -1806,6 +1854,28 @@ def set_variant_stock(pid, qty, option_key=None, actor=None):
 
 
 
+def deleted_product_ids():
+    """Every product id that must never come back or be re-created by an
+    automated pass (supplier sync, mirror, cache re-hydration).
+
+    Unions the local override deleted list with the durable Supabase
+    tombstone list, so the answer is correct whichever side a delete landed
+    on. A failed durable read returns the local side only: an unreachable
+    database must never look like "nothing is deleted"."""
+    ids = set()
+    try:
+        ids |= {str(x or "").strip() for x in (overrides().get("deleted") or []) if str(x or "").strip()}
+    except Exception:
+        pass
+    try:
+        durable = _durable_deleted_ids()
+        if durable:
+            ids |= {str(x or "").strip() for x in durable if str(x or "").strip()}
+    except Exception:
+        pass
+    return ids
+
+
 def local_only_products():
     """Admin overrides that are not yet in the live Supabase table.
 
@@ -2368,6 +2438,7 @@ def remove(pid, actor=None):
 
     _mutate(actor, _apply)
     _purge_removed_media(existing_product, None)
+    _purge_local_product_rows(pid)
     try:
         from supabase_store import hard_delete_products
         hard_delete_products([pid])
@@ -2377,6 +2448,25 @@ def remove(pid, actor=None):
     _tombstone()
     _sync_repo_async()
     return None
+
+
+def _purge_local_product_rows(pid):
+    """Hard-delete the local database rows a product owned.
+
+    variant_stock / product_views / product_reviews rows survive a catalogue
+    remove unless they are deleted explicitly - orphaned rows for a gone
+    product id (and a views row still "referencing" it confused later
+    housekeeping). Best effort: the catalogue removal itself must never be
+    blocked by a database hiccup.
+    """
+    for sql in ("DELETE FROM variant_stock WHERE product_id=?",
+                "DELETE FROM product_views WHERE product_id=?",
+                "DELETE FROM product_reviews WHERE product_id=?"):
+        try:
+            from db import execute as _execute
+            _execute(sql, (pid,))
+        except Exception:
+            pass
 
 
 def replace_all(products, actor=None):

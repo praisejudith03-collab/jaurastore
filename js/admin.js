@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=171" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=178" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -239,7 +239,16 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
     const res = await JA.loginAdmin(loginEmail, fd.get("password"));
     btn.disabled = false;
     btn.textContent = "Sign in";
-    if (res.ok) { loginNeedsEmail = false; paintDesk(); }
+    if (res.ok) {
+      loginNeedsEmail = false;
+      // The boot-time catalogue fetch ran BEFORE this session existed, so
+      // the list in memory is still the public answer: stock numbers
+      // stripped, "in" translated to the 9999 sentinel, per-variant
+      // quantities gone. Refetch now that the admin cookie is set - or the
+      // desk renders fake stock and an editor SAVE would commit it.
+      try { await JA.reloadCatalog(); } catch (e) {}
+      paintDesk();
+    }
     else if (/email/i.test(res.error || "")) {
       loginNeedsEmail = true;
       paintLogin(res.error || "Could not sign in.");
@@ -649,18 +658,58 @@ function bindOptions() {
   });
   const status = document.getElementById("stock-status");
   const qty = document.getElementById("stock-qty");
+  // The whole-product "Out of stock" switch also switches off every variant:
+  // the per-variant quantity boxes are zeroed (their previous values are
+  // remembered on the input so toggling back restores them), because a
+  // variant left at 5 used to re-sum the saved row back to "in stock" - the
+  // "out of stock does not save" bug.
+  const zeroVariantInputs = () => {
+    const live = currentOptionStock();
+    const prev = { ...(window.__editPrevOptionStock || {}) };
+    Object.keys(live).forEach((k) => {
+      if (Number(live[k]) > 0) prev[k] = live[k];
+    });
+    window.__editPrevOptionStock = prev;
+    document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
+      inp.value = "0";
+    });
+  };
+  const restoreVariantInputs = () => {
+    const prev = window.__editPrevOptionStock;
+    if (!prev) return;
+    document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
+      const key = inp.getAttribute("data-opt-stock");
+      if (key && Object.prototype.hasOwnProperty.call(prev, key)
+          && !(Number(inp.value) > 0)) {
+        inp.value = String(prev[key]);
+      }
+    });
+    window.__editPrevOptionStock = null;
+  };
   status?.addEventListener("change", () => {
     if (!qty) return;
     if (status.value === "out") {
       if (Number(qty.value) > 0) qty.dataset.prev = qty.value;
       qty.value = 0;
-    } else if (!(Number(qty.value) > 0)) {
-      qty.value = qty.dataset.prev || "24";
+      zeroVariantInputs();
+    } else {
+      if (!(Number(qty.value) > 0)) qty.value = qty.dataset.prev || "24";
+      restoreVariantInputs();
     }
+    syncOptionStockTotals();
     refreshOptionChips();
   });
   qty?.addEventListener("input", () => {
-    if (status && Number(qty.value) > 0) status.value = "in";
+    if (status) {
+      if (Number(qty.value) > 0) status.value = "in";
+      else if (qty.value === "0") {
+        // Typing an explicit 0 IS "sold out": capture that intent instead of
+        // silently re-filling the old quantity at save time.
+        status.value = "out";
+        zeroVariantInputs();
+        syncOptionStockTotals();
+      }
+    }
     refreshOptionChips();
   });
 }
@@ -868,6 +917,16 @@ function productForm(p = {}) {
     `<option value="${c.id}" ${preCat === c.id ? "selected" : (p.category === c.id ? "selected" : "")}>${JA.escape(c.name)}</option>`
   ).join("");
   window.__editImages = productImages(p);
+  // Freshness token for the save-time conflict guard: the row's updated_at
+  // as it was when THIS editor was opened. If the stored row moves on
+  // before the admin saves (another admin, another tab, an API write), the
+  // server answers 409 instead of silently reverting those changes.
+  window.__editBaseUpdatedAt = String((p && p.updated_at) || "");
+  // Per-editor-session memory of the variant quantities that were live
+  // before the admin last flipped "Out of stock". It lives on window (not
+  // on the inputs) because refreshOptionChips repaints the variant boxes
+  // and would wipe a dataset attribute with them.
+  window.__editPrevOptionStock = null;
   window.__editUploads = [];
   window.__editReviews = Array.isArray(p.reviews) ? p.reviews.slice() : ((p.id && JA.reviews) ? JA.reviews(p.id).slice() : []);
   const opts = editorOptions(p);
@@ -949,7 +1008,7 @@ function productForm(p = {}) {
     </div>
     <div class="field"><label>Customer note</label><textarea id="rev-note" rows="2" maxlength="600" placeholder="Their comment"></textarea></div>
     <button type="button" class="au-link-btn" id="rev-add">+ Add review to this product</button>
-    <button class="btn au-save" type="submit">${p.id ? "Save" : "Add a Product"}</button>
+    <button class="btn au-save" type="submit">Save Product</button>
     ${p.id ? `<button type="button" class="au-del-prod" data-del="${JA.escape(p.id)}">Delete this product</button>` : ""}
   </form>`;
 }
@@ -1008,7 +1067,13 @@ async function handleProductSubmit(e, existing) {
   const status = String(fd.get("stockStatus") || "in");
   let stock = num("stock");
   if (status === "out") stock = 0;
-  else if (!(stock > 0)) stock = (existing && Number(existing.stock) > 0) ? Number(existing.stock) : 24;
+  else if (stock === null || stock === undefined) {
+    // An EMPTY box means "leave the quantity alone" (keep the stored value,
+    // 24 for a brand-new row). An explicit 0 is a deliberate "sold out" and
+    // is honoured below - it used to be silently replaced by the old
+    // quantity, so the admin's out-of-stock choice never reached the server.
+    stock = (existing && Number(existing.stock) > 0) ? Number(existing.stock) : 24;
+  }
   // Optional per-product bulk discount: both values or neither. An empty box
   // means "no discount configured for this product".
   let bulkQty = num("bulkQty");
@@ -1027,6 +1092,24 @@ async function handleProductSubmit(e, existing) {
     hasOptionStock = true;
   });
   if (hasOptionStock) stock = Object.values(optionStock).reduce((n, q) => n + q, 0);
+  // "Out of stock" (the switch, or an explicit 0 quantity) is a final
+  // whole-product decision: it wins over the variant sum - which used to
+  // re-stock the row from stale variant numbers - and zeroes every variant
+  // in the payload, so the storefront badge, the buy button and each
+  // variant chip all read sold out together.
+  let payloadOptionStock = { ...(hasOptionStock ? optionStock : (existing?.optionStock || {})) };
+  if (status === "out" || stock === 0) {
+    stock = 0;
+    Object.keys(payloadOptionStock).forEach((k) => { payloadOptionStock[k] = 0; });
+  } else if (!hasOptionStock && stock > 0
+             && Object.keys(payloadOptionStock).length
+             && Object.values(payloadOptionStock).every((v) => !(Number(v) > 0))) {
+    // Mirror image of the switch-off: re-stocking a product whose variants
+    // were all sold out with a plain quantity. The typed number is the new
+    // availability, so the all-zero variant map must not pin the row (and
+    // the storefront badge) to "out" forever.
+    payloadOptionStock = {};
+  }
   const optionPrices = {};
   e.target.querySelectorAll("[data-opt-price]").forEach((inp) => {
     const key = inp.getAttribute("data-opt-price");
@@ -1070,6 +1153,9 @@ async function handleProductSubmit(e, existing) {
   const savedCategory = String(fd.get("category") || "").trim();
   const res = await JA.upsertProduct({
       ...(existing || {}),
+      // opt-in freshness token (see productForm); stripped from the local
+      // copy by upsertProduct and never persisted by catalog.normalize
+      baseUpdatedAt: window.__editBaseUpdatedAt || "",
       id,
       sku: fd.get("sku") || existing?.sku || ("JAU-" + Date.now().toString(36).toUpperCase().slice(-6)),
       slug: existing?.slug || slugify(name) || id,
@@ -1095,6 +1181,9 @@ async function handleProductSubmit(e, existing) {
       // stock_quantity and the freshly typed quantity was silently discarded
       // (seed products reverted to 24). Ship BOTH aliases, in sync.
       stock_quantity: stock,
+      // The explicit availability intent: "out" makes catalog.normalize
+      // zero the row and every variant, immune to the variant-sum revert.
+      stockStatus: status,
       // Per-product bulk discount (null = none configured).
       bulkQty,
       bulkPercent,
@@ -1103,7 +1192,7 @@ async function handleProductSubmit(e, existing) {
       online: !!fd.get("online"),
       colors: colorOpt ? colorOpt.values : [],
       options,
-      optionStock: hasOptionStock ? optionStock : (existing?.optionStock || {}),
+      optionStock: payloadOptionStock,
       optionPrices,
       optionCompareAt,
       nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
@@ -1126,7 +1215,7 @@ async function handleProductSubmit(e, existing) {
       customer_reviews: manualReviews,
   });
   if (window.__editReviews && JA.setReviews) JA.setReviews(id, manualReviews);
-  if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = existing ? "Save" : "Add a Product"; }
+  if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save Product"; }
   // Only a server-confirmed save leaves this editor. A queued retry or a
   // Supabase failure keeps the form open with the error, so the admin never
   // believes a product is live when PostgreSQL rejected it.
@@ -1139,14 +1228,13 @@ async function handleProductSubmit(e, existing) {
   } else {
     JA.toast(status === "out" ? "Live now · Out of stock." : "Live on the store now · " + images.length + " photo(s).");
   }
-  // Preserve the administrator's context. A save used to clear editingId and
-  // repaint the category list (often at page one), which felt like an
-  // unexpected redirect and made consecutive edits slow. Stay in this editor;
-  // the success toast above confirms the write and the fresh server row is
-  // what the re-render reads. Search/filter/page state remains untouched for
-  // the explicit Cancel/back action.
-  editingId = String((res && res.data && res.data.product && res.data.product.id) || id);
-  paintDesk("products");
+  // Return THIS admin to their exact source page. The list position they
+  // came from (category, search, page, scroll) was captured in
+  // rememberProductsReturn() when the editor was opened and is stored in
+  // THIS TAB's sessionStorage, so several admins saving at once each land
+  // back on their own list - nobody is bounced to page one of "All
+  // products" and nobody sees another admin's filters.
+  restoreProductsReturn();
 }
 
 let prodPage = 1;
@@ -1170,6 +1258,113 @@ let marketingTo = "";
 let selectedProductIds = new Set();
 let dashTimer = null;
 let dashCat = "";
+
+/* ================================================== isolated return navigation
+ *
+ * When an admin opens a product to edit or create, the products list they
+ * came from (its category filter, search box, page number and scroll) is
+ * captured as a return URL. Saving (or cancelling) sends THEM back to that
+ * exact page.
+ *
+ * The state lives in sessionStorage, which the browser scopes PER TAB: two
+ * admins working at the same time - even on the same machine - each keep
+ * their own list position and never overwrite each other's view. Nothing is
+ * written to a store shared across tabs, nor to the server, so no other
+ * admin's screen is affected by one admin's save.
+ */
+const PRODUCTS_RETURN_KEY = "jaura_admin_products_return";
+
+/** The canonical list URL for the products desk's CURRENT state, e.g.
+ *  "/admin/products?category=bags&page=2&q=tote". */
+function productsReturnUrl() {
+  const params = new URLSearchParams();
+  const category = dashCat || prodCatSel || "";
+  if (category) params.set("category", category);
+  if (prodPage > 1) params.set("page", String(prodPage));
+  if (prodSearchQ) params.set("q", prodSearchQ);
+  const qs = params.toString();
+  return "/admin/products" + (qs ? "?" + qs : "");
+}
+
+/** Read the captured return state for THIS tab (null when none). */
+function readProductsReturn() {
+  try {
+    const raw = sessionStorage.getItem(PRODUCTS_RETURN_KEY);
+    if (!raw) return null;
+    const box = JSON.parse(raw);
+    if (!box || typeof box !== "object" || !box.url) return null;
+    return box;
+  } catch (e) { return null; }
+}
+
+/** Capture where THIS admin is standing before an editor replaces the list. */
+function rememberProductsReturn() {
+  const box = {
+    url: productsReturnUrl(),
+    category: dashCat || prodCatSel || "",
+    q: prodSearchQ || "",
+    page: Math.max(1, prodPage || 1),
+    scrollTop: Math.max(0, window.scrollY || 0),
+    at: Date.now(),
+  };
+  try { sessionStorage.setItem(PRODUCTS_RETURN_KEY, JSON.stringify(box)); } catch (e) {}
+  // Mirror the state into the address bar so the position survives a reload
+  // and is visible/shareable: admin.html?return_url=<encoded list url>
+  try {
+    history.replaceState(null, "", "admin.html?return_url=" + encodeURIComponent(box.url));
+  } catch (e) {}
+  return box;
+}
+
+/** Parse a return URL ("/admin/products?category=bags&page=2") or a bare
+ *  query string into products-desk state. Returns {} when nothing matches. */
+function productsStateFromUrl(raw) {
+  let qs = String(raw || "");
+  const qmark = qs.indexOf("?");
+  if (qmark >= 0) qs = qs.slice(qmark + 1);
+  qs = qs.split("#")[0];
+  const params = new URLSearchParams(qs);
+  const state = {};
+  const cat = (params.get("category") || params.get("cat") || "").trim();
+  const page = parseInt(params.get("page"), 10);
+  const q = (params.get("q") || params.get("search") || "").trim();
+  if (cat) state.category = cat;
+  if (Number.isFinite(page) && page >= 1) state.page = page;
+  if (q) state.q = q;
+  return state;
+}
+
+/** Apply a captured/linked list state to the products desk module vars. */
+function applyProductsState(state) {
+  const s = state || {};
+  if (typeof s.category === "string") { dashCat = s.category; prodCatSel = s.category; }
+  if (typeof s.q === "string") prodSearchQ = s.q;
+  if (Number.isFinite(s.page) && s.page >= 1) prodPage = s.page; else prodPage = 1;
+}
+
+/** Leave the editor and land back on THIS admin's captured list position.
+ *  Falls back to the plain products list when nothing was captured. */
+function restoreProductsReturn(scrollToSaved) {
+  const box = readProductsReturn();
+  editingId = null;
+  if (box) applyProductsState(productsStateFromUrl(box.url));
+  else {
+    dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1;
+  }
+  paintDesk("products");
+  // Clean the address bar: refreshing the restored list must not replay an
+  // editor return_url forever.
+  try { history.replaceState(null, "", "admin.html"); } catch (e) {}
+  if (scrollToSaved !== false) {
+    requestAnimationFrame(() => {
+      try {
+        if (box && box.scrollTop) { window.scrollTo({ top: box.scrollTop, behavior: "auto" }); return; }
+        window.scrollTo({ top: 0, behavior: "auto" });
+      } catch (e) {}
+    });
+  }
+  return box;
+}
 
 function getFilteredProducts() {
   const all = JA.products();
@@ -1201,18 +1396,22 @@ function renderProdGrid() {
   const cards = slice.map((p) => {
     const ngnNow = Number(p.priceNgn) || 0;
     const ngnWas = Number(p.compareNgn) || 0;
-    const ngn = ngnNow > 0 ? JA.money(ngnNow, "NGN") : "";
-    const ngnStrike = ngnWas > ngnNow ? JA.money(ngnWas, "NGN") : "";
+    // Multi-variant items show their real ₦ price range (e.g.
+    // "₦1,800.00 – ₦2,500.00") instead of an unrelated base price.
+    const range = ngnNow > 0 && JA.priceRangeOf ? JA.priceRangeOf(p, "NGN") : null;
+    const rangeText = range && JA.moneyRange ? JA.moneyRange(range, "NGN") : "";
+    const ngn = rangeText ? rangeText : (ngnNow > 0 ? JA.money(ngnNow, "NGN") : "");
+    const ngnStrike = !rangeText && ngnWas > ngnNow ? JA.money(ngnWas, "NGN") : "";
     const cfaNowN = ngnNow > 0 ? (JA.toCfa ? JA.toCfa(ngnNow) : Math.ceil((ngnNow * 0.44) / 50) * 50) : (Number(p.priceCfa) || 0);
     const cfaNow = JA.money(cfaNowN, "CFA");
     const stockN = Number(p.stock) || 0;
-    const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN <= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;
+    const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN<= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;
     const rowq = JA.escape((p.name + " " + (p.nameFr || "") + " " + (p.sku || "") + " " + p.category).toLowerCase());
     const productSelected = selectedProductIds.has(String(p.id)) ? " checked" : "";
     return `<article class="adx-card" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
       <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
-      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong></div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn ? cfaNow : ""}</span>${pill}</div>
+      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong></div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price${rangeText ? " adx-price-range" : ""}">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn && !rangeText ? cfaNow : ""}</span>${pill}</div>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     </article>`;
   }).join("");
@@ -1309,7 +1508,7 @@ function bindProductBulk() {
 }
 function bindProdGridEvents() {
   document.querySelectorAll("#prod-grid [data-edit]").forEach((b) => {
-    const open = () => { editingId = b.dataset.edit; paintDesk("products"); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    const open = () => { rememberProductsReturn(); editingId = b.dataset.edit; paintDesk("products"); window.scrollTo({ top: 0, behavior: "smooth" }); };
     b.onclick = open;
     b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
   });
@@ -2012,7 +2211,7 @@ function bindOrderButtons() {
   });
 }
 function accountPanel() {
-  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. You sign in with <strong>ADMIN_MASTER_PASSWORD</strong> — that is your main admin password. <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> is the backup one, and it still works if the master password is ever unset. Both are managed in Render (Environment → Environment Variables), not in this portal: change one there and the new password works at your next sign-in.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn btn-line" id="repair-photos">Repair missing photos</button><button class="btn" id="sync-github" hidden>Sync to GitHub</button></div><div id="sync-status" role="status" aria-live="polite" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Everything you save goes straight to the live store. If your Wi-Fi drops, the change waits on this device and sends itself as soon as you are back online.</p></div></details>`;
+  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. You sign in with <strong>ADMIN_MASTER_PASSWORD</strong> — that is your main admin password. <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> is the backup one, and it still works if the master password is ever unset. Both are managed in Render (Environment → Environment Variables), not in this portal: change one there and the new password works at your next sign-in.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn btn-line" id="repair-photos">Repair missing photos</button><button class="btn" id="sync-github" hidden>Sync to GitHub</button></div><div id="sync-status" role="status" aria-live="polite" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Everything you save goes straight to the live store. If your Wi-Fi drops, the change waits on this device and sends itself as soon as you are back online.</p></div><div class="admin-card"><h3 class="admin-h">Storage cleanup</h3><p class="admin-note">Photos and receipts that no product or order uses any more stay in storage forever and eat the quota. The scan never touches files a live product or order still shows, and never touches uploads from the last two days (they may still be being saved).</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="storage-cleanup-scan">Scan storage now</button><button class="btn" id="storage-cleanup-apply" hidden>Delete unused files</button></div><p class="admin-note" id="storage-cleanup-out" role="status" aria-live="polite" style="margin-top:12px">Nothing scanned yet.</p></div></details>`;
 }
 function bindAccount() {
   const email = $("#acct-email");
@@ -2123,6 +2322,54 @@ function bindAccount() {
       + (stuck ? " · " + stuck + " product(s) have no photo left to use — open them and add one." : ".")
       + (fixed ? " The shop shows them now." : "");
   });
+  // Storage cleanup: a two-step flow - the scan only REPORTS (dry-run), and
+  // the delete button appears once there is something safe to remove. The
+  // server re-validates every file against the live catalogue at apply time,
+  // so a photo saved between the scan and the click is never purged.
+  {
+    const scanBtn = $("#storage-cleanup-scan");
+    const applyBtn = $("#storage-cleanup-apply");
+    const out = $("#storage-cleanup-out");
+    if (scanBtn && applyBtn && out && !scanBtn.dataset.bound) {
+      scanBtn.dataset.bound = "1";
+      const call = (body) => window.JA_NET.api("api/admin/storage/cleanup", {
+        method: "POST", json: body || {}, queue: false, label: "Storage cleanup",
+      });
+      scanBtn.onclick = async () => {
+        scanBtn.disabled = true; applyBtn.hidden = true;
+        out.textContent = "Scanning every product, order, receipt and setting…";
+        try {
+          const d = await call({});
+          if (d && d.ok === false) throw new Error(d.error || "The scan failed.");
+          const n = Number(d.candidate_count || 0);
+          const mb = Number(d.freedMb || 0) || (Number(d.candidate_bytes || 0) / 1048576);
+          const dups = (d.duplicate_groups || []).length;
+          out.textContent = n
+            ? `${n} unused file(s) found (${mb.toFixed(1)} MB` + (dups ? `, ${dups} duplicate group(s)` : "") + `) out of ${Number(d.objects || 0)} stored. Files shown by a live product, order or the site itself are never touched.`
+            : `Nothing to clean: every file is still used (scanned ${Number(d.objects || 0)}, referenced ${Number(d.referenced || 0)}).`;
+          if (n) { applyBtn.hidden = false; applyBtn.textContent = `Delete ${n} unused file${n === 1 ? "" : "s"}`; }
+        } catch (e) {
+          out.textContent = "Failed: " + (e.message || "Check your connection and try again.");
+        } finally { scanBtn.disabled = false; }
+      };
+      applyBtn.onclick = async () => {
+        applyBtn.disabled = true;
+        out.textContent = "Deleting the unused files…";
+        try {
+          const d = await call({ apply: true });
+          if (d && d.ok === false) throw new Error((d.errors && d.errors[0]) || d.error || "The cleanup failed.");
+          const n = (d.deleted || []).length;
+          const mb = Number(d.freedMb || 0);
+          out.textContent = d && d.errors && d.errors.length
+            ? `Deleted ${n} file(s), freed ${mb.toFixed(1)} MB — but ${d.errors.length} file(s) could not be removed. Try again in a moment.`
+            : `Done: deleted ${n} file(s) and freed ${mb.toFixed(1)} MB of storage.`;
+          applyBtn.hidden = true;
+        } catch (e) {
+          out.textContent = "Failed: " + (e.message || "Check your connection and try again.");
+        } finally { applyBtn.disabled = false; }
+      };
+    }
+  }
   bindAction("#sync-github", "Syncing the catalogue backup to GitHub…", async () => {
     if (!window.JA_NET || !window.JA_NET.csrf) throw new Error("Sync is unavailable. Reload this page.");
     const token = await window.JA_NET.csrf();
@@ -2251,8 +2498,11 @@ function broadcastFeedFor(slot) {
 
 function broadcastScheduledFeedFor(slot) {
   const automatic = broadcastFeedFor(slot);
-  const eligible = broadcastEligibleProducts();
-  const byId = new Map(eligible.map((p) => [String(p.id), p]));
+  // Overrides may point at ANY catalogue row (an out-of-stock or hidden
+  // piece the owner deliberately chose), so resolve them against the full
+  // catalogue - only the AUTOMATIC rotation stays inside the eligible pool.
+  const catalogue = JA.products ? JA.products() : [];
+  const byId = new Map(catalogue.map((p) => [String(p && p.id), p]));
   const overrides = (bcOverrides[slot] || []).filter((row) => byId.has(String(row.id)));
   const manualIds = new Set(overrides.map((row) => String(row.id)));
   const used = new Set();
@@ -2339,30 +2589,178 @@ function broadcastFullText(p) {
   return lines.join("\n");
 }
 
-async function copyProductDetails(p) {
-  const text = broadcastFullText(p);
+
+/** Cover photo URL for a broadcast post (falls back to the placeholder). */
+function broadcastPhotoUrl(p) {
+  const raw = (p && (p.image || (Array.isArray(p.images) && p.images[0]))) || "";
+  return raw ? JA.asset(raw) : JA.asset("images/products/_placeholder.jpg");
+}
+
+/** Fetch one product photo as a PNG-ready blob (null when unreachable). */
+async function broadcastPhotoBlob(p) {
   try {
-    await navigator.clipboard.writeText(text);
-    JA.toast("Details copied — paste into your WhatsApp Channel.");
+    const res = await fetch(broadcastPhotoUrl(p), { credentials: "same-origin" });
+    if (!res.ok) return null;
+    return await res.blob();
+  } catch (e) { return null; }
+}
+
+/** Best-effort native copy of the selected products' photos (Chromium/Safari
+ *  support image ClipboardItems; Firefox and older browsers fall back to the
+ *  photo drawer, which always works). Returns how many photos were copied. */
+async function broadcastCopyPhotos(products) {
+  if (!navigator.clipboard || typeof ClipboardItem === "undefined" || !products.length) return 0;
+  const capped = products.slice(0, 10);
+  const blobs = (await Promise.all(capped.map((p) => broadcastPhotoBlob(p)))).filter(Boolean);
+  if (!blobs.length) return 0;
+  try {
+    await navigator.clipboard.write(blobs.map((blob) => new ClipboardItem({ [blob.type || "image/png"]: blob })));
+    return blobs.length;
   } catch (e) {
-    JA.toast("Could not copy automatically. Details: " + text);
+    if (blobs.length === 1) return 0;
+    try {
+      // Some browsers only accept a single image at a time.
+      await navigator.clipboard.write([new ClipboardItem({ [blobs[0].type || "image/png"]: blobs[0] })]);
+      return 1;
+    } catch (e2) { return 0; }
   }
 }
 
+/** The grid of downloadable photos for a selection. */
+function broadcastPhotosGridHTML(products) {
+  return products.map((p) => `<figure class="mk-bc-photo">
+    <img src="${esc(broadcastPhotoUrl(p))}" alt="${esc(broadcastDisplayName(p))}" loading="lazy" onerror="fallbackImg(event)" />
+    <figcaption>
+      <b>${esc(broadcastDisplayName(p))}</b>
+      <a class="btn btn-line" href="${esc(broadcastPhotoUrl(p))}" download target="_blank" rel="noopener">Download photo</a>
+    </figcaption>
+  </figure>`).join("");
+}
 
-function broadcastPickerResultsHTML(query) {
-  const term = String(query || "").trim().toLowerCase();
+/** Copy the caption for a selection AND extract its photos: the text lands
+ *  on the clipboard, the photos are best-effort copied natively and always
+ *  offered in a download drawer. Used by both "Copy Details" (one product)
+ *  and "Copy details for selected" (the batch), for custom picks and
+ *  automatic suggestions alike. */
+async function copyBroadcastSelection(products) {
+  const list = (products || []).filter(Boolean);
+  if (!list.length) { JA.toast("Select at least one product first."); return; }
+  const text = list.map(broadcastFullText).join("\n\n");
+  let textCopied = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    textCopied = true;
+    JA.toast(`Caption for ${list.length} product${list.length === 1 ? "" : "s"} copied.`);
+  } catch (e) {
+    JA.toast("Could not copy automatically. Details: " + text);
+  }
+  const photosCopied = await broadcastCopyPhotos(list);
+  if (photosCopied) {
+    JA.toast(photosCopied === 1
+      ? "Photo copied to the clipboard too — paste it with the caption."
+      : `${photosCopied} photos copied to the clipboard too — paste them with the caption.`);
+  }
+  // The drawer is the universal fallback: every photo, one tap to download.
+  openBroadcastPhotosDrawer(list);
+}
+
+function openBroadcastPhotosDrawer(products) {
+  const drawer = $("#mk-bc-photos");
+  if (!drawer) return;
+  const grid = drawer.querySelector(".mk-bc-photos-grid");
+  if (grid) grid.innerHTML = broadcastPhotosGridHTML(products);
+  const note = drawer.querySelector(".mk-bc-photos-note");
+  if (note) note.textContent = `The caption is already on your clipboard. These are the photos for the ${products.length} selected product${products.length === 1 ? "" : "s"} — download them (or copy one straight from the page) and attach them to the same WhatsApp Channel post.`;
+  drawer.hidden = false;
+}
+
+async function copyProductDetails(p) {
+  // One product, same extraction as the batch button: formatted caption on
+  // the clipboard plus its photo (native copy where supported, download
+  // drawer always).
+  await copyBroadcastSelection([p]);
+}
+
+
+function broadcastPickerStatus(p) {
+  // Small availability badges so the owner can tell at a glance whether a
+  // pick is ready to post (the rotation only suggests ready items, but ANY
+  // catalogue product may be chosen deliberately).
+  if (p && p.online === false) return { label: "Hidden", cls: "is-hidden" };
+  if (!broadcastInStock(p)) return { label: "Out of stock", cls: "is-oos" };
+  return { label: "In stock", cls: "is-in" };
+}
+
+function broadcastPickerMatches() {
+  // The picker searches the WHOLE catalogue (owner request 2026-10-01:
+  // "selecting ANY custom product"), not just today's rotation pool.
+  // Matches are ranked ready-to-post first (online + in stock), everything
+  // else after, so the top of the list is still the safest to post.
+  const term = String($("#mk-bc-picker-search")?.value || "").trim().toLowerCase();
   const category = String($("#mk-bc-picker-category")?.value || "");
-  // Manual picks stay inside the eligible feed: online and in stock only.
-  const products = broadcastEligibleProducts().filter((p) => {
-    const haystack = [p.name, p.nameFr, p.sku, p.category].join(" ").toLowerCase();
-    return (!term || haystack.includes(term)) && (!category || String(p.category || "") === category);
-  }).slice(0, 100);
-  if (!products.length) return `<p class="empty">No catalogue product matches that search.</p>`;
-  return products.map((p) => `<button type="button" class="mk-bc-picker-item" data-bc-choose="${esc(String(p.id))}">
-    <img src="${esc(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="" onerror="fallbackImg(event)" />
-    <span><b>${esc(broadcastDisplayName(p))}</b><small>${esc(p.sku || p.id || "")} · ${broadcastPriceLine(p)}</small></span>
-  </button>`).join("");
+  const all = JA.products ? JA.products() : [];
+  const matches = all.filter((p) => {
+    if (!p || !p.id) return false;
+    if (category && String(p.category || "") !== category) return false;
+    if (!term) return true;
+    const haystack = [p.name, p.nameFr, p.sku, p.category,
+      JA.categoryName ? JA.categoryName(p.category) : ""].join(" ").toLowerCase();
+    return haystack.includes(term);
+  });
+  const rank = (p) => (p.online !== false && broadcastInStock(p) ? 0 : 1);
+  return matches.sort((a, b) => rank(a) - rank(b)
+    || String(a.name || "").localeCompare(String(b.name || "")));
+}
+
+function broadcastPickerItemHTML(p) {
+  const status = broadcastPickerStatus(p);
+  return `<button type="button" class="mk-bc-picker-item" data-bc-choose="${esc(String(p.id))}">
+    <img src="${esc(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="" loading="lazy" onerror="fallbackImg(event)" />
+    <span><b>${esc(broadcastDisplayName(p))}</b><small>${esc(p.sku || p.id || "")} · ${esc(JA.categoryName ? JA.categoryName(p.category) : (p.category || ""))} · ${broadcastPriceLine(p)}</small><em class="mk-bc-status ${status.cls}">${status.label}</em></span>
+  </button>`;
+}
+
+// Smooth scroll pagination: only the first page of matches is rendered, and
+// the next page is APPENDED as the admin scrolls near the bottom (or taps
+// "Show more") - a 300-product catalogue never paints 300 rows at once.
+const BC_PICKER_PAGE_SIZE = 24;
+let bcPickerMatches = [];
+let bcPickerShown = 0;
+
+function broadcastPickerResultsHTML() {
+  if (!bcPickerMatches.length) return `<p class="empty">No catalogue product matches that search.</p>`;
+  return bcPickerMatches.slice(0, bcPickerShown).map(broadcastPickerItemHTML).join("")
+    + broadcastPickerMoreHTML();
+}
+
+function broadcastPickerMoreHTML() {
+  if (!bcPickerMatches.length || bcPickerShown >= bcPickerMatches.length) return "";
+  return `<div class="mk-bc-picker-more" data-bc-picker-more>
+    <span class="mk-bc-picker-count">Showing ${bcPickerShown} of ${bcPickerMatches.length}</span>
+    <button type="button" class="btn btn-line" data-bc-picker-more-btn>Show more</button>
+  </div>`;
+}
+
+function broadcastPickerRefresh(reset) {
+  if (reset) { bcPickerMatches = broadcastPickerMatches(); bcPickerShown = BC_PICKER_PAGE_SIZE; }
+  if (bcPickerShown > bcPickerMatches.length) bcPickerShown = bcPickerMatches.length;
+  const results = $("#mk-bc-picker-results");
+  if (results) results.innerHTML = broadcastPickerResultsHTML();
+}
+
+function broadcastPickerShowMore() {
+  if (bcPickerShown >= bcPickerMatches.length) return;
+  const results = $("#mk-bc-picker-results");
+  if (!results) { broadcastPickerRefresh(false); return; }
+  // Append the next page instead of re-rendering: the list keeps its scroll
+  // position, so loading more while scrolling is seamless.
+  const from = bcPickerShown;
+  bcPickerShown = Math.min(bcPickerShown + BC_PICKER_PAGE_SIZE, bcPickerMatches.length);
+  const more = results.querySelector("[data-bc-picker-more]");
+  if (more) more.remove();
+  results.insertAdjacentHTML("beforeend",
+    bcPickerMatches.slice(from, bcPickerShown).map(broadcastPickerItemHTML).join("")
+    + broadcastPickerMoreHTML());
 }
 
 function closeBroadcastPicker() {
@@ -2373,8 +2771,13 @@ function closeBroadcastPicker() {
 
 function chooseBroadcastProduct(id) {
   const productId = String(id || "");
-  const eligible = broadcastEligibleProducts();
-  if (!eligible.some((p) => String(p.id) === productId)) return;
+  // ANY catalogue product may be pinned into a batch (owner request
+  // 2026-10-01); the availability badges in the picker make the state
+  // obvious, and a not-ready pick is confirmed with a note rather than
+  // silently refused.
+  const catalogue = JA.products ? JA.products() : [];
+  const chosenProduct = catalogue.find((p) => p && String(p.id) === productId);
+  if (!chosenProduct) return;
   const overrides = bcOverrides[bcSlot];
   const visible = broadcastScheduledFeedFor(bcSlot);
   const current = bcPickerTarget ? visible.find((p) => String(p.id) === bcPickerTarget) : null;
@@ -2403,7 +2806,10 @@ function chooseBroadcastProduct(id) {
   saveBroadcastOverrides();
   closeBroadcastPicker();
   paintBroadcastFeed();
-  JA.toast(current ? "Broadcast item swapped." : "Custom product added to this batch.");
+  const status = broadcastPickerStatus(chosenProduct);
+  JA.toast(status.cls === "is-in"
+    ? (current ? "Broadcast item swapped." : "Custom product added to this batch.")
+    : `${current ? "Broadcast item swapped" : "Custom product added"} — note: ${status.label.toLowerCase()}.`);
 }
 
 function openBroadcastPicker(targetId) {
@@ -2414,9 +2820,10 @@ function openBroadcastPicker(targetId) {
   bcPickerTarget = targetId ? String(targetId) : null;
   if (title) title.textContent = bcPickerTarget ? "Swap item" : "Select custom product";
   search.value = "";
+  const cat = $("#mk-bc-picker-category");
+  if (cat) cat.value = "";
   picker.hidden = false;
-  const results = $("#mk-bc-picker-results");
-  if (results) results.innerHTML = broadcastPickerResultsHTML("");
+  broadcastPickerRefresh(true);
   setTimeout(() => search.focus(), 0);
 }
 
@@ -2446,8 +2853,17 @@ function broadcastFeedCardHTML() {
     <div class="mk-bc-picker" id="mk-bc-picker" hidden role="dialog" aria-modal="true" aria-labelledby="mk-bc-picker-title">
       <div class="mk-bc-picker-panel">
         <div class="mk-bc-picker-head"><h3 id="mk-bc-picker-title">Select custom product</h3><button type="button" class="au-link-btn" id="mk-bc-picker-close" aria-label="Close product picker">Close</button></div>
-        <div class="mk-bc-picker-filters"><input type="search" id="mk-bc-picker-search" placeholder="Search by product name or SKU…" autocomplete="off" /><select id="mk-bc-picker-category" aria-label="Filter products by category"><option value="">All Categories</option>${[...new Set((JA.products ? JA.products() : []).map((p) => p.category).filter(Boolean))].sort().map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></div>
-        <div class="mk-bc-picker-results" id="mk-bc-picker-results"></div>
+        <div class="mk-bc-picker-filters"><input type="search" id="mk-bc-picker-search" placeholder="Search by title, SKU or category…" autocomplete="off" /><select id="mk-bc-picker-category" aria-label="Filter products by category"><option value="">All Categories</option>${[...new Set((JA.products ? JA.products() : []).map((p) => p.category).filter(Boolean))].sort().map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></div>
+        <p class="admin-note mk-bc-picker-hint">Every catalogue product is listed — ready-to-post items first. Scroll for more; the list loads as you scroll.</p>
+        <div class="mk-bc-picker-results" id="mk-bc-picker-results" tabindex="0"></div>
+      </div>
+    </div>
+    <div class="mk-bc-photos" id="mk-bc-photos" hidden role="dialog" aria-modal="true" aria-labelledby="mk-bc-photos-title">
+      <div class="mk-bc-picker-panel mk-bc-photos-panel">
+        <div class="mk-bc-picker-head"><h3 id="mk-bc-photos-title">Photos for your post</h3><button type="button" class="au-link-btn" id="mk-bc-photos-close" aria-label="Close photos drawer">Close</button></div>
+        <p class="admin-note mk-bc-photos-note">The caption is already on your clipboard.</p>
+        <div class="mk-bc-photos-grid"></div>
+        <div class="mk-bc-photos-actions"><button type="button" class="btn" id="mk-bc-photos-download-all">Download all photos</button></div>
       </div>
     </div>
     <div class="adx-bulkbar" id="mk-bc-bulk" hidden>
@@ -2542,15 +2958,42 @@ function bindBroadcastFeed() {
   $("#mk-bc-picker")?.addEventListener("click", (event) => {
     if (event.target.id === "mk-bc-picker") closeBroadcastPicker();
   });
-  const refreshPicker = () => {
-    const results = $("#mk-bc-picker-results");
-    if (results) results.innerHTML = broadcastPickerResultsHTML($("#mk-bc-picker-search")?.value || "");
-  };
+  // Searchable picker: filter by title, SKU or category; the result list
+  // renders one page at a time and appends more as the admin scrolls.
+  const refreshPicker = () => broadcastPickerRefresh(true);
   $("#mk-bc-picker-search")?.addEventListener("input", refreshPicker);
   $("#mk-bc-picker-category")?.addEventListener("change", refreshPicker);
   $("#mk-bc-picker-results")?.addEventListener("click", (event) => {
     const choice = event.target.closest("[data-bc-choose]");
-    if (choice) chooseBroadcastProduct(choice.dataset.bcChoose);
+    if (choice) { chooseBroadcastProduct(choice.dataset.bcChoose); return; }
+    if (event.target.closest("[data-bc-picker-more-btn]")) broadcastPickerShowMore();
+  });
+  // Smooth scroll pagination: nearing the bottom of the results appends the
+  // next page in place (throttled to one frame at a time).
+  const pickerResults = $("#mk-bc-picker-results");
+  if (pickerResults) {
+    let pickerScrollBusy = false;
+    pickerResults.addEventListener("scroll", () => {
+      if (pickerScrollBusy) return;
+      pickerScrollBusy = true;
+      requestAnimationFrame(() => {
+        pickerScrollBusy = false;
+        const nearBottom = pickerResults.scrollTop + pickerResults.clientHeight
+          >= pickerResults.scrollHeight - 180;
+        if (nearBottom) broadcastPickerShowMore();
+      });
+    }, { passive: true });
+  }
+  // Photos drawer: close on the button or the backdrop.
+  $("#mk-bc-photos-close")?.addEventListener("click", () => { const d = $("#mk-bc-photos"); if (d) d.hidden = true; });
+  $("#mk-bc-photos")?.addEventListener("click", (event) => {
+    if (event.target.id === "mk-bc-photos") event.currentTarget.hidden = true;
+  });
+  $("#mk-bc-photos-download-all")?.addEventListener("click", () => {
+    document.querySelectorAll("#mk-bc-photos .mk-bc-photo a[download]").forEach((link, i) => {
+      setTimeout(() => link.click(), i * 350);   // browsers throttle simultaneous downloads
+    });
+    JA.toast("Downloading the photos — attach them to the same post.");
   });
   card.querySelectorAll("[data-bc-slot]").forEach((btn) => {
     btn.onclick = () => {
@@ -2568,16 +3011,12 @@ function bindBroadcastFeed() {
   });
   $("#mk-bc-clear")?.addEventListener("click", () => { bcSelected[bcSlot].clear(); paintBroadcastFeed(); });
   $("#mk-bc-copy-batch")?.addEventListener("click", async () => {
-    const eligible = broadcastEligibleProducts();
-    const chosen = eligible.filter((p) => bcSelected[bcSlot].has(String(p.id)));
+    // Whichever items the admin selected - custom picks (including
+    // deliberately chosen out-of-stock pieces) or batch suggestions.
+    const catalogue = JA.products ? JA.products() : [];
+    const chosen = catalogue.filter((p) => p && bcSelected[bcSlot].has(String(p.id)));
     if (!chosen.length) { JA.toast("Select at least one product first."); return; }
-    const text = chosen.map(broadcastFullText).join("\n\n");
-    try {
-      await navigator.clipboard.writeText(text);
-      JA.toast(`Details for ${chosen.length} product${chosen.length === 1 ? "" : "s"} copied.`);
-    } catch (e) {
-      JA.toast("Could not copy automatically. Details: " + text);
-    }
+    await copyBroadcastSelection(chosen);
   });
 }
 async function fillMarketing() {
@@ -2908,7 +3347,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=171" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=178" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -2999,12 +3438,11 @@ function paintDesk(tab = "analytics") {
         return;
       }
       JA.toast("Deleted from the website.");
-      editingId = null;
-      paintDesk("products");
+      restoreProductsReturn();
     });
   }
-  $("#cancel-edit")?.addEventListener("click", () => { editingId = null; paintDesk("products"); });
-  $("#add-product")?.addEventListener("click", () => { editingId = "new"; paintDesk("products"); });
+  $("#cancel-edit")?.addEventListener("click", () => { restoreProductsReturn(); });
+  $("#add-product")?.addEventListener("click", () => { rememberProductsReturn(); editingId = "new"; paintDesk("products"); });
   bindMedia(); bindOptions(); bindCategories(); bindCfaPreview(); bindReviewsAdmin(existing ? existing.id : "");
 
   if (tab === "products" && !editingId) {
@@ -3264,7 +3702,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=171", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=178", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -4386,6 +4824,39 @@ function bindSiteBranding() {
   });
 })();
 
+/** Apply a ?return_url=/admin/products?category=bags&page=2 deep link (or the
+ *  loose un-encoded spelling) so a reload / shared link reopens the exact
+ *  products list position. Returns the requested desk, if any. */
+function applyAdminDeepLink() {
+  let desk = "";
+  let state = {};
+  try {
+    const search = new URLSearchParams(window.location.search);
+    let target = search.get("return_url") || search.get("returnUrl") || "";
+    // Loose spelling: ?return_url=/admin/products?category=bags&page=2 - the
+    // inner "&" split off into sibling params. Re-attach any list-state
+    // siblings so the full position survives.
+    if (target && !target.includes("page") && search.get("page")) {
+      target += "&page=" + search.get("page");
+    }
+    if (target && !target.includes("category") && !target.includes("cat") && search.get("category")) {
+      target += "&category=" + search.get("category");
+    }
+    if (target && !target.includes("q=") && search.get("q")) {
+      target += "&q=" + search.get("q");
+    }
+    desk = search.get("desk") || search.get("tab") || "";
+    if (target) {
+      const parsed = productsStateFromUrl(target);
+      if (Object.keys(parsed).length) { state = parsed; desk = desk || "products"; }
+    } else if (desk === "products") {
+      state = productsStateFromUrl(window.location.search);
+    }
+  } catch (e) { return ""; }
+  if (Object.keys(state).length) applyProductsState(state);
+  return desk;
+}
+
 async function bootAdmin() {
   const root = document.getElementById("admin-root");
   if (root) root.innerHTML = `<div class="admin-live-loading" role="status" aria-live="polite"><div class="catalog-skeleton-head"></div><div class="catalog-skeleton-grid">${"<i></i>".repeat(6)}</div><strong>Loading live catalogue and stock…</strong></div>`;
@@ -4395,6 +4866,44 @@ async function bootAdmin() {
   JA.mountChrome();
   await (JA.loadServerCategories ? JA.loadServerCategories() : Promise.resolve());
   const ok = await JA.isAdmin();
-  if (ok) paintDesk(); else paintLogin();
+  if (ok) {
+    const desk = applyAdminDeepLink();
+    paintDesk(desk === "products" ? "products" : "analytics");
+    // A deep-linked products desk must show its filters, not just carry them.
+    if (desk === "products" && !editingId) {
+      const sel = document.getElementById("prod-cat");
+      if (sel && (dashCat || prodCatSel)) sel.value = dashCat || prodCatSel;
+    }
+  } else paintLogin();
 }
 document.addEventListener("DOMContentLoaded", bootAdmin);
+
+/* ================================================== fresh data on refocus
+ *
+ * The products list is fetched once at boot: writes made by ANOTHER admin
+ * (or any API integration) never appear in a tab that stays open - the
+ * desk keeps rendering a frozen catalogue until someone reloads. When the
+ * tab comes back to the foreground, quietly refetch it. Never while an
+ * editor is open (a repaint would discard the admin's in-progress edits -
+ * the save-time freshness guard covers that window), and throttled to one
+ * refetch per minute so a fidgety tab-switcher cannot hammer the API.
+ */
+let __lastCatalogRefetchAt = 0;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  if (editingId) return;                              // never repaint under an open editor
+  if (document.getElementById("login-form")) return;  // not signed in yet
+  const now = Date.now();
+  if (now - __lastCatalogRefetchAt < 60000) return;
+  __lastCatalogRefetchAt = now;
+  if (typeof JA.reloadCatalog !== "function") return;
+  const hadGrid = !!document.getElementById("prod-grid");
+  JA.reloadCatalog()
+    .then(() => {
+      // Re-render the products grid with the fresh rows, keeping the
+      // admin's current search / page / category exactly as they were.
+      if (hadGrid && !editingId) { renderProdGrid(); bindProdGridEvents(); }
+    })
+    .catch(() => {});
+});
+;

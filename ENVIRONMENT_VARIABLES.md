@@ -96,6 +96,45 @@ left exactly as they are (with a logged warning).
   above the owner's manually entered quantity. Reductions and out-of-stock
   are always applied regardless of this setting.
 
+### Price watch
+
+The watchdog also reads the supplier page's **prices** (JSON-LD offers,
+product JSON, `data-price` attributes) and remembers the last price seen per
+product/variant. When a supplier price **rises** it writes a
+`supplier_price_increased` warning to the admin's supplier-warning queue
+(drops are reported as `supplier_price_dropped`). The shop's own retail price
+is **never** rewritten by a supplier page — repricing stays the owner's
+decision.
+
+### The 2:00 AM nightly pass
+
+Once per day, after 2:00 AM in the owner's timezone, the scheduler runs a
+deep pass: every supplier-linked product is checked **exactly once**
+(regardless of day-time batching), followed by the **storage sweeper** that
+purges orphaned/duplicate upload media through the same protected plan as the
+Admin Portal's *Settings → Advanced settings → Storage cleanup* card (files a
+live product, order, receipt or the site still references are never touched;
+uploads younger than two days are protected; a failed reference scan aborts
+rather than guessing). `/healthz` reports the schedule and the last run under
+`background.nightly`. Hard-deleted product ids are skipped by every automated
+pass, so a deleted product can never be re-created by a sync.
+
+- `SUPPLIER_WATCHDOG_NIGHTLY` (default `1`) — set `0`/`off` to disable the
+  nightly pass entirely.
+- `SUPPLIER_WATCHDOG_NIGHTLY_HOUR` (default `2`) — the local hour the pass
+  becomes due (24h clock; `0` = midnight).
+- `SUPPLIER_WATCHDOG_NIGHTLY_TZ_OFFSET` (default `1`) — the owner's timezone
+  as an offset from UTC in hours (default `1` = West Africa Time). The
+  scheduler runs on UTC; this is what makes "2:00 AM" mean the owner's 2 AM.
+- `SUPPLIER_WATCHDOG_NIGHTLY_MAX` (default `400`) — upper bound on products
+  checked in one nightly pass.
+- `SUPPLIER_WATCHDOG_MIN_INTERVAL` (default `3600`) — how long a
+  supplier-linked product waits before a *day-time* tick may check it again.
+  The nightly pass always ignores it.
+- `STORAGE_SWEEPER_NIGHTLY` (default `1`) — set `0`/`off` to keep the nightly
+  supplier sweep but skip the automatic media purge (the admin card and the
+  CLI tool keep working either way).
+
 ## Analytics geolocation, bot filtering and crash reporting
 
 Visitor locations come from the CDN edge headers (`CF-IPCity` /
