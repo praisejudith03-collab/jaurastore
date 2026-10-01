@@ -76,7 +76,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # dynamic bulk-discount copy. A phone holding the v149 bundle from its
 # service-worker cache would keep leaking stock counts and stale prices, so
 # every shared asset ships under a fresh token.
-SHARED_TOKEN = "169"
+# Bumped to 170 for the image-replacement persistence release (owner incident
+# 2026-10-01): js/admin.js carries the stale-alias-safe save payload, the
+# upload-promise-aware Save and the identity-based tile swap, and js/store.js
+# syncs the image/image_url aliases on every upsert - a phone holding the
+# v169 bundle could still post a payload whose stale image_url silently
+# restored the previous product photo, so every shared asset ships v170.
+SHARED_TOKEN = "170"
 
 
 def _image_size(path):
