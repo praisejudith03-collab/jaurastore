@@ -200,7 +200,16 @@ fixed and verified live:
 * Polish: the customer Account page now re-renders from the server after
   a profile save (previously fields stayed stale until the next load);
   `mediaHTML` escapes the `data-ph` attribute and `opts.attrs` values
-  (defense-in-depth); Flask bumped 3.0.3 → 3.1.1.
+  (defense-in-depth); Flask bumped 3.0.3 → 3.1.1 and gunicorn 22.0.0 →
+  23.0.0 (closes the CVE-2024-6827 request-smuggling issue; every Procfile
+  flag re-validated).
+* **Functional escaping verification.** A Node-VM test now executes the
+  REAL `cardHTML` / `mediaHTML` from `js/store.js` against hostile product
+  data (a name carrying `<img onerror=…`, image URLs and placeholder paths
+  carrying quote-injection payloads — all storable, because the
+  server-side `sec.clean` strips tags but keeps quotes) and asserts the
+  rendered HTML carries no injectable attribute or script tag while the
+  card still renders correctly.
 
 ## Verification
 
@@ -229,7 +238,9 @@ fixed and verified live:
   honoured, development unchanged), and source pins for the editor
   freshness stash, the 409 local rollback, the focus refetch, the account
   re-render and the escaping on the product render paths.
-* Full suite: **1578 passed, 21 skipped** (was 1562).
+* Full suite: **1581 passed, 21 skipped** (was 1578) — including the
+  functional escaping VM test and a pin that the offline queue treats a
+  409 as permanent (never retried).
 * Live run (production-mode instance, catalog cache active — plus a
   testing-mode instance for the Supabase-backed upload/site-settings paths
   which are unreachable from the offline sandbox): **28/28 end-to-end checks

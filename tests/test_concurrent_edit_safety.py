@@ -279,6 +279,17 @@ def test_account_profile_save_rehydrates_the_whole_view():
     assert 'querySelector("[data-profile-msg]")' in then
 
 
+# --------------------------------------------------- net.js source pins
+
+def test_the_offline_queue_never_retries_a_conflict():
+    """The 409 guard relies on the request layer treating 4xx (except 429)
+    as PERMANENT: a conflict must reject the promise, never sit in the
+    outbox to be resent later."""
+    js = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
+    assert "r.status >= 500 || r.status === 429 || r.status === 0" in js
+    assert "if (err.retryable) return enqueue(job);" in js
+
+
 # --------------------------------------------------- api.py source pins
 
 def test_the_guard_is_opt_in_and_covers_every_save_surface():
