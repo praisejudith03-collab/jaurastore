@@ -276,6 +276,17 @@ def inject_product_meta(html_text, product):
 def create_app():
     app = Flask(__name__, static_folder=None)
 
+    # A production deployment without SECRET_KEY set used to boot silently
+    # with the repository-public development default - the key that signs
+    # admin session cookies. It now boots with a random per-boot secret
+    # (never forgeable) and this loud warning so the owner fixes the env.
+    if getattr(Config, "SECRET_KEY_IS_RANDOM_FALLBACK", False):
+        app.logger.critical(
+            "SECRET_KEY is not set: this deployment is signing sessions with a "
+            "random key generated at boot. Admins will have to sign in again "
+            "after every restart. Set a fixed SECRET_KEY in the host's "
+            "environment (e.g. `python3 -c \"import secrets; print(secrets.token_hex(32))\"`).")
+
     app.config.from_mapping(
         SECRET_KEY=Config.SECRET_KEY,
         ENV=Config.ENV,

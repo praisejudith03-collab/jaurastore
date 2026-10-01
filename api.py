@@ -2831,6 +2831,36 @@ def _product_save_response(payload):
     AND category menu), so both the storefront and /admin read fresh
     database rows on the very next request.
     """
+    # ---- last-write-wins guard -------------------------------------------
+    # The admin editor sends baseUpdatedAt = the row's updated_at as it was
+    # when the editor was OPENED. When the stored row has moved on since
+    # then (another admin, another tab, an API integration saved first),
+    # this save is built on a stale copy and would silently revert those
+    # changes - answer 409 instead and let the admin re-open the row.
+    # Opt-in: payloads without the token (API clients, imports, mirrors)
+    # keep the previous behaviour, so nothing that exists today breaks.
+    payload = dict(payload or {})
+    base_updated_at = str(payload.pop("baseUpdatedAt", "") or "").strip()
+    if base_updated_at:
+        pid = str(payload.get("id") or "").strip()
+        if pid:
+            try:
+                current = catalog_mod.product_index(include_hidden=True).get(pid)
+            except Exception:
+                current = None          # a failed read never blocks a save
+            if current is not None:
+                current_updated_at = str(current.get("updated_at") or "").strip()
+                if current_updated_at and current_updated_at != base_updated_at:
+                    try:
+                        audit(authmod.current_admin(), "product.save_conflict",
+                              f"id={pid} editor_seen={base_updated_at} "
+                              f"stored={current_updated_at}", _ip())
+                    except Exception:
+                        pass
+                    return jsonify(ok=False, conflict=True, error=(
+                        "This product was changed by someone else while you "
+                        "were editing. Your changes were NOT saved - close "
+                        "this editor, reopen the product and re-apply them.")), 409
     pid_probe = str((payload or {}).get("id") or "")[:80]
     name_probe = str((payload or {}).get("name") or "")[:120]
     try:

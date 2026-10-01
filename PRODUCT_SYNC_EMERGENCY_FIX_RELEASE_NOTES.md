@@ -166,7 +166,41 @@ pass:
   before the desk is painted.
 
 Asset cache token bumped `v173 → v176` (picker, stock toggle, login
-refetch).
+refetch), then `v176 → v177` (audit fixes).
+
+## 7. Whole-site audit — concurrent-edit safety, production secret key, stale-tab refresh
+
+A full-site audit (auth coverage on all 65 admin routes, CSRF, upload
+serving, catalogue write locking, security headers, escaping discipline)
+found the foundations sound, plus three real underlying defects — all now
+fixed and verified live:
+
+* **Last-write-wins data loss on product saves.** The admin editor saves
+  the ENTIRE product from the copy in the tab's memory, so a save built on
+  a stale copy silently reverted whatever changed in between — another
+  admin, another tab, or an API integration. The editor now ships the
+  row's `updated_at` as it was when the editor was OPENED
+  (`baseUpdatedAt`); when the stored row has moved on, the server answers
+  **409 Conflict** ("This product was changed by someone else while you
+  were editing…"), the editor stays open, the optimistic local copy is
+  rolled back (no phantom row, no outbox retry of a stale save), and the
+  rejected save is audit-logged as `product.save_conflict`. The guard is
+  opt-in: API clients, imports and mirrors that send no token keep the
+  previous behaviour.
+* **A production deployment without `SECRET_KEY` booted with a
+  repository-public key** — the key that signs admin session cookies. It
+  now falls back to a random per-boot secret (never forgeable; admins
+  simply sign in again after a restart) and the boot log says so loudly.
+  Development is unchanged; an explicitly set key always wins.
+* **An open admin tab never saw other admins' writes.** The catalogue is
+  fetched once at boot. When the tab regains focus it now quietly
+  refetches (throttled to once a minute, never under an open editor —
+  the 409 guard covers that window), keeping the list and its search /
+  page state honest.
+* Polish: the customer Account page now re-renders from the server after
+  a profile save (previously fields stayed stale until the next load);
+  `mediaHTML` escapes the `data-ph` attribute and `opts.attrs` values
+  (defense-in-depth); Flask bumped 3.0.3 → 3.1.1.
 
 ## Verification
 
@@ -188,7 +222,14 @@ refetch).
   explicit-0, out-toggle zeroing, the out→in restore stash (window-level,
   never `dataset.prev`, reset per editor open), the re-stock guard, the
   login refetch, and a full normalize round-trip field audit.
-* Full suite: **1562 passed, 21 skipped** (was 1564).
+* `tests/test_concurrent_edit_safety.py` — NEW, 16 tests: the 409 guard
+  (stale copy rejected + not applied + audited, current token accepted,
+  no-token saves unaffected, token never persisted), the production
+  SECRET_KEY fallback (random, never the public default, explicit keys
+  honoured, development unchanged), and source pins for the editor
+  freshness stash, the 409 local rollback, the focus refetch, the account
+  re-render and the escaping on the product render paths.
+* Full suite: **1578 passed, 21 skipped** (was 1562).
 * Live run (production-mode instance, catalog cache active — plus a
   testing-mode instance for the Supabase-backed upload/site-settings paths
   which are unreachable from the offline sandbox): **28/28 end-to-end checks
@@ -211,3 +252,11 @@ refetch).
   never-cacheable catalogue answer, the full field audit, and a fresh-login
   admin seeing the authenticated stock numbers (4 units, per-variant map)
   without a reload.
+* Live run #3 (after the audit fixes): **12/12 end-to-end checks in a
+  real browser** — fresh login stock numbers, a fresh editor save
+  committing without a false conflict, a stale editor save refused with
+  the conflict message (other admin's rename kept, refused edit not
+  applied, no phantom copy left in the tab, reopening shows the merged
+  version), a refocused tab picking up another admin's write without a
+  reload, the out-of-stock switch + PDP regression, return navigation,
+  and the refocus throttle.

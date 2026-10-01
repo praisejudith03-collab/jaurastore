@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=176" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=177" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -917,6 +917,11 @@ function productForm(p = {}) {
     `<option value="${c.id}" ${preCat === c.id ? "selected" : (p.category === c.id ? "selected" : "")}>${JA.escape(c.name)}</option>`
   ).join("");
   window.__editImages = productImages(p);
+  // Freshness token for the save-time conflict guard: the row's updated_at
+  // as it was when THIS editor was opened. If the stored row moves on
+  // before the admin saves (another admin, another tab, an API write), the
+  // server answers 409 instead of silently reverting those changes.
+  window.__editBaseUpdatedAt = String((p && p.updated_at) || "");
   // Per-editor-session memory of the variant quantities that were live
   // before the admin last flipped "Out of stock". It lives on window (not
   // on the inputs) because refreshOptionChips repaints the variant boxes
@@ -1148,6 +1153,9 @@ async function handleProductSubmit(e, existing) {
   const savedCategory = String(fd.get("category") || "").trim();
   const res = await JA.upsertProduct({
       ...(existing || {}),
+      // opt-in freshness token (see productForm); stripped from the local
+      // copy by upsertProduct and never persisted by catalog.normalize
+      baseUpdatedAt: window.__editBaseUpdatedAt || "",
       id,
       sku: fd.get("sku") || existing?.sku || ("JAU-" + Date.now().toString(36).toUpperCase().slice(-6)),
       slug: existing?.slug || slugify(name) || id,
@@ -3291,7 +3299,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=176" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=177" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3646,7 +3654,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=176", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=177", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -4821,4 +4829,33 @@ async function bootAdmin() {
   } else paintLogin();
 }
 document.addEventListener("DOMContentLoaded", bootAdmin);
+
+/* ================================================== fresh data on refocus
+ *
+ * The products list is fetched once at boot: writes made by ANOTHER admin
+ * (or any API integration) never appear in a tab that stays open - the
+ * desk keeps rendering a frozen catalogue until someone reloads. When the
+ * tab comes back to the foreground, quietly refetch it. Never while an
+ * editor is open (a repaint would discard the admin's in-progress edits -
+ * the save-time freshness guard covers that window), and throttled to one
+ * refetch per minute so a fidgety tab-switcher cannot hammer the API.
+ */
+let __lastCatalogRefetchAt = 0;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  if (editingId) return;                              // never repaint under an open editor
+  if (document.getElementById("login-form")) return;  // not signed in yet
+  const now = Date.now();
+  if (now - __lastCatalogRefetchAt < 60000) return;
+  __lastCatalogRefetchAt = now;
+  if (typeof JA.reloadCatalog !== "function") return;
+  const hadGrid = !!document.getElementById("prod-grid");
+  JA.reloadCatalog()
+    .then(() => {
+      // Re-render the products grid with the fresh rows, keeping the
+      // admin's current search / page / category exactly as they were.
+      if (hadGrid && !editingId) { renderProdGrid(); bindProdGridEvents(); }
+    })
+    .catch(() => {});
+});
 ;

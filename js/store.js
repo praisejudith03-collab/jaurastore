@@ -1651,7 +1651,13 @@ const JA = (() => {
       next.compareCfa = Number(next.compareNgn) > 0 ? toCfa(next.compareNgn) : null;
     }
     // 1. show it immediately, 2. push it to the server (queued if offline)
+    // The editor's freshness token rides ONLY on the request - it must never
+    // live in the local copy, or a later outbox retry would carry a stale
+    // token forever.
+    const baseUpdatedAt = String(next.baseUpdatedAt || "").trim();
+    delete next.baseUpdatedAt;
     const custom = read(KEYS.custom, []);
+    const prevCustom = custom.slice();
     const i = custom.findIndex((x) => x.id === next.id);
     if (i >= 0) custom[i] = next;
     else custom.unshift(next);
@@ -1660,7 +1666,7 @@ const JA = (() => {
     if (!window.JA_NET) return Promise.resolve({ ok: false, offline: true });
     return window.JA_NET.api("api/admin/products", {
       method: "POST",
-      json: { product: next },
+      json: { product: baseUpdatedAt ? Object.assign({}, next, { baseUpdatedAt: baseUpdatedAt }) : next },
       queue: true,
       label: "Product",
       onDone: (data) => { if (data && data.product) applyServerProduct(data.product); },
@@ -1687,6 +1693,18 @@ const JA = (() => {
     })
       .catch((err) => {
         if (err && err.status === 401) { toast("Session expired — sign in again."); return { ok: false, error: err.message }; }
+        if (err && err.status === 409) {
+          // A freshness conflict is PERMANENT for this payload: retrying the
+          // same stale copy can never succeed. Roll the optimistic local
+          // edit back too, or the tab would keep showing a version the
+          // server rejected (and a later outbox flush would resend it).
+          write(KEYS.custom, prevCustom);
+          clearPending(next.id);
+          const cmsg = (err && (err.error || err.message))
+            || "This product was changed by someone else while you were editing. Your changes were NOT saved.";
+          toast(cmsg);
+          return { ok: false, conflict: true, error: cmsg };
+        }
         const msg = err && err.error ? err.error : "Could not save the product. No changes are live.";
         toast(msg);
         return { ok: false, error: msg };
@@ -2295,7 +2313,7 @@ const JA = (() => {
     const kind = mediaKind(src);
     const assetSrc = asset(src);
     const cls = opts.cls ? ` class="${opts.cls}"` : "";
-    const extra = Object.keys(opts.attrs || {}).map((k) => `${k}="${opts.attrs[k]}"`).join(" ");
+    const extra = Object.keys(opts.attrs || {}).map((k) => `${k}="${escape(opts.attrs[k])}"`).join(" ");
     const attrs = extra ? " " + extra : "";
     if (kind === "video") {
       return `<video src="${escape(assetSrc)}"${cls} muted loop playsinline preload="metadata"${attrs}></video>`;
@@ -2312,7 +2330,7 @@ const JA = (() => {
     const lazy = opts.eager
       ? ' loading="eager" fetchpriority="high"'
       : ' loading="lazy" fetchpriority="low"';
-    const img = `<img src="${escape(assetSrc)}" alt="${escape(opts.alt || "")}"${cls} data-ph="${ph}" width="400" height="400"${onErr}${lazy} decoding="async"${attrs} />`;
+    const img = `<img src="${escape(assetSrc)}" alt="${escape(opts.alt || "")}"${cls} data-ph="${escape(ph)}" width="400" height="400"${onErr}${lazy} decoding="async"${attrs} />`;
     if (opts.full) return img;
     const thumb = thumbFor(assetSrc);
     if (!thumb) return img;
@@ -2568,8 +2586,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=176";
-        const FLYER = "images/brand/logo-flyer.jpg?v=176";
+        const LOGO = "images/brand/logo.jpg?v=177";
+        const FLYER = "images/brand/logo-flyer.jpg?v=177";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2765,7 +2783,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=176" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=177" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3063,7 +3081,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=176" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=177" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3199,7 +3217,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=176", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=177", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3233,7 +3251,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=176";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=177";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3292,7 +3310,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=176");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=177");
     document.title = title;
     [
       ["name", "description", description],

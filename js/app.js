@@ -67,8 +67,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=176";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=176";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=177";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=177";
 }
 
 function renderCategories() {
@@ -2799,7 +2799,16 @@ function paintAccountHome(root, me, orders) {
       name: fd.get("name"), email: fd.get("email"), phone: fd.get("phone"),
       country: fd.get("country"), city: fd.get("city"), delivery_address: fd.get("delivery_address"),
       preferred_currency: fd.get("preferred_currency"),
-    } }).then((d) => accountMsg(msg, t("account.saved"), false))
+    } }).then((d) => {
+      // Rehydrate the WHOLE account view from the server, not just the
+      // fields this form owns: the old flow left every other rendered
+      // value (and any other admin-normalized field) stale on screen
+      // until the next full page load.
+      return Promise.resolve(renderAccount()).then(() => {
+        const freshMsg = root.querySelector("[data-profile-msg]") || msg;
+        accountMsg(freshMsg, t("account.saved"), false);
+      });
+    })
       .catch((err) => accountMsg(msg, (err && err.data && err.data.error) || err.message, true));
   });
   root.querySelector("[data-account-password]")?.addEventListener("submit", (e) => {
