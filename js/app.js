@@ -2,7 +2,7 @@ function param(name) {
   return new URLSearchParams(location.search).get(name);
 }
 
-function compressImage(file, max = 1400, quality = 0.82, targetBytes = 950 * 1024) {
+function compressImage(file, max = 1280, quality = 0.82, targetBytes = 900 * 1024) {
   return new Promise((resolve, reject) => {
     if (!file) {
       reject(new Error("Please upload an image screenshot."));
@@ -67,8 +67,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=168";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=168";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=169";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=169";
 }
 
 function renderCategories() {
@@ -2311,7 +2311,7 @@ function renderCheckout() {
     // A PDF cannot be drawn on a canvas, and shrinking it would mean the shop
     // no longer holds the customer's real receipt - send it untouched.
     if (isPdf(file)) {
-      if (file.size > 16 * 1024 * 1024) {
+      if (file.size > 24 * 1024 * 1024) {
         proofFailed = true;
         showProofUploadFailure(form, RECEIPT_UPLOAD_FAILED_MESSAGE);
         return;

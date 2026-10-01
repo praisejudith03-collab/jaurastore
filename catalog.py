@@ -95,11 +95,9 @@ BASE_FIELDS = (
     "optionSupplierSku", "optionSku", "reviews",
 )
 
-# Historical constant, kept only for backward-compatible imports. There is no
-# automated supplier discovery/stock-sync worker any more (owner directive
-# 2026-09-30) - supplierId/supplierSku/optionSupplierSku are plain,
-# owner-entered reference fields that nothing in this codebase reads to
-# guess a match or mirror stock automatically.
+# Historical constant, kept for backward-compatible imports. Supplier URLs are
+# owner-entered, but the in-process supplier_watchdog can now read those URLs
+# in bounded batches and mirror matched variant availability.
 KNOWN_SUPPLIERS = ("splendall",)
 
 
@@ -713,18 +711,18 @@ def normalize(product):
         # product links / order lines / reviews keep resolving. See
         # product_index().
         "legacyId": _clean_legacy_id(product.get("legacyId"), pid),
-        # Plain, owner-entered supplier reference fields. Nothing automated
-        # reads or writes these - there is no background discovery/sync
-        # worker (owner directive 2026-09-30), so a link can never be
-        # silently guessed, mirrored or reset back to blank.
+        # Plain, owner-entered supplier reference fields. The consolidated
+        # in-process supplier watchdog may read a URL here to mirror variant
+        # availability; it never guesses or overwrites the URL itself.
         "supplierId": sec.clean(
             product.get("supplierId") or product.get("supplier_id"), 40).lower(),
         "supplierSku": sec.clean(
             product.get("supplierSku") or product.get("supplier_sku")
             or product.get("supplierUrl") or product.get("supplier_url")
             or product.get("supplierURL"), 500),
-        # Per-option supplier reference links (component -> URL), manual and
-        # informational only; no automated supplier sync reads them.
+        # Per-option supplier reference links (component -> URL). The
+        # in-process supplier watchdog may use them to augment product-level
+        # variant matching; blank entries are left alone.
         "optionSupplierSku": _clean_option_supplier_sku(
             product.get("optionSupplierSku") or product.get("option_supplier_sku")
             or product.get("optionSupplierUrls") or product.get("option_supplier_urls")
@@ -917,9 +915,9 @@ def _clean_option_supplier_sku(raw):
     """Per-option supplier reference links, e.g. {"Serum":
     "https://supplier.example/serum", "Shampoo": "https://..."}. Each variant
     option (a distinct component such as Serum / Shampoo / Conditioner) can
-    carry its own plain, owner-entered reference URL. Purely informational -
-    nothing reads or writes it automatically. Blank values are dropped so an
-    unlinked option is simply absent."""
+    carry its own plain, owner-entered reference URL. The in-process supplier
+    watchdog can read these links for stock matching, but blank values are
+    dropped so an unlinked option is simply absent."""
     import json
     import security as sec
     if isinstance(raw, str):

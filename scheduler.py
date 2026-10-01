@@ -1,47 +1,39 @@
-"""In-process scheduler for the midnight backup and catalog maintenance.
+"""In-process maintenance scheduler for the single Render web service.
 
-Two isolated daemon workers, each ticking every 5 minutes:
-  * backup.run() — the first tick on or after midnight backs up all
-    products and orders to GitHub (once per calendar day);
-  * catalog.repair_dead_photos() — once a day, re-point a product whose
-    uploaded photo is missing from the bucket at one that still exists.
+Option-1 free-tier architecture: there are no Render background worker services.
+The web dyno starts one lightweight daemon thread named ``jaurastore-background``
+that runs the old maintenance job, the abandoned-cart reminders, and the
+supplier stock watchdog in bounded batches. This keeps instance-hours at one
+web service only and avoids the duplicated RAM footprint of separate workers.
 
-The abandoned-cart worker is isolated from catalog/backup work, so a slow
-maintenance task cannot delay reminders. Started from create_app(); never
-started twice, never under pytest.
-
-Crash tracing
--------------
-Every step of every tick runs inside observability.record_failure(), so a
-failure is stored with its exception type, stack trace, timestamp, the
-worker's memory usage and the payload id it was working on - locally in
-`job_failures`, mirrored to Supabase and dispatched to GitHub Actions.
-The watchdog's "background scheduler workers are not healthy" can then be
-traced to the actual exception instead of guessed at.
-
-Both loops are also self-healing: health_snapshot() reports whether each
-named thread is alive, and start()/ensure_alive() restart a thread that
-died so the watchdog's liveness check describes a worker that is really
-running.
+Every step is isolated with observability.record_failure(), so a failing email,
+backup, supplier page or storage probe is logged and cannot crash the Flask
+process. Work is paginated/bounded; each tick releases transient memory before
+sleeping.
 """
 import datetime, gc, os, threading, time
 
 import observability
 
 TICK_SECONDS = 300
-# One tick never processes more than this many reminders, and never holds
-# more than one page of rows in memory. Both ceilings exist so the worker's
-# resident memory stays far below the 50MB budget that used to be blown by
-# "SELECT everything" batches (the cause of scheduler.worker_died).
+# One tick never processes more than this many reminders, and never holds more
+# than one page of rows in memory.
 REMINDER_PAGE_SIZE = 20
 REMINDER_MAX_PER_TICK = 200
-MAINTENANCE_THREAD = "jaura-maintenance"
-REMINDERS_THREAD = "jaura-abandoned-carts"
+SUPPLIER_PAGE_SIZE = int(os.environ.get("SUPPLIER_WATCHDOG_BATCH", "8") or 8)
+
+# Compatibility names kept for health/tests/admin copy; they now refer to the
+# same in-process consolidated loop instead of separate Render worker services.
+BACKGROUND_THREAD = "jaurastore-background"
+MAINTENANCE_THREAD = BACKGROUND_THREAD
+REMINDERS_THREAD = BACKGROUND_THREAD
+
 _started = threading.Event()
 _start_lock = threading.Lock()
 _health = {
     "maintenanceLastRun": "",
     "remindersLastRun": "",
+    "supplierLastRun": "",
     "lastError": "",
     "lastErrorAt": "",
     "lastErrorJob": "",
@@ -82,15 +74,14 @@ def _keep_alive(logger=None):
 
     Guarded by KEEP_ALIVE (default: on when SITE_ORIGIN is set). A short
     timeout plus a catch-all try/except mean this can never crash the
-    scheduler. Skipped completely under pytest (FLASK_ENV=testing) so the
-    test suite never makes real network calls.
+    scheduler. Skipped completely under pytest (FLASK_ENV=testing) so the test
+    suite never makes real network calls.
     """
     env = os.environ.get("FLASK_ENV", "")
     if env == "testing":                          # pragma: no cover
         return
     site_origin = os.environ.get("SITE_ORIGIN", "").strip().rstrip("/")
     raw = os.environ.get("KEEP_ALIVE", "").strip().lower()
-    # Default: keep-alive on only when a public URL is configured.
     enabled = site_origin and (raw == "" or raw in ("1", "true", "yes", "on"))
     if not site_origin or not enabled:
         return
@@ -105,11 +96,6 @@ def _keep_alive(logger=None):
         if logger: logger.warning("keep-alive skipped: %s", exc)
 
 
-# Photo repair runs at most once a day: it walks the live catalogue and asks
-# the storage bucket whether each product's own uploaded photo still exists,
-# so a photo that went missing is swapped for one that works (and saved) long
-# before it can annoy a shopper for weeks. Voluntarily bounded - never a
-# catalogue-wide scan on every tick.
 _PHOTO_REPAIR_PER_RUN = 60
 _last_photo_repair = ""
 
@@ -146,44 +132,40 @@ def _remirror(logger=None):
 
 
 def _persist_counters(logger=None):
-    """Push the lifetime analytics counters to Supabase every tick.
-
-    Without this the odometer only reaches durable storage when a request
-    happens to fire it, and a quiet hour before a deploy loses the tail.
-    """
+    """Push lifetime analytics counters to Supabase every tick."""
     import analytics as analytics_mod
     analytics_mod.persist_counters()
 
 
-def _tick(logger=None):
+def _supplier_watchdog(logger=None):
+    """Run one bounded supplier-stock page in the web service process."""
+    import supplier_watchdog
+    result = supplier_watchdog.tick(limit=SUPPLIER_PAGE_SIZE, logger=logger)
+    _health["supplierLastRun"] = result.get("at") or _utc_now()
+    return result
+
+
+def _maintenance_tick(logger=None):
     _step("scheduler.keep_alive", lambda: _keep_alive(logger), logger)
     _step("scheduler.daily_backup", lambda: _run_backup(logger), logger)
     _step("scheduler.remirror_strays", lambda: _remirror(logger), logger)
     _step("scheduler.repair_photos", lambda: _repair_photos(logger), logger)
     _step("scheduler.persist_counters", lambda: _persist_counters(logger), logger)
+    _step("supplier.watchdog", lambda: _supplier_watchdog(logger), logger)
+    _health["maintenanceLastRun"] = _utc_now()
 
 
-def _loop(logger=None):
-    """Maintenance loop; a failed tick is traced and never kills the thread."""
-    while True:
-        try:
-            _tick(logger)
-            _health["maintenanceLastRun"] = _utc_now()
-            _release_memory(MAINTENANCE_THREAD, logger)
-        except Exception as exc:                  # pragma: no cover
-            _note_failure("scheduler.maintenance_tick", exc, logger=logger)
-        time.sleep(TICK_SECONDS)
+# Backwards-compatible test helper name.
+def _tick(logger=None):
+    _maintenance_tick(logger)
 
 
 def _abandoned_tick(logger=None, attempts=3):
-    """Run abandoned-cart delivery independently with bounded retries.
+    """Run abandoned-cart delivery with bounded retries.
 
     Work is paginated inside abandoned.send_due_reminders (one small page of
-    rows in memory at a time) and every individual send is try/except-ed
-    there, so one bad recipient can neither stop the queue nor kill the
-    worker. A failing attempt is recorded as a crash report (with traceback
-    and attempt number) so a downed notification pipeline is visible rather
-    than merely quiet.
+    rows in memory at a time) and every individual send is try/except-ed there,
+    so one bad recipient can neither stop the queue nor kill the worker.
     """
     import abandoned
     result = {"sent": 0, "failed": 0}
@@ -194,8 +176,6 @@ def _abandoned_tick(logger=None, attempts=3):
                 result = abandoned.send_due_reminders(
                     limit=REMINDER_MAX_PER_TICK, page_size=REMINDER_PAGE_SIZE)
             except TypeError:
-                # A sender without the pagination keyword (older build or a
-                # test double) still runs with its own bounded default.
                 result = abandoned.send_due_reminders(limit=REMINDER_PAGE_SIZE)
             total_sent += int(result.get("sent") or 0)
         except Exception as exc:                  # pragma: no cover - traced
@@ -204,24 +184,17 @@ def _abandoned_tick(logger=None, attempts=3):
             result = {"sent": 0, "failed": 1}
         if not result.get("failed") or attempt + 1 >= attempts:
             break
-        # Failed sends release their claim and are safe to retry. Keep this
-        # short so the independent worker remains responsive.
         time.sleep(2 ** attempt)
     result = {"sent": total_sent, "failed": int(result.get("failed") or 0)}
     if logger and (result["sent"] or result["failed"]):
         logger.info("abandoned-cart reminders: sent=%s failed=%s",
                     result["sent"], result["failed"])
+    _health["remindersLastRun"] = _utc_now()
     return result
 
 
 def _release_memory(job, logger=None):
-    """Drop per-tick garbage and log the worker's RSS.
-
-    The workers used to die (scheduler.worker_died) because a tick built
-    large transient lists that the allocator kept hold of between ticks.
-    Collecting at the end of every tick returns that memory immediately and
-    gives the health snapshot an honest reading.
-    """
+    """Drop per-tick garbage and log RSS for free-tier RAM safety."""
     try:
         gc.collect()
         rss = observability.memory_mb()
@@ -233,19 +206,19 @@ def _release_memory(job, logger=None):
         return 0.0
 
 
-def _abandoned_loop(logger=None):
-    """A dedicated loop means slow catalog/backup work cannot block recovery."""
+def _loop(logger=None):
+    """One consolidated loop: maintenance, supplier watchdog, reminders."""
     while True:
         try:
+            _maintenance_tick(logger)
             _abandoned_tick(logger)
-            _health["remindersLastRun"] = _utc_now()
-            _release_memory(REMINDERS_THREAD, logger)
+            _release_memory(BACKGROUND_THREAD, logger)
         except Exception as exc:                  # pragma: no cover
-            _note_failure("scheduler.reminders_tick", exc, logger=logger)
+            _note_failure("scheduler.background_tick", exc, logger=logger)
         time.sleep(TICK_SECONDS)
 
 
-def _alive(name):
+def _alive(name=BACKGROUND_THREAD):
     return any(t.name == name and t.is_alive() for t in threading.enumerate())
 
 
@@ -257,25 +230,15 @@ def _spawn(name, target, logger):
 
 
 def ensure_alive(app=None):
-    """Restart any worker thread that died. Returns the names restarted.
-
-    A daemon thread can be lost to an unrecoverable error, an OOM kill or a
-    fork; when that happened the watchdog reported "workers are not
-    healthy" forever because nothing ever put them back. /healthz calls
-    this on every check, so the next 20-minute run finds a live worker and
-    the crash that killed it is already in job_failures.
-    """
+    """Restart the consolidated in-process worker if it died."""
     logger = app.logger if app is not None else _app_logger
     restarted = []
     if not _started.is_set():
         return restarted
     with _start_lock:
-        if not _alive(MAINTENANCE_THREAD):
-            _spawn(MAINTENANCE_THREAD, _loop, logger)
-            restarted.append(MAINTENANCE_THREAD)
-        if not _alive(REMINDERS_THREAD):
-            _spawn(REMINDERS_THREAD, _abandoned_loop, logger)
-            restarted.append(REMINDERS_THREAD)
+        if not _alive(BACKGROUND_THREAD):
+            _spawn(BACKGROUND_THREAD, _loop, logger)
+            restarted.append(BACKGROUND_THREAD)
     if restarted:
         _health["restarts"] = int(_health.get("restarts") or 0) + len(restarted)
         observability.record_failure(
@@ -286,19 +249,13 @@ def ensure_alive(app=None):
 
 
 def health_snapshot(repair=True):
-    """Public-safe liveness used by /healthz and the 20-minute watchdog.
-
-    `repair` restarts a dead worker before reporting, so the watchdog gets
-    a truthful answer and a self-healed service rather than a permanent
-    failure. The recent crash reports travel with it: when the watchdog
-    fails, the reason is in the same payload.
-    """
+    """Public-safe liveness used by /healthz and the admin job panel."""
     if repair:
         try:
             ensure_alive()
         except Exception:                          # pragma: no cover
             pass
-    names = {thread.name for thread in threading.enumerate() if thread.is_alive()}
+    alive = _alive(BACKGROUND_THREAD)
     recent = []
     try:
         for report in observability.recent(5):
@@ -312,10 +269,22 @@ def health_snapshot(repair=True):
             })
     except Exception:                              # pragma: no cover
         recent = []
+    supplier = {}
+    try:
+        import supplier_watchdog
+        supplier = supplier_watchdog.summary()
+    except Exception:
+        supplier = {}
     return {**_health, "started": _started.is_set(),
-            "maintenanceAlive": MAINTENANCE_THREAD in names,
-            "remindersAlive": REMINDERS_THREAD in names,
+            "backgroundAlive": alive,
+            # Backwards-compatible booleans: both old logical workers are now
+            # represented by the same consolidated in-process loop.
+            "maintenanceAlive": alive,
+            "remindersAlive": alive,
+            "supplierAlive": alive,
+            "threadName": BACKGROUND_THREAD,
             "intervalSeconds": TICK_SECONDS,
+            "supplier": supplier,
             "recentFailures": recent}
 
 
@@ -329,12 +298,9 @@ def start(app=None):
     try:
         import backup
         if not backup.last_backup_date():
-            # First boot: baseline today so the first automatic backup runs
-            # at the NEXT midnight, exactly as scheduled.
             backup.mark_backup_done()
     except Exception as exc:                     # pragma: no cover
         _note_failure("scheduler.backup_baseline", exc, logger=logger)
     with _start_lock:
-        _spawn(MAINTENANCE_THREAD, _loop, logger)
-        _spawn(REMINDERS_THREAD, _abandoned_loop, logger)
+        _spawn(BACKGROUND_THREAD, _loop, logger)
     return True

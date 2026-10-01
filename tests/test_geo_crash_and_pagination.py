@@ -385,9 +385,9 @@ def test_a_dead_worker_is_restarted_instead_of_failing_forever(monkeypatch):
                         lambda name, target, logger: started.append(name))
     monkeypatch.setattr(scheduler._started, "is_set", lambda: True)
     restarted = scheduler.ensure_alive()
-    assert restarted == [scheduler.MAINTENANCE_THREAD, scheduler.REMINDERS_THREAD]
+    assert restarted == [scheduler.BACKGROUND_THREAD]
     assert started == restarted
-    assert scheduler._health["restarts"] >= 2
+    assert scheduler._health["restarts"] >= 1
 
 
 def test_the_watchdog_message_now_names_the_actual_failure():
