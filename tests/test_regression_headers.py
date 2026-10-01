@@ -56,29 +56,32 @@ def test_household_and_explicit_category_order_in_real_store():
     assert "category ordering preserves every category" in result.stdout
 
 
-# ------------------------------------------------- cache freshness (no-store)
-@pytest.mark.parametrize("path", [
-    "/healthz",
-    "/api/site",
-    "/api/catalog",
-    "/api/products",
-    "/api/categories",
-    "/api/config",
-    "/api/csrf",
-    "/api/stock",
-    "/api/most-viewed",
-    "/api/payment-methods",
+# --------------------------------------- cache freshness and catalogue speed
+@pytest.mark.parametrize("path, directives", [
+    ("/healthz", ("no-store",)),
+    ("/api/site", ("no-store",)),
+    # Catalogue reads are explicitly short-lived and private: an admin write
+    # invalidates the server snapshot and a user-triggered refresh bypasses
+    # the browser cache. This avoids an expensive products query per visit.
+    ("/api/catalog", ("private", "max-age=20", "must-revalidate")),
+    ("/api/products", ("no-store",)),
+    # Categories are anonymous public navigation content and can use a small
+    # shared cache window; category writes clear the server snapshot.
+    ("/api/categories", ("public", "max-age=60")),
+    ("/api/config", ("no-store",)),
+    ("/api/csrf", ("no-store",)),
+    ("/api/stock", ("no-store",)),
+    ("/api/most-viewed", ("no-store",)),
+    ("/api/payment-methods", ("no-store",)),
 ])
-def test_dynamic_routes_are_never_served_from_a_cache(client, path):
-    """Every dynamic page/API answer carries no-store: a CDN (or the browser
-    disk cache) holding a stale copy after an admin save is exactly the
-    "saved product / new photo not visible on my phone" complaint. Static
-    assets are exempt - they carry the ?v= shared token instead."""
+def test_dynamic_route_cache_contract(client, path, directives):
+    """Sensitive/dynamic answers stay no-store; safe catalogue reads cache briefly."""
     response = client.get(path)
     assert response.status_code == 200, f"{path} -> {response.status_code}"
     cache_control = response.headers.get("Cache-Control", "")
-    assert "no-store" in cache_control, \
-        f"{path} serves Cache-Control={cache_control!r}; dynamic answers must be no-store"
+    for directive in directives:
+        assert directive in cache_control, \
+            f"{path} serves Cache-Control={cache_control!r}; expected {directive!r}"
 
 
 def test_html_asset_refs_carry_the_shared_token_and_sw_evicts_old_caches():

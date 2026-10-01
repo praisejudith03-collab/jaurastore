@@ -7413,3 +7413,70 @@ body.store-paused{overflow:hidden}
     box-sizing: border-box;
   }
 }
+
+/* Settings → Welcome pop-up: a real, labelled ON/OFF switch instead of an
+   ambiguous checkbox. It remains keyboard accessible because the native input
+   stays in the document and owns the label. */
+.welcome-active-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-block: 1px solid #f0e4d7;
+}
+.welcome-active-row > span { display: grid; gap: 3px; }
+.welcome-active-row small { color: var(--taupe); font-size: 12px; line-height: 1.35; }
+.admin-switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; flex: 0 0 auto; }
+.admin-switch input { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; }
+.admin-switch i {
+  position: relative; width: 48px; height: 27px; border-radius: 999px;
+  background: #b9aaa0; box-shadow: inset 0 0 0 1px rgba(52,41,34,.12);
+  transition: background .18s ease;
+}
+.admin-switch i::after {
+  content: ""; position: absolute; width: 21px; height: 21px; border-radius: 50%;
+  left: 3px; top: 3px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.22);
+  transition: transform .18s ease;
+}
+.admin-switch input:checked + i { background: #3f8b58; }
+.admin-switch input:checked + i::after { transform: translateX(21px); }
+.admin-switch input:focus-visible + i { outline: 3px solid rgba(96,74,177,.35); outline-offset: 3px; }
+.admin-switch b { min-width: 28px; font-size: 12px; letter-spacing: .08em; color: #26723e; }
+.admin-switch b.is-off { color: #9f3027; }
+@media (max-width: 520px) {
+  .welcome-active-row { align-items: flex-start; }
+  .welcome-active-row > span { max-width: 220px; }
+}
+
+/* Prominent, readable prices across cards, PDP and mobile pop-up contexts.
+   Range labels inherit the same hierarchy and wrap cleanly instead of forcing
+   a two-column card wider than the viewport. */
+.price,
+.price .now,
+[data-mv-price-for],
+.modal .price,
+.welcome-pop .price {
+  font-size: clamp(15px, 3.9vw, 19px) !important;
+  font-weight: 750 !important;
+  line-height: 1.25;
+  letter-spacing: .01em !important;
+  font-variant-numeric: tabular-nums;
+}
+.price .range-separator { padding: 0 .16em; font-weight: 600; color: var(--taupe); }
+.price .price-range { white-space: normal; }
+.price .alt { font-size: .72em !important; font-weight: 600 !important; }
+.pdp .price,
+.pdp .price .now { font-size: clamp(21px, 6vw, 29px) !important; font-weight: 800 !important; }
+@media (max-width: 480px) {
+  .just-in-grid .price,
+  .just-in-grid .price .now,
+  body[data-page="home"] .just-in-grid .price,
+  body[data-page="home"] .just-in-grid .price .now {
+    font-size: 12px !important;
+    font-weight: 750 !important;
+  }
+  .just-in-grid .price .range-separator { padding: 0 .05em; }
+}
+.stock-line.is-in-stock { color: #24733a; font-weight: 700; }
+.stock-line.is-out-of-stock { color: var(--oos, #a82e22); font-weight: 700; }

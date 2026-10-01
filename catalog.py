@@ -1419,18 +1419,18 @@ def _normalize_homepage_featured(raw, products=None):
             "updatedBy": str(source.get("updatedBy") or "")}
 
 
-def homepage_featured():
+def homepage_featured(products=None):
     """Current Homepage Featured Products selector settings.
 
-    Supabase/growth_settings is the durable production source. The local
-    catalogue override file carries the same key for dev/testing and as a
-    read-through cache.
+    ``products`` lets a caller which already resolved the catalogue reuse that
+    list.  This avoids a second Supabase products query on the hot /api/catalog
+    response path; callers without a list retain the original behaviour.
     """
-    products = []
-    try:
-        products = merged(include_hidden=True)
-    except Exception:
-        products = []
+    if products is None:
+        try:
+            products = merged(include_hidden=True)
+        except Exception:
+            products = []
     raw = None
     if _prod_source():
         raw = _homepage_featured_raw_from_supabase()
