@@ -2965,6 +2965,7 @@ def admin_product_variants_upsert_alias():
         "compareNgn": ("compareNgn", "compare_ngn", "compareAtPrice", "compare_at_price"),
         "bulkQty": ("bulkQty", "bulk_qty", "bulkQuantity", "bulk_quantity", "bulkDiscountQty", "bulk_discount_qty"),
         "bulkPercent": ("bulkPercent", "bulk_percent", "bulkDiscountPercent", "bulk_discount_percent"),
+        "stockStatus": ("stockStatus", "stock_status"),
     }
     for canonical, names in aliases.items():
         for name in names:
@@ -2974,6 +2975,53 @@ def admin_product_variants_upsert_alias():
                     patch["supplierUrl"] = d.get(name)
                     patch["supplier_url"] = d.get(name)
                 break
+    # Availability flags an API client may send instead of stockStatus.
+    for name in ("is_in_stock", "in_stock"):
+        if name in d:
+            flag = d.get(name)
+            off = (flag is False
+                   or (isinstance(flag, (int, float)) and flag == 0)
+                   or (not isinstance(flag, (dict, list))
+                       and str(flag).strip().lower()
+                       in ("false", "0", "out", "no", "off")))
+            patch["stockStatus"] = "out" if off else "in"
+            break
+    # A plain `stock: 0` on a product that tracks per-variant quantities
+    # means "the whole product is switched off" (the reported "out of stock
+    # does not save" case): without the explicit flag, catalog.normalize's
+    # variant sum would silently re-stock the row from the stored variant
+    # numbers. Only infer the flag when this payload does not manage the
+    # per-variant numbers itself - a caller that sends optionStock is
+    # deliberately setting availability per variant and wins.
+    variant_payload_keys = ("optionStock", "option_stock",
+                            "variantStock", "variant_stock")
+    if not any(k in d for k in variant_payload_keys):
+        explicit_qty = None
+        for name in ("stock", "stock_quantity"):
+            if name not in d:
+                continue
+            raw = d.get(name)
+            try:
+                if raw is not None and str(raw).strip() != "":
+                    explicit_qty = float(raw)
+                    break
+            except (TypeError, ValueError):
+                pass
+        if explicit_qty is not None:
+            current_map = patch.get("optionStock") \
+                if isinstance(patch.get("optionStock"), dict) else {}
+            map_sum = sum(int(v or 0) for v in current_map.values()) \
+                if current_map else 0
+            if explicit_qty == 0:
+                patch["stockStatus"] = "out"
+            elif current_map and map_sum == 0:
+                # The mirror image: re-stocking a product whose variants were
+                # all sold out with a plain whole-product quantity. The typed
+                # number is the new availability, so the all-zero variant map
+                # must not pin the row (and the public badge) to "out"
+                # forever. Per-variant tracking simply resumes the next time
+                # variant quantities are saved.
+                patch["optionStock"] = {}
     return _product_save_response(patch)
 
 @api.delete("/admin/products/<pid>")

@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=173" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=176" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -239,7 +239,16 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
     const res = await JA.loginAdmin(loginEmail, fd.get("password"));
     btn.disabled = false;
     btn.textContent = "Sign in";
-    if (res.ok) { loginNeedsEmail = false; paintDesk(); }
+    if (res.ok) {
+      loginNeedsEmail = false;
+      // The boot-time catalogue fetch ran BEFORE this session existed, so
+      // the list in memory is still the public answer: stock numbers
+      // stripped, "in" translated to the 9999 sentinel, per-variant
+      // quantities gone. Refetch now that the admin cookie is set - or the
+      // desk renders fake stock and an editor SAVE would commit it.
+      try { await JA.reloadCatalog(); } catch (e) {}
+      paintDesk();
+    }
     else if (/email/i.test(res.error || "")) {
       loginNeedsEmail = true;
       paintLogin(res.error || "Could not sign in.");
@@ -649,18 +658,58 @@ function bindOptions() {
   });
   const status = document.getElementById("stock-status");
   const qty = document.getElementById("stock-qty");
+  // The whole-product "Out of stock" switch also switches off every variant:
+  // the per-variant quantity boxes are zeroed (their previous values are
+  // remembered on the input so toggling back restores them), because a
+  // variant left at 5 used to re-sum the saved row back to "in stock" - the
+  // "out of stock does not save" bug.
+  const zeroVariantInputs = () => {
+    const live = currentOptionStock();
+    const prev = { ...(window.__editPrevOptionStock || {}) };
+    Object.keys(live).forEach((k) => {
+      if (Number(live[k]) > 0) prev[k] = live[k];
+    });
+    window.__editPrevOptionStock = prev;
+    document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
+      inp.value = "0";
+    });
+  };
+  const restoreVariantInputs = () => {
+    const prev = window.__editPrevOptionStock;
+    if (!prev) return;
+    document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
+      const key = inp.getAttribute("data-opt-stock");
+      if (key && Object.prototype.hasOwnProperty.call(prev, key)
+          && !(Number(inp.value) > 0)) {
+        inp.value = String(prev[key]);
+      }
+    });
+    window.__editPrevOptionStock = null;
+  };
   status?.addEventListener("change", () => {
     if (!qty) return;
     if (status.value === "out") {
       if (Number(qty.value) > 0) qty.dataset.prev = qty.value;
       qty.value = 0;
-    } else if (!(Number(qty.value) > 0)) {
-      qty.value = qty.dataset.prev || "24";
+      zeroVariantInputs();
+    } else {
+      if (!(Number(qty.value) > 0)) qty.value = qty.dataset.prev || "24";
+      restoreVariantInputs();
     }
+    syncOptionStockTotals();
     refreshOptionChips();
   });
   qty?.addEventListener("input", () => {
-    if (status && Number(qty.value) > 0) status.value = "in";
+    if (status) {
+      if (Number(qty.value) > 0) status.value = "in";
+      else if (qty.value === "0") {
+        // Typing an explicit 0 IS "sold out": capture that intent instead of
+        // silently re-filling the old quantity at save time.
+        status.value = "out";
+        zeroVariantInputs();
+        syncOptionStockTotals();
+      }
+    }
     refreshOptionChips();
   });
 }
@@ -868,6 +917,11 @@ function productForm(p = {}) {
     `<option value="${c.id}" ${preCat === c.id ? "selected" : (p.category === c.id ? "selected" : "")}>${JA.escape(c.name)}</option>`
   ).join("");
   window.__editImages = productImages(p);
+  // Per-editor-session memory of the variant quantities that were live
+  // before the admin last flipped "Out of stock". It lives on window (not
+  // on the inputs) because refreshOptionChips repaints the variant boxes
+  // and would wipe a dataset attribute with them.
+  window.__editPrevOptionStock = null;
   window.__editUploads = [];
   window.__editReviews = Array.isArray(p.reviews) ? p.reviews.slice() : ((p.id && JA.reviews) ? JA.reviews(p.id).slice() : []);
   const opts = editorOptions(p);
@@ -1008,7 +1062,13 @@ async function handleProductSubmit(e, existing) {
   const status = String(fd.get("stockStatus") || "in");
   let stock = num("stock");
   if (status === "out") stock = 0;
-  else if (!(stock > 0)) stock = (existing && Number(existing.stock) > 0) ? Number(existing.stock) : 24;
+  else if (stock === null || stock === undefined) {
+    // An EMPTY box means "leave the quantity alone" (keep the stored value,
+    // 24 for a brand-new row). An explicit 0 is a deliberate "sold out" and
+    // is honoured below - it used to be silently replaced by the old
+    // quantity, so the admin's out-of-stock choice never reached the server.
+    stock = (existing && Number(existing.stock) > 0) ? Number(existing.stock) : 24;
+  }
   // Optional per-product bulk discount: both values or neither. An empty box
   // means "no discount configured for this product".
   let bulkQty = num("bulkQty");
@@ -1027,6 +1087,24 @@ async function handleProductSubmit(e, existing) {
     hasOptionStock = true;
   });
   if (hasOptionStock) stock = Object.values(optionStock).reduce((n, q) => n + q, 0);
+  // "Out of stock" (the switch, or an explicit 0 quantity) is a final
+  // whole-product decision: it wins over the variant sum - which used to
+  // re-stock the row from stale variant numbers - and zeroes every variant
+  // in the payload, so the storefront badge, the buy button and each
+  // variant chip all read sold out together.
+  let payloadOptionStock = { ...(hasOptionStock ? optionStock : (existing?.optionStock || {})) };
+  if (status === "out" || stock === 0) {
+    stock = 0;
+    Object.keys(payloadOptionStock).forEach((k) => { payloadOptionStock[k] = 0; });
+  } else if (!hasOptionStock && stock > 0
+             && Object.keys(payloadOptionStock).length
+             && Object.values(payloadOptionStock).every((v) => !(Number(v) > 0))) {
+    // Mirror image of the switch-off: re-stocking a product whose variants
+    // were all sold out with a plain quantity. The typed number is the new
+    // availability, so the all-zero variant map must not pin the row (and
+    // the storefront badge) to "out" forever.
+    payloadOptionStock = {};
+  }
   const optionPrices = {};
   e.target.querySelectorAll("[data-opt-price]").forEach((inp) => {
     const key = inp.getAttribute("data-opt-price");
@@ -1095,6 +1173,9 @@ async function handleProductSubmit(e, existing) {
       // stock_quantity and the freshly typed quantity was silently discarded
       // (seed products reverted to 24). Ship BOTH aliases, in sync.
       stock_quantity: stock,
+      // The explicit availability intent: "out" makes catalog.normalize
+      // zero the row and every variant, immune to the variant-sum revert.
+      stockStatus: status,
       // Per-product bulk discount (null = none configured).
       bulkQty,
       bulkPercent,
@@ -1103,7 +1184,7 @@ async function handleProductSubmit(e, existing) {
       online: !!fd.get("online"),
       colors: colorOpt ? colorOpt.values : [],
       options,
-      optionStock: hasOptionStock ? optionStock : (existing?.optionStock || {}),
+      optionStock: payloadOptionStock,
       optionPrices,
       optionCompareAt,
       nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
@@ -1419,7 +1500,7 @@ function bindProductBulk() {
 }
 function bindProdGridEvents() {
   document.querySelectorAll("#prod-grid [data-edit]").forEach((b) => {
-    const open = () => { editingId = b.dataset.edit; paintDesk("products"); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    const open = () => { rememberProductsReturn(); editingId = b.dataset.edit; paintDesk("products"); window.scrollTo({ top: 0, behavior: "smooth" }); };
     b.onclick = open;
     b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
   });
@@ -3210,7 +3291,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=173" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=176" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3565,7 +3646,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=173", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=176", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

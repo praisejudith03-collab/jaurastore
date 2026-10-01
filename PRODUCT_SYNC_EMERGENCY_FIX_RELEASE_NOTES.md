@@ -116,6 +116,58 @@ catalogue (owner request 2026-10-01):
   a per-photo Download link and a staggered "Download all photos" button.
 * Asset cache token bumped `v172 → v173`.
 
+## 6. Out-of-stock toggle persistence & full field audit
+
+**The report:** switching a product to "Out of stock" (or typing `0`) did
+not stick — the admin kept reverting to a stock number, and the storefront
+never showed the sold-out state. Re-stocking was equally unreliable.
+
+Semantics now implemented and verified live, end to end:
+
+* **Every explicit OFF spelling commits.** `catalog.normalize` treats an
+  explicit whole-product OFF — `stockStatus` / `stock_status` set to an
+  out-word, `is_in_stock` / `in_stock` false/0/out-word, or
+  `stock: 0` — as FINAL: the row is saved `stock = 0` and **every**
+  per-variant quantity is zeroed with it. Absent/other values express no
+  opinion: the variant-sum and default-24 invariants stay intact.
+* **The `/api/products/variants` endpoint** accepts all the same spellings
+  (`stockStatus`, `is_in_stock`, `in_stock`, `stock`), infers `stock: 0` as
+  "out" when the payload carries no variant quantities, and **re-stocks**
+  an all-sold-out product when it receives an explicit positive stock (the
+  whole-product mode resumes; a later per-variant payload wins per variant).
+* **The admin editor** honours an explicitly typed `0`, flips the
+  availability switch automatically, zeroes the variant boxes live when the
+  switch is turned OFF, and — new — **remembers the quantities that were
+  live before the flip** (stashed outside the repainted DOM, reset at every
+  editor open), so toggling OFF → ON within one session restores them
+  instead of leaving the product at 0/0. A re-stock guard resumes
+  whole-product mode when the admin types a positive quantity over an
+  all-zero variant map.
+* **The storefront reacts instantly** (badge, PDP buy button, card pill and
+  dead add-button switch on the same save; the catalogue answer is always
+  revalidated, never CDN-cacheable) and **persists across full reloads**.
+* **Field audit of the same save:** price override (₦14,000 on one variant),
+  supplier URL, category, description and dimensions all persist verbatim
+  across reloads; the PDP shows the exact min–max range (`₦9,000.00 –
+  ₦14,000.00`).
+
+Two adjacent defects found by the end-to-end run and fixed in the same
+pass:
+
+* **Return navigation captured nothing when an editor was opened by
+  clicking a product card** — only the "Add product" button captured the
+  list state, so Cancel/Save restored a *stale* earlier snapshot (wrong
+  search, wrong page). Card clicks now capture the return state too.
+* **A fresh admin login kept the pre-login (public) catalogue** — the boot
+  fetch runs before the session exists, so the products list — and worse,
+  the editor, whose save commits what it renders — saw the public answer:
+  stock numbers stripped, "in" translated to the 9999 sentinel. A
+  successful login now refetches the authenticated `?all=1` catalogue
+  before the desk is painted.
+
+Asset cache token bumped `v173 → v176` (picker, stock toggle, login
+refetch).
+
 ## Verification
 
 * `tests/test_product_persistence_instant_sync.py` — persistence of every
@@ -129,7 +181,14 @@ catalogue (owner request 2026-10-01):
   catalogue: whole-catalogue matching, ready-first ranking, 24-per-page
   rendering, scroll/show-more pagination, SKU and category-name search, and
   pinning a sold-out product into the scheduled batch).
-* Full suite: **1564 passed**.
+* `tests/test_stock_toggle_persistence.py` — NEW, 19 tests: every OFF
+  spelling normalizes to `stock = 0` + zeroed variants (variant-sum and
+  default-24 invariants pinned), the variants endpoint's out/in/variant-
+  wins/re-stock/cache-header contracts, admin.js source pins for the
+  explicit-0, out-toggle zeroing, the out→in restore stash (window-level,
+  never `dataset.prev`, reset per editor open), the re-stock guard, the
+  login refetch, and a full normalize round-trip field audit.
+* Full suite: **1562 passed, 21 skipped** (was 1564).
 * Live run (production-mode instance, catalog cache active — plus a
   testing-mode instance for the Supabase-backed upload/site-settings paths
   which are unreachable from the offline sandbox): **28/28 end-to-end checks
@@ -143,3 +202,12 @@ catalogue (owner request 2026-10-01):
   admin list-state restoration (search + page + count) after the editor;
   the variant min–max price range with enlarged fonts; and the pop-up
   banner ON/OFF toggle rendering/removing the storefront modal.
+* Live run #2 (same two instances, after the stock-toggle work):
+  **38/38 end-to-end checks in a real browser** — the full regression above
+  plus the out-of-stock switch (live zeroing, commit, storefront badge/PDP/
+  card, reload persistence, in-session out→in restore, re-entry re-stock),
+  the typed-0 path, all three API spellings on `/api/products/variants`
+  (stock:0, stock:8 re-stock, is_in_stock:false, per-variant payload), the
+  never-cacheable catalogue answer, the full field audit, and a fresh-login
+  admin seeing the authenticated stock numbers (4 units, per-variant map)
+  without a reload.

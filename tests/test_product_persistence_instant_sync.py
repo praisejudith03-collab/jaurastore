@@ -267,9 +267,14 @@ def test_admin_js_return_navigation_is_session_scoped():
     """Requirement 3: capture on open, restore on save, isolated per tab."""
     admin_js = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
     assert "PRODUCTS_RETURN_KEY = \"jaura_admin_products_return\"" in admin_js
-    # capture happens when an editor is opened
+    # capture happens when an editor is opened - on the add button AND on
+    # every product-card click, so cancelling (or saving) always returns to
+    # the list the admin actually came from, never a stale earlier snapshot
     assert "rememberProductsReturn();" in admin_js
     assert "editingId = b.dataset.edit;" in admin_js
+    assert ('const open = () => { rememberProductsReturn(); editingId = b.dataset.edit;'
+            in admin_js)
+    assert '$("#add-product")?.addEventListener("click", () => { rememberProductsReturn();' in admin_js
     # save button label matches the requirement's action
     assert '>Save Product</button>' in admin_js
     # the capture URL is the canonical /admin/products list state
