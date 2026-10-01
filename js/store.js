@@ -1658,6 +1658,17 @@ const JA = (() => {
     // reason to refuse the save: saves are last-write-wins and always land.
     const baseUpdatedAt = String(next.baseUpdatedAt || "").trim();
     delete next.baseUpdatedAt;
+    // The opened-at row copy travels on the REQUEST only, for the server's
+    // per-field merge. It must never live in the local copy: a later outbox
+    // retry would otherwise carry a base that is hours old and merge against
+    // a row nothing like the one the admin actually edited.
+    const mergeBase = next.mergeBase && typeof next.mergeBase === "object" ? next.mergeBase : null;
+    delete next.mergeBase;
+    // ...and which fields the admin actually touched, for the same request.
+    // Never persisted locally: a retry hours later must not claim the admin
+    // edited fields they never opened.
+    const mergeFields = Array.isArray(next.mergeFields) ? next.mergeFields.slice() : null;
+    delete next.mergeFields;
     const custom = read(KEYS.custom, []);
     const i = custom.findIndex((x) => x.id === next.id);
     if (i >= 0) custom[i] = next;
@@ -1667,7 +1678,17 @@ const JA = (() => {
     if (!window.JA_NET) return Promise.resolve({ ok: false, offline: true });
     return window.JA_NET.api("api/admin/products", {
       method: "POST",
-      json: { product: baseUpdatedAt ? Object.assign({}, next, { baseUpdatedAt: baseUpdatedAt }) : next },
+      json: {
+        product: Object.assign(
+          {},
+          next,
+          baseUpdatedAt ? { baseUpdatedAt: baseUpdatedAt } : {},
+          // Only ship a base copy that really is the row being saved, so a
+          // stale or foreign one can never drive a merge.
+          mergeBase && String(mergeBase.id) === String(next.id) ? { mergeBase: mergeBase } : {},
+          mergeBase && mergeFields ? { mergeFields: mergeFields } : {},
+        ),
+      },
       queue: true,
       label: "Product",
       onDone: (data) => { if (data && data.product) applyServerProduct(data.product); },

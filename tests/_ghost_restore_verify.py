@@ -126,9 +126,14 @@ def main():
     scheduler._nightly_run()
     check("the 2 AM pass runs the supplier sweep", ran.get("supplier") is True, ran)
     check("the 2 AM pass runs the storage sweeper", ran.get("sweeper") is True, ran)
-    # ...and it does not re-run all day once it has run for the day.
-    again = scheduler._nightly_due(utc(2026, 10, 1, 8, 0))
-    check("it does not re-run every 5 minutes", again is False, again)
+    # ...and it does not re-run every 5 minutes. Pinned to a fixed date rather
+    # than "today", so the result does not depend on what time of day this
+    # script happens to run at.
+    scheduler._last_nightly_date = "2026-10-01"
+    check("it does not re-run every 5 minutes",
+          scheduler._nightly_due(utc(2026, 10, 1, 8, 0)) is False)
+    check("but it is due again the next day",
+          scheduler._nightly_due(utc(2026, 10, 2, 1, 0)) is True)
 
     print("")
     failed = [r for r in results if not r[0]]

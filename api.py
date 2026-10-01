@@ -2865,6 +2865,7 @@ def _product_save_response(payload):
     payload = dict(payload or {})
     base_updated_at = str(payload.pop("baseUpdatedAt", "") or "").strip()
     overwrote_updated_at = ""
+    stored_row = None
     if base_updated_at:
         pid = str(payload.get("id") or "").strip()
         if pid:
@@ -2873,9 +2874,38 @@ def _product_save_response(payload):
             except Exception:
                 current = None          # a failed read never blocks a save
             if current is not None:
+                stored_row = current
                 current_updated_at = str(current.get("updated_at") or "").strip()
                 if current_updated_at and current_updated_at != base_updated_at:
                     overwrote_updated_at = current_updated_at
+
+    # ---- per-field merge: two admins, two fields, no lost work -----------
+    # Last-write-wins stops the save being REFUSED, but it is row-level: the
+    # editor sends the whole product from its in-memory copy, so a price typed
+    # on a phone is reverted by a photo swap made on a laptop a minute later.
+    # When the editor also sends the row as it was when it was OPENED
+    # (mergeBase), each field the admin did not touch keeps whatever is in the
+    # database now, and every field they DID change is theirs.
+    #
+    # This is a merge, never a guard: it decides which values win and can
+    # never turn a save into an error. Callers that send no base copy (API
+    # integrations, CSV imports, mirrors, the supplier watchdog) keep plain
+    # last-write-wins, which is what they want.
+    merge_kept = []
+    merge_base = payload.pop("mergeBase", None)
+    merge_dirty = payload.pop("mergeFields", None)
+    if isinstance(merge_base, dict) and merge_base:
+        try:
+            from product_merge import merge_is_worthwhile, merge_product_edit
+            if stored_row is None and payload.get("id"):
+                stored_row = catalog_mod.product_index(
+                    include_hidden=True).get(str(payload.get("id")))
+            if merge_is_worthwhile(merge_base, payload, stored_row):
+                payload, merge_kept = merge_product_edit(
+                    merge_base, payload, stored_row, dirty=merge_dirty)
+        except Exception as exc:        # a broken merge is never a failed save
+            print(f"[merge] per-field merge skipped: {exc}")
+            merge_kept = []
     pid_probe = str((payload or {}).get("id") or "")[:80]
     name_probe = str((payload or {}).get("name") or "")[:120]
     try:
@@ -2938,6 +2968,13 @@ def _product_save_response(payload):
                   f"{authmod.current_admin()}", _ip())
         except Exception:
             pass
+    if merge_kept:
+        try:
+            audit(authmod.current_admin(), "product.save_merged",
+                  f"id={product.get('id')} kept_newer={','.join(sorted(merge_kept)[:40])} "
+                  f"actor={authmod.current_admin()}", _ip())
+        except Exception:
+            pass
     # Purge EVERY catalogue representation (list snapshot + category menu)
     # so the storefront and the /admin dashboard both read fresh database
     # rows on the next request.
@@ -2951,7 +2988,26 @@ def _product_save_response(payload):
         body["notice"] = ("Saved. This product had been updated by another "
                           "change while you were editing, so your copy is now "
                           "the live one.")
+    if merge_kept:
+        # Say what was preserved, so "the other admin's change is still there"
+        # is visible rather than a surprise - and so a field this save did NOT
+        # touch can never be mistaken for one it did.
+        body["merged"] = True
+        body["kept"] = sorted(merge_kept)
+        body["notice"] = ((body.get("notice", "") + " ") if body.get("notice") else "") + (
+            "Kept the newer value of " + _merge_label(merge_kept) +
+            ", which you had not changed.")
     return jsonify(**body)
+
+
+def _merge_label(fields):
+    """A short, readable list of field names for the admin-facing notice."""
+    names = [str(f) for f in fields[:3]]
+    if len(fields) > 3:
+        names.append("and %d more" % (len(fields) - 3))
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + " and " + names[-1]
 
 
 @api.post("/admin/products")

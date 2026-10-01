@@ -909,6 +909,72 @@ function bindCfaPreview() {
   form.addEventListener("input", paint);
   paint();
 }
+/* ------------------------------------------------ which fields did we edit?
+ * Maps a form control to the product fields its value ends up on, so the
+ * server can merge per field. Only the controls whose meaning is unambiguous
+ * are listed: an unlisted control simply is not reported as edited, and the
+ * server falls back to comparing against the row as it was opened - which is
+ * the behaviour that already shipped.
+ *
+ * `slug` is deliberately absent: the server re-derives it on every save, so
+ * it is never merged from the editor's copy.
+ */
+const EDIT_FIELD_MAP = {
+  name: ["name"],
+  nameFr: ["nameFr"],
+  description: ["description"],
+  descriptionFr: ["descriptionFr"],
+  dimensions: ["dimensions"],
+  badge: ["badge"],
+  category: ["category"],
+  online: ["online"],
+  featured: ["featured"],
+  sku: ["sku"],
+  supplierSku: ["supplierSku", "supplierUrl", "supplier_url"],
+  // Money: priceCfa / compareCfa are derived from these by the editor, so they
+  // travel with them - a price typed on the phone must not be reverted by a
+  // photo swap made elsewhere.
+  priceNgn: ["priceNgn", "priceCfa", "compareCfa"],
+  compareNgn: ["compareNgn", "compareCfa"],
+  stock: ["stock", "stock_quantity"],
+  stockStatus: ["stockStatus", "stock", "stock_quantity"],
+  bulkQty: ["bulkQty"],
+  bulkPercent: ["bulkPercent"],
+};
+// The media strip, the option editor and the variant rows are built from
+// data-* controls rather than named inputs.
+const EDIT_DATA_PREFIXES = [
+  ["data-img-i", ["image", "image_url", "imageUrl", "images"]],
+  ["data-opt-row", ["options", "optionPrices", "optionCompareAt", "optionStock",
+                    "optionSupplierSku", "optionSupplierUrls", "option_supplier_urls",
+                    "optionSku", "option_sku", "stock", "stock_quantity"]],
+  ["data-opt-sku", ["optionSku", "option_sku"]],
+  ["data-var-row", ["stock", "stock_quantity", "stockStatus"]],
+  ["data-var-state", ["stock", "stock_quantity", "stockStatus"]],
+];
+
+/** Record that the admin edited the field(s) behind a form control. */
+function trackEditedField(el) {
+  if (!el || !el.tagName) return;
+  if (typeof window.__editDirty !== "object" || window.__editDirty === null) {
+    window.__editDirty = new Set();
+  }
+  const byName = EDIT_FIELD_MAP[el.getAttribute && el.getAttribute("name")];
+  if (byName) byName.forEach((f) => window.__editDirty.add(f));
+  for (const [attr, fields] of EDIT_DATA_PREFIXES) {
+    if (el.closest && el.closest("[" + attr + "]")) {
+      fields.forEach((f) => window.__editDirty.add(f));
+    }
+  }
+  // Adding or removing a review changes the stored list, not a field.
+  if (el.id && /^rev-/.test(el.id)) {
+    ["reviews", "customerReviews", "customer_reviews"].forEach((f) => window.__editDirty.add(f));
+  }
+  if (el.getAttribute && el.getAttribute("data-rev-del") != null) {
+    ["reviews", "customerReviews", "customer_reviews"].forEach((f) => window.__editDirty.add(f));
+  }
+}
+
 function productForm(p = {}) {
   const allCats = (JA.categories ? JA.categories() : JA.CATEGORIES) || [];
   // Preserve current filter category when adding new product
@@ -932,6 +998,18 @@ function productForm(p = {}) {
   // afterwards whether we overwrote a newer row (see _product_save_response).
   // Saves are last-write-wins, so this is a receipt, not a guard.
   window.__editBaseUpdatedAt = String((p && p.updated_at) || "");
+  // A DEEP COPY of the row as it was when the editor opened. The save ships
+  // it so the server can do a three-way merge per field: what this admin
+  // changed wins, and what they did not touch keeps whatever another admin
+  // (or the supplier watchdog) has written since. Without it two admins
+  // editing the same product silently undo each other - one typing a price,
+  // the other swapping a photo. Cleared with the other per-editor state
+  // below, so it can never leak from one product's editor into another's.
+  window.__editBase = p && p.id ? JSON.parse(JSON.stringify(p)) : null;
+  // ...and the per-editor record of which boxes this admin actually touched,
+  // reset here with the rest of the per-editor state so it can never leak
+  // from one product's editor into another's.
+  window.__editDirty = new Set();
   // Per-editor-session memory of the variant quantities that were live
   // before the admin last flipped "Out of stock". It lives on window (not
   // on the inputs) because refreshOptionChips repaints the variant boxes
@@ -1174,6 +1252,15 @@ async function handleProductSubmit(e, existing) {
       // Non-blocking opened-at receipt (see productForm); stripped from the
       // local copy by upsertProduct and never persisted by catalog.normalize
       baseUpdatedAt: window.__editBaseUpdatedAt || "",
+      // The row as it was when the editor opened, so the server can merge
+      // field by field instead of letting this save revert the other admin's
+      // work. It rides on the REQUEST only - never in the local copy, or an
+      // outbox retry would carry a base that is hours old.
+      mergeBase: window.__editBase || null,
+      // Which boxes this admin actually touched. Without this the server
+      // cannot distinguish "left alone" from "deliberately set back to the
+      // same value", and a real edit would be silently discarded.
+      mergeFields: window.__editDirty ? Array.from(window.__editDirty) : null,
       id,
       sku: fd.get("sku") || existing?.sku || ("JAU-" + Date.now().toString(36).toUpperCase().slice(-6)),
       slug: existing?.slug || slugify(name) || id,
@@ -3465,6 +3552,13 @@ function paintDesk(tab = "analytics") {
   if (form) {
     form.addEventListener("submit", (e) => handleProductSubmit(e, existing));
     form.dataset.submitBound = "1";
+    // Remember WHICH fields this admin actually touched. Without it the
+    // server cannot tell "never opened this box" from "deliberately set it
+    // back to what it already was", and guessing wrong there silently throws
+    // away a real edit. Delegated so it also covers the option rows, variant
+    // rows and gallery strip, which are re-rendered as the admin types.
+    form.addEventListener("input", (e) => trackEditedField(e.target), true);
+    form.addEventListener("change", (e) => trackEditedField(e.target), true);
     // "Delete this product" inside the editor: clear the Tombstone FIRST so
     // a failed delete is never reported as done.
     $(".au-del-prod", form)?.addEventListener("click", async () => {

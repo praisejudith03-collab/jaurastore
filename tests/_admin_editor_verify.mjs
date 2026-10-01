@@ -372,6 +372,68 @@ async function main() {
         raceRow ? raceRow.name : "missing");
 
   // =====================================================================
+  // PART 2b - two admins, two DIFFERENT fields: neither is lost
+  // =====================================================================
+  note("--- part 2b: per-field merge, two admins on different fields ---");
+  const MID = "jau-verify-merge";
+  await post({ product: { id: MID, name: "Merge Test Bag", category,
+                          priceNgn: 5000, stock: 5, online: true, images: [] } });
+  const opened = (await (await realFetch(BASE + "/api/catalog?all=1")).json()).products
+    .find((p) => p.id === MID);
+  check("the merge product is live", !!opened, String(opened && opened.priceNgn));
+
+  // The other admin re-prices while our editor is open.
+  await sleep(1300);
+  await post({ product: { id: MID, name: "Merge Test Bag", category,
+                          priceNgn: 7000, stock: 5, online: true, images: [] } });
+  const repriced = (await (await realFetch(BASE + "/api/catalog?all=1")).json()).products
+    .find((p) => p.id === MID);
+  check("the other admin changed the price", repriced && repriced.priceNgn === 7000,
+        String(repriced && repriced.priceNgn));
+
+  // We rename, shipping the row as we opened it and the fields we touched.
+  const rename = await post({
+    product: { id: MID, name: "Merge Test Bag RENAMED", category,
+               priceNgn: 5000, stock: 5, online: true, images: [],
+               mergeBase: opened, mergeFields: ["name"] },
+  });
+  check("the rename is accepted", rename.status === 200, "status " + rename.status);
+  check("the server reports the merge", rename.body.merged === true,
+        JSON.stringify(rename.body).slice(0, 120));
+  check("it says the price was kept", (rename.body.kept || []).includes("priceNgn"),
+        String(rename.body.kept));
+  check("it is shown as information, not an error",
+        !rename.body.error && /price/i.test(rename.body.notice || ""),
+        String(rename.body.notice));
+
+  const merged = (await (await realFetch(BASE + "/api/catalog?all=1")).json()).products
+    .find((p) => p.id === MID);
+  check("OUR rename is live", merged && merged.name === "Merge Test Bag RENAMED",
+        merged ? merged.name : "missing");
+  check("THEIR price survived", merged && merged.priceNgn === 7000,
+        merged ? String(merged.priceNgn) : "missing");
+
+  // The case a naive merge silently loses: re-typing the value it already had.
+  const reopened = (await (await realFetch(BASE + "/api/catalog?all=1")).json()).products
+    .find((p) => p.id === MID);
+  await sleep(1300);
+  await post({ product: { id: MID, name: merged.name, category,
+                          priceNgn: 9000, stock: 5, online: true, images: [] } });
+  const back = await post({
+    product: { id: MID, name: merged.name, category,
+               priceNgn: 7000, stock: 5, online: true, images: [],
+               mergeBase: reopened, mergeFields: ["priceNgn"] },
+  });
+  check("re-typing the SAME price is accepted", back.status === 200, "status " + back.status);
+  const backRow = (await (await realFetch(BASE + "/api/catalog?all=1")).json()).products
+    .find((p) => p.id === MID);
+  check("the deliberate re-price is NOT discarded", backRow && backRow.priceNgn === 7000,
+        backRow ? String(backRow.priceNgn) : "missing");
+  await realFetch(BASE + "/api/admin/products/" + MID, {
+    method: "DELETE", headers: { "X-CSRF-Token": csrf, Cookie: jarHeader() },
+  });
+
+  // =====================================================================
   // PART 3 - delete a product: gone, and it NEVER comes back
   // =====================================================================
   note("--- part 3: absolute delete ---");

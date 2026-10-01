@@ -348,7 +348,17 @@ def test_upsert_product_keeps_the_token_off_the_local_copy():
     fn = js[js.index("function upsertProduct"):]
     fn = fn[:fn.index("function removeProduct")]
     assert "delete next.baseUpdatedAt;" in fn
-    assert "Object.assign({}, next, { baseUpdatedAt: baseUpdatedAt })" in fn
+    # the merge machinery must travel on the REQUEST only, for the same
+    # reason: a base copy or an edited-field list sitting in the local copy
+    # would be replayed by a later outbox retry, hours out of date
+    assert "delete next.mergeBase;" in fn
+    assert "delete next.mergeFields;" in fn
+    assert "Object.assign(" in fn
+    assert "baseUpdatedAt: baseUpdatedAt" in fn
+    assert "mergeBase: mergeBase" in fn
+    assert "mergeFields: mergeFields" in fn
+    # ...and a base that is not the row being saved is never shipped
+    assert 'String(mergeBase.id) === String(next.id)' in fn
 
 
 def test_the_409_rollback_path_is_gone_from_the_client():

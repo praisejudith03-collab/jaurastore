@@ -49,6 +49,44 @@ crossed edit is traceable; it is never a popup.
 > alternative is a merge that decides per field which admin "owns" it. The
 > audit entry above is what makes it recoverable rather than silent.
 
+### 1a. Per-field merge — the follow-up, so neither admin loses work
+
+Row-level last-write-wins still reverts a *field* another admin changed. The
+editor now ships the row as it was when it was **opened**, and the server
+does a three-way merge on the fields it understands:
+
+| | admin changed it | admin left it alone |
+| --- | --- | --- |
+| **someone else changed it too** | the admin wins | **the newer value is kept** |
+| **nobody else touched it** | the admin wins | identical either way |
+
+So a rename on the phone no longer reverts a price set on the laptop, and the
+save banner says what it preserved: *"Kept the newer value of priceNgn, which
+you had not changed."* Nothing is ever refused — this is a merge, not a guard.
+
+**The subtlety that makes it correct.** Comparing the edited row against the
+opened row cannot tell *"the admin never opened this box"* from *"the admin
+deliberately set it back to the value it already had"*. Both look identical,
+and "put the price back to 5,000" is an ordinary thing to do. Guessing wrong
+silently discards a real edit — far worse than the revert being fixed. The
+editor therefore reports **which controls were actually touched**, and that
+report decides. Without it (an older client, an API call) the base comparison
+is a best-effort fallback.
+
+**A second subtlety, found while verifying.** The row the editor snapshots is
+the *public* catalogue projection, which deliberately omits `stock`. A key
+that is **absent** is not "unchanged", it is *unknown* — and reading unknown
+as unchanged made the merge overwrite the admin's own stock with the stored
+value while announcing it had "preserved a newer change". **No evidence means
+no preservation**: a field the base never carried keeps the admin's value.
+
+**Deliberately narrow.** Only fields in `MERGEABLE_FIELDS` are merged;
+everything else keeps plain last-write-wins. Per-variant maps
+(`optionStock`, `optionPrices`, …) are merged per key, so one variant's
+quantity cannot wipe another's, and a variant added since the editor opened is
+never dropped. Callers that send no base copy — API integrations, CSV imports,
+the supplier watchdog — are completely unaffected.
+
 ## 2. Saving exits to the source list
 
 Already largely in place, with two gaps closed:
@@ -135,26 +173,28 @@ references as orphans, and recent uploads are protected by a grace window).
 
 ## How this was verified
 
-`python3 -m pytest tests/` — **1643 passed, 21 skipped**. New:
-`tests/test_absolute_delete_and_ghost_guard.py` (12 tests).
+`python3 -m pytest tests/` — **1671 passed, 21 skipped**. New:
+`tests/test_absolute_delete_and_ghost_guard.py` (12 tests) and
+`tests/test_product_field_merge.py` (28 tests).
 
 Two live harnesses run against a real gunicorn server:
 
-- `tests/_admin_editor_verify.mjs` — **42/42**. Loads the real `admin.html` and
+- `tests/_admin_editor_verify.mjs` — **52/52**. Loads the real `admin.html` and
   scripts in jsdom (the browser CDN is network-blocked in this sandbox), signs
   in over HTTP, and drives the actual UI: filter to a category, click a
   product card, edit the name, submit the form, and measure what the admin
-  sees. Also runs a two-device stale-save race, and deletes a product then
-  re-reads the catalogue six times.
-- `tests/_ghost_restore_verify.py` — **20/20**. Creates a product, hard-deletes
+  sees. Also runs a two-device stale-save race, a two-admin different-field
+  merge, and deletes a product then re-reads the catalogue six times.
+- `tests/_ghost_restore_verify.py` — **21/21**. Creates a product, hard-deletes
   it, then forces the stale copy back into the catalogue so the only thing that
   can stop the re-create is the guard — and runs the tick, the nightly sweep
   and repeated passes afterwards.
 
-Measured on the verification server: **save round trip 76–90 ms** (budget:
+Measured on the verification server: **save round trip 76–116 ms** (budget:
 2 s), concurrent saves 25–60 ms, no `409`, no "changed by someone else", editor
 closed automatically, returned to the source category (`filter=gadgets`), the
-deleted product absent after every refresh.
+other admin's price surviving our rename, a deliberate re-price honoured, and
+the deleted product absent after every refresh.
 
 > jsdom executes the shipped JavaScript but is not a real browser engine, and
 > the verification server runs the local (non-Supabase) storage backend. The
@@ -167,12 +207,14 @@ deleted product absent after every refresh.
 
 | File | What changed |
 | --- | --- |
-| `api.py` | 409 guard replaced by last-write-wins + `product.save_overwrite` receipt |
-| `js/store.js` | 409 rollback branch removed; token is a receipt |
-| `js/admin.js` | banner after redirect; filter boxes restored; category never blanked |
+| `api.py` | 409 guard replaced by last-write-wins + `product.save_overwrite` receipt; per-field merge wired into the same funnel |
+| `product_merge.py` | **new** — the three-way merge, with the touched-field report |
+| `js/store.js` | 409 rollback branch removed; token/base/touched-list are request-only |
+| `js/admin.js` | banner after redirect; filter boxes restored; category never blanked; base snapshot + touched-field tracking |
 | `js/net.js` | failed jobs dropped so the pill closes; "Retrying" vs "Syncing" |
 | `supabase_store.py` | SQL cascade with an identical fallback; all named child tables swept |
 | `supplier_watchdog.py` | deleted-id re-check immediately before every write |
 | `hard_delete_products.sql` | **new** — real `ON DELETE CASCADE` + the delete function |
 | `tests/test_absolute_delete_and_ghost_guard.py` | **new** — 12 tests |
+| `tests/test_product_field_merge.py` | **new** — 28 tests |
 | asset cache token | bumped 178 → 179 (shipped JS changed) |
