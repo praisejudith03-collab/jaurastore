@@ -1020,6 +1020,73 @@ def mark_abandoned_reminder_sent(token, at):
         return False
 
 
+
+
+def delete_abandoned_carts_for_tokens(tokens):
+    """Delete abandoned-cart rows by token. Best effort, never raises."""
+    c = client()
+    tokens = [str(t or "").strip() for t in (tokens or []) if str(t or "").strip()]
+    if c is None or not tokens:
+        return 0
+    try:
+        c.table("abandoned_carts").delete().in_("token", tokens).execute()
+        return len(tokens)
+    except Exception as exc:
+        print(f"[supabase] abandoned cart token purge failed: {exc}")
+        return 0
+
+
+def delete_abandoned_carts_for_email(email, converted_only=True):
+    """Delete abandoned carts tied to an order email. Best effort."""
+    c = client()
+    email = str(email or "").strip().lower()
+    if c is None or not email:
+        return 0
+    try:
+        q = c.table("abandoned_carts").delete().eq("email", email)
+        if converted_only:
+            q = q.not_.is_("converted_at", "null")
+        q.execute()
+        return 1
+    except Exception as exc:
+        print(f"[supabase] abandoned cart email purge failed: {exc}")
+        return 0
+
+
+def delete_abandoned_carts_for_product(product_id, product_name=""):
+    """Delete abandoned carts whose JSON items mention a deleted product.
+
+    PostgREST JSON containment cannot cover every legacy item shape, so this
+    uses safe ilike filters against the JSON text. It is best-effort and only
+    runs after an admin intentionally deletes the product.
+    """
+    c = client()
+    pid = str(product_id or "").strip()
+    name = str(product_name or "").strip()
+    if c is None or not (pid or name):
+        return 0
+    deleted = 0
+    if pid:
+        for shape in ({"id": pid}, {"productId": pid}, {"product_id": pid}):
+            try:
+                c.table("abandoned_carts").delete().contains("items", [shape]).execute()
+                deleted += 1
+            except Exception as exc:
+                print(f"[supabase] abandoned cart product containment purge failed: {exc}")
+        try:
+            c.table("abandoned_carts").delete().ilike("items", f"%{pid}%").execute()
+            deleted += 1
+        except Exception as exc:
+            print(f"[supabase] abandoned cart product-id purge failed: {exc}")
+    try:
+        if name:
+            c.table("abandoned_carts").delete().ilike("items", f"%{name[:80]}%").execute()
+            deleted += 1
+    except Exception as exc:
+        print(f"[supabase] abandoned cart product-name purge failed: {exc}")
+    return deleted
+
+
 def mirror_marketing_campaign(row):
     """Mirror one campaign audit row without storing recipient addresses."""
     c = client()

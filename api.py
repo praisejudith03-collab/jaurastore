@@ -1283,6 +1283,9 @@ def create_order():
         # records the RANGE the checkout quoted plus who has to confirm it.
         "delivery": fare,
     }
+    cart_token = sec.clean(d.get("cartToken"), 80)
+    if cart_token:
+        order["cartToken"] = cart_token
     if bulk_discount_lines:
         order["bulkDiscount"] = bulk_discount_lines
     if promo:
@@ -2491,6 +2494,67 @@ def admin_order_update(oid):
                    notificationTriggered=bool(should_notify))
 
 
+def _purge_local_abandoned_carts_for_order(email="", token=""):
+    """Delete local abandoned-cart rows associated with a deleted order."""
+    removed = 0
+    token = sec.clean(token, 80)
+    email = sec.clean_email(email)
+    try:
+        if token:
+            removed += execute("DELETE FROM abandoned_carts WHERE token=?", (token,)).rowcount
+        if email:
+            removed += execute("DELETE FROM abandoned_carts WHERE lower(email)=lower(?) AND converted_at IS NOT NULL", (email,)).rowcount
+    except Exception as exc:
+        print(f"[abandoned] local order cart purge skipped: {exc}")
+    try:
+        from supabase_store import delete_abandoned_carts_for_tokens, delete_abandoned_carts_for_email
+        if token:
+            delete_abandoned_carts_for_tokens([token])
+        if email:
+            delete_abandoned_carts_for_email(email, converted_only=True)
+    except Exception as exc:
+        print(f"[abandoned] remote order cart purge skipped: {exc}")
+    return removed
+
+
+def _abandoned_cart_mentions_product(row, product_id, product_name=""):
+    try:
+        items = json.loads((row or {}).get("items") if isinstance(row, dict) else row["items"] or "[]")
+    except Exception:
+        items = []
+    pid = str(product_id or "").strip()
+    pname = str(product_name or "").strip().lower()
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        if pid and str(item.get("id") or item.get("productId") or item.get("product_id") or "") == pid:
+            return True
+        if pname and str(item.get("name") or "").strip().lower() == pname:
+            return True
+    return False
+
+
+def _purge_local_abandoned_carts_for_product(product_id, product_name=""):
+    """Delete carts that reference a product being permanently deleted."""
+    removed = 0
+    try:
+        rows = [dict(r) for r in query("SELECT token, items FROM abandoned_carts")]
+        tokens = [r["token"] for r in rows if _abandoned_cart_mentions_product(r, product_id, product_name)]
+        for token in tokens:
+            removed += execute("DELETE FROM abandoned_carts WHERE token=?", (token,)).rowcount
+    except Exception as exc:
+        print(f"[abandoned] local product cart purge skipped: {exc}")
+        tokens = []
+    try:
+        from supabase_store import delete_abandoned_carts_for_tokens, delete_abandoned_carts_for_product
+        if tokens:
+            delete_abandoned_carts_for_tokens(tokens)
+        delete_abandoned_carts_for_product(product_id, product_name)
+    except Exception as exc:
+        print(f"[abandoned] remote product cart purge skipped: {exc}")
+    return removed
+
+
 @api.delete("/admin/orders/<oid>")
 @authmod.require_admin
 @sec.require_csrf
@@ -2498,7 +2562,7 @@ def admin_order_delete(oid):
     """Delete an order (with its uploaded payment receipt). Used only from the
     admin portal's explicit Delete button; it never runs on a status change."""
     oid = sec.clean(oid, 24).upper()
-    row = one("SELECT id, status, payload, proof_url FROM orders WHERE id=?", (oid,))
+    row = one("SELECT id, email, status, payload, proof_url FROM orders WHERE id=?", (oid,))
     if not row:
         return jsonify(ok=False, error="Order not found."), 404
     try:
@@ -2554,6 +2618,9 @@ def admin_order_delete(oid):
                 "The order could not be deleted from Supabase. "
                 "No changes were made.")), 503
     execute("DELETE FROM payment_proofs WHERE order_id=?", (oid,))
+    abandoned_removed = _purge_local_abandoned_carts_for_order(
+        email=(row["email"] or payload.get("customer", {}).get("email") or payload.get("email") or ""),
+        token=(payload.get("cartToken") or payload.get("cart_token") or ""))
     execute("DELETE FROM orders WHERE id=?", (oid,))
 
     if Config.SUPABASE_ENABLED and not prod_source:
@@ -2566,8 +2633,8 @@ def admin_order_delete(oid):
             pass
 
     audit(authmod.current_admin(), "order.delete",
-          f"{oid} receipts={len(proofs)} files_removed={files_removed}", _ip())
-    return jsonify(ok=True, id=oid, filesRemoved=files_removed)
+          f"{oid} receipts={len(proofs)} files_removed={files_removed} abandoned_carts={abandoned_removed}", _ip())
+    return jsonify(ok=True, id=oid, filesRemoved=files_removed, abandonedCartsRemoved=abandoned_removed)
 
 # -------------------------------------------------------- admin: products
 @api.get("/admin/products.csv")
@@ -2587,13 +2654,21 @@ def admin_products_csv():
     response.headers["Content-Disposition"] = "attachment; filename=jaura-products.csv"
     return response
 
-@api.post("/admin/products")
-@authmod.require_admin
-@sec.require_csrf
-def admin_product_upsert():
-    """Save one product. Live for the next visitor immediately."""
-    d = request.get_json(silent=True) or {}
-    result = catalog_mod.upsert(d.get("product") or d, authmod.current_admin())
+def _product_save_response(payload):
+    """Shared zero-data-loss product save surface for admin API aliases."""
+    try:
+        result = catalog_mod.upsert(payload, authmod.current_admin())
+    except Exception as exc:
+        try:
+            import observability
+            observability.record_failure("admin.product_save", exc,
+                                         payload_id=str((payload or {}).get("id") or "")[:80],
+                                         logger=current_app.logger)
+        except Exception:
+            pass
+        return jsonify(ok=False, error=(
+            "The product could not be saved because the database operation failed. "
+            "No changes were acknowledged; please retry.")), 503
     product, action = result[0], result[1]
     mirrored = result[2] if len(result) > 2 else True
     if not product:
@@ -2616,6 +2691,78 @@ def admin_product_upsert():
     return jsonify(ok=True, product=product, action=action, mirrored=mirrored,
                    meta=catalog_mod.meta())
 
+
+@api.post("/admin/products")
+@authmod.require_admin
+@sec.require_csrf
+def admin_product_upsert():
+    """Save one product. Live for the next visitor immediately."""
+    d = request.get_json(silent=True) or {}
+    return _product_save_response(d.get("product") or d)
+
+
+@api.post("/products")
+@api.put("/products")
+@authmod.require_admin
+@sec.require_csrf
+def admin_product_upsert_alias():
+    """Admin-compatible product save alias for clients using /api/products."""
+    d = request.get_json(silent=True) or {}
+    return _product_save_response(d.get("product") or d)
+
+
+@api.post("/products/variants")
+@api.put("/products/variants")
+@authmod.require_admin
+@sec.require_csrf
+def admin_product_variants_upsert_alias():
+    """Save variant-specific fields without dropping any existing product data.
+
+    Accepts either a full {product:{...}} payload or a patch:
+      {productId, options, optionStock, optionPrices, optionCompareAt,
+       optionSupplierSku/optionSupplierUrls, optionSku, colors, stock}.
+    The current product row is loaded first, then patched and saved through the
+    same catalog.normalize()/Supabase all-or-nothing path as the main editor.
+    """
+    d = request.get_json(silent=True) or {}
+    if isinstance(d.get("product"), dict):
+        return _product_save_response(d["product"])
+    pid = sec.clean(d.get("productId") or d.get("id"), 64)
+    if not pid:
+        return jsonify(ok=False, error="productId is required."), 400
+    try:
+        product = catalog_mod.product_index(include_hidden=True).get(pid)
+    except Exception:
+        product = None
+    if not product:
+        return jsonify(ok=False, error="Product not found."), 404
+    patch = dict(product)
+    # Explicitly collect every variant/admin field this endpoint may own.
+    aliases = {
+        "options": ("options",),
+        "colors": ("colors",),
+        "optionStock": ("optionStock", "option_stock", "variantStock", "variant_stock"),
+        "optionPrices": ("optionPrices", "option_prices", "variantPrices", "variant_prices", "priceOverrides", "price_overrides"),
+        "optionCompareAt": ("optionCompareAt", "option_compare_at", "variantCompareAt", "variant_compare_at", "variantComparePrices", "variant_compare_prices"),
+        "optionSupplierSku": ("optionSupplierSku", "option_supplier_sku", "optionSupplierUrls", "option_supplier_urls", "variantSupplierUrls", "variant_supplier_urls"),
+        "optionSku": ("optionSku", "option_sku", "optionSkus", "option_skus", "variantSku", "variant_sku", "variantSkus", "variant_skus"),
+        "supplierSku": ("supplierSku", "supplier_sku", "supplierUrl", "supplier_url"),
+        "stock": ("stock", "stock_quantity"),
+        "stock_quantity": ("stock_quantity", "stock"),
+        "compareNgn": ("compareNgn", "compare_ngn", "compareAtPrice", "compare_at_price"),
+        "bulkQty": ("bulkQty", "bulk_qty", "bulkQuantity", "bulk_quantity", "bulkDiscountQty", "bulk_discount_qty"),
+        "bulkPercent": ("bulkPercent", "bulk_percent", "bulkDiscountPercent", "bulk_discount_percent"),
+    }
+    for canonical, names in aliases.items():
+        for name in names:
+            if name in d:
+                patch[canonical] = d.get(name)
+                if canonical == "supplierSku":
+                    patch["supplierUrl"] = d.get(name)
+                    patch["supplier_url"] = d.get(name)
+                break
+    return _product_save_response(patch)
+
 @api.delete("/admin/products/<pid>")
 @authmod.require_admin
 @sec.require_csrf
@@ -2631,6 +2778,12 @@ def admin_product_delete(pid):
     """
     pid = sec.clean(pid, 64)
     files_removed = 0
+    try:
+        existing_for_purge = catalog_mod.product_index(include_hidden=True).get(pid) or {}
+    except Exception:
+        existing_for_purge = {}
+    product_name_for_purge = str((existing_for_purge or {}).get("name") or "")
+    abandoned_removed = 0
     if catalog_mod._prod_source():
         from supabase_store import hard_delete_products
         report = hard_delete_products([pid])
@@ -2644,6 +2797,7 @@ def admin_product_delete(pid):
                 "The product row was removed, but one or more media/tombstone "
                 "cleanup steps failed. Retry so no media or tombstones are left behind."),
                 report=report), 503
+        abandoned_removed = _purge_local_abandoned_carts_for_product(pid, product_name_for_purge)
         catalog_mod._sync_repo_async()
     else:
         before = catalog_mod.merged(include_hidden=True)
@@ -2653,8 +2807,9 @@ def admin_product_delete(pid):
         before_keys = {storage._key_from_url(u) for p in before if str((p or {}).get("id") or "") == pid for u in getattr(catalog_mod, "_media_refs")(p)}
         after_keys = {storage._key_from_url(u) for p in after for u in getattr(catalog_mod, "_media_refs")(p)}
         files_removed = len([k for k in before_keys if k and k not in after_keys])
-    audit(authmod.current_admin(), "product.delete", f"{pid} files_removed={files_removed}", _ip())
-    return jsonify(ok=True, id=pid, filesRemoved=files_removed, meta=catalog_mod.meta())
+        abandoned_removed = _purge_local_abandoned_carts_for_product(pid, product_name_for_purge)
+    audit(authmod.current_admin(), "product.delete", f"{pid} files_removed={files_removed} abandoned_carts={abandoned_removed}", _ip())
+    return jsonify(ok=True, id=pid, filesRemoved=files_removed, abandonedCartsRemoved=abandoned_removed, meta=catalog_mod.meta())
 
 @api.put("/admin/products")
 @authmod.require_admin

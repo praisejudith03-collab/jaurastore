@@ -283,7 +283,7 @@ window.I18N = (() => {
     "ck.fareNote": "Transport fare is not fixed. It ranges by your delivery location and the weight of your products. After payment, tap WhatsApp to get your specific fare.",
     "ck.uploadReceipt": "Upload the bank payment receipt",
     "ck.legal": "By placing your order, you are providing your Name, Address, Phone Number, Order ID, and Ordered Items. Your order will be confirmed soon.",
-    "ck.fileTypes": "JPG, PNG, PDF or DOC — up to 16 MB. Large images are compressed under 1 MB before upload.",
+    "ck.fileTypes": "JPG, PNG, PDF or DOC — up to 24 MB. Large images are compressed under 1 MB before upload.",
     "ck.recaptcha": "This site is protected by reCAPTCHA and the Google <a href=\"https://policies.google.com/privacy\" target=\"_blank\" rel=\"noopener\">Privacy Policy</a> and <a href=\"https://policies.google.com/terms\" target=\"_blank\" rel=\"noopener\">Terms of Service</a> apply.",
     "ck.place": "Place Your Order",
     "ck.placing": "Placing your order…",

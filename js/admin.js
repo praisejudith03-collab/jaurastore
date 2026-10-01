@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=168" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=169" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -704,8 +704,8 @@ function optionPricingHTML(p) {
 function optionSupplierLinksHTML(p) {
   // Per-option Supplier URL: a plain, manual field per variant/component
   // (e.g. Serum, Shampoo, Conditioner) so each one can point at its own
-  // supplier listing. Purely informational reference data - nothing reads
-  // or writes these automatically, and a blank field is never flagged.
+  // supplier listing. The in-process supplier watchdog can read these URLs
+  // to match stock per variant; it never rewrites or blanks the URL field.
   const options = p.options || [];
   const links = p.optionSupplierSku || {};
   const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
@@ -1047,8 +1047,8 @@ async function handleProductSubmit(e, existing) {
       nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
       descriptionFr: String(fd.get("descriptionFr") || "").trim() || existing?.descriptionFr || "",
       dimensions: String(fd.get("dimensions") || "").trim(),
-      // Manual, owner-entered supplier reference link only. Nothing reads or
-      // writes this automatically - see catalog.normalize().
+      // Manual, owner-entered supplier reference link. The consolidated
+      // supplier watchdog may read it for stock, but never rewrites it.
       supplierSku: supplierRef,
       supplierUrl: supplierRef,
       supplier_url: supplierRef,
@@ -2846,7 +2846,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=168" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=169" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3202,7 +3202,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=168", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=169", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

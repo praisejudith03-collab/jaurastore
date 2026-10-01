@@ -286,7 +286,7 @@ def create_app():
         PERMANENT_SESSION_LIFETIME=Config.PERMANENT_SESSION_LIFETIME,
         # Allows a 50 MB video plus multipart/form-data overhead,
         # and gives receipt/PDF uploads enough headroom before validation.
-        MAX_CONTENT_LENGTH=80 * 1024 * 1024,
+        MAX_CONTENT_LENGTH=96 * 1024 * 1024,
     )
     import customers as customers_mod
     customers_mod.register_routes(api)
@@ -737,7 +737,7 @@ def create_app():
     @app.errorhandler(413)
     def _too_big(_e):
         return jsonify(ok=False,
-                       error="That upload is too large. Please send an image under 6 MB or a video/doc under 40 MB."), 413
+                       error="That upload is too large. Payment proofs can be up to 24 MB, product photos up to 6 MB, and videos up to 50 MB."), 413
 
     @app.errorhandler(404)
     def _404(e):
@@ -745,6 +745,14 @@ def create_app():
 
     @app.errorhandler(500)
     def _500(e):
+        try:
+            import observability
+            original = getattr(e, "original_exception", None) or e
+            observability.record_failure("flask.unhandled_exception", original,
+                                         logger=app.logger,
+                                         payload_id=(request.path or "")[:120])
+        except Exception:
+            pass
         return jsonify(ok=False, error="Server error"), 500
 
     return app
