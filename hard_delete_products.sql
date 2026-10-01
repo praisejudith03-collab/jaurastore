@@ -69,10 +69,25 @@ create index if not exists product_options_product_id_idx  on public.product_opt
 
 -- Attach ON DELETE CASCADE to the child tables that already exist. The shop
 -- keeps variant quantities in variant_stock; the rest are legacy tables.
+--
+-- Two properties matter here, and both come from tables that have lived through
+-- a few years of shop changes:
+--
+--   * A table may hold rows pointing at products that no longer exist - most
+--     obviously product_reviews, where product_id has never had a foreign key
+--     and so kept every review of every product since deleted. So a table that
+--     cannot take the cascade is reported and skipped, and is left EXACTLY as
+--     it was. It must not be able to abort the file: the tables that do accept
+--     the cascade are the ones the shop actually needs, and losing all of them
+--     to one table of old junk is a bad trade.
+--   * While a table is being altered it is never left with no foreign key at
+--     all, and the expensive part (checking every existing row) runs under a
+--     lock that does not block reads or writes.
 do $$
 declare
-  t       text;
-  gone    text;
+  t    text;
+  gone text;
+  new_name text := '_product_id_cascade_fkey';
 begin
   foreach t in array array[
     'variant_stock', 'product_reviews', 'product_views', 'featured_products'
@@ -81,28 +96,8 @@ begin
       continue;                    -- not in this deployment: nothing to cascade
     end if;
 
-    -- Drop only the constraints that point at products(id) WITHOUT a cascade.
-    -- ('a' = no action, 'r' = restrict.) Anything else is left alone.
-    for gone in
-      select con.conname
-        from pg_constraint con
-        join pg_class rel      on rel.oid = con.conrelid
-        join pg_namespace ns   on ns.oid = rel.relnamespace
-        join pg_class parent   on parent.oid = con.confrelid
-        join pg_namespace pns  on pns.oid = parent.relnamespace
-       where ns.nspname  = 'public'
-         and rel.relname = t
-         and pns.nspname = 'public'
-         and parent.relname = 'products'
-         and con.contype = 'f'
-         and con.confdeltype <> 'c'
-    loop
-      execute format('alter table public.%I drop constraint %I', t, gone);
-    end loop;
-
-    -- Add the cascade, unless a cascading constraint to products(id) already
-    -- exists for this table.
-    if not exists (
+    -- Already cascades? Nothing to do, and nothing to risk.
+    if exists (
       select 1
         from pg_constraint con
         join pg_class rel    on rel.oid = con.conrelid
@@ -114,11 +109,56 @@ begin
          and con.contype = 'f'
          and con.confdeltype = 'c'
     ) then
+      continue;
+    end if;
+
+    new_name := t || '_product_id_cascade_fkey';
+
+    -- One table at a time, and all or nothing per table.
+    begin
+      -- (a) Add the cascade FIRST, and add it NOT VALID. NOT VALID checks no
+      --     existing row, so this cannot fail on a table holding old orphans,
+      --     and the table is never left with no foreign key. The cascade
+      --     applies to real rows immediately - NOT VALID only means the
+      --     pre-existing rows have not been proved - so deletion already
+      --     takes the children with it.
+      execute format('alter table public.%I drop constraint if exists %I',
+                     t, new_name);
       execute format(
         'alter table public.%I add constraint %I foreign key (product_id) '
-        'references public.products(id) on delete cascade',
-        t, t || '_product_id_fkey');
-    end if;
+        'references public.products(id) on delete cascade not valid',
+        t, new_name);
+
+      -- (b) Now the old non-cascading constraint is redundant, and it would
+      --     refuse the very delete this migration exists to allow. ('a' = no
+      --     action, 'r' = restrict.) Anything else is left alone.
+      for gone in
+        select con.conname
+          from pg_constraint con
+          join pg_class rel      on rel.oid = con.conrelid
+          join pg_namespace ns   on ns.oid = rel.relnamespace
+          join pg_class parent   on parent.oid = con.confrelid
+          join pg_namespace pns  on pns.oid = parent.relnamespace
+         where ns.nspname  = 'public'
+           and rel.relname = t
+           and pns.nspname = 'public'
+           and parent.relname = 'products'
+           and con.contype = 'f'
+           and con.confdeltype <> 'c'
+      loop
+        execute format('alter table public.%I drop constraint %I', t, gone);
+      end loop;
+
+      -- (c) Finally check the old rows for real. This takes a weaker lock
+      --     than the ADD did, so it does not block the shop. If it fails, the
+      --     whole table rolls back to where it started and the notice below
+      --     says so.
+      execute format('alter table public.%I validate constraint %I', t, new_name);
+    exception when others then
+      raise notice
+        'hard_delete_products: left %.% on its existing constraint (%). '
+        'It is still deleted row-by-row by the app.', t, new_name, sqlerrm;
+    end;
   end loop;
 end $$;
 
@@ -153,4 +193,40 @@ begin
 end;
 $$;
 
-grant execute on function public.hard_delete_products(text[]) to service_role;
+-- ------------------------------------------------------------------ access
+-- CREATE FUNCTION grants EXECUTE to PUBLIC, and on Supabase the public schema
+-- is the one PostgREST exposes. Without this revoke, a function whose entire
+-- job is deleting the catalogue is callable by the anonymous internet: any
+-- visitor who can reach the API could send a request body listing the product
+-- ids and empty the shop. The cascade above is what makes that reachable, so
+-- it is revoked before it is ever useful.
+revoke execute on function public.hard_delete_products(text[]) from public;
+
+-- anon / authenticated are Supabase roles and may not exist on a plain
+-- PostgreSQL server, so their absence is not treated as an error.
+do $$
+declare
+  r text;
+begin
+  foreach r in array array['anon', 'authenticated', 'authenticator'] loop
+    if exists (select 1 from pg_roles where rolname = r) then
+      execute format(
+        'revoke execute on function public.hard_delete_products(text[]) from %I',
+        r);
+    end if;
+  end loop;
+end $$;
+
+-- The app calls this with the service-role key (server side only, never in a
+-- browser). SECURITY DEFINER means the role needs no grants on the tables
+-- themselves. Guarded for the same reason as the revokes above: this file is
+-- also run against staging and test databases, where the Supabase roles are
+-- not present, and a bare GRANT on a missing role aborts the whole script -
+-- taking every cascade above it down with it.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    execute 'grant execute on function '
+           'public.hard_delete_products(text[]) to service_role';
+  end if;
+end $$;

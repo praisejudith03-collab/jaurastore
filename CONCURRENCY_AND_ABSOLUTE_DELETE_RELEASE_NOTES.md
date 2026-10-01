@@ -143,6 +143,47 @@ durable tombstone stays single-sourced in
 `growth_settings.deleted_product_ids_json` — two lists would eventually
 disagree, and the disagreement is exactly how a product comes back.
 
+### The SQL is now executed by the test suite, and it had two real bugs
+
+`pgserver` (already a test dependency) ships a real PostgreSQL, so
+`tests/test_hard_delete_sql.py` runs the migration through `psql` — the same
+way it gets pasted into the Supabase SQL editor — and checks the state it
+leaves behind. Reading the file would not have found either of these.
+
+**1. `grant execute … to service_role` aborted the entire script.** A bare
+`GRANT` to a role that does not exist is an error, and the error rolled back
+everything above it. The revokes were already guarded; the grant was not. It
+worked on Supabase, which is the only place anyone was going to run it, and
+would have failed on staging or on any future database. The guard now checks
+`pg_roles` first.
+
+**2. A function that deletes the catalogue was executable by anyone.**
+`CREATE FUNCTION` grants `EXECUTE` to `PUBLIC`, and on Supabase the `public`
+schema is the one PostgREST exposes. As written, a visitor who could reach
+the shop's API could POST a list of product ids and empty the shop — a
+`SECURITY DEFINER` function with no `REVOKE`. It is now revoked from `PUBLIC`,
+`anon` and `authenticated` (those roles only exist on Supabase, so their
+absence is not an error) and granted to `service_role`, which is server-side
+only.
+
+**Also changed, for a failure mode the first two would have hidden:** one
+`product_reviews` row pointing at a product deleted years ago would have
+failed the foreign-key validation and rolled back the whole file — so *none*
+of the cascades would have been applied. The foreign key is now added
+`NOT VALID` first (which checks no existing rows, and means the table is
+never left with no foreign key at all), the old non-cascading constraint is
+dropped, and only then is it validated. A table that still cannot take it is
+left **exactly** as it was, with a `NOTICE` saying so, and the other tables
+keep their cascade.
+
+Worth being clear about what the SQL does and does not buy: **the app already
+deletes correctly without it.** `_purge_product_children()` sweeps all seven
+child tables unconditionally, whether or not the RPC succeeded, and the
+end-to-end delete test passes on a database where the migration has never
+been run. The migration makes the cascade a property of the schema, so a
+future table or a future code path cannot quietly orphan rows. Applying it is
+an improvement, not a prerequisite.
+
 **The real cause of ghost restores.** Candidate selection already skipped
 deleted ids, but selection and write are *minutes* apart on a real catalogue —
 the watchdog fetches a supplier page in between. Deleting a product inside
@@ -173,9 +214,11 @@ references as orphans, and recent uploads are protected by a grace window).
 
 ## How this was verified
 
-`python3 -m pytest tests/` — **1671 passed, 21 skipped**. New:
-`tests/test_absolute_delete_and_ghost_guard.py` (12 tests) and
-`tests/test_product_field_merge.py` (28 tests).
+`python3 -m pytest tests/` — **1681 passed, 0 skipped** locally, plus 8
+Playwright browser tests that need a real browser and run in CI. New:
+`tests/test_absolute_delete_and_ghost_guard.py` (12),
+`tests/test_product_field_merge.py` (28), `tests/test_hard_delete_sql.py`
+(10, against a real PostgreSQL).
 
 Two live harnesses run against a real gunicorn server:
 
@@ -216,5 +259,6 @@ the deleted product absent after every refresh.
 | `supplier_watchdog.py` | deleted-id re-check immediately before every write |
 | `hard_delete_products.sql` | **new** — real `ON DELETE CASCADE` + the delete function |
 | `tests/test_absolute_delete_and_ghost_guard.py` | **new** — 12 tests |
+| `tests/test_hard_delete_sql.py` | **new** — 10 tests that execute the migration |
 | `tests/test_product_field_merge.py` | **new** — 28 tests |
 | asset cache token | bumped 178 → 179 (shipped JS changed) |
