@@ -21,6 +21,85 @@ TICK_SECONDS = 300
 REMINDER_PAGE_SIZE = 20
 REMINDER_MAX_PER_TICK = 200
 SUPPLIER_PAGE_SIZE = int(os.environ.get("SUPPLIER_WATCHDOG_BATCH", "8") or 8)
+# How long one supplier-linked product waits before a day-time tick may check
+# it again. Tunable per deployment (a small catalogue on a fast supplier can
+# afford a shorter wait); the nightly sweep always ignores it.
+SUPPLIER_MIN_INTERVAL = int(os.environ.get("SUPPLIER_WATCHDOG_MIN_INTERVAL", "3600") or 3600)
+
+# ------------------------------------------------------------- nightly 2 AM
+# The off-peak deep pass: once per day, at 2:00 AM in the owner's timezone
+# (Africa/Porto-Novo, UTC+1 by default), the scheduler runs the full supplier
+# watchdog sweep (every linked product once, instead of the day-time batches
+# of 8) followed by the storage sweeper that purges orphaned / duplicate
+# media the day's edits left behind. Render's free tier has no real cron, so
+# the in-process loop IS the cron: each 5-minute tick checks whether the
+# nightly hour has passed and the deep pass has not run yet today.
+NIGHTLY_HOUR = int(os.environ.get("SUPPLIER_WATCHDOG_NIGHTLY_HOUR", "2") or 0)
+NIGHTLY_TZ_OFFSET = float(os.environ.get("SUPPLIER_WATCHDOG_NIGHTLY_TZ_OFFSET", "1") or 0)
+_last_nightly_date = ""
+
+
+def _nightly_enabled():
+    raw = os.environ.get("SUPPLIER_WATCHDOG_NIGHTLY", "1").strip().lower()
+    return NIGHTLY_HOUR >= 0 and raw not in ("0", "false", "no", "off")
+
+
+def _nightly_due(now=None):
+    """True once per local day, after the configured nightly hour."""
+    if not _nightly_enabled():
+        return False
+    now = now or datetime.datetime.utcnow()
+    local = now + datetime.timedelta(hours=NIGHTLY_TZ_OFFSET)
+    if local.hour < NIGHTLY_HOUR:
+        return False
+    return _last_nightly_date != local.date().isoformat()
+
+
+def _supplier_nightly(logger=None):
+    import supplier_watchdog
+    return supplier_watchdog.nightly_sweep(logger=logger)
+
+
+def _storage_sweeper(logger=None):
+    """Purge orphaned / duplicate upload media the day left behind.
+
+    Runs the same battle-tested plan as the admin's Storage cleanup card:
+    files a live product, order, receipt or the site itself still references
+    are never candidates, and uploads from the last two days (grace window)
+    are protected. Nothing is guessed - a failed reference scan aborts the
+    sweep rather than treating unreadable references as orphans."""
+    raw = os.environ.get("STORAGE_SWEEPER_NIGHTLY", "1").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return {"skipped": True}
+    import storage_cleanup
+    report = storage_cleanup.build_plan(min_age_days=2)
+    out = {"candidates": int(report.get("candidate_count") or 0),
+           "bytes": int(report.get("candidate_bytes") or 0), "deleted": [], "errors": []}
+    if out["candidates"] > 0:
+        result = storage_cleanup.apply_plan(report=report)
+        out["deleted"] = list(result.get("deleted") or [])
+        out["errors"] = list(result.get("errors") or [])
+    if logger:
+        logger.info("nightly storage sweeper: candidates=%s deleted=%s errors=%s",
+                    out["candidates"], len(out["deleted"]), len(out["errors"]))
+    return out
+
+
+def _nightly_run(logger=None):
+    """The 2 AM deep pass: full supplier sweep + storage sweeper, once a day."""
+    global _last_nightly_date
+    now = datetime.datetime.utcnow()
+    local = now + datetime.timedelta(hours=NIGHTLY_TZ_OFFSET)
+    supplier = _step("supplier.nightly_sweep", lambda: _supplier_nightly(logger), logger)
+    sweeper = _step("storage.nightly_sweeper", lambda: _storage_sweeper(logger), logger)
+    _health["nightlyLastRun"] = _utc_now()
+    _health["nightlySchedule"] = (
+        f"{NIGHTLY_HOUR:02d}:00 (UTC{NIGHTLY_TZ_OFFSET:+g})" if _nightly_enabled() else "off")
+    # Only stamp the date when both steps at least ran (a raise would have
+    # been traced by _step; a None result still counts as "attempted today" so
+    # a broken supplier page cannot re-run the sweep every 5 minutes).
+    _last_nightly_date = local.date().isoformat()
+    return {"supplier": supplier, "sweeper": sweeper}
 
 # Compatibility names kept for health/tests/admin copy; they now refer to the
 # same in-process consolidated loop instead of separate Render worker services.
@@ -34,6 +113,8 @@ _health = {
     "maintenanceLastRun": "",
     "remindersLastRun": "",
     "supplierLastRun": "",
+    "nightlyLastRun": "",
+    "nightlySchedule": "",
     "lastError": "",
     "lastErrorAt": "",
     "lastErrorJob": "",
@@ -140,7 +221,9 @@ def _persist_counters(logger=None):
 def _supplier_watchdog(logger=None):
     """Run one bounded supplier-stock page in the web service process."""
     import supplier_watchdog
-    result = supplier_watchdog.tick(limit=SUPPLIER_PAGE_SIZE, logger=logger)
+    result = supplier_watchdog.tick(limit=SUPPLIER_PAGE_SIZE,
+                                    min_interval_seconds=SUPPLIER_MIN_INTERVAL,
+                                    logger=logger)
     _health["supplierLastRun"] = result.get("at") or _utc_now()
     return result
 
@@ -152,6 +235,9 @@ def _maintenance_tick(logger=None):
     _step("scheduler.repair_photos", lambda: _repair_photos(logger), logger)
     _step("scheduler.persist_counters", lambda: _persist_counters(logger), logger)
     _step("supplier.watchdog", lambda: _supplier_watchdog(logger), logger)
+    # The once-a-day 2:00 AM deep pass (full supplier sweep + storage sweeper).
+    if _nightly_due():
+        _step("scheduler.nightly", lambda: _nightly_run(logger), logger)
     _health["maintenanceLastRun"] = _utc_now()
 
 
@@ -275,8 +361,14 @@ def health_snapshot(repair=True):
         supplier = supplier_watchdog.summary()
     except Exception:
         supplier = {}
+    nightly = {
+        "schedule": (f"{NIGHTLY_HOUR:02d}:00 (UTC{NIGHTLY_TZ_OFFSET:+g})"
+                     if _nightly_enabled() else "off"),
+        "jobs": "supplier sweep + storage sweeper",
+    }
     return {**_health, "started": _started.is_set(),
             "backgroundAlive": alive,
+            "nightly": nightly,
             # Backwards-compatible booleans: both old logical workers are now
             # represented by the same consolidated in-process loop.
             "maintenanceAlive": alive,

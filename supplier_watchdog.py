@@ -312,6 +312,123 @@ def _stock_from_dict(row: Dict[str, Any]) -> Optional[int]:
     return None
 
 
+# ------------------------------------------------------------------ prices
+# The watchdog never rewrites the shop's own retail price: a supplier page's
+# price is a COST signal, not the shop's margin. What it does is watch the
+# supplier's price per variant and raise an admin-visible warning the moment
+# it rises, so the owner can reprice deliberately.
+_PRICE_KEYS = ("price", "priceAmount", "price_amount", "amount", "unitPrice",
+               "unit_price", "priceNGN", "priceNgn", "sellingPrice")
+
+
+def parse_price(value: Any) -> Optional[float]:
+    """A confident positive number out of a price field, or None.
+
+    Handles plain numbers, "1234.50", "₦12,500", "$12.99", "12 500 FCFA" and
+    JSON-LD {"amount": "...", "currency": "..."} objects."""
+    if isinstance(value, dict):
+        value = value.get("amount", value.get("value"))
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return round(float(value), 2) if value > 0 else None
+    text = str(value).strip()
+    if not text:
+        return None
+    # Reject ranges ("$10 - $20") and per-unit noise ("$10 / kg").
+    if "/" in text:
+        text = text.split("/", 1)[0].strip()
+    m = re.search(r"(\d[\d\s.,]*\.\d{1,2}|\d[\d\s.,]{0,11})", text)
+    if not m:
+        return None
+    # A minus directly before the number (a discount / refund amount) is
+    # never a price to watch: "-3", "₦ -1,200", "− 4.00".
+    before = text[:m.start()].rstrip(" \u00a0$₦£€")
+    if before.endswith(("-", "−", "–")):
+        return None
+    if not m:
+        return None
+    raw = m.group(1).strip().replace(" ", "")
+    # "1,234.50" -> 1234.50 ; "12.500" (EU) -> 12.5 only when unambiguous
+    if re.fullmatch(r"\d{1,3}(,\d{3})+(\.\d{1,2})?", raw):
+        raw = raw.replace(",", "")
+    elif re.fullmatch(r"\d+\.\d{2}", raw):
+        pass
+    else:
+        raw = raw.replace(",", "").replace(".", "")
+    try:
+        n = round(float(raw), 2)
+    except ValueError:
+        return None
+    return n if n > 0 else None
+
+
+def _price_from_dict(row: Dict[str, Any]) -> Optional[float]:
+    """The row's own selling price (never the strike-through compare-at)."""
+    for key in _PRICE_KEYS:
+        if key in row:
+            price = parse_price(row.get(key))
+            if price is not None:
+                return price
+    offers = row.get("offers")
+    if isinstance(offers, dict):
+        for key in _PRICE_KEYS:
+            if key in offers:
+                price = parse_price(offers.get(key))
+                if price is not None:
+                    return price
+    if isinstance(offers, list):
+        for offer in offers:
+            if isinstance(offer, dict):
+                price = _price_from_dict(offer)
+                if price is not None:
+                    return price
+    return None
+
+
+def product_page_price(text: str) -> Optional[float]:
+    """The supplier page's product-level price (JSON-LD offers / product JSON).
+
+    Used for variant-free products and as a fallback signal; variant products
+    prefer the per-variant price carried on their matched rows."""
+    for blob in _json_blobs(text or ""):
+        found = _product_price_in_json(blob, 0)
+        if found is not None:
+            return found
+    m = re.search(r'itemprop=["\']price["\'][^>]*content=["\']([\d.,]+)["\']',
+                  text or "", flags=re.I)
+    if m:
+        return parse_price(m.group(1))
+    m = re.search(r'"price"\s*:\s*"?([\d.,]+)"?', text or "", flags=re.I)
+    if m:
+        return parse_price(m.group(1))
+    return None
+
+
+def _product_price_in_json(node: Any, depth: int) -> Optional[float]:
+    if depth > 8:
+        return None
+    if isinstance(node, dict):
+        kind = str(node.get("@type") or node.get("type") or "").lower()
+        if "product" in kind or "offer" in kind or "variant" in kind:
+            price = _price_from_dict(node)
+            if price is not None:
+                return price
+        for key in ("offers", "variants", "variant", "products", "items", "data"):
+            child = node.get(key)
+            if child is not None:
+                price = _product_price_in_json(child, depth + 1)
+                if price is not None:
+                    return price
+    elif isinstance(node, list):
+        for item in node[:80]:
+            price = _product_price_in_json(item, depth)
+            if price is not None:
+                return price
+    return None
+
+
+
 def _walk_json(node: Any, rows: List[Dict[str, Any]], depth: int = 0) -> None:
     if depth > 8 or len(rows) > 300:
         return
@@ -319,7 +436,11 @@ def _walk_json(node: Any, rows: List[Dict[str, Any]], depth: int = 0) -> None:
         label = _label_from_dict(node)
         qty = _stock_from_dict(node)
         if label and qty is not None:
-            rows.append({"label": label, "qty": max(0, int(qty)), "source": "json"})
+            row = {"label": label, "qty": max(0, int(qty)), "source": "json"}
+            price = _price_from_dict(node)
+            if price is not None:
+                row["price"] = price
+            rows.append(row)
         for key in ("variants", "variant", "products", "items", "offers", "options", "data", "nodes", "edges"):
             child = node.get(key)
             if child is not None:
@@ -371,7 +492,13 @@ def parse_supplier_variants(text: str, jaura_labels: Iterable[str] = ()) -> List
         chunk = html.unescape(m.group(0)).lower()
         qty = _availability_from_value(chunk)
         if label and qty is not None:
-            rows.append({"label": label, "qty": qty, "source": "html-attr"})
+            row = {"label": label, "qty": qty, "source": "html-attr"}
+            pm = re.search(r"data-price\s*=\s*[\"']([^\"']{1,32})[\"']", chunk, flags=re.I)
+            if pm:
+                price = parse_price(pm.group(1))
+                if price is not None:
+                    row["price"] = price
+            rows.append(row)
 
     # Conservative plain-text fallback: only for the Jaura labels we know, and
     # only when stock words appear close to that label.
@@ -405,6 +532,8 @@ def parse_supplier_variants(text: str, jaura_labels: Iterable[str] = ()) -> List
         key = fold(label)
         qty = max(0, int(row.get("qty") or 0))
         incoming = {"label": label, "qty": qty, "source": row.get("source") or ""}
+        if row.get("price") is not None:
+            incoming["price"] = row["price"]
         prev = by_label.get(key)
         if prev is None:
             by_label[key] = incoming
@@ -419,6 +548,12 @@ def parse_supplier_variants(text: str, jaura_labels: Iterable[str] = ()) -> List
             continue
         elif qty == 0 or qty > int(prev.get("qty") or 0):
             by_label[key] = incoming
+        # Same label seen twice at the same strength: keep whichever row
+        # carried a price so the price watch never loses its reading.
+        if "price" not in by_label[key] and "price" in incoming:
+            merged_row = dict(by_label[key])
+            merged_row["price"] = incoming["price"]
+            by_label[key] = merged_row
     return list(by_label.values())
 
 
@@ -492,12 +627,33 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> T
     if not keys:
         # Simple product (no variants): the supplier page answers for the
         # whole piece, and the rule is applied to the product's own stock.
+        observed_price = None
+        for row in supplier_rows:
+            if row.get("price") is not None:
+                observed_price = float(row["price"])
+                break
+        if observed_price is None:
+            try:
+                observed_price = product_page_price(fetch_url(urls[0])) if urls else None
+            except Exception:
+                observed_price = None
+        if observed_price is not None:
+            _watch_prices(p, {"product": observed_price}, warnings)
         return _sync_whole_product(p, supplier_rows, actor, warnings)
 
     matched = map_supplier_to_jaura(keys, supplier_rows)
     if not matched:
         warnings.append(_warning(p, "supplier_no_matches", "Supplier variants did not confidently match this product's option names; existing stock was left unchanged."))
         return False, warnings
+
+    # Price watch: remember each matched variant's supplier price and warn on
+    # any rise. Warnings only - the retail price stays the owner's decision.
+    observed: Dict[str, Optional[float]] = {
+        key: (float(row["price"]) if row.get("price") is not None else None)
+        for key, row in matched.items()
+    }
+    if any(v is not None for v in observed.values()):
+        _watch_prices(p, {k: v for k, v in observed.items() if v is not None}, warnings)
 
     # A variant the supplier page did not confidently cover keeps its current
     # quantity, always - but the owner is told, once per product, which boxes
@@ -640,6 +796,94 @@ def _save_warnings(new_warnings: List[Dict[str, Any]]) -> None:
         pass
 
 
+# ------------------------------------------------------- supplier price watch
+# Last supplier price seen per product/variant, persisted in growth_settings
+# so a deploy does not reset the baseline. The in-process map is the fallback
+# for local/development mode and a read outage (never block a stock sync on a
+# price-book read: an outage simply means "no comparison this run").
+PRICE_WATCH_KEY = "supplier_price_watch_json"
+_price_map: Dict[str, Dict[str, Any]] = {}
+
+
+def _load_price_map() -> Dict[str, Dict[str, Any]]:
+    """Refresh the in-process price book from growth_settings.
+
+    The module-level ``_price_map`` is always the live book; this only merges
+    the persisted copy into it, so a read outage degrades to "compare against
+    what this process last saw" instead of losing the baseline."""
+    try:
+        import supabase_store
+        c = supabase_store.client()
+        if c is not None:
+            res = (c.table("growth_settings").select("value")
+                   .eq("key", PRICE_WATCH_KEY).limit(1).execute())
+            rows = getattr(res, "data", None) or []
+            raw = (rows[0] or {}).get("value") if rows else None
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    if isinstance(v, dict):
+                        _price_map[str(k)] = v
+    except Exception:
+        pass
+    return _price_map
+
+
+def _save_price_map() -> None:
+    try:
+        import supabase_store
+        c = supabase_store.client()
+        if c is None:
+            return
+        payload = json.dumps(_price_map, ensure_ascii=False, separators=(",", ":"))
+        c.table("growth_settings").upsert([{"key": PRICE_WATCH_KEY, "value": payload}]).execute()
+    except Exception:
+        pass
+
+
+def _fmt_price(n: Optional[float]) -> str:
+    try:
+        return f"{float(n):,.2f}"
+    except Exception:
+        return "?"
+
+
+def _watch_prices(p: Dict[str, Any], observed: Dict[str, Optional[float]],
+                  warnings: List[Dict[str, Any]]) -> None:
+    """Compare this run's supplier prices with the last ones we remembered.
+
+    Only warns - the shop's own retail price is never rewritten by a supplier
+    page. Rises are urgent (margin squeeze); drops are worth knowing too."""
+    clean = {str(k): v for k, v in (observed or {}).items()
+             if v is not None and float(v) > 0}
+    if not clean:
+        return
+    pid = str(p.get("id") or "")
+    _load_price_map()
+    entry = _price_map.get(pid) if isinstance(_price_map.get(pid), dict) else {}
+    known = entry.get("prices") if isinstance(entry.get("prices"), dict) else {}
+    for key, price in clean.items():
+        old = known.get(key)
+        try:
+            old_n = float(old) if old is not None else None
+        except (TypeError, ValueError):
+            old_n = None
+        if old_n is not None and price > old_n + 0.005:
+            warnings.append(_warning(
+                p, "supplier_price_increased",
+                f"Supplier price for '{key}' rose from {_fmt_price(old_n)} to "
+                f"{_fmt_price(price)}. Review your retail price for this product."))
+        elif old_n is not None and price < old_n - 0.005:
+            warnings.append(_warning(
+                p, "supplier_price_dropped",
+                f"Supplier price for '{key}' fell from {_fmt_price(old_n)} to "
+                f"{_fmt_price(price)} - a chance to widen your margin."))
+    merged = dict(known)
+    merged.update(clean)
+    _price_map[pid] = {"prices": merged, "at": _now()}
+    _save_price_map()
+
+
 def tick(limit: int = DEFAULT_BATCH_SIZE, min_interval_seconds: int = 60 * 60, logger=None) -> Dict[str, Any]:
     """Run one bounded supplier watchdog batch inside the web service."""
     global _last_summary
@@ -653,11 +897,20 @@ def tick(limit: int = DEFAULT_BATCH_SIZE, min_interval_seconds: int = 60 * 60, l
     except Exception as exc:
         _last_summary = {"at": _now(), "checked": 0, "updated": 0, "warnings": 1, "lastError": str(exc)[:200]}
         return dict(_last_summary)
+    # Defence in depth against "ghost" products: a hard-deleted id must never
+    # be re-saved (and thereby re-created in Supabase) by an automated sync,
+    # even if a stale copy of the row somehow reaches this list.
+    try:
+        dead_ids = catalog_mod.deleted_product_ids()
+    except Exception:
+        dead_ids = set()
     now_ts = time.time()
     candidates = []
     for product in products or []:
         pid = str((product or {}).get("id") or "").strip()
         if not pid or not product_supplier_urls(product):
+            continue
+        if pid in dead_ids:
             continue
         if now_ts - float(_last_checked.get(pid) or 0) < min_interval_seconds:
             continue
@@ -683,3 +936,53 @@ def tick(limit: int = DEFAULT_BATCH_SIZE, min_interval_seconds: int = 60 * 60, l
     if logger and (checked or updated or warnings):
         logger.info("supplier watchdog: checked=%s updated=%s warnings=%s", checked, updated, len(warnings))
     return dict(_last_summary)
+
+
+def nightly_sweep(logger=None, max_products: Optional[int] = None) -> Dict[str, Any]:
+    """The 2:00 AM deep pass: EVERY supplier-linked product, exactly once.
+
+    The 5-minute ticks keep day-time stock fresh in small batches; this sweep
+    is the off-peak safety net that guarantees no product waits more than a
+    day for a supplier reading regardless of tick batching. Hard-deleted ids
+    are skipped so an automated pass can never re-create them."""
+    cap = max(1, max_products or int(os.environ.get("SUPPLIER_WATCHDOG_NIGHTLY_MAX", "400") or 400))
+    checked = updated = 0
+    warnings: List[Dict[str, Any]] = []
+    try:
+        products = catalog_mod.merged(include_hidden=True) or []
+    except Exception as exc:
+        _last_summary = {"at": _now(), "checked": 0, "updated": 0,
+                         "warnings": 1, "lastError": str(exc)[:200]}
+        return dict(_last_summary)
+    try:
+        dead_ids = catalog_mod.deleted_product_ids()
+    except Exception:
+        dead_ids = set()
+    todo = []
+    seen = set()
+    for product in products:
+        pid = str((product or {}).get("id") or "").strip()
+        if not pid or pid in seen or pid in dead_ids:
+            continue
+        if not product_supplier_urls(product):
+            continue
+        seen.add(pid)
+        todo.append(product)
+        if len(todo) >= cap:
+            break
+    now_ts = time.time()
+    for product in todo:
+        pid = str((product or {}).get("id") or "").strip()
+        _last_checked[pid] = now_ts
+        checked += 1
+        ok, warn = sync_product(product)
+        if ok:
+            updated += 1
+        warnings.extend(warn)
+    _save_warnings(warnings)
+    out = {"at": _now(), "checked": checked, "updated": updated,
+           "warnings": len(warnings), "lastError": ""}
+    if logger and (checked or updated or warnings):
+        logger.info("supplier nightly sweep: checked=%s updated=%s warnings=%s",
+                    checked, updated, len(warnings))
+    return out

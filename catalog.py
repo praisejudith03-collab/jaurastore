@@ -1854,6 +1854,28 @@ def set_variant_stock(pid, qty, option_key=None, actor=None):
 
 
 
+def deleted_product_ids():
+    """Every product id that must never come back or be re-created by an
+    automated pass (supplier sync, mirror, cache re-hydration).
+
+    Unions the local override deleted list with the durable Supabase
+    tombstone list, so the answer is correct whichever side a delete landed
+    on. A failed durable read returns the local side only: an unreachable
+    database must never look like "nothing is deleted"."""
+    ids = set()
+    try:
+        ids |= {str(x or "").strip() for x in (overrides().get("deleted") or []) if str(x or "").strip()}
+    except Exception:
+        pass
+    try:
+        durable = _durable_deleted_ids()
+        if durable:
+            ids |= {str(x or "").strip() for x in durable if str(x or "").strip()}
+    except Exception:
+        pass
+    return ids
+
+
 def local_only_products():
     """Admin overrides that are not yet in the live Supabase table.
 
