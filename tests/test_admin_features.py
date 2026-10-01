@@ -90,6 +90,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("POST", "/api/admin/uploads/category"), ("POST", "/api/admin/uploads/hero"),
     ("POST", "/api/admin/uploads/image"), ("POST", "/api/admin/uploads/product"),
     ("DELETE", "/api/admin/uploads/purge"), ("POST", "/api/admin/uploads/video"),
+    ("POST", "/api/admin/storage/cleanup"),
 }
 
 

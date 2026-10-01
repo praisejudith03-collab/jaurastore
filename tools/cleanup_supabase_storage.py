@@ -5,7 +5,7 @@ Dry-run is the default. Apply requires BOTH --apply and --confirm-project with
 exact project ref. Objects referenced by any scanned row are never removed.
 Use the JSON report as the review/audit record.
 """
-import argparse, hashlib, json, os, re, sys
+import argparse, datetime, hashlib, json, os, re, sys
 from urllib.parse import unquote, urlparse
 
 from supabase import create_client
@@ -55,9 +55,32 @@ def list_objects(bucket, prefix=""):
     return out
 
 
+def parse_ts(raw):
+    if not raw: return None
+    try:
+        return datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        try: return datetime.datetime.utcfromtimestamp(float(raw) / 1000.0)
+        except (TypeError, ValueError): return None
+
+def object_age_days(obj):
+    """Age of a listed object in days, or None when it cannot be established."""
+    meta = obj.get("metadata") or {}
+    stamps = [parse_ts(obj.get("updated_at")), parse_ts(obj.get("created_at")),
+              parse_ts(meta.get("lastModified")), parse_ts(meta.get("created"))]
+    stamps = [t for t in stamps if t]
+    if not stamps: return None
+    return (datetime.datetime.utcnow() - min(stamps)).total_seconds() / 86400.0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
+    # An upload that just landed (the admin is still filling the product
+    # form) must never be hoovered up by a cleanup that runs at the wrong
+    # second. Objects younger than this many days are skipped - and objects
+    # whose age cannot be read are treated as brand new, never as ancient.
+    ap.add_argument("--min-age-days", type=float, default=2.0)
     ap.add_argument("--confirm-project", default="")
     ap.add_argument("--report", default="storage-cleanup-report.json")
     args = ap.parse_args()
@@ -106,13 +129,17 @@ def main():
         name = item.name if hasattr(item, "name") else item.get("name")
         bucket = sb.storage.from_(name)
         objects = list_objects(bucket)
-        orphaned, broken, hashes, sizes = [], [], {}, {}
+        orphaned, broken, hashes, sizes, protected = [], [], {}, {}, []
         for obj in objects:
             path = obj["path"]
             if (name, path) in refs: continue
             ext = path.rsplit(".", 1)[-1].lower()
             # Never classify unknown extension/system files as disposable.
             if ext not in MEDIA_EXT: continue
+            age = object_age_days(obj)
+            if age is None or age < args.min_age_days:
+                protected.append(path)
+                continue
             orphaned.append(path)
             try:
                 data = bucket.download(path)
@@ -128,6 +155,7 @@ def main():
         report["buckets"][name] = {"objects": len(objects), "orphaned": orphaned,
                                     "broken_videos": broken, "duplicate_groups": duplicates,
                                     "delete_candidates": candidates,
+                                    "protected_recent_uploads": protected,
                                     "candidate_bytes": sum(sizes.get(p, 0) for p in candidates)}
         if args.apply:
             for start in range(0, len(candidates), 100):

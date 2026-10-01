@@ -2782,6 +2782,12 @@ def admin_order_delete(oid):
                 "The order could not be deleted from Supabase. "
                 "No changes were made.")), 503
     execute("DELETE FROM payment_proofs WHERE order_id=?", (oid,))
+    # coupon redemptions belong to the order: a hard delete must not leave
+    # their rows behind a gone order id (they would keep counting as uses).
+    try:
+        execute("DELETE FROM coupon_uses WHERE order_id=?", (oid,))
+    except Exception:
+        pass
     abandoned_removed = _purge_local_abandoned_carts_for_order(
         email=(row["email"] or payload.get("customer", {}).get("email") or payload.get("email") or ""),
         token=(payload.get("cartToken") or payload.get("cart_token") or ""))
@@ -3468,6 +3474,57 @@ def _unlink_product_media(product_id, url):
         if not saved or mirrored is False:
             raise RuntimeError("Product media unlink could not be saved.")
     return changed
+
+
+@api.post("/admin/storage/cleanup")
+@authmod.require_admin
+@sec.require_csrf
+def admin_storage_cleanup():
+    """Scan the upload storage for orphaned / duplicate files and purge them.
+
+    Dry-run by default: POST {apply: false} (or no body) returns the report
+    with delete_candidates and the bytes they would free. POST {apply: true}
+    deletes them - every key is re-validated against the LIVE reference set
+    immediately before removal, and nothing younger than minAgeDays (default
+    2) is ever a candidate, so an upload that lands while the report is being
+    read can not be purged out from under its product.
+    """
+    limited = sec.guard("storage-cleanup", limit=12, window=3600)
+    if limited: return limited
+    d = request.get_json(silent=True) or {}
+    apply_changes = bool(d.get("apply"))
+    try:
+        min_age = float(d.get("minAgeDays") or 2)
+    except (TypeError, ValueError):
+        min_age = 2.0
+    min_age = max(0.0, min(90.0, min_age))
+    import storage_cleanup
+    try:
+        report = storage_cleanup.build_plan(min_age_days=min_age)
+    except Exception as exc:
+        # A reference source that cannot be read must never look like "zero
+        # references" - the scan is refused, nothing is deleted.
+        return jsonify(ok=False, error=(
+            "The storage scan could not read every reference source, so "
+            f"nothing was deleted. {exc}")), 503
+    if not apply_changes:
+        audit(authmod.current_admin(), "storage.cleanup",
+              f"dry-run candidates={report['candidate_count']} "
+              f"objects={report['objects']} referenced={report['referenced']}", _ip())
+        return jsonify(ok=True, applied=False, **{
+            k: v for k, v in report.items() if k != "ok"})
+    result = storage_cleanup.apply_plan(report=report, min_age_days=min_age)
+    audit(authmod.current_admin(), "storage.cleanup",
+          f"apply deleted={len(result['deleted'])} "
+          f"freed_bytes={result['freed_bytes']} "
+          f"errors={len(result['errors'])}", _ip())
+    ok = not result["errors"]
+    return jsonify(ok=ok, applied=True,
+                   deleted=result["deleted"], freedBytes=result["freed_bytes"],
+                   freedMb=round(result["freed_bytes"] / 1048576.0, 3),
+                   errors=result["errors"][:20],
+                   **{k: v for k, v in report.items()
+                      if k not in ("ok", "delete_candidates")}), (200 if ok else 503)
 
 
 @api.delete("/admin/uploads/purge")

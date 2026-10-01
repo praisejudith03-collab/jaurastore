@@ -2416,6 +2416,7 @@ def remove(pid, actor=None):
 
     _mutate(actor, _apply)
     _purge_removed_media(existing_product, None)
+    _purge_local_product_rows(pid)
     try:
         from supabase_store import hard_delete_products
         hard_delete_products([pid])
@@ -2425,6 +2426,25 @@ def remove(pid, actor=None):
     _tombstone()
     _sync_repo_async()
     return None
+
+
+def _purge_local_product_rows(pid):
+    """Hard-delete the local database rows a product owned.
+
+    variant_stock / product_views / product_reviews rows survive a catalogue
+    remove unless they are deleted explicitly - orphaned rows for a gone
+    product id (and a views row still "referencing" it confused later
+    housekeeping). Best effort: the catalogue removal itself must never be
+    blocked by a database hiccup.
+    """
+    for sql in ("DELETE FROM variant_stock WHERE product_id=?",
+                "DELETE FROM product_views WHERE product_id=?",
+                "DELETE FROM product_reviews WHERE product_id=?"):
+        try:
+            from db import execute as _execute
+            _execute(sql, (pid,))
+        except Exception:
+            pass
 
 
 def replace_all(products, actor=None):

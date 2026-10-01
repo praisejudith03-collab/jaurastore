@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=177" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=178" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -2211,7 +2211,7 @@ function bindOrderButtons() {
   });
 }
 function accountPanel() {
-  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. You sign in with <strong>ADMIN_MASTER_PASSWORD</strong> — that is your main admin password. <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> is the backup one, and it still works if the master password is ever unset. Both are managed in Render (Environment → Environment Variables), not in this portal: change one there and the new password works at your next sign-in.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn btn-line" id="repair-photos">Repair missing photos</button><button class="btn" id="sync-github" hidden>Sync to GitHub</button></div><div id="sync-status" role="status" aria-live="polite" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Everything you save goes straight to the live store. If your Wi-Fi drops, the change waits on this device and sends itself as soon as you are back online.</p></div></details>`;
+  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. You sign in with <strong>ADMIN_MASTER_PASSWORD</strong> — that is your main admin password. <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> is the backup one, and it still works if the master password is ever unset. Both are managed in Render (Environment → Environment Variables), not in this portal: change one there and the new password works at your next sign-in.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn btn-line" id="repair-photos">Repair missing photos</button><button class="btn" id="sync-github" hidden>Sync to GitHub</button></div><div id="sync-status" role="status" aria-live="polite" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Everything you save goes straight to the live store. If your Wi-Fi drops, the change waits on this device and sends itself as soon as you are back online.</p></div><div class="admin-card"><h3 class="admin-h">Storage cleanup</h3><p class="admin-note">Photos and receipts that no product or order uses any more stay in storage forever and eat the quota. The scan never touches files a live product or order still shows, and never touches uploads from the last two days (they may still be being saved).</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="storage-cleanup-scan">Scan storage now</button><button class="btn" id="storage-cleanup-apply" hidden>Delete unused files</button></div><p class="admin-note" id="storage-cleanup-out" role="status" aria-live="polite" style="margin-top:12px">Nothing scanned yet.</p></div></details>`;
 }
 function bindAccount() {
   const email = $("#acct-email");
@@ -2322,6 +2322,54 @@ function bindAccount() {
       + (stuck ? " · " + stuck + " product(s) have no photo left to use — open them and add one." : ".")
       + (fixed ? " The shop shows them now." : "");
   });
+  // Storage cleanup: a two-step flow - the scan only REPORTS (dry-run), and
+  // the delete button appears once there is something safe to remove. The
+  // server re-validates every file against the live catalogue at apply time,
+  // so a photo saved between the scan and the click is never purged.
+  {
+    const scanBtn = $("#storage-cleanup-scan");
+    const applyBtn = $("#storage-cleanup-apply");
+    const out = $("#storage-cleanup-out");
+    if (scanBtn && applyBtn && out && !scanBtn.dataset.bound) {
+      scanBtn.dataset.bound = "1";
+      const call = (body) => window.JA_NET.api("api/admin/storage/cleanup", {
+        method: "POST", json: body || {}, queue: false, label: "Storage cleanup",
+      });
+      scanBtn.onclick = async () => {
+        scanBtn.disabled = true; applyBtn.hidden = true;
+        out.textContent = "Scanning every product, order, receipt and setting…";
+        try {
+          const d = await call({});
+          if (d && d.ok === false) throw new Error(d.error || "The scan failed.");
+          const n = Number(d.candidate_count || 0);
+          const mb = Number(d.freedMb || 0) || (Number(d.candidate_bytes || 0) / 1048576);
+          const dups = (d.duplicate_groups || []).length;
+          out.textContent = n
+            ? `${n} unused file(s) found (${mb.toFixed(1)} MB` + (dups ? `, ${dups} duplicate group(s)` : "") + `) out of ${Number(d.objects || 0)} stored. Files shown by a live product, order or the site itself are never touched.`
+            : `Nothing to clean: every file is still used (scanned ${Number(d.objects || 0)}, referenced ${Number(d.referenced || 0)}).`;
+          if (n) { applyBtn.hidden = false; applyBtn.textContent = `Delete ${n} unused file${n === 1 ? "" : "s"}`; }
+        } catch (e) {
+          out.textContent = "Failed: " + (e.message || "Check your connection and try again.");
+        } finally { scanBtn.disabled = false; }
+      };
+      applyBtn.onclick = async () => {
+        applyBtn.disabled = true;
+        out.textContent = "Deleting the unused files…";
+        try {
+          const d = await call({ apply: true });
+          if (d && d.ok === false) throw new Error((d.errors && d.errors[0]) || d.error || "The cleanup failed.");
+          const n = (d.deleted || []).length;
+          const mb = Number(d.freedMb || 0);
+          out.textContent = d && d.errors && d.errors.length
+            ? `Deleted ${n} file(s), freed ${mb.toFixed(1)} MB — but ${d.errors.length} file(s) could not be removed. Try again in a moment.`
+            : `Done: deleted ${n} file(s) and freed ${mb.toFixed(1)} MB of storage.`;
+          applyBtn.hidden = true;
+        } catch (e) {
+          out.textContent = "Failed: " + (e.message || "Check your connection and try again.");
+        } finally { applyBtn.disabled = false; }
+      };
+    }
+  }
   bindAction("#sync-github", "Syncing the catalogue backup to GitHub…", async () => {
     if (!window.JA_NET || !window.JA_NET.csrf) throw new Error("Sync is unavailable. Reload this page.");
     const token = await window.JA_NET.csrf();
@@ -3299,7 +3347,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=177" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=178" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3654,7 +3702,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=177", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=178", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

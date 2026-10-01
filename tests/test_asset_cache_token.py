@@ -5,16 +5,16 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
-TOKEN = "177"
+TOKEN = "178"
 ASSETS = {
     "css/style.css": "6585ec66268028ea5dd89acd2f0f5b808215b1b62e5c422ef54a6265d37b4b52",
-    "css/fonts.css": "161f557ede96625567321c7f772db29e0c2daf71b9d4b64d09b186f414b65a90",
-    "js/store.js": "8f6a91be83e0d215962bc245ae55d2ca2bb1b5ad8a14e0e1a48f06e7cc4bf6d4",
-    "js/app.js": "355af571f11b7d1036d9aeeae55f0d5d92e573e7f5ddb365932b6688f8550630",
-    "js/admin.js": "bc1b388993ad97f44c81ac6fed673ec09c1d7b95af6a72069c9b03136bb766c0",
+    "css/fonts.css": "ce8b84746b9a69f543f7e3334d09d453e1551728bf83fbc28a3ce3a93b3418e6",
+    "js/store.js": "30d87869c6bb8ff0afb24e68bbdb5c83b10c30e2ec31e755fcbe9c17cc16ed2f",
+    "js/app.js": "8d8a3f8986461b511817738571e0dae50f6954425fa273f34d8f59b15b50f67d",
+    "js/admin.js": "f8a90f0bbb07679e2b61d9e5861120f3a31f2046c0cbd4a19ca727cde7cc80e7",
     "js/i18n.js": "4e90108092b7840c9bafcbc2310da11bdd21385aadf05fa658680c4977093ced",
     "js/net.js": "ef9635c7280b8f9bc54fe3a653c5822d739195b7006c3fcd5e791612ccc6250e",
-    "sw.js": "2bfbd5204ad3ebab9384cdc51ac174d7ec1923a353168157d312175104fa9c48",
+    "sw.js": "0c1a8f2febc120b8f1cad145c7836de74d223df97f805be129961bb24ee59a95",
 }
 
 def _refs(text):

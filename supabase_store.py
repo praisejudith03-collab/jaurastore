@@ -626,6 +626,24 @@ def hard_delete_products(ids):
     except Exception:
         pass
 
+    # 4b. reviews and view counters belong to the product: hard-deleting the
+    # row must not leave orphaned rows behind (an orphaned review would also
+    # keep "referencing" nothing while confusing the storage cleanup scan).
+    try:
+        c.table("product_reviews").delete().in_("product_id", ids).execute()
+    except Exception:
+        pass
+    try:
+        c.table("product_views").delete().in_("product_id", ids).execute()
+    except Exception:
+        pass
+    # 4c. legacy featured_products rows (if that table exists) must not pin a
+    # deleted product on the homepage.
+    try:
+        c.table("featured_products").delete().in_("product_id", ids).execute()
+    except Exception:
+        pass
+
     # 5. purge unreferenced files. storage.delete_upload() refuses to remove an
     #    object still used by another product, but does delete receipts/videos
     #    and already-unlinked product media immediately.
@@ -1552,6 +1570,16 @@ def delete_order(order_id):
         c.table("receipts").delete().eq("order_id", order_id).execute()
     except Exception as exc:
         print(f"[supabase] receipts delete failed: {exc}")
+    # coupon redemptions and referral uses belong to the order too: a hard
+    # delete must not leave their rows orphaned behind a gone order id.
+    try:
+        c.table("coupon_uses").delete().eq("order_id", order_id).execute()
+    except Exception as exc:
+        print(f"[supabase] coupon_uses delete failed: {exc}")
+    try:
+        c.table("referral_uses").delete().eq("order_id", order_id).execute()
+    except Exception as exc:
+        print(f"[supabase] referral_uses delete failed: {exc}")
     try:
         c.table("orders").delete().eq("id", order_id).execute()
     except Exception as exc:
