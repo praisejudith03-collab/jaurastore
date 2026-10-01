@@ -75,6 +75,27 @@ data, storage, and the admin login. Do not delete the shop-email variables
 above, or receipts stop reaching the inbox. Removing obsolete variables does not
 mutate products, orders, customers, receipts, reviews, or catalogue data.
 
+## Supplier stock sync (in-process watchdog)
+
+Product stock can follow the supplier page attached to a product's **Supplier
+URL for Auto Stock Sync** field. The sync runs quietly inside the web service
+(consolidated scheduler loop, bounded hourly batches — no worker service),
+never deletes a supplier link, and writes a warning row for anything it could
+not read with confidence instead of guessing.
+
+The stock rule, per matched product/variant: supplier **out** → Jaura out;
+supplier **lower** → Jaura reduced to the supplier count; supplier **higher**
+→ Jaura is **not** raised above the owner's hand-entered quantity unless the
+safe setting below is on. Variants with no confident supplier match, products
+whose supplier page cannot be fetched/parsed, and uncertain readings are all
+left exactly as they are (with a logged warning).
+
+- `SUPPLIER_WATCHDOG_ENABLED` (default `1`) — master switch for the sync.
+- `SUPPLIER_STOCK_AUTO_INCREASE` (default `0`/off) — the safe setting. Set it
+  to `1` ONLY if supplier restocks should automatically raise Jaura stock
+  above the owner's manually entered quantity. Reductions and out-of-stock
+  are always applied regardless of this setting.
+
 ## Analytics geolocation, bot filtering and crash reporting
 
 Visitor locations come from the CDN edge headers (`CF-IPCity` /

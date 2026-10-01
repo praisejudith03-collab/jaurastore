@@ -13,6 +13,9 @@ Needed environment variables (see .env.example):
   SUPABASE_ANON_KEY              (reserved; not required for these calls)
 """
 import os, json, re
+import copy as _copy
+import threading as _threading
+import time as _time
 from config import Config
 try:
     import urllib.parse
@@ -22,6 +25,76 @@ except ImportError:             # pragma: no cover
 
 _client = None
 _loaded = False
+
+
+# ---------------------------------------------------------------- read cache
+# One Render web service, ONE gunicorn worker (threads share this process):
+# a single /api/catalog answer runs merged() several times (the route, then
+# meta(), then homepage_featured()), and every merged() used to walk the
+# products table, the tombstone ids AND the deleted-ids key as three
+# SEQUENTIAL PostgREST roundtrips - ~11 network calls for one page's data.
+# On a cold free-tier database that is the slow "shop takes seconds to open".
+#
+# A short in-process TTL cache collapses the repeats to one read per TTL
+# window. Staleness safety, by construction:
+#   * every write that can change any of these reads goes through THIS module
+#     and calls invalidate_read_cache() immediately (admin product save,
+#     delete, bulk replace, tombstones, homepage featured, stock RPCs), and
+#   * with the single-worker deployment there is no second process that could
+#     keep answering from its own stale copy after a write, and
+#   * pytest (Config.ENV == "testing") never caches, so test isolation and
+#     the live-Postgres pgserver suites are completely untouched, and
+#   * only SUCCESSFUL reads are remembered: a Supabase blip is never cached
+#     as "empty shop".
+# The 10s TTL only bounds out-of-band edits (someone hand-editing rows in the
+# Supabase dashboard), which the app never performs.
+_READ_TTL_SECONDS = 10.0
+_read_cache_lock = _threading.Lock()
+_read_cache = {}
+
+
+def _read_cache_enabled():
+    # Never cache under pytest (a test may fake Config.ENV == "production";
+    # the module-level cache would otherwise leak one test's mock-client rows
+    # into the next). This mirrors the pytest guard in catalog._sync_repo_async.
+    try:
+        import sys
+        if "pytest" in sys.modules:
+            return False
+        return Config.ENV != "testing"
+    except Exception:
+        return True
+
+
+def cached_read(key, fetch):
+    """Run ``fetch()`` or reuse its result for the TTL window.
+
+    The cached value is deep-copied on the way out so a caller mutating the
+    answer can never poison the next reader (merged()/resolve_image produce
+    per-call copies, and callers rely on that contract).
+    """
+    if not _read_cache_enabled():
+        return fetch()
+    now = _time.monotonic()
+    with _read_cache_lock:
+        hit = _read_cache.get(key)
+    if hit and (now - hit[0]) < _READ_TTL_SECONDS:
+        return _copy.deepcopy(hit[1])
+    value = fetch()
+    if value is not None:
+        with _read_cache_lock:
+            _read_cache[key] = (_time.monotonic(), _copy.deepcopy(value))
+    return value
+
+
+def invalidate_read_cache(*keys):
+    """Drop cached reads. Called by every write path in this module."""
+    with _read_cache_lock:
+        if keys:
+            for key in keys:
+                _read_cache.pop(key, None)
+        else:
+            _read_cache.clear()
 
 
 def enabled():
@@ -176,30 +249,33 @@ def products_table_rows():
     reconciled by id, or by a slug/sku clash confirmed by the same name, in
     catalog.merged().
     """
-    try:
-        c = client()
-    except Exception as exc:
-        print(f"[supabase] products read failed: {exc}")
-        return None
-    if c is None:
-        return None
-    try:
-        seen_ids = set()
-        rows = []
-        for r in _fetch_product_pages(c):
-            pid = str((r or {}).get("id") or "").strip()
-            if not pid or pid in seen_ids:
-                continue
-            seen_ids.add(pid)
-            rows.append(_canonicalize_product(r, c))
-        # Reconcile each row's image to a path the browser can display (a
-        # committed repo file when present, else the branded placeholder).
-        # No third-party / Wix photo is ever referenced.
-        from catalog import resolve_image
-        return [resolve_image(r) for r in rows]
-    except Exception as exc:
-        print(f"[supabase] products read failed: {exc}")
-        return None
+    def _fetch():
+        try:
+            c = client()
+        except Exception as exc:
+            print(f"[supabase] products read failed: {exc}")
+            return None
+        if c is None:
+            return None
+        try:
+            seen_ids = set()
+            rows = []
+            for r in _fetch_product_pages(c):
+                pid = str((r or {}).get("id") or "").strip()
+                if not pid or pid in seen_ids:
+                    continue
+                seen_ids.add(pid)
+                rows.append(_canonicalize_product(r, c))
+            # Reconcile each row's image to a path the browser can display (a
+            # committed repo file when present, else the branded placeholder).
+            # No third-party / Wix photo is ever referenced.
+            from catalog import resolve_image
+            return [resolve_image(r) for r in rows]
+        except Exception as exc:
+            print(f"[supabase] products read failed: {exc}")
+            return None
+
+    return cached_read("products_rows", _fetch)
 
 
 def dead_product_ids_table():
@@ -212,26 +288,29 @@ def dead_product_ids_table():
     redeploy). None means 'could not read', which callers treat as an empty
     set so an outage neither resurrects a product nor empties the shop.
     """
-    try:
-        c = client()
-    except Exception as exc:
-        print(f"[supabase] dead product ids read failed: {exc}")
-        return None
-    if c is None:
-        return None
-    try:
-        ids = set()
-        for r in _fetch_product_pages(c, include_dead=True):
-            source = str((r or {}).get("source") or "").strip().lower()
-            if source not in DEAD_SOURCES:
-                continue
-            pid = str((r or {}).get("id") or "").strip()
-            if pid:
-                ids.add(pid)
-        return ids
-    except Exception as exc:
-        print(f"[supabase] dead product ids read failed: {exc}")
-        return None
+    def _fetch():
+        try:
+            c = client()
+        except Exception as exc:
+            print(f"[supabase] dead product ids read failed: {exc}")
+            return None
+        if c is None:
+            return None
+        try:
+            ids = set()
+            for r in _fetch_product_pages(c, include_dead=True):
+                source = str((r or {}).get("source") or "").strip().lower()
+                if source not in DEAD_SOURCES:
+                    continue
+                pid = str((r or {}).get("id") or "").strip()
+                if pid:
+                    ids.add(pid)
+            return ids
+        except Exception as exc:
+            print(f"[supabase] dead product ids read failed: {exc}")
+            return None
+
+    return cached_read("dead_product_ids", _fetch)
 
 
 def product_by_id(pid):
@@ -422,7 +501,12 @@ def upsert_products(products):
         rows.append(r)
     if not rows:
         return True
-    return _upsert_products_resilient(rows)
+    ok = _upsert_products_resilient(rows)
+    # A confirmed (or ambiguous) write must never leave the read cache serving
+    # the pre-save row: the very next /api/catalog has to carry the new photo,
+    # price and stock the admin just saved.
+    invalidate_read_cache()
+    return ok
 
 
 def delete_products(ids):
@@ -432,6 +516,7 @@ def delete_products(ids):
         return
     try:
         c.table("products").update({"source": "deleted"}).in_("id", list(ids)).execute()
+        invalidate_read_cache()
     except Exception as exc:
         print(f"[supabase] products delete failed: {exc}")
 
@@ -448,6 +533,7 @@ def delete_products_strict(ids):
         return False
     try:
         c.table("products").update({"source": "deleted"}).in_("id", list(ids)).execute()
+        invalidate_read_cache()
         return True
     except Exception as exc:
         print(f"[supabase] products delete failed: {exc}")
@@ -522,6 +608,7 @@ def hard_delete_products(ids):
     try:
         c.table("products").delete().in_("id", ids).execute()
         report["deleted"] = list(ids)
+        invalidate_read_cache()
     except Exception as exc:
         report["errors"].append(f"delete: {exc}")
         return report
@@ -589,6 +676,7 @@ def replace_all_products(products):
         except Exception as exc:
             print(f"[supabase] products replace tombstone failed: {exc}")
             return False
+    invalidate_read_cache()
     return True
 
 
@@ -619,6 +707,7 @@ def reserve_product_stock(product_id, qty, option=None):
         reserved = bool(ok and (ok[0] if isinstance(ok, list) else ok))
         if not reserved:
             return None          # out of stock / offline product
+        invalidate_read_cache()     # stock moved: the next catalogue read must show it
         return product_by_id(pid)
     except Exception as exc:
         print(f"[supabase] reserve_product_stock failed: {exc}")
@@ -643,7 +732,10 @@ def release_product_stock(product_id, qty, option=None):
         res = c.rpc("release_product_stock",
                     {"p_id": pid, "p_qty": qty, "p_option": opt}).execute()
         ok = _res_data(res)
-        return bool(ok and (ok[0] if isinstance(ok, list) else ok))
+        released = bool(ok and (ok[0] if isinstance(ok, list) else ok))
+        if released:
+            invalidate_read_cache()
+        return released
     except Exception as exc:
         print(f"[supabase] release_product_stock failed: {exc}")
         return False
@@ -1650,36 +1742,39 @@ def load_deleted_ids():
     product nor empties the shop. An empty list means the key is present and
     genuinely empty.
     """
-    c = client()
-    if c is None:
-        return None
-    try:
-        res = (c.table("growth_settings")
-               .select("value")
-               .eq("key", DELETED_IDS_KEY)
-               .limit(1)
-               .execute())
-        rows = _res_data(res)
-        if not rows:
-            return []
-        raw = (rows[0] or {}).get("value")
-        if raw is None or raw == "":
-            return []
-        data = json.loads(raw) if isinstance(raw, str) else raw
-        if not isinstance(data, list):
-            return []
-        out = []
-        seen = set()
-        for item in data:
-            pid = str(item or "").strip()
-            if not pid or pid in seen:
-                continue
-            seen.add(pid)
-            out.append(pid)
-        return out
-    except Exception as exc:                       # pragma: no cover
-        print(f"[supabase] deleted ids load failed: {exc}")
-        return None
+    def _fetch():
+        c = client()
+        if c is None:
+            return None
+        try:
+            res = (c.table("growth_settings")
+                   .select("value")
+                   .eq("key", DELETED_IDS_KEY)
+                   .limit(1)
+                   .execute())
+            rows = _res_data(res)
+            if not rows:
+                return []
+            raw = (rows[0] or {}).get("value")
+            if raw is None or raw == "":
+                return []
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            if not isinstance(data, list):
+                return []
+            out = []
+            seen = set()
+            for item in data:
+                pid = str(item or "").strip()
+                if not pid or pid in seen:
+                    continue
+                seen.add(pid)
+                out.append(pid)
+            return out
+        except Exception as exc:                       # pragma: no cover
+            print(f"[supabase] deleted ids load failed: {exc}")
+            return None
+
+    return cached_read("deleted_ids", _fetch)
 
 
 def save_deleted_ids(ids):
@@ -1704,6 +1799,7 @@ def save_deleted_ids(ids):
         c.table("growth_settings").upsert(
             [{"key": DELETED_IDS_KEY, "value": payload}]
         ).execute()
+        invalidate_read_cache("deleted_ids")
         return True
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] deleted ids save failed: {exc}")
@@ -1787,6 +1883,7 @@ def save_homepage_featured(featured):
         c.table("growth_settings").upsert(
             [{"key": HOMEPAGE_FEATURED_KEY, "value": payload}]
         ).execute()
+        invalidate_read_cache("homepage_featured")
         return True
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] homepage featured save failed: {exc}")
@@ -1796,26 +1893,29 @@ def save_homepage_featured(featured):
 def load_homepage_featured():
     """Return the homepage featured selector payload, {} if unset, or None
     when Supabase is unavailable."""
-    c = client()
-    if c is None:
-        return None
-    try:
-        res = (c.table("growth_settings")
-               .select("value")
-               .eq("key", HOMEPAGE_FEATURED_KEY)
-               .limit(1)
-               .execute())
-        rows = _res_data(res)
-        if not rows:
-            return {"categories": {}}
-        raw = (rows[0] or {}).get("value")
-        if raw is None or raw == "":
-            return {"categories": {}}
-        data = json.loads(raw) if isinstance(raw, str) else raw
-        return data if isinstance(data, dict) else {"categories": {}}
-    except Exception as exc:                       # pragma: no cover
-        print(f"[supabase] homepage featured load failed: {exc}")
-        return None
+    def _fetch():
+        c = client()
+        if c is None:
+            return None
+        try:
+            res = (c.table("growth_settings")
+                   .select("value")
+                   .eq("key", HOMEPAGE_FEATURED_KEY)
+                   .limit(1)
+                   .execute())
+            rows = _res_data(res)
+            if not rows:
+                return {"categories": {}}
+            raw = (rows[0] or {}).get("value")
+            if raw is None or raw == "":
+                return {"categories": {}}
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            return data if isinstance(data, dict) else {"categories": {}}
+        except Exception as exc:                       # pragma: no cover
+            print(f"[supabase] homepage featured load failed: {exc}")
+            return None
+
+    return cached_read("homepage_featured", _fetch)
 
 
 # The Delivery page the owner edits in Admin -> Delivery. Same growth_settings

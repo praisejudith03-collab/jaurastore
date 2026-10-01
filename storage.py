@@ -648,6 +648,13 @@ def _key_from_url(value: str) -> str:
     raw = clean(value, 500)
     if not raw:
         return ""
+    # A cache-buster query (?v=<ts>, added to every freshly uploaded media
+    # URL so every phone repaints) is a DISPLAY token, never part of the
+    # stored object key: "/uploads/x.jpg" and "/uploads/x.jpg?v=9" are the
+    # same object. Leaving it in made purge/reference checks treat the two
+    # spellings as different files - a photo still shown by another product
+    # could be deleted right out from under it.
+    raw = raw.split("?", 1)[0].split("#", 1)[0]
     if raw.startswith("/uploads/"):
         return raw[len("/uploads/"):].lstrip("/")
     if "/storage/v1/object/" in raw:

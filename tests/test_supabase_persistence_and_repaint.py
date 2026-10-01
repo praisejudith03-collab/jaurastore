@@ -295,8 +295,11 @@ def test_every_admin_upload_handler_stamps_and_persists_the_fresh_url():
     # the helper itself
     assert "function bustMediaCache(url)" in src
     # product photos: the editor tile, the DOM strip and the save payload all
-    # carry the stamped URL
-    assert "window.__editImages[idx] = bustMediaCache(res.url);" in src
+    # carry the stamped URL. The swap is IDENTITY-based (not a captured index)
+    # so a tile deleted/reordered mid-upload can never hand the fresh URL to
+    # the wrong photo.
+    assert "window.__editImages[at] = bustMediaCache(url);" in src
+    assert "if (swapEntry(res.url)) {" in src
     # category assets
     assert "input.dataset.catUrl = freshUrl;" in src
     assert "pic.innerHTML = _catAssetHTML(freshUrl);" in src
@@ -307,7 +310,7 @@ def test_every_admin_upload_handler_stamps_and_persists_the_fresh_url():
     # no upload handler still saves the raw response URL
     for raw in ("{ logoUrl: res.url }", "{ shopBannerUrl: res.url }",
                 "heroVideo: res.url", "dataset.catUrl = res.url",
-                "__editImages[idx] = res.url"):
+                "__editImages[idx] = res.url", "__editImages[at] = res.url"):
         assert raw not in src, f"an upload handler still persists the raw URL: {raw}"
 
 

@@ -232,6 +232,12 @@ def resolve_image(product):
 
     The placeholder path is also preserved on `placeholderImage` so the
     frontend `onerror` handler can swap to it if a photo ever fails.
+
+    Every rewrite of the cover below also rewrites ``image_url`` to the same
+    value. The two columns are one logical field: letting ``image_url`` keep
+    the pre-resolution value is how a promoted (or replaced) photo used to
+    be silently un-done by the NEXT save, whose payload carried the stale
+    alias back in.
     """
     p = dict(product or {})
     img = p.get("image") or ""
@@ -243,6 +249,7 @@ def resolve_image(product):
         if better:
             img = better
             p["image"] = better
+            p["image_url"] = better
     if _is_placeholder_path(img):
         p["images"] = [g for g in (p.get("images") or []) if not _is_placeholder_path(g)]
     try:
@@ -253,7 +260,9 @@ def resolve_image(product):
     if own:
         # Keep complete URLs in production; legacy tests/static preview use the
         # same-origin compatibility route only in testing.
-        p["image"] = own if __import__("config").Config.ENV == "testing" else img
+        resolved = own if __import__("config").Config.ENV == "testing" else img
+        p["image"] = resolved
+        p["image_url"] = resolved
         p["placeholderImage"] = PLACEHOLDER_IMG
         p["usesPlaceholder"] = False
         gal = []
@@ -280,6 +289,7 @@ def resolve_image(product):
     # A committed repo photo wins (the user asked to link repository paths).
     if _is_local(img) and _file_exists(img):
         p["image"] = img
+        p["image_url"] = img
         p["placeholderImage"] = PLACEHOLDER_IMG
         p["usesPlaceholder"] = False
         return p
@@ -289,11 +299,13 @@ def resolve_image(product):
     for candidate in photo_repair_candidates(p):
         if _file_exists(candidate):
             p["image"] = candidate
+            p["image_url"] = candidate
             p["placeholderImage"] = PLACEHOLDER_IMG
             p["usesPlaceholder"] = False
             return p
     # No usable local file: show the committed branded placeholder.
     p["image"] = PLACEHOLDER_IMG
+    p["image_url"] = PLACEHOLDER_IMG
     p["placeholderImage"] = PLACEHOLDER_IMG
     p["usesPlaceholder"] = True
     return p
@@ -631,7 +643,24 @@ def normalize(product):
         compare_cfa = to_cfa(compare_ngn)
     elif compare_cfa:
         compare_cfa = round_cfa(compare_cfa)
-    image = sec.safe_url(product.get("image_url") or product.get("image") or "")
+    # Cover-image precedence. Every writer in the app (the admin product
+    # editor, resolve_image, the photo-repair paths) treats ``image`` as the
+    # intended cover; ``image_url`` is only the Supabase-canonical ALIAS of
+    # the same value and is rewritten to match on every save below.
+    #
+    # Reading ``image_url`` FIRST was the "image replacement does not save"
+    # bug: the admin editor posts ``{...existing, image: <new upload>}``, so
+    # the payload carries the row's STALE ``image_url`` beside the fresh
+    # ``image`` - and the stale alias silently won, leaving image and
+    # image_url pinned to the old photo while the new upload only ever
+    # reached the gallery. ``image`` now wins whenever it carries a real
+    # photo; ``image_url`` is honoured only when ``image`` is blank (legacy
+    # mirror/import rows) or holds nothing but the branded placeholder.
+    image = sec.safe_url(product.get("image") or "")
+    image_url = sec.safe_url(product.get("image_url") or "")
+    if not image or (_is_placeholder_path(image) and image_url
+                     and not _is_placeholder_path(image_url)):
+        image = image_url or image
     images = [sec.safe_url(i) for i in (product.get("images") or []) if sec.safe_url(i)]
     # The branded placeholder is a fallback, never a photo: a row that carries
     # one in the cover slot while holding a real photo in its gallery (exactly
@@ -2268,8 +2297,12 @@ def upsert(product, actor=None):
         clear_deleted_id(clean["id"])
     except Exception:
         pass
-    if previous:
-        _purge_removed_media(previous, clean)
+    # Mirror BEFORE purging removed media: storage.delete_upload() refuses to
+    # delete an object a LIVE product row still references, and when a
+    # Supabase mirror is active merged() reads the mirror. Purging first made
+    # the guard see the OLD row on the mirror and refuse, so every replaced
+    # photo leaked in the bucket forever. The production (_prod_source) path
+    # already mirrors-then-purges; this keeps both paths in the same order.
     mirrored = True
     try:
         from supabase_store import upsert_products, enabled
@@ -2281,6 +2314,8 @@ def upsert(product, actor=None):
             mirrored = not enabled()
         except Exception:
             mirrored = True
+    if previous:
+        _purge_removed_media(previous, clean)
     _sync_repo_async()
     return clean, action, mirrored
 

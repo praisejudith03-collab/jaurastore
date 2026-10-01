@@ -1546,6 +1546,20 @@ const JA = (() => {
     // a stale copy of the other win on the server.
     if (next.stock_quantity != null) next.stock = next.stock_quantity;
     else if (next.stock != null) next.stock_quantity = next.stock;
+    // The cover photo travels under image / image_url / imageUrl. A save
+    // that sets only one spelling used to let a STALE copy of the others
+    // (carried over from the existing row the caller spread in) outlive the
+    // new photo - the server then picked the stale one back up. When the
+    // caller sets a fresh cover, overwrite every alias; when only an alias
+    // is set, promote it to the cover the same way catalog.normalize does.
+    if (next.image) {
+      next.image_url = next.image;
+      next.imageUrl = next.image;
+    } else if (next.image_url || next.imageUrl) {
+      next.image = next.image_url || next.imageUrl;
+      next.image_url = next.image;
+      next.imageUrl = next.image;
+    }
     if (Number(next.priceNgn) > 0) {
       next.priceCfa = toCfa(next.priceNgn);
       next.compareCfa = Number(next.compareNgn) > 0 ? toCfa(next.compareNgn) : null;
@@ -2468,8 +2482,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=169";
-        const FLYER = "images/brand/logo-flyer.jpg?v=169";
+        const LOGO = "images/brand/logo.jpg?v=170";
+        const FLYER = "images/brand/logo-flyer.jpg?v=170";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2658,7 +2672,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=169" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=170" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -2956,7 +2970,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=169" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=170" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3084,7 +3098,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=169", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=170", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3118,7 +3132,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=169";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=170";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3177,7 +3191,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=169");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=170");
     document.title = title;
     [
       ["name", "description", description],

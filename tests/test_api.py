@@ -1793,8 +1793,11 @@ def test_product_photos_are_compressed_and_time_out_quickly():
     assert "squeezed = await compressImageFile(file);" in src
     # 45 s for a (small) photo; videos keep the long window
     assert "timeout: isVideo ? 300000 : 45000" in src
-    # Save waits ~8 s at most, and never pumps the outbox for minutes
-    assert "Date.now() + 8000" in src
+    # Save waits on the REAL upload promises (tracked in window.__editUploads),
+    # hard-capped, instead of the old blind ~8s poll that could finish BEFORE
+    # a compressed camera photo landed - and it never pumps the outbox.
+    assert "function trackUpload(p)" in src
+    assert "Promise.allSettled(window.__editUploads)" in src
     body = src.split("async function handleProductSubmit", 1)[1].split("\nasync function ", 1)[0]
     assert "JA_NET.flush()" not in body
     # media strip paints are coalesced

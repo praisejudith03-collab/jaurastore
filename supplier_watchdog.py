@@ -98,6 +98,19 @@ def enabled() -> bool:
     return str(raw).strip().lower() not in ("0", "false", "no", "off")
 
 
+def auto_increase_allowed() -> bool:
+    """The SAFE setting for raising stock from the supplier page.
+
+    The watchdog never increases a quantity above what the owner typed in the
+    admin portal unless SUPPLIER_STOCK_AUTO_INCREASE is explicitly switched
+    on. Default OFF: a supplier restock can never silently inflate the count
+    the owner deliberately set low (pre-orders, reserved pieces, ...).
+    Reductions and out-of-stock are always applied.
+    """
+    raw = os.environ.get("SUPPLIER_STOCK_AUTO_INCREASE", "0")
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
 def summary() -> Dict[str, Any]:
     return dict(_last_summary)
 
@@ -460,8 +473,6 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> T
         return False, warnings
     labels = variant_labels(p)
     keys = _stock_keys(p, labels)
-    if not keys:
-        return False, warnings
 
     # Single-URL multi-variant path: fetch product-level URL once, then match
     # all Jaura variant keys. Per-option URLs, when present, can augment it.
@@ -478,10 +489,25 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> T
         warnings.append(_warning(p, "supplier_no_variants", "No supplier variant stock could be read; existing stock was left unchanged."))
         return False, warnings
 
+    if not keys:
+        # Simple product (no variants): the supplier page answers for the
+        # whole piece, and the rule is applied to the product's own stock.
+        return _sync_whole_product(p, supplier_rows, actor, warnings)
+
     matched = map_supplier_to_jaura(keys, supplier_rows)
     if not matched:
         warnings.append(_warning(p, "supplier_no_matches", "Supplier variants did not confidently match this product's option names; existing stock was left unchanged."))
         return False, warnings
+
+    # A variant the supplier page did not confidently cover keeps its current
+    # quantity, always - but the owner is told, once per product, which boxes
+    # the sync could not answer for this run.
+    unmatched = [k for k in keys if k not in matched]
+    if unmatched:
+        warnings.append(_warning(
+            p, "supplier_partial_match",
+            "No confident supplier reading for: " + ", ".join(unmatched[:20])
+            + ". Their stock was left unchanged."))
 
     current = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else {}
     next_stock: Dict[str, int] = {}
@@ -490,12 +516,17 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> T
         old = max(0, int(current.get(key, p.get("stock") or 0) or 0)) if current else max(0, int(p.get("stock") or 0))
         row = matched.get(key)
         if row is None:
+            next_stock[key] = old          # unmatched variant: keep current stock
+            continue
+        qty = row.get("qty")
+        if qty is None:
+            # Uncertain reading: leave the current quantity untouched. The row
+            # should never reach here (the parser drops qty-less rows), so keep
+            # the guard explicit rather than trusted.
+            warnings.append(_warning(p, "supplier_stock_uncertain", f"Stock for '{key}' could not be read with confidence; left unchanged."))
             next_stock[key] = old
             continue
-        qty = max(0, int(row.get("qty") or 0))
-        # If the supplier only tells us "available", keep the owner's positive
-        # count when there is one; otherwise mark it sellable with quantity 1.
-        new_qty = 0 if qty <= 0 else (qty if qty > 1 else max(1, old))
+        new_qty = _apply_stock_rule(int(qty), old)
         next_stock[key] = new_qty
         if new_qty != old:
             changed = True
@@ -503,6 +534,75 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> T
     if not changed:
         return False, warnings
     row = {**p, "optionStock": next_stock, "stock": sum(next_stock.values()), "stock_quantity": sum(next_stock.values())}
+    return _save_synced(p, row, actor, warnings)
+
+
+def _apply_stock_rule(qty: int, old: int) -> int:
+    """The one stock rule, shared by simple products and matched variants.
+
+      supplier out (0)          -> Jaura out (0)
+      supplier lower            -> reduce Jaura to the supplier count
+      supplier higher (counted) -> keep the owner's count unless the safe
+                                   auto-increase setting is explicitly on
+      supplier "in stock" but no number (qty 1 sentinel)
+                                -> keep the owner's positive count; only
+                                   revive a 0 when auto-increase is on
+    """
+    qty = max(0, int(qty or 0))
+    old = max(0, int(old or 0))
+    if qty <= 0:
+        return 0
+    if qty == 1:
+        return 1 if (old <= 0 and auto_increase_allowed()) else old
+    if qty < old:
+        return qty
+    if qty > old:
+        return qty if auto_increase_allowed() else old
+    return old
+
+
+def _whole_product_row(product: Dict[str, Any], supplier_rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The supplier row that speaks for a variant-free product.
+
+    A single parsed row is trusted directly; on a multi-row supplier page the
+    product NAME must match one row confidently, or the reading is ambiguous
+    and nothing is touched.
+    """
+    rows = [r for r in supplier_rows if r.get("qty") is not None]
+    if len(rows) == 1:
+        return rows[0]
+    best: Tuple[int, Optional[Dict[str, Any]]] = (0, None)
+    name = str(product.get("name") or "").strip()
+    for row in supplier_rows:
+        score = match_score(name, str(row.get("label") or ""))
+        if score > best[0]:
+            best = (score, row)
+    return best[1] if best[0] >= 70 else None
+
+
+def _sync_whole_product(p: Dict[str, Any], supplier_rows: List[Dict[str, Any]],
+                        actor: str, warnings: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]]]:
+    row = _whole_product_row(p, supplier_rows)
+    if row is None:
+        warnings.append(_warning(
+            p, "supplier_no_product_match",
+            "The supplier page lists several items and none confidently matches this "
+            "product's name; existing stock was left unchanged."))
+        return False, warnings
+    qty = row.get("qty")
+    if qty is None:
+        warnings.append(_warning(p, "supplier_stock_uncertain", "Stock could not be read with confidence; left unchanged."))
+        return False, warnings
+    old = max(0, int(p.get("stock") if p.get("stock") is not None else (p.get("stock_quantity") or 0) or 0))
+    new_qty = _apply_stock_rule(int(qty), old)
+    if new_qty == old:
+        return False, warnings
+    out = {**p, "stock": new_qty, "stock_quantity": new_qty}
+    return _save_synced(p, out, actor, warnings)
+
+
+def _save_synced(p: Dict[str, Any], row: Dict[str, Any], actor: str,
+                 warnings: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]]]:
     try:
         saved, _action, mirrored = catalog_mod.upsert(row, actor=actor)
         if not saved or mirrored is False:

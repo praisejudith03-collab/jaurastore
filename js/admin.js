@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=169" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=170" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -467,7 +467,7 @@ function bindMedia() {
     if (!window.__editImages) window.__editImages = [];
     for (const file of files) {
       if (window.__editImages.length >= 20) break;
-      uploadProductImage(file, box);
+      trackUpload(uploadProductImage(file, box));
     }
   });
   box.addEventListener("change", async (e) => {
@@ -476,10 +476,22 @@ function bindMedia() {
     if (!window.__editImages) window.__editImages = [];
     for (const file of [...input.files]) {
       if (window.__editImages.length >= 20) break;
-      uploadProductImage(file, box);
+      trackUpload(uploadProductImage(file, box));
     }
     input.value = "";
   });
+  // Every in-flight upload is registered so Save can AWAIT the real uploads
+  // instead of guessing with a blind poll: a compressed camera photo that
+  // finishes a second after Save used to be silently left out of the row.
+  function trackUpload(p) {
+    if (!p || typeof p.then !== "function") return;
+    if (!Array.isArray(window.__editUploads)) window.__editUploads = [];
+    const pr = p.catch(() => null).then(() => {
+      const i = (window.__editUploads || []).indexOf(pr);
+      if (i >= 0) window.__editUploads.splice(i, 1);
+    });
+    window.__editUploads.push(pr);
+  }
   async function uploadProductImage(file, box) {
     const t = String(file.type || "");
     const n = String(file.name || "");
@@ -503,7 +515,11 @@ function bindMedia() {
       paintMedia(box); return;
     }
     const preview = URL.createObjectURL(file);
-    const idx = window.__editImages.push({ pending: true, preview, video: isVideo }) - 1;
+    // Identity, not index: deleting/reordering a tile while this file is
+    // still uploading must never let the answer land on the WRONG tile.
+    const entry = { pending: true, preview, video: isVideo };
+    window.__editImages.push(entry);
+    const entryAt = () => (window.__editImages || []).indexOf(entry);
     paintMedia(box);
     // Resize + re-encode on the phone first: a 1200px WebP uploads in a
     // fraction of the time (and of the Storage) a camera original needs.
@@ -518,25 +534,44 @@ function bindMedia() {
       } catch (err) { payload = file; }
     }
     if (!isVideo && payload.size > maxPhoto) {
-      window.__editImages.splice(idx, 1);
+      const at = entryAt();
+      if (at >= 0) window.__editImages.splice(at, 1);
       paintMedia(box);
       JA.toast("That photo is still " + (payload.size / 1048576).toFixed(1) + " MB after compression. The limit is 6 MB.");
       return;
     }
+    // An OFFLINE upload waits in the outbox; when the connection returns and
+    // the file finally lands, put its URL into the tile it came from - while
+    // that editor is still open - so pressing Save after reconnection carries
+    // the photo instead of silently dropping it.
+    const swapEntry = (url) => {
+      const at = entryAt();
+      if (at < 0) return false;               // the owner deleted the tile meanwhile
+      window.__editImages[at] = bustMediaCache(url);
+      paintMedia(box);
+      return true;
+    };
     const res = await photoSlot(() => window.JA_NET.api(endpoint, {
       method: "POST", blob: payload, field: "file", filename,
       queue: true, timeout: isVideo ? 300000 : 45000, label: isVideo ? "Video" : "Photo",
+      onDone: (data) => {
+        if (data && data.url && swapEntry(data.url)) {
+          JA.toast("Queued photo is uploaded now — press Save to keep it.");
+        }
+      },
     }));
     if (res && res.url) {
-      window.__editImages[idx] = bustMediaCache(res.url);
-      JA.toast(isVideo ? "Video uploaded."
-        : (squeezed && squeezed.compressed
-          ? "Photo uploaded — compressed " + readableBytes(squeezed.originalSize) + " → " + readableBytes(squeezed.size) + "."
-          : "Photo uploaded."));
+      if (swapEntry(res.url)) {
+        JA.toast(isVideo ? "Video uploaded."
+          : (squeezed && squeezed.compressed
+            ? "Photo uploaded — compressed " + readableBytes(squeezed.originalSize) + " → " + readableBytes(squeezed.size) + "."
+            : "Photo uploaded."));
+      }
     } else if (res && res.queued) {
       window.__jaPendingPhoto = (window.__jaPendingPhoto || 0) + 1;
     } else {
-      window.__editImages[idx] = { pending: true, preview, video: isVideo, failed: true };
+      const at = entryAt();
+      if (at >= 0) window.__editImages[at] = { pending: true, preview, video: isVideo, failed: true };
       JA.toast((res && res.error) || "That file did not upload. It will retry by itself.");
     }
     paintMedia(box);
@@ -833,6 +868,7 @@ function productForm(p = {}) {
     `<option value="${c.id}" ${preCat === c.id ? "selected" : (p.category === c.id ? "selected" : "")}>${JA.escape(c.name)}</option>`
   ).join("");
   window.__editImages = productImages(p);
+  window.__editUploads = [];
   window.__editReviews = Array.isArray(p.reviews) ? p.reviews.slice() : ((p.id && JA.reviews) ? JA.reviews(p.id).slice() : []);
   const opts = editorOptions(p);
   const inStock = p.id ? Number(p.stock) > 0 : true;
@@ -896,7 +932,7 @@ function productForm(p = {}) {
     </div>
     <p class="admin-note">Optional. When a customer orders <strong>more</strong> than the unit count above of this one product, the discount % is taken off its unit price automatically at checkout — for example 10 and 15 means every unit above 10 is priced 15% off. Leave either box empty for no per-product bulk discount (shop-wide tiers, if any, still apply).</p>
     <div class="field"><label>SKU</label><input name="sku" value="${JA.escape(p.sku || "")}" /></div>
-    <div class="field"><label>Supplier URL <small>optional</small></label>
+    <div class="field"><label>Supplier URL for Auto Stock Sync</label>
       <input name="supplierSku" value="${JA.escape(p.supplierSku || p.supplierUrl || p.supplier_url || "")}" placeholder="https://…" />
     </div>
     <div class="field"><label>Featured</label>
@@ -923,14 +959,26 @@ async function handleProductSubmit(e, existing) {
   const saveBtn = e.target.querySelector(".au-save");
   let rawImages = (window.__editImages || []).filter(Boolean);
   if (rawImages.some((s) => typeof s === "object") && window.JA_NET) {
+    // A compressed camera photo can need more than the old 8s blind poll on
+    // mobile data. Wait on the actual upload promises (they settle whether
+    // they succeed, fail or queue), and keep waiting while ANY entry is
+    // still an in-flight object, capped so a dead network cannot wedge Save.
     JA.toast("Finishing the photo upload…");
-    const deadline = Date.now() + 8000;
-    while (rawImages.some((s) => typeof s === "object") && Date.now() < deadline) {
+    const deadline = Date.now() + 45000;
+    if (Array.isArray(window.__editUploads) && window.__editUploads.length) {
+      try {
+        await Promise.race([
+          Promise.allSettled(window.__editUploads),
+          new Promise((r) => setTimeout(r, 40000)),
+        ]);
+      } catch (err) {}
+    }
+    while (rawImages.some((s) => typeof s === "object" && s && !s.failed) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 250));
       rawImages = (window.__editImages || []).filter(Boolean);
     }
   }
-  const stillUploading = rawImages.filter((s) => typeof s === "object");
+  const stillUploading = rawImages.filter((s) => typeof s === "object" && !(s && s.failed));
   let images = rawImages.filter((s) => typeof s === "string" && s).slice(0, 20);
   if (!images.length && existing) {
     images = (existing.images && existing.images.length) ? existing.images.slice(0, 20) : (existing.image ? [existing.image] : []);
@@ -944,6 +992,13 @@ async function handleProductSubmit(e, existing) {
   if (!images.length) {
     JA.toast(stillUploading.length ? "Your photo is still uploading. Wait a moment, then press Save again." : "Please add a photo from your gallery.");
     return;
+  }
+  if (stillUploading.length) {
+    // Never write a pending blob: preview into the row, and never save in
+    // silence either: the owner must know this save went ahead WITHOUT the
+    // photo that is still on its way up, and to press Save again once the
+    // "Photo uploaded" toast lands.
+    JA.toast(stillUploading.length + " photo(s) still uploading were NOT saved. Press Save again when the upload toast appears.");
   }
   const image = images[0] || "";
   if (!image) { JA.toast("Please upload a photo."); return; }
@@ -1026,6 +1081,13 @@ async function handleProductSubmit(e, existing) {
       compareCfa: compareNgn > 0 ? toCfa(compareNgn) : null,
       image,
       images,
+      // image/image_url/imageUrl are ONE logical field. The ...(existing)
+      // spread above carries the row's previous value of every alias, so the
+      // fresh cover must overwrite each spelling or the stale alias travels
+      // to the server beside the new photo (and used to WIN there - the
+      // "replacement never saves" bug). Keep all three in lock-step here.
+      image_url: image,
+      imageUrl: image,
       description: fd.get("description"),
       stock,
       // The server prefers stock_quantity (catalog.normalize), so sending
@@ -2846,7 +2908,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=169" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=170" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3202,7 +3264,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=169", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=170", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
