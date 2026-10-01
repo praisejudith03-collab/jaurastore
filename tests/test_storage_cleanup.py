@@ -274,11 +274,25 @@ def test_cleanup_endpoint_audits_and_refuses_failed_scans(client, admin, env, mo
 # ------------------------------------------------- source pins
 
 def test_supabase_hard_delete_also_clears_product_rows():
+    """Deleting a product must leave nothing behind for the storage sweeper to
+    trip over later: every per-product child table is purged, and a table that
+    does not exist in this deployment is skipped rather than failing."""
     src = open(os.path.join(ROOT, "supabase_store.py"), encoding="utf-8").read()
+    sweep = src[src.index("def _purge_product_children"):]
+    sweep = sweep[:sweep.index("\ndef ")]
+    assert 'c.table(table).delete().in_(column, ids).execute()' in sweep
+    for table in ("product_variants", "product_prices", "product_options",
+                  "variant_stock", "product_reviews", "product_views",
+                  "featured_products"):
+        assert f'("{table}", "product_id")' in src, table
+    # a missing table is not an error...
+    assert "missing" in sweep
+    # ...but a real failure is reported, never swallowed
+    assert "errors.append" in sweep
+    # and the sweep actually runs as part of the hard delete
     fn = src[src.index("def hard_delete_products"):]
     fn = fn[:fn.index("\ndef ")]
-    assert 'c.table("product_reviews").delete().in_("product_id", ids)' in fn
-    assert 'c.table("variant_stock").delete().in_("product_id", ids)' in fn
+    assert "_purge_product_children(c, ids)" in fn
 
 
 def test_supabase_order_delete_clears_order_scoped_rows():

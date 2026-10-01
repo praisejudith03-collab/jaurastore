@@ -759,8 +759,36 @@ def _sync_whole_product(p: Dict[str, Any], supplier_rows: List[Dict[str, Any]],
 
 def _save_synced(p: Dict[str, Any], row: Dict[str, Any], actor: str,
                  warnings: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]]]:
+    # GHOST-RESTORE GUARD (last line of defence).
+    #
+    # tick()/nightly_sweep() already skip ids on the durable deleted list when
+    # they pick candidates, but picking candidates and saving them are minutes
+    # apart on a big catalogue. If the owner hard-deletes a product inside
+    # that window, this save is the LAST writer and would re-create the row in
+    # Supabase - and catalog.upsert() clears the durable tombstone on a
+    # successful write, so the deletion would be silently undone and the
+    # product would come back as a "ghost". Re-checking the durable list here,
+    # immediately before the write, closes that window.
+    pid = str(p.get("id") or "").strip()
+    if pid:
+        try:
+            dead_ids = catalog_mod.deleted_product_ids()
+        except Exception:
+            dead_ids = set()
+        if pid in dead_ids:
+            warnings.append(_warning(p, "product_deleted_during_sync",
+                                     "The product was deleted by the owner while this "
+                                     "supplier check was running. Nothing was re-created."))
+            return False, warnings
     try:
         saved, _action, mirrored = catalog_mod.upsert(row, actor=actor)
+        # Checked BEFORE the "saved" test: a never-re-create row comes back as
+        # saved=None, which would otherwise be reported as a failed sync.
+        if _action == "permanently-removed":
+            warnings.append(_warning(p, "product_deleted_during_sync",
+                                     "The product is on the never-re-create list. "
+                                     "Nothing was written."))
+            return False, warnings
         if not saved or mirrored is False:
             warnings.append(_warning(p, "supplier_save_failed", "Supplier stock was read but could not be saved to the catalogue."))
             return False, warnings
