@@ -17,8 +17,8 @@ exception when duplicate_object then null;
 end $$;
 
 create or replace function sync_supplier_stock(p_id text,p_stock integer,
- p_option_stock_changes jsonb default null,p_allow_increase boolean default false,
- p_option_snapshot_keys jsonb default null)
+ p_option_stock_changes jsonb,p_allow_increase boolean,
+ p_option_snapshot_keys jsonb)
 returns boolean language plpgsql security definer set search_path=public,pg_temp as $$
 declare current_options jsonb; product_options jsonb; merged_options jsonb; safe_changes jsonb;
  total_stock numeric;

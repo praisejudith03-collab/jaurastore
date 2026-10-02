@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PRODUCTS_DDL = Path("schema_sections/01_products.sql").read_text()
 PRODUCT_COMPATIBILITY_SQL = Path("schema_sections/09_product_compatibility.sql").read_text()
 STOCK_SQL = Path("schema_sections/16_stock.sql").read_text()
+INVENTORY_GUARDRAILS_SQL = Path("inventory_guardrails.sql").read_text()
 
 PRODUCTS = [
     # one unit left: the classic two-buyers race
@@ -96,7 +97,8 @@ def pg():
             # a caller-supplied shadow schema.
             setup = ("set search_path = public;\n"
                      + PRODUCTS_DDL + "\n" + PRODUCT_COMPATIBILITY_SQL + "\n"
-                     + STOCK_SQL + "\n" + _seed_rows() + "\n")
+                     + STOCK_SQL + "\n" + INVENTORY_GUARDRAILS_SQL + "\n"
+                     + _seed_rows() + "\n")
             result = subprocess.run(
                 [str(executable), "-X", "-qAt", "-v", "ON_ERROR_STOP=1",
                  "-h", str(base), "-p", "5432", "-U", "schema_test", "-d", "postgres"],
