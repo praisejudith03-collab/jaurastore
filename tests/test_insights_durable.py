@@ -378,8 +378,12 @@ def test_boot_survives_supabase_being_unreachable(monkeypatch):
     _wipe_analytics_tables()
     boot = appmod.create_app()
     assert boot is not None
-    assert boot.test_client().get("/healthz").get_json() == {
-        "ok": True, "env": Config.ENV, "background": None}
+    health = boot.test_client().get("/healthz").get_json()
+    assert health["ok"] is True
+    assert health["env"] == Config.ENV
+    assert health["background"] is None
+    assert health["database"]["checks"]["supabase"]["ok"] is True
+    assert health["eventLoop"]["ok"] is True
     assert analytics_mod.report(days=7)["totals"]["pageViews"] == 0
 
 

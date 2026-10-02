@@ -33,6 +33,15 @@ def _api_no_store(resp):
         resp.headers["Cache-Control"] = "no-store"
     return resp
 
+
+@api.get("/health")
+def api_health():
+    """Uncached, public health probe for monitors that require an /api route."""
+    import health_checks
+    body, status = health_checks.health_report()
+    return jsonify(body), status
+
+
 @api.get("/realtime-config")
 def realtime_config():
     """Public, least-privilege credentials for Supabase Realtime only.

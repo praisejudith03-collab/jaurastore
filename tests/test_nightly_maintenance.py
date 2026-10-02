@@ -193,16 +193,17 @@ def test_hard_delete_tables_pin():
     The shop keeps variants, prices and options as jsonb columns ON the
     products row (optionStock / optionPrices / optionCompareAt / optionSku),
     so deleting the row takes them with it. Where a deployment has normalised
-    them into their own tables instead, they are named explicitly so those
-    rows are purged too - either by the SQL CASCADE (hard_delete_products.sql)
-    or by the explicit sweep below, whichever the database supports.
+    them into their own tables instead, they are named explicitly for the SQL
+    CASCADE and the post-delete orphan sweep. No REST fallback is allowed:
+    only the RPC can atomically tombstone and delete against stale writers.
     """
     src = open(os.path.join(ROOT, "supabase_store.py"), encoding="utf-8").read()
     fn = src[src.index("def hard_delete_products"):]
     fn = fn[:fn.index("\ndef ")]
-    # the row itself
-    assert 'c.table("products").delete()' in fn
-    # and the child tables, declared once and swept in a loop
+    # the parent delete is only issued through the atomic RPC
+    assert 'c.rpc("hard_delete_products", {"product_ids": ids}).execute()' in fn
+    assert "atomic hard delete unavailable or failed" in fn
+    # and the child tables, declared once and swept for historical orphans
     for table in ("product_variants", "product_prices", "product_options",
                   "variant_stock", "product_reviews", "product_views",
                   "featured_products"):
@@ -215,18 +216,17 @@ def test_hard_delete_tables_pin():
     assert "add_deleted_id" in fn
 
 
-def test_hard_delete_prefers_the_sql_cascade_and_falls_back_safely():
-    """One SQL CASCADE when the function is installed, an identical
-    table-by-table delete when it is not - and never a silent no-op."""
+def test_hard_delete_requires_the_atomic_sql_cascade():
+    """The RPC is mandatory; a REST fallback could race a stale upsert."""
     src = open(os.path.join(ROOT, "supabase_store.py"), encoding="utf-8").read()
     fn = src[src.index("def hard_delete_products"):]
     fn = fn[:fn.index("\ndef ")]
     assert 'c.rpc("hard_delete_products", {"product_ids": ids}).execute()' in fn
-    assert "deleted_by_sql = True" in fn
-    # a missing function must NOT look like a successful delete: the explicit
-    # delete still has to run before the ids are reported gone
-    assert "if not deleted_by_sql:" in fn
-    assert "report[\"deleted\"] = list(ids)" in fn
+    assert "if not isinstance(raw_deleted, (list, tuple)):" in fn
+    assert "atomic hard delete unavailable or failed" in fn
+    assert "return report" in fn
+    assert "report[\"deleted\"] = deleted_ids" in fn
+    assert "c.table(\"products\").delete()" not in fn
 
 
 # --------------------------------------------------------- supplier prices

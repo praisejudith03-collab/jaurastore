@@ -1260,14 +1260,20 @@ def _durable_deleted_ids():
     Returns an empty set on any failure so an outage neither resurrects a
     product the owner deleted nor empties the shop.
     """
+    ids = set()
     try:
-        from supabase_store import load_deleted_ids
-        ids = load_deleted_ids()
+        from supabase_store import load_deleted_ids, load_hard_deleted_ids
+        legacy = load_deleted_ids()
+        if legacy:
+            ids |= {str(x).strip() for x in legacy if str(x or "").strip()}
+        hard = load_hard_deleted_ids()
+        if hard:
+            ids |= {str(x).strip() for x in hard if str(x or "").strip()}
     except Exception:
-        return set()
-    if ids is None:
-        return set()
-    return {str(x).strip() for x in ids if str(x or "").strip()}
+        # Preserve whatever was read from the other ledger. A failed database
+        # read must never turn into a fabricated full catalogue wipe.
+        pass
+    return ids
 
 
 def _supabase_dead_ids():
@@ -2295,9 +2301,21 @@ def upsert(product, actor=None):
     if _fixture_guard_active() and is_test_fixture(clean):
         return None, "test-fixture", True
     # A permanently removed product (the owner deleted it for good) can never
-    # be re-created - by an admin save, a CSV import or a mirror pass.
+    # be re-created - by an admin save, a CSV import or a mirror pass. The
+    # dedicated SQL ledger is distinct from the older soft-delete JSON list:
+    # a deliberate legacy re-save can still clear a soft tombstone, but no
+    # writer may resurrect a hard-deleted id.
     if is_permanently_removed(clean):
         return None, "permanently-removed", True
+    try:
+        from supabase_store import load_hard_deleted_ids
+        hard_deleted = load_hard_deleted_ids() or []
+        if clean["id"] in {str(x or "").strip() for x in hard_deleted}:
+            return None, "permanently-removed", True
+    except Exception:
+        # The PostgreSQL trigger is the final race-safe guard if the read path
+        # is unavailable; a transient read never turns into a false save error.
+        pass
 
     live = []
     try:

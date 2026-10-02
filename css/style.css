@@ -5047,6 +5047,16 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   padding: 9px 15px; font: 500 12.5px/1 "Outfit", system-ui, sans-serif;
   letter-spacing: .02em; cursor: pointer;
   box-shadow: 0 8px 22px rgba(0, 0, 0, .22);
+  opacity: 1; transform: translate3d(0, 0, 0);
+  transition: opacity .22s ease, transform .22s ease;
+  will-change: opacity, transform;
+}
+.sync-pill.is-dismissing {
+  opacity: 0; transform: translate3d(calc(100% + 20px), 0, 0);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-pill { transition-duration: .01ms; }
 }
 .sync-pill.is-offline { background: #9b5f24; }
 .sync-dot {

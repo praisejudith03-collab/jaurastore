@@ -404,7 +404,7 @@ def test_the_offline_queue_never_retries_a_permanent_failure():
     call must reject the promise, never sit in the outbox to be resent."""
     js = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
     assert "r.status >= 500 || r.status === 429 || r.status === 0" in js
-    assert "if (err.retryable) return enqueue(job);" in js
+    assert "if (err.retryable) return enqueue(job, true);" in js
 
 
 def test_a_permanently_failed_job_is_dropped_so_the_pill_closes():
@@ -431,8 +431,35 @@ def test_the_sync_pill_distinguishes_syncing_from_waiting():
     js = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
     pill = js[js.index("function paintPill()"):]
     pill = pill[:pill.index('window.addEventListener("online"')]
-    assert 'var live = jobs.length - waiting;' in pill
+    assert 'var live = visible.length - waiting;' in pill
     assert "Syncing " in pill and "Retrying " in pill
+
+
+def test_the_sync_pill_slides_away_and_caps_its_lifetime():
+    """A queued/offline status is brief feedback, never a permanent overlay."""
+    js = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
+    css = open(os.path.join(ROOT, "css", "style.css"), encoding="utf-8").read()
+    assert "PILL_AUTO_DISMISS_MS = 1400" in js
+    assert "PILL_HARD_TIMEOUT_MS = 5000" in js
+    assert "dismissPill(el, true)" in js
+    assert 'el.classList.add("is-dismissing")' in js
+    assert ".sync-pill.is-dismissing" in css
+    assert "translate3d(calc(100% + 20px)" in css
+
+
+def test_regular_network_requests_have_a_five_second_end_to_end_deadline():
+    """The timeout includes CSRF, reCAPTCHA, headers and response-body reads."""
+    js = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
+    assert "Number(opts.timeout) || 5000" in js
+    assert "var abortMs = job.timeout || (job.bodyKind === \"blob\" ? 300000 : 5000);" in js
+    assert "Promise.race([attempt, timedOut])" in js
+    # Failed/slow requests keep their durable outbox job but cannot recreate
+    # the floating badge; the caller/background retry uses a temporary toast.
+    api = js[js.index("function api(path, opts)"):js.index("function pending()")]
+    assert "return enqueue(job, true);" in api
+    flush = js[js.index("function flush(force)"):js.index("function api(path, opts)")]
+    assert "is taking too long" in flush
+    assert "rec.badgeHidden = true;" in flush
 
 
 # --------------------------------------------------- api.py source pins
@@ -460,6 +487,21 @@ def test_saving_a_product_exits_to_the_captured_source_list():
     assert "sessionStorage.setItem(PRODUCTS_RETURN_KEY" in js
     assert "function rememberProductsReturn()" in js
     assert "function restoreProductsReturn(" in js
+
+
+def test_editor_return_url_captures_the_visible_category_and_search_controls():
+    """The rendered filters win over stale module state when an editor opens."""
+    js = _admin_js()
+    url_fn = js[js.index("function productsReturnUrl()"):]
+    url_fn = url_fn[:url_fn.index("function readProductsReturn()")]
+    capture_fn = js[js.index("function rememberProductsReturn()"):]
+    capture_fn = capture_fn[:capture_fn.index("function productsStateFromUrl(")]
+    assert 'document.getElementById("prod-cat")' in url_fn
+    assert 'document.getElementById("prod-search")' in url_fn
+    assert 'document.getElementById("prod-cat")' in capture_fn
+    assert 'document.getElementById("prod-search")' in capture_fn
+    assert "const category = dashCat || String((catEl && catEl.value) || prodCatSel || \"\");" in capture_fn
+    assert "const query = String((searchEl && searchEl.value) || prodSearchQ || \"\")" in capture_fn
 
 
 def test_the_success_banner_lands_on_the_list_view_not_the_editor():

@@ -1525,13 +1525,14 @@ def test_benin_minimum_order_cfa_and_ngn_limits(client):
     assert f"{_min_ngn():,} naira" in r2.get_json().get("error", "")
 
 
-def test_net_js_blob_uploads_wait_five_minutes_and_persist_timeout():
+def test_net_js_blob_uploads_keep_their_longer_deadline_and_persist_it():
     src = open(os.path.join(os.path.dirname(__file__), "..", "js", "net.js"),
                encoding="utf-8").read()
-    assert "opts.blob ? 300000 : 25000" in src
-    assert "job.bodyKind === \"blob\" ? 300000 : 25000" in src
-    assert "timeout: opts.timeout || (opts.blob ? 300000 : 25000)" in src
-    assert "job.timeout || (job.bodyKind === \"blob\" ? 300000 : 25000)" in src
+    assert "timeout: opts.blob" in src
+    assert "? (opts.timeout || 300000)" in src
+    assert "Math.min(5000, Math.max(1, Number(opts.timeout) || 5000))" in src
+    assert "job.timeout || (job.bodyKind === \"blob\" ? 300000 : 5000)" in src
+    assert "timeout: job.timeout || 0" in src
 
 
 

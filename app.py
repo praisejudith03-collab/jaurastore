@@ -276,6 +276,16 @@ def inject_product_meta(html_text, product):
 def create_app():
     app = Flask(__name__, static_folder=None)
 
+    # Global Python equivalents for uncaught process/thread/async errors.
+    # They record diagnostics and then chain to the runtime's default handler;
+    # fatal errors are not swallowed because Gunicorn must be able to recycle
+    # a damaged worker. Testing deliberately leaves pytest's own hooks alone.
+    try:
+        import runtime_errors
+        runtime_errors.install(app.logger)
+    except Exception as exc:
+        app.logger.warning("runtime error hooks could not be installed: %s", exc)
+
     # A production deployment without SECRET_KEY set used to boot silently
     # with the repository-public development default - the key that signs
     # admin session cookies. It now boots with a random per-boot secret
@@ -603,29 +613,15 @@ def create_app():
     @app.route("/health")
     @app.route("/healthz")
     def healthz():
-        # no-store: a CDN (Cloudflare in front of the custom domain, and the
-        # edge that sits in front of *.onrender.com) must never answer the
-        # keep-alive ping from its own cache. A cached 200 never reaches the
-        # dyno, so Render would still count the service as idle and spin it
-        # down - and the next real visitor eats the ~50s cold start.
-        background = None
-        if Config.SCHEDULER_ENABLED and Config.ENV != "testing":
-            try:
-                import scheduler
-                # health_snapshot() restarts a worker thread that died
-                # before reporting, so the 20-minute watchdog both gets the
-                # truth and leaves a healed service behind. The crash that
-                # killed it is already recorded in job_failures and travels
-                # back in `recentFailures`.
-                background = scheduler.health_snapshot()
-            except Exception as exc:
-                import observability
-                observability.record_failure("healthz.background", exc,
-                                             logger=app.logger)
-                background = {"started": False, "maintenanceAlive": False,
-                              "remindersAlive": False,
-                              "lastError": str(exc)[:200]}
-        resp = jsonify(ok=True, env=Config.ENV, background=background)
+        # Render requires a fresh 2xx/3xx response within five seconds. Ping
+        # the real database (with a bounded Supabase probe) and verify Python
+        # request-thread scheduling on every check; a stuck DB must return 500
+        # so Render's health monitor can take the instance out of rotation and
+        # restart it. Never let a CDN cache a previous 200.
+        import health_checks
+        body, status = health_checks.health_report()
+        resp = jsonify(body)
+        resp.status_code = status
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return resp
 

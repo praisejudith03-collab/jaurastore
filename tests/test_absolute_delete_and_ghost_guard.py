@@ -128,12 +128,23 @@ class _Recorder:
         self.missing = set(missing)
         self.rpc_error = rpc_error
         self.deleted = []
+        self.tombstones = []
         self.rpc_calls = []
 
     def table(self, name):
         rec = self
 
         class _T:
+            def upsert(self_inner, rows, **_kwargs):
+                class _U:
+                    def execute(self_inner2):
+                        if name in rec.missing:
+                            raise RuntimeError(
+                                f'Could not find the table public.{name} (PGRST205)')
+                        rec.tombstones.extend(rows)
+                        return type("R", (), {"data": rows})()
+                return _U()
+
             def delete(self_inner):
                 class _D:
                     def in_(self_inner2, col, ids):
@@ -166,26 +177,41 @@ class _Recorder:
                 rec.rpc_calls.append((name, tuple(params["product_ids"])))
                 if rec.rpc_error:
                     raise rec.rpc_error
+                if "deleted_products" in rec.missing:
+                    raise RuntimeError("relation public.deleted_products does not exist")
                 return type("Res", (), {"data": list(params["product_ids"])})()
         return _R()
 
 
-def test_every_named_product_table_is_purged(monkeypatch):
-    """products, product_variants, product_prices, product_options and the
-    rest must all be swept - a survivor is exactly what the storage sweeper
-    later mistakes for live media."""
+def test_missing_atomic_delete_rpc_fails_closed(monkeypatch):
+    """Without the RPC, a REST delete can race a supplier write that already
+    passed its trigger; no row or media may be reported as deleted."""
     rec = _Recorder(rpc_error=RuntimeError("cascade not installed"))
+    legacy_writes = []
     monkeypatch.setattr(sb, "client", lambda: rec)
-    monkeypatch.setattr(sb, "add_deleted_id", lambda pid: True)
+    monkeypatch.setattr(sb, "add_deleted_id", lambda pid: legacy_writes.append(pid) or True)
 
     report = sb.hard_delete_products(["jau-x-1"])
 
-    tables = [t for t, _ in rec.deleted]
-    for expected in ("products", "product_variants", "product_prices",
-                     "product_options", "variant_stock", "product_reviews",
-                     "product_views", "featured_products"):
-        assert expected in tables, f"{expected} was never purged"
-    assert report["deleted"] == ["jau-x-1"]
+    assert report["deleted"] == []
+    assert report["errors"] and "hard_delete_products.sql" in report["errors"][0]
+    assert rec.deleted == []
+    assert legacy_writes == []
+
+
+def test_hard_delete_fails_closed_when_the_race_safe_guard_is_missing(monkeypatch):
+    """Without the SQL tombstone table/trigger, REST deletion can race a stale
+    save, so the route must not claim an absolute delete succeeded."""
+    rec = _Recorder(missing={"deleted_products"})
+    monkeypatch.setattr(sb, "client", lambda: rec)
+    monkeypatch.setattr(sb, "add_deleted_id", lambda pid: True)
+
+    report = sb.hard_delete_products(["jau-x-guard-missing"])
+
+    assert report["deleted"] == []
+    assert report["errors"] and "hard_delete_products.sql" in report["errors"][0]
+    assert rec.rpc_calls == [("hard_delete_products", ("jau-x-guard-missing",))]
+    assert rec.deleted == []
 
 
 def test_a_table_that_does_not_exist_is_skipped_not_failed(monkeypatch):
@@ -250,9 +276,9 @@ def test_the_cascade_and_the_sweep_never_both_delete_the_children(monkeypatch):
     assert len(rec.deleted) == len(set(rec.deleted))
 
 
-def test_a_missing_cascade_function_still_deletes_the_row(monkeypatch):
-    """Deploys that have not run the SQL yet must get a real delete, not a
-    silent no-op that reports success."""
+def test_a_missing_cascade_function_never_falls_back_to_an_unsafe_delete(monkeypatch):
+    """An incomplete migration is a visible failure, not a race-prone REST
+    delete that can let a stale supplier write recreate the product."""
     rec = _Recorder(rpc_error=RuntimeError(
         "Could not find the function public.hard_delete_products"))
     monkeypatch.setattr(sb, "client", lambda: rec)
@@ -260,8 +286,10 @@ def test_a_missing_cascade_function_still_deletes_the_row(monkeypatch):
 
     report = sb.hard_delete_products(["jau-x-5"])
 
-    assert ("products", ("jau-x-5",)) in rec.deleted
-    assert report["deleted"] == ["jau-x-5"]
+    assert rec.rpc_calls == [("hard_delete_products", ("jau-x-5",))]
+    assert rec.deleted == []
+    assert report["deleted"] == []
+    assert report["errors"]
 
 
 def test_a_failed_delete_is_never_reported_as_deleted(monkeypatch):
