@@ -301,8 +301,8 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     in Naira FIRST, the floating pill is shown, and a tap on FCFA recalculates
     every price on screen without a reload. French (?lang=fr, the explicit
     form of what a French phone detects): the whole interface turns French,
-    the currency locks to FCFA, the pill disappears, and the checkout
-    surfaces the FCFA payment gateway instead of the Naira one.
+    the storefront currency locks to CFA, the pill disappears, and checkout
+    defaults to Benin CFA while keeping all three payment methods available.
     """
     # -- English default: NGN first, pill visible, tap FCFA recalculates.
     mobile.set_viewport_size({"width": 390, "height": 844})
@@ -333,7 +333,8 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     # setCurrency cannot talk a French storefront out of FCFA
     mobile.evaluate("JA.setCurrency('NGN')")
     assert mobile.evaluate("JA.currency()") == "CFA"
-    # -- Checkout gateways follow the active/locked currency.
+    # -- Checkout presents all three payment methods; the selected method
+    # derives the order currency, rather than currency hiding a payment option.
     mobile.goto(live_shop + "/shop.html?lang=fr")
     # The storefront deliberately shows nothing until the authoritative
     # /api/catalog answer lands (store.js boot clears window.JA_SEED and awaits
@@ -351,25 +352,28 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     assert mobile.evaluate("JA.cartCount()") > 0, "the test item must be in the cart"
     mobile.goto(live_shop + "/checkout.html?lang=fr")
     expect(mobile.locator("[data-checkout]")).to_be_visible()
-    assert mobile.locator('[name=currency][value="CFA"]').is_checked(), (
-        "French checkout pre-selects the FCFA gateway")
-    expect(mobile.locator("[data-bank-cfa]")).to_be_visible()
+    assert mobile.locator('[name=paymentMethod][value="benin_cfa"]').is_checked(), (
+        "French checkout defaults to the Benin CFA method")
+    expect(mobile.locator("[data-bank-benin]")).to_be_visible()
     expect(mobile.locator("[data-bank-ngn]")).to_be_hidden()
-    ng_card = mobile.locator(".pay-card").filter(has=mobile.locator('[value="NGN"]'))
-    assert ng_card.evaluate("el => el.hidden"), (
-        "the Naira pay-card is removed from a French (FCFA-locked) checkout")
-    # English checkout: Naira gateway surfaced first. The pill tap above
-    # left localStorage on CFA, and English mode honors that unprompted
-    # choice, so reset to Naira before checking the default gateway.
+    expect(mobile.locator("[data-bank-togo]")).to_be_hidden()
+    for method in ("naira", "benin_cfa", "togo_cfa"):
+        expect(mobile.locator(f'[name=paymentMethod][value="{method}"]')).to_be_visible()
+
+    # English checkout defaults to Naira even after the French page used CFA;
+    # each of the three methods remains selectable in both languages.
     mobile.goto(live_shop + "/shop.html?lang=en")
     mobile.evaluate("JA.setCurrency('NGN')")
     assert mobile.evaluate("JA.currency()") == "NGN"
     mobile.goto(live_shop + "/checkout.html?lang=en")
     expect(mobile.locator("[data-checkout]")).to_be_visible()
-    assert mobile.locator('[name=currency][value="NGN"]').is_checked(), (
-        "English checkout pre-selects the Naira gateway")
+    assert mobile.locator('[name=paymentMethod][value="naira"]').is_checked(), (
+        "English checkout defaults to the Naira method")
     expect(mobile.locator("[data-bank-ngn]")).to_be_visible()
-    expect(mobile.locator("[data-bank-cfa]")).to_be_hidden()
+    expect(mobile.locator("[data-bank-benin]")).to_be_hidden()
+    expect(mobile.locator("[data-bank-togo]")).to_be_hidden()
+    for method in ("naira", "benin_cfa", "togo_cfa"):
+        expect(mobile.locator(f'[name=paymentMethod][value="{method}"]')).to_be_visible()
 
 
 def test_owner_category_creation_product_and_reordering(mobile, live_shop):
