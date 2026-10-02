@@ -157,9 +157,9 @@ def test_the_broadcast_message_mentions_available_colours_and_sizes():
     assert re.search(r"size\|length", body)
 
 
-def test_the_store_link_points_at_the_real_product_page():
+def test_the_store_link_uses_a_clean_public_product_slug():
     body = _func(ADMIN_JS, "broadcastProductUrl")
-    assert "/product.html?id=" in body
+    assert "/product.html?slug=" in body or "JA.productUrl" in body
     assert "location.origin" in body
 
 

@@ -153,8 +153,25 @@ def test_html_in_a_product_name_is_escaped_not_injected(client, monkeypatch, tmp
     assert "&lt;script&gt;" in body
 
 
-def test_the_canonical_and_og_url_point_at_this_exact_product(client, monkeypatch, tmp_path):
+def test_the_canonical_and_og_url_use_a_readable_public_slug(client, monkeypatch, tmp_path):
     _override(monkeypatch, tmp_path, BASE)
-    body = _get(client, "wix-003")
-    assert 'rel="canonical" href="https://jaurastore.com.ng/product.html?id=wix-003"' in body
-    assert 'og:url" content="https://jaurastore.com.ng/product.html?id=wix-003"' in body
+    body = _get(client, "wix-003")  # old internal-ID links remain compatible
+    public = "https://jaurastore.com.ng/product.html?slug=sandwich-maker"
+    assert f'rel="canonical" href="{public}"' in body
+    assert f'og:url" content="{public}"' in body
+    assert "wix-003" not in re.search(r'og:url" content="([^"]+)', body).group(1)
+
+
+def test_a_clean_slug_link_resolves_but_an_imported_slug_is_never_published(
+        client, monkeypatch, tmp_path):
+    _override(monkeypatch, tmp_path, {**BASE, "slug": "wix-003", "legacyId": "legacy-003"})
+    r = client.get("/product.html?slug=sandwich-maker")
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert "Sandwich Maker · Jaura Store" in body
+    assert 'og:url" content="https://jaurastore.com.ng/product.html?slug=sandwich-maker"' in body
+    assert "?slug=wix-003" not in body
+    # Preserved public aliases keep opening the same product while canonical
+    # links and sharing stay clean.
+    legacy = client.get("/product.html?id=legacy-003")
+    assert "Sandwich Maker · Jaura Store" in legacy.get_data(as_text=True)

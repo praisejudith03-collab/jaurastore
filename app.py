@@ -84,7 +84,7 @@ def build_sitemap() -> str:
     """The live sitemap, rebuilt on every request from what the store serves.
 
     One URL per fixed page, one per LIVE non-hidden category
-    (shop.html?cat=<id>) and one per LIVE product (product.html?id=<id>).
+    (shop.html?cat=<id>) and one per LIVE product using its clean public slug.
 
     The categories come from the same table the storefront reads -
     api_mod._categories_data(), which on boot is restored from Supabase
@@ -120,11 +120,11 @@ def build_sitemap() -> str:
     except Exception:
         products = []
     for p in products:
-        pid = str((p or {}).get("id") or "").strip()
-        if not pid:
+        slug = catalog_mod.public_slug(p)
+        if not slug:
             continue
         urls.append(_sitemap_entry(
-            url_for("/product.html?id=" + quote(pid, safe="")), today, "weekly", "0.6"))
+            url_for("/product.html?slug=" + quote(slug, safe="")), today, "weekly", "0.6"))
 
     return ('<?xml version="1.0" encoding="UTF-8"?>\n'
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
@@ -231,17 +231,18 @@ def inject_product_meta(html_text, product):
     product link showed the generic store cover photo. This is the
     server-rendered fix: the exact tags a crawler reads are rewritten
     before the response ever leaves the server, for the one request that
-    matters (?id=<product>), while every other visit to product.html
+    matters (?slug=<product>), while legacy ?id=<product> links also resolve
+    and every other visit to product.html
     (no id, or an id no longer in the catalogue) keeps the generic tags
     unchanged.
     """
-    pid = str(product.get("id") or "").strip()
+    slug = catalog_mod.public_slug(product)
     name = _product_display_name(p=product) or "Product"
     image = _abs_asset_url(product.get("image"))
     price = _product_price_line(product)
     options = _product_options_line(product)
     origin = (Config.SITE_ORIGIN or "").rstrip("/")
-    url = f"{origin}/product.html?id={quote(pid, safe='')}"
+    url = f"{origin}/product.html?slug={quote(slug, safe='')}"
     desc_bits = [b for b in (price, options) if b]
     description = (" · ".join(desc_bits) or "Shop this piece at Jaura Store in Naira or CFA.")
     description = f"{description} — jaurastore.com.ng"
@@ -669,9 +670,8 @@ def create_app():
 
     @app.route("/product.html")
     def product_page():
-        """Same static page for everyone, except the exact product's own
-        Open Graph / Twitter tags are stamped in when ?id= names one that
-        still exists - see inject_product_meta().
+        """Same static page for everyone, except a resolved slug/id/sku gets
+        the product's own Open Graph / Twitter tags from inject_product_meta().
 
         static_for() is still called first (and its response returned
         unchanged) for every other case - no id, an id that no longer
@@ -682,14 +682,36 @@ def create_app():
         decoded with get_data().
         """
         resp = static_for("product.html")
+        slug = (request.args.get("slug") or "").strip()
         pid = (request.args.get("id") or "").strip()
-        if resp is None or resp.status_code != 200 or not pid:
+        sku = (request.args.get("sku") or "").strip()
+        requested = slug or pid or sku
+        if resp is None or resp.status_code != 200 or not requested:
             return resp
         try:
             products = catalog_mod.merged()
         except Exception:
             products = []
-        product = next((p for p in products if str((p or {}).get("id") or "") == pid), None)
+        product = None
+        if slug:
+            product = next((p for p in products
+                            if slug in {str((p or {}).get("slug") or "").strip(),
+                                        catalog_mod.public_slug(p)}), None)
+        elif pid:
+            # Preserve canonical-ID precedence, then old slug and legacyId
+            # aliases; an alias can never shadow another product's primary key.
+            product = next((p for p in products
+                            if str((p or {}).get("id") or "").strip() == pid), None)
+            if product is None:
+                product = next((p for p in products
+                                if pid in {str((p or {}).get("slug") or "").strip(),
+                                           catalog_mod.public_slug(p)}), None)
+            if product is None:
+                product = next((p for p in products
+                                if str((p or {}).get("legacyId") or "").strip() == pid), None)
+        else:
+            product = next((p for p in products
+                            if str((p or {}).get("sku") or "").strip() == sku), None)
         if not product:
             return resp
         try:

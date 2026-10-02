@@ -790,4 +790,14 @@ def delete_upload(value: str) -> bool:
             removed = True
         except OSError:
             pass
+    if removed:
+        # Replacement URLs are content-addressed only loosely (the object key
+        # also carries a random suffix), and photo-repair/signed-URL checks
+        # cache existence for several minutes. A successful purge must take
+        # those entries out immediately so no process can keep treating the
+        # deleted upload as present.
+        _object_exists_cache.pop(key, None)
+        for cache_key in list(_signed_url_cache):
+            if cache_key.rsplit("|", 1)[-1] == key:
+                _signed_url_cache.pop(cache_key, None)
     return removed

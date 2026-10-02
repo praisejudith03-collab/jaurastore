@@ -564,3 +564,31 @@ def test_restoring_the_list_also_restores_the_filter_boxes():
     assert 'sel.value = dashCat || prodCatSel || "";' in restore
     assert 'document.getElementById("prod-search")' in restore
 
+
+def test_admin_category_selection_and_opening_are_exact_and_clear_stale_state():
+    js = _admin_js()
+    filtered = js[js.index("function getFilteredProducts()"):]
+    filtered = filtered[:filtered.index("function renderProdGrid()")]
+    assert "if (catFilter && p.category !== catFilter) return false;" in filtered
+
+    category_change = js[js.index("function applyProductFilter(e)"):]
+    category_change = category_change[:category_change.index("function esc(")]
+    assert 'e.target.id === "prod-cat"' in category_change
+    assert 'if (categoryChanged) dashCat = "";' in category_change
+    assert 'if (categoryChanged) {\n    // Rebuild the heading/count' in category_change
+
+    state = js[js.index("function applyProductsState(state)"):]
+    state = state[:state.index("function restoreProductsReturn(")]
+    assert 'const known = cats.some((c) => String((c || {}).id || "") === s.category);' in state
+    assert 'dashCat = known ? s.category : "";' in state
+    assert 'prodCatSel = known ? s.category : "";' in state
+
+    manager = js[js.index("function categoryManager()"):]
+    manager = manager[:manager.index("function _catAssetHTML(")]
+    assert 'JA.products().filter((p) => p.category === c.id).length' in manager
+    # Both ways of opening a category (the explicit link and the card) set
+    # that exact id; neither falls back to a name substring or old selection.
+    assert 'data-view-cat' in manager
+    assert 'dashCat = viewBtn.getAttribute("data-view-cat"); prodCatSel = dashCat;' in js
+    assert 'if (dashCat === id || prodCatSel === id)' in js
+

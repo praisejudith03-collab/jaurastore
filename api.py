@@ -3678,55 +3678,6 @@ def admin_upload_product():
     return jsonify(ok=True, url=url, kind=kind)
 
 
-def _same_upload_ref(a, b):
-    ka = storage._key_from_url(str(a or ""))
-    kb = storage._key_from_url(str(b or ""))
-    if ka or kb:
-        return bool(ka and kb and ka == kb)
-    return str(a or "").split("?", 1)[0] == str(b or "").split("?", 1)[0]
-
-
-def _unlink_product_media(product_id, url):
-    product_id = sec.clean(product_id, 64)
-    if not product_id or not url:
-        return False
-    product = None
-    try:
-        for row in catalog_mod.merged(include_hidden=True):
-            if str((row or {}).get("id") or "") == product_id:
-                product = dict(row)
-                break
-    except Exception:
-        product = None
-    if not product:
-        return False
-    changed = False
-    images = []
-    raw_images = product.get("images") or []
-    if isinstance(raw_images, str):
-        try: raw_images = json.loads(raw_images)
-        except Exception: raw_images = []
-    for item in raw_images if isinstance(raw_images, list) else []:
-        ref = item if isinstance(item, str) else (item.get("url") or item.get("src") or item.get("image") if isinstance(item, dict) else "")
-        if ref and _same_upload_ref(ref, url):
-            changed = True
-            continue
-        if item:
-            images.append(item)
-    for key in ("image", "image_url", "imageUrl", "video", "video_url"):
-        if product.get(key) and _same_upload_ref(product.get(key), url):
-            product[key] = ""
-            changed = True
-    if changed:
-        string_images = [i for i in images if isinstance(i, str)]
-        product["images"] = string_images
-        product["image"] = string_images[0] if string_images else catalog_mod.PLACEHOLDER_IMG
-        product["image_url"] = product["image"]
-        saved, action, mirrored = catalog_mod.upsert(product, authmod.current_admin())
-        if not saved or mirrored is False:
-            raise RuntimeError("Product media unlink could not be saved.")
-    return changed
-
 
 @api.post("/admin/storage/cleanup")
 @authmod.require_admin
@@ -3783,20 +3734,23 @@ def admin_storage_cleanup():
 @authmod.require_admin
 @sec.require_csrf
 def admin_upload_purge():
-    """Immediately unlink and permanently delete an uploaded media object."""
+    """Delete an unreferenced upload; never edit a product from this route.
+
+    A product replacement/removal must first save through catalog.upsert,
+    which purges its old-media diff after persistence. This endpoint is only
+    for purge-only cleanup (such as a new upload discarded before save), and
+    storage.delete_upload refuses to remove any object still referenced by a
+    live product. Ignore legacy productId fields rather than unlinking a saved
+    product as a side effect of a delete request.
+    """
     d = request.get_json(silent=True) or {}
     url = sec.safe_url(d.get("url") or d.get("fileUrl") or "", 500)
     if not url:
         return jsonify(ok=False, error="A media URL is required."), 400
-    product_id = sec.clean(d.get("productId") or "", 64)
-    try:
-        unlinked = _unlink_product_media(product_id, url) if product_id else False
-    except Exception as exc:
-        return jsonify(ok=False, error=str(exc) or "Could not unlink that media."), 503
     removed = storage.delete_upload(url)
     audit(authmod.current_admin(), "upload.purge",
-          f"product={product_id or '-'} removed={removed} {url[:180]}", _ip())
-    return jsonify(ok=True, removed=bool(removed), unlinked=bool(unlinked))
+          f"removed={removed} {url[:180]}", _ip())
+    return jsonify(ok=True, removed=bool(removed), unlinked=False)
 
 
 @api.post("/admin/uploads/hero")

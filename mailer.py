@@ -726,14 +726,19 @@ def campaign_email_html(subject, content, recipient="", products=None):
         price_text = f"{float(price):,.0f} CFA" if is_cfa else f"₦{float(price):,.0f}"
         compare_text = f"{float(compare):,.0f} CFA" if is_cfa else f"₦{float(compare):,.0f}"
         badge = str(product.get("badge") or ("Discount" if compare and compare > price else ""))
-        pid = urllib.parse.quote(str(product.get("id") or ""))
+        try:
+            from catalog import public_slug
+            public_slug_value = public_slug(product)
+        except Exception:
+            public_slug_value = str(product.get("slug") or "jau-product")
+        public_slug_value = urllib.parse.quote(public_slug_value, safe="")
         body += ('<div style="margin:18px 0;border:1px solid #eadfce;border-radius:10px;overflow:hidden">'
                  + (f'<img src="{_esc(image, quote=True)}" alt="{_esc(name, quote=True)}" style="width:100%;max-height:280px;object-fit:cover">' if image else "")
                  + '<div style="padding:14px">'
                  + (f'<span style="background:#8f2635;color:white;padding:3px 8px;border-radius:10px;font-size:11px">{_esc(badge)}</span>' if badge else "")
                  + f'<h3 style="margin:8px 0">{_esc(name)}</h3><strong>{_esc(price_text)}</strong>'
                  + (f' <s style="color:#888">{_esc(compare_text)}</s>' if compare and compare > price else "")
-                 + f'<p><a href="{_esc(origin + "/product.html?id=" + pid, quote=True)}" style="display:inline-block;background:#a97e48;color:#fff;padding:9px 15px;text-decoration:none;border-radius:6px">Shop now</a></p></div></div>')
+                 + f'<p><a href="{_esc(origin + "/product.html?slug=" + public_slug_value, quote=True)}" style="display:inline-block;background:#a97e48;color:#fff;padding:9px 15px;text-decoration:none;border-radius:6px">Shop now</a></p></div></div>')
     if recipient:
         body += (f'<p style="margin:24px 0 0;padding-top:14px;border-top:1px solid #f0e8de;'
                  f'font-size:12px;color:#777">You are receiving Jaura Store updates because you shared '

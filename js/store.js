@@ -872,16 +872,28 @@ const JA = (() => {
     }
   }
 
+  function publicProductSlug(p) {
+    const slugify = (value) => String(value || "").toLowerCase().replace(/&/g, " and ")
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    let slug = slugify(p && p.slug);
+    const imported = /^(?:wix|shopify|import)(?:-|$)|^(?:product|item)-\d+$|^[0-9a-f]{24,}$/i; // Legacy import slugs are rewritten before publishing.
+    if (!slug || imported.test(slug)) slug = slugify(p && p.name);
+    return slug || "jau-product";
+  }
+
+  function productUrl(p) {
+    return "product.html?slug=" + encodeURIComponent(publicProductSlug(p));
+  }
+
   function product(idOrSlug) {
     const want = String(idOrSlug || "").trim();
     if (!want) return undefined;
     const list = products();
-    // Canonical id / slug first, then the legacyId alias - so an old wix-*
-    // product link (a bookmark or a shared URL)
-    // still opens the right page after a row is given a canonical jau-* id.
-    // The canonical match must win: a legacyId is never allowed to shadow a
-    // real primary key.
-    return list.find((p) => p.id === want || p.slug === want)
+    // Internal ids and the old legacyId alias remain valid for carts,
+    // bookmarks, orders and integrations. The legacyId resolver accepts old wix-* keys;
+    // public links use the readable slug, including a title fallback for artifact slugs.
+    return list.find((p) => p.id === want)
+      || list.find((p) => p.slug === want || publicProductSlug(p) === want)
       || list.find((p) => String(p.legacyId || "").trim() === want);
   }
 
@@ -2500,8 +2512,9 @@ const JA = (() => {
     const nm = displayName(p);
     const loved = isWished(p.id) ? "is-on" : "";
     const rating = reviewStats(p.id);
+    const publicUrl = productUrl(p);
     const ratingHTML = rating.n
-      ? `<a class="card-rating" href="product.html?id=${encodeURIComponent(p.id)}#reviews" aria-label="${escape(tx("rev.rated", { avg: rating.avg.toFixed(1), n: rating.n }))}">${starsDisplayHTML(rating.avg)}<span>${rating.avg.toFixed(1)} · ${rating.n}</span></a>`
+      ? `<a class="card-rating" href="${publicUrl}#reviews" aria-label="${escape(tx("rev.rated", { avg: rating.avg.toFixed(1), n: rating.n }))}">${starsDisplayHTML(rating.avg)}<span>${rating.avg.toFixed(1)} · ${rating.n}</span></a>`
       : "";
     const gals = galleryOf(p);
     const home = (document.body.dataset.page || "") === "home";
@@ -2514,14 +2527,14 @@ const JA = (() => {
         })).join("")
       : mediaHTML(gals[0] || p.image, { alt: nm, ph });
     return `<article class="card${sold ? " is-oos" : ""}">
-      <a class="card-media${many ? " has-slides" : ""}" ${many ? "data-card-slides" : ""} href="product.html?id=${encodeURIComponent(p.id)}">
+      <a class="card-media${many ? " has-slides" : ""}" ${many ? "data-card-slides" : ""} href="${publicUrl}">
         ${slides}
         ${badge}${oos}
         <button type="button" class="wish-btn ${loved}" data-wish="${p.id}" aria-label="Wishlist">${HEART_SVG}</button>
       </a>
       <div class="card-body">
         <div class="card-cat">${categoryName(p.category)}</div>
-        <h3><a href="product.html?id=${encodeURIComponent(p.id)}">${escape(nm)}</a></h3>
+        <h3><a href="${publicUrl}">${escape(nm)}</a></h3>
         ${priceHTML(p)}
         ${ratingHTML}
         <button class="add-mini" ${sold ? "disabled" : ""} data-add="${p.id}">${sold ? tx("card.oos") : tx("card.add")}</button>
@@ -2664,8 +2677,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=181";
-        const FLYER = "images/brand/logo-flyer.jpg?v=181";
+        const LOGO = "images/brand/logo.jpg?v=182";
+        const FLYER = "images/brand/logo-flyer.jpg?v=182";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2861,7 +2874,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=181" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=182" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -2978,7 +2991,7 @@ const JA = (() => {
       const atMax = Number(i.qty) >= avail;
       const atMin = Number(i.qty) <= 1;
       return `<div class="mini-row">
-        <a href="product.html?id=${encodeURIComponent(i.id)}"><img src="${asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a>
+        <a href="${productUrl(i.product)}"><img src="${asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a>
         <div class="mini-info">
           <p>${escape(nm)}</p>
           ${i.note ? `<small class="mini-note">${escape(tx("pdp.productNote"))}: ${escape(i.note)}</small>` : ""}
@@ -3160,7 +3173,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=181" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=182" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3296,7 +3309,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=181", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=182", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3330,7 +3343,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=181";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=182";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3389,7 +3402,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=181");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=182");
     document.title = title;
     [
       ["name", "description", description],
@@ -3697,7 +3710,7 @@ const JA = (() => {
           : tx("search.type");
       }
       box.innerHTML = shown.map((p) => `
-        <a class="search-hit" href="product.html?id=${encodeURIComponent(p.id)}">
+        <a class="search-hit" href="${productUrl(p)}">
           <img src="${asset(p.image)}" alt="${escape(p.name)}" onerror="fallbackImg(event)" />
           <span><small>${categoryName(p.category)}</small><br>${escape(displayName(p))}</span>
           <span>${money(priceOf(p))}</span>
@@ -3757,7 +3770,7 @@ const JA = (() => {
       logSearchSoon(q, searchProducts(q).length, "");
       menuLive.hidden = false;
       menuLive.innerHTML = (hits.length
-        ? hits.map((p) => `<a class="au-hit" href="product.html?id=${encodeURIComponent(p.id)}">
+        ? hits.map((p) => `<a class="au-hit" href="${productUrl(p)}">
             <img src="${asset(p.image)}" alt="" onerror="fallbackImg(event)" />
             <span>${escape(displayName(p))}</span>
             <em>${money(priceOf(p))}</em>
@@ -3830,7 +3843,7 @@ const JA = (() => {
         if (btn) {
           const piece = product(btn.dataset.add);
           if (piece && (piece.options || []).length) {
-            location.href = "product.html?id=" + encodeURIComponent(piece.id);
+            location.href = productUrl(piece);
             return;
           }
           addToCart(btn.dataset.add);
@@ -3943,7 +3956,7 @@ const JA = (() => {
 
   return {
     ready, CATEGORIES: [], categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,
-    products, product, searchProducts, categoryName, displayName,
+    products, product, publicProductSlug, productUrl, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     homepageFeatured, homepageFeaturedProducts, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
     currency, setCurrency, currencyLocked, money, moneyExact, moneyRange, priceOf, compareOf, priceRangeOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,

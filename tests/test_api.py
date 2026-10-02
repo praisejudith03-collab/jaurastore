@@ -1356,7 +1356,12 @@ def test_admin_order_delete(client):
     assert client.delete("/api/admin/orders/JA-DELETE1", headers={"X-CSRF-Token": tok}).status_code == 404
 
 
-def test_admin_upload_purge_unlinks_product_media_and_deletes_file(client):
+def test_admin_upload_purge_never_unlinks_a_saved_product(client):
+    """A purge-only request cannot blank a product, even with legacy productId.
+
+    The local test storage is used here; this verifies the reference guard and
+    post-save catalog replacement path, not a live Supabase bucket.
+    """
     import catalog
     import storage
     pid = "jau-purge-media"
@@ -1365,17 +1370,30 @@ def test_admin_upload_purge_unlinks_product_media_and_deletes_file(client):
     assert ok and url
     key = storage._key_from_url(url)
     assert storage.resolve_local(key)
-    catalog.upsert({"id": pid, "name": "Purge Media", "category": "beauty",
-                    "priceNgn": 1000, "stock": 3, "online": True,
-                    "image": url, "images": [url]})
+    original = catalog.upsert({"id": pid, "name": "Purge Media", "category": "beauty",
+                               "priceNgn": 1000, "stock": 3, "online": True,
+                               "image": url, "images": [url]})[0]
     tok = login(client)
     r = client.delete("/api/admin/uploads/purge", json={"url": url, "productId": pid},
                       headers={"X-CSRF-Token": tok})
     assert r.status_code == 200, r.data
-    assert storage.resolve_local(key) is None
+    assert r.get_json()["removed"] is False
+    assert r.get_json()["unlinked"] is False
+    assert storage.resolve_local(key), "a purge request must not delete a still-referenced upload"
     product = next(p for p in catalog.merged(include_hidden=True) if p["id"] == pid)
-    assert storage._key_from_url(product.get("image") or "") != key
-    assert all(storage._key_from_url(i) != key for i in (product.get("images") or []))
+    assert storage._key_from_url(product.get("image") or "") == key
+    storage._object_exists_cache[key] = (True, 9999999999)
+    storage._signed_url_cache[f"uploads|{key}"] = ("stale-signed-url", 9999999999)
+
+    # A real replacement persists the new row first; catalog.upsert then
+    # purges its now-unreferenced old local object as the trusted save path.
+    catalog.upsert({**original, "image": "images/brand/logo.jpg",
+                    "image_url": "images/brand/logo.jpg",
+                    "imageUrl": "images/brand/logo.jpg",
+                    "images": ["images/brand/logo.jpg"]})
+    assert storage.resolve_local(key) is None
+    assert key not in storage._object_exists_cache
+    assert f"uploads|{key}" not in storage._signed_url_cache
 
 
 def test_admin_order_delete_purges_checkout_proof_url(client):

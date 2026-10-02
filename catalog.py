@@ -14,7 +14,7 @@ Two persistence backends are supported:
   mirrored there. The local override file is still used as a read-through cache
   so a momentarily unavailable Supabase never empties the shop.
 """
-import os, sys, json, re, secrets, datetime, contextlib
+import os, sys, json, re, secrets, datetime, contextlib, hashlib
 from config import Config
 
 try:
@@ -572,7 +572,28 @@ def _slugify(name):
     slug = (name or "").lower().replace("&", "and").replace("/", " ")
     for ch in ".,()'\"":
         slug = slug.replace(ch, "")
-    return "-".join(slug.split())
+    slug = "-".join(slug.split())
+    return re.sub(r"[^a-z0-9-]+", "-", slug).strip("-")
+
+
+_IMPORT_SLUG_RE = re.compile(
+    r"^(?:wix|shopify|import)(?:-|$)|^(?:product|item)-\d+$|^[0-9a-f]{24,}$", re.I)
+
+
+def public_slug(product):
+    """A clean, readable public URL identity; never an imported Wix ID.
+
+    Internal product ids and legacyId aliases remain untouched and continue to
+    resolve old links. Imported slugs are replaced with the product's readable
+    title slug at the public boundary (and on the next normalized save).
+    """
+    p = product or {}
+    raw = re.sub(r"[^a-z0-9-]+", "-", str(p.get("slug") or "").lower()).strip("-")
+    if not raw or _IMPORT_SLUG_RE.search(raw):
+        raw = _slugify(str(p.get("name") or ""))
+    if not raw:
+        raw = "jau-product"
+    return raw
 
 
 _SLUG_TRIES = 40
@@ -595,7 +616,10 @@ def _free_slug(slug, pid, taken):
         cand = f"{slug}-{n}"
         if cand not in taken:
             return cand
-    return str(pid or slug)
+    # Never fall back to an imported internal id in a public slug, even in
+    # the pathological case of forty same-title collisions.
+    suffix = hashlib.sha1(str(pid or slug).encode("utf-8")).hexdigest()[:8]
+    return f"{slug}-jau-{suffix}"
 
 
 def normalize(product):
@@ -704,7 +728,8 @@ def normalize(product):
     out = {
         "id": pid,
         "sku": sec.valid_sku(product.get("sku") or ""),
-        "slug": sec.safe_url(product.get("slug") or "") or _slugify(name),
+        "slug": public_slug({"slug": sec.safe_url(product.get("slug") or ""),
+                             "name": name, "id": pid}),
         "name": name,
         "nameFr": sec.clean(product.get("nameFr") or product.get("name_fr"), 200),
         "category": sec.clean(product.get("category"), 40),

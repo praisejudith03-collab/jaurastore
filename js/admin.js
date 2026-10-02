@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=181" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=182" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -367,17 +367,15 @@ function mediaStripHTML(imgs) {
 function purgeRemovedMedia(entry) {
   const url = imgSrc(entry) || (typeof entry === "string" ? entry : "");
   if (!url || /^(data:|blob:)/i.test(url) || !window.JA_NET) return Promise.resolve(null);
+  // Purge-only requests never carry productId: the endpoint must not mutate a
+  // saved product. Existing saved media is removed by catalog.upsert after the
+  // product save; this request is a safe follow-up for newly uploaded files
+  // that were discarded before that save.
   return window.JA_NET.api("api/admin/uploads/purge", {
     method: "DELETE",
-    json: { url, productId: editingId || "" },
+    json: { url },
     label: "Media purge",
-  }).then((res) => {
-    if (res && res.removed) JA.toast("Media permanently deleted from storage.");
-    return res;
-  }).catch((err) => {
-    JA.toast((err && err.message) || "Could not delete that media from storage.");
-    return null;
-  });
+  }).catch(() => null);
 }
 function editorOptions(p) {
   if (p && p.options && p.options.length) return p.options;
@@ -592,8 +590,14 @@ function bindMedia() {
       const i = Number(del.getAttribute("data-del-img"));
       if (!window.__editImages) window.__editImages = [];
       const removed = window.__editImages.splice(i, 1)[0];
+      // Keep the file until Save is confirmed. catalog.upsert owns replacement
+      // cleanup for media already attached to the product; the post-save
+      // purge below also covers a just-uploaded tile discarded in this editor.
+      if (removed) {
+        if (!Array.isArray(window.__editRemovedImages)) window.__editRemovedImages = [];
+        window.__editRemovedImages.push(removed);
+      }
       paintMedia(box);
-      purgeRemovedMedia(removed);
       return;
     }
     const tile = e.target.closest(".au-tile");
@@ -954,6 +958,7 @@ function productForm(p = {}) {
     `<option value="${c.id}" ${preCat === c.id ? "selected" : ""}>${JA.escape(c.name)}</option>`
   ).join("");
   window.__editImages = productImages(p);
+  window.__editRemovedImages = [];
   // The row's updated_at as it was when THIS editor was opened. It is NOT a
   // lock and can never block a save: it rides along so the server can tell us
   // afterwards whether we overwrote a newer row (see _product_save_response).
@@ -1291,6 +1296,25 @@ async function handleProductSubmit(e, existing) {
   } else {
     savedMsg = status === "out" ? "Saved · Live now · Out of stock." : "Saved · Live on the store now · " + images.length + " photo(s).";
   }
+  // Only now may the UI purge media the owner removed. The product write has
+  // succeeded, so a storage reference guard sees the replacement row rather
+  // than unlinking a still-saved image. catalog.upsert already purges its old
+  // media diff after persistence; this safe URL-only follow-up covers files
+  // uploaded and then discarded before they ever belonged to that row.
+  const mediaIdentity = (value) => {
+    let raw = String(imgSrc(value) || (typeof value === "string" ? value : "") || "")
+      .split("?")[0].split("#")[0];
+    const m = raw.match(/(?:\/uploads\/|\/storage\/v1\/object\/(?:public|sign)\/[^/]+\/)(.+)$/i);
+    try { return decodeURIComponent(m ? m[1] : raw); } catch (err) { return m ? m[1] : raw; }
+  };
+  const savedMedia = new Set(images.map(mediaIdentity));
+  const removedMedia = Array.isArray(window.__editRemovedImages) ? window.__editRemovedImages.slice() : [];
+  window.__editRemovedImages = [];
+  removedMedia.filter((entry) => {
+    const key = mediaIdentity(entry);
+    return key && !savedMedia.has(key);
+  }).forEach((entry) => { void purgeRemovedMedia(entry); });
+
   // Return THIS admin to their exact source page. The list position they
   // came from (category, search, page, scroll) was captured in
   // rememberProductsReturn() when the editor was opened and is stored in
@@ -1420,7 +1444,18 @@ function productsStateFromUrl(raw) {
 /** Apply a captured/linked list state to the products desk module vars. */
 function applyProductsState(state) {
   const s = state || {};
-  if (typeof s.category === "string") { dashCat = s.category; prodCatSel = s.category; }
+  if (typeof s.category === "string" && s.category) {
+    const cats = (JA.categories ? JA.categories() : JA.CATEGORIES) || [];
+    const known = cats.some((c) => String((c || {}).id || "") === s.category);
+    // A saved return URL can outlive its category. Do not pin the desk to a
+    // deleted/stale id (which otherwise renders an empty list and keeps the
+    // hidden selection alive through later filter changes).
+    dashCat = known ? s.category : "";
+    prodCatSel = known ? s.category : "";
+  } else if (typeof s.category === "string") {
+    dashCat = "";
+    prodCatSel = "";
+  }
   if (typeof s.q === "string") prodSearchQ = s.q;
   if (Number.isFinite(s.page) && s.page >= 1) prodPage = s.page; else prodPage = 1;
 }
@@ -1627,10 +1662,11 @@ function productsTable() {
   const all = JA.products();
   const cats = JA.categories ? JA.categories() : JA.CATEGORIES;
   const catName = (id) => (cats.find((c) => c.id === id) || {}).name || id || "";
-  const catOpts = cats.map((c) => `<option value="${JA.escape(c.id)}" ${ (dashCat === c.id || prodCatSel === c.id) ? "selected" : ""}>${JA.escape(c.name)}</option>`).join("");
+  const activeCategory = String(dashCat || prodCatSel || "");
+  const catOpts = cats.map((c) => `<option value="${JA.escape(c.id)}" ${activeCategory === c.id ? "selected" : ""}>${JA.escape(c.name)}</option>`).join("");
   const backBtn = dashCat ? `<button type="button" class="btn btn-line" id="back-all-products">← All products</button>` : "";
   const exportBtn = `<a class="btn btn-line" href="api/admin/products.csv" download="jaura-products.csv">Export CSV</a>`;
-  const filteredNote = dashCat ? ` · <strong>${JA.escape(catName(dashCat))}</strong>` : "";
+  const filteredNote = activeCategory ? ` · <strong>${JA.escape(catName(activeCategory))}</strong>` : "";
   const qVal = JA.escape(prodSearchQ);
   return `<div class="adx-list-head">
       <button type="button" class="btn adx-add-btn" id="add-product">+ New Product</button>
@@ -1648,13 +1684,26 @@ function productsTable() {
     <p class="empty" id="prod-none" hidden>No products match that search.</p>
     <div id="prod-pager"></div>`;
 }
-function applyProductFilter() {
+function applyProductFilter(e) {
   const qEl = document.getElementById("prod-search");
   const cEl = document.getElementById("prod-cat");
+  const categoryChanged = !!(e && e.target && e.target.id === "prod-cat");
+  // A category opened from /admin/categories or a deep link pins dashCat.
+  // The select is the new explicit choice when it changes, including the
+  // empty "All categories" value; the old pin must not keep winning.
+  if (categoryChanged) dashCat = "";
   selectedProductIds.clear();
   prodSearchQ = String(qEl?.value || "").toLowerCase().trim();
   prodCatSel = String(cEl?.value || "");
   prodPage = 1;
+  if (categoryChanged) {
+    // Rebuild the heading/count as well as the list so it cannot still name
+    // the category that was pinned before this selection.
+    paintDesk("products");
+    const selected = document.getElementById("prod-cat");
+    if (selected) selected.value = prodCatSel;
+    return;
+  }
   renderProdGrid(); bindProdGridEvents();
 }
 
@@ -2629,7 +2678,8 @@ function broadcastOverrideForProduct(slot, id) {
 }
 
 function broadcastProductUrl(p) {
-  return `${location.origin}/product.html?id=${encodeURIComponent(p.id)}`;
+  const path = JA.productUrl ? JA.productUrl(p) : ("product.html?slug=" + encodeURIComponent(p.slug || p.name || "product"));
+  return `${location.origin}/${path}`;
 }
 function broadcastPriceLine(p) {
   // Active selling price only, in both currencies - never priceCompare /
@@ -3444,7 +3494,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=181" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=182" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3798,7 +3848,11 @@ function bindCategories() {
       const res = await JA.deleteCategory(id, "beauty");
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not delete the category. No changes are live."); return; }
     }
-    JA.toast("Category deleted."); paintDesk("categories");
+    JA.toast("Category deleted.");
+    if (dashCat === id || prodCatSel === id) {
+      dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1;
+    }
+    paintDesk("categories");
   });
   document.getElementById("add-cat")?.addEventListener("click", async () => {
     const name = (document.getElementById("new-cat-name")?.value || "").trim();
@@ -3806,7 +3860,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=181", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=182", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

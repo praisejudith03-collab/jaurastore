@@ -109,21 +109,90 @@ def _clean_url(value: Any) -> str:
     return raw[:1000]
 
 
-def product_supplier_urls(product: Dict[str, Any]) -> List[str]:
-    """Supplier URLs attached to a product, with the product-level URL first."""
+def _urls_from_value(value: Any) -> List[str]:
+    values = value if isinstance(value, (list, tuple)) else [value]
     urls: List[str] = []
-    for key in ("supplierSku", "supplierUrl", "supplier_url", "supplierURL", "supplier_sku"):
-        url = _clean_url((product or {}).get(key))
+    for item in values:
+        url = _clean_url(item)
         if url and url not in urls:
             urls.append(url)
-    mapping = (product or {}).get("optionSupplierSku") or (product or {}).get("option_supplier_sku") or {}
-    if isinstance(mapping, dict):
-        for value in mapping.values():
-            values = value if isinstance(value, (list, tuple)) else [value]
-            for item in values:
-                url = _clean_url(item)
-                if url and url not in urls:
-                    urls.append(url)
+    return urls
+
+
+def main_supplier_urls(product: Dict[str, Any]) -> List[str]:
+    """The product-level supplier URL(s), separate from per-option links."""
+    urls: List[str] = []
+    for key in ("supplierSku", "supplierUrl", "supplier_url", "supplierURL", "supplier_sku"):
+        for url in _urls_from_value((product or {}).get(key)):
+            if url not in urls:
+                urls.append(url)
+    return urls
+
+
+def _option_supplier_mapping(product: Dict[str, Any]) -> Dict[str, Any]:
+    p = product or {}
+    raw = (p.get("optionSupplierSku") or p.get("option_supplier_sku")
+           or p.get("optionSupplierUrls") or p.get("option_supplier_urls")
+           or p.get("variantSupplierUrls") or p.get("variant_supplier_urls") or {})
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def option_supplier_urls_for(product: Dict[str, Any], stock_key: Any) -> List[str]:
+    """Return URLs explicitly assigned to one live option/variant.
+
+    Admin fields normally use ``"Colour: Black"`` keys; older saves may use
+    just ``"Black"`` or the exact optionStock key. Matching is normalized so
+    harmless punctuation/case differences do not make an override disappear,
+    while a different option title cannot steal another option's URL.
+    """
+    key = str(stock_key or "").strip()
+    if not key:
+        return []
+    key_folded = fold(key)
+    exact = {key_folded} if key_folded else set()
+    value_aliases = {fold(option_value_only(key))} if fold(option_value_only(key)) else set()
+    options = (product or {}).get("options")
+    if isinstance(options, list):
+        for option in options[:20]:
+            if not isinstance(option, dict):
+                continue
+            title = str(option.get("title") or "Option").strip() or "Option"
+            values = option.get("values") if isinstance(option.get("values"), list) else []
+            for value in values[:200]:
+                value_text = str(value or "").strip()
+                if not value_text:
+                    continue
+                value_folded = fold(value_text)
+                full_folded = fold(f"{title}: {value_text}")
+                if key_folded in (value_folded, full_folded):
+                    exact.add(full_folded)
+                    value_aliases.add(value_folded)
+    urls: List[str] = []
+    for map_key, raw_urls in _option_supplier_mapping(product).items():
+        normalized = fold(map_key)
+        # Full option keys require an exact title+value match. A plain value
+        # key is accepted for backwards-compatible maps and maps to the
+        # currently tracked stock key only.
+        if normalized not in exact and normalized not in value_aliases:
+            continue
+        for url in _urls_from_value(raw_urls):
+            if url not in urls:
+                urls.append(url)
+    return urls
+
+
+def product_supplier_urls(product: Dict[str, Any]) -> List[str]:
+    """All configured supplier URLs (product-level first) for scheduling."""
+    urls = main_supplier_urls(product)
+    for value in _option_supplier_mapping(product).values():
+        for url in _urls_from_value(value):
+            if url not in urls:
+                urls.append(url)
     return urls
 
 
@@ -156,13 +225,9 @@ def variant_labels(product: Dict[str, Any]) -> List[str]:
         if label and folded and folded not in seen:
             seen.add(folded)
             labels.append(label)
-    os_map = product.get("optionStock") if isinstance(product.get("optionStock"), dict) else {}
-    for value in os_map.keys():
-        label = str(value or "").strip()
-        folded = fold(label)
-        if label and folded and folded not in seen:
-            seen.add(folded)
-            labels.append(label)
+    # optionStock is not the option definition: it can contain keys left by an
+    # older import or by a removed variant. Never turn those stale keys back
+    # into labels the watchdog is allowed to update.
     return labels
 
 
@@ -575,124 +640,228 @@ def map_supplier_to_jaura(jaura_labels: List[str], supplier_rows: List[Dict[str,
 
 
 def _stock_keys(product: Dict[str, Any], labels: List[str]) -> List[str]:
-    os_map = product.get("optionStock") if isinstance(product.get("optionStock"), dict) else {}
-    if os_map:
-        return [str(k) for k in os_map.keys()]
-    # Prefer first option values; optionStock is keyed by values, not "Colour: X".
-    opts = product.get("options") if isinstance(product.get("options"), list) else []
+    """Current sellable values for the stock dimension the store tracks.
+
+    ``optionStock`` is a snapshot, not the option definition. Filtering its
+    keys through the current first option prevents stale/removed choices from
+    being queried or carried into a supplier total.
+    """
+    p = product or {}
+    opts = p.get("options") if isinstance(p.get("options"), list) else []
+    first_values = []
     if opts and isinstance(opts[0], dict) and isinstance(opts[0].get("values"), list):
-        return [str(v) for v in opts[0].get("values") or [] if str(v or "").strip()]
-    return [option_value_only(x) for x in labels]
+        first_values = [str(v or "").strip() for v in opts[0]["values"] if str(v or "").strip()]
+    if not first_values:
+        first_values = [str(v or "").strip() for v in (p.get("colors") or []) if str(v or "").strip()]
+    if not first_values:
+        return []
+
+    os_map = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else {}
+    by_fold = {fold(option_value_only(k)): str(k) for k in os_map if fold(option_value_only(k))}
+    out, seen = [], set()
+    for value in first_values:
+        # Keep the stored key spelling where possible, but only if its value
+        # still exists in the live option definition.
+        key = by_fold.get(fold(value), value)
+        if fold(key) not in seen:
+            seen.add(fold(key))
+            out.append(key)
+    return out
+
+
+def _option_match_labels(product: Dict[str, Any], stock_key: str) -> List[str]:
+    labels = [stock_key, option_value_only(stock_key)]
+    opts = (product or {}).get("options")
+    if isinstance(opts, list):
+        for option in opts[:20]:
+            if not isinstance(option, dict):
+                continue
+            title = str(option.get("title") or "Option").strip() or "Option"
+            values = option.get("values") if isinstance(option.get("values"), list) else []
+            for value in values[:200]:
+                value = str(value or "").strip()
+                if value and fold(value) == fold(option_value_only(stock_key)):
+                    labels.append(f"{title}: {value}")
+    out, seen = [], set()
+    for label in labels:
+        value = str(label or "").strip()
+        folded = fold(value)
+        if value and folded and folded not in seen:
+            seen.add(folded)
+            out.append(value)
+    return out
+
+
+def _option_page_row(labels: List[str], rows: List[Dict[str, Any]],
+                     other_labels: List[str] = None) -> Optional[Dict[str, Any]]:
+    """Pick one confident row from a URL assigned to a single option.
+
+    If the page only exposes one stock-bearing row, the admin's explicit URL
+    assignment is sufficient to identify that option when the row is a generic
+    product title. A row that clearly names a DIFFERENT live option is never
+    accepted, and a multi-row page still has to match the requested option.
+    """
+    best_score, best_row = 0, None
+    for label in labels:
+        for row in rows:
+            score = match_score(label, str(row.get("label") or ""))
+            if score > best_score:
+                best_score, best_row = score, row
+    if best_row is not None and best_score >= 70:
+        return best_row
+    if len(rows) != 1 or rows[0].get("qty") is None:
+        return None
+    row_label = str(rows[0].get("label") or "")
+    if any(match_score(other, row_label) >= 70 for other in (other_labels or [])):
+        return None
+    return rows[0]
+
+
+def _fetch_rows(product: Dict[str, Any], url: str, labels: List[str],
+                warnings: List[Dict[str, Any]], scope: str) -> List[Dict[str, Any]]:
+    try:
+        return parse_supplier_variants(fetch_url(url), labels)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        warnings.append(_warning(product, f"{scope}_fetch_failed", f"Could not fetch {url}: {exc}"))
+    except Exception as exc:  # defensive: a supplier page must not kill the scheduler
+        warnings.append(_warning(product, f"{scope}_parse_failed", f"Could not parse {url}: {exc}"))
+    return []
 
 
 def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> Tuple[bool, List[Dict[str, Any]]]:
-    """Check one product. Returns (updated, warnings). Never raises."""
+    """Check one product, isolating option URLs from the main product URL.
+
+    A URL entered for a particular option is authoritative for that option and
+    uses the requested 50% buffer. Any option without its own URL can still be
+    read from the main product URL at the standing 40% buffer. A simple
+    product-level URL also keeps the 40% rule. Returns (updated, warnings)
+    and never raises.
+    """
     warnings: List[Dict[str, Any]] = []
     p = dict(product or {})
     pid = str(p.get("id") or "").strip()
-    urls = product_supplier_urls(p)
-    if not pid or not urls:
+    if not pid:
+        return False, warnings
+    main_urls = main_supplier_urls(p)
+    all_urls = product_supplier_urls(p)
+    if not all_urls:
         return False, warnings
     labels = variant_labels(p)
     keys = _stock_keys(p, labels)
 
-    # Single-URL multi-variant path: fetch product-level URL once, then match
-    # all Jaura variant keys. Per-option URLs, when present, can augment it.
-    supplier_rows: List[Dict[str, Any]] = []
-    for url in urls[:4]:
-        try:
-            body = fetch_url(url)
-            supplier_rows.extend(parse_supplier_variants(body, keys + labels))
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-            warnings.append(_warning(p, "supplier_fetch_failed", f"Could not fetch {url}: {exc}"))
-        except Exception as exc:  # defensive: a supplier page must not kill the scheduler
-            warnings.append(_warning(p, "supplier_parse_failed", f"Could not parse {url}: {exc}"))
-    if not supplier_rows:
-        warnings.append(_warning(p, "supplier_no_variants", "No supplier variant stock could be read; existing stock was left unchanged."))
-        return False, warnings
-
     if not keys:
-        # Simple product (no variants): the supplier page answers for the
-        # whole piece, and the rule is applied to the product's own stock.
-        observed_price = None
-        for row in supplier_rows:
-            if row.get("price") is not None:
-                observed_price = float(row["price"])
-                break
+        # Variant-free products only use the product-level URL. Option URLs
+        # have no matching inventory key and must not turn into whole-product
+        # stock by accident.
+        if not main_urls:
+            return False, warnings
+        supplier_rows: List[Dict[str, Any]] = []
+        for url in main_urls[:4]:
+            supplier_rows.extend(_fetch_rows(p, url, labels, warnings, "supplier"))
+        if not supplier_rows:
+            warnings.append(_warning(p, "supplier_no_variants", "No supplier stock could be read; existing stock was left unchanged."))
+            return False, warnings
+        observed_price = next((float(row["price"]) for row in supplier_rows
+                               if row.get("price") is not None), None)
         if observed_price is None:
             try:
-                observed_price = product_page_price(fetch_url(urls[0])) if urls else None
+                observed_price = product_page_price(fetch_url(main_urls[0]))
             except Exception:
                 observed_price = None
         if observed_price is not None:
             _watch_prices(p, {"product": observed_price}, warnings)
         return _sync_whole_product(p, supplier_rows, actor, warnings)
 
-    matched = map_supplier_to_jaura(keys, supplier_rows)
+    option_urls = {key: option_supplier_urls_for(p, key)[:4] for key in keys}
+    option_url_keys = {key for key, urls in option_urls.items() if urls}
+    shared_keys = [key for key in keys if key not in option_url_keys]
+    main_rows: List[Dict[str, Any]] = []
+    if shared_keys and main_urls:
+        for url in main_urls[:4]:
+            main_rows.extend(_fetch_rows(p, url, shared_keys, warnings, "supplier"))
+    main_matched = map_supplier_to_jaura(shared_keys, main_rows) if main_rows else {}
+
+    # A per-option URL wins outright for that key. It is checked on its own,
+    # so a page for Black cannot mark Brown sold out (or restock it).
+    option_matched: Dict[str, Dict[str, Any]] = {}
+    for key in keys:
+        urls = option_urls.get(key) or []
+        if not urls:
+            continue
+        target_labels = _option_match_labels(p, key)
+        other_labels = [label for other in keys if other != key
+                        for label in _option_match_labels(p, other)]
+        for url in urls:
+            rows = _fetch_rows(p, url, target_labels, warnings, "supplier_option")
+            row = _option_page_row(target_labels, rows, other_labels)
+            if row is not None:
+                option_matched[key] = row
+                break
+        if key not in option_matched:
+            warnings.append(_warning(
+                p, "supplier_option_unreadable",
+                f"No confident stock reading for option '{key}' from its assigned supplier URL; its current stock was left unchanged."))
+
+    matched: Dict[str, Dict[str, Any]] = {**main_matched, **option_matched}
     if not matched:
-        warnings.append(_warning(p, "supplier_no_matches", "Supplier variants did not confidently match this product's option names; existing stock was left unchanged."))
+        if not warnings:
+            warnings.append(_warning(p, "supplier_no_matches", "No supplier stock matched the current options; existing stock was left unchanged."))
         return False, warnings
 
-    # Price watch: remember each matched variant's supplier price and warn on
-    # any rise. Warnings only - the retail price stays the owner's decision.
-    observed: Dict[str, Optional[float]] = {
-        key: (float(row["price"]) if row.get("price") is not None else None)
-        for key, row in matched.items()
-    }
-    if any(v is not None for v in observed.values()):
-        _watch_prices(p, {k: v for k, v in observed.items() if v is not None}, warnings)
+    observed = {key: float(row["price"]) for key, row in matched.items()
+                if row.get("price") is not None}
+    if observed:
+        _watch_prices(p, observed, warnings)
 
-    # A variant the supplier page did not confidently cover keeps its current
-    # quantity, always - but the owner is told, once per product, which boxes
-    # the sync could not answer for this run.
-    unmatched = [k for k in keys if k not in matched]
+    unmatched = [key for key in keys if key not in matched]
     if unmatched:
         warnings.append(_warning(
             p, "supplier_partial_match",
-            "No confident supplier reading for: " + ", ".join(unmatched[:20])
+            "No supplier reading for: " + ", ".join(unmatched[:20])
             + ". Their stock was left unchanged."))
 
     current = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else {}
     next_stock: Dict[str, int] = {}
     changed = False
     for key in keys:
-        old = max(0, int(current.get(key, p.get("stock") or 0) or 0)) if current else max(0, int(p.get("stock") or 0))
+        old = (max(0, int(current.get(key, p.get("stock") or 0) or 0))
+               if current else max(0, int(p.get("stock") or 0)))
         row = matched.get(key)
         if row is None:
-            next_stock[key] = old          # unmatched variant: keep current stock
+            next_stock[key] = old
             continue
         qty = row.get("qty")
         if qty is None:
-            # Uncertain reading: leave the current quantity untouched. The row
-            # should never reach here (the parser drops qty-less rows), so keep
-            # the guard explicit rather than trusted.
             warnings.append(_warning(p, "supplier_stock_uncertain", f"Stock for '{key}' could not be read with confidence; left unchanged."))
             next_stock[key] = old
             continue
-        new_qty = _apply_stock_rule(int(qty), old)
+        new_qty = (_apply_option_stock_rule(int(qty), old)
+                   if key in option_url_keys else _apply_stock_rule(int(qty), old))
         next_stock[key] = new_qty
         if new_qty != old:
             changed = True
 
     if not changed:
         return False, warnings
-    row = {**p, "optionStock": next_stock, "stock": sum(next_stock.values()), "stock_quantity": sum(next_stock.values())}
+    total = sum(next_stock.values())
+    row = {**p, "optionStock": next_stock, "stock": total, "stock_quantity": total}
     return _save_synced(p, row, actor, warnings)
 
 
 def _apply_stock_rule(qty: int, old: int) -> int:
-    """Keep 40% of the supplier count as the shop's sellable inventory.
-
-    Exact supplier counts are multiplied by 0.40 and rounded down; any
-    positive supplier availability keeps at least one sellable unit so a
-    generic "in stock" signal can restore the public In Stock state. Zero
-    remains zero. ``old`` stays in the signature for callers/tests but stock
-    now follows the same deterministic supplier rule on every sync.
-    """
+    """The standing 40% buffer for product-level supplier stock."""
     qty = max(0, int(qty or 0))
     if qty <= 0:
         return 0
     return max(1, (qty * 40) // 100)
+
+
+def _apply_option_stock_rule(qty: int, old: int) -> int:
+    """Use the requested 50% buffer only for an option's own supplier URL."""
+    qty = max(0, int(qty or 0))
+    if qty <= 0:
+        return 0
+    return max(1, (qty * 50) // 100)
 
 
 def _whole_product_row(product: Dict[str, Any], supplier_rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

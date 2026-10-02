@@ -1,10 +1,10 @@
 """Supplier stock sync rules - freeze the owner-specified contract.
 
-  * exact positive supplier count -> floor(40%); generic in-stock -> at least 1
-  * supplier out / 0                 -> Jaura product/variant goes out of stock
-  * restock                          -> restores the buffered public quantity
-  * simple products                  -> the rule applies to the whole product
-  * variant products                 -> only the matched variant moves
+  * product-level supplier counts -> floor(40%); option-URL counts -> floor(50%)
+  * supplier out / 0                 -> only the matched product/variant goes out
+  * restock                          -> restores only the matched buffered option
+  * simple products                  -> the product-level 40% rule applies
+  * variant products                 -> own URL overrides the main URL per option
   * unmatched variants               -> keep current stock, warning logged
   * unreadable / uncertain page      -> nothing changes, warning logged
   * the supplier LINK itself         -> never removed by a sync
@@ -157,6 +157,137 @@ def test_fetch_failure_changes_nothing_and_warns(monkeypatch, saved):
     assert changed is False
     assert saved.get("optionStock") is None
     assert any(w["code"] == "supplier_fetch_failed" for w in warns)
+
+
+# ------------------------------------------------------- option URL watchdog
+
+
+def _colour_product(**over):
+    p = {
+        "id": "jau-supplier-black-brown",
+        "name": "Everyday Tote",
+        "priceNgn": 3000,
+        "supplierSku": "https://supplier.example/tote-all",
+        "options": [{"title": "Colour", "values": ["Black", "Brown"]}],
+        "optionStock": {"Black": 0, "Brown": 0},
+        "stock": 0,
+        "optionSupplierSku": {
+            "Colour: Black": "https://supplier.example/tote-black",
+            "Colour: Brown": "https://supplier.example/tote-brown",
+        },
+    }
+    p.update(over)
+    return p
+
+
+def test_option_supplier_urls_win_and_watchdog_restocks_black_and_brown_separately(
+        monkeypatch, saved):
+    """The 50% option URLs override a conflicting main page for each colour.
+
+    This exercises the actual watchdog tick (the same cycle used in service),
+    not just the ratio helper. A 100-unit Black listing and 40-unit Brown
+    listing restore only those options to 50 and 20. The main product URL says
+    Black is sold out and Brown has 100; neither result may leak into the
+    explicitly linked option URLs.
+    """
+    p = _colour_product()
+    pages = {
+        "https://supplier.example/tote-all": _variants_html(
+            ("Black", False, None), ("Brown", True, 100)),
+        "https://supplier.example/tote-black": _variants_html(("Black", True, 100)),
+        "https://supplier.example/tote-brown": _variants_html(("Brown", True, 40)),
+    }
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return pages[url]
+
+    monkeypatch.setattr(supplier_watchdog, "fetch_url", fetch)
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "merged",
+                        lambda include_hidden=True: [p])
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "deleted_product_ids", lambda: set())
+    monkeypatch.setattr(supplier_watchdog, "_last_checked", {})
+    supplier_watchdog.catalog_mod.apply_supplier_stock.test_box._source = dict(p)
+
+    result = supplier_watchdog.tick(limit=1, min_interval_seconds=0)
+
+    assert result["checked"] == 1 and result["updated"] == 1
+    assert calls == ["https://supplier.example/tote-black",
+                     "https://supplier.example/tote-brown"]
+    assert saved["optionStock"] == {"Black": 50, "Brown": 20}
+    assert saved["stock"] == saved["stock_quantity"] == 70
+
+
+def test_option_url_out_of_stock_is_isolated_and_non_url_option_keeps_40_percent(
+        monkeypatch, saved):
+    p = _colour_product(optionStock={"Black": 8, "Brown": 10}, stock=18,
+                        optionSupplierSku={"Colour: Black": "https://supplier.example/tote-black"})
+    supplier_watchdog.catalog_mod.apply_supplier_stock.test_box._source = dict(p)
+    pages = {
+        "https://supplier.example/tote-all": _variants_html(
+            ("Black", True, 100), ("Brown", True, 100)),
+        "https://supplier.example/tote-black": _variants_html(("Black", False, None)),
+    }
+    monkeypatch.setattr(supplier_watchdog, "fetch_url", lambda url: pages[url])
+
+    ok, warnings = supplier_watchdog.sync_product(p)
+
+    assert ok is True
+    assert saved["optionStock"] == {"Black": 0, "Brown": 40}
+    assert saved["stock"] == saved["stock_quantity"] == 40
+    assert not any(w["code"] == "supplier_partial_match" for w in warnings)
+
+
+def test_option_url_buffer_survives_a_real_local_watchdog_catalog_cycle(tmp_path, monkeypatch):
+    """Exercise tick -> stock-only catalog patch -> persisted local row.
+
+    The storage backend here is the test/local catalog, not a real Supabase
+    project. It verifies the watchdog's cycle and write semantics end-to-end.
+    """
+    import json
+    import catalog as catalog_mod
+
+    p = _colour_product()
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps({"products": [p], "deleted": []}), encoding="utf-8")
+    monkeypatch.setattr(catalog_mod, "CATALOG_FILE", str(path))
+    monkeypatch.setattr(catalog_mod, "merged", lambda include_hidden=True: [p])
+    monkeypatch.setattr(catalog_mod, "deleted_product_ids", lambda: set())
+    monkeypatch.setattr(supplier_watchdog, "_last_checked", {})
+    pages = {
+        "https://supplier.example/tote-all": _variants_html(
+            ("Black", False, None), ("Brown", True, 100)),
+        "https://supplier.example/tote-black": _variants_html(("Black", True, 100)),
+        "https://supplier.example/tote-brown": _variants_html(("Brown", True, 40)),
+    }
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return pages[url]
+
+    monkeypatch.setattr(supplier_watchdog, "fetch_url", fetch)
+    result = supplier_watchdog.tick(limit=1, min_interval_seconds=0)
+    stored = json.loads(path.read_text(encoding="utf-8"))["products"][0]
+
+    assert result["checked"] == 1 and result["updated"] == 1
+    assert calls == ["https://supplier.example/tote-black",
+                     "https://supplier.example/tote-brown"]
+    assert stored["optionStock"] == {"Black": 50, "Brown": 20}
+    assert stored["stock"] == stored["stock_quantity"] == 70
+
+
+def test_removed_option_supplier_url_is_never_polled_or_restored():
+    p = _colour_product(
+        options=[{"title": "Colour", "values": ["Black"]}],
+        optionStock={"Black": 4, "Brown": 30},
+    )
+    keys = supplier_watchdog._stock_keys(p, supplier_watchdog.variant_labels(p))
+    assert keys == ["Black"]
+    assert supplier_watchdog.option_supplier_urls_for(p, "Black") == [
+        "https://supplier.example/tote-black"]
+    assert "Brown" not in keys, "a stale stock/URL map cannot restore a deleted variant"
 
 
 # -------------------------------------------------------- whole-product rule

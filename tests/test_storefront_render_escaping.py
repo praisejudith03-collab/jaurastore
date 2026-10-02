@@ -53,8 +53,8 @@ sandbox.window = {};
 vm.createContext(sandbox);
 const pieces = [stubs];
 for (const fn of ["wish", "isWished", "escape", "asset", "mediaKind",
-                  "thumbFor", "galleryOf", "displayName", "mediaHTML",
-                  "cardHTML"]) {
+                  "thumbFor", "galleryOf", "displayName", "publicProductSlug",
+                  "productUrl", "mediaHTML", "cardHTML"]) {
   pieces.push(grab(fn));
 }
 vm.runInContext(pieces.join("\n"), sandbox);
@@ -81,7 +81,8 @@ assert(!/<script>/i.test(card2), "a raw <script> tag reached the DOM");
 assert(!/data:text\/html,<script>/i.test(card2), "a data: URL with markup got through raw");
 assert(card2.includes("Purse &amp; Bag"), "the ampersand is escaped");
 // and the card is still a WORKING card, not an over-escaped husk
-assert(card2.includes('href="product.html?id=jau-xss-1"'), "the product link still renders");
+assert(card2.includes('href="product.html?slug='), "the product link still renders with a clean public slug");
+assert(!card2.includes("product.html?id=jau-xss-1"), "public product URLs do not expose internal IDs");
 assert(card2.includes("Evil"), "the product name still renders");
 
 // ---- mediaHTML directly (alt / data-ph / src attribute contexts) --------
@@ -93,7 +94,7 @@ assert(!/" onload="alert\(7\)/.test(media), "data-ph attribute injection");
 assert(media.includes("&quot;"), "the quotes are escaped");
 
 // ---- sanity: the id is URL-encoded on the link ---------------------------
-assert(card2.includes("product.html?id=jau-xss-1"), "id encoding intact");
+assert(card2.includes("product.html?slug="), "the readable product slug is encoded in the link");
 console.log("ALL ESCAPING CHECKS PASSED");
 """
 
