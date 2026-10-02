@@ -1630,13 +1630,14 @@ def delete_order(order_id):
 
     urls = []
     try:
-        res = (c.table("receipts").select("id, file_url, proof_url")
+        # `receipts` stores the uploaded object in `file_url`; `proof_url`
+        # belongs to the parent `orders` row and is not present in this table.
+        res = (c.table("receipts").select("id, file_url")
                .eq("order_id", order_id).execute())
         for row in _res_data(res):
-            for key in ("file_url", "proof_url"):
-                u = str((row or {}).get(key) or "").strip()
-                if u:
-                    urls.append(u)
+            u = str((row or {}).get("file_url") or "").strip()
+            if u:
+                urls.append(u)
     except Exception as exc:
         print(f"[supabase] receipt lookup failed: {exc}")
     try:
