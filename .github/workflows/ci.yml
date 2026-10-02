@@ -28,4 +28,41 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Run test suite
-        run: python -m pytest tests/ -q
+        run: python -m pytest tests/ -q --junitxml=pytest-results.xml
+
+      # The Actions log download endpoint is not always reachable from the
+      # sandbox. Surface the failing pytest node IDs and short failure messages
+      # as check-run annotations as well as in the ordinary step log.
+      - name: Report pytest failures
+        if: failure()
+        run: |
+          python - <<'PY'
+          import re
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path("pytest-results.xml")
+          if not report.exists():
+              print("::error title=Pytest report::pytest-results.xml was not produced")
+              sys.exit(0)
+
+          root = ET.parse(report).getroot()
+          failures = 0
+          for case in root.iter("testcase"):
+              for kind in ("failure", "error"):
+                  result = case.find(kind)
+                  if result is None:
+                      continue
+                  failures += 1
+                  detail = result.get("message") or result.text or ""
+                  detail = re.sub(r"\s+", " ", detail).strip()
+                  name = f"{case.get('classname', '')}::{case.get('name', '')}"
+                  message = f"{name}: {detail[:900]}"
+                  message = (message.replace("%", "%25")
+                                    .replace("\r", "%0D")
+                                    .replace("\n", "%0A"))
+                  print(f"::error title=pytest {kind}::{message}")
+          if not failures:
+              print("::error title=Pytest report::pytest failed, but the JUnit report contains no failure nodes")
+          PY
