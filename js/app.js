@@ -67,8 +67,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=182";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=182";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=183";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=183";
 }
 
 function renderCategories() {
@@ -2153,9 +2153,15 @@ function renderCheckout() {
 
   if (form.dataset.paymentInitialized !== "1") {
     const country = String(form.querySelector("[name=country]")?.value || "");
-    const initialMethod = JA.currency() === "NGN"
-      ? "naira"
-      : (/togo/i.test(country) ? "togo_cfa" : "benin_cfa");
+    // Payment method is a separate shopper choice, not an alias for the
+    // storefront currency. Pick a language-friendly initial method (with
+    // Togo's distinct provider taking precedence for a Togo checkout); never
+    // let a late currency restore overwrite the locale default.
+    const language = window.I18N && typeof I18N.lang === "function"
+      ? String(I18N.lang()).toLowerCase() : "en";
+    const initialMethod = /togo/i.test(country)
+      ? "togo_cfa"
+      : (language === "fr" ? "benin_cfa" : "naira");
     const initialRadio = form.querySelector(`[name=paymentMethod][value="${initialMethod}"]`);
     if (initialRadio) initialRadio.checked = true;
     form.dataset.paymentInitialized = "1";

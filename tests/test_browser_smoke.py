@@ -346,14 +346,14 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     mobile.wait_for_function(
         "() => { try { return typeof JA !== 'undefined' && Array.isArray(JA.products())"
         " && JA.products().length > 0; } catch (e) { return false; } }")
-    mobile.evaluate(
+    added = mobile.evaluate(
         "() => { const p = JA.products().find(p => JA.stockFor(p, '') > 0) || JA.products()[0];"
-        " JA.addToCart(p.id); }")
+        " return JA.addToCart(p.id); }")
+    assert added is True, "the server-validated cart addition should succeed"
     assert mobile.evaluate("JA.cartCount()") > 0, "the test item must be in the cart"
     mobile.goto(live_shop + "/checkout.html?lang=fr")
     expect(mobile.locator("[data-checkout]")).to_be_visible()
-    assert mobile.locator('[name=paymentMethod][value="benin_cfa"]').is_checked(), (
-        "French checkout defaults to the Benin CFA method")
+    expect(mobile.locator('[name=paymentMethod][value="benin_cfa"]')).to_be_checked()
     expect(mobile.locator("[data-bank-benin]")).to_be_visible()
     expect(mobile.locator("[data-bank-ngn]")).to_be_hidden()
     expect(mobile.locator("[data-bank-togo]")).to_be_hidden()
