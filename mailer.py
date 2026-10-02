@@ -271,7 +271,7 @@ def send_mail(subject, html, attachments=()):
 # below is an integer formatted with thousands separators. The line maths is
 # done here, once: unit price x quantity = subtotal, and the sum of the
 # subtotals is checked against the order total the server stored.
-CURRENCY_SYMBOL = {"NGN": "\u20a6", "CFA": "F CFA", "XOF": "F CFA"}
+CURRENCY_SYMBOL = {"NGN": "\u20a6", "CFA": "CFA", "XOF": "CFA"}
 
 
 def _amount(value):
@@ -290,7 +290,7 @@ def _money(amount, currency):
     if cur == "NGN":
         return "\u20a6" + text
     if cur in ("CFA", "XOF"):
-        return text + " F CFA"
+        return text + " CFA"
     return (text + " " + cur).strip()
 
 
@@ -351,10 +351,13 @@ def _items_table(order):
         variant = _variant(item)
         variant_html = (f"<div style=\"color:#6b6b6b;font-size:12px;margin-top:2px\">"
                         f"{_esc(variant[:80])}</div>" if variant else "")
+        item_note = str(item.get("note") or "").strip()[:300]
+        note_html = (f"<div style=\"color:#6b6b6b;font-size:12px;margin-top:2px\">"
+                     f"Product note: {_esc(item_note)}</div>" if item_note else "")
         rows.append(
             "<tr>"
             f"<td style=\"padding:10px 12px;border-bottom:1px solid #eee;text-align:left\">"
-            f"<div style=\"font-weight:600\">{name}</div>{variant_html}</td>"
+            f"<div style=\"font-weight:600\">{name}</div>{variant_html}{note_html}</td>"
             f"<td style=\"padding:10px 12px;border-bottom:1px solid #eee;text-align:right;white-space:nowrap\">"
             f"{_esc(_money(unit, currency))}</td>"
             f"<td style=\"padding:10px 12px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap\">"
@@ -456,11 +459,11 @@ def _payment_label(order):
     payment = str(order.get("payment") or "").strip()
     currency = str(order.get("currency") or "").strip().upper()
     if payment and payment.upper() not in ("NGN", "CFA", "XOF"):
-        return payment
+        return payment.replace("F CFA", "CFA").replace("FCFA", "CFA")
     if currency == "NGN":
         return "Bank transfer (Naira)"
     if currency in ("CFA", "XOF"):
-        return "Mobile money (F CFA)"
+        return "Mobile money (CFA)"
     return payment or "Bank transfer"
 
 
@@ -469,7 +472,7 @@ def _currency_label(currency):
     if cur == "NGN":
         return "Naira (\u20a6)"
     if cur in ("CFA", "XOF"):
-        return "F CFA"
+        return "CFA"
     return cur or ""
 
 
@@ -718,16 +721,18 @@ def campaign_email_html(subject, content, recipient="", products=None):
         name = str(product.get("name") or "Product")
         image = str(product.get("image_url") or product.get("image") or "")
         price = product.get("priceCfa") or product.get("priceNgn") or 0
-        currency = "F CFA" if product.get("priceCfa") else "₦"
+        is_cfa = bool(product.get("priceCfa"))
         compare = product.get("compareCfa") or product.get("compareNgn") or 0
+        price_text = f"{float(price):,.0f} CFA" if is_cfa else f"₦{float(price):,.0f}"
+        compare_text = f"{float(compare):,.0f} CFA" if is_cfa else f"₦{float(compare):,.0f}"
         badge = str(product.get("badge") or ("Discount" if compare and compare > price else ""))
         pid = urllib.parse.quote(str(product.get("id") or ""))
         body += ('<div style="margin:18px 0;border:1px solid #eadfce;border-radius:10px;overflow:hidden">'
                  + (f'<img src="{_esc(image, quote=True)}" alt="{_esc(name, quote=True)}" style="width:100%;max-height:280px;object-fit:cover">' if image else "")
                  + '<div style="padding:14px">'
                  + (f'<span style="background:#8f2635;color:white;padding:3px 8px;border-radius:10px;font-size:11px">{_esc(badge)}</span>' if badge else "")
-                 + f'<h3 style="margin:8px 0">{_esc(name)}</h3><strong>{currency}{float(price):,.0f}</strong>'
-                 + (f' <s style="color:#888">{currency}{float(compare):,.0f}</s>' if compare and compare > price else "")
+                 + f'<h3 style="margin:8px 0">{_esc(name)}</h3><strong>{_esc(price_text)}</strong>'
+                 + (f' <s style="color:#888">{_esc(compare_text)}</s>' if compare and compare > price else "")
                  + f'<p><a href="{_esc(origin + "/product.html?id=" + pid, quote=True)}" style="display:inline-block;background:#a97e48;color:#fff;padding:9px 15px;text-decoration:none;border-radius:6px">Shop now</a></p></div></div>')
     if recipient:
         body += (f'<p style="margin:24px 0 0;padding-top:14px;border-top:1px solid #f0e8de;'

@@ -161,9 +161,9 @@ def test_plain_zero_quantity_without_variants_stays_zero():
         "id": "jau-plain-zero", "name": "Plain Zero", "priceNgn": 500,
         "stock": 0, "stock_quantity": 0})
     assert clean["stock"] == 0
-    # and the untouched default (no quantity posted at all) is still 24
+    # an absent/unassigned quantity is also zero, never an invented default.
     fresh = catalog_mod.normalize({"name": "Fresh", "priceNgn": 500})
-    assert fresh["stock"] == 24
+    assert fresh["stock"] == 0
 
 
 # ------------------------------------------------- /api/products/variants

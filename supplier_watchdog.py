@@ -98,19 +98,6 @@ def enabled() -> bool:
     return str(raw).strip().lower() not in ("0", "false", "no", "off")
 
 
-def auto_increase_allowed() -> bool:
-    """The SAFE setting for raising stock from the supplier page.
-
-    The watchdog never increases a quantity above what the owner typed in the
-    admin portal unless SUPPLIER_STOCK_AUTO_INCREASE is explicitly switched
-    on. Default OFF: a supplier restock can never silently inflate the count
-    the owner deliberately set low (pre-orders, reserved pieces, ...).
-    Reductions and out-of-stock are always applied.
-    """
-    raw = os.environ.get("SUPPLIER_STOCK_AUTO_INCREASE", "0")
-    return str(raw).strip().lower() in ("1", "true", "yes", "on")
-
-
 def summary() -> Dict[str, Any]:
     return dict(_last_summary)
 
@@ -694,27 +681,18 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> T
 
 
 def _apply_stock_rule(qty: int, old: int) -> int:
-    """The one stock rule, shared by simple products and matched variants.
+    """Keep 40% of the supplier count as the shop's sellable inventory.
 
-      supplier out (0)          -> Jaura out (0)
-      supplier lower            -> reduce Jaura to the supplier count
-      supplier higher (counted) -> keep the owner's count unless the safe
-                                   auto-increase setting is explicitly on
-      supplier "in stock" but no number (qty 1 sentinel)
-                                -> keep the owner's positive count; only
-                                   revive a 0 when auto-increase is on
+    Exact supplier counts are multiplied by 0.40 and rounded down; any
+    positive supplier availability keeps at least one sellable unit so a
+    generic "in stock" signal can restore the public In Stock state. Zero
+    remains zero. ``old`` stays in the signature for callers/tests but stock
+    now follows the same deterministic supplier rule on every sync.
     """
     qty = max(0, int(qty or 0))
-    old = max(0, int(old or 0))
     if qty <= 0:
         return 0
-    if qty == 1:
-        return 1 if (old <= 0 and auto_increase_allowed()) else old
-    if qty < old:
-        return qty
-    if qty > old:
-        return qty if auto_increase_allowed() else old
-    return old
+    return max(1, (qty * 40) // 100)
 
 
 def _whole_product_row(product: Dict[str, Any], supplier_rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -759,39 +737,77 @@ def _sync_whole_product(p: Dict[str, Any], supplier_rows: List[Dict[str, Any]],
 
 def _save_synced(p: Dict[str, Any], row: Dict[str, Any], actor: str,
                  warnings: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]]]:
-    # GHOST-RESTORE GUARD (last line of defence).
-    #
-    # tick()/nightly_sweep() already skip ids on the durable deleted list when
-    # they pick candidates, but picking candidates and saving them are minutes
-    # apart on a big catalogue. If the owner hard-deletes a product inside
-    # that window, this save is the LAST writer and would re-create the row in
-    # Supabase - and catalog.upsert() clears the durable tombstone on a
-    # successful write, so the deletion would be silently undone and the
-    # product would come back as a "ghost". Re-checking the durable list here,
-    # immediately before the write, closes that window.
+    # Candidate selection and supplier fetch are minutes apart. Recheck the
+    # durable tombstone just before the write, but do not upsert the fetched
+    # product snapshot: the owner may have edited its name, price, image or
+    # options while the supplier page was loading. apply_supplier_stock is an
+    # UPDATE-only stock patch (and its Postgres RPC shares the delete lock), so
+    # it cannot recreate a hard-deleted id or replay those stale non-stock fields.
     pid = str(p.get("id") or "").strip()
-    if pid:
-        try:
-            dead_ids = catalog_mod.deleted_product_ids()
-        except Exception:
-            dead_ids = set()
-        if pid in dead_ids:
-            warnings.append(_warning(p, "product_deleted_during_sync",
-                                     "The product was deleted by the owner while this "
-                                     "supplier check was running. Nothing was re-created."))
-            return False, warnings
+    if not pid:
+        return False, warnings
     try:
-        saved, _action, mirrored = catalog_mod.upsert(row, actor=actor)
-        # Checked BEFORE the "saved" test: a never-re-create row comes back as
-        # saved=None, which would otherwise be reported as a failed sync.
-        if _action == "permanently-removed":
+        dead_ids = catalog_mod.deleted_product_ids()
+    except Exception:
+        dead_ids = set()
+    if pid in dead_ids:
+        warnings.append(_warning(p, "product_deleted_during_sync",
+                                 "The product was deleted by the owner while this "
+                                 "supplier check was running. Nothing was re-created."))
+        return False, warnings
+
+    option_changes = None
+    next_options = row.get("optionStock")
+    if isinstance(next_options, dict) and next_options:
+        previous_options = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else {}
+        option_changes = {}
+        for key, value in next_options.items():
+            try:
+                qty = max(0, int(value or 0))
+                old_qty = max(0, int(previous_options.get(key, 0) or 0))
+            except (TypeError, ValueError):
+                continue
+            if key not in previous_options or qty != old_qty:
+                option_changes[str(key)] = qty
+
+    try:
+        previous_options = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else {}
+        saved, action, mirrored = catalog_mod.apply_supplier_stock(
+            pid, row.get("stock_quantity") if row.get("stock_quantity") is not None
+            else row.get("stock"), option_changes, actor=actor,
+            # The 40% supplier rule is the intended public stock level, so a
+            # restock may raise a former zero while never exposing the full
+            # supplier quantity.
+            allow_increase=True,
+            option_snapshot_keys=list(previous_options.keys()) if option_changes is not None else None)
+        # A hard delete won the race after the read above. The atomic helper
+        # answers "permanently-removed" and, importantly, never inserts as a
+        # fallback.
+        if action == "permanently-removed":
             warnings.append(_warning(p, "product_deleted_during_sync",
                                      "The product is on the never-re-create list. "
                                      "Nothing was written."))
             return False, warnings
         if not saved or mirrored is False:
+            try:
+                if pid in catalog_mod.deleted_product_ids():
+                    warnings.append(_warning(p, "product_deleted_during_sync",
+                                             "The product was deleted during this supplier check. "
+                                             "Nothing was re-created."))
+                    return False, warnings
+            except Exception:
+                pass
             warnings.append(_warning(p, "supplier_save_failed", "Supplier stock was read but could not be saved to the catalogue."))
             return False, warnings
+        # A successful supplier write is a live inventory change too. The
+        # Supabase client cache is invalidated by the write; clear this web
+        # process's serialized public response so /api/products and /api/catalog
+        # can serve it immediately and Supabase Realtime subscribers repaint.
+        try:
+            import api as _api
+            _api.invalidate_catalog_cache()
+        except Exception:
+            pass
         return True, warnings
     except Exception as exc:
         warnings.append(_warning(p, "supplier_save_failed", f"Supplier stock was read but saving failed: {exc}"))

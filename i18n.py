@@ -47,11 +47,11 @@ TEXT_JS = """() => {
 # strings that are identical in English and French, or are not English at all
 ALLOWED = {
     "EN", "FR", "×", "·", ".", "FAQ", "Contact", "Vision", "Atelier", "Maison",
-    "TikTok", "jaurastore@gmail.com", "F CFA", "Cotonou", "Cotonou, Benin",
+    "TikTok", "jaurastore@gmail.com", "CFA", "Cotonou", "Cotonou, Benin",
     "Cotonou, Benin Rep.", "Cotonou, Benin Republic", "Lagos, Nigeria", "Lomé",
     "Togo", "Porto-Novo", "Lagos Island", "Lagos Mainland", "Benin", "Nigeria",
     "Total", "Page", "Conversion", "sessions", "on the site", "Account",
-    "Moov Money Togo (F CFA)", "Admin · Jaura Store", "Beauty & skincare",
+    "Moov Money Togo (CFA)", "Admin · Jaura Store", "Beauty & skincare",
     "Naira — UBA", "Festac, Iyana-Ishashi, Iyana-Ipaja, Ojo, Surulere, Yaba, Gbagada",
     "Lekki Phase 1, Lekki Phase 2, Oniru, Victoria Island, Ikoyi, Ajah",
     "name, category, priceNgn, compareNgn, stock, badge, description, colors",

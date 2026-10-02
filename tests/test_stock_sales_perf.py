@@ -72,10 +72,9 @@ def _order_payload(order_id, pid, name, qty, price, total):
     }
 
 
-def test_over_order_rejected_without_leaking_stock_counts(client):
-    """An over-stock cart is refused with code out_of_stock, but the customer
-   -facing message must never expose the numerical inventory (only In/Out of
-    Stock), so the exact available count stays secret."""
+def test_over_order_rejected_with_the_available_stock_count(client):
+    """A too-large request is rejected with the exact, customer-approved
+    strict-stock message; the server reports only the remaining amount."""
     pid = "wix-001"
     name = _seed_name(pid)
     payload = _order_payload("JA-OVER1", pid, name, 25, 1000, 25000)
@@ -84,20 +83,22 @@ def test_over_order_rejected_without_leaking_stock_counts(client):
     assert r.status_code == 409, r.get_json()
     body = r.get_json()
     assert body.get("code") == "out_of_stock"
-    err = body.get("error", "")
-    assert name in err
-    assert "24" not in err and "25" not in err   # stock quantities stay private
+    assert body.get("error") == "You cannot order more than the available stock (24 remaining)."
+    assert body.get("availableStock") == 24
     assert body.get("items")
 
 
-def test_stock_bypass_when_enforce_off(client, monkeypatch):
+def test_stock_cannot_be_bypassed_when_enforce_off(client, monkeypatch):
+    """The legacy switch is ignored; checkout is always server-stock-guarded."""
     monkeypatch.setattr(Config, "ENFORCE_STOCK", False)
     pid = "wix-001"
     name = _seed_name(pid)
     payload = _order_payload("JA-OVER2", pid, name, 25, 1000, 25000)
     r = client.post("/api/orders", json=payload,
                     headers={"X-CSRF-Token": csrf(client)})
-    assert r.status_code == 200, r.get_json()
+    assert r.status_code == 409, r.get_json()
+    assert r.get_json().get("error") == \
+        "You cannot order more than the available stock (24 remaining)."
 
 
 def test_sales_confirmed_only_and_csv(client):

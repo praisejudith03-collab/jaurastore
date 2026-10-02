@@ -149,8 +149,8 @@ async function main() {
 
   // ---- Add to cart + cart state -------------------------------------------
   const first = prods.find((p) => (p.stock || 0) > 0) || prods[0];
-  JA.addToCart(first.id, 2, "");
-  JA.addToCart(first.id, 1, "");
+  await JA.addToCart(first.id, 2, "");
+  await JA.addToCart(first.id, 1, "");
   const cart = JA.cart();
   check("add to cart stores item", cart.some((i) => i.id === first.id), JSON.stringify(cart));
   check("cart quantity accumulates", qtyOf(first.id) === 3, "qty=" + qtyOf(first.id));
@@ -160,7 +160,7 @@ async function main() {
   const total = JA.cartTotal("CFA");
   check("cart total computes (CFA)", typeof total === "number" && total > 0, "total=" + total);
 
-  JA.setQty(first.id, "", 5);
+  await JA.setQty(first.id, "", 5);
   check("setQty updates quantity", qtyOf(first.id) === 5, "qty=" + qtyOf(first.id));
 
   // ---- Cart page renders ---------------------------------------------------

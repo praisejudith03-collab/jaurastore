@@ -12,25 +12,25 @@
   <meta property="og:title" content="Checkout · Jaura Store" />
   <meta property="og:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
   <meta property="og:url" content="https://jaurastore.com.ng/checkout.html" />
-  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=180" />
+  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=181" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Checkout · Jaura Store" />
   <meta name="twitter:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
-  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=180" />
+  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=181" />
   <!-- brand icons: Supabase public-assets bucket (tools/upload_brand_assets.py) -->
   <link rel="icon" type="image/png" sizes="32x32" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="48x48" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/favicon-48.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/apple-touch-180.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/icon-192.png" />
   <!-- same-origin fallback: still a legible mark if the bucket is unreachable -->
-  <link rel="icon" type="image/png" sizes="16x16" href="/images/brand/favicon-16.png?v=180" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/brand/favicon-16.png?v=181" />
   <!-- /brand icons -->
-  <link rel="stylesheet" href="css/fonts.css?v=180" />
+  <link rel="stylesheet" href="css/fonts.css?v=181" />
   <!-- product photos live in the shop's Supabase storage bucket:
        open that connection while the HTML is still parsing so the
        first photo starts the moment the grid renders -->
   <link rel="preconnect" href="https://rvkweyipqgsggcnimhxf.supabase.co" />
-  <link rel="stylesheet" href="css/style.css?v=180" />
+  <link rel="stylesheet" href="css/style.css?v=181" />
 </head>
 <body data-page="checkout">
   <div id="site-header"></div>
@@ -87,7 +87,7 @@
                 <option value="Lagos Island" data-currency="NGN" data-i18n="ck.fare.island">🇳🇬 Lagos State (Express Delivery) — Lagos Island (₦3,500 – ₦6,000)</option>
                 <option value="Other Nigeria" data-currency="NGN" data-i18n="ck.fare.ngOther">🇳🇬 Other States in Nigeria (Inter-State Dispatch)</option>
               </optgroup>
-              <optgroup label="Benin &amp; Togo (F CFA)" data-i18n-label="ck.zoneGroupCfa">
+              <optgroup label="Benin &amp; Togo (CFA)" data-i18n-label="ck.zoneGroupCfa">
                 <option value="Cotonou" data-currency="CFA" data-i18n="ck.fare.cotonou">Cotonou (1,000 – 3,000 CFA)</option>
                 <option value="Calavi" data-currency="CFA" data-i18n="ck.fare.calavi">Calavi (1,500 – 3,500 CFA)</option>
                 <option value="Porto-Novo" data-currency="CFA" data-i18n="ck.fare.porto">Porto-Novo (1,500 – 3,500 CFA)</option>
@@ -141,64 +141,73 @@
 
         <div class="ck-pay">
           <h3 data-i18n="ck.advance">Advance bank payment</h3>
-          <p class="ck-pay-intro" data-i18n="ck.payIntro">Make your payment directly into our bank account first in the details below according to your currency choice.</p>
-          <label class="pay-card">
-            <input type="radio" name="currency" value="NGN" checked />
-            <div>
-              <strong data-i18n="ck.payNgn">Direct bank transfer — ₦ Naira</strong>
-              <span data-i18n="ck.payNgnHint">Pay in Nigerian Naira to the UBA account below.</span>
-            </div>
-          </label>
-          <label class="pay-card">
-            <input type="radio" name="currency" value="CFA" />
-            <div>
-              <strong data-i18n="ck.payCfa">Direct bank transfer — F CFA</strong>
-              <span data-i18n="ck.payCfaHint">Pay in F CFA by MTN MoMo (Benin) or Moov Money (Togo).</span>
-            </div>
-          </label>
+          <p class="ck-pay-intro" data-i18n="ck.payIntro">Choose one of the three payment methods. The order currency follows your selection.</p>
+          <fieldset class="pay-methods">
+            <legend class="sr-only" data-i18n="ck.paymentMethod">Choose a payment method</legend>
+            <label class="pay-card">
+              <input type="radio" name="paymentMethod" value="naira" checked required />
+              <div>
+                <strong data-i18n="ck.payNgn">Naira bank transfer</strong>
+                <span data-i18n="ck.payNgnHint">Pay in Nigerian Naira using the details below.</span>
+              </div>
+            </label>
+            <label class="pay-card">
+              <input type="radio" name="paymentMethod" value="benin_cfa" required />
+              <div>
+                <strong data-i18n="ck.payBeninCfa">Benin CFA payment</strong>
+                <span data-i18n="ck.payBeninCfaHint">Pay using the Benin provider and account below.</span>
+              </div>
+            </label>
+            <label class="pay-card">
+              <input type="radio" name="paymentMethod" value="togo_cfa" required />
+              <div>
+                <strong data-i18n="ck.payTogoCfa">Togo CFA payment</strong>
+                <span data-i18n="ck.payTogoCfaHint">Pay using the Togo provider and account below.</span>
+              </div>
+            </label>
+          </fieldset>
           <script>
-            // A French checkout locks the currency to FCFA (js/app.js boot()
-            // makes this same call, in full, once it has loaded), but that
-            // bundle has to be fetched over the network first, and this form
-            // is visible the instant the cart has an item - so on a slow
-            // connection the Naira gateway could sit "checked" (its markup
-            // default, above) for a moment even for a French shopper. Decide
-            // the zero-network-dependency subset of that same rule right
-            // here, synchronously, during parsing, so it is never wrong even
-            // for an instant. js/app.js repeats and owns the full decision
-            // once it is ready; this is purely a paint-time guard.
+            // Paint a sensible default without waiting for the app bundle.
+            // This only chooses a payment method; currency remains derived
+            // independently from that choice when checkout totals are drawn.
             (function () {
               try {
                 var q = new URLSearchParams(location.search).get("lang");
                 var lang = (q === "fr" || q === "en") ? q : null;
                 if (!lang) { try { lang = localStorage.getItem("jaura_lang"); } catch (e) {} }
                 if (!lang) { try { lang = sessionStorage.getItem("jaura_lang"); } catch (e) {} }
-                if (lang !== "fr") return;
-                var cfa = document.querySelector('[name="currency"][value="CFA"]');
-                var ngn = document.querySelector('[name="currency"][value="NGN"]');
-                if (cfa) cfa.checked = true;
-                if (ngn) {
-                  ngn.checked = false;
-                  var ngnCard = ngn.closest(".pay-card");
-                  if (ngnCard) ngnCard.hidden = true;
-                }
+                var choice = lang === "fr" ? "benin_cfa" : "naira";
+                var input = document.querySelector('[name="paymentMethod"][value="' + choice + '"]');
+                if (input) input.checked = true;
               } catch (e) {}
             })();
           </script>
 
+          <p class="ck-pay-country-note" data-ck-min-cfa></p>
           <div class="bank-sheet" data-bank-ngn>
-            <h4 data-i18n="ck.ourBank">Our bank details</h4>
-            <p class="bank-name-line" data-ngn-name></p>
-            <div class="bank-row" data-ngn-row-bank hidden><span data-i18n="ck.bank">Bank</span><strong data-ngn-bank></strong></div>
-            <div class="bank-row" data-ngn-row-acc hidden><span data-i18n="ck.accNo">Account number</span><strong data-ngn-acc></strong></div>
+            <h4 data-i18n="ck.ourBank">Naira payment details</h4>
+            <div class="bank-row" data-ngn-row-bank hidden><span data-i18n="ck.provider">Bank</span><strong data-ngn-bank></strong></div>
+            <div class="bank-row" data-ngn-row-acc hidden><span data-i18n="ck.accNo">Account / phone number</span><strong data-ngn-acc></strong></div>
+            <div class="bank-row" data-ngn-row-name hidden><span data-i18n="ck.accountHolder">Account holder</span><strong data-ngn-name></strong></div>
+            <p class="bank-sub" data-ngn-instructions hidden></p>
+            <p class="bank-unconfigured" data-ngn-unconfigured data-i18n="ck.payUnconfigured" hidden>Payment details are not configured yet. Please contact us on WhatsApp.</p>
           </div>
-          <div class="bank-sheet" data-bank-cfa hidden>
-            <h4 data-i18n="ck.ourBank">Our bank details</h4>
-            <p class="ck-pay-country-note">Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below. Minimum order is 5,000 CFA (₦12,000).</p>
-            <p class="bank-name-line" data-cfa-name></p>
-            <div class="bank-row" data-cfa-row hidden><span data-cfa-provider></span><strong data-cfa-acc></strong></div>
-            <div class="bank-row" data-togo-row hidden><span data-togo-provider></span><strong data-togo-acc></strong></div>
-            <p class="bank-sub" data-togo-name></p>
+          <div class="bank-sheet" data-bank-benin hidden>
+            <h4 data-i18n="ck.beninPayDetails">Benin CFA payment details</h4>
+            <div class="bank-row" data-benin-row-provider hidden><span data-i18n="ck.provider">Provider</span><strong data-benin-provider></strong></div>
+            <div class="bank-row" data-benin-row-acc hidden><span data-i18n="ck.accNo">Account / phone number</span><strong data-benin-acc></strong></div>
+            <div class="bank-row" data-benin-row-name hidden><span data-i18n="ck.accountHolder">Account holder</span><strong data-benin-name></strong></div>
+            <p class="bank-sub" data-benin-instructions hidden></p>
+            <p class="bank-unconfigured" data-benin-unconfigured data-i18n="ck.payUnconfigured" hidden>Payment details are not configured yet. Please contact us on WhatsApp.</p>
+          </div>
+          <div class="bank-sheet" data-bank-togo hidden>
+            <h4 data-i18n="ck.togoPayDetails">Togo CFA payment details</h4>
+            <div class="bank-row" data-togo-row-provider hidden><span data-i18n="ck.provider">Provider</span><strong data-togo-provider></strong></div>
+            <div class="bank-row" data-togo-row-acc hidden><span data-i18n="ck.accNo">Account / phone number</span><strong data-togo-acc></strong></div>
+            <div class="bank-row" data-togo-row-name hidden><span data-i18n="ck.accountHolder">Account holder</span><strong data-togo-name></strong></div>
+            <p class="bank-sub" data-togo-instructions hidden></p>
+            <p class="bank-unconfigured" data-togo-unconfigured data-i18n="ck.payUnconfigured" hidden>Payment details are not configured yet. Please contact us on WhatsApp.</p>
+            <p class="ck-togo-fee-notice" data-i18n="ck.togoFeeNotice">Moov Money Togo may charge a fee for cross-border transfers.</p>
           </div>
 
           <p class="ck-exact-payment" role="note" data-i18n="ck.exactPayment">Please send the exact amount for your order to be confirmed.</p>
@@ -224,11 +233,11 @@
   </div>
 
   <div id="site-footer"></div>
-  <script src="js/products-data.js?v=180"></script>
-  <script src="js/i18n-phrases.js?v=180"></script>
-  <script src="js/i18n.js?v=180"></script>
-  <script src="js/net.js?v=180"></script>
-  <script src="js/store.js?v=180"></script>
-  <script src="js/app.js?v=180"></script>
+  <script src="js/products-data.js?v=181"></script>
+  <script src="js/i18n-phrases.js?v=181"></script>
+  <script src="js/i18n.js?v=181"></script>
+  <script src="js/net.js?v=181"></script>
+  <script src="js/store.js?v=181"></script>
+  <script src="js/app.js?v=181"></script>
 </body>
 </html>

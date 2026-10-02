@@ -39,6 +39,8 @@ create table if not exists products (
   "optionSupplierSku" jsonb,
   "optionSku"      jsonb,
   reviews          jsonb,
+  "enableCustomNote" boolean not null default false,
+  "customNotePrompt" text not null default '',
   dimensions       text,
   "bulkQty"        integer,
   "bulkPercent"    integer,
@@ -73,6 +75,8 @@ alter table products add column if not exists "optionCompareAt"  jsonb;
 alter table products add column if not exists "optionSupplierSku" jsonb;
 alter table products add column if not exists "optionSku"         jsonb;
 alter table products add column if not exists reviews             jsonb;
+alter table products add column if not exists "enableCustomNote" boolean not null default false;
+alter table products add column if not exists "customNotePrompt" text not null default '';
 alter table products add column if not exists dimensions         text;
 alter table products add column if not exists "bulkQty"      integer;
 alter table products add column if not exists "bulkPercent"  integer;

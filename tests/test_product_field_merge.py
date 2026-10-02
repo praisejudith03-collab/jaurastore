@@ -271,7 +271,7 @@ def test_the_api_merges_per_field_and_still_answers_200(client, admin):
     assert body["ok"] is True
     assert body.get("merged") is True
     assert "priceNgn" in (body.get("kept") or [])
-    assert "price" in body.get("notice", "").lower() or "priceNgn" in body.get("notice", "")
+    assert "notice" not in body  # merge metadata is quiet; audit log is retained
 
     row = _row(client, "jau-merge-api-1")
     assert row["name"] == "API Merge Bag v2", "the admin's edit must be live"

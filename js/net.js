@@ -505,7 +505,7 @@ window.JA_NET = (function () {
     };
     // The forms Google reCAPTCHA v3 protects: checkout + payment receipt.
     if (job.method === "POST") {
-      if (/api\/orders(\?|$)/.test(path)) job.recaptcha = "checkout";
+      if (/api\/(?:orders|checkout)(\?|$)/.test(path)) job.recaptcha = "checkout";
       else if (/api\/payment-proof(\?|$)/.test(path)) job.recaptcha = "receipt";
     }
     if (opts.recaptcha) job.recaptcha = opts.recaptcha;

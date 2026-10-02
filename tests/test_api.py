@@ -191,7 +191,7 @@ def _post_min_order(client, oid, currency, total, zone, qty=1, pid="wix-008"):
 def test_benin_minimum_is_enforced_on_orders(client):
     r = _post_min_order(client, "JA-BJ1", "CFA", 4999, "Cotonou")
     assert r.status_code == 400, r.data
-    assert "5,000 F CFA" in r.get_json()["error"]
+    assert "5,000 CFA" in r.get_json()["error"]
 
 
 def test_benin_minimum_in_naira_is_enforced(client):
@@ -1511,7 +1511,7 @@ def test_benin_minimum_order_cfa_and_ngn_limits(client):
     }
     r1 = client.post("/api/orders", json=order_cfa_low, headers={"X-CSRF-Token": tok})
     assert r1.status_code == 400
-    assert "5,000 F CFA" in r1.get_json().get("error", "")
+    assert "5,000 CFA" in r1.get_json().get("error", "")
 
     order_ngn_low = {
         "id": "JA-BJMIN-2",
@@ -1600,8 +1600,9 @@ def test_homepage_video_in_lower_card_container_and_fixes():
 
     # checkout fixes check
     ck_html = open(os.path.join(root, "checkout.html"), encoding="utf-8").read()
-    assert 'data-bank-cfa' in ck_html
-    assert 'Minimum order is 5,000 CFA' in ck_html or '5,000 CFA' in ck_html
+    assert 'data-bank-benin' in ck_html and 'data-bank-togo' in ck_html
+    assert 'data-i18n="ck.togoFeeNotice"' in ck_html
+    assert 'data-ck-min-cfa' in ck_html
     assert 'g-recaptcha' in ck_html
     assert 'data-recaptcha-widget' in ck_html
 
@@ -1975,7 +1976,7 @@ def test_welcome_popup_quotes_the_cfa_equivalent_without_the_f():
     en = "Order above ₦20,000 (8,800 CFA)"
     assert en in i18n
     assert en in store                       # the offline fallback agrees
-    assert "(8 800 CFA)" in i18n             # the French line
+    assert "(8,800 CFA)" in i18n             # the French line
     for path in (os.path.join(root, "js", "i18n.js"), os.path.join(root, "js", "store.js")):
         lines = _referral_lines(path)
         assert lines, f"promo.referral missing from {path}"

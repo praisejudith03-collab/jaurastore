@@ -66,6 +66,8 @@ MERGEABLE_FIELDS = frozenset((
     "stock", "stock_quantity", "stockStatus",
     # supplier
     "supplierSku", "supplierUrl", "supplier_url",
+    # customer-supplied product-specific order notes
+    "enableCustomNote", "customNotePrompt", "reviews",
     # per-variant maps - merged per key, so one variant's quantity cannot
     # wipe another's
     "optionStock", "optionPrices", "optionCompareAt",

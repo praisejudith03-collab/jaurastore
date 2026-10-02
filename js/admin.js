@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=180" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=181" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -713,40 +713,6 @@ function bindOptions() {
     refreshOptionChips();
   });
 }
-function reviewsAdminHTML(id) {
-  const list = Array.isArray(window.__editReviews) ? window.__editReviews : ((id && JA.reviews) ? JA.reviews(id) : []);
-  window.__editReviews = list.slice();
-  if (!list.length) return `<p class="admin-note" id="rev-empty">No reviews yet.</p>`;
-  return list.map((r) => `
-    <article class="rev-note admin-rev">
-      <p>${JA.starsHTML ? JA.starsHTML(r.rating != null ? r.rating : r.stars) : ""} <strong>${JA.escape(r.name || "")}</strong></p>
-      ${r.title ? `<p class="rev-title"><strong>${JA.escape(r.title)}</strong></p>` : ""}
-      <p>${JA.escape(r.body != null ? r.body : (r.note || ""))}</p>
-      <button type="button" class="au-opt-del" data-del-rev="${JA.escape(r.created_at || r.at || "")}">Remove</button>
-    </article>`).join("");
-}
-function bindReviewsAdmin(id) {
-  const box = document.getElementById("rev-admin");
-  const paint = () => { if (box) box.innerHTML = reviewsAdminHTML(id); };
-  document.getElementById("rev-add")?.addEventListener("click", () => {
-    const name = (document.getElementById("rev-name")?.value || "").trim();
-    const note = (document.getElementById("rev-note")?.value || "").trim();
-    const rating = Number(document.getElementById("rev-stars")?.value || 5);
-    if (!note) { JA.toast("Type the customer note first."); return; }
-    const created_at = new Date().toISOString();
-    window.__editReviews = (window.__editReviews || []).concat([{ name: name || "Customer", body: note, note, rating, stars: rating, created_at, at: created_at }]);
-    if (document.getElementById("rev-name")) document.getElementById("rev-name").value = "";
-    if (document.getElementById("rev-note")) document.getElementById("rev-note").value = "";
-    paint(); JA.toast("Review added.");
-  });
-  box?.addEventListener("click", (e) => {
-    const del = e.target.closest("[data-del-rev]");
-    if (!del) return;
-    const at = del.getAttribute("data-del-rev");
-    window.__editReviews = (window.__editReviews || []).filter((r) => String(r.created_at || r.at || "") !== String(at || ""));
-    paint();
-  });
-}
 function currentOptionStock() {
   const map = {};
   document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
@@ -898,13 +864,13 @@ function bindCfaPreview() {
     const n = Number(form.priceNgn && form.priceNgn.value) || 0;
     const c = Number(form.compareNgn && form.compareNgn.value) || 0;
     if (!(n > 0)) {
-      el.textContent = "Enter the ₦ price. The website will show F CFA converted at 1 ₦ = 0.44.";
+      el.textContent = "Enter the ₦ price. The website will show CFA converted at 1 ₦ = 0.44.";
       return;
     }
     const now = toCfa(n);
     const was = c > 0 ? toCfa(c) : 0;
     const line = was > now ? "<s>" + JA.money(was, "CFA") + "</s> " + JA.money(now, "CFA") : JA.money(now, "CFA");
-    el.innerHTML = "Website will show " + line + " · converted from ₦ at 1 ₦ = 0.44 F CFA.";
+    el.innerHTML = "Website will show " + line + " · converted from ₦ at 1 ₦ = 0.44 CFA.";
   };
   form.addEventListener("input", paint);
   paint();
@@ -925,6 +891,8 @@ const EDIT_FIELD_MAP = {
   description: ["description"],
   descriptionFr: ["descriptionFr"],
   dimensions: ["dimensions"],
+  enableCustomNote: ["enableCustomNote"],
+  customNotePrompt: ["customNotePrompt"],
   badge: ["badge"],
   category: ["category"],
   online: ["online"],
@@ -965,13 +933,6 @@ function trackEditedField(el) {
     if (el.closest && el.closest("[" + attr + "]")) {
       fields.forEach((f) => window.__editDirty.add(f));
     }
-  }
-  // Adding or removing a review changes the stored list, not a field.
-  if (el.id && /^rev-/.test(el.id)) {
-    ["reviews", "customerReviews", "customer_reviews"].forEach((f) => window.__editDirty.add(f));
-  }
-  if (el.getAttribute && el.getAttribute("data-rev-del") != null) {
-    ["reviews", "customerReviews", "customer_reviews"].forEach((f) => window.__editDirty.add(f));
   }
 }
 
@@ -1016,7 +977,6 @@ function productForm(p = {}) {
   // and would wipe a dataset attribute with them.
   window.__editPrevOptionStock = null;
   window.__editUploads = [];
-  window.__editReviews = Array.isArray(p.reviews) ? p.reviews.slice() : ((p.id && JA.reviews) ? JA.reviews(p.id).slice() : []);
   const opts = editorOptions(p);
   const inStock = p.id ? Number(p.stock) > 0 : true;
   return `<form id="prod-form" class="au-edit">
@@ -1030,9 +990,15 @@ function productForm(p = {}) {
       <div class="field"><label>Price ₦</label><div class="au-price"><input name="priceNgn" type="number" min="0" required value="${p.priceNgn || ""}" /><i>₦</i></div></div>
       <div class="field"><label>Price reduction / strikethrough ₦</label><div class="au-price"><input name="compareNgn" type="number" min="0" value="${p.compareNgn || ""}" /><i>₦</i></div></div>
     </div>
-    <p class="admin-note" id="cfa-preview">CFA on the website is converted from Naira at 1 ₦ = 0.44 F CFA. You only enter ₦.</p>
+    <p class="admin-note" id="cfa-preview">CFA on the website is converted from Naira at 1 ₦ = 0.44 CFA. You only enter ₦.</p>
     <div class="field"><label>Add a description</label><textarea name="description" rows="3">${JA.escape(p.description || "")}</textarea></div>
     <div class="field"><label>Description (French — shown when the site is in French)</label><textarea name="descriptionFr" rows="3" placeholder="Optional">${JA.escape(p.descriptionFr || "")}</textarea></div>
+    <h3>Product note</h3>
+    <label class="au-tog"><span>Allow a customer note on this product</span>
+      <input type="checkbox" name="enableCustomNote" ${p.enableCustomNote ? "checked" : ""} />
+    </label>
+    <div class="field"><label>Prompt shown to the customer</label><input name="customNotePrompt" maxlength="160" value="${JA.escape(p.customNotePrompt || "")}" placeholder="Enter the specific colour you want" /></div>
+    <p class="admin-note">The prompt can ask for any product-specific detail, not just a colour. Customers’ answers stay with this item on the order; the general checkout order note remains separate.</p>
     <div class="field"><label>Dimensions / size (optional — shown on the product page and WhatsApp posts)</label><input name="dimensions" maxlength="160" value="${JA.escape(p.dimensions || "")}" placeholder="e.g. 30 x 20 x 10 cm" /></div>
     <div class="field"><label>Promo display ribbon (Sale, New Arrival, Best Seller)</label>
       <select name="badge">
@@ -1085,17 +1051,6 @@ function productForm(p = {}) {
     <div class="field"><label>Featured</label>
       <select name="featured"><option value="no">No</option><option value="yes" ${p.featured ? "selected" : ""}>Yes</option></select>
     </div>
-    <h3>Customer reviews</h3>
-    <p class="admin-note">Stars and notes show on the product page. Quantity stays in Admin only — shoppers never see the stock number.</p>
-    <div id="rev-admin">${reviewsAdminHTML(p.id)}</div>
-    <div class="au-2">
-      <div class="field"><label>Customer name</label><input id="rev-name" maxlength="60" placeholder="e.g. Ada" /></div>
-      <div class="field"><label>Stars</label>
-        <select id="rev-stars"><option value="5">5</option><option value="4">4</option><option value="3">3</option><option value="2">2</option><option value="1">1</option></select>
-      </div>
-    </div>
-    <div class="field"><label>Customer note</label><textarea id="rev-note" rows="2" maxlength="600" placeholder="Their comment"></textarea></div>
-    <button type="button" class="au-link-btn" id="rev-add">+ Add review to this product</button>
     <button class="btn au-save" type="submit">Save Product</button>
     ${p.id ? `<button type="button" class="au-del-prod" data-del="${JA.escape(p.id)}">Delete this product</button>` : ""}
   </form>`;
@@ -1221,7 +1176,6 @@ async function handleProductSubmit(e, existing) {
     if (key && val) optionSku[key] = val;
   });
   const supplierRef = String(fd.get("supplierSku") || "").trim();
-  const manualReviews = Array.isArray(window.__editReviews) ? window.__editReviews.map((r) => ({ ...r })) : (existing?.reviews || []);
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
   const priceNgn = num("priceNgn") || 0;
   const compareNgn = num("compareNgn");
@@ -1303,6 +1257,8 @@ async function handleProductSubmit(e, existing) {
       nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
       descriptionFr: String(fd.get("descriptionFr") || "").trim() || existing?.descriptionFr || "",
       dimensions: String(fd.get("dimensions") || "").trim(),
+      enableCustomNote: !!fd.get("enableCustomNote"),
+      customNotePrompt: String(fd.get("customNotePrompt") || "").trim().slice(0, 160),
       // Manual, owner-entered supplier reference link. The consolidated
       // supplier watchdog may read it for stock, but never rewrites it.
       supplierSku: supplierRef,
@@ -1315,11 +1271,7 @@ async function handleProductSubmit(e, existing) {
       option_supplier_urls: optionSupplierSku,
       optionSku,
       option_sku: optionSku,
-      reviews: manualReviews,
-      customerReviews: manualReviews,
-      customer_reviews: manualReviews,
   });
-  if (window.__editReviews && JA.setReviews) JA.setReviews(id, manualReviews);
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save Product"; }
   // Only a server-confirmed save leaves this editor. A queued retry or a
   // Supabase failure keeps the form open with the error, so the admin never
@@ -1327,8 +1279,8 @@ async function handleProductSubmit(e, existing) {
   //
   // There is deliberately NO concurrency failure here any more: saves are
   // last-write-wins, so a save built on a copy the editor opened before the
-  // row moved on still lands. The server hands back a quiet `notice` when it
-  // overwrote a newer row, which we show as information, never as an error.
+  // row moved on still lands. Concurrent saves are recorded in the admin audit
+  // log without a customer-facing or toast warning.
   if (res && res.ok === false) {
     JA.toast((res && res.error) || "Could not save the product. No changes are live.");
     return;
@@ -1339,8 +1291,6 @@ async function handleProductSubmit(e, existing) {
   } else {
     savedMsg = status === "out" ? "Saved · Live now · Out of stock." : "Saved · Live on the store now · " + images.length + " photo(s).";
   }
-  const data = res && res.data;
-  if (data && data.notice) savedMsg = savedMsg + " " + data.notice;
   // Return THIS admin to their exact source page. The list position they
   // came from (category, search, page, scroll) was captured in
   // rememberProductsReturn() when the editor was opened and is stored in
@@ -1821,14 +1771,19 @@ async function fillNeedsAttention() {
   try {
     const d = await window.JA_NET.api("api/admin/needs-attention");
     const pending = d.pending || [], stale = d.stale || [], low = d.lowStock || [];
+    const supplierOut = d.supplierOutOfStock || [], supplierLow = d.supplierLowStock || [];
     setOrderBadge(pending.length);
-    if (!pending.length && !low.length) {
-      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders or low-stock variants need action.</span></div>`;
+    if (!pending.length && !low.length && !supplierOut.length && !supplierLow.length) {
+      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders or low-stock items need action.</span></div>`;
     } else {
       const pendingBlock = `<article class="attention-block"><div class="attention-title"><strong>Pending orders</strong><b>${pending.length}</b></div>${pending.length ? `<ul class="attention-list">${pending.slice(0, 5).map(attentionOrderLine).join("")}</ul>${pending.length > 5 ? `<small class="attention-more">+ ${pending.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Review orders →</button>` : `<p class="empty">No pending orders.</p>`}</article>`;
-      const lowBlock = `<article class="attention-block"><div class="attention-title"><strong>Low stock</strong><b>${low.length}</b></div>${low.length ? `<ul class="attention-list">${low.slice(0, 5).map((r) => `<li><span><strong>${esc(r.name || r.product_id || "Product")}</strong><small>${esc(r.variant_label || r.variant_key || "Variant")}</small></span><b>${Number(r.qty || 0)} left</b></li>`).join("")}${low.length > 5 ? `<small class="attention-more">+ ${low.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Manage products →</button>` : `<p class="empty">No products at five or fewer units.</p>`}</article>`;
+      const stockItems = (rows) => rows.slice(0, 5).map((r) => `<li><span><strong>${esc(r.name || r.product_id || "Product")}</strong><small>${esc(r.variant_label || r.variant_key || "Product stock")}</small></span><b>${Number(r.qty || 0)} left</b></li>`).join("");
+      const stockBlock = (title, rows, emptyText, alert) => `<article class="attention-block ${alert && rows.length ? "is-alert" : ""}"><div class="attention-title"><strong>${title}</strong><b>${rows.length}</b></div>${rows.length ? `<ul class="attention-list">${stockItems(rows)}</ul>${rows.length > 5 ? `<small class="attention-more">+ ${rows.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Manage products →</button>` : `<p class="empty">${emptyText}</p>`}</article>`;
+      const lowBlock = stockBlock("Low stock", low, "No products at five or fewer units.", false);
+      const supplierOutBlock = stockBlock("Supplier-linked · out of stock", supplierOut, "No supplier-linked products are out of stock.", true);
+      const supplierLowBlock = stockBlock("Supplier-linked · low stock", supplierLow, "No supplier-linked products are low.", false);
       const staleBlock = `<article class="attention-block ${stale.length ? "is-alert" : ""}"><div class="attention-title"><strong>Waiting over 24 hours</strong><b>${stale.length}</b></div>${stale.length ? `<ul class="attention-list">${stale.slice(0, 3).map(attentionOrderLine).join("")}</ul><button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Follow up →</button>` : `<p class="empty">No overdue pending orders.</p>`}</article>`;
-      box.innerHTML = `<div class="needs-grid">${pendingBlock}${lowBlock}${staleBlock}</div>`;
+      box.innerHTML = `<div class="needs-grid">${pendingBlock}${lowBlock}${supplierOutBlock}${supplierLowBlock}${staleBlock}</div>`;
     }
     box.querySelectorAll("[data-attention-tab]").forEach((button) => { button.onclick = () => paintDesk(button.dataset.attentionTab); });
   } catch (err) {
@@ -1924,7 +1879,7 @@ function orderReviewHTML(o) {
 function orderCardHTML(o) {
   const c = o.customer || {}; const shot = o.proofUrl || (JA.getProof && JA.getProof(o.id, o.proof)) || ""; const when = o.at ? new Date(o.at).toLocaleString() : ""; const s = o.status || "pending"; const nItems = (o.items || []).reduce((n, i) => n + (Number(i.qty) || 0), 0);
   const selected = selectedOrderIds.has(String(o.id)) ? " checked" : "";
-  return `<details class="adx-order" data-order="${esc(o.id)}"><summary class="adx-order-row"><span class="adx-select-wrap"><input type="checkbox" class="adx-row-select" data-order-select="${esc(o.id)}"${selected} aria-label="Select order ${esc(o.id)}" /></span><span class="adx-order-id">${esc(o.id)}</span><span class="adx-order-who"><strong>${esc(c.name || "Customer")}</strong><small>${esc(when)} · ${nItems} item(s)</small></span><span class="adx-order-total">${esc(JA.money(o.total, o.currency))}</span><span class="status-pill ${esc(s)}">${esc(orderStatusLabel(s))}</span></summary><div class="adx-order-body"><div class="order-card-top"><div><p><strong>${esc(c.name || "Customer")}</strong></p><p>${esc(c.email || "")}</p><p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p><p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}<p>${esc(when)}</p></div><div><p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p><p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p></div></div><ul class="order-items">${(o.items || []).map((i) => `<li>${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}${i.bulkPercent ? ` <em class="bulk-tag">bulk ${esc(String(i.bulkPercent))}% off</em>` : ""}</li>`).join("")}</ul>${(o.bulkDiscount && o.bulkDiscount.length) ? `<p class="admin-note">Automatic bulk discount applied: ${o.bulkDiscount.map((b) => `${esc(b.name)} (${b.qty} units → ${esc(String(b.percent))}%)`).join(", ")}.</p>` : ""}${orderReviewHTML(o)}${o.proofUploadFailed ? `<p class="proof-upload-failed" role="alert">⚠️ Proof Upload Failed — ask the customer to resend the receipt.</p>` : ""}${shot ? receiptViewer(shot, `Payment receipt for ${o.id}`, `${o.id}-receipt`) : `<p class="empty">No receipt attached.</p>`}<div class="order-actions">${orderActionsHTML(o)}</div></div></details>`;
+  return `<details class="adx-order" data-order="${esc(o.id)}"><summary class="adx-order-row"><span class="adx-select-wrap"><input type="checkbox" class="adx-row-select" data-order-select="${esc(o.id)}"${selected} aria-label="Select order ${esc(o.id)}" /></span><span class="adx-order-id">${esc(o.id)}</span><span class="adx-order-who"><strong>${esc(c.name || "Customer")}</strong><small>${esc(when)} · ${nItems} item(s)</small></span><span class="adx-order-total">${esc(JA.money(o.total, o.currency))}</span><span class="status-pill ${esc(s)}">${esc(orderStatusLabel(s))}</span></summary><div class="adx-order-body"><div class="order-card-top"><div><p><strong>${esc(c.name || "Customer")}</strong></p><p>${esc(c.email || "")}</p><p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p><p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}<p>${esc(when)}</p></div><div><p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p><p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p></div></div><ul class="order-items">${(o.items || []).map((i) => `<li>${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}${i.note ? ` <small class="order-item-note">${esc(i.note)}</small>` : ""}${i.bulkPercent ? ` <em class="bulk-tag">bulk ${esc(String(i.bulkPercent))}% off</em>` : ""}</li>`).join("")}</ul>${(o.bulkDiscount && o.bulkDiscount.length) ? `<p class="admin-note">Automatic bulk discount applied: ${o.bulkDiscount.map((b) => `${esc(b.name)} (${b.qty} units → ${esc(String(b.percent))}%)`).join(", ")}.</p>` : ""}${orderReviewHTML(o)}${o.proofUploadFailed ? `<p class="proof-upload-failed" role="alert">⚠️ Proof Upload Failed — ask the customer to resend the receipt.</p>` : ""}${shot ? receiptViewer(shot, `Payment receipt for ${o.id}`, `${o.id}-receipt`) : `<p class="empty">No receipt attached.</p>`}<div class="order-actions">${orderActionsHTML(o)}</div></div></details>`;
 }
 let orderFilter = "all";
 function ordersPanel() {
@@ -2311,7 +2266,7 @@ function bindOrderButtons() {
     b.onclick = async () => {
       const id = b.dataset.partial;
       const order = serverOrders.find((o) => o.id === id) || {};
-      const symbol = order.currency === "NGN" ? "₦" : "F CFA";
+      const symbol = order.currency === "NGN" ? "₦" : "CFA";
       const raw = window.prompt(`Enter the amount received in ${symbol}. The order total is ${JA.money(order.total, order.currency)}.`, "");
       if (raw == null) return;
       const paidAmount = Number(String(raw).replace(/[^0-9]/g, ""));
@@ -2723,7 +2678,7 @@ function broadcastOptionsLine(p) {
 function broadcastFullText(p) {
   // One-tap "Copy Details" caption: exactly the merchandise details.
   //   1. Product name (EN / FR)
-  //   2. Prices (₦ NGN / F CFA)
+  //   2. Prices (₦ NGN / CFA)
   //   3. Colours / options, when the product has any
   const lines = [broadcastDisplayName(p), broadcastPriceLine(p)];
   const options = broadcastOptionsLine(p);
@@ -3215,7 +3170,7 @@ async function fillMarketing() {
       const box = $("#mk-product-options"); const q = String($("#mk-product-search")?.value || "").trim().toLowerCase();
       if (!box) return;
       const rows = campaignProducts.filter((p) => !q || `${p.name || ""} ${p.sku || ""}`.toLowerCase().includes(q));
-      box.innerHTML = rows.length ? rows.map((p) => `<label class="mk-product-option"><input type="checkbox" name="campaignProduct" value="${esc(p.id)}" ${selectedProducts.has(String(p.id)) ? "checked" : ""} /><img src="${esc(p.image_url || p.image || "images/products/_placeholder.jpg")}" alt="" /><span><b>${esc(p.name || "Product")}</b><small>${p.priceCfa ? `${Number(p.priceCfa).toLocaleString()} F CFA` : `₦${Number(p.priceNgn || 0).toLocaleString()}`}${p.badge ? ` · ${esc(p.badge)}` : ""}</small></span></label>`).join("") : `<p class="empty">No matching products.</p>`;
+      box.innerHTML = rows.length ? rows.map((p) => `<label class="mk-product-option"><input type="checkbox" name="campaignProduct" value="${esc(p.id)}" ${selectedProducts.has(String(p.id)) ? "checked" : ""} /><img src="${esc(p.image_url || p.image || "images/products/_placeholder.jpg")}" alt="" /><span><b>${esc(p.name || "Product")}</b><small>${p.priceCfa ? `${Number(p.priceCfa).toLocaleString()} CFA` : `₦${Number(p.priceNgn || 0).toLocaleString()}`}${p.badge ? ` · ${esc(p.badge)}` : ""}</small></span></label>`).join("") : `<p class="empty">No matching products.</p>`;
     };
     try { const catalog = await api("api/catalog?all=1"); campaignProducts = catalog.products || []; paintProducts(); } catch (_err) { const box = $("#mk-product-options"); if (box) box.innerHTML = `<p class="empty">Catalog unavailable.</p>`; }
     $("#mk-product-search")?.addEventListener("input", paintProducts);
@@ -3260,9 +3215,9 @@ async function fillMarketing() {
     const d = await api("api/admin/growth/settings"); const s = d.settings || {}; mkGrowthSettings = s; const card = $("#mk-settings-card");
     if (card) {
       const tierRows = (s.bulkDiscountTiers || []).map((tier) => `<div class="mk-tier-row" data-bulk-tier><label>Minimum quantity<input type="number" min="2" name="bulkMin" value="${num(tier.minQuantity)}" required /></label><label>Discount %<input type="number" min="1" max="90" name="bulkPercent" value="${num(tier.percent)}" required /></label><button type="button" class="btn btn-line" data-remove-tier>Remove</button></div>`).join("");
-      card.innerHTML = `<h3 class="admin-h">Discounts, promos & referral settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="promosEnabled" ${s.promosEnabled === 0 || s.promosEnabled === false ? "" : "checked"} /> Promotions ON — promo codes, coupons and volume discounts are live at checkout</label><p class="admin-note">Master switch for every discount: when it is OFF, the checkout promo box disappears, no coupon can be redeemed, and no bulk discount is applied — your coupons and tiers are kept intact and come back the moment you switch it back ON.</p><h4>Flexible bulk / volume discounts</h4><p class="admin-note">Create quantity tiers such as 10 units = 5%, 15 units = 10%, or 30 units = 20%. With no tiers, no automatic volume discount is applied.</p><div id="mk-bulk-tiers">${tierRows || `<p class="admin-note" data-no-tiers>No volume discount tiers configured.</p>`}</div><button class="btn btn-line" type="button" id="mk-add-tier">+ Add discount tier</button><hr /><h4>Minimum order rule — Benin &amp; Togo deliveries</h4><label class="mk-toggle"><input type="checkbox" name="minimumOrderEnabled" ${s.minimumOrderEnabled === 0 || s.minimumOrderEnabled === false ? "" : "checked"} /> Minimum order requirement ON</label><div class="admin-grid"><label>Minimum order (F CFA)<input name="minOrderCfa" type="number" min="0" step="50" value="${num(s.minOrderCfa === undefined || s.minOrderCfa === null ? 5000 : s.minOrderCfa)}" /></label></div><p class="admin-note">Deliveries to Benin &amp; Togo must reach this basket total. Type <strong>0</strong> to switch the rule OFF completely. The naira floor follows automatically from the exchange rate below: <span id="mk-min-note"></span></p><hr /><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? F CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's promo discount %<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><button class="btn" type="submit">Save settings</button></form>`;
-      const cfaNote = () => { const f = $("#mk-set-form"); const note = $("#mk-cfa-note"); if (!f || !note) return; const spend = Number(f.minSpendNgn.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = rate > 0 ? `CFA shoppers qualify from ${Math.round(spend * rate).toLocaleString()} F CFA (₦${spend.toLocaleString()} × ${rate}).` : ""; };
-      const minNote = () => { const f = $("#mk-set-form"); const note = $("#mk-min-note"); if (!f || !note) return; const minCfa = Number(f.minOrderCfa.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = minCfa <= 0 ? "the rule is OFF — any basket total is accepted." : rate > 0 ? `${Math.round(minCfa).toLocaleString()} F CFA ≈ ₦${Math.round(minCfa / rate).toLocaleString()}.` : ""; };
+      card.innerHTML = `<h3 class="admin-h">Discounts, promos & referral settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="promosEnabled" ${s.promosEnabled === 0 || s.promosEnabled === false ? "" : "checked"} /> Promotions ON — promo codes, coupons and volume discounts are live at checkout</label><p class="admin-note">Master switch for every discount: when it is OFF, the checkout promo box disappears, no coupon can be redeemed, and no bulk discount is applied — your coupons and tiers are kept intact and come back the moment you switch it back ON.</p><h4>Flexible bulk / volume discounts</h4><p class="admin-note">Create quantity tiers such as 10 units = 5%, 15 units = 10%, or 30 units = 20%. With no tiers, no automatic volume discount is applied.</p><div id="mk-bulk-tiers">${tierRows || `<p class="admin-note" data-no-tiers>No volume discount tiers configured.</p>`}</div><button class="btn btn-line" type="button" id="mk-add-tier">+ Add discount tier</button><hr /><h4>Minimum order rule — Benin &amp; Togo deliveries</h4><label class="mk-toggle"><input type="checkbox" name="minimumOrderEnabled" ${s.minimumOrderEnabled === 0 || s.minimumOrderEnabled === false ? "" : "checked"} /> Minimum order requirement ON</label><div class="admin-grid"><label>Minimum order (CFA)<input name="minOrderCfa" type="number" min="0" step="50" value="${num(s.minOrderCfa === undefined || s.minOrderCfa === null ? 5000 : s.minOrderCfa)}" /></label></div><p class="admin-note">Deliveries to Benin &amp; Togo must reach this basket total. Type <strong>0</strong> to switch the rule OFF completely. The naira floor follows automatically from the exchange rate below: <span id="mk-min-note"></span></p><hr /><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's promo discount %<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><button class="btn" type="submit">Save settings</button></form>`;
+      const cfaNote = () => { const f = $("#mk-set-form"); const note = $("#mk-cfa-note"); if (!f || !note) return; const spend = Number(f.minSpendNgn.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = rate > 0 ? `CFA shoppers qualify from ${Math.round(spend * rate).toLocaleString()} CFA (₦${spend.toLocaleString()} × ${rate}).` : ""; };
+      const minNote = () => { const f = $("#mk-set-form"); const note = $("#mk-min-note"); if (!f || !note) return; const minCfa = Number(f.minOrderCfa.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = minCfa <= 0 ? "the rule is OFF — any basket total is accepted." : rate > 0 ? `${Math.round(minCfa).toLocaleString()} CFA ≈ ₦${Math.round(minCfa / rate).toLocaleString()}.` : ""; };
       cfaNote(); minNote(); ["minSpendNgn", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", cfaNote); });
       ["minOrderCfa", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", minNote); });
       const tiersBox = $("#mk-bulk-tiers");
@@ -3489,7 +3444,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=180" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=181" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3592,7 +3547,7 @@ function paintDesk(tab = "analytics") {
   }
   $("#cancel-edit")?.addEventListener("click", () => { restoreProductsReturn(); });
   $("#add-product")?.addEventListener("click", () => { rememberProductsReturn(); editingId = "new"; paintDesk("products"); });
-  bindMedia(); bindOptions(); bindCategories(); bindCfaPreview(); bindReviewsAdmin(existing ? existing.id : "");
+  bindMedia(); bindOptions(); bindCategories(); bindCfaPreview();
 
   if (tab === "products" && !editingId) {
     renderProdGrid(); bindProdGridEvents();
@@ -3851,7 +3806,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=180", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=181", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

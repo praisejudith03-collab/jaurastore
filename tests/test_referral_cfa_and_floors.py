@@ -94,7 +94,7 @@ def test_the_quoted_naira_figure_matches_the_enforced_one(client):
     err = api._benin_togo_min("Cotonou", "", "NGN", 10, rate=0.44)
     assert f"{api.benin_togo_min_ngn(0.44):,} naira" in err
     err_cfa = api._benin_togo_min("Cotonou", "", "CFA", 10, rate=0.44)
-    assert "5,000 F CFA" in err_cfa
+    assert "5,000 CFA" in err_cfa
 
 
 def test_zones_outside_benin_and_togo_have_no_minimum():

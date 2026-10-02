@@ -220,7 +220,7 @@ def main():
             const b = document.querySelector('.cur-float button[data-cur="NGN"]');
             return b ? Math.round(b.getBoundingClientRect().width) : null;
         }""")
-        check("₦ and F CFA each hold their own fixed width",
+        check("₦ and CFA each hold their own fixed width",
               bool(ngn_box) and bool(after) and ngn_box < after["btnW"],
               f"NGN={ngn_box}px CFA={after and after['btnW']}px")
 

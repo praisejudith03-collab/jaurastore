@@ -1,3 +1,7 @@
+-- Inventory guardrails migration. Safe to apply more than once after the
+-- products table exists. Apply through the Supabase SQL editor/migrations.
+begin;
+
 -- SECTION: stock
 alter table products add column if not exists stock_quantity integer not null default 0;
 alter table products add column if not exists stock integer default 0;
@@ -50,15 +54,64 @@ begin
  return found;
 end $$;
 
-
+create or replace function sync_supplier_stock(p_id text,p_stock integer,
+ p_option_stock_changes jsonb default null,p_allow_increase boolean default false)
+returns boolean language plpgsql security definer set search_path=public,pg_temp as $$
+declare current_options jsonb; product_options jsonb; merged_options jsonb; safe_changes jsonb;
+ total_stock numeric;
+begin
+ if p_id is null or btrim(p_id)='' or p_stock is null or p_stock<0 or p_stock>10000000 then
+  return false;
+ end if;
+ perform pg_advisory_xact_lock(hashtextextended(p_id,0));
+ select coalesce("optionStock",'{}'::jsonb),coalesce(options,'null'::jsonb)
+  into current_options,product_options from products where id=p_id for update;
+ if not found then return false; end if;
+ if p_option_stock_changes is null then
+  if current_options<>'{}'::jsonb or
+    product_options not in ('null'::jsonb,'[]'::jsonb,'{}'::jsonb)
+    then return false; end if;
+  update products set stock_quantity=case when p_allow_increase then p_stock
+    else least(coalesce(stock_quantity,0),p_stock) end,
+    stock=case when p_allow_increase then p_stock
+    else least(coalesce(stock_quantity,0),p_stock) end,updated_at=now()
+    where id=p_id;
+  return found;
+ end if;
+ if jsonb_typeof(p_option_stock_changes)<>'object' then return false; end if;
+ if exists (select 1 from jsonb_each(p_option_stock_changes) x(k,v)
+  where jsonb_typeof(v) not in ('number','string')
+    or case when coalesce(v #>> '{}','') ~ '^[0-9]+$'
+      then (v #>> '{}')::numeric>10000000 else true end)
+  then return false; end if;
+ if jsonb_typeof(current_options)<>'object' then current_options:='{}'::jsonb; end if;
+ if current_options='{}'::jsonb and
+  product_options in ('null'::jsonb,'[]'::jsonb,'{}'::jsonb)
+  then return false; end if;
+ select coalesce(jsonb_object_agg(k,to_jsonb(case when p_allow_increase
+  then (v #>> '{}')::integer else least(case when current_options ? k
+    and (current_options->>k) ~ '^[0-9]+$' then (current_options->>k)::integer
+    else 0 end,(v #>> '{}')::integer) end)),'{}'::jsonb)
+  into safe_changes from jsonb_each(p_option_stock_changes) x(k,v);
+ merged_options:=current_options||safe_changes;
+ select coalesce(sum(case when (v #>> '{}') ~ '^[0-9]+$'
+  then (v #>> '{}')::numeric else 0 end),0)
+  into total_stock from jsonb_each(merged_options) x(k,v);
+ if total_stock>10000000 then return false; end if;
+ update products set "optionStock"=merged_options,stock_quantity=total_stock::integer,
+  stock=total_stock::integer,updated_at=now() where id=p_id;
+ return found;
+end $$;
 
 revoke all on function public.reserve_product_stock(text,integer,text) from public;
 revoke all on function public.release_product_stock(text,integer,text) from public;
-revoke all on function public.sync_supplier_stock(text,integer,jsonb,boolean,jsonb) from public;
+revoke all on function public.sync_supplier_stock(text,integer,jsonb,boolean) from public;
 do $$ begin
  if exists (select 1 from pg_roles where rolname='service_role') then
   execute 'grant execute on function public.reserve_product_stock(text,integer,text) to service_role';
   execute 'grant execute on function public.release_product_stock(text,integer,text) to service_role';
-  execute 'grant execute on function public.sync_supplier_stock(text,integer,jsonb,boolean,jsonb) to service_role';
+  execute 'grant execute on function public.sync_supplier_stock(text,integer,jsonb,boolean) to service_role';
  end if;
 end $$;
+
+commit;

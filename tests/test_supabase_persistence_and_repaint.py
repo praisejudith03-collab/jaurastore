@@ -63,6 +63,7 @@ FULL_PRODUCT_COLUMNS = {
     "optionPrices", "optionCompareAt", "optionSupplierSku", "optionSku",
     "reviews", "dimensions", "bulkQty", "bulkPercent", "placeholderImage",
     "usesPlaceholder", "source", "supplierId", "supplierSku", "updated_at",
+    "enableCustomNote", "customNotePrompt",
 }
 
 

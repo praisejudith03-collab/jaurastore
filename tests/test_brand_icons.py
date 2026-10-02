@@ -82,7 +82,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # syncs the image/image_url aliases on every upsert - a phone holding the
 # v169 bundle could still post a payload whose stale image_url silently
 # restored the previous product photo, so every shared asset ships v170.
-SHARED_TOKEN = "180"
+SHARED_TOKEN = "181"
 
 
 def _image_size(path):

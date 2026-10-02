@@ -316,7 +316,7 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     mobile.locator('.cur-float button[data-cur="CFA"]').click()
     mobile.wait_for_timeout(600)
     assert mobile.evaluate("JA.currency()") == "CFA"
-    expect(mobile.locator(".price").first).to_contain_text("F CFA")  # recalculated without reload
+    expect(mobile.locator(".price").first).to_contain_text("CFA")  # recalculated without reload
     assert mobile.locator(".price").first.evaluate(
         "el => el.isConnected"), "prices repainted in place, no navigation"
     # -- French: greeting + interface in French, FCFA locked, pill hidden.
@@ -329,7 +329,7 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
         "the floating currency pill stays hidden in French mode")
     expect(mobile.locator('.home-hero-static [data-i18n="home.kicker"]')).to_have_text(
         "Bienvenue. Prêt à faire vos achats ?")
-    expect(mobile.locator(".price").first).to_contain_text("F CFA")
+    expect(mobile.locator(".price").first).to_contain_text("CFA")
     # setCurrency cannot talk a French storefront out of FCFA
     mobile.evaluate("JA.setCurrency('NGN')")
     assert mobile.evaluate("JA.currency()") == "CFA"

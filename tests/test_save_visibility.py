@@ -205,7 +205,8 @@ MIGRATE_COLUMNS = {"id", "legacyId", "sku", "slug", "name", "nameFr",
                    "optionPrices", "optionCompareAt", "optionSupplierSku",
                    "optionSku", "reviews", "dimensions", "bulkQty",
                    "bulkPercent", "placeholderImage", "usesPlaceholder",
-                   "source", "supplierId", "supplierSku", "updated_at"}
+                   "source", "supplierId", "supplierSku", "updated_at",
+                   "enableCustomNote", "customNotePrompt"}
 
 
 class _StrictTable(_FakeTable):

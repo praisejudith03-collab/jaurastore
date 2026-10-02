@@ -1,16 +1,13 @@
 """Supplier stock sync rules - freeze the owner-specified contract.
 
-  * supplier lower                    -> reduce Jaura to the supplier count
-  * supplier out / 0                  -> Jaura product/variant goes out of stock
-  * supplier higher (counted)         -> NEVER auto-increase past the owner's
-                                         hand-entered quantity, unless the safe
-                                         SUPPLIER_STOCK_AUTO_INCREASE setting is on
-  * supplier "in stock", no number    -> keep the owner's positive count
-  * simple products (no variants)     -> the rule applies to the whole product
-  * variant products                  -> only the matched variant moves
-  * unmatched variants                -> keep current stock, warning logged
-  * unreadable / uncertain supplier page -> nothing changes, warning logged
-  * the supplier LINK itself is never removed by a sync
+  * exact positive supplier count -> floor(40%); generic in-stock -> at least 1
+  * supplier out / 0                 -> Jaura product/variant goes out of stock
+  * restock                          -> restores the buffered public quantity
+  * simple products                  -> the rule applies to the whole product
+  * variant products                 -> only the matched variant moves
+  * unmatched variants               -> keep current stock, warning logged
+  * unreadable / uncertain page      -> nothing changes, warning logged
+  * the supplier LINK itself         -> never removed by a sync
 
 Run with:  python3 -m pytest tests/test_supplier_stock_rules.py -q
 """
@@ -43,14 +40,32 @@ def _variants_html(*rows):
 
 @pytest.fixture()
 def saved(monkeypatch):
-    box = {}
+    class Box(dict):
+        pass
 
-    def fake_upsert(row, actor=None):
+    box = Box()
+
+    def fake_apply(pid, stock, option_changes=None, actor=None, allow_increase=False,
+                   option_snapshot_keys=None):
+        row = dict(getattr(box, "_source", {}))
+        if option_changes is None:
+            previous = max(0, int(row.get("stock_quantity", row.get("stock", 0)) or 0))
+            qty = int(stock) if allow_increase else min(previous, int(stock))
+        else:
+            options = dict(row.get("optionStock") or {})
+            for key, value in option_changes.items():
+                incoming = max(0, int(value or 0))
+                previous = max(0, int(options.get(key, 0) or 0))
+                options[key] = incoming if allow_increase else min(previous, incoming)
+            row["optionStock"] = options
+            qty = sum(max(0, int(value or 0)) for value in options.values())
+        row["stock"] = row["stock_quantity"] = qty
         box.clear()
         box.update(row)
         return row, "updated", True
 
-    monkeypatch.setattr(supplier_watchdog.catalog_mod, "upsert", fake_upsert)
+    fake_apply.test_box = box
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "apply_supplier_stock", fake_apply)
     return box
 
 
@@ -68,9 +83,14 @@ def _product(**over):
     return p
 
 
-def _sync(monkeypatch, product, html, auto_increase=False):
+def _sync(monkeypatch, product, html):
+    # The test double applies the stock-only patch to the latest row, and is
+    # given the candidate snapshot only as its initial state.
+    try:
+        supplier_watchdog.catalog_mod.apply_supplier_stock.test_box._source = dict(product)
+    except Exception:
+        pass
     monkeypatch.setattr(supplier_watchdog, "fetch_url", lambda url: html)
-    monkeypatch.setenv("SUPPLIER_STOCK_AUTO_INCREASE", "1" if auto_increase else "0")
     return supplier_watchdog.sync_product(product)
 
 
@@ -80,9 +100,9 @@ def test_supplier_lower_reduces_to_supplier_count(monkeypatch, saved):
     ok, warns = _sync(monkeypatch, _product(),
                       _variants_html(("Serum", True, 3), ("Cream", True, 4)))
     assert ok is True
-    assert saved["optionStock"]["Serum"] == 3
-    assert saved["optionStock"]["Cream"] == 4
-    assert saved["stock"] == 7
+    assert saved["optionStock"]["Serum"] == 1
+    assert saved["optionStock"]["Cream"] == 1
+    assert saved["stock"] == 2
 
 
 def test_supplier_out_of_stock_zeroes_the_matched_variant(monkeypatch, saved):
@@ -90,54 +110,34 @@ def test_supplier_out_of_stock_zeroes_the_matched_variant(monkeypatch, saved):
                       _variants_html(("Serum", False, None), ("Cream", True, 4)))
     assert ok is True
     assert saved["optionStock"]["Serum"] == 0
-    assert saved["optionStock"]["Cream"] == 4
-    assert saved["stock"] == 4
+    assert saved["optionStock"]["Cream"] == 1
+    assert saved["stock"] == 1
 
 
-def test_supplier_higher_never_increases_by_default(monkeypatch, saved):
-    changed, warns = _sync(monkeypatch, _product(),
-                           _variants_html(("Serum", True, 25), ("Cream", True, 4)),
-                           auto_increase=False)
-    # Serum would rise 10 -> 25: forbidden. Cream unchanged. No write at all.
-    assert changed is False
-    assert saved.get("optionStock") is None
-
-
-def test_supplier_higher_raises_only_with_the_safe_setting(monkeypatch, saved):
+def test_supplier_count_uses_the_forty_percent_buffer(monkeypatch, saved):
     ok, warns = _sync(monkeypatch, _product(),
-                      _variants_html(("Serum", True, 25), ("Cream", True, 4)),
-                      auto_increase=True)
+                      _variants_html(("Serum", True, 25), ("Cream", True, 4)))
     assert ok is True
-    assert saved["optionStock"]["Serum"] == 25
-    assert saved["stock"] == 29
+    assert saved["optionStock"]["Serum"] == 10
+    assert saved["optionStock"]["Cream"] == 1
+    assert saved["stock"] == 11
 
 
-def test_boolean_in_stock_keeps_the_owners_count(monkeypatch, saved):
-    changed, warns = _sync(monkeypatch, _product(),
-                           _variants_html(("Serum", True, None), ("Cream", True, 4)))
-    # Serum 10 -> boolean "in": never shrink a counted stock to a boolean.
-    assert changed is False
-    assert saved.get("optionStock") is None
-
-
-def test_boolean_in_stock_revives_a_zero_only_with_the_setting(monkeypatch, saved):
+def test_generic_in_stock_signal_restores_a_positive_variant(monkeypatch, saved):
     p = _product(optionStock={"Serum": 0, "Cream": 4}, stock=4)
-    changed, _ = _sync(monkeypatch, p,
-                       _variants_html(("Serum", True, None), ("Cream", True, 4)),
-                       auto_increase=False)
-    assert changed is False
     ok, _ = _sync(monkeypatch, p,
-                  _variants_html(("Serum", True, None), ("Cream", True, 4)),
-                  auto_increase=True)
+                  _variants_html(("Serum", True, None), ("Cream", True, 4)))
     assert ok is True
     assert saved["optionStock"]["Serum"] == 1
+    assert saved["optionStock"]["Cream"] == 1
+
 
 
 def test_unmatched_variants_keep_their_stock_and_warn(monkeypatch, saved):
     html = _variants_html(("Serum", True, 2))   # supplier page has no Cream row
     ok, warns = _sync(monkeypatch, _product(), html)
     assert ok is True
-    assert saved["optionStock"]["Serum"] == 2
+    assert saved["optionStock"]["Serum"] == 1
     assert saved["optionStock"]["Cream"] == 4, "unmatched variant must not move"
     assert any(w["code"] == "supplier_partial_match" for w in warns)
 
@@ -153,7 +153,6 @@ def test_fetch_failure_changes_nothing_and_warns(monkeypatch, saved):
     def boom(url):
         raise OSError("connection reset")
     monkeypatch.setattr(supplier_watchdog, "fetch_url", boom)
-    monkeypatch.setenv("SUPPLIER_STOCK_AUTO_INCREASE", "0")
     changed, warns = supplier_watchdog.sync_product(_product())
     assert changed is False
     assert saved.get("optionStock") is None
@@ -167,8 +166,8 @@ def test_simple_product_syncs_as_a_whole(monkeypatch, saved):
     ok, warns = _sync(monkeypatch, p,
                       '<script type="application/json">{"quantity": 5, "name": "Shea Glow Set"}</script>')
     assert ok is True
-    assert saved["stock"] == 5
-    assert saved["stock_quantity"] == 5
+    assert saved["stock"] == 2
+    assert saved["stock_quantity"] == 2
     assert "optionStock" not in saved or not saved.get("optionStock")
 
 
@@ -190,12 +189,13 @@ def test_simple_product_out_of_stock(monkeypatch, saved):
     assert saved["stock_quantity"] == 0
 
 
-def test_simple_product_higher_never_increases_by_default(monkeypatch, saved):
-    p = _product(options=[], optionStock={}, stock=2)
-    changed, warns = _sync(monkeypatch, p,
-                           '<script type="application/json">{"quantity": 40, "name": "Shea Glow Set"}</script>')
-    assert changed is False
-    assert saved.get("stock") is None
+def test_simple_product_restock_sets_the_buffered_sellable_quantity(monkeypatch, saved):
+    p = _product(options=[], optionStock={}, stock=0)
+    ok, warns = _sync(monkeypatch, p,
+                      '<script type="application/json">{"quantity": 100, "name": "Shea Glow Set"}</script>')
+    assert ok is True
+    assert saved["stock"] == 40
+    assert saved["stock_quantity"] == 40
 
 
 # ------------------------------------------------------------- link safety
@@ -204,7 +204,7 @@ def test_the_supplier_link_itself_survives_a_sync(monkeypatch, saved):
     ok, warns = _sync(monkeypatch, _product(),
                       _variants_html(("Serum", True, 7), ("Cream", True, 4)))
     assert ok is True
-    assert saved["optionStock"]["Serum"] == 7
+    assert saved["optionStock"]["Serum"] == 2
     assert saved.get("supplierSku") == SUPPLIER, "a sync must never strip the supplier link"
 
 
@@ -214,3 +214,91 @@ def test_product_supplier_urls_reads_every_alias():
         assert supplier_watchdog.product_supplier_urls(p) == [SUPPLIER], key
     p = {"id": "x", "optionSupplierSku": {"Serum": SUPPLIER}}
     assert supplier_watchdog.product_supplier_urls(p) == [SUPPLIER]
+
+
+def test_local_supplier_patch_preserves_admin_edits_and_cannot_restore_a_sale(tmp_path, monkeypatch):
+    import catalog as catalog_mod
+
+    monkeypatch.setattr(catalog_mod, "CATALOG_FILE", str(tmp_path / "catalog.json"))
+    pid = "jau-supplier-current-row"
+    initial = {"id": pid, "name": "Original title", "priceNgn": 1000,
+               "stock": 10, "stock_quantity": 10, "online": True}
+    assert catalog_mod.upsert(initial, actor="test")[0]
+
+    # Simulate an admin edit and checkout that happened after the watchdog
+    # captured its stale product snapshot, but before its supplier write.
+    latest = {**initial, "name": "Admin's current title", "priceNgn": 9000,
+              "image": "latest-image.jpg", "stock": 4, "stock_quantity": 4}
+    assert catalog_mod.upsert(latest, actor="admin-test")[0]
+
+    saved, action, mirrored = catalog_mod.apply_supplier_stock(
+        pid, 3, actor="supplier-test", allow_increase=False)
+    assert action == "updated" and mirrored is True
+    assert saved["stock"] == saved["stock_quantity"] == 3
+    assert saved["name"] == "Admin's current title"
+    assert saved["priceNgn"] == 9000 and saved["image"] == "latest-image.jpg"
+
+    # A later stale supplier read of 7 must not put back units already sold.
+    saved, action, _ = catalog_mod.apply_supplier_stock(
+        pid, 7, actor="supplier-test", allow_increase=False)
+    assert action == "updated"
+    assert saved["stock"] == saved["stock_quantity"] == 3
+
+
+def test_local_supplier_patch_cannot_recreate_an_option_removed_after_snapshot(tmp_path, monkeypatch):
+    import catalog as catalog_mod
+
+    monkeypatch.setattr(catalog_mod, "CATALOG_FILE", str(tmp_path / "catalog.json"))
+    pid = "jau-stale-supplier-option"
+    initial = {"id": pid, "name": "Variant Item", "priceNgn": 1000,
+               "stock": 5, "stock_quantity": 5, "online": True,
+               "options": [{"title": "Colour", "values": ["Red", "Black"]}],
+               "optionStock": {"Red": 1, "Black": 4}}
+    assert catalog_mod.upsert(initial, actor="test")[0]
+    latest = {**initial,
+              "options": [{"title": "Colour", "values": ["Black"]}],
+              "optionStock": {"Black": 4}, "stock": 4, "stock_quantity": 4}
+    assert catalog_mod.upsert(latest, actor="admin-test")[0]
+    saved, action, mirrored = catalog_mod.apply_supplier_stock(
+        pid, 10, {"Red": 4, "Black": 2}, actor="supplier-test",
+        allow_increase=True, option_snapshot_keys=["Red", "Black"])
+    assert action == "updated" and mirrored is True
+    assert saved["optionStock"] == {"Black": 2}
+    assert saved["stock"] == saved["stock_quantity"] == 2
+
+
+def test_supplier_out_of_stock_reaches_the_public_catalog_promptly(tmp_path, monkeypatch):
+    import api
+    import app as appmod
+    import catalog as catalog_mod
+
+    monkeypatch.setattr(catalog_mod, "CATALOG_FILE", str(tmp_path / "live-catalog.json"))
+    product, _, _ = catalog_mod.upsert({
+        "id": "jau-supplier-public-refresh", "name": "Supplier Live Item",
+        "priceNgn": 3000, "stock": 5, "stock_quantity": 5, "online": True,
+        "supplierSku": SUPPLIER,
+    }, actor="test")
+    app = appmod.create_app()
+    app.config.update(TESTING=True)
+    with app.test_client() as client:
+        before = client.get("/api/catalog").get_json()
+        row = next(p for p in before["products"] if p["id"] == product["id"])
+        assert row["stock_status"] == "in"
+
+        ok, warnings = supplier_watchdog._save_synced(
+            product, {**product, "stock": 0, "stock_quantity": 0},
+            "supplier-watchdog", [])
+        assert ok is True and warnings == []
+        after = client.get("/api/catalog").get_json()
+        row = next(p for p in after["products"] if p["id"] == product["id"])
+        assert row["stock_status"] == "out"
+        assert "stock" not in row and "stock_quantity" not in row
+
+        ok, warnings = supplier_watchdog._save_synced(
+            {**product, "stock": 0, "stock_quantity": 0},
+            {**product, "stock": 40, "stock_quantity": 40},
+            "supplier-watchdog", [])
+        assert ok is True and warnings == []
+        restored = client.get("/api/catalog").get_json()
+        row = next(p for p in restored["products"] if p["id"] == product["id"])
+        assert row["stock_status"] == "in"

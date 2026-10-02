@@ -167,11 +167,11 @@ def _product_price_line(p):
         import math
         cfa = int(math.ceil((ngn * rate) / 50) * 50)
         if cfa > 0:
-            parts.append("F CFA {:,}".format(cfa).replace(",", " "))
+            parts.append("{:,} CFA".format(cfa))
     elif p.get("priceCfa"):
         cfa = int(round(float(p.get("priceCfa") or 0)))
         if cfa > 0:
-            parts.append("F CFA {:,}".format(cfa).replace(",", " "))
+            parts.append("{:,} CFA".format(cfa))
     return " · ".join(parts) if parts else ""
 
 
@@ -243,7 +243,7 @@ def inject_product_meta(html_text, product):
     origin = (Config.SITE_ORIGIN or "").rstrip("/")
     url = f"{origin}/product.html?id={quote(pid, safe='')}"
     desc_bits = [b for b in (price, options) if b]
-    description = (" · ".join(desc_bits) or "Shop this piece at Jaura Store in Naira or F CFA.")
+    description = (" · ".join(desc_bits) or "Shop this piece at Jaura Store in Naira or CFA.")
     description = f"{description} — jaurastore.com.ng"
     title = f"{name} · Jaura Store"
 

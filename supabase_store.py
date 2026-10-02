@@ -388,18 +388,18 @@ def _canonicalize_product(row, _c=None):
         p["image_url"] = p["image"]
     if p.get("image") is None and p.get("image_url") is not None:
         p["image"] = p["image_url"]
-    if p.get("stock_quantity") is None and p.get("stock") is not None:
-        p["stock_quantity"] = p["stock"]
-    if p.get("stock") is None and p.get("stock_quantity") is not None:
-        p["stock"] = p["stock_quantity"]
+    # The canonical column wins by presence, not by truthiness. A NULL/blank
+    # stock_quantity is zero stock; reading the legacy `stock` alias in that
+    # case could silently resurrect inventory after a bad import.
+    if "stock_quantity" not in p:
+        p["stock_quantity"] = p.get("stock") if "stock" in p else 0
     try:
-        p["stock"] = int(p.get("stock") or 0)
+        stock_qty = max(0, int(str(p.get("stock_quantity") or "0").strip()))
     except (TypeError, ValueError):
-        p["stock"] = 0
-    try:
-        p["stock_quantity"] = int(p.get("stock_quantity") or 0)
-    except (TypeError, ValueError):
-        p["stock_quantity"] = 0
+        stock_qty = 0
+    p["stock_quantity"] = stock_qty
+    # Keep the legacy alias in lock-step for older storefront/mirror readers.
+    p["stock"] = stock_qty
     supplier = (p.get("supplierSku") or p.get("supplier_sku") or
                 p.get("supplierUrl") or p.get("supplier_url") or "")
     p["supplierSku"] = supplier
@@ -449,7 +449,7 @@ _CRITICAL_PRODUCT_COLUMNS = frozenset({
     "optionStock", "optionPrices", "optionCompareAt", "optionSupplierSku",
     "optionSku", "reviews", "dimensions", "bulkQty", "bulkPercent",
     "placeholderImage", "usesPlaceholder", "source", "supplierId",
-    "supplierSku", "updated_at",
+    "supplierSku", "updated_at", "enableCustomNote", "customNotePrompt",
 })
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
 
@@ -763,12 +763,57 @@ def reserve_product_stock(product_id, qty, option=None):
                     {"p_id": pid, "p_qty": qty, "p_option": opt}).execute()
         ok = _res_data(res)
         reserved = bool(ok and (ok[0] if isinstance(ok, list) else ok))
+        # A failed guard can mean another shopper just took stock. Invalidate
+        # too, so the 409 response and the next public read report that fresh
+        # remaining quantity rather than a cached pre-race number.
+        invalidate_read_cache("products_rows")
         if not reserved:
             return None          # out of stock / offline product
-        invalidate_read_cache()     # stock moved: the next catalogue read must show it
-        return product_by_id(pid)
+        # The RPC's successful UPDATE is authoritative. Do not turn a later
+        # read-back timeout into a false reservation failure: the caller would
+        # miss this line while rolling back earlier ones and leak its units.
+        return True
     except Exception as exc:
         print(f"[supabase] reserve_product_stock failed: {exc}")
+        return False
+
+
+def apply_supplier_stock(product_id, stock, option_changes=None, allow_increase=False,
+                         option_snapshot_keys=None):
+    """Patch only supplier-observed inventory on an existing product row.
+
+    The SQL RPC takes the product's advisory lock, merges only changed variant
+    keys, and performs UPDATE (never upsert). A deleted/stale product therefore
+    cannot be recreated by a watchdog run, and concurrent title/price/image
+    edits are untouched. By default, observed counts are also capped at the
+    latest database count to avoid restoring a checkout reservation made while
+    the supplier page was loading.
+    """
+    c = client()
+    if c is None:
+        return False
+    try:
+        pid = str(product_id or "").strip()
+        qty = max(0, int(stock))
+        if option_changes is not None and not isinstance(option_changes, dict):
+            return False
+        changes = option_changes
+        if not pid or qty > 10**7:
+            return False
+        result = c.rpc("sync_supplier_stock", {
+            "p_id": pid,
+            "p_stock": qty,
+            "p_option_stock_changes": changes,
+            "p_allow_increase": bool(allow_increase),
+            "p_option_snapshot_keys": option_snapshot_keys,
+        }).execute()
+        data = _res_data(result)
+        applied = bool(data and (data[0] if isinstance(data, list) else data))
+        invalidate_read_cache("products_rows")
+        return applied
+    except Exception as exc:
+        print(f"[supabase] apply supplier stock failed: {exc}")
+        invalidate_read_cache("products_rows")
         return False
 
 

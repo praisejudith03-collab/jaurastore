@@ -152,18 +152,20 @@ def test_the_old_confirm_popup_is_gone_from_checkout():
     assert "Togo delivery detected" not in src and "Benin delivery detected" not in src
 
 
-def test_checkout_surfaces_the_gateway_for_the_active_currency():
-    src = _read(os.path.join("js", "app.js"))
-    body = src.split("function paintCheckoutTotals(", 1)[1]
+def test_checkout_keeps_three_payment_methods_and_derives_currency_from_the_choice():
+    app = _read(os.path.join("js", "app.js"))
+    checkout = _read("checkout.html")
+    body = app.split("function paintCheckoutTotals(", 1)[1]
     body = body.split("/** One zone ->", 1)[0]
-    assert "JA.currencyLocked()" in body, (
-        "the French FCFA lock must be enforced where the gateways are painted")
-    assert r'[name=currency][value=\"CFA\"]' in body, (
-        "the FCFA gateway must be pre-selected in French mode")
-    assert re.search(r'value\s*===\s*"NGN"\)\s*card\.hidden\s*=\s*true', body), (
-        "the Naira pay-card must be hidden from a FCFA-locked checkout")
-    assert 'data-bank-ngn]' in body and 'data-bank-cfa]' in body, (
-        "the per-currency bank sheets must keep driving the visible gateway")
+    assert 'function checkoutPaymentMethod(form)' in app
+    assert 'function checkoutCurrency(form)' in app
+    assert 'const cur = method === "naira" ? "NGN" : "CFA"' in body
+    for method in ("naira", "benin_cfa", "togo_cfa"):
+        assert f'value="{method}"' in checkout
+    for sheet in ("data-bank-ngn", "data-bank-benin", "data-bank-togo"):
+        assert sheet in body and sheet in checkout
+    assert 'data-i18n="ck.togoFeeNotice"' in checkout
+    assert "Moov Money Togo may charge a fee for cross-border transfers." in _read("js/i18n.js")
 
 
 # ------------------------------------------------------------------- hero

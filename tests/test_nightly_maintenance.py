@@ -262,14 +262,31 @@ def _variant_page(prices):
 
 @pytest.fixture()
 def saved(monkeypatch):
-    box = {}
+    class Box(dict):
+        pass
 
-    def fake_upsert(row, actor=None):
+    box = Box()
+
+    def fake_apply(pid, stock, option_changes=None, actor=None, allow_increase=False, option_snapshot_keys=None):
+        row = dict(getattr(box, "_source", {}))
+        options = dict(row.get("optionStock") or {})
+        if option_changes is not None:
+            for key, value in option_changes.items():
+                incoming = max(0, int(value or 0))
+                previous = max(0, int(options.get(key, 0) or 0))
+                options[key] = incoming if allow_increase else min(previous, incoming)
+            row["optionStock"] = options
+            stock = sum(max(0, int(value or 0)) for value in options.values())
+        elif not allow_increase:
+            previous = max(0, int(row.get("stock_quantity", row.get("stock", 0)) or 0))
+            stock = min(previous, int(stock))
+        row["stock"] = row["stock_quantity"] = int(stock)
         box.clear()
         box.update(row)
         return row, "updated", True
 
-    monkeypatch.setattr(supplier_watchdog.catalog_mod, "upsert", fake_upsert)
+    fake_apply.test_box = box
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "apply_supplier_stock", fake_apply)
     return box
 
 
@@ -281,8 +298,13 @@ def _price_product():
 
 
 def _run(monkeypatch, page):
+    product = _price_product()
+    try:
+        supplier_watchdog.catalog_mod.apply_supplier_stock.test_box._source = dict(product)
+    except Exception:
+        pass
     monkeypatch.setattr(supplier_watchdog, "fetch_url", lambda url: page)
-    return supplier_watchdog.sync_product(_price_product())
+    return supplier_watchdog.sync_product(product)
 
 
 def test_supplier_price_increase_raises_a_warning_not_a_rewrite(monkeypatch, saved):
@@ -299,7 +321,7 @@ def test_supplier_price_increase_raises_a_warning_not_a_rewrite(monkeypatch, sav
     up = [w for w in warns if w["code"] == "supplier_price_increased"]
     assert up and "Serum" in up[0]["reason"] and "42" in up[0]["reason"]
     # ... the stock update went through ...
-    assert saved.get("optionStock") == {"Serum": 3, "Cream": 5}
+    assert saved.get("optionStock") == {"Serum": 1, "Cream": 2}
     # ... and the shop's own retail price was NEVER rewritten by the supplier
     assert saved.get("priceNgn") == 5000
     assert (saved.get("optionPrices") or {}).get("Serum") != 42.0

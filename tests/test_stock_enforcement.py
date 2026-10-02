@@ -1,4 +1,4 @@
-"""Stock accuracy, enforced everywhere, with no numbers shown to customers.
+"""Stock accuracy, enforced everywhere, with counts withheld from public listings.
 
 The production defects this file pins shut forever:
 
@@ -10,7 +10,8 @@ The production defects this file pins shut forever:
     ordered again while other variants still had units;
   * two customers ordering the last unit at the same time could both succeed
     (validation and decrement were separate, unlocked steps);
-  * customer-facing copy leaked exact counts ("Only 2 left").
+  * ordinary public catalogue rows must not leak counts, while a rejected
+    add/order must report the exact remaining count needed to fix the basket.
 
 Everything here runs on the local backend (no Supabase needed): reservation
 goes through catalog.reserve_stock, which guards under the catalogue's
@@ -42,7 +43,10 @@ from _pw import PW  # noqa: E402
 os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = PW
 
 EMAIL = "jaurastore@gmail.com"
-GENERIC = "this option is currently unavailable in the quantity selected"
+OUT_OF_STOCK = "This item is currently out of stock."
+
+def over_limit(remaining):
+    return f"You cannot order more than the available stock ({remaining} remaining)."
 FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock", "variantStock", "inventory")
 
 
@@ -81,6 +85,7 @@ def make_product(pid, stock=10, option_stock=None, options=None, price=2000,
         "category": "beauty",
         "priceNgn": price,
         "stock": stock,
+        "stock_quantity": stock,
         "online": True,
     }
     if options:
@@ -140,6 +145,43 @@ def test_variant_product_with_every_variant_zero_is_out(client):
     assert row["option_stock_status"] == {"Red": "out", "Black": "out"}
 
 
+def test_unassigned_or_unknown_variant_is_zero_stock(client):
+    make_product("jau-enf-unassigned-variant", stock=5, options=COLOR_OPTS)
+    missing_map = place(client, "JA-ENF-UNASSIGNED", [
+        {"id": "jau-enf-unassigned-variant", "name": "X", "qty": 1,
+         "price": 2000, "color": "Red"},
+    ])
+    assert missing_map.status_code == 409
+    assert missing_map.get_json()["error"] == OUT_OF_STOCK
+    assert product_row("jau-enf-unassigned-variant")["stock"] == 5
+
+    make_product("jau-enf-unknown-variant", stock=5,
+                 option_stock={"Red": 5, "Black": 0}, options=COLOR_OPTS)
+    unknown = place(client, "JA-ENF-UNKNOWN", [
+        {"id": "jau-enf-unknown-variant", "name": "X", "qty": 1,
+         "price": 2000, "color": "Green"},
+    ])
+    assert unknown.status_code == 409
+    assert unknown.get_json()["error"] == OUT_OF_STOCK
+
+
+def test_variant_stock_cannot_be_bypassed_by_omitting_or_faking_selection(client):
+    make_product("jau-enf-variant-required", stock=5,
+                 option_stock={"Red": 5, "Black": 0}, options=COLOR_OPTS)
+    omitted = place(client, "JA-ENF-OMITTED", [
+        {"id": "jau-enf-variant-required", "name": "X", "qty": 1, "price": 2000},
+    ])
+    assert omitted.status_code == 409
+    assert omitted.get_json()["error"] == OUT_OF_STOCK
+    unknown = place(client, "JA-ENF-FAKE", [
+        {"id": "jau-enf-variant-required", "name": "X", "qty": 1,
+         "price": 2000, "color": "Not a real variant"},
+    ])
+    assert unknown.status_code == 409
+    assert unknown.get_json()["error"] == OUT_OF_STOCK
+    assert product_row("jau-enf-variant-required")["stock"] == 5
+
+
 def test_variant_availability_is_public_without_quantities(client):
     """Red: 5, Black: 0 - the shopper learns which colour is sold out, never
     how many Reds remain."""
@@ -171,9 +213,11 @@ def test_one_stock_alias_can_never_beat_the_other_again(client):
     is absent. The split readers are what made a product show In Stock while
     checkout reserved against 0."""
     assert catalog_mod.stock_of({"stock": 24, "stock_quantity": 0}) == 0
-    assert catalog_mod.stock_of({"stock": 24}) == 24
+    assert catalog_mod.stock_of({"stock": 24, "stock_quantity": None}) == 0
+    assert catalog_mod.stock_of({"stock": 24, "stock_quantity": "  "}) == 0
     assert catalog_mod.stock_of({"stock": 7, "stock_quantity": 9}) == 9
     assert catalog_mod.stock_of({}) == 0
+    assert catalog_mod.stock_of({"stock_quantity": -4}) == 0
     assert catalog_mod.stock_of({"stock": "junk"}) == 0
     assert catalog_mod.stock_of(None) == 0
 
@@ -185,6 +229,7 @@ def test_zero_stock_product_is_not_orderable(client):
                                      "price": 2000}])
     assert r.status_code == 409
     assert r.get_json()["code"] == "out_of_stock"
+    assert r.get_json()["error"] == OUT_OF_STOCK
 
 
 def test_variants_are_enforced_individually(client):
@@ -198,10 +243,11 @@ def test_variants_are_enforced_individually(client):
     assert over_red.status_code == 409
     body = over_red.get_json()
     assert body["code"] == "out_of_stock"
-    assert GENERIC in body["error"]
+    assert body["error"] == over_limit(1)
     over_black = place(client, "JA-ENF012", [{"id": "jau-enf-var2", "name": "X", "qty": 11,
                                               "price": 2000, "color": "Black"}])
     assert over_black.status_code == 409
+    assert over_black.get_json()["error"] == over_limit(10)
     # what is LEFT of each variant still fits: 1 Red + 10 Black
     both = place(client, "JA-ENF013", [
         {"id": "jau-enf-var2", "name": "X", "qty": 1, "price": 2000, "color": "Red"},
@@ -219,22 +265,112 @@ def test_duplicate_variant_lines_are_aggregated_before_checking(client):
         {"id": "jau-enf-var3", "name": "X", "qty": 3, "price": 2000, "color": "Colour: Red"},
     ])
     assert r.status_code == 409
-    assert GENERIC in r.get_json()["error"]
+    assert r.get_json()["error"] == over_limit(5)
+    assert product_row("jau-enf-var3")["stock"] == 5, "partial checkout reservations must roll back"
 
 
-def test_checkout_error_never_states_a_quantity(client):
-    """The over-order message names the product and the generic phrase - no
-    counts, no 'only N left'."""
+def test_checkout_error_includes_authoritative_remaining_stock(client):
+    """The exact error contract reports authoritative remaining stock."""
     make_product("jau-enf-num", stock=2)
     r = place(client, "JA-ENF015", [{"id": "jau-enf-num", "name": "Silk Press",
                                      "qty": 9, "price": 2000}])
     assert r.status_code == 409
-    err = r.get_json()["error"]
-    assert GENERIC in err
-    # the display name from the catalogue, not the free-typed cart name
-    assert "Enforcement Test jau-enf-num" in err
-    assert "Silk Press" not in err
-    assert "2" not in err and "9" not in err and "left" not in err
+    assert r.get_json()["error"] == over_limit(2)
+
+
+def test_ten_units_reject_a_fifteen_unit_checkout(client):
+    make_product("jau-enf-10-to-15", stock=10)
+    r = place(client, "JA-ENF015A", [{"id": "jau-enf-10-to-15", "name": "X",
+                                      "qty": 15, "price": 2000}])
+    assert r.status_code == 409
+    assert r.get_json()["error"] == over_limit(10)
+    assert product_row("jau-enf-10-to-15")["stock"] == 10
+
+
+def test_cart_validator_is_csrf_protected_stateless_and_server_priced(client):
+    make_product("jau-enf-cart", stock=10, price=2000)
+    body = {"currency": "NGN", "items": [{"id": "jau-enf-cart", "qty": 2,
+                                            "price": 1, "name": "fake"}]}
+    assert client.post("/api/cart", json=body).status_code == 403
+    token = csrf(client)
+    valid = client.post("/api/cart", json=body, headers={"X-CSRF-Token": token})
+    assert valid.status_code == 200, valid.get_json()
+    result = valid.get_json()
+    assert result["ok"] is True and result["subtotal"] == 4000
+    assert result["items"][0]["price"] == 4000
+    assert product_row("jau-enf-cart")["stock"] == 10, "cart validation must not reserve"
+
+    too_many = {"currency": "NGN", "items": [{"id": "jau-enf-cart", "qty": 15}]}
+    rejected = client.put("/api/cart", json=too_many,
+                          headers={"X-CSRF-Token": token})
+    assert rejected.status_code == 409
+    assert rejected.get_json()["error"] == over_limit(10)
+    assert product_row("jau-enf-cart")["stock"] == 10
+
+
+def test_catalog_category_and_cart_reads_handle_concurrent_shoppers(client, app):
+    make_product("jau-enf-public-race", stock=10)
+    shoppers = 12
+    barrier = threading.Barrier(shoppers)
+    results = []
+
+    def browse(i):
+        with app.test_client() as shopper:
+            token = csrf(shopper)
+            barrier.wait(timeout=10)
+            catalog_status = shopper.get("/api/catalog").status_code
+            product_status = shopper.get("/api/products").status_code
+            category_status = shopper.get("/api/categories").status_code
+            cart_status = shopper.post("/api/cart", json={
+                "currency": "NGN",
+                "items": [{"id": "jau-enf-public-race", "qty": 1}],
+            }, headers={"X-CSRF-Token": token}).status_code
+            results.append((i, catalog_status, product_status, category_status, cart_status))
+
+    threads = [threading.Thread(target=browse, args=(i,)) for i in range(shoppers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    assert len(results) == shoppers, results
+    assert all(status == 200 for row in results for status in row[1:]), results
+    assert product_row("jau-enf-public-race")["stock"] == 10
+
+
+def test_checkout_alias_enforces_the_same_atomic_inventory_limit(client):
+    make_product("jau-enf-checkout-alias", stock=1)
+    body = {
+        "id": "JA-ENF-CHECKOUT-ALIAS", "currency": "NGN", "total": 2000,
+        "customer": {"name": "Alias Tester", "email": "alias@example.com",
+                     "phone": "+2348012345678", "city": "Lagos",
+                     "zone": "Lagos Mainland", "address": "1 Test St"},
+        "items": [{"id": "jau-enf-checkout-alias", "name": "X", "qty": 2,
+                   "price": 2000}],
+    }
+    response = client.post("/api/checkout", json=body,
+                           headers={"X-CSRF-Token": csrf(client)})
+    assert response.status_code == 409
+    assert response.get_json()["error"] == over_limit(1)
+    assert product_row("jau-enf-checkout-alias")["stock"] == 1
+
+
+def test_null_blank_absent_negative_and_zero_stock_fail_closed(client, monkeypatch):
+    cases = [
+        ("null", {"stock_quantity": None, "stock": 12}),
+        ("blank", {"stock_quantity": "  ", "stock": 12}),
+        ("absent", {}),
+        ("negative", {"stock_quantity": -3, "stock": 12}),
+        ("zero", {"stock_quantity": 0, "stock": 12}),
+    ]
+    for suffix, stock_fields in cases:
+        pid = "jau-enf-missing-stock-" + suffix
+        row = {"id": pid, "name": "Unassigned inventory", "priceNgn": 2000,
+               "online": True, **stock_fields}
+        monkeypatch.setattr(catalog_mod, "merged", lambda include_hidden=False, row=row: [row])
+        result = place(client, "JA-ENF0" + str(len(suffix)) + suffix[:1].upper(),
+                       [{"id": pid, "name": "X", "qty": 1, "price": 2000}])
+        assert result.status_code == 409, (suffix, result.get_json())
+        assert result.get_json()["error"] == OUT_OF_STOCK, suffix
 
 
 def test_sold_out_variant_is_not_orderable_after_the_units_are_gone(client):
@@ -466,10 +602,11 @@ def test_stock_manager_rejects_unknown_products(client):
 
 
 # ================================================= E. storefront contract
-def test_store_js_never_states_a_stock_count():
+def test_store_js_uses_the_exact_stock_rejection_messages():
     src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "js", "store.js"), encoding="utf-8").read()
-    assert GENERIC in src, "the generic over-order message must be the one shown"
+    assert OUT_OF_STOCK in src
+    assert "You cannot order more than the available stock (${left} remaining)." in src
     assert "you asked for" not in src
     assert "Only ${left}" not in src
     assert "units of ${name}" not in src

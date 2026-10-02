@@ -42,6 +42,7 @@ const stubs = `
   function tx(s) { return s; }
   function categoryName(id) { return id; }
   function priceHTML() { return "<span class='price'>PRICE</span>"; }
+  function reviewStats() { return { n: 0, avg: 0 }; }
 `;
 const sandbox = {
   Number, String, Math, JSON, Array, Object, Set, Map, Promise, console,

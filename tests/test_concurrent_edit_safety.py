@@ -127,8 +127,8 @@ def test_a_save_built_on_a_stale_copy_is_accepted_last_write_wins(client, admin)
     # the save landed: last write wins
     assert _row(client, pid)["name"] == "Concurrency Purse v3"
     # ...and it is reported as a receipt, never as an error popup
-    assert body.get("overwrote"), body
-    assert body.get("notice"), body
+    assert body.get("overwrote"), body  # quiet diagnostic metadata only
+    assert "notice" not in body
     assert "error" not in body
 
 
@@ -514,11 +514,12 @@ def test_the_success_banner_lands_on_the_list_view_not_the_editor():
     assert 'savedMsg = "Saved' in save
 
 
-def test_the_overwrite_receipt_is_information_not_an_error_popup():
+def test_save_success_toasts_never_include_overwrite_or_merge_notices():
     js = _admin_js()
     save = js[js.index("const res = await JA.upsertProduct({"):]
     save = save[:save.index("\nlet prodPage")]
-    assert "if (data && data.notice) savedMsg = savedMsg + \" \" + data.notice;" in save
+    assert "data.notice" not in save
+    assert "data.merged" not in save
     # no save may be refused for concurrency
     assert "conflict" not in save.lower()
 
