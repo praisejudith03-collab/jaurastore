@@ -3,7 +3,7 @@ const JA = (() => {
     const KEYS = {
     cart: "jaura_cart",
     currency: "jaura_currency",
-    // Per-VISIT marker: the shopper tapped the ₦ / F CFA pill themselves.
+    // Per-VISIT marker: the shopper tapped the ₦ / CFA pill themselves.
     // Without it an English page load always opens in Naira (see currency()).
     currencyManual: "jaura_currency_manual",
     custom: "jaura_custom_products",
@@ -65,12 +65,12 @@ const JA = (() => {
 
   /** Throw away the persisted catalogue so the next load must hit the server.
    *
-   * Tapping ₦ / F CFA is a full re-read of the shop, not a re-format of what
+   * Tapping ₦ / CFA is a full re-read of the shop, not a re-format of what
    * the device happens to be holding: the cached box could be a partial or
    * stale answer (a page opened mid-deploy, a phone that loaded the shop on a
    * flaky connection, an old box written before rows were published), and the
    * currency toggle repainted straight from it - which is how switching to
-   * F CFA could drop the grid from the full catalogue to a short list. The
+   * CFA could drop the grid from the full catalogue to a short list. The
    * box is dropped here and loadSeed(true) refetches every active, published
    * row from the database before the repaint. */
   function invalidateCatalogCache() {
@@ -125,7 +125,7 @@ const JA = (() => {
     "promo.shop": "Shop now",
     "promo.kicker": "Everything you love, all in one store",
     "conv.banner": "Benin 🇧🇯 customers: place your order now and we deliver in the next batch",
-    "ck.bjMin": "Benin deliveries: minimum order 5,000 F CFA (about 12,000 naira).",
+    "ck.bjMin": "Benin deliveries: minimum order 5,000 CFA (about 12,000 naira).",
     "bulk.label": "Bulk discount",
     "cart.bulkApplied": "Bulk discount applied — {p}% off this item.",
   };
@@ -826,7 +826,7 @@ const JA = (() => {
   function hasNgn(p) {
     return Number(p && p.priceNgn) > 0;
   }
-  // F CFA is a CONVERTED currency: Naira is the exact base, and every CFA
+  // CFA is a CONVERTED currency: Naira is the exact base, and every CFA
   // figure derived from it is rounded UP to a clean 50 / 100 step (24 -> 50,
   // 64 -> 100) so no odd amount appears on a listing, option or cart line.
   // Mirrors currency.py round_cfa/to_cfa on the server.
@@ -872,16 +872,28 @@ const JA = (() => {
     }
   }
 
+  function publicProductSlug(p) {
+    const slugify = (value) => String(value || "").toLowerCase().replace(/&/g, " and ")
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    let slug = slugify(p && p.slug);
+    const imported = /^(?:wix|shopify|import)(?:-|$)|^(?:product|item)-\d+$|^[0-9a-f]{24,}$/i; // Legacy import slugs are rewritten before publishing.
+    if (!slug || imported.test(slug)) slug = slugify(p && p.name);
+    return slug || "jau-product";
+  }
+
+  function productUrl(p) {
+    return "/products/" + encodeURIComponent(publicProductSlug(p));
+  }
+
   function product(idOrSlug) {
     const want = String(idOrSlug || "").trim();
     if (!want) return undefined;
     const list = products();
-    // Canonical id / slug first, then the legacyId alias - so an old wix-*
-    // product link (a bookmark or a shared URL)
-    // still opens the right page after a row is given a canonical jau-* id.
-    // The canonical match must win: a legacyId is never allowed to shadow a
-    // real primary key.
-    return list.find((p) => p.id === want || p.slug === want)
+    // Internal ids and the old legacyId alias remain valid for carts,
+    // bookmarks, orders and integrations. The legacyId resolver accepts old wix-* keys;
+    // public links use the readable slug, including a title fallback for artifact slugs.
+    return list.find((p) => p.id === want)
+      || list.find((p) => p.slug === want || publicProductSlug(p) === want)
       || list.find((p) => String(p.legacyId || "").trim() === want);
   }
 
@@ -1146,24 +1158,24 @@ const JA = (() => {
    * The interface language is auto-detected from the device (js/i18n.js) and
    * the currency follows it (owner request 2026-09-27):
    *
-   *   French interface (fr, fr-FR, fr-BJ, ...)  -> FCFA ONLY. The currency
+   *   French interface (fr, fr-FR, fr-BJ, ...)  -> CFA ONLY. The currency
    *     is locked: currency() always answers CFA, setCurrency() cannot talk
-   *     the shop out of CFA, and the floating ₦/FCFA pill stays hidden.
+   *     the shop out of CFA, and the floating ₦/CFA pill stays hidden.
    *
    *   English interface (en, en-NG, en-US, default) -> prices open in ₦ NGN
    *     first on every page load (the "NGN" fallback below is what paints
    *     them), and the floating pill lets the shopper recalculate everything
-   *     on screen in FCFA on tap; that manual choice is remembered.
+   *     on screen in CFA on tap; that manual choice is remembered.
    *
    * NAIRA FIRST, STRICTLY (owner request). "Remembered" used to mean
    * localStorage forever, and jaura_currency is also written by the FRENCH
    * storefront (where CFA is forced) - so an English shopper could open the
-   * shop in F CFA without ever having asked for it: one French visit, or one
+   * shop in CFA without ever having asked for it: one French visit, or one
    * tap weeks ago, and every later English load painted CFA. The manual
    * choice is now scoped to the VISIT (sessionStorage + this tab's memory):
    *
    *   - a fresh visit in English always opens in ₦ Naira;
-   *   - tapping F CFA on the pill keeps F CFA while the shopper browses
+   *   - tapping CFA on the pill keeps CFA while the shopper browses
    *     (page to page, product to checkout) - the toggle stays useful;
    *   - the French lock never counts as a manual choice, so it cannot leak
    *     into an English session.
@@ -1203,7 +1215,7 @@ const JA = (() => {
   function money(n, cur = currency()) {
     const val = Math.round(Number(n) || 0);
     if (cur === "NGN") return "₦" + val.toLocaleString("en-NG");
-    return "F CFA " + val.toLocaleString("fr-FR");
+    return val.toLocaleString("en-US") + " CFA";
   }
 
   /** Money with exact kobo/centimes, used for multi-variant price ranges.
@@ -1214,7 +1226,7 @@ const JA = (() => {
   function moneyExact(n, cur = currency()) {
     const val = Number(n) || 0;
     if (cur === "NGN") return "₦" + val.toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return "F CFA " + val.toLocaleString("fr-FR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    return val.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + " CFA";
   }
 
   /** The formatted "₦1,800.00 – ₦2,500.00" label for a multi-variant item.
@@ -1250,7 +1262,10 @@ const JA = (() => {
       if (match != null) { ngn = match; overridden = true; }
     }
     if (overridden || ngn > 0) return cur === "NGN" ? ngn : toCfa(ngn);
-    return cur === "NGN" ? (Number(p && p.priceCfa) || 0) : roundCfa(p && p.priceCfa);
+    const cfa = roundCfa(p && p.priceCfa);
+    return cur === "NGN"
+      ? Math.max(0, Math.round(cfa / NGN_TO_CFA))
+      : cfa;
   }
   function compareOf(p, cur = currency(), variant = "") {
     // Per-option "was" (strike-through) price wins when the chosen variant has
@@ -1344,6 +1359,34 @@ const JA = (() => {
 
   function cart() {
     return read(KEYS.cart, []);
+  }
+  // Serialize cart writes in this tab. Two fast taps must validate the
+  // cumulative cart, not two independent stale snapshots that each fit stock.
+  let cartMutationQueue = Promise.resolve();
+  let cartMutationGeneration = 0;
+  function queueCartMutation(work) {
+    const result = cartMutationQueue.then(work, work);
+    cartMutationQueue = result.catch(() => {});
+    return result;
+  }
+  function validateCartOnServer(items, method) {
+    if (!window.JA_NET || typeof window.JA_NET.api !== "function") {
+      return Promise.reject(new Error("We couldn't verify current stock. Please try again."));
+    }
+    const lines = (Array.isArray(items) ? items : []).map((item) => ({
+      id: String(item && item.id || ""),
+      qty: Math.round(Number(item && item.qty) || 0),
+      color: String(item && item.color || ""),
+    }));
+    return window.JA_NET.api("/api/cart", {
+      method: method || "POST",
+      json: { items: lines, currency: currency() },
+      timeout: 5000,
+    });
+  }
+  function cartServerError(err) {
+    if (err && (err.status === 409 || err.status === 400) && err.message) return err.message;
+    return "We couldn't verify current stock. Please try again.";
   }
   function saveCart(items) {
     write(KEYS.cart, items);
@@ -1498,83 +1541,104 @@ const JA = (() => {
     return out;
   }
   function stockProblemLine(problems) {
-    // Generic by design: the exact quantity on the shelf is a business
-    // secret, so the shopper is told THAT the option is unavailable in the
-    // quantity selected - never how many units exist.
     let list = problems;
     if (list && !Array.isArray(list)) list = [list];
     if (!list) list = stockProblems();
     if (!list.length) return "";
     const p = list[0];
-    const name = String(p.name || "This item");
     const left = Math.max(0, Number(p.available != null ? p.available : p.left) || 0);
-    if (left <= 0) return `${name} is out of stock.`;
-    return `${name} — this option is currently unavailable in the quantity selected.`;
+    if (left <= 0) return "This item is currently out of stock.";
+    return `You cannot order more than the available stock (${left} remaining).`;
   }
   function bulkUnit(p, qty, cur, variant = "") {
     const unit = priceOf(p, cur, variant);
     const percent = bulkPercentFor(p, qty);
     if (!percent) return unit;
     const discounted = unit * (100 - percent) / 100;
-    // F CFA always lands on a clean 50 step, a discounted unit included:
+    // CFA always lands on a clean 50 step, a discounted unit included:
     // 2,150 at -10% is 1,935 raw and 1,950 on the tag, and the server
     // (api._checkout_items) bills the identical figure. Naira is the exact
     // base currency and keeps ordinary rounding.
     return cur === "CFA" ? roundCfa(discounted) : Math.round(discounted);
   }
-  function addToCart(id, qty = 1, color = "") {
-    if (_siteConfig.store_active === false) { paintStoreStatus(false); toast("The store is temporarily paused. Please chat with us on WhatsApp."); return; }
-    const p = product(id);
-    const want = Math.max(1, Math.round(Number(qty) || 1));
-    if (!p) {
-      toast(tx("toast.unavailable"));
-      return;
-    }
-    const avail = stockFor(p, color);
-    if (avail <= 0) {
-      toast(tx("toast.unavailable"));
-      return;
-    }
-    const already = cartQtyFor(id, color);
-    const room = Math.max(0, avail - already);
-    if (room <= 0) {
-      toast(stockProblemLine([{ name: displayName(p) || p.name, available: avail, requested: already + want }]));
-      return;
-    }
-    const add = Math.min(want, room);
-    const items = cart();
-    const found = items.find((i) => i.id === id && String(i.color || "") === String(color || ""));
-    if (found) found.qty = Math.min(avail, (Number(found.qty) || 0) + add);
-    else items.push({ id, qty: add, color: String(color || "") });
-    saveCart(items);
-    if (add < want) {
-      toast(stockProblemLine([{ name: displayName(p) || p.name, available: avail, requested: already + want }]));
-    }
-    track("cart", { id, name: p.name, qty: add, variant: color });
-    const totalQty = cartQtyFor(id);
-    const bulkPct = bulkPercentFor(p, totalQty);
-    if (bulkPct) toast(tx("cart.bulkApplied", { p: bulkPct }));
-    openMini();
+  function addToCart(id, qty = 1, color = "", note = "") {
+    const scheduledGeneration = cartMutationGeneration;
+    const cleanNote = String(note || "").trim().slice(0, 300);
+    return queueCartMutation(async () => {
+      if (scheduledGeneration !== cartMutationGeneration) return false;
+      if (_siteConfig.store_active === false) {
+        paintStoreStatus(false);
+        toast("The store is temporarily paused. Please chat with us on WhatsApp.");
+        return false;
+      }
+      const p = product(id);
+      const want = Math.max(1, Math.round(Number(qty) || 1));
+      if (!p) {
+        toast("This item is currently out of stock.");
+        return false;
+      }
+      const items = cart().map((item) => ({ ...item }));
+      const found = items.find((item) => item.id === id
+        && String(item.color || "") === String(color || "")
+        && String(item.note || "") === cleanNote);
+      if (found) found.qty = Math.max(0, Number(found.qty) || 0) + want;
+      else items.push({ id, qty: want, color: String(color || ""), ...(cleanNote ? { note: cleanNote } : {}) });
+      try {
+        await validateCartOnServer(items, "POST");
+      } catch (err) {
+        toast(cartServerError(err));
+        return false;
+      }
+      // Checkout/clear may complete while the stock probe is in flight.
+      if (scheduledGeneration !== cartMutationGeneration) return false;
+      saveCart(items);
+      track("cart", { id, name: p.name, qty: want, variant: color });
+      const totalQty = cartQtyFor(id);
+      const bulkPct = bulkPercentFor(p, totalQty);
+      if (bulkPct) toast(tx("cart.bulkApplied", { p: bulkPct }));
+      openMini();
+      return true;
+    });
   }
-  function setQty(id, color, qty) {
-    const want = Math.round(Number(qty) || 0);
-    if (want <= 0) {
-      saveCart(cart().filter((i) => !(i.id === id && String(i.color || "") === String(color || ""))));
-      return;
-    }
-    const p = product(id);
-    const avail = p ? stockFor(p, color) : want;
-    const capped = Math.min(want, Math.max(0, avail));
-    if (p && want > avail) {
-      toast(stockProblemLine([{ name: displayName(p) || p.name, available: avail, requested: want }]));
-    }
-    if (capped <= 0) {
-      saveCart(cart().filter((i) => !(i.id === id && String(i.color || "") === String(color || ""))));
-      return;
-    }
-    saveCart(cart().map((i) => (i.id === id && String(i.color || "") === String(color || "") ? { ...i, qty: capped } : i)));
+  function setQty(id, color, qty, note = "") {
+    const scheduledGeneration = cartMutationGeneration;
+    return queueCartMutation(async () => {
+      if (scheduledGeneration !== cartMutationGeneration) return false;
+      const want = Math.round(Number(qty) || 0);
+      const current = cart();
+      const cleanNote = String(note || "").trim().slice(0, 300);
+      const matches = (item) => item.id === id
+        && String(item.color || "") === String(color || "")
+        && String(item.note || "") === cleanNote;
+      if (want <= 0) {
+        saveCart(current.filter((item) => !matches(item)));
+        return true;
+      }
+      const previous = current.find(matches);
+      const items = current.map((item) => ({ ...item }));
+      const next = items.find(matches);
+      if (!next) return false;
+      const priorQty = Math.max(0, Number(previous && previous.qty) || 0);
+      next.qty = want;
+      // Decreases/removals always remain possible, including when a supplier
+      // has since reduced stock. Increases must pass the live server guard.
+      if (want > priorQty) {
+        try {
+          await validateCartOnServer(items, "PUT");
+        } catch (err) {
+          toast(cartServerError(err));
+          return false;
+        }
+      }
+      if (scheduledGeneration !== cartMutationGeneration) return false;
+      saveCart(items);
+      return true;
+    });
   }
-  function clearCart() { saveCart([]); }
+  function clearCart() {
+    cartMutationGeneration += 1;
+    saveCart([]);
+  }
   function cartCount() { return cart().reduce((n, i) => n + i.qty, 0); }
   function wish() { return read(KEYS.wish, []); }
   function isWished(id) { return wish().includes(id); }
@@ -1591,23 +1655,28 @@ const JA = (() => {
   function wishDetailed() {
     return wish().map((id) => product(id)).filter(Boolean);
   }
-  function cartDetailed() {
+  function cartDetailed(cur) {
+    const forcedCur = arguments.length && (cur === "NGN" || cur === "CFA") ? cur : "";
+    const activeCur = forcedCur || currency();
     return cart().map((i) => {
       const p = product(i.id);
       if (!p) return null;
-      const cur = displayCur(p);
-      const unit = priceOf(p, cur, i.color);
+      // Without an argument, preserve a product's native currency when it has
+      // no Naira price. Checkout passes an explicit method-derived currency,
+      // so every line is converted into that one order currency.
+      const useCur = forcedCur || displayCur(p, activeCur);
+      const unit = priceOf(p, useCur, i.color);
       const qtyAll = cartQtyFor(i.id);
       const bulkPct = bulkPercentFor(p, qtyAll);
       const bulk = bulkPct > 0;
-      const payUnit = bulkUnit(p, qtyAll, cur, i.color);
-      return { ...i, product: p, cur, unit, bulk, bulkPercent: bulkPct, payUnit, line: payUnit * i.qty };
+      const payUnit = bulkUnit(p, qtyAll, useCur, i.color);
+      return { ...i, product: p, cur: useCur, unit, bulk, bulkPercent: bulkPct, payUnit, line: payUnit * i.qty };
     }).filter(Boolean);
   }
-  function cartTotal(cur = currency()) {
-    return cartDetailed().reduce((n, i) => {
-      const use = i.cur || displayCur(i.product, cur);
-      return n + bulkUnit(i.product, cartQtyFor(i.id), use, i.color) * i.qty;
+  function cartTotal(cur) {
+    const items = arguments.length ? cartDetailed(cur) : cartDetailed();
+    return items.reduce((n, i) => {
+      return n + bulkUnit(i.product, cartQtyFor(i.id), i.cur || cur || currency(), i.color) * i.qty;
     }, 0);
   }
 
@@ -1846,7 +1915,8 @@ const JA = (() => {
       at: order.at,
       currency: order.currency,
       total: order.total,
-      payment: order.currency,
+      paymentMethod: order.paymentMethod || "",
+      payment: order.payment || order.paymentMethod || order.currency,
       source: "web",
       customer: {
         firstName: order.customer.firstName,
@@ -1862,6 +1932,7 @@ const JA = (() => {
       },
       items: (order.items || []).map((i) => ({
         id: i.id, name: i.name, qty: i.qty, price: i.price, color: i.color,
+        ...(i.note ? { note: i.note } : {}),
         ...(i.bulkPercent ? { bulkPercent: i.bulkPercent } : {}),
       })),
     };
@@ -2424,6 +2495,10 @@ const JA = (() => {
     }
     return `<span class="star-row" role="img" aria-label="${rounded} of 5">${bits.join("")}</span>`;
   }
+  function starsDisplayHTML(n) {
+    const rounded = Math.max(0, Math.min(5, Math.round(Number(n) || 0)));
+    return `<span class="rating-stars" aria-hidden="true">${"★".repeat(rounded)}${"☆".repeat(5 - rounded)}</span>`;
+  }
   // One clean, symmetric heart used by every wishlist button (card, PDP, dock).
   // The .is-on class on the button controls the fill via CSS, so the same
   // markup works for both the off (outline) and on (filled) states.
@@ -2436,6 +2511,11 @@ const JA = (() => {
     const oos = sold ? `<span class="pill oos">${tx("card.oos")}</span>` : "";
     const nm = displayName(p);
     const loved = isWished(p.id) ? "is-on" : "";
+    const rating = reviewStats(p.id);
+    const publicUrl = productUrl(p);
+    const ratingHTML = rating.n
+      ? `<a class="card-rating" href="${publicUrl}#reviews" aria-label="${escape(tx("rev.rated", { avg: rating.avg.toFixed(1), n: rating.n }))}">${starsDisplayHTML(rating.avg)}<span>${rating.avg.toFixed(1)} · ${rating.n}</span></a>`
+      : "";
     const gals = galleryOf(p);
     const home = (document.body.dataset.page || "") === "home";
     const many = home && gals.length > 1;
@@ -2447,15 +2527,16 @@ const JA = (() => {
         })).join("")
       : mediaHTML(gals[0] || p.image, { alt: nm, ph });
     return `<article class="card${sold ? " is-oos" : ""}">
-      <a class="card-media${many ? " has-slides" : ""}" ${many ? "data-card-slides" : ""} href="product.html?id=${encodeURIComponent(p.id)}">
+      <a class="card-media${many ? " has-slides" : ""}" ${many ? "data-card-slides" : ""} href="${publicUrl}">
         ${slides}
         ${badge}${oos}
         <button type="button" class="wish-btn ${loved}" data-wish="${p.id}" aria-label="Wishlist">${HEART_SVG}</button>
       </a>
       <div class="card-body">
         <div class="card-cat">${categoryName(p.category)}</div>
-        <h3><a href="product.html?id=${encodeURIComponent(p.id)}">${escape(nm)}</a></h3>
+        <h3><a href="${publicUrl}">${escape(nm)}</a></h3>
         ${priceHTML(p)}
+        ${ratingHTML}
         <button class="add-mini" ${sold ? "disabled" : ""} data-add="${p.id}">${sold ? tx("card.oos") : tx("card.add")}</button>
       </div>
     </article>`;
@@ -2518,7 +2599,7 @@ const JA = (() => {
   function minOrderLine() {
     const site = _siteConfig || {};
     const fr = currentLang().toLowerCase().indexOf("fr") === 0;
-    const group = fr ? " " : ",";
+    const group = ",";
     const fmt = (n) => String(Math.max(0, Math.round(Number(n) || 0)))
       .replace(/\B(?=(\d{3})+(?!\d))/g, group);
     if (site.minOrderCfa === undefined || site.minOrderCfa === null || site.minOrderCfa === "") {
@@ -2528,8 +2609,8 @@ const JA = (() => {
     if (cfa <= 0) return "";
     const ngn = Number(site.minOrderNgn) || Math.round(cfa / 0.44);
     return fr
-      ? `Livraisons au Bénin : commande minimum de ${fmt(cfa)} F CFA (environ ${fmt(ngn)} nairas).`
-      : `Benin deliveries: minimum order ${fmt(cfa)} F CFA (about ${fmt(ngn)} naira).`;
+      ? `Livraisons au Bénin : commande minimum de ${fmt(cfa)} CFA (environ ${fmt(ngn)} nairas).`
+      : `Benin deliveries: minimum order ${fmt(cfa)} CFA (about ${fmt(ngn)} naira).`;
   }
   function convBannerHTML() {
     const lang = currentLang();
@@ -2596,8 +2677,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=179";
-        const FLYER = "images/brand/logo-flyer.jpg?v=179";
+        const LOGO = "images/brand/logo.jpg?v=186";
+        const FLYER = "images/brand/logo-flyer.jpg?v=186";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2793,7 +2874,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=179" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=186" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -2889,7 +2970,7 @@ const JA = (() => {
     wrap.addEventListener("click", (e) => {
       const set = e.target.closest("[data-mini-set]");
       if (!set) return;
-      setQty(set.dataset.miniSet, set.dataset.color || "", parseInt(set.dataset.n, 10));
+      setQty(set.dataset.miniSet, set.dataset.color || "", parseInt(set.dataset.n, 10), set.dataset.note || "");
       paintMini();
     });
   }
@@ -2910,17 +2991,18 @@ const JA = (() => {
       const atMax = Number(i.qty) >= avail;
       const atMin = Number(i.qty) <= 1;
       return `<div class="mini-row">
-        <a href="product.html?id=${encodeURIComponent(i.id)}"><img src="${asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a>
+        <a href="${productUrl(i.product)}"><img src="${asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a>
         <div class="mini-info">
           <p>${escape(nm)}</p>
+          ${i.note ? `<small class="mini-note">${escape(tx("pdp.productNote"))}: ${escape(i.note)}</small>` : ""}
           <div class="mini-qty">
-            <button type="button" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-n="${i.qty - 1}"${atMin ? " disabled" : ""}>−</button>
+            <button type="button" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-note="${escape(i.note || "")}" data-n="${i.qty - 1}"${atMin ? " disabled" : ""}>−</button>
             <span>${i.qty}</span>
-            <button type="button" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-n="${i.qty + 1}"${atMax ? " disabled" : ""}>+</button>
+            <button type="button" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-note="${escape(i.note || "")}" data-n="${i.qty + 1}"${atMax ? " disabled" : ""}>+</button>
           </div>
           <p class="mini-price">${i.qty} × ${money(i.payUnit, i.cur)}${i.bulk ? ` <em class="bulk-tag">${tx("bulk.label")}</em>` : ""}</p>
         </div>
-        <button type="button" class="mini-remove" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-n="0" aria-label="Remove">×</button>
+        <button type="button" class="mini-remove" data-mini-set="${i.id}" data-color="${escape(i.color)}" data-note="${escape(i.note || "")}" data-n="0" aria-label="Remove">×</button>
       </div>`;
     }).join("");
     foot.innerHTML = `
@@ -3091,7 +3173,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=179" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=186" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3157,11 +3239,11 @@ const JA = (() => {
     <!-- Floating currency pill (English storefront only): sits stacked above
          the WhatsApp bubble. The shared [data-cur] click handler in
          bindChrome() recalculates every price on screen without a reload.
-         In French mode the currency is locked to FCFA, so the pill stays
+         In French mode the currency is locked to CFA, so the pill stays
          hidden (see currencyLocked() and refreshChrome()). -->
     <div class="cur-float" data-cur-float role="group" aria-label="Currency"${currencyLocked() ? " hidden" : ""}>
       <button type="button" data-cur="NGN">₦</button>
-      <button type="button" data-cur="CFA">F CFA</button>
+      <button type="button" data-cur="CFA">CFA</button>
     </div>
     <a class="wa-float" data-wa-inquiry data-wa-country="benin" href="${waInquiryUrl(WA_BJ)}" target="_blank" rel="noopener" aria-label="WhatsApp">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M12.04 2C6.58 2 2.15 6.4 2.15 11.84c0 1.74.46 3.44 1.33 4.94L2 22l5.36-1.4a10 10 0 0 0 4.68 1.19h.01c5.46 0 9.89-4.4 9.89-9.85C21.94 6.4 17.5 2 12.04 2zm5.72 14.13c-.24.68-1.4 1.3-1.95 1.38-.5.07-1.12.1-1.81-.11-.42-.13-.95-.31-1.64-.6-2.89-1.25-4.77-4.16-4.92-4.35-.14-.2-1.18-1.57-1.18-3 0-1.42.75-2.12 1.01-2.41.27-.29.58-.36.78-.36h.56c.18 0 .42-.07.66.5.24.58.82 2 .89 2.15.07.15.12.32.02.52-.1.2-.14.32-.29.5-.14.17-.3.38-.43.51-.14.14-.29.29-.12.56.16.27.73 1.2 1.56 1.95 1.08.96 1.98 1.26 2.26 1.4.27.14.43.12.59-.07.16-.2.68-.79.86-1.06.18-.27.36-.22.6-.13.25.08 1.57.74 1.84.87.27.14.45.2.52.31.06.11.06.64-.18 1.32z"/></svg>
@@ -3227,7 +3309,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=179", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=186", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3261,7 +3343,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=179";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=186";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3291,9 +3373,9 @@ const JA = (() => {
   }
   // FAQ answers Google can show as rich results. Kept in step with faq.html.
   const FAQ_LD = [
-    ["How do I order?", "01 Select your items. 02 Review your bag. 03 Complete checkout. 04 Send payment in F CFA or Naira. 05 Send your payment screenshot to us on WhatsApp. 06 Jaura Store will confirm your payment and your receipt is saved."],
-    ["Can I pay in CFA and Naira?", "Yes. Tap F CFA or Naira in the menu and prices switch at once. At checkout choose Direct bank transfer — F CFA or Direct bank transfer — Naira."],
-    ["What is the exchange rate?", "Naira is the main price. F CFA is converted each day from the live Naira rate, then rounded."],
+    ["How do I order?", "01 Select your items. 02 Review your bag. 03 Complete checkout. 04 Send payment in CFA or Naira. 05 Send your payment screenshot to us on WhatsApp. 06 Jaura Store will confirm your payment and your receipt is saved."],
+    ["Can I pay in CFA and Naira?", "Yes. Tap CFA or Naira in the menu and prices switch at once. At checkout choose Direct bank transfer — CFA or Direct bank transfer — Naira."],
+    ["What is the exchange rate?", "Naira is the main price. CFA is converted each day from the live Naira rate, then rounded."],
     ["Where do you deliver?", "Lagos (Mainland and Island): within 24 to 72 hours. Other Nigerian states and hubs (Ogun, Abuja, Rivers, Edo, Delta, Ekiti, Osun, Oyo, Kwara, Abia, Anambra and more): within 3 to 7 business days. Benin Republic (Cotonou, Abomey-Calavi, Porto-Novo): within 4 to 12 business days. Togo (Lome): within 4 to 12 business days. Shipment rates are confirmed at checkout by city."],
     ["How do I send payment?", "Transfer using the details shown for your chosen currency, then send a screenshot of your payment to us on WhatsApp. You do not need to upload a receipt on the site. Your receipt is saved."],
     ["How do I track my order?", "Message us on WhatsApp with your order ID (for example JA-M8K2Q1) and we will tell you if it is waiting, confirmed, or declined."],
@@ -3320,7 +3402,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=179");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=186");
     document.title = title;
     [
       ["name", "description", description],
@@ -3497,10 +3579,10 @@ const JA = (() => {
     const page = (document.body && document.body.dataset.page) || "home";
     const map = {
       home: { title: "Jaura Store | Official Fashion, Beauty & Lifestyle Store", description: "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa." },
-      shop: { title: "All Products · Jaura Store", description: "Browse 250+ pieces at Jaura Store. Filter by category, colour and size. Pay in ₦ or F CFA." },
+      shop: { title: "All Products · Jaura Store", description: "Browse 250+ pieces at Jaura Store. Filter by category, colour and size. Pay in ₦ or CFA." },
       categories: { title: "Categories · Jaura Store", description: "Shop Jaura Store by category: clothes, shoes, bags, ankara, household, beauty, gadgets and more." },
-      product: { title: "Product · Jaura Store", description: "Shop this piece at Jaura Store in Naira or F CFA." },
-      about: { title: "Vision · Jaura Store", description: "Jaura Store vision — curated fashion and lifestyle from Cotonou and Lagos. Pay in F CFA or Naira." },
+      product: { title: "Product · Jaura Store", description: "Shop this piece at Jaura Store in Naira or CFA." },
+      about: { title: "Vision · Jaura Store", description: "Jaura Store vision — curated fashion and lifestyle from Cotonou and Lagos. Pay in CFA or Naira." },
       faq: { title: "FAQ · Jaura Store", description: "How to order from Jaura Store, delivery to Benin, Lagos and West Africa, payment in CFA or Naira." },
       delivery: { title: "Delivery · Jaura Store", description: "Jaura Store delivery: Lagos 24–72 hours, other Nigerian states 3–7 business days, Benin and Togo 4–12 business days. Fare on WhatsApp." },
       contact: { title: "Contact · Jaura Store", description: "Customer care: " + careSummary() + "." },
@@ -3577,7 +3659,7 @@ const JA = (() => {
       btn.classList.toggle("is-on", btn.dataset.lang === currentLang);
     });
     // The floating currency pill only exists for the English storefront: a
-    // French interface means FCFA is locked in, so the pill is hidden (and
+    // French interface means CFA is locked in, so the pill is hidden (and
     // the body class lets CSS hide it as a backstop).
     const locked = currencyLocked();
     try {
@@ -3628,7 +3710,7 @@ const JA = (() => {
           : tx("search.type");
       }
       box.innerHTML = shown.map((p) => `
-        <a class="search-hit" href="product.html?id=${encodeURIComponent(p.id)}">
+        <a class="search-hit" href="${productUrl(p)}">
           <img src="${asset(p.image)}" alt="${escape(p.name)}" onerror="fallbackImg(event)" />
           <span><small>${categoryName(p.category)}</small><br>${escape(displayName(p))}</span>
           <span>${money(priceOf(p))}</span>
@@ -3688,7 +3770,7 @@ const JA = (() => {
       logSearchSoon(q, searchProducts(q).length, "");
       menuLive.hidden = false;
       menuLive.innerHTML = (hits.length
-        ? hits.map((p) => `<a class="au-hit" href="product.html?id=${encodeURIComponent(p.id)}">
+        ? hits.map((p) => `<a class="au-hit" href="${productUrl(p)}">
             <img src="${asset(p.image)}" alt="" onerror="fallbackImg(event)" />
             <span>${escape(displayName(p))}</span>
             <em>${money(priceOf(p))}</em>
@@ -3761,7 +3843,7 @@ const JA = (() => {
         if (btn) {
           const piece = product(btn.dataset.add);
           if (piece && (piece.options || []).length) {
-            location.href = "product.html?id=" + encodeURIComponent(piece.id);
+            location.href = productUrl(piece);
             return;
           }
           addToCart(btn.dataset.add);
@@ -3787,7 +3869,7 @@ const JA = (() => {
     //    whatever this device was holding, and that copy can be stale or
     //    short (a box written mid-deploy, a phone that loaded the shop on a
     //    flaky connection, rows published since the page opened) - which is
-    //    how switching ₦ -> F CFA could show a truncated grid instead of the
+    //    how switching ₦ -> CFA could show a truncated grid instead of the
     //    full catalogue. The cached box is dropped, every active/published
     //    row is refetched past every cache, and the page repaints again via
     //    "ja:catalog" when the answer differs from what is on screen.
@@ -3874,7 +3956,7 @@ const JA = (() => {
 
   return {
     ready, CATEGORIES: [], categories, loadServerCategories, saveCategories, deleteCategory, moveCategoryProducts, settings, saveSettings, setBanner, convBannerHTML,
-    products, product, searchProducts, categoryName, displayName,
+    products, product, publicProductSlug, productUrl, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     homepageFeatured, homepageFeaturedProducts, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
     currency, setCurrency, currencyLocked, money, moneyExact, moneyRange, priceOf, compareOf, priceRangeOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,

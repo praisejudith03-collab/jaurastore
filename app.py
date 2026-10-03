@@ -84,7 +84,7 @@ def build_sitemap() -> str:
     """The live sitemap, rebuilt on every request from what the store serves.
 
     One URL per fixed page, one per LIVE non-hidden category
-    (shop.html?cat=<id>) and one per LIVE product (product.html?id=<id>).
+    (shop.html?cat=<id>) and one per LIVE product using its clean public slug.
 
     The categories come from the same table the storefront reads -
     api_mod._categories_data(), which on boot is restored from Supabase
@@ -120,11 +120,11 @@ def build_sitemap() -> str:
     except Exception:
         products = []
     for p in products:
-        pid = str((p or {}).get("id") or "").strip()
-        if not pid:
+        slug = catalog_mod.public_slug(p)
+        if not slug:
             continue
         urls.append(_sitemap_entry(
-            url_for("/product.html?id=" + quote(pid, safe="")), today, "weekly", "0.6"))
+            url_for("/products/" + quote(slug, safe="")), today, "weekly", "0.6"))
 
     return ('<?xml version="1.0" encoding="UTF-8"?>\n'
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
@@ -167,11 +167,11 @@ def _product_price_line(p):
         import math
         cfa = int(math.ceil((ngn * rate) / 50) * 50)
         if cfa > 0:
-            parts.append("F CFA {:,}".format(cfa).replace(",", " "))
+            parts.append("{:,} CFA".format(cfa))
     elif p.get("priceCfa"):
         cfa = int(round(float(p.get("priceCfa") or 0)))
         if cfa > 0:
-            parts.append("F CFA {:,}".format(cfa).replace(",", " "))
+            parts.append("{:,} CFA".format(cfa))
     return " · ".join(parts) if parts else ""
 
 
@@ -231,19 +231,20 @@ def inject_product_meta(html_text, product):
     product link showed the generic store cover photo. This is the
     server-rendered fix: the exact tags a crawler reads are rewritten
     before the response ever leaves the server, for the one request that
-    matters (?id=<product>), while every other visit to product.html
+    matters (?slug=<product>), while legacy ?id=<product> links also resolve
+    and every other visit to product.html
     (no id, or an id no longer in the catalogue) keeps the generic tags
     unchanged.
     """
-    pid = str(product.get("id") or "").strip()
+    slug = catalog_mod.public_slug(product)
     name = _product_display_name(p=product) or "Product"
     image = _abs_asset_url(product.get("image"))
     price = _product_price_line(product)
     options = _product_options_line(product)
     origin = (Config.SITE_ORIGIN or "").rstrip("/")
-    url = f"{origin}/product.html?id={quote(pid, safe='')}"
+    url = f"{origin}/products/{quote(slug, safe='')}"
     desc_bits = [b for b in (price, options) if b]
-    description = (" · ".join(desc_bits) or "Shop this piece at Jaura Store in Naira or F CFA.")
+    description = (" · ".join(desc_bits) or "Shop this piece at Jaura Store in Naira or CFA.")
     description = f"{description} — jaurastore.com.ng"
     title = f"{name} · Jaura Store"
 
@@ -275,6 +276,16 @@ def inject_product_meta(html_text, product):
 
 def create_app():
     app = Flask(__name__, static_folder=None)
+
+    # Global Python equivalents for uncaught process/thread/async errors.
+    # They record diagnostics and then chain to the runtime's default handler;
+    # fatal errors are not swallowed because Gunicorn must be able to recycle
+    # a damaged worker. Testing deliberately leaves pytest's own hooks alone.
+    try:
+        import runtime_errors
+        runtime_errors.install(app.logger)
+    except Exception as exc:
+        app.logger.warning("runtime error hooks could not be installed: %s", exc)
 
     # A production deployment without SECRET_KEY set used to boot silently
     # with the repository-public development default - the key that signs
@@ -603,29 +614,15 @@ def create_app():
     @app.route("/health")
     @app.route("/healthz")
     def healthz():
-        # no-store: a CDN (Cloudflare in front of the custom domain, and the
-        # edge that sits in front of *.onrender.com) must never answer the
-        # keep-alive ping from its own cache. A cached 200 never reaches the
-        # dyno, so Render would still count the service as idle and spin it
-        # down - and the next real visitor eats the ~50s cold start.
-        background = None
-        if Config.SCHEDULER_ENABLED and Config.ENV != "testing":
-            try:
-                import scheduler
-                # health_snapshot() restarts a worker thread that died
-                # before reporting, so the 20-minute watchdog both gets the
-                # truth and leaves a healed service behind. The crash that
-                # killed it is already recorded in job_failures and travels
-                # back in `recentFailures`.
-                background = scheduler.health_snapshot()
-            except Exception as exc:
-                import observability
-                observability.record_failure("healthz.background", exc,
-                                             logger=app.logger)
-                background = {"started": False, "maintenanceAlive": False,
-                              "remindersAlive": False,
-                              "lastError": str(exc)[:200]}
-        resp = jsonify(ok=True, env=Config.ENV, background=background)
+        # Render requires a fresh 2xx/3xx response within five seconds. Ping
+        # the real database (with a bounded Supabase probe) and verify Python
+        # request-thread scheduling on every check; a stuck DB must return 500
+        # so Render's health monitor can take the instance out of rotation and
+        # restart it. Never let a CDN cache a previous 200.
+        import health_checks
+        body, status = health_checks.health_report()
+        resp = jsonify(body)
+        resp.status_code = status
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return resp
 
@@ -673,9 +670,8 @@ def create_app():
 
     @app.route("/product.html")
     def product_page():
-        """Same static page for everyone, except the exact product's own
-        Open Graph / Twitter tags are stamped in when ?id= names one that
-        still exists - see inject_product_meta().
+        """Same static page for everyone, except a resolved slug/id/sku gets
+        the product's own Open Graph / Twitter tags from inject_product_meta().
 
         static_for() is still called first (and its response returned
         unchanged) for every other case - no id, an id that no longer
@@ -686,14 +682,36 @@ def create_app():
         decoded with get_data().
         """
         resp = static_for("product.html")
+        slug = (request.args.get("slug") or "").strip()
         pid = (request.args.get("id") or "").strip()
-        if resp is None or resp.status_code != 200 or not pid:
+        sku = (request.args.get("sku") or "").strip()
+        requested = slug or pid or sku
+        if resp is None or resp.status_code != 200 or not requested:
             return resp
         try:
             products = catalog_mod.merged()
         except Exception:
             products = []
-        product = next((p for p in products if str((p or {}).get("id") or "") == pid), None)
+        product = None
+        if slug:
+            product = next((p for p in products
+                            if slug in {str((p or {}).get("slug") or "").strip(),
+                                        catalog_mod.public_slug(p)}), None)
+        elif pid:
+            # Preserve canonical-ID precedence, then old slug and legacyId
+            # aliases; an alias can never shadow another product's primary key.
+            product = next((p for p in products
+                            if str((p or {}).get("id") or "").strip() == pid), None)
+            if product is None:
+                product = next((p for p in products
+                                if pid in {str((p or {}).get("slug") or "").strip(),
+                                           catalog_mod.public_slug(p)}), None)
+            if product is None:
+                product = next((p for p in products
+                                if str((p or {}).get("legacyId") or "").strip() == pid), None)
+        else:
+            product = next((p for p in products
+                            if str((p or {}).get("sku") or "").strip() == sku), None)
         if not product:
             return resp
         try:
@@ -703,6 +721,48 @@ def create_app():
             return resp
         out = Response(body, mimetype="text/html; charset=utf-8")
         return out
+
+    @app.route("/products/<slug>")
+    def product_slug_page(slug):
+        """Serve a product at its clean, readable `/products/<slug>` URL.
+
+        Old `product.html?slug=...` links remain supported, but all generated
+        links, canonical tags and sitemap entries use this path. An imported
+        stored slug is accepted as an incoming alias and permanently redirected
+        to the current public slug, so legacy Wix/import artifacts are never
+        re-published in a share URL.
+        """
+        resp = static_for("product.html")
+        if resp is None or resp.status_code != 200:
+            return resp if resp is not None else ("Not found", 404)
+        try:
+            products = catalog_mod.merged()
+        except Exception:
+            products = []
+        wanted = str(slug or "").strip()
+        # Exact catalog IDs and legacy IDs remain valid incoming aliases even
+        # when catalogue normalization has already replaced their old slug.
+        product = next((p for p in products
+                        if wanted and wanted in {
+                            str((p or {}).get("id") or "").strip(),
+                            str((p or {}).get("legacyId") or "").strip(),
+                        }), None)
+        if product is None:
+            product = next((p for p in products
+                            if wanted in {str((p or {}).get("slug") or "").strip(),
+                                          catalog_mod.public_slug(p)}), None)
+        if product is None:
+            resp.status_code = 404
+            return resp
+        clean_slug = catalog_mod.public_slug(product)
+        if wanted != clean_slug:
+            return redirect("/products/" + quote(clean_slug, safe=""), code=301)
+        try:
+            with open(os.path.join(ROOT, "product.html"), "r", encoding="utf-8") as f:
+                body = inject_product_meta(f.read(), product)
+        except Exception:
+            return resp
+        return Response(body, mimetype="text/html; charset=utf-8")
 
     @app.route(LEGACY_PREFIX)
     @app.route(LEGACY_PREFIX + "/")

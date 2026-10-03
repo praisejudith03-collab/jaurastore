@@ -127,8 +127,8 @@ def test_a_save_built_on_a_stale_copy_is_accepted_last_write_wins(client, admin)
     # the save landed: last write wins
     assert _row(client, pid)["name"] == "Concurrency Purse v3"
     # ...and it is reported as a receipt, never as an error popup
-    assert body.get("overwrote"), body
-    assert body.get("notice"), body
+    assert body.get("overwrote"), body  # quiet diagnostic metadata only
+    assert "notice" not in body
     assert "error" not in body
 
 
@@ -404,7 +404,7 @@ def test_the_offline_queue_never_retries_a_permanent_failure():
     call must reject the promise, never sit in the outbox to be resent."""
     js = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
     assert "r.status >= 500 || r.status === 429 || r.status === 0" in js
-    assert "if (err.retryable) return enqueue(job);" in js
+    assert "if (err.retryable) return enqueue(job, true);" in js
 
 
 def test_a_permanently_failed_job_is_dropped_so_the_pill_closes():
@@ -431,8 +431,35 @@ def test_the_sync_pill_distinguishes_syncing_from_waiting():
     js = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
     pill = js[js.index("function paintPill()"):]
     pill = pill[:pill.index('window.addEventListener("online"')]
-    assert 'var live = jobs.length - waiting;' in pill
+    assert 'var live = visible.length - waiting;' in pill
     assert "Syncing " in pill and "Retrying " in pill
+
+
+def test_the_sync_pill_slides_away_and_caps_its_lifetime():
+    """A queued/offline status is brief feedback, never a permanent overlay."""
+    js = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
+    css = open(os.path.join(ROOT, "css", "style.css"), encoding="utf-8").read()
+    assert "PILL_AUTO_DISMISS_MS = 1400" in js
+    assert "PILL_HARD_TIMEOUT_MS = 5000" in js
+    assert "dismissPill(el, true)" in js
+    assert 'el.classList.add("is-dismissing")' in js
+    assert ".sync-pill.is-dismissing" in css
+    assert "translate3d(calc(100% + 20px)" in css
+
+
+def test_regular_network_requests_have_a_five_second_end_to_end_deadline():
+    """The timeout includes CSRF, reCAPTCHA, headers and response-body reads."""
+    js = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
+    assert "Number(opts.timeout) || 5000" in js
+    assert "var abortMs = job.timeout || (job.bodyKind === \"blob\" ? 300000 : 5000);" in js
+    assert "Promise.race([attempt, timedOut])" in js
+    # Failed/slow requests keep their durable outbox job but cannot recreate
+    # the floating badge; the caller/background retry uses a temporary toast.
+    api = js[js.index("function api(path, opts)"):js.index("function pending()")]
+    assert "return enqueue(job, true);" in api
+    flush = js[js.index("function flush(force)"):js.index("function api(path, opts)")]
+    assert "is taking too long" in flush
+    assert "rec.badgeHidden = true;" in flush
 
 
 # --------------------------------------------------- api.py source pins
@@ -462,6 +489,21 @@ def test_saving_a_product_exits_to_the_captured_source_list():
     assert "function restoreProductsReturn(" in js
 
 
+def test_editor_return_url_captures_the_visible_category_and_search_controls():
+    """The rendered filters win over stale module state when an editor opens."""
+    js = _admin_js()
+    url_fn = js[js.index("function productsReturnUrl()"):]
+    url_fn = url_fn[:url_fn.index("function readProductsReturn()")]
+    capture_fn = js[js.index("function rememberProductsReturn()"):]
+    capture_fn = capture_fn[:capture_fn.index("function productsStateFromUrl(")]
+    assert 'document.getElementById("prod-cat")' in url_fn
+    assert 'document.getElementById("prod-search")' in url_fn
+    assert 'document.getElementById("prod-cat")' in capture_fn
+    assert 'document.getElementById("prod-search")' in capture_fn
+    assert "const category = dashCat || String((catEl && catEl.value) || prodCatSel || \"\");" in capture_fn
+    assert "const query = String((searchEl && searchEl.value) || prodSearchQ || \"\")" in capture_fn
+
+
 def test_the_success_banner_lands_on_the_list_view_not_the_editor():
     """The toast is raised AFTER the redirect, so it is seen on the list the
     admin was returned to rather than on an editor that no longer exists."""
@@ -472,11 +514,12 @@ def test_the_success_banner_lands_on_the_list_view_not_the_editor():
     assert 'savedMsg = "Saved' in save
 
 
-def test_the_overwrite_receipt_is_information_not_an_error_popup():
+def test_save_success_toasts_never_include_overwrite_or_merge_notices():
     js = _admin_js()
     save = js[js.index("const res = await JA.upsertProduct({"):]
     save = save[:save.index("\nlet prodPage")]
-    assert "if (data && data.notice) savedMsg = savedMsg + \" \" + data.notice;" in save
+    assert "data.notice" not in save
+    assert "data.merged" not in save
     # no save may be refused for concurrency
     assert "conflict" not in save.lower()
 
@@ -520,4 +563,32 @@ def test_restoring_the_list_also_restores_the_filter_boxes():
     assert 'document.getElementById("prod-cat")' in restore
     assert 'sel.value = dashCat || prodCatSel || "";' in restore
     assert 'document.getElementById("prod-search")' in restore
+
+
+def test_admin_category_selection_and_opening_are_exact_and_clear_stale_state():
+    js = _admin_js()
+    filtered = js[js.index("function getFilteredProducts()"):]
+    filtered = filtered[:filtered.index("function renderProdGrid()")]
+    assert "if (catFilter && p.category !== catFilter) return false;" in filtered
+
+    category_change = js[js.index("function applyProductFilter(e)"):]
+    category_change = category_change[:category_change.index("function esc(")]
+    assert 'e.target.id === "prod-cat"' in category_change
+    assert 'if (categoryChanged) dashCat = "";' in category_change
+    assert 'if (categoryChanged) {\n    // Rebuild the heading/count' in category_change
+
+    state = js[js.index("function applyProductsState(state)"):]
+    state = state[:state.index("function restoreProductsReturn(")]
+    assert 'const known = cats.some((c) => String((c || {}).id || "") === s.category);' in state
+    assert 'dashCat = known ? s.category : "";' in state
+    assert 'prodCatSel = known ? s.category : "";' in state
+
+    manager = js[js.index("function categoryManager()"):]
+    manager = manager[:manager.index("function _catAssetHTML(")]
+    assert 'JA.products().filter((p) => p.category === c.id).length' in manager
+    # Both ways of opening a category (the explicit link and the card) set
+    # that exact id; neither falls back to a name substring or old selection.
+    assert 'data-view-cat' in manager
+    assert 'dashCat = viewBtn.getAttribute("data-view-cat"); prodCatSel = dashCat;' in js
+    assert 'if (dashCat === id || prodCatSel === id)' in js
 

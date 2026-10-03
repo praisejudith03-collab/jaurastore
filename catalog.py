@@ -14,7 +14,7 @@ Two persistence backends are supported:
   mirrored there. The local override file is still used as a read-through cache
   so a momentarily unavailable Supabase never empties the shop.
 """
-import os, sys, json, re, secrets, datetime, contextlib
+import os, sys, json, re, secrets, datetime, contextlib, hashlib
 from config import Config
 
 try:
@@ -92,7 +92,8 @@ BASE_FIELDS = (
     "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
     "stock", "badge", "featured", "online", "colors", "options", "optionPrices",
     "optionCompareAt", "dimensions", "supplierId", "supplierSku",
-    "optionSupplierSku", "optionSku", "reviews",
+    "optionSupplierSku", "optionSku", "reviews", "enableCustomNote",
+    "customNotePrompt",
 )
 
 # Historical constant, kept for backward-compatible imports. Supplier URLs are
@@ -571,7 +572,28 @@ def _slugify(name):
     slug = (name or "").lower().replace("&", "and").replace("/", " ")
     for ch in ".,()'\"":
         slug = slug.replace(ch, "")
-    return "-".join(slug.split())
+    slug = "-".join(slug.split())
+    return re.sub(r"[^a-z0-9-]+", "-", slug).strip("-")
+
+
+_IMPORT_SLUG_RE = re.compile(
+    r"^(?:wix|shopify|import)(?:-|$)|^(?:product|item)-\d+$|^[0-9a-f]{24,}$", re.I)
+
+
+def public_slug(product):
+    """A clean, readable public URL identity; never an imported Wix ID.
+
+    Internal product ids and legacyId aliases remain untouched and continue to
+    resolve old links. Imported slugs are replaced with the product's readable
+    title slug at the public boundary (and on the next normalized save).
+    """
+    p = product or {}
+    raw = re.sub(r"[^a-z0-9-]+", "-", str(p.get("slug") or "").lower()).strip("-")
+    if not raw or _IMPORT_SLUG_RE.search(raw):
+        raw = _slugify(str(p.get("name") or ""))
+    if not raw:
+        raw = "jau-product"
+    return raw
 
 
 _SLUG_TRIES = 40
@@ -594,7 +616,10 @@ def _free_slug(slug, pid, taken):
         cand = f"{slug}-{n}"
         if cand not in taken:
             return cand
-    return str(pid or slug)
+    # Never fall back to an imported internal id in a public slug, even in
+    # the pathological case of forty same-title collisions.
+    suffix = hashlib.sha1(str(pid or slug).encode("utf-8")).hexdigest()[:8]
+    return f"{slug}-jau-{suffix}"
 
 
 def normalize(product):
@@ -672,8 +697,12 @@ def normalize(product):
         images = real_photos
         if not image or _is_placeholder_path(image):
             image = real_photos[0]
-    stock_qty = sec.clean_int(product.get("stock_quantity"),
-                              sec.clean_int(product.get("stock"), 24), 0, 10**7)
+    # stock_quantity is canonical. If it is present but NULL/blank/invalid,
+    # that is zero stock - never fall back to a stale positive `stock` alias.
+    # The legacy alias is read only for old rows that have no canonical key.
+    stock_source = (product.get("stock_quantity") if "stock_quantity" in product
+                    else product.get("stock") if "stock" in product else 0)
+    stock_qty = sec.clean_int(stock_source, 0, 0, 10**7)
     option_stock = _clean_option_stock(product.get("optionStock"))
     if option_stock:
         # Per-variant stock is the truth for a variant product and the total
@@ -699,7 +728,8 @@ def normalize(product):
     out = {
         "id": pid,
         "sku": sec.valid_sku(product.get("sku") or ""),
-        "slug": sec.safe_url(product.get("slug") or "") or _slugify(name),
+        "slug": public_slug({"slug": sec.safe_url(product.get("slug") or ""),
+                             "name": name, "id": pid}),
         "name": name,
         "nameFr": sec.clean(product.get("nameFr") or product.get("name_fr"), 200),
         "category": sec.clean(product.get("category"), 40),
@@ -724,6 +754,13 @@ def normalize(product):
         # (mirror/import) spellings.
         "dimensions": sec.clean(
             product.get("dimensions") or product.get("dimension"), 160),
+        # Optional per-product customer prompt. The admin chooses which
+        # products expose the note field and can edit the prompt for each.
+        "enableCustomNote": bool(product.get("enableCustomNote")
+                                 or product.get("customNoteEnabled")
+                                 or product.get("allowCustomNote")),
+        "customNotePrompt": sec.clean(
+            product.get("customNotePrompt") or product.get("custom_note_prompt"), 160),
         "stock": stock_qty,
         "stock_quantity": stock_qty,
         "badge": sec.clean(product.get("badge"), 20),
@@ -808,11 +845,13 @@ def stock_of(product):
     negative; a non-numeric value reads as 0.
     """
     p = product if isinstance(product, dict) else {}
-    raw = p.get("stock_quantity")
-    if raw is None:
-        raw = p.get("stock")
+    # Presence of the canonical column is meaningful: NULL/blank/invalid is
+    # an explicit zero, not permission to fall back to a stale legacy alias.
+    # Only old seed/mirror rows that do not carry stock_quantity at all may
+    # read their legacy `stock` field.
+    raw = p.get("stock_quantity") if "stock_quantity" in p else p.get("stock")
     try:
-        return max(0, int(raw or 0))
+        return max(0, int(str(raw).strip())) if raw is not None and str(raw).strip() else 0
     except (TypeError, ValueError):
         return 0
 
@@ -1260,14 +1299,20 @@ def _durable_deleted_ids():
     Returns an empty set on any failure so an outage neither resurrects a
     product the owner deleted nor empties the shop.
     """
+    ids = set()
     try:
-        from supabase_store import load_deleted_ids
-        ids = load_deleted_ids()
+        from supabase_store import load_deleted_ids, load_hard_deleted_ids
+        legacy = load_deleted_ids()
+        if legacy:
+            ids |= {str(x).strip() for x in legacy if str(x or "").strip()}
+        hard = load_hard_deleted_ids()
+        if hard:
+            ids |= {str(x).strip() for x in hard if str(x or "").strip()}
     except Exception:
-        return set()
-    if ids is None:
-        return set()
-    return {str(x).strip() for x in ids if str(x or "").strip()}
+        # Preserve whatever was read from the other ledger. A failed database
+        # read must never turn into a fabricated full catalogue wipe.
+        pass
+    return ids
 
 
 def _supabase_dead_ids():
@@ -1705,7 +1750,7 @@ def reserve_stock(pid, qty, option_key=None, actor=None):
     the product is online and BOTH the product total and the chosen variant
     still have the quantity. The read-modify-write runs under the catalogue's
     cross-process file lock, so two concurrent checkouts (two gunicorn
-    workers) can never both take the last unit. Returns the updated row on
+    workers) can never both take the last unit. Returns a truthy result on
     success, None when there is not enough stock, and False when the write
     itself failed.
     """
@@ -1719,9 +1764,13 @@ def reserve_stock(pid, qty, option_key=None, actor=None):
 
     if _prod_source():
         # Production guards in PostgreSQL (single guarded UPDATE); the local
-        # lock below would not span dynos anyway.
+        # lock below would not span dynos anyway. A selected variant with no
+        # assigned stock key must never fall back to the product total.
+        matched = _match_option_key(pid, option_key) if option_key else None
+        if option_key and matched is None:
+            return None
         from supabase_store import reserve_product_stock
-        return reserve_product_stock(pid, qty, option=_match_option_key(pid, option_key))
+        return reserve_product_stock(pid, qty, option=matched)
 
     path = _norm_filename(CATALOG_FILE)
     with _catalog_lock(path):
@@ -1737,6 +1786,8 @@ def reserve_stock(pid, qty, option_key=None, actor=None):
         if rec.get("online") is False or stock < qty:
             return None
         matched = _option_stock_key_for(rec, option_key) if option_key else None
+        if option_key and matched is None:
+            return None
         if matched is not None:
             try:
                 variant_qty = int(rec["optionStock"][matched] or 0)
@@ -1766,6 +1817,225 @@ def reserve_stock(pid, qty, option_key=None, actor=None):
             print(f"[catalog] local stock reserve failed: {exc}")
             return False
     return rec
+
+
+def release_stock(pid, qty, option_key=None, actor=None):
+    """Atomically return reserved units without racing another checkout."""
+    pid = str(pid or "").strip()
+    try:
+        qty = int(qty)
+    except (TypeError, ValueError):
+        return False
+    if not pid or qty <= 0:
+        return False
+    if _prod_source():
+        try:
+            from supabase_store import release_product_stock
+            return release_product_stock(pid, qty, option=_match_option_key(pid, option_key))
+        except Exception as exc:
+            print(f"[supabase] release stock failed for {pid}: {exc}")
+            return False
+
+    path = _norm_filename(CATALOG_FILE)
+    with _catalog_lock(path):
+        data, path = _load_overrides()
+        deleted = {str(x or "").strip() for x in (data.get("deleted") or [])}
+        if pid in deleted or pid in PERMANENTLY_REMOVED_IDS:
+            return False
+        current = next((dict(p) for p in (data.get("products") or [])
+                        if str((p or {}).get("id") or "").strip() == pid), None)
+        if current is None:
+            current = next((dict(p) for p in _seed_products()
+                            if str((p or {}).get("id") or "").strip() == pid), None)
+        if current is None or is_permanently_removed(current):
+            return False
+        rec = dict(current)
+        current_stock = stock_of(rec)
+        rec["stock"] = rec["stock_quantity"] = min(10**7, current_stock + qty)
+        matched = _option_stock_key_for(rec, option_key) if option_key else None
+        if matched is not None:
+            try:
+                current_variant = max(0, int(rec["optionStock"].get(matched) or 0))
+            except (TypeError, ValueError):
+                current_variant = 0
+            options = dict(rec["optionStock"])
+            options[matched] = min(10**7, current_variant + qty)
+            rec["optionStock"] = options
+        clean = normalize(rec)
+        if clean is None:
+            return False
+        data["products"] = [p for p in (data.get("products") or [])
+                            if str((p or {}).get("id") or "").strip() != pid]
+        data["products"].append(clean)
+        data["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        data["updatedBy"] = actor or "stock-release"
+        try:
+            _write_overrides(data, path)
+        except Exception as exc:
+            print(f"[catalog] local stock release failed for {pid}: {exc}")
+            return False
+    return clean
+
+
+def _supplier_option_key_is_current(product, key):
+    """Whether a previously untracked supplier key still names a live option."""
+    raw = str(key or "").strip()
+    options = (product or {}).get("options")
+    if not raw or not isinstance(options, list):
+        return False
+
+    def part_is_current(part):
+        part = str(part or "").strip()
+        if not part:
+            return False
+        title, value = (part.split(":", 1) if ":" in part else ("", part))
+        wanted_title = re.sub(r"[^a-z0-9]", "", title.lower())
+        wanted_value = re.sub(r"[^a-z0-9]", "", value.lower())
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            option_title = re.sub(r"[^a-z0-9]", "", str(option.get("title") or "").lower())
+            if wanted_title and wanted_title != option_title:
+                continue
+            values = option.get("values") if isinstance(option.get("values"), list) else []
+            if any(re.sub(r"[^a-z0-9]", "", str(v or "").lower()) == wanted_value
+                   for v in values):
+                return True
+        return False
+
+    parts = raw.split(" · ") if " · " in raw else [raw]
+    return bool(parts) and all(part_is_current(part) for part in parts)
+
+
+def apply_supplier_stock(pid, stock, option_changes=None, actor="supplier-watchdog",
+                         allow_increase=False, option_snapshot_keys=None):
+    """Apply supplier-observed stock only, without replaying a stale product row.
+
+    Production uses an UPDATE-only Postgres RPC (never an upsert) that merges
+    just the changed option keys under the same advisory lock as hard delete.
+    Unless explicitly enabled, incoming counts are also capped at the latest
+    database/file count so a slow supplier fetch cannot restore units sold by
+    a checkout while that fetch was in flight. The local backend patches the
+    latest product under its cross-process file lock. Returns ``(row, action,
+    mirrored)`` like :func:`upsert`.
+    """
+    pid = str(pid or "").strip()
+    if not pid:
+        return None, "rejected", True
+    try:
+        stock = max(0, min(10**7, int(stock)))
+    except (TypeError, ValueError):
+        return None, "rejected", True
+    changes = None
+    if option_changes is not None:
+        if not isinstance(option_changes, dict):
+            return None, "rejected", True
+        changes = {}
+        for key, value in list(option_changes.items())[:60]:
+            key = str(key or "").strip()
+            if not key:
+                continue
+            try:
+                changes[key] = max(0, min(10**7, int(value)))
+            except (TypeError, ValueError):
+                return None, "rejected", True
+
+    if _prod_source():
+        try:
+            from supabase_store import apply_supplier_stock as _sb_apply
+            ok = bool(_sb_apply(pid, stock, changes, allow_increase=allow_increase,
+                                option_snapshot_keys=option_snapshot_keys))
+        except Exception as exc:
+            print(f"[supabase] supplier stock patch failed for {pid}: {exc}")
+            ok = False
+        if not ok:
+            try:
+                if pid in deleted_product_ids() or pid in PERMANENTLY_REMOVED_IDS:
+                    return None, "permanently-removed", True
+            except Exception:
+                pass
+            return None, "error", False
+        row = _read_back_product(pid)
+        if row is None:
+            return None, "error", False
+        return row, "updated", True
+
+    path = _norm_filename(CATALOG_FILE)
+    with _catalog_lock(path):
+        data, path = _load_overrides()
+        deleted = {str(x or "").strip() for x in (data.get("deleted") or [])}
+        if pid in deleted or pid in PERMANENTLY_REMOVED_IDS:
+            return None, "permanently-removed", True
+        current = next((dict(p) for p in (data.get("products") or [])
+                        if str((p or {}).get("id") or "").strip() == pid), None)
+        if current is None:
+            current = next((dict(p) for p in _seed_products()
+                            if str((p or {}).get("id") or "").strip() == pid), None)
+        if current is None or is_permanently_removed(current):
+            return None, "permanently-removed", True
+        if changes is not None:
+            if not current.get("options") and not current.get("optionStock"):
+                return None, "error", False
+            option_stock = dict(current.get("optionStock") or {})
+            snapshot_keys = None
+            if option_snapshot_keys is not None:
+                snapshot_keys = {str(k or "").strip() for k in option_snapshot_keys
+                                 if str(k or "").strip()}
+            accepted_changes = {}
+            for key, value in changes.items():
+                key = str(key or "").strip()
+                if not key:
+                    continue
+                # If an option was tracked when the supplier fetch began but
+                # the owner has since removed its optionStock key, this stale
+                # snapshot may not put that key back. Untracked keys are only
+                # accepted while they still exist in the latest product options.
+                # Ignore keys which no longer exist in the current option
+                # definitions, even if an obsolete optionStock entry remains.
+                if not _supplier_option_key_is_current(current, key):
+                    continue
+                if key not in option_stock and snapshot_keys is not None and key in snapshot_keys:
+                    continue
+                try:
+                    incoming = max(0, int(value or 0))
+                    previous = max(0, int(option_stock.get(key, 0) or 0))
+                except (TypeError, ValueError):
+                    return None, "rejected", True
+                accepted_changes[key] = incoming if allow_increase else min(previous, incoming)
+            if not accepted_changes:
+                return current, "updated", True
+            option_stock.update(accepted_changes)
+            current["optionStock"] = option_stock
+            stock = 0
+            for value in option_stock.values():
+                try:
+                    stock += max(0, int(value or 0))
+                except (TypeError, ValueError):
+                    continue
+        else:
+            if current.get("options") or current.get("optionStock"):
+                return None, "error", False
+            if not allow_increase:
+                stock = min(stock_of(current), stock)
+        current["stock"] = stock
+        current["stock_quantity"] = stock
+        current["updated_at"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        data["products"] = [p for p in (data.get("products") or [])
+                            if str((p or {}).get("id") or "").strip() != pid]
+        data["products"].append(current)
+        data["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        data["updatedBy"] = actor or "supplier-watchdog"
+        try:
+            _write_overrides(data, path)
+        except Exception as exc:
+            print(f"[catalog] local supplier stock patch failed for {pid}: {exc}")
+            return None, "error", False
+    try:
+        from supabase_store import invalidate_read_cache
+        invalidate_read_cache("products_rows")
+    except Exception:
+        pass
+    return current, "updated", True
 
 
 def set_variant_stock(pid, qty, option_key=None, actor=None):
@@ -2295,9 +2565,21 @@ def upsert(product, actor=None):
     if _fixture_guard_active() and is_test_fixture(clean):
         return None, "test-fixture", True
     # A permanently removed product (the owner deleted it for good) can never
-    # be re-created - by an admin save, a CSV import or a mirror pass.
+    # be re-created - by an admin save, a CSV import or a mirror pass. The
+    # dedicated SQL ledger is distinct from the older soft-delete JSON list:
+    # a deliberate legacy re-save can still clear a soft tombstone, but no
+    # writer may resurrect a hard-deleted id.
     if is_permanently_removed(clean):
         return None, "permanently-removed", True
+    try:
+        from supabase_store import load_hard_deleted_ids
+        hard_deleted = load_hard_deleted_ids() or []
+        if clean["id"] in {str(x or "").strip() for x in hard_deleted}:
+            return None, "permanently-removed", True
+    except Exception:
+        # The PostgreSQL trigger is the final race-safe guard if the read path
+        # is unavailable; a transient read never turns into a false save error.
+        pass
 
     live = []
     try:

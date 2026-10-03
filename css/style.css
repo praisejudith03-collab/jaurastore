@@ -457,6 +457,15 @@ ul { list-style: none; }
 }
 .card:hover .quick-add { opacity: 1; transform: none; }
 .card-body { padding: 14px 2px 0; }
+.card-rating { display: inline-flex; align-items: center; gap: 5px; margin-top: 5px; color: var(--taupe, #887562); font-size: 12px; text-decoration: none; }
+.card-rating:hover { color: var(--ink, #342922); }
+.rating-stars { color: #e6a900; font-size: 14px; letter-spacing: 1px; line-height: 1; white-space: nowrap; }
+.pdp-product-note { display: grid; gap: 6px; margin: 16px 0; font-size: 13px; color: var(--taupe, #887562); }
+.pdp-product-note input { width: 100%; border: 1px solid var(--line, #e2e2e2); border-radius: 8px; padding: 11px 12px; font: inherit; color: var(--ink, #342922); }
+.pdp-supplier-availability { margin: 12px 0; padding: 11px 14px; border-left: 3px solid var(--gold, #b8956a); border-radius: 6px; background: var(--cream, #faf7f2); color: var(--ink, #342922); font-size: 13px; line-height: 1.5; }
+.cart-item-note, .ck-line-note, .order-item-note { display: block; margin-top: 4px; font-size: 12px; line-height: 1.45; color: var(--muted, #756a60); }
+.ck-line-note { font-weight: 400; }
+.order-item-note { font-style: italic; }
 .card-cat {
   font-size: 10px;
   letter-spacing: 0.18em;
@@ -1367,6 +1376,8 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #f8f0e2; }
 }
 .ck-pay { margin-top: 22px; }
 .ck-pay h3 { font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 10px; }
+.pay-methods { border: 0; padding: 0; margin: 0; min-width: 0; }
+.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 .pay-card {
   display: grid;
   grid-template-columns: 18px 1fr;
@@ -2631,6 +2642,8 @@ body.menu-open { overflow: hidden; }
   letter-spacing: 0.04em;
 }
 .bank-sub { font-size: 13px; color: #666666; text-align: center; margin-top: 8px; }
+.bank-unconfigured { margin: 8px 0 0; padding: 10px; border-radius: 8px; background: #fff8e9; color: #765a2c; font-size: 13px; line-height: 1.45; }
+.ck-togo-fee-notice { margin: 12px 0 0; padding: 10px 12px; border-left: 3px solid #c8a45e; background: #fcf8ef; color: #66512d; font-size: 13px; line-height: 1.5; }
 .ck-pay-intro { font-size: 14px; color: #6b6b6b; line-height: 1.55; margin: 0 0 14px; }
 .ck-pay-country-note {
   font-size: 13px;
@@ -2724,6 +2737,7 @@ body.mini-open { overflow: hidden; }
   font-size: 16px;
 }
 .mini-price { color: var(--purple); font-size: 13px; }
+.mini-note { display: block; margin-top: 4px; font-size: 11px; line-height: 1.4; color: var(--muted, #756a60); }
 .mini-remove { border: 0; background: none; font-size: 20px; color: #888888; }
 .mini-foot { padding: 14px 18px 22px; border-top: 1px solid var(--line); }
 .mini-sub {
@@ -5047,6 +5061,16 @@ body[data-page="admin"] .conv-bar { display: none !important; }
   padding: 9px 15px; font: 500 12.5px/1 "Outfit", system-ui, sans-serif;
   letter-spacing: .02em; cursor: pointer;
   box-shadow: 0 8px 22px rgba(0, 0, 0, .22);
+  opacity: 1; transform: translate3d(0, 0, 0);
+  transition: opacity .22s ease, transform .22s ease;
+  will-change: opacity, transform;
+}
+.sync-pill.is-dismissing {
+  opacity: 0; transform: translate3d(calc(100% + 20px), 0, 0);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-pill { transition-duration: .01ms; }
 }
 .sync-pill.is-offline { background: #9b5f24; }
 .sync-dot {
@@ -5061,7 +5085,7 @@ body[data-page="admin"] .conv-bar { display: none !important; }
 .needs-attention-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .needs-attention-head h2 { margin: 0; font-family: Georgia, serif; font-size: 21px; font-weight: 500; }
 .needs-attention-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
-.needs-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.needs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
 .attention-block { padding: 13px; border-radius: 10px; background: #fff; border: 1px solid #eee5df; }
 .attention-block.is-alert { border-color: #e4b9ae; background: #fff8f6; }
 .attention-title { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }

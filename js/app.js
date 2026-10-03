@@ -1,5 +1,10 @@
 function param(name) {
-  return new URLSearchParams(location.search).get(name);
+  const value = new URLSearchParams(location.search).get(name);
+  if (value != null && (name !== "slug" || String(value).trim())) return value;
+  if (name !== "slug") return null;
+  const match = String(location.pathname || "").match(/^\/products\/([^/]+)\/?$/i);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch (e) { return match[1]; }
 }
 
 function compressImage(file, max = 1280, quality = 0.82, targetBytes = 900 * 1024) {
@@ -67,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=179";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=179";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=186";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=186";
 }
 
 function renderCategories() {
@@ -238,9 +243,9 @@ function renderHome() {
     } catch (e) {
       newIn.innerHTML = list.map((p) => {
         const img = (p.images && p.images[0]) || p.image || "";
-        const id = p.id || "";
+        const url = JA.productUrl ? JA.productUrl(p) : ("/products/" + encodeURIComponent(p.slug || p.name || "product"));
         const name = p.name || "";
-        return `<article class="card"><a class="card-media" href="product.html?id=${encodeURIComponent(id)}"><img src="${img}" alt="" loading="lazy" decoding="async" onerror="fallbackImg(event)"></a><div class="card-body"><h3><a href="product.html?id=${encodeURIComponent(id)}">${name}</a></h3></div></article>`;
+        return `<article class="card"><a class="card-media" href="${url}"><img src="${img}" alt="" loading="lazy" decoding="async" onerror="fallbackImg(event)"></a><div class="card-body"><h3><a href="${url}">${name}</a></h3></div></article>`;
       }).join("");
     }
   }
@@ -281,7 +286,7 @@ function renderHome() {
  * roughly double the same product's CFA price: leaving it in place across a
  * currency switch silently filtered out every product that fell under the
  * old Naira floor, and the grid came back short (the "27 products in ₦, 17
- * in F CFA" report). renderShop() re-derives the bounds from the catalogue
+ * in CFA" report). renderShop() re-derives the bounds from the catalogue
  * whenever `cur` no longer matches JA.currency(). */
 const shopFilter = { min: 0, max: 0, color: "", size: "", inited: false, cat: "", cur: "" };
 
@@ -633,7 +638,7 @@ function paintMostViewed(host, items) {
     <div class="mv-rail">${live.map((p) => {
       const sold = !(Number(p.stock) > 0);
       return `<article class="mv-card${sold ? " is-oos" : ""}">
-        <a class="mv-card-link" href="product.html?id=${encodeURIComponent(p.id)}">
+        <a class="mv-card-link" href="${JA.productUrl ? JA.productUrl(p) : ("/products/" + encodeURIComponent(p.slug || p.name || "product"))}">
           <img src="${JA.asset(p.image)}" alt="" loading="lazy" onerror="fallbackImg(event)" />
           <strong>${JA.escape(JA.displayName(p))}</strong>
           ${(() => {
@@ -757,8 +762,9 @@ function paintProduct(root, p) {
   try { JA.track("view", { id: p.id, name: p.name, page: "product" }); } catch (e) {}
   try {
     const name = JA.displayName(p);
-    const desc = String(JA.displayDescription(p) || "").trim() || (name + " at Jaura Store. Pay in ₦ or F CFA.");
-    const url = (JA.SITE || "https://jaurastore.com.ng") + "/product.html?id=" + encodeURIComponent(p.id);
+    const desc = String(JA.displayDescription(p) || "").trim() || (name + " at Jaura Store. Pay in ₦ or CFA.");
+    const publicUrl = JA.productUrl ? JA.productUrl(p) : ("/products/" + encodeURIComponent(p.slug || p.name || "product"));
+    const url = new URL(publicUrl, JA.SITE || "https://jaurastore.com.ng").href;
     const img = (p.images && p.images[0]) || p.image;
     const cur = Number(p.priceNgn) > 0 ? "NGN" : "XOF";
     const price = Number(p.priceNgn) > 0 ? p.priceNgn : p.priceCfa;
@@ -830,6 +836,12 @@ function paintProduct(root, p) {
   const extra = (p.additionalInfo || []).map((sec) =>
     `<div class="pdp-info"><strong>${JA.escape(sec.title || t("pdp.details"))}</strong><p>${JA.escape(sec.description || "")}</p></div>`
   ).join("");
+  const productNoteHTML = p.enableCustomNote
+    ? `<label class="pdp-product-note"><span>${t("pdp.productNote")}</span><input type="text" name="productNote" maxlength="300" autocomplete="off" placeholder="${JA.escape(p.customNotePrompt || "")}" /></label>`
+    : "";
+  const supplierAvailabilityHTML = p.supplierTracked
+    ? `<p class="pdp-supplier-availability" role="note">${t("pdp.supplierAvailability")}</p>`
+    : "";
   const gallery = (JA.galleryOf ? JA.galleryOf(p) : ((p.images && p.images.length ? p.images : [p.image]) || [])).filter(Boolean).slice(0, 20);
   const stockN = Number(p.stock) || 0;
   const rev = (JA.reviews && JA.reviews(p.id)) || [];
@@ -840,7 +852,7 @@ function paintProduct(root, p) {
   const reviewSummary = (list) => {
     const n = list.length;
     const avg = n ? list.reduce((sum, r) => sum + Number(r.rating != null ? r.rating : r.stars) || 0, 0) / n : 0;
-    return n ? starsOf(avg) + " " + t(n === 1 ? "rev.count" : "rev.countMany", { n }) : t(reviewFilter ? "rev.noMatch" : "rev.empty");
+    return n ? starsOf(avg) + ` ${avg.toFixed(1)} · ` + t(n === 1 ? "rev.count" : "rev.countMany", { n }) : t(reviewFilter ? "rev.noMatch" : "rev.empty");
   };
   const mainHTML = (idx) => JA.mediaHTML(gallery[idx], {
     full: true, eager: idx === 0, alt: p.name, ph: p.placeholderImage, attrs: { "data-main-img": "" },
@@ -860,6 +872,7 @@ function paintProduct(root, p) {
       ${JA.priceHTML(p)}
       ${stockN > 0 ? "" : `<p class="pdp-stock">${t("pdp.oos")}</p>`}
       <p class="stock-line" data-stock-line role="status" aria-live="polite"></p>
+      ${supplierAvailabilityHTML}
       ${(() => {
         const tiers = JA.bulkDiscountTiers ? JA.bulkDiscountTiers() : [];
         const ownQty = Math.round(Number(p.bulkQty) || 0);
@@ -875,6 +888,7 @@ function paintProduct(root, p) {
       ${p.dimensions ? `<p class="pdp-dims"><strong>${t("pdp.dimensions") || "Dimensions"}:</strong> ${JA.escape(p.dimensions)}</p>` : ""}
       ${optHTML}
       ${extra}
+      ${productNoteHTML}
       <div class="kicker">${t("pdp.qty")}</div>
       <div class="qty">
         <button type="button" data-q="-">−</button>
@@ -883,10 +897,10 @@ function paintProduct(root, p) {
       </div>
       <div class="pdp-actions">
         <button class="btn" data-buy ${p.stock <= 0 ? "disabled" : ""}>${p.stock <= 0 ? t("pdp.oos") : t("pdp.add")}</button>
-        <a class="btn btn-line" href="checkout.html">${t("pdp.payIn", { cur: JA.currency() === "NGN" ? "₦" : "F CFA" })}</a>
+        <a class="btn btn-line" href="checkout.html">${t("pdp.payIn", { cur: JA.currency() === "NGN" ? "₦" : "CFA" })}</a>
       </div>
       <p style="font-size:13px;color:var(--taupe)">${t("pdp.hint", { sku: p.sku || p.id })}</p>
-      <section class="pdp-reviews" data-reviews="${JA.escape(p.id)}">
+      <section class="pdp-reviews" id="reviews" data-reviews="${JA.escape(p.id)}">
         <h3>${t("rev.title")}</h3>
         <p class="rev-avg">${reviewSummary(initialReviews)}</p>
         <div class="rev-controls" aria-label="${t("rev.filters")}">
@@ -1077,7 +1091,8 @@ function paintProduct(root, p) {
       updateStockUI();
       return;
     }
-    JA.addToCart(p.id, want, variant);
+    const productNote = root.querySelector("[name=productNote]")?.value || "";
+    JA.addToCart(p.id, want, variant, productNote);
     setTimeout(updateStockUI, 50);
   });
   const frame = root.querySelector(".pdp-img");
@@ -1177,27 +1192,28 @@ function renderCart() {
         const atMin = Number(i.qty) <= 1;
         return `
       <tr class="cart-row-tr">
-        <td><a href="product.html?id=${i.id}"><img src="${JA.asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a></td>
+        <td><a href="${JA.productUrl ? JA.productUrl(i.product) : ("/products/" + encodeURIComponent(i.product.slug || i.product.name || "product"))}"><img src="${JA.asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a></td>
         <td>
-          <a href="product.html?id=${i.id}"><strong>${JA.escape(JA.displayName(i.product))}</strong></a>
+          <a href="${JA.productUrl ? JA.productUrl(i.product) : ("/products/" + encodeURIComponent(i.product.slug || i.product.name || "product"))}"><strong>${JA.escape(JA.displayName(i.product))}</strong></a>
           ${i.color ? `<div class="card-cat">${JA.escape(variantLabel(i.product, i.color))}</div>` : ""}
+          ${i.note ? `<div class="cart-item-note"><strong>${t("pdp.productNote")}:</strong> ${JA.escape(i.note)}</div>` : ""}
         </td>
         <td>${i.bulk ? `<s>${JA.money(i.unit, i.cur)}</s> ${JA.money(i.payUnit, i.cur)}` : JA.priceHTML(i.product)}${i.bulk ? `<div class="bulk-tag">${t("bulk.label")} ${i.bulkPercent}%</div>` : ""}</td>
         <td>
           <div class="qty">
-            <button type="button" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-n="${i.qty - 1}"${atMin ? " disabled" : ""}>−</button>
+            <button type="button" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-note="${JA.escape(i.note || "")}" data-n="${i.qty - 1}"${atMin ? " disabled" : ""}>−</button>
             <input value="${i.qty}" readonly />
-            <button type="button" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-n="${i.qty + 1}"${atMax ? " disabled" : ""}>+</button>
+            <button type="button" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-note="${JA.escape(i.note || "")}" data-n="${i.qty + 1}"${atMax ? " disabled" : ""}>+</button>
           </div>
         </td>
         <td><strong>${JA.money(i.line, i.cur)}</strong>
-          <button class="icon-btn" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-n="0" aria-label="Remove">✕</button>
+          <button class="icon-btn" data-set="${i.id}" data-color="${JA.escape(i.color)}" data-note="${JA.escape(i.note || "")}" data-n="0" aria-label="Remove">✕</button>
         </td>
       </tr>`; }).join("")}</tbody>
     </table>`;
   }
   rows.querySelectorAll("[data-set]").forEach((b) => {
-    b.addEventListener("click", () => JA.setQty(b.dataset.set, b.dataset.color, parseInt(b.dataset.n, 10)));
+    b.addEventListener("click", () => JA.setQty(b.dataset.set, b.dataset.color, parseInt(b.dataset.n, 10), b.dataset.note || ""));
   });
   const sum = document.querySelector("[data-summary]");
   if (sum) {
@@ -1205,9 +1221,9 @@ function renderCart() {
     sum.innerHTML = `
       <h3>${t("cart.summary")}</h3>
       <div class="line"><span>${t("cart.items", { n: JA.cartCount() })}</span><span>${JA.money(JA.cartTotal(cur), cur)}</span></div>
-      <div class="line total"><span>${t("cart.toPay", { cur: cur === "NGN" ? "₦" : "F CFA" })}</span><span>${JA.money(JA.cartTotal(cur), cur)}</span></div>
+      <div class="line total"><span>${t("cart.toPay", { cur: cur === "NGN" ? "₦" : "CFA" })}</span><span>${JA.money(JA.cartTotal(cur), cur)}</span></div>
       <p style="font-size:13px;color:var(--taupe);margin:12px 0 18px">${t("cart.switchHint")}</p>
-      <a class="btn" href="checkout.html" style="width:100%">${t("cart.checkout", { cur: cur === "NGN" ? "₦" : "F CFA" })}</a>`;
+      <a class="btn" href="checkout.html" style="width:100%">${t("cart.checkout", { cur: cur === "NGN" ? "₦" : "CFA" })}</a>`;
   }
 }
 
@@ -1224,14 +1240,15 @@ function orderSummaryLines(order) {
     const qty = Number(i.qty) || 0;
     const name = i.name || "";
     const variant = i.color ? " (" + variantLabel(i, i.color) + ")" : "";
+    const productNote = i.note ? " — " + t("pdp.productNote") + ": " + i.note : "";
     const line = JA.money((Number(i.price) || 0) * qty, order.currency);
-    return "- " + qty + " x " + name + variant + " = " + line;
+    return "- " + qty + " x " + name + variant + productNote + " = " + line;
   }).join("\n");
 }
 
 /** The exact message the customer sends to confirm payment + transport fare.
  * Order-completion channel ONLY (owner directive 2026-09-12): it compiles the
- * customer name, Order ID, items, total price (NGN or F CFA), delivery
+ * customer name, Order ID, items, total price (NGN or CFA), delivery
  * location and the transport-fare question in one message. General product
  * questions stay on the floating widget's own pre-filled message. */
 function fareWaText(order) {
@@ -1347,18 +1364,21 @@ function payConfigured(d) {
 function showOrderDone(order) {
   const root = document.querySelector("[data-checkout-root]") || document.querySelector("[data-checkout]");
   if (!root) return;
-  const payName = order.currency === "NGN" ? t("ck.payNgn") : t("ck.payCfa");
+  const customerCountry = String(order.customer?.country || "");
+  const method = ["naira", "benin_cfa", "togo_cfa"].includes(order.paymentMethod)
+    ? order.paymentMethod
+    : (order.currency === "NGN" ? "naira" : (/togo/i.test(customerCountry + " " + String(order.payment || "")) ? "togo_cfa" : "benin_cfa"));
+  const payName = paymentMethodLabel(method);
   const locale = (window.I18N && I18N.lang() === "fr") ? "fr-FR" : "en-GB";
   // Payment details: the live Supabase row, via GET /api/site. No fallback -
   // if nothing is configured the customer is pointed at support instead of
   // being shown a baked-in account number.
-  const pay = payDetails(order.currency === "NGN" ? "NGN" : "CFA");
-  // An unconfigured method shows NOTHING here: a "being updated" notice on
-  // the thank-you screen read like the order had failed. The pay box is
-  // simply omitted when there is nothing real to print.
+  const pay = payDetails(method === "naira" ? "NGN" : method === "togo_cfa" ? "TOGO" : "CFA");
+  // Only print the live details for the method the customer selected.
   const note = payConfigured(pay)
-    ? [pay.provider, pay.account, pay.name].filter(Boolean).join(" · ")
+    ? [pay.provider, pay.account, pay.name, pay.instructions].filter(Boolean).join(" · ")
     : "";
+  const feeNotice = method === "togo_cfa" ? t("ck.togoFeeNotice") : "";
   const customer = order.customer || {};
   const customerRows = [
     [t("ck.name"), customer.name],
@@ -1403,14 +1423,14 @@ function showOrderDone(order) {
         <button type="button" class="btn btn-line" data-wa-toggle="nigeria">${t("ck.waNg")}</button>
         <button type="button" class="btn btn-line" data-wa-toggle="benin">${t("ck.waBj")}</button>
       </div>
-      ${note ? `<div class="pay-box" style="margin-top:16px">
-        <p class="proof-label">${t("ck.account")}</p>
-        <p class="pay-note">${JA.escape(note)}</p>
+      ${(note || feeNotice) ? `<div class="pay-box" style="margin-top:16px">
+        ${note ? `<p class="proof-label">${t("ck.account")}</p><p class="pay-note">${JA.escape(note)}</p>` : ""}
+        ${feeNotice ? `<p class="ck-togo-fee-notice">${JA.escape(feeNotice)}</p>` : ""}
       </div>` : ""}
       ${((JA.getProof && JA.getProof(order.id, order.proof)) || (String(order.proof || "").startsWith("data:") ? order.proof : "")) ? `<p class="proof-label">${t("ck.uploadReceipt")}</p><img class="proof-preview" src="${(JA.getProof && JA.getProof(order.id, order.proof)) || order.proof}" alt="Payment screenshot" />` : ""}
       <table class="ck-table" style="margin-top:22px">
         <thead><tr><th>${t("ck.product")}</th><th>${t("ck.total")}</th></tr></thead>
-        <tbody>${order.items.map((i) => `<tr><td>${i.qty}× ${JA.escape(i.name)}${i.color ? " · " + JA.escape(variantLabel(i, i.color)) : ""}${i.bulkPercent ? ` <em class="bulk-tag">${t("bulk.label")} ${i.bulkPercent}%</em>` : ""}</td><td>${JA.money(i.price * i.qty, order.currency)}</td></tr>`).join("")}</tbody>
+        <tbody>${order.items.map((i) => `<tr><td>${i.qty}× ${JA.escape(i.name)}${i.color ? " · " + JA.escape(variantLabel(i, i.color)) : ""}${i.note ? `<small class="ck-line-note">${t("pdp.productNote")}: ${JA.escape(i.note)}</small>` : ""}${i.bulkPercent ? ` <em class="bulk-tag">${t("bulk.label")} ${i.bulkPercent}%</em>` : ""}</td><td>${JA.money(i.price * i.qty, order.currency)}</td></tr>`).join("")}</tbody>
         <tfoot><tr class="ck-total"><th>${t("ck.total")}</th><td>${JA.money(order.total, order.currency)}</td></tr></tfoot>
       </table>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:22px">
@@ -1472,8 +1492,16 @@ function paintReferralSlot(orderId) {
   });
 }
 
+function checkoutPaymentMethod(form) {
+  return form.querySelector("[name=paymentMethod]:checked")?.value || "naira";
+}
 function checkoutCurrency(form) {
-  return form.querySelector("[name=currency]:checked")?.value || JA.currency();
+  return checkoutPaymentMethod(form) === "naira" ? "NGN" : "CFA";
+}
+function paymentMethodLabel(method) {
+  if (method === "togo_cfa") return t("ck.payTogoCfa");
+  if (method === "benin_cfa") return t("ck.payBeninCfa");
+  return t("ck.payNgn");
 }
 
 /* The promo/referral code applied at checkout — validated by the server. */
@@ -1489,22 +1517,11 @@ function ckCeiledDiscount(sub, cur) {
 }
 
 function paintCheckoutTotals(form) {
-  // Automatic language rule (2026-09-27): a French interface means FCFA is
-  // the only currency, so the checkout surfaces the FCFA payment gateways
-  // and the Naira card is removed from the choice. In English the opposite
-  // default holds - the Naira gateway is pre-selected from JA.currency()
-  // (NGN first) and the shopper can still switch to FCFA via the floating
-  // pill, which repaints this form through ja:currency -> renderCheckout.
-  if (JA.currencyLocked && JA.currencyLocked()) {
-    const cfaRadio = form.querySelector("[name=currency][value=\"CFA\"]");
-    if (cfaRadio) cfaRadio.checked = true;
-    form.querySelectorAll(".pay-card").forEach((card) => {
-      const input = card.querySelector("input");
-      if (input && input.value === "NGN") card.hidden = true;
-    });
-  }
-  const cur = checkoutCurrency(form);
-  const items = JA.cartDetailed();
+  // Payment method and order currency are separate values: Naira maps to
+  // NGN, while either country-specific CFA method maps to CFA.
+  const method = checkoutPaymentMethod(form);
+  const cur = method === "naira" ? "NGN" : "CFA";
+  const items = JA.cartDetailed(cur);
   const lines = document.querySelector("[data-ck-lines]");
   if (lines) {
     lines.innerHTML = items.map((i) => `
@@ -1512,7 +1529,7 @@ function paintCheckoutTotals(form) {
         <td>
           <div class="ck-line">
             <img src="${JA.asset(i.product.image)}" alt="" onerror="fallbackImg(event)" />
-            <span>${JA.escape(JA.displayName(i.product))}${i.color ? " — " + JA.escape(variantLabel(i.product, i.color)) : ""} <b>× ${i.qty}</b>${i.bulk ? ` <em class="bulk-tag">${t("bulk.label")} ${i.bulkPercent}%</em>` : ""}</span>
+            <span>${JA.escape(JA.displayName(i.product))}${i.color ? " — " + JA.escape(variantLabel(i.product, i.color)) : ""} <b>× ${i.qty}</b>${i.note ? `<small class="ck-line-note">${t("pdp.productNote")}: ${JA.escape(i.note)}</small>` : ""}${i.bulk ? ` <em class="bulk-tag">${t("bulk.label")} ${i.bulkPercent}%</em>` : ""}</span>
           </div>
         </td>
         <td>${i.bulk ? `<s>${JA.money(i.unit * i.qty, cur)}</s> ` : ""}${JA.money(i.payUnit * i.qty, cur)}</td>
@@ -1529,39 +1546,50 @@ function paintCheckoutTotals(form) {
   if (discCell) discCell.textContent = disc
     ? "− " + JA.money(disc, cur) + " (" + ckPromo.percent + "%)" : "—";
   if (tot) tot.textContent = JA.money(subVal - disc, cur);
-  // Payment details come from GET /api/site -> Supabase site_settings. The
-  // storefront holds no fallback: an unconfigured method renders the
-  // "not configured" line and hides the account rows rather than inventing
-  // values.
-  const ngnBox = document.querySelector("[data-bank-ngn]");
-  const cfaBox = document.querySelector("[data-bank-cfa]");
-  if (ngnBox) ngnBox.hidden = cur !== "NGN";
-  if (cfaBox) cfaBox.hidden = cur !== "CFA";
+
+  // Each method reads only its own live admin-configured provider, account
+  // and holder details. No payment number is baked into the storefront.
   const setText = (sel, val) => {
     const el = document.querySelector(sel);
-    if (el) el.textContent = val;
+    if (el) el.textContent = val || "";
   };
   const ngn = payDetails("NGN");
-  setText("[data-ngn-name]", ngn.name);
-  setText("[data-ngn-bank]", ngn.provider);
-  setText("[data-ngn-acc]", ngn.account);
-  _togglePayRow("[data-ngn-row-bank]", !!ngn.provider);
-  _togglePayRow("[data-ngn-row-acc]", !!ngn.account);
-  const cfa = payDetails("CFA");
+  const benin = payDetails("CFA");
   const togo = payDetails("TOGO");
-  setText("[data-cfa-name]", cfa.name);
-  setText("[data-cfa-provider]", cfa.provider);
-  setText("[data-cfa-acc]", cfa.account);
-  setText("[data-togo-provider]", togo.provider);
-  setText("[data-togo-name]", togo.name);
-  setText("[data-togo-acc]", togo.account);
-  _togglePayRow("[data-cfa-row]", payConfigured(cfa));
-  _togglePayRow("[data-togo-row]", payConfigured(togo));
+  const methods = [
+    { id: "naira", box: "[data-bank-ngn]", data: ngn, rows: [
+      ["[data-ngn-row-bank]", "[data-ngn-bank]", ngn.provider],
+      ["[data-ngn-row-acc]", "[data-ngn-acc]", ngn.account],
+      ["[data-ngn-row-name]", "[data-ngn-name]", ngn.name],
+    ], instructions: ["[data-ngn-instructions]", ngn.instructions], missing: "[data-ngn-unconfigured]" },
+    { id: "benin_cfa", box: "[data-bank-benin]", data: benin, rows: [
+      ["[data-benin-row-provider]", "[data-benin-provider]", benin.provider],
+      ["[data-benin-row-acc]", "[data-benin-acc]", benin.account],
+      ["[data-benin-row-name]", "[data-benin-name]", benin.name],
+    ], instructions: ["[data-benin-instructions]", benin.instructions], missing: "[data-benin-unconfigured]" },
+    { id: "togo_cfa", box: "[data-bank-togo]", data: togo, rows: [
+      ["[data-togo-row-provider]", "[data-togo-provider]", togo.provider],
+      ["[data-togo-row-acc]", "[data-togo-acc]", togo.account],
+      ["[data-togo-row-name]", "[data-togo-name]", togo.name],
+    ], instructions: ["[data-togo-instructions]", togo.instructions], missing: "[data-togo-unconfigured]" },
+  ];
+  methods.forEach((entry) => {
+    const active = entry.id === method;
+    const box = document.querySelector(entry.box);
+    if (box) box.hidden = !active;
+    entry.rows.forEach(([rowSel, textSel, value]) => {
+      setText(textSel, value);
+      _togglePayRow(rowSel, !!value);
+    });
+    setText(entry.instructions[0], entry.instructions[1]);
+    _togglePayRow(entry.instructions[0], !!entry.instructions[1]);
+    _togglePayRow(entry.missing, active && !payConfigured(entry.data));
+  });
+  const countryNote = document.querySelector("[data-ck-min-cfa]");
+  if (countryNote) countryNote.hidden = method === "naira";
   form.querySelectorAll(".pay-card").forEach((card) => {
     card.classList.toggle("is-on", card.querySelector("input")?.checked);
   });
-  const countryNote = document.querySelector("[data-ck-country-note]");
-  if (countryNote) countryNote.hidden = false;
 }
 
 /** One zone -> the label a customer should read. The fare is a RANGE because
@@ -1596,7 +1624,7 @@ function zoneGroups(list) {
   const groups = [
     { id: "pickup", label: t("ck.zoneGroupPickup") || "Pickup / collection", zones: [] },
     { id: "ngn", label: t("ck.zoneGroupNaira") || "Nigeria (₦ Naira)", zones: [] },
-    { id: "cfa", label: t("ck.zoneGroupCfa") || "Benin & Togo (F CFA)", zones: [] },
+    { id: "cfa", label: t("ck.zoneGroupCfa") || "Benin & Togo (CFA)", zones: [] },
   ];
   const by = { pickup: groups[0], ngn: groups[1], cfa: groups[2] };
   zones.forEach((z) => {
@@ -1610,7 +1638,7 @@ function zoneGroups(list) {
 /** Which delivery-window pill a zone should show once it is picked at
  *  checkout (owner request 2026-09-28). Lagos (any name containing "Lagos
  *  Mainland"/"Lagos Island") is the fast lane; any other Naira zone is the
- *  rest of Nigeria; any F CFA zone is Benin Republic or Togo, which share
+ *  rest of Nigeria; any CFA zone is Benin Republic or Togo, which share
  *  the same wider window; a pickup zone has no delivery wait at all. */
 function zoneEtaKey(z) {
   if (!z) return "";
@@ -1635,13 +1663,13 @@ function minOrderFigures() {
     ? 5000 : (Number(_minRaw) || 0);
   const minOrderNgn = Number(siteRow.minOrderNgn) || (minOrderCfa ? Math.round(minOrderCfa / 0.44) : 0);
   const fr = (window.I18N && I18N.lang && I18N.lang() || "en").toLowerCase().indexOf("fr") === 0;
-  const grp = (n) => String(Math.max(0, Math.round(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, fr ? " " : ",");
+  const grp = (n) => String(Math.max(0, Math.round(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return { minOrderCfa, minOrderNgn, fr, grp };
 }
 
 /** Paint the ALWAYS-VISIBLE Benin/Togo minimum-order explainer line -
- *  .ck-pay-country-note above the F CFA bank details - from the live admin setting
- *  instead of a hardcoded "5,000 F CFA" that used to stay wrong forever once the owner changed the
+ *  .ck-pay-country-note above the CFA bank details - from the live admin setting
+ *  instead of a hardcoded "5,000 CFA" that used to stay wrong forever once the owner changed the
  *  minimum. Called on checkout init, again whenever a fresh "ja:site" lands,
  *  and again on a language switch ("ja:lang") - both languages are built
  *  here directly rather than through data-i18n, since the text depends on a
@@ -1656,11 +1684,11 @@ function paintMinOrderNotices() {
   if (payNote) {
     payNote.textContent = minOrderCfa <= 0
       ? (fr
-          ? "Clients du Bénin et du Togo : payez en F CFA via MTN MoMo (Bénin) ou Moov Money (Togo) avec les coordonnées ci-dessous."
-          : "Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below.")
+          ? "Clients du Bénin et du Togo : payez en CFA via MTN MoMo (Bénin) ou Moov Money (Togo) avec les coordonnées ci-dessous."
+          : "Benin and Togo customers: pay in CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below.")
       : (fr
-          ? `Clients du Bénin et du Togo : payez en F CFA via MTN MoMo (Bénin) ou Moov Money (Togo) avec les coordonnées ci-dessous. Commande minimum : ${grp(minOrderCfa)} F CFA (₦${grp(minOrderNgn)}).`
-          : `Benin and Togo customers: pay in F CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below. Minimum order is ${grp(minOrderCfa)} F CFA (₦${grp(minOrderNgn)}).`);
+          ? `Clients du Bénin et du Togo : payez en CFA via MTN MoMo (Bénin) ou Moov Money (Togo) avec les coordonnées ci-dessous. Commande minimum : ${grp(minOrderCfa)} CFA (₦${grp(minOrderNgn)}).`
+          : `Benin and Togo customers: pay in CFA via MTN MoMo (Benin) or Moov Money (Togo) using the details below. Minimum order is ${grp(minOrderCfa)} CFA (₦${grp(minOrderNgn)}).`);
   }
 }
 
@@ -2044,7 +2072,8 @@ function captureCheckoutCart(form) {
   if (!form || !window.JA_NET?.api) return Promise.resolve(null);
   const email = String(form.querySelector("[name=email]")?.value || "").trim().toLowerCase();
   if (!CHECKOUT_EMAIL_PATTERN.test(email)) return Promise.resolve(null);
-  const items = JA.cartDetailed().map((item) => ({
+  const currency = checkoutCurrency(form);
+  const items = JA.cartDetailed(currency).map((item) => ({
     id: item.id,
     name: item.product?.name || "Item",
     qty: item.qty,
@@ -2058,8 +2087,8 @@ function captureCheckoutCart(form) {
     token: checkoutCartToken(),
     email,
     customerName: [first, last].filter(Boolean).join(" "),
-    currency: form.querySelector("[name=currency]:checked")?.value || JA.currency(),
-    total: JA.cartTotal(),
+    currency,
+    total: JA.cartTotal(currency),
     items,
   };
   return window.JA_NET.api("api/abandoned-carts", {
@@ -2131,9 +2160,21 @@ function renderCheckout() {
   if (instruction) instruction.hidden = false;
   form.hidden = false;
 
-  const curNow = JA.currency();
-  const radio = form.querySelector(`[name=currency][value="${curNow}"]`);
-  if (radio) radio.checked = true;
+  if (form.dataset.paymentInitialized !== "1") {
+    const country = String(form.querySelector("[name=country]")?.value || "");
+    // Payment method is a separate shopper choice, not an alias for the
+    // storefront currency. Pick a language-friendly initial method (with
+    // Togo's distinct provider taking precedence for a Togo checkout); never
+    // let a late currency restore overwrite the locale default.
+    const language = window.I18N && typeof I18N.lang === "function"
+      ? String(I18N.lang()).toLowerCase() : "en";
+    const initialMethod = /togo/i.test(country)
+      ? "togo_cfa"
+      : (language === "fr" ? "benin_cfa" : "naira");
+    const initialRadio = form.querySelector(`[name=paymentMethod][value="${initialMethod}"]`);
+    if (initialRadio) initialRadio.checked = true;
+    form.dataset.paymentInitialized = "1";
+  }
 
   paintCheckoutTotals(form);
   const me = JA.customer && JA.customer();
@@ -2231,9 +2272,16 @@ function renderCheckout() {
   }
 
   form.addEventListener("change", (e) => {
-    if (e.target.name === "currency") {
-      const next = e.target.value;
-      if (next !== JA.currency()) JA.setCurrency(next);
+    if (e.target.name === "paymentMethod") {
+      form.dataset.paymentTouched = "1";
+    } else if (e.target.name === "country" && form.dataset.paymentTouched !== "1") {
+      const country = String(e.target.value || "");
+      const nextMethod = /togo/i.test(country) ? "togo_cfa"
+        : /benin/i.test(country) ? "benin_cfa"
+          : /nigeria/i.test(country) ? "naira"
+            : (JA.currency() === "NGN" ? "naira" : "benin_cfa");
+      const nextRadio = form.querySelector(`[name=paymentMethod][value="${nextMethod}"]`);
+      if (nextRadio) nextRadio.checked = true;
     }
     paintCheckoutTotals(form);
   });
@@ -2376,8 +2424,9 @@ function renderCheckout() {
     };
 
     const data = Object.fromEntries(new FormData(form).entries());
-    const cur = data.currency || JA.currency();
-    const liveItems = JA.cartDetailed();
+    const paymentMethod = checkoutPaymentMethod(form);
+    const cur = checkoutCurrency(form);
+    const liveItems = JA.cartDetailed(cur);
     if (!liveItems.length) {
       const empty = document.querySelector("[data-empty]");
       if (empty) empty.hidden = false;
@@ -2421,7 +2470,7 @@ function renderCheckout() {
     }
     // Benin & Togo deliveries: the minimum order is an ADMIN SETTING
     // (Admin -> Marketing, growth setting minOrderCfa, served on /api/site).
-    // It used to be hardcoded at 5,000 F CFA / 12,000 naira; now the guard
+    // It used to be hardcoded at 5,000 CFA / 12,000 naira; now the guard
     // reads the live value, and a saved 0 switches the rule OFF (no guard,
     // the server skips it the same way). Runs before any proof handling /
     // queueing so an under-minimum order is never saved locally or sent.
@@ -2436,15 +2485,15 @@ function renderCheckout() {
       // equivalent / Togo) the moment anything about the live copy changed.
       if (cur_ === "CFA") {
         return _fr
-          ? `Bénin & Togo : commande minimum ${_grp(minOrderCfa)} F CFA (environ ${_grp(minOrderNgn)} nairas). Ajoutez quelques articles de plus.`
-          : `Benin & Togo: minimum order ${_grp(minOrderCfa)} F CFA (about ${_grp(minOrderNgn)} naira). Please add more items.`;
+          ? `Bénin & Togo : commande minimum ${_grp(minOrderCfa)} CFA (environ ${_grp(minOrderNgn)} nairas). Ajoutez quelques articles de plus.`
+          : `Benin & Togo: minimum order ${_grp(minOrderCfa)} CFA (about ${_grp(minOrderNgn)} naira). Please add more items.`;
       }
       // The Naira line is ALWAYS built from the live figure: it must quote
       // the exact floor the server enforces (the old static phrase claimed
       // 12,000 naira while the server floor is derived from the rate).
       return _fr
-        ? `Bénin & Togo : commande minimum ${_grp(minOrderNgn)} nairas (environ ${_grp(minOrderCfa)} F CFA). Ajoutez quelques articles de plus.`
-        : `Benin & Togo: minimum order ${_grp(minOrderNgn)} naira (about ${_grp(minOrderCfa)} F CFA). Please add more items.`;
+        ? `Bénin & Togo : commande minimum ${_grp(minOrderNgn)} nairas (environ ${_grp(minOrderCfa)} CFA). Ajoutez quelques articles de plus.`
+        : `Benin & Togo: minimum order ${_grp(minOrderNgn)} naira (about ${_grp(minOrderCfa)} CFA). Please add more items.`;
     };
     const showMinWarn = (cur_) => {
       const msg = minOrderMsg(cur_);
@@ -2515,6 +2564,8 @@ function renderCheckout() {
         note: clean(data.note),
       },
       currency: cur,
+      paymentMethod,
+      payment: paymentMethodLabel(paymentMethod),
       total: subNow - discNow,
       proof: form.dataset.proof || "",
       items: liveItems.map((i) => ({
@@ -2522,6 +2573,7 @@ function renderCheckout() {
         name: i.product.name,
         qty: i.qty,
         color: i.color,
+        note: String(i.note || "").trim().slice(0, 300),
         price: JA.bulkUnit(i.product, JA.cartQtyFor(i.id), cur, i.color),
       })),
     });
@@ -2758,7 +2810,7 @@ function paintAccountHome(root, me, orders) {
         <div class="field"><label>${t("ck.country")}</label><input name="country" value="${JA.escape(me.country || "")}" /></div>
         <div class="field"><label>${t("ck.city")}</label><input name="city" value="${JA.escape(me.city || "")}" /></div>
         <div class="field"><label>${t("ck.street")}</label><input name="delivery_address" value="${JA.escape(me.delivery_address || "")}" /></div>
-        <div class="field"><label>${t("account.currency")}</label><select name="preferred_currency"><option value="NGN" ${me.preferred_currency === "NGN" ? "selected" : ""}>NGN</option><option value="CFA" ${me.preferred_currency === "CFA" ? "selected" : ""}>F CFA</option></select></div>
+        <div class="field"><label>${t("account.currency")}</label><select name="preferred_currency"><option value="NGN" ${me.preferred_currency === "NGN" ? "selected" : ""}>NGN</option><option value="CFA" ${me.preferred_currency === "CFA" ? "selected" : ""}>CFA</option></select></div>
         <p class="acct-msg" data-profile-msg hidden></p>
         <button class="btn" type="submit">${t("account.saveProfile")}</button>
       </form>
@@ -2883,10 +2935,11 @@ function installProductPrefetch() {
   if (document.documentElement.dataset.jaPrefetchBound) return;
   document.documentElement.dataset.jaPrefetchBound = "1";
   const idFrom = (el) => {
-    const a = el && el.closest && el.closest('a[href*="product.html?id="]');
+    const a = el && el.closest && el.closest('a[href*="product.html?"]');
     if (!a) return "";
     try {
-      return new URL(a.getAttribute("href"), location.href).searchParams.get("id") || "";
+      const params = new URL(a.getAttribute("href"), location.href).searchParams;
+      return params.get("slug") || params.get("id") || params.get("sku") || "";
     } catch (e) { return ""; }
   };
   const warm = (e) => { const id = idFrom(e.target); if (id) warmProduct(id); };
@@ -2909,30 +2962,9 @@ async function boot() {
   const page = document.body.dataset.page;
   const needsSiteFirst = page === "checkout" || page === "order-complete";
 
-  // A French interface locks the currency to FCFA the instant I18N can
-  // answer that question (?lang=fr is read synchronously from the URL - no
-  // network needed), but the checkout form's FCFA/Naira radio used to only
-  // get set inside renderCheckout(), which on this page is deliberately
-  // gated behind the site/categories fetch below. On a real network that
-  // fetch is never instant, so the form could paint (it is visible from the
-  // static HTML the instant the cart has an item, before any JS runs) with
-  // the NGN gateway still showing "checked" from checkout.html's markup for
-  // that whole gap. Do the one synchronous, catalogue-free part of that
-  // decision immediately, before any await, so a French checkout never
-  // shows the wrong gateway even for a moment.
-  if (page === "checkout") {
-    try {
-      const form = document.querySelector("[data-checkout]");
-      if (form && JA.currencyLocked && JA.currencyLocked()) {
-        const cfaRadio = form.querySelector('[name=currency][value="CFA"]');
-        if (cfaRadio) cfaRadio.checked = true;
-        form.querySelectorAll(".pay-card").forEach((card) => {
-          const input = card.querySelector("input");
-          if (input && input.value === "NGN") card.hidden = true;
-        });
-      }
-    } catch (e) {}
-  }
+  // Checkout payment choice is deliberately independent from the global
+  // storefront currency toggle. All three payment methods remain available
+  // in every language; renderCheckout derives NGN/CFA from the selected method.
 
   // Never paint cached catalogue rows or stock. A short skeleton is honest;
   // a stale in-stock card that disappears a second later is not.

@@ -191,7 +191,7 @@ def _post_min_order(client, oid, currency, total, zone, qty=1, pid="wix-008"):
 def test_benin_minimum_is_enforced_on_orders(client):
     r = _post_min_order(client, "JA-BJ1", "CFA", 4999, "Cotonou")
     assert r.status_code == 400, r.data
-    assert "5,000 F CFA" in r.get_json()["error"]
+    assert "5,000 CFA" in r.get_json()["error"]
 
 
 def test_benin_minimum_in_naira_is_enforced(client):
@@ -1356,7 +1356,12 @@ def test_admin_order_delete(client):
     assert client.delete("/api/admin/orders/JA-DELETE1", headers={"X-CSRF-Token": tok}).status_code == 404
 
 
-def test_admin_upload_purge_unlinks_product_media_and_deletes_file(client):
+def test_admin_upload_purge_never_unlinks_a_saved_product(client):
+    """A purge-only request cannot blank a product, even with legacy productId.
+
+    The local test storage is used here; this verifies the reference guard and
+    post-save catalog replacement path, not a live Supabase bucket.
+    """
     import catalog
     import storage
     pid = "jau-purge-media"
@@ -1365,17 +1370,30 @@ def test_admin_upload_purge_unlinks_product_media_and_deletes_file(client):
     assert ok and url
     key = storage._key_from_url(url)
     assert storage.resolve_local(key)
-    catalog.upsert({"id": pid, "name": "Purge Media", "category": "beauty",
-                    "priceNgn": 1000, "stock": 3, "online": True,
-                    "image": url, "images": [url]})
+    original = catalog.upsert({"id": pid, "name": "Purge Media", "category": "beauty",
+                               "priceNgn": 1000, "stock": 3, "online": True,
+                               "image": url, "images": [url]})[0]
     tok = login(client)
     r = client.delete("/api/admin/uploads/purge", json={"url": url, "productId": pid},
                       headers={"X-CSRF-Token": tok})
     assert r.status_code == 200, r.data
-    assert storage.resolve_local(key) is None
+    assert r.get_json()["removed"] is False
+    assert r.get_json()["unlinked"] is False
+    assert storage.resolve_local(key), "a purge request must not delete a still-referenced upload"
     product = next(p for p in catalog.merged(include_hidden=True) if p["id"] == pid)
-    assert storage._key_from_url(product.get("image") or "") != key
-    assert all(storage._key_from_url(i) != key for i in (product.get("images") or []))
+    assert storage._key_from_url(product.get("image") or "") == key
+    storage._object_exists_cache[key] = (True, 9999999999)
+    storage._signed_url_cache[f"uploads|{key}"] = ("stale-signed-url", 9999999999)
+
+    # A real replacement persists the new row first; catalog.upsert then
+    # purges its now-unreferenced old local object as the trusted save path.
+    catalog.upsert({**original, "image": "images/brand/logo.jpg",
+                    "image_url": "images/brand/logo.jpg",
+                    "imageUrl": "images/brand/logo.jpg",
+                    "images": ["images/brand/logo.jpg"]})
+    assert storage.resolve_local(key) is None
+    assert key not in storage._object_exists_cache
+    assert f"uploads|{key}" not in storage._signed_url_cache
 
 
 def test_admin_order_delete_purges_checkout_proof_url(client):
@@ -1511,7 +1529,7 @@ def test_benin_minimum_order_cfa_and_ngn_limits(client):
     }
     r1 = client.post("/api/orders", json=order_cfa_low, headers={"X-CSRF-Token": tok})
     assert r1.status_code == 400
-    assert "5,000 F CFA" in r1.get_json().get("error", "")
+    assert "5,000 CFA" in r1.get_json().get("error", "")
 
     order_ngn_low = {
         "id": "JA-BJMIN-2",
@@ -1525,13 +1543,14 @@ def test_benin_minimum_order_cfa_and_ngn_limits(client):
     assert f"{_min_ngn():,} naira" in r2.get_json().get("error", "")
 
 
-def test_net_js_blob_uploads_wait_five_minutes_and_persist_timeout():
+def test_net_js_blob_uploads_keep_their_longer_deadline_and_persist_it():
     src = open(os.path.join(os.path.dirname(__file__), "..", "js", "net.js"),
                encoding="utf-8").read()
-    assert "opts.blob ? 300000 : 25000" in src
-    assert "job.bodyKind === \"blob\" ? 300000 : 25000" in src
-    assert "timeout: opts.timeout || (opts.blob ? 300000 : 25000)" in src
-    assert "job.timeout || (job.bodyKind === \"blob\" ? 300000 : 25000)" in src
+    assert "timeout: opts.blob" in src
+    assert "? (opts.timeout || 300000)" in src
+    assert "Math.min(5000, Math.max(1, Number(opts.timeout) || 5000))" in src
+    assert "job.timeout || (job.bodyKind === \"blob\" ? 300000 : 5000)" in src
+    assert "timeout: job.timeout || 0" in src
 
 
 
@@ -1599,8 +1618,9 @@ def test_homepage_video_in_lower_card_container_and_fixes():
 
     # checkout fixes check
     ck_html = open(os.path.join(root, "checkout.html"), encoding="utf-8").read()
-    assert 'data-bank-cfa' in ck_html
-    assert 'Minimum order is 5,000 CFA' in ck_html or '5,000 CFA' in ck_html
+    assert 'data-bank-benin' in ck_html and 'data-bank-togo' in ck_html
+    assert 'data-i18n="ck.togoFeeNotice"' in ck_html
+    assert 'data-ck-min-cfa' in ck_html
     assert 'g-recaptcha' in ck_html
     assert 'data-recaptcha-widget' in ck_html
 
@@ -1974,7 +1994,7 @@ def test_welcome_popup_quotes_the_cfa_equivalent_without_the_f():
     en = "Order above ₦20,000 (8,800 CFA)"
     assert en in i18n
     assert en in store                       # the offline fallback agrees
-    assert "(8 800 CFA)" in i18n             # the French line
+    assert "(8,800 CFA)" in i18n             # the French line
     for path in (os.path.join(root, "js", "i18n.js"), os.path.join(root, "js", "store.js")):
         lines = _referral_lines(path)
         assert lines, f"promo.referral missing from {path}"

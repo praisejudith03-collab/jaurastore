@@ -316,7 +316,7 @@ async function bootShop(opts) {
   check("prices recalculate in F CFA after the tap",
     JA.priceOf(PRODUCTS[0]) === JA.toCfa(before),
     `NGN ${before} -> CFA ${JA.priceOf(PRODUCTS[0])}`);
-  check("money formats follow the active currency", JA.money(1000).startsWith("F CFA"), JA.money(1000));
+  check("money formats put the amount before the CFA suffix", JA.money(1000) === "1,000 CFA", JA.money(1000));
   els.curButtons[0].click();
   check("tapping ₦ flips back to Naira", JA.currency() === "NGN" && JA.priceOf(PRODUCTS[0]) === before);
   check("Naira formatting is restored", JA.money(1000).startsWith("₦"), JA.money(1000));
@@ -339,53 +339,55 @@ async function bootShop(opts) {
   check("pill: hidden property synced by refreshChrome", els.pill.hidden === true);
   check("body carries the ja-fr class backstop", els && sandbox.document.body.classList.contains("ja-fr"));
 
-  // ---- checkout: the FCFA gateway surfaces, the Naira card disappears ----
+  // ---- checkout: all methods stay available; the selected one paints its own details ----
   vm.runInContext(appSrc, sandbox, { filename: "js/app.js" });
-  // Same-group radios are mutually exclusive in a real DOM: checking one
-  // unchecks the other. Model that link or the harness lies.
-  const group = { cfa: null, ngn: null };
-  const radio = (value, initiallyChecked, key) => {
-    let on = !!initiallyChecked;
-    return {
-      value,
-      get checked() { return on; },
-      set checked(v) {
-        on = !!v;
-        if (on) {
-          const other = group[key === "cfa" ? "ngn" : "cfa"];
-          if (other) other._uncheck();
-        }
-      },
-      _uncheck() { on = false; },
-    };
+  const group = { selected: "naira" };
+  const radio = (value) => ({
+    value,
+    get checked() { return group.selected === value; },
+    set checked(on) { if (on) group.selected = value; },
+  });
+  const radios = {
+    naira: radio("naira"),
+    benin: radio("benin_cfa"),
+    togo: radio("togo_cfa"),
   };
-  const cfaRadio = radio("CFA", false, "cfa");
-  const ngnRadio = radio("NGN", true, "ngn");
-  group.cfa = cfaRadio; group.ngn = ngnRadio;
-  const ngnCard = Object.assign(makeEl("label"), { querySelector: () => ngnRadio });
-  const cfaCard = Object.assign(makeEl("label"), { querySelector: () => cfaRadio });
-  const ngnBox = { hidden: false };
-  const cfaBox = { hidden: true };
+  const cards = Object.values(radios).map((r) =>
+    Object.assign(makeEl("label"), { querySelector: () => r }));
+  const boxes = {
+    "[data-bank-ngn]": { hidden: false },
+    "[data-bank-benin]": { hidden: true },
+    "[data-bank-togo]": { hidden: true },
+    "[data-ck-min-cfa]": { hidden: false },
+  };
   const form = {
-    querySelector: (sel) => {
-      if (sel === "[name=currency]:checked") return ngnRadio.checked ? ngnRadio : (cfaRadio.checked ? cfaRadio : null);
-      if (sel === '[name=currency][value="CFA"]') return cfaRadio;
-      return null;
-    },
-    querySelectorAll: (sel) => (sel === ".pay-card" ? [ngnCard, cfaCard] : []),
+    dataset: {},
+    querySelector: (sel) => sel === "[name=paymentMethod]:checked"
+      ? Object.values(radios).find((r) => r.checked) || null : null,
+    querySelectorAll: (sel) => sel === ".pay-card" ? cards : [],
   };
   const docQS = sandbox.document.querySelector;
-  sandbox.document.querySelector = (sel) => {
-    if (sel === "[data-bank-ngn]") return ngnBox;
-    if (sel === "[data-bank-cfa]") return cfaBox;
-    return docQS(sel);
-  };
+  sandbox.document.querySelector = (sel) => boxes[sel] || docQS(sel);
+  radios.benin.checked = true; // French storefront's default is Benin CFA.
   vm.runInContext("paintCheckoutTotals(form)", Object.assign(sandbox, { form }));
-  check("French checkout pre-selects the FCFA gateway", cfaRadio.checked === true);
-  check("French checkout hides the Naira pay-card", ngnCard.hidden === true);
-  check("French checkout leaves the FCFA pay-card", cfaCard.hidden === false);
-  check("French checkout shows the FCFA bank sheet", cfaBox.hidden === false);
-  check("French checkout hides the NGN bank sheet", ngnBox.hidden === true);
+  check("French checkout defaults to the Benin CFA payment method", radios.benin.checked === true);
+  check("all three payment-method cards remain available", cards.length === 3 && cards.every((card) => !card.hidden));
+  check("Benin selection shows Benin details only", !boxes["[data-bank-benin]"].hidden
+    && boxes["[data-bank-ngn]"].hidden && boxes["[data-bank-togo]"].hidden);
+  check("Benin CFA selection derives CFA order currency",
+    vm.runInContext("checkoutCurrency(form)", sandbox) === "CFA");
+  radios.togo.checked = true;
+  vm.runInContext("paintCheckoutTotals(form)", sandbox);
+  check("Togo selection shows its separate detail sheet", !boxes["[data-bank-togo]"].hidden
+    && boxes["[data-bank-benin]"].hidden);
+  check("Togo notice copy is exact and present in checkout HTML",
+    /Moov Money Togo may charge a fee for cross-border transfers\./.test(
+      readFileSync(path.join(root, "checkout.html"), "utf8")));
+  radios.naira.checked = true;
+  vm.runInContext("paintCheckoutTotals(form)", sandbox);
+  check("Naira selection shows the Naira sheet and derives NGN",
+    !boxes["[data-bank-ngn]"].hidden
+      && vm.runInContext("checkoutCurrency(form)", sandbox) === "NGN");
   sandbox.document.querySelector = docQS;
 }
 
@@ -429,11 +431,11 @@ async function localeSurfaceCheck(stored, label) {
   const pickup = groups.find((g) => g.id === "pickup");
   if (stored === "fr") {
     check(`[${label}] delivery-zone Naira group heading is French`, naira.label === "Nigéria (₦ Naira)", naira.label);
-    check(`[${label}] delivery-zone F CFA group heading is French`, cfa.label === "Bénin & Togo (F CFA)", cfa.label);
+    check(`[${label}] delivery-zone F CFA group heading is French`, cfa.label === "Bénin & Togo (CFA)", cfa.label);
     check(`[${label}] delivery-zone pickup group heading is French`, pickup.label === "Retrait / point relais", pickup.label);
   } else {
     check(`[${label}] delivery-zone Naira group heading is English`, naira.label === "Nigeria (₦ Naira)", naira.label);
-    check(`[${label}] delivery-zone F CFA group heading is English`, cfa.label === "Benin & Togo (F CFA)", cfa.label);
+    check(`[${label}] delivery-zone F CFA group heading is English`, cfa.label === "Benin & Togo (CFA)", cfa.label);
     check(`[${label}] delivery-zone pickup group heading is English`, pickup.label === "Pickup / collection", pickup.label);
   }
 

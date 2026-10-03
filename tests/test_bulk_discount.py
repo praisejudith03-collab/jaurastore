@@ -230,12 +230,17 @@ def test_store_js_prices_per_product_bulk_first():
     assert "bulkPercentFor(p, totalQty)" in src
 
 
-def test_admin_editor_offers_the_per_product_fields():
+def test_simplified_product_editor_hides_legacy_per_product_discount_fields():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = open(os.path.join(root, "js", "admin.js"), encoding="utf-8").read()
-    assert 'name="bulkQty"' in src
-    assert 'name="bulkPercent"' in src
-    assert "bulkQty," in src and "bulkPercent," in src
+    start = src.index("function productForm(p = {})")
+    end = src.index("async function handleProductSubmit", start)
+    product_form = src[start:end]
+    assert 'name="bulkQty"' not in product_form
+    assert 'name="bulkPercent"' not in product_form
+    # Shop-wide bulk tiers remain a separate Growth setting, not a product
+    # metadata field that makes the create/edit form harder to maintain.
+    assert 'name="bulkMin"' in src and 'name="bulkPercent"' in src
 
 
 def test_customer_screens_show_the_applied_discount():

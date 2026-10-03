@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=179" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=186" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -367,17 +367,87 @@ function mediaStripHTML(imgs) {
 function purgeRemovedMedia(entry) {
   const url = imgSrc(entry) || (typeof entry === "string" ? entry : "");
   if (!url || /^(data:|blob:)/i.test(url) || !window.JA_NET) return Promise.resolve(null);
+  // Purge-only requests never carry productId: the endpoint must not mutate a
+  // saved product. The storage reference guard rejects a still-live photo;
+  // catalog.upsert hard-deletes it immediately after a replacement gallery is
+  // confirmed. This also cleans a fresh upload discarded before it was saved.
   return window.JA_NET.api("api/admin/uploads/purge", {
     method: "DELETE",
-    json: { url, productId: editingId || "" },
+    json: { url },
     label: "Media purge",
-  }).then((res) => {
-    if (res && res.removed) JA.toast("Media permanently deleted from storage.");
-    return res;
-  }).catch((err) => {
-    JA.toast((err && err.message) || "Could not delete that media from storage.");
-    return null;
+  }).catch(() => null);
+}
+function markEditedMediaFields() {
+  if (!(window.__editDirty instanceof Set)) window.__editDirty = new Set();
+  ["image", "image_url", "imageUrl", "images"].forEach((field) => window.__editDirty.add(field));
+}
+function persistEditedMedia() {
+  const productId = String(window.__editMediaProductId || "").trim();
+  const session = Number(window.__editMediaSession || 0);
+  if (!productId || productId === "new" || !window.JA_NET) {
+    return Promise.resolve({ ok: false, skipped: true });
+  }
+  markEditedMediaFields();
+  window.__editMediaRevision = Number(window.__editMediaRevision || 0) + 1;
+  const prior = window.__editMediaSave || Promise.resolve();
+  const task = Promise.resolve(prior).catch(() => null).then(async () => {
+    if (session !== Number(window.__editMediaSession || 0)
+        || productId !== String(window.__editMediaProductId || "")) {
+      return { ok: false, staleEditor: true };
+    }
+    const revision = Number(window.__editMediaRevision || 0);
+    if (revision <= Number(window.__editMediaSavedRevision || 0)) {
+      return { ok: true, skipped: true };
+    }
+    const current = window.__editImages || [];
+    if (current.some((entry) => entry && typeof entry === "object" && !entry.failed)) {
+      return { ok: false, deferred: true };
+    }
+    const images = current.filter((entry) => typeof entry === "string" && entry.trim())
+      .slice(0, 20);
+    // An empty editor can be the first half of an intentional replacement.
+    // Keep the saved reference until the replacement itself is uploaded.
+    if (!images.length) return { ok: false, deferred: true };
+    try {
+      const result = await window.JA_NET.api(
+        "api/admin/products/" + encodeURIComponent(productId) + "/media", {
+          method: "PUT", json: { images }, label: "Product photos",
+        });
+      if (!result || result.ok === false || !result.product) {
+        throw new Error((result && result.error) || "The photo change was not confirmed.");
+      }
+      const editorStillCurrent = session === Number(window.__editMediaSession || 0)
+        && productId === String(window.__editMediaProductId || "");
+      if (editorStillCurrent && window.JA
+          && typeof JA.applyServerProduct === "function") {
+        JA.applyServerProduct(result.product);
+      }
+      if (editorStillCurrent) {
+        window.__editMediaSavedRevision = Math.max(
+          Number(window.__editMediaSavedRevision || 0), revision);
+      }
+      if (editorStillCurrent && revision === Number(window.__editMediaRevision || 0)) {
+        const removed = Array.isArray(window.__editRemovedImages)
+          ? window.__editRemovedImages.slice() : [];
+        window.__editRemovedImages = [];
+        // Run only after the confirmed gallery write: a URL-only purge racing
+        // an in-flight save could otherwise delete a file the save is about
+        // to reference. The storage guard also protects shared gallery files.
+        removed.forEach((entry) => { void purgeRemovedMedia(entry); });
+        JA.toast("Photo update is live; unused replaced files were deleted.");
+      }
+      return { ok: true, data: result };
+    } catch (error) {
+      if (session === Number(window.__editMediaSession || 0)) {
+        const detail = error && (error.message || (error.data && error.data.error));
+        JA.toast("Photo update could not be saved. The previous saved photo is safe. "
+          + (detail || "Please try again or press Save Product."));
+      }
+      return { ok: false, error: (error && error.message) || "Photo save failed." };
+    }
   });
+  window.__editMediaSave = task;
+  return task;
 }
 function editorOptions(p) {
   if (p && p.options && p.options.length) return p.options;
@@ -393,13 +463,13 @@ function optionRowHTML(o, i) {
         <button type="button" class="au-opt-del" data-del-opt>Remove</button>
       </div>
       <div class="au-chips">${vals.map((v) => `<em>${JA.escape(v)}</em>`).join("")}</div>
-      <input name="opt-title-${i}" value="${JA.escape((o && o.title) || "")}" placeholder="Option name (Colour, Size, Type, Length, Scent…)" />
-      <input name="opt-vals-${i}" value="${JA.escape(vals.join(", "))}" placeholder="Values, comma separated — e.g. Ash, Blue, Black" />
+      <input name="opt-title-${i}" aria-label="Option name" value="${JA.escape((o && o.title) || "")}" placeholder="Option name, e.g. Colour" />
+      <input name="opt-vals-${i}" aria-label="Option values" value="${JA.escape(vals.join(", "))}" placeholder="Values separated by commas, e.g. Black, Brown" />
     </div>`;
 }
 function optionBlockHTML(opts) {
   const list = opts || [];
-  if (!list.length) return `<p class="admin-note" data-opt-empty>No options yet. Add Colour, Size, Type, Length or Scent so shoppers can choose on the product page.</p>`;
+  if (!list.length) return `<p class="admin-note" data-opt-empty>Optional: add a colour, size or other choice to manage stock and supplier links per variant.</p>`;
   return list.map((o, i) => optionRowHTML(o, i)).join("");
 }
 function collectOptions(root) {
@@ -426,22 +496,24 @@ function refreshOptionChips() {
   const count = document.getElementById("opt-count");
   if (count) count.textContent = `${document.querySelectorAll("[data-opt-row]").length}/20`;
   const existing = editingId && editingId !== "new" ? (JA.product(editingId) || {}) : {};
-  const status = document.getElementById("stock-status")?.value;
-  const qty = Number(document.getElementById("stock-qty")?.value);
-  const stock = status === "out" ? 0 : (qty > 0 ? qty : 24);
-  const typed = currentOptionStock();
-  const typedPrices = currentOptionPrices();
-  const typedCompare = currentOptionCompareAt();
-  const typedSupplier = currentOptionSupplierSku();
-  const typedSku = currentOptionSku();
-  const optionStock = { ...(existing.optionStock || {}), ...typed };
-  const optionPrices = { ...(existing.optionPrices || {}), ...typedPrices };
-  const optionCompareAt = { ...(existing.optionCompareAt || {}), ...typedCompare };
-  const optionSupplierSku = { ...(existing.optionSupplierSku || {}), ...typedSupplier };
-  const optionSku = { ...(existing.optionSku || {}), ...typedSku };
-  const fake = { ...existing, options: collectOptions(box || document), stock, optionStock, optionPrices, optionCompareAt, optionSupplierSku, optionSku };
+  const options = collectOptions(box || document);
+  const typedStock = keepActiveOptionMap(currentOptionStock(), options);
+  const typedSupplier = keepActiveOptionMap(currentOptionSupplierSku(), options);
+  const optionStock = options.length
+    ? { ...keepActiveOptionMap(existing.optionStock, options), ...typedStock } : {};
+  const optionSupplierSku = options.length
+    ? { ...keepActiveOptionMap(existing.optionSupplierSku, options), ...typedSupplier } : {};
+  const optionPrices = keepActiveOptionMap(existing.optionPrices, options);
+  const optionCompareAt = keepActiveOptionMap(existing.optionCompareAt, options);
+  const qty = Math.max(0, Number(document.getElementById("stock-qty")?.value) || 0);
+  const stock = options.length
+    ? Object.values(optionStockValues(options, optionStock)).reduce((n, value) => n + value, 0)
+    : qty;
+  const fake = { ...existing, options, stock, optionStock, optionPrices,
+    optionCompareAt, optionSupplierSku };
   const varBox = document.getElementById("var-box");
-  if (varBox) varBox.innerHTML = variantPanelsHTML(fake);
+  if (varBox) varBox.innerHTML = optionStockHTML(fake) + optionSupplierLinksHTML(fake);
+  syncOptionStockTotals();
 }
 function addOptionRow(title, values) {
   const box = document.getElementById("opt-box");
@@ -557,20 +629,35 @@ function bindMedia() {
       const at = entryAt();
       if (at < 0) return false;               // the owner deleted the tile meanwhile
       window.__editImages[at] = bustMediaCache(url);
+      markEditedMediaFields();
       paintMedia(box);
+      return true;
+    };
+    const acceptUploadedUrl = (url, queued = false) => {
+      if (!url) return false;
+      if (!swapEntry(url)) {
+        // The owner removed this pending tile while the upload was in flight.
+        // It has never been attached to the product, so the guarded purge is safe.
+        void purgeRemovedMedia(url);
+        return false;
+      }
+      if (window.__editMediaProductId) {
+        void persistEditedMedia();
+        if (queued) JA.toast("Queued photo uploaded; saving it to the live product now.");
+      } else if (queued) {
+        JA.toast("Queued photo uploaded — press Save Product to keep it.");
+      }
       return true;
     };
     const res = await photoSlot(() => window.JA_NET.api(endpoint, {
       method: "POST", blob: payload, field: "file", filename,
       queue: true, timeout: isVideo ? 300000 : 45000, label: isVideo ? "Video" : "Photo",
       onDone: (data) => {
-        if (data && data.url && swapEntry(data.url)) {
-          JA.toast("Queued photo is uploaded now — press Save to keep it.");
-        }
+        if (data && data.url) acceptUploadedUrl(data.url, true);
       },
     }));
     if (res && res.url) {
-      if (swapEntry(res.url)) {
+      if (acceptUploadedUrl(res.url, false)) {
         JA.toast(isVideo ? "Video uploaded."
           : (squeezed && squeezed.compressed
             ? "Photo uploaded — compressed " + readableBytes(squeezed.originalSize) + " → " + readableBytes(squeezed.size) + "."
@@ -592,8 +679,17 @@ function bindMedia() {
       const i = Number(del.getAttribute("data-del-img"));
       if (!window.__editImages) window.__editImages = [];
       const removed = window.__editImages.splice(i, 1)[0];
+      // The gallery is auto-published below for existing products. Do not
+      // delete a saved file here: persistEditedMedia waits for the replacement
+      // row to be confirmed, after which catalog.upsert hard-purges the old
+      // object. This keeps the only saved copy safe if upload/save fails.
+      if (removed) {
+        markEditedMediaFields();
+        if (!Array.isArray(window.__editRemovedImages)) window.__editRemovedImages = [];
+        window.__editRemovedImages.push(removed);
+      }
       paintMedia(box);
-      purgeRemovedMedia(removed);
+      if (removed) void persistEditedMedia();
       return;
     }
     const tile = e.target.closest(".au-tile");
@@ -606,7 +702,9 @@ function bindMedia() {
       if (Number.isFinite(i) && i > 0 && arr[i] != null) {
         const picked = arr.splice(i, 1)[0];
         arr.unshift(picked);
+        markEditedMediaFields();
         paintMedia(box);
+        void persistEditedMedia();
         JA.toast("That photo is now the main one for this product.");
       }
       return;
@@ -640,7 +738,7 @@ function bindOptions() {
       e.preventDefault();
       del.closest("[data-opt-row]")?.remove();
       if (!box.querySelector("[data-opt-row]")) {
-        box.innerHTML = `<p class="admin-note" data-opt-empty>No options yet. Add Colour, Size, Type, Length or Scent so shoppers can choose on the product page.</p>`;
+        box.innerHTML = `<p class="admin-note" data-opt-empty>Optional: add a colour, size or other choice to manage stock and supplier links per variant.</p>`;
       }
       refreshOptionChips();
     });
@@ -653,137 +751,53 @@ function bindOptions() {
     });
   }
   document.getElementById("add-opt")?.addEventListener("click", () => addOptionRow("", ""));
-  document.querySelectorAll("[data-preset]").forEach((b) => {
-    b.onclick = () => addOptionRow(b.dataset.preset, "");
-  });
-  const status = document.getElementById("stock-status");
-  const qty = document.getElementById("stock-qty");
-  // The whole-product "Out of stock" switch also switches off every variant:
-  // the per-variant quantity boxes are zeroed (their previous values are
-  // remembered on the input so toggling back restores them), because a
-  // variant left at 5 used to re-sum the saved row back to "in stock" - the
-  // "out of stock does not save" bug.
-  const zeroVariantInputs = () => {
-    const live = currentOptionStock();
-    const prev = { ...(window.__editPrevOptionStock || {}) };
-    Object.keys(live).forEach((k) => {
-      if (Number(live[k]) > 0) prev[k] = live[k];
-    });
-    window.__editPrevOptionStock = prev;
-    document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
-      inp.value = "0";
-    });
-  };
-  const restoreVariantInputs = () => {
-    const prev = window.__editPrevOptionStock;
-    if (!prev) return;
-    document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
-      const key = inp.getAttribute("data-opt-stock");
-      if (key && Object.prototype.hasOwnProperty.call(prev, key)
-          && !(Number(inp.value) > 0)) {
-        inp.value = String(prev[key]);
-      }
-    });
-    window.__editPrevOptionStock = null;
-  };
-  status?.addEventListener("change", () => {
-    if (!qty) return;
-    if (status.value === "out") {
-      if (Number(qty.value) > 0) qty.dataset.prev = qty.value;
-      qty.value = 0;
-      zeroVariantInputs();
-    } else {
-      if (!(Number(qty.value) > 0)) qty.value = qty.dataset.prev || "24";
-      restoreVariantInputs();
-    }
-    syncOptionStockTotals();
-    refreshOptionChips();
-  });
-  qty?.addEventListener("input", () => {
-    if (status) {
-      if (Number(qty.value) > 0) status.value = "in";
-      else if (qty.value === "0") {
-        // Typing an explicit 0 IS "sold out": capture that intent instead of
-        // silently re-filling the old quantity at save time.
-        status.value = "out";
-        zeroVariantInputs();
-        syncOptionStockTotals();
-      }
-    }
-    refreshOptionChips();
-  });
-}
-function reviewsAdminHTML(id) {
-  const list = Array.isArray(window.__editReviews) ? window.__editReviews : ((id && JA.reviews) ? JA.reviews(id) : []);
-  window.__editReviews = list.slice();
-  if (!list.length) return `<p class="admin-note" id="rev-empty">No reviews yet.</p>`;
-  return list.map((r) => `
-    <article class="rev-note admin-rev">
-      <p>${JA.starsHTML ? JA.starsHTML(r.rating != null ? r.rating : r.stars) : ""} <strong>${JA.escape(r.name || "")}</strong></p>
-      ${r.title ? `<p class="rev-title"><strong>${JA.escape(r.title)}</strong></p>` : ""}
-      <p>${JA.escape(r.body != null ? r.body : (r.note || ""))}</p>
-      <button type="button" class="au-opt-del" data-del-rev="${JA.escape(r.created_at || r.at || "")}">Remove</button>
-    </article>`).join("");
-}
-function bindReviewsAdmin(id) {
-  const box = document.getElementById("rev-admin");
-  const paint = () => { if (box) box.innerHTML = reviewsAdminHTML(id); };
-  document.getElementById("rev-add")?.addEventListener("click", () => {
-    const name = (document.getElementById("rev-name")?.value || "").trim();
-    const note = (document.getElementById("rev-note")?.value || "").trim();
-    const rating = Number(document.getElementById("rev-stars")?.value || 5);
-    if (!note) { JA.toast("Type the customer note first."); return; }
-    const created_at = new Date().toISOString();
-    window.__editReviews = (window.__editReviews || []).concat([{ name: name || "Customer", body: note, note, rating, stars: rating, created_at, at: created_at }]);
-    if (document.getElementById("rev-name")) document.getElementById("rev-name").value = "";
-    if (document.getElementById("rev-note")) document.getElementById("rev-note").value = "";
-    paint(); JA.toast("Review added.");
-  });
-  box?.addEventListener("click", (e) => {
-    const del = e.target.closest("[data-del-rev]");
-    if (!del) return;
-    const at = del.getAttribute("data-del-rev");
-    window.__editReviews = (window.__editReviews || []).filter((r) => String(r.created_at || r.at || "") !== String(at || ""));
-    paint();
-  });
+  syncOptionStockTotals();
 }
 function currentOptionStock() {
   const map = {};
   document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
-    const v = inp.getAttribute("data-opt-stock");
-    if (inp.value !== "") map[v] = Math.max(0, parseInt(inp.value, 10) || 0);
+    const key = inp.getAttribute("data-opt-stock");
+    if (key) map[key] = Math.max(0, parseInt(inp.value, 10) || 0);
   });
   return map;
 }
-function currentOptionPrices() {
-  const map = {};
-  document.querySelectorAll("[data-opt-price]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-price");
-    if (key && inp.value !== "") map[key] = Math.max(0, Number(inp.value) || 0);
+function activeOptionKeys(options) {
+  const keys = new Set();
+  (options || []).forEach((opt) => {
+    const title = String((opt && opt.title) || "Option").trim().toLowerCase();
+    (opt && opt.values || []).forEach((value) => {
+      const v = String(value || "").trim().toLowerCase();
+      if (!v) return;
+      keys.add(v);
+      keys.add(`${title}: ${v}`);
+    });
   });
-  return map;
+  return keys;
 }
-function currentOptionCompareAt() {
-  const map = {};
-  document.querySelectorAll("[data-opt-compare]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-compare");
-    if (key && inp.value !== "") map[key] = Math.max(0, Number(inp.value) || 0);
-  });
-  return map;
+function keepActiveOptionMap(map, options) {
+  const valid = activeOptionKeys(options);
+  if (!map || typeof map !== "object" || Array.isArray(map) || !valid.size) return {};
+  return Object.fromEntries(Object.entries(map).filter(([raw]) => {
+    const key = String(raw || "").trim().toLowerCase();
+    return valid.has(key);
+  }));
 }
-function optionPricingHTML(p) {
-  const options = p.options || [];
-  const overrides = p.optionPrices || {};
-  const compares = p.optionCompareAt || {};
-  const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
-    const key = `${opt.title}: ${value}`;
-    const inherited = Number(p.priceNgn) || 0;
-    const inheritedCompare = Number(p.compareNgn) || 0;
-    const valueNgn = overrides[key] != null ? overrides[key] : (overrides[value] != null ? overrides[value] : "");
-    const compareNgn = compares[key] != null ? compares[key] : (compares[value] != null ? compares[value] : "");
-    return `<label class="adx-var"><span class="adx-var-name"><strong>${JA.escape(key)}</strong><span>Blank inherits ${JA.money(inherited, "NGN")}</span></span><span class="adx-var-qty">Price ₦<input type="number" min="0" data-opt-price="${JA.escape(key)}" value="${valueNgn}" placeholder="${inherited}" /> <s>Was</s> ₦<input type="number" min="0" data-opt-compare="${JA.escape(key)}" value="${compareNgn}" placeholder="${inheritedCompare || ""}" /></span></label>`;
-  })).join("");
-  return `<h3>Option price overrides</h3><p class="admin-note">Leave the price blank to inherit the base product price. Set an override only when this option costs more or less. The optional "Was" price shows a crossed-out original next to it.</p>${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to set individual prices.</p>`}`;
+function optionStockValues(options, map) {
+  const first = (options || [])[0];
+  const values = (first && first.values) || [];
+  const title = String((first && first.title) || "option").trim();
+  const source = map && typeof map === "object" && !Array.isArray(map) ? map : {};
+  return Object.fromEntries(values.map((value) => {
+    const composite = `${title}: ${value}`;
+    const lowerValue = String(value || "").trim().toLowerCase();
+    const lowerComposite = composite.toLowerCase();
+    const found = Object.entries(source).find(([key]) => {
+      const normalized = String(key || "").trim().toLowerCase();
+      return normalized === lowerValue || normalized === lowerComposite;
+    });
+    const raw = source[value] ?? source[composite] ?? (found && found[1]);
+    return [value, Math.max(0, parseInt(raw, 10) || 0)];
+  }));
 }
 function optionSupplierLinksHTML(p) {
   // Per-option Supplier URL: a plain, manual field per variant/component
@@ -795,10 +809,10 @@ function optionSupplierLinksHTML(p) {
   const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
     const key = `${opt.title}: ${value}`;
     const url = links[key] != null ? links[key] : (links[value] != null ? links[value] : "");
-    const urlText = Array.isArray(url) ? url.join("\n") : String(url || "");
+    const urlText = Array.isArray(url) ? url.join(", ") : String(url || "");
     return `<label class="adx-var" data-optlink-row>
       <span class="adx-var-name"><strong>${JA.escape(key)}</strong></span>
-      <span class="adx-var-qty"><input type="text" data-opt-supplier="${JA.escape(key)}" placeholder="Supplier URL (optional)" value="${JA.escape(urlText)}" /></span>
+      <span class="adx-var-qty"><input type="text" inputmode="url" autocomplete="url" aria-label="Supplier URL for ${JA.escape(key)}" data-opt-supplier="${JA.escape(key)}" placeholder="Supplier URL (optional)" value="${JA.escape(urlText)}" /></span>
     </label>`;
   })).join("");
   return rows ? `<h3>Supplier URL per option</h3><div class="adx-vars">${rows}</div>` : "";
@@ -812,68 +826,40 @@ function currentOptionSupplierSku() {
   });
   return map;
 }
-function optionSkuHTML(p) {
-  const options = p.options || [];
-  const skus = p.optionSku || p.optionSkus || {};
-  const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
-    const key = `${opt.title}: ${value}`;
-    const sku = skus[key] != null ? skus[key] : (skus[value] != null ? skus[value] : "");
-    return `<label class="adx-var" data-opt-sku-row>
-      <span class="adx-var-name"><strong>${JA.escape(key)}</strong></span>
-      <span class="adx-var-qty"><input type="text" data-opt-sku="${JA.escape(key)}" placeholder="SKU / identifier (optional)" value="${JA.escape(sku || "")}" /></span>
-    </label>`;
-  })).join("");
-  return rows ? `<h3>SKU / identifier per option</h3><div class="adx-vars">${rows}</div>` : "";
-}
-function currentOptionSku() {
-  const map = {};
-  document.querySelectorAll("[data-opt-sku]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-sku");
-    const value = String(inp.value || "").trim();
-    if (key && value) map[key] = value;
-  });
-  return map;
-}
-function variantPanelsHTML(p) { return optionStockHTML(p) + optionPricingHTML(p) + optionSupplierLinksHTML(p) + optionSkuHTML(p); }
 function optionStockHTML(p) {
   const opt = (p.options || [])[0];
   const vals = (opt && opt.values) || p.colors || [];
-  if (!vals.length) {
-    return `<h3>Stock per option</h3>
-      <p class="admin-note">Add an option above (Colour, Size…) and a stock box appears here for each choice. Until then the single Quantity below is used.</p>`;
-  }
-  const os = p.optionStock || {};
-  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
-  const price = `${Number(p.compareNgn) > Number(p.priceNgn) ? `<s>${JA.money(p.compareNgn, "NGN")}</s> ` : ""}${JA.money(p.priceNgn || 0, "NGN")} · ${JA.money(toCfa(p.priceNgn), "CFA")}`;
+  if (!vals.length) return "";
+  const quantities = optionStockValues(p.options, p.optionStock);
   const rows = vals.map((v) => {
-    const qty = os[v] != null ? Number(os[v]) : "";
-    const state = qty === "" ? "" : (qty > 0 ? "in" : "out");
+    const qty = quantities[v];
+    const state = qty > 0 ? "in" : "out";
     return `<div class="adx-var" data-var-row>
-      <div class="adx-var-name"><strong>${JA.escape(v)}</strong><span>${price}</span></div>
-      <label class="adx-var-qty">Stock
-        <input type="number" min="0" inputmode="numeric" data-opt-stock="${JA.escape(v)}" value="${qty}" placeholder="0" />
+      <div class="adx-var-name"><strong>${JA.escape(v)}</strong></div>
+      <label class="adx-var-qty">Quantity
+        <input type="number" min="0" inputmode="numeric" data-opt-stock="${JA.escape(v)}" value="${qty}" />
       </label>
-      <em class="adx-var-state ${state}" data-var-state>${qty === "" ? "—" : (qty > 0 ? "In stock" : "Sold out")}</em>
+      <em class="adx-var-state ${state}" data-var-state>${qty > 0 ? "In stock" : "Sold out"}</em>
     </div>`;
   }).join("");
-  const total = vals.reduce((n, v) => n + (Number(os[v]) > 0 ? Number(os[v]) : 0), 0);
-  return `<h3>Stock per ${JA.escape((opt && opt.title) || "option")}</h3>
-    <p class="admin-note">Type how many pieces you have of each ${JA.escape((opt && opt.title) || "option").toLowerCase()}. The total quantity below updates by itself; a choice with 0 shows as sold out.</p>
+  const total = Object.values(quantities).reduce((n, quantity) => n + quantity, 0);
+  const title = JA.escape(String((opt && opt.title) || "option").trim());
+  return `<div class="variant-stock-section"><h4>Stock by ${title.toLowerCase()}</h4>
+    <p class="admin-note">Unassigned or blank variant quantities are zero. Product quantity below is the total of these values.</p>
     <div class="adx-vars">${rows}</div>
-    <p class="admin-note" id="opt-stock-total"><strong>Total: ${total}</strong> piece(s) across ${vals.length} ${JA.escape((opt && opt.title) || "option")} choice(s).</p>`;
+    <p class="admin-note" id="opt-stock-total"><strong>Total: ${total}</strong> piece(s).</p></div>`;
 }
 function syncOptionStockTotals() {
   const inputs = [...document.querySelectorAll("[data-opt-stock]")];
-  if (!inputs.length) return;
-  let total = 0, touched = false;
+  const qty = document.getElementById("stock-qty");
+  if (!inputs.length) {
+    if (qty) qty.readOnly = false;
+    return;
+  }
+  let total = 0;
   inputs.forEach((inp) => {
     const row = inp.closest("[data-var-row]");
     const state = row && row.querySelector("[data-var-state]");
-    if (inp.value === "") {
-      if (state) { state.textContent = "—"; state.className = "adx-var-state"; }
-      return;
-    }
-    touched = true;
     const n = Math.max(0, parseInt(inp.value, 10) || 0);
     total += n;
     if (state) {
@@ -882,12 +868,8 @@ function syncOptionStockTotals() {
     }
   });
   const totalEl = document.getElementById("opt-stock-total");
-  if (totalEl) totalEl.innerHTML = `<strong>Total: ${total}</strong> piece(s). This becomes the product quantity when you save.`;
-  if (!touched) return;
-  const qty = document.getElementById("stock-qty");
-  const status = document.getElementById("stock-status");
-  if (qty) qty.value = total;
-  if (status) status.value = total > 0 ? "in" : "out";
+  if (totalEl) totalEl.innerHTML = `<strong>Total: ${total}</strong> piece(s).`;
+  if (qty) { qty.value = total; qty.readOnly = true; }
 }
 function bindCfaPreview() {
   const form = document.getElementById("prod-form");
@@ -895,16 +877,12 @@ function bindCfaPreview() {
   if (!form || !el) return;
   const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   const paint = () => {
-    const n = Number(form.priceNgn && form.priceNgn.value) || 0;
-    const c = Number(form.compareNgn && form.compareNgn.value) || 0;
-    if (!(n > 0)) {
-      el.textContent = "Enter the ₦ price. The website will show F CFA converted at 1 ₦ = 0.44.";
+    const ngn = Number(form.priceNgn && form.priceNgn.value) || 0;
+    if (!(ngn > 0)) {
+      el.textContent = "CFA price will be calculated from the Naira price.";
       return;
     }
-    const now = toCfa(n);
-    const was = c > 0 ? toCfa(c) : 0;
-    const line = was > now ? "<s>" + JA.money(was, "CFA") + "</s> " + JA.money(now, "CFA") : JA.money(now, "CFA");
-    el.innerHTML = "Website will show " + line + " · converted from ₦ at 1 ₦ = 0.44 F CFA.";
+    el.textContent = `CFA price: ${JA.money(toCfa(ngn), "CFA")}`;
   };
   form.addEventListener("input", paint);
   paint();
@@ -921,36 +899,25 @@ function bindCfaPreview() {
  */
 const EDIT_FIELD_MAP = {
   name: ["name"],
-  nameFr: ["nameFr"],
   description: ["description"],
-  descriptionFr: ["descriptionFr"],
-  dimensions: ["dimensions"],
-  badge: ["badge"],
+  enableCustomNote: ["enableCustomNote"],
+  customNotePrompt: ["customNotePrompt"],
   category: ["category"],
-  online: ["online"],
-  featured: ["featured"],
-  sku: ["sku"],
   supplierSku: ["supplierSku", "supplierUrl", "supplier_url"],
-  // Money: priceCfa / compareCfa are derived from these by the editor, so they
-  // travel with them - a price typed on the phone must not be reverted by a
-  // photo swap made elsewhere.
-  priceNgn: ["priceNgn", "priceCfa", "compareCfa"],
-  compareNgn: ["compareNgn", "compareCfa"],
-  stock: ["stock", "stock_quantity"],
-  stockStatus: ["stockStatus", "stock", "stock_quantity"],
-  bulkQty: ["bulkQty"],
-  bulkPercent: ["bulkPercent"],
+  // CFA is derived from the entered Naira price.
+  priceNgn: ["priceNgn", "priceCfa"],
+  stock: ["stock", "stock_quantity", "stockStatus"],
 };
-// The media strip, the option editor and the variant rows are built from
-// data-* controls rather than named inputs.
+// Media, variant stock and per-option supplier controls use data attributes.
 const EDIT_DATA_PREFIXES = [
   ["data-img-i", ["image", "image_url", "imageUrl", "images"]],
-  ["data-opt-row", ["options", "optionPrices", "optionCompareAt", "optionStock",
-                    "optionSupplierSku", "optionSupplierUrls", "option_supplier_urls",
-                    "optionSku", "option_sku", "stock", "stock_quantity"]],
-  ["data-opt-sku", ["optionSku", "option_sku"]],
-  ["data-var-row", ["stock", "stock_quantity", "stockStatus"]],
-  ["data-var-state", ["stock", "stock_quantity", "stockStatus"]],
+  ["data-opt-row", ["options", "optionStock", "optionPrices", "optionCompareAt",
+                     "optionSupplierSku", "optionSupplierUrls", "option_supplier_urls",
+                     "stock", "stock_quantity", "stockStatus"]],
+  ["data-opt-stock", ["optionStock", "stock", "stock_quantity", "stockStatus"]],
+  ["data-opt-supplier", ["optionSupplierSku", "optionSupplierUrls", "option_supplier_urls"]],
+  ["data-var-row", ["stock", "stock_quantity"]],
+  ["data-var-state", ["stock", "stock_quantity"]],
 ];
 
 /** Record that the admin edited the field(s) behind a form control. */
@@ -965,13 +932,6 @@ function trackEditedField(el) {
     if (el.closest && el.closest("[" + attr + "]")) {
       fields.forEach((f) => window.__editDirty.add(f));
     }
-  }
-  // Adding or removing a review changes the stored list, not a field.
-  if (el.id && /^rev-/.test(el.id)) {
-    ["reviews", "customerReviews", "customer_reviews"].forEach((f) => window.__editDirty.add(f));
-  }
-  if (el.getAttribute && el.getAttribute("data-rev-del") != null) {
-    ["reviews", "customerReviews", "customer_reviews"].forEach((f) => window.__editDirty.add(f));
   }
 }
 
@@ -993,6 +953,15 @@ function productForm(p = {}) {
     `<option value="${c.id}" ${preCat === c.id ? "selected" : ""}>${JA.escape(c.name)}</option>`
   ).join("");
   window.__editImages = productImages(p);
+  window.__editRemovedImages = [];
+  window.__editMediaProductId = String((p && p.id) || "");
+  window.__editMediaSession = Number(window.__editMediaSession || 0) + 1;
+  window.__editMediaRevision = 0;
+  window.__editMediaSavedRevision = 0;
+  // Keep the promise chain itself across editor sessions. If an old media save
+  // is still in flight, a new editor must queue behind it instead of racing it.
+  // The session check in persistEditedMedia prevents the old result from
+  // repainting or changing the new editor's revision counter.
   // The row's updated_at as it was when THIS editor was opened. It is NOT a
   // lock and can never block a save: it rides along so the server can tell us
   // afterwards whether we overwrote a newer row (see _product_save_response).
@@ -1010,92 +979,44 @@ function productForm(p = {}) {
   // reset here with the rest of the per-editor state so it can never leak
   // from one product's editor into another's.
   window.__editDirty = new Set();
-  // Per-editor-session memory of the variant quantities that were live
-  // before the admin last flipped "Out of stock". It lives on window (not
-  // on the inputs) because refreshOptionChips repaints the variant boxes
-  // and would wipe a dataset attribute with them.
-  window.__editPrevOptionStock = null;
   window.__editUploads = [];
-  window.__editReviews = Array.isArray(p.reviews) ? p.reviews.slice() : ((p.id && JA.reviews) ? JA.reviews(p.id).slice() : []);
   const opts = editorOptions(p);
-  const inStock = p.id ? Number(p.stock) > 0 : true;
+  const savedOptionStock = keepActiveOptionMap(p.optionStock, opts);
+  const initialStock = opts.length
+    ? Object.values(optionStockValues(opts, savedOptionStock)).reduce((n, value) => n + value, 0)
+    : (p.id ? Math.max(0, Number(p.stock) || 0) : 0);
+  const quantityReadonly = opts.length ? "readonly" : "";
   return `<form id="prod-form" class="au-edit">
     <button type="button" class="au-back" id="cancel-edit">← Store Products</button>
-    <h2>Product ${preCat ? `· ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
+    <h2>${p.id ? "Edit product" : "New product"}${preCat ? ` · ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
-    <div class="field"><label>Product Name</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
-    <div class="field"><label>Product Name (French — shown when the site is in French)</label><input name="nameFr" maxlength="80" value="${JA.escape(p.nameFr || "")}" placeholder="Optional" /></div>
-    <input type="hidden" name="id" value="${p.id || ""}" />
-    <div class="au-2">
-      <div class="field"><label>Price ₦</label><div class="au-price"><input name="priceNgn" type="number" min="0" required value="${p.priceNgn || ""}" /><i>₦</i></div></div>
-      <div class="field"><label>Price reduction / strikethrough ₦</label><div class="au-price"><input name="compareNgn" type="number" min="0" value="${p.compareNgn || ""}" /><i>₦</i></div></div>
+    <input type="hidden" name="id" value="${JA.escape(p.id || "")}" />
+    <div class="field"><label>Product title</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
+    <div class="field"><label>Description</label><textarea name="description" rows="3" maxlength="2000">${JA.escape(p.description || "")}</textarea></div>
+    <div class="field"><label>Category</label><select name="category" required>${cats}</select></div>
+    <div class="field"><label>Price (Naira ₦)</label><div class="au-price"><input name="priceNgn" type="number" min="0" inputmode="numeric" required value="${p.priceNgn || ""}" /><i>₦</i></div>
+      <p class="admin-note" id="cfa-preview">CFA price will be calculated from the Naira price.</p>
     </div>
-    <p class="admin-note" id="cfa-preview">CFA on the website is converted from Naira at 1 ₦ = 0.44 F CFA. You only enter ₦.</p>
-    <div class="field"><label>Add a description</label><textarea name="description" rows="3">${JA.escape(p.description || "")}</textarea></div>
-    <div class="field"><label>Description (French — shown when the site is in French)</label><textarea name="descriptionFr" rows="3" placeholder="Optional">${JA.escape(p.descriptionFr || "")}</textarea></div>
-    <div class="field"><label>Dimensions / size (optional — shown on the product page and WhatsApp posts)</label><input name="dimensions" maxlength="160" value="${JA.escape(p.dimensions || "")}" placeholder="e.g. 30 x 20 x 10 cm" /></div>
-    <div class="field"><label>Promo display ribbon (Sale, New Arrival, Best Seller)</label>
-      <select name="badge">
-        <option value="">None</option>
-        ${[["sale","Sale / Promo Discount"],["new","New Product Arrival"],["bestseller","Best Seller"]].map(([b,label]) => `<option value="${b}" ${p.badge === b ? "selected" : ""}>${label}</option>`).join("")}
-      </select>
+    <div class="field"><label>Main supplier URL</label>
+      <input name="supplierSku" type="url" inputmode="url" autocomplete="url" value="${JA.escape(p.supplierSku || p.supplierUrl || p.supplier_url || "")}" placeholder="https://…" />
     </div>
-    <label class="au-tog"><span>Show in online store</span>
-      <input type="checkbox" name="online" ${p.online === false ? "" : "checked"} />
-    </label>
-    <div class="field"><label>Category</label><select name="category">${cats}</select></div>
-    <h3>Product options <small id="opt-count">${opts.length}/20</small></h3>
-    <div id="opt-box">${optionBlockHTML(opts)}</div>
-    <div class="au-opt-presets">
-      <button type="button" data-preset="Colour">+ Colour</button>
-      <button type="button" data-preset="Size">+ Size</button>
-      <button type="button" data-preset="Type">+ Type</button>
-      <button type="button" data-preset="Length">+ Length</button>
-      <button type="button" data-preset="Scent">+ Scent</button>
+    <section class="product-variants" aria-labelledby="product-options-title">
+      <h3 id="product-options-title">Options and variant supplier URLs <small id="opt-count">${opts.length}/20</small></h3>
+      <div id="opt-box">${optionBlockHTML(opts)}</div>
+      <button type="button" class="au-link-btn" id="add-opt">+ Add option</button>
+      <div id="var-box">${optionStockHTML({ ...p, options: opts, optionStock: savedOptionStock }) + optionSupplierLinksHTML({ ...p, options: opts })}</div>
+    </section>
+    <div class="field"><label>Stock quantity</label>
+      <input name="stock" id="stock-qty" type="number" min="0" inputmode="numeric" value="${initialStock}" ${quantityReadonly} />
+      <p class="admin-note">Zero or blank means out of stock. For products with options, enter each variant quantity above; this total is calculated automatically.</p>
     </div>
-    <button type="button" class="au-link-btn" id="add-opt">+ Add Option</button>
-    <div id="var-box">${variantPanelsHTML({ ...p, options: opts })}</div>
-    <h3>Inventory</h3>
-    <div class="au-2">
-      <div class="field"><label>Availability</label>
-        <select name="stockStatus" id="stock-status">
-          <option value="in" ${inStock ? "selected" : ""}>In stock</option>
-          <option value="out" ${inStock ? "" : "selected"}>Out of stock</option>
-        </select>
-      </div>
-      <div class="field"><label>Quantity</label>
-        <input name="stock" id="stock-qty" type="number" min="0" value="${p.id ? (p.stock ?? 0) : 24}" />
-      </div>
-    </div>
-    <p class="admin-note">Choose <strong>Out of stock</strong> to stop sales. Choose <strong>In stock</strong> and set a quantity so customers can add it to cart.</p>
-    <h3>Bulk discount for this product</h3>
-    <div class="au-2">
-      <div class="field"><label>Bulk discount — more than how many units?</label>
-        <input name="bulkQty" type="number" min="1" max="100000" value="${p.bulkQty || ""}" placeholder="e.g. 10" />
-      </div>
-      <div class="field"><label>Discount % (applies above that quantity)</label>
-        <input name="bulkPercent" type="number" min="1" max="90" value="${p.bulkPercent || ""}" placeholder="e.g. 15" />
-      </div>
-    </div>
-    <p class="admin-note">Optional. When a customer orders <strong>more</strong> than the unit count above of this one product, the discount % is taken off its unit price automatically at checkout — for example 10 and 15 means every unit above 10 is priced 15% off. Leave either box empty for no per-product bulk discount (shop-wide tiers, if any, still apply).</p>
-    <div class="field"><label>SKU</label><input name="sku" value="${JA.escape(p.sku || "")}" /></div>
-    <div class="field"><label>Supplier URL for Auto Stock Sync</label>
-      <input name="supplierSku" value="${JA.escape(p.supplierSku || p.supplierUrl || p.supplier_url || "")}" placeholder="https://…" />
-    </div>
-    <div class="field"><label>Featured</label>
-      <select name="featured"><option value="no">No</option><option value="yes" ${p.featured ? "selected" : ""}>Yes</option></select>
-    </div>
-    <h3>Customer reviews</h3>
-    <p class="admin-note">Stars and notes show on the product page. Quantity stays in Admin only — shoppers never see the stock number.</p>
-    <div id="rev-admin">${reviewsAdminHTML(p.id)}</div>
-    <div class="au-2">
-      <div class="field"><label>Customer name</label><input id="rev-name" maxlength="60" placeholder="e.g. Ada" /></div>
-      <div class="field"><label>Stars</label>
-        <select id="rev-stars"><option value="5">5</option><option value="4">4</option><option value="3">3</option><option value="2">2</option><option value="1">1</option></select>
-      </div>
-    </div>
-    <div class="field"><label>Customer note</label><textarea id="rev-note" rows="2" maxlength="600" placeholder="Their comment"></textarea></div>
-    <button type="button" class="au-link-btn" id="rev-add">+ Add review to this product</button>
+    <section class="product-custom-note" aria-labelledby="custom-note-title">
+      <h3 id="custom-note-title">Custom order note</h3>
+      <label class="au-tog"><span>Enable a note for this product</span>
+        <input type="checkbox" name="enableCustomNote" ${p.enableCustomNote ? "checked" : ""} />
+      </label>
+      <div class="field"><label>Customer prompt</label><input name="customNotePrompt" maxlength="160" value="${JA.escape(p.customNotePrompt || "")}" placeholder="e.g. preferred colour, size, or another detail" /></div>
+    </section>
     <button class="btn au-save" type="submit">Save Product</button>
     ${p.id ? `<button type="button" class="au-del-prod" data-del="${JA.escape(p.id)}">Delete this product</button>` : ""}
   </form>`;
@@ -1125,6 +1046,13 @@ async function handleProductSubmit(e, existing) {
       rawImages = (window.__editImages || []).filter(Boolean);
     }
   }
+  // Existing-product media changes are saved as soon as the upload/delete
+  // settles. Let that confirmation finish before the full form save so two
+  // writes from this same editor cannot race each other.
+  if (window.__editMediaSave && typeof window.__editMediaSave.then === "function") {
+    try { await window.__editMediaSave; } catch (err) {}
+    rawImages = (window.__editImages || []).filter(Boolean);
+  }
   const stillUploading = rawImages.filter((s) => typeof s === "object" && !(s && s.failed));
   let images = rawImages.filter((s) => typeof s === "string" && s).slice(0, 20);
   if (!images.length && existing) {
@@ -1149,93 +1077,26 @@ async function handleProductSubmit(e, existing) {
   }
   const image = images[0] || "";
   if (!image) { JA.toast("Please upload a photo."); return; }
-  const name = fd.get("name").trim();
+  const name = String(fd.get("name") || "").trim();
   const id = fd.get("id") || ("jau-" + Date.now().toString(36));
   const num = (k) => { const v = fd.get(k); return v === "" || v == null ? null : Number(v); };
-  const status = String(fd.get("stockStatus") || "in");
-  let stock = num("stock");
-  if (status === "out") stock = 0;
-  else if (stock === null || stock === undefined) {
-    // An EMPTY box means "leave the quantity alone" (keep the stored value,
-    // 24 for a brand-new row). An explicit 0 is a deliberate "sold out" and
-    // is honoured below - it used to be silently replaced by the old
-    // quantity, so the admin's out-of-stock choice never reached the server.
-    stock = (existing && Number(existing.stock) > 0) ? Number(existing.stock) : 24;
-  }
-  // Optional per-product bulk discount: both values or neither. An empty box
-  // means "no discount configured for this product".
-  let bulkQty = num("bulkQty");
-  let bulkPercent = num("bulkPercent");
-  if (!(bulkQty > 0) || !(bulkPercent > 0)) { bulkQty = null; bulkPercent = null; }
-  if (bulkQty != null) bulkQty = Math.min(100000, Math.round(bulkQty));
-  if (bulkPercent != null) bulkPercent = Math.min(90, Math.max(1, Math.round(bulkPercent)));
   const options = collectOptions(e.target);
-  const optionStock = {};
-  let hasOptionStock = false;
-  const firstVals = (options[0] && options[0].values) || [];
-  e.target.querySelectorAll("[data-opt-stock]").forEach((inp) => {
-    const v = inp.getAttribute("data-opt-stock");
-    if (!firstVals.includes(v) || inp.value === "") return;
-    optionStock[v] = Math.max(0, parseInt(inp.value, 10) || 0);
-    hasOptionStock = true;
-  });
-  if (hasOptionStock) stock = Object.values(optionStock).reduce((n, q) => n + q, 0);
-  // "Out of stock" (the switch, or an explicit 0 quantity) is a final
-  // whole-product decision: it wins over the variant sum - which used to
-  // re-stock the row from stale variant numbers - and zeroes every variant
-  // in the payload, so the storefront badge, the buy button and each
-  // variant chip all read sold out together.
-  let payloadOptionStock = { ...(hasOptionStock ? optionStock : (existing?.optionStock || {})) };
-  if (status === "out" || stock === 0) {
-    stock = 0;
-    Object.keys(payloadOptionStock).forEach((k) => { payloadOptionStock[k] = 0; });
-  } else if (!hasOptionStock && stock > 0
-             && Object.keys(payloadOptionStock).length
-             && Object.values(payloadOptionStock).every((v) => !(Number(v) > 0))) {
-    // Mirror image of the switch-off: re-stocking a product whose variants
-    // were all sold out with a plain quantity. The typed number is the new
-    // availability, so the all-zero variant map must not pin the row (and
-    // the storefront badge) to "out" forever.
-    payloadOptionStock = {};
-  }
-  const optionPrices = {};
-  e.target.querySelectorAll("[data-opt-price]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-price");
-    if (key && inp.value !== "") optionPrices[key] = Math.max(0, Number(inp.value) || 0);
-  });
-  const optionCompareAt = {};
-  e.target.querySelectorAll("[data-opt-compare]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-compare");
-    if (key && inp.value !== "") optionCompareAt[key] = Math.max(0, Number(inp.value) || 0);
-  });
-  const optionSupplierSku = {};
-  e.target.querySelectorAll("[data-opt-supplier]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-supplier");
-    const values = String(inp.value || "").split(/[\n,]+/).map((v) => v.trim()).filter(Boolean);
-    if (key && values.length) optionSupplierSku[key] = values.length === 1 ? values[0] : values;
-  });
-  const optionSku = {};
-  e.target.querySelectorAll("[data-opt-sku]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-sku");
-    const val = String(inp.value || "").trim();
-    if (key && val) optionSku[key] = val;
-  });
+  const variantValues = (options[0] && options[0].values) || [];
+  const typedStock = keepActiveOptionMap(currentOptionStock(), options);
+  const payloadOptionStock = variantValues.length
+    ? Object.fromEntries(variantValues.map((value) => [value, Math.max(0, parseInt(typedStock[value], 10) || 0)]))
+    : {};
+  const stock = variantValues.length
+    ? Object.values(payloadOptionStock).reduce((total, quantity) => total + quantity, 0)
+    : Math.max(0, parseInt(num("stock"), 10) || 0);
+  const isOnline = existing ? existing.online !== false : true;
+  const optionPrices = keepActiveOptionMap(existing?.optionPrices, options);
+  const optionCompareAt = keepActiveOptionMap(existing?.optionCompareAt, options);
+  const optionSupplierSku = keepActiveOptionMap(currentOptionSupplierSku(), options);
   const supplierRef = String(fd.get("supplierSku") || "").trim();
-  const manualReviews = Array.isArray(window.__editReviews) ? window.__editReviews.map((r) => ({ ...r })) : (existing?.reviews || []);
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
-  const priceNgn = num("priceNgn") || 0;
-  const compareNgn = num("compareNgn");
-  // The base price is only mandatory when at least one option/variant is not
-  // already covered by its own price override. A product where every option
-  // (e.g. Shampoo / Serum / Conditioner) has its own ₦ override sets its own
-  // price entirely and must never be blocked from saving just because the
-  // shared base-price box is empty/0 - the storefront already ignores the
-  // base price for any variant that carries an override (see JA.priceOf in
-  // js/store.js).
-  const allOptionKeys = options.flatMap((opt) => (opt.values || []).map((value) => `${opt.title}: ${value}`));
-  const everyOptionPriced = allOptionKeys.length > 0
-    && allOptionKeys.every((key) => optionPrices[key] != null && optionPrices[key] > 0);
-  if (!(priceNgn > 0) && !everyOptionPriced) { JA.toast("Enter the ₦ price, or set a price for every option."); return; }
+  const priceNgn = Math.max(0, num("priceNgn") || 0);
+  if (!(priceNgn > 0)) { JA.toast("Enter the Naira price."); return; }
   const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
   // Never let a save blank a category the row already has. The select is
@@ -1262,47 +1123,29 @@ async function handleProductSubmit(e, existing) {
       // same value", and a real edit would be silently discarded.
       mergeFields: window.__editDirty ? Array.from(window.__editDirty) : null,
       id,
-      sku: fd.get("sku") || existing?.sku || ("JAU-" + Date.now().toString(36).toUpperCase().slice(-6)),
+      sku: existing?.sku || ("JAU-" + Date.now().toString(36).toUpperCase().slice(-6)),
       slug: existing?.slug || slugify(name) || id,
       name,
       category: savedCategory,
       priceNgn,
-      compareNgn,
       priceCfa: toCfa(priceNgn),
-      compareCfa: compareNgn > 0 ? toCfa(compareNgn) : null,
       image,
       images,
-      // image/image_url/imageUrl are ONE logical field. The ...(existing)
-      // spread above carries the row's previous value of every alias, so the
-      // fresh cover must overwrite each spelling or the stale alias travels
-      // to the server beside the new photo (and used to WIN there - the
-      // "replacement never saves" bug). Keep all three in lock-step here.
+      // image/image_url/imageUrl are ONE logical field. Keep all aliases in
+      // lock-step so an old copy can never beat the newly selected cover.
       image_url: image,
       imageUrl: image,
-      description: fd.get("description"),
+      description: String(fd.get("description") || "").trim(),
       stock,
-      // The server prefers stock_quantity (catalog.normalize), so sending
-      // only the legacy `stock` key made every save keep the row's stale
-      // stock_quantity and the freshly typed quantity was silently discarded
-      // (seed products reverted to 24). Ship BOTH aliases, in sync.
       stock_quantity: stock,
-      // The explicit availability intent: "out" makes catalog.normalize
-      // zero the row and every variant, immune to the variant-sum revert.
-      stockStatus: status,
-      // Per-product bulk discount (null = none configured).
-      bulkQty,
-      bulkPercent,
-      badge: fd.get("badge"),
-      featured: fd.get("featured") === "yes",
-      online: !!fd.get("online"),
+      stockStatus: stock > 0 ? "in" : "out",
       colors: colorOpt ? colorOpt.values : [],
       options,
       optionStock: payloadOptionStock,
       optionPrices,
       optionCompareAt,
-      nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
-      descriptionFr: String(fd.get("descriptionFr") || "").trim() || existing?.descriptionFr || "",
-      dimensions: String(fd.get("dimensions") || "").trim(),
+      enableCustomNote: !!fd.get("enableCustomNote"),
+      customNotePrompt: String(fd.get("customNotePrompt") || "").trim().slice(0, 160),
       // Manual, owner-entered supplier reference link. The consolidated
       // supplier watchdog may read it for stock, but never rewrites it.
       supplierSku: supplierRef,
@@ -1313,13 +1156,7 @@ async function handleProductSubmit(e, existing) {
       optionSupplierSku,
       optionSupplierUrls: optionSupplierSku,
       option_supplier_urls: optionSupplierSku,
-      optionSku,
-      option_sku: optionSku,
-      reviews: manualReviews,
-      customerReviews: manualReviews,
-      customer_reviews: manualReviews,
   });
-  if (window.__editReviews && JA.setReviews) JA.setReviews(id, manualReviews);
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save Product"; }
   // Only a server-confirmed save leaves this editor. A queued retry or a
   // Supabase failure keeps the form open with the error, so the admin never
@@ -1327,8 +1164,8 @@ async function handleProductSubmit(e, existing) {
   //
   // There is deliberately NO concurrency failure here any more: saves are
   // last-write-wins, so a save built on a copy the editor opened before the
-  // row moved on still lands. The server hands back a quiet `notice` when it
-  // overwrote a newer row, which we show as information, never as an error.
+  // row moved on still lands. Concurrent saves are recorded in the admin audit
+  // log without a customer-facing or toast warning.
   if (res && res.ok === false) {
     JA.toast((res && res.error) || "Could not save the product. No changes are live.");
     return;
@@ -1337,10 +1174,30 @@ async function handleProductSubmit(e, existing) {
   if (res && res.mirrored === false) {
     savedMsg = "Saved on the server only — not yet on the cloud copy. Tap Retry now.";
   } else {
-    savedMsg = status === "out" ? "Saved · Live now · Out of stock." : "Saved · Live on the store now · " + images.length + " photo(s).";
+    const liveState = isOnline ? "Live on the store now" : "Hidden from the store";
+    savedMsg = stock > 0
+      ? `Saved · ${liveState} · ${images.length} photo(s).`
+      : `Saved · ${liveState} · Out of stock.`;
   }
-  const data = res && res.data;
-  if (data && data.notice) savedMsg = savedMsg + " " + data.notice;
+  // Only now may the UI purge media the owner removed. The product write has
+  // succeeded, so a storage reference guard sees the replacement row rather
+  // than unlinking a still-saved image. catalog.upsert already purges its old
+  // media diff after persistence; this safe URL-only follow-up covers files
+  // uploaded and then discarded before they ever belonged to that row.
+  const mediaIdentity = (value) => {
+    let raw = String(imgSrc(value) || (typeof value === "string" ? value : "") || "")
+      .split("?")[0].split("#")[0];
+    const m = raw.match(/(?:\/uploads\/|\/storage\/v1\/object\/(?:public|sign)\/[^/]+\/)(.+)$/i);
+    try { return decodeURIComponent(m ? m[1] : raw); } catch (err) { return m ? m[1] : raw; }
+  };
+  const savedMedia = new Set(images.map(mediaIdentity));
+  const removedMedia = Array.isArray(window.__editRemovedImages) ? window.__editRemovedImages.slice() : [];
+  window.__editRemovedImages = [];
+  removedMedia.filter((entry) => {
+    const key = mediaIdentity(entry);
+    return key && !savedMedia.has(key);
+  }).forEach((entry) => { void purgeRemovedMedia(entry); });
+
   // Return THIS admin to their exact source page. The list position they
   // came from (category, search, page, scroll) was captured in
   // rememberProductsReturn() when the editor was opened and is stored in
@@ -1394,10 +1251,18 @@ const PRODUCTS_RETURN_KEY = "jaura_admin_products_return";
  *  "/admin/products?category=bags&page=2&q=tote". */
 function productsReturnUrl() {
   const params = new URLSearchParams();
-  const category = dashCat || prodCatSel || "";
+  // The live controls are authoritative at the moment the editor opens. In
+  // particular, a filter may have been changed programmatically (or while a
+  // category panel was being repainted) before the cached state variables
+  // were updated; reading the DOM here keeps the return URL faithful to what
+  // the admin is actually looking at.
+  const catEl = document.getElementById("prod-cat");
+  const searchEl = document.getElementById("prod-search");
+  const category = dashCat || String((catEl && catEl.value) || prodCatSel || "");
+  const query = String((searchEl && searchEl.value) || prodSearchQ || "").trim();
   if (category) params.set("category", category);
   if (prodPage > 1) params.set("page", String(prodPage));
-  if (prodSearchQ) params.set("q", prodSearchQ);
+  if (query) params.set("q", query);
   const qs = params.toString();
   return "/admin/products" + (qs ? "?" + qs : "");
 }
@@ -1415,10 +1280,19 @@ function readProductsReturn() {
 
 /** Capture where THIS admin is standing before an editor replaces the list. */
 function rememberProductsReturn() {
+  const catEl = document.getElementById("prod-cat");
+  const searchEl = document.getElementById("prod-search");
+  const category = dashCat || String((catEl && catEl.value) || prodCatSel || "");
+  const query = String((searchEl && searchEl.value) || prodSearchQ || "")
+    .toLowerCase().trim();
+  // Keep the process-local state aligned with the visible controls before
+  // paintDesk() removes them to open the editor.
+  if (!dashCat) prodCatSel = category;
+  prodSearchQ = query;
   const box = {
     url: productsReturnUrl(),
-    category: dashCat || prodCatSel || "",
-    q: prodSearchQ || "",
+    category,
+    q: query,
     page: Math.max(1, prodPage || 1),
     scrollTop: Math.max(0, window.scrollY || 0),
     at: Date.now(),
@@ -1453,7 +1327,18 @@ function productsStateFromUrl(raw) {
 /** Apply a captured/linked list state to the products desk module vars. */
 function applyProductsState(state) {
   const s = state || {};
-  if (typeof s.category === "string") { dashCat = s.category; prodCatSel = s.category; }
+  if (typeof s.category === "string" && s.category) {
+    const cats = (JA.categories ? JA.categories() : JA.CATEGORIES) || [];
+    const known = cats.some((c) => String((c || {}).id || "") === s.category);
+    // A saved return URL can outlive its category. Do not pin the desk to a
+    // deleted/stale id (which otherwise renders an empty list and keeps the
+    // hidden selection alive through later filter changes).
+    dashCat = known ? s.category : "";
+    prodCatSel = known ? s.category : "";
+  } else if (typeof s.category === "string") {
+    dashCat = "";
+    prodCatSel = "";
+  }
   if (typeof s.q === "string") prodSearchQ = s.q;
   if (Number.isFinite(s.page) && s.page >= 1) prodPage = s.page; else prodPage = 1;
 }
@@ -1660,10 +1545,11 @@ function productsTable() {
   const all = JA.products();
   const cats = JA.categories ? JA.categories() : JA.CATEGORIES;
   const catName = (id) => (cats.find((c) => c.id === id) || {}).name || id || "";
-  const catOpts = cats.map((c) => `<option value="${JA.escape(c.id)}" ${ (dashCat === c.id || prodCatSel === c.id) ? "selected" : ""}>${JA.escape(c.name)}</option>`).join("");
+  const activeCategory = String(dashCat || prodCatSel || "");
+  const catOpts = cats.map((c) => `<option value="${JA.escape(c.id)}" ${activeCategory === c.id ? "selected" : ""}>${JA.escape(c.name)}</option>`).join("");
   const backBtn = dashCat ? `<button type="button" class="btn btn-line" id="back-all-products">← All products</button>` : "";
   const exportBtn = `<a class="btn btn-line" href="api/admin/products.csv" download="jaura-products.csv">Export CSV</a>`;
-  const filteredNote = dashCat ? ` · <strong>${JA.escape(catName(dashCat))}</strong>` : "";
+  const filteredNote = activeCategory ? ` · <strong>${JA.escape(catName(activeCategory))}</strong>` : "";
   const qVal = JA.escape(prodSearchQ);
   return `<div class="adx-list-head">
       <button type="button" class="btn adx-add-btn" id="add-product">+ New Product</button>
@@ -1681,13 +1567,26 @@ function productsTable() {
     <p class="empty" id="prod-none" hidden>No products match that search.</p>
     <div id="prod-pager"></div>`;
 }
-function applyProductFilter() {
+function applyProductFilter(e) {
   const qEl = document.getElementById("prod-search");
   const cEl = document.getElementById("prod-cat");
+  const categoryChanged = !!(e && e.target && e.target.id === "prod-cat");
+  // A category opened from /admin/categories or a deep link pins dashCat.
+  // The select is the new explicit choice when it changes, including the
+  // empty "All categories" value; the old pin must not keep winning.
+  if (categoryChanged) dashCat = "";
   selectedProductIds.clear();
   prodSearchQ = String(qEl?.value || "").toLowerCase().trim();
   prodCatSel = String(cEl?.value || "");
   prodPage = 1;
+  if (categoryChanged) {
+    // Rebuild the heading/count as well as the list so it cannot still name
+    // the category that was pinned before this selection.
+    paintDesk("products");
+    const selected = document.getElementById("prod-cat");
+    if (selected) selected.value = prodCatSel;
+    return;
+  }
   renderProdGrid(); bindProdGridEvents();
 }
 
@@ -1804,14 +1703,19 @@ async function fillNeedsAttention() {
   try {
     const d = await window.JA_NET.api("api/admin/needs-attention");
     const pending = d.pending || [], stale = d.stale || [], low = d.lowStock || [];
+    const supplierOut = d.supplierOutOfStock || [], supplierLow = d.supplierLowStock || [];
     setOrderBadge(pending.length);
-    if (!pending.length && !low.length) {
-      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders or low-stock variants need action.</span></div>`;
+    if (!pending.length && !low.length && !supplierOut.length && !supplierLow.length) {
+      box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders or low-stock items need action.</span></div>`;
     } else {
       const pendingBlock = `<article class="attention-block"><div class="attention-title"><strong>Pending orders</strong><b>${pending.length}</b></div>${pending.length ? `<ul class="attention-list">${pending.slice(0, 5).map(attentionOrderLine).join("")}</ul>${pending.length > 5 ? `<small class="attention-more">+ ${pending.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Review orders →</button>` : `<p class="empty">No pending orders.</p>`}</article>`;
-      const lowBlock = `<article class="attention-block"><div class="attention-title"><strong>Low stock</strong><b>${low.length}</b></div>${low.length ? `<ul class="attention-list">${low.slice(0, 5).map((r) => `<li><span><strong>${esc(r.name || r.product_id || "Product")}</strong><small>${esc(r.variant_label || r.variant_key || "Variant")}</small></span><b>${Number(r.qty || 0)} left</b></li>`).join("")}${low.length > 5 ? `<small class="attention-more">+ ${low.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Manage products →</button>` : `<p class="empty">No products at five or fewer units.</p>`}</article>`;
+      const stockItems = (rows) => rows.slice(0, 5).map((r) => `<li><span><strong>${esc(r.name || r.product_id || "Product")}</strong><small>${esc(r.variant_label || r.variant_key || "Product stock")}</small></span><b>${Number(r.qty || 0)} left</b></li>`).join("");
+      const stockBlock = (title, rows, emptyText, alert) => `<article class="attention-block ${alert && rows.length ? "is-alert" : ""}"><div class="attention-title"><strong>${title}</strong><b>${rows.length}</b></div>${rows.length ? `<ul class="attention-list">${stockItems(rows)}</ul>${rows.length > 5 ? `<small class="attention-more">+ ${rows.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Manage products →</button>` : `<p class="empty">${emptyText}</p>`}</article>`;
+      const lowBlock = stockBlock("Low stock", low, "No products at five or fewer units.", false);
+      const supplierOutBlock = stockBlock("Supplier-linked · out of stock", supplierOut, "No supplier-linked products are out of stock.", true);
+      const supplierLowBlock = stockBlock("Supplier-linked · low stock", supplierLow, "No supplier-linked products are low.", false);
       const staleBlock = `<article class="attention-block ${stale.length ? "is-alert" : ""}"><div class="attention-title"><strong>Waiting over 24 hours</strong><b>${stale.length}</b></div>${stale.length ? `<ul class="attention-list">${stale.slice(0, 3).map(attentionOrderLine).join("")}</ul><button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Follow up →</button>` : `<p class="empty">No overdue pending orders.</p>`}</article>`;
-      box.innerHTML = `<div class="needs-grid">${pendingBlock}${lowBlock}${staleBlock}</div>`;
+      box.innerHTML = `<div class="needs-grid">${pendingBlock}${lowBlock}${supplierOutBlock}${supplierLowBlock}${staleBlock}</div>`;
     }
     box.querySelectorAll("[data-attention-tab]").forEach((button) => { button.onclick = () => paintDesk(button.dataset.attentionTab); });
   } catch (err) {
@@ -1907,7 +1811,7 @@ function orderReviewHTML(o) {
 function orderCardHTML(o) {
   const c = o.customer || {}; const shot = o.proofUrl || (JA.getProof && JA.getProof(o.id, o.proof)) || ""; const when = o.at ? new Date(o.at).toLocaleString() : ""; const s = o.status || "pending"; const nItems = (o.items || []).reduce((n, i) => n + (Number(i.qty) || 0), 0);
   const selected = selectedOrderIds.has(String(o.id)) ? " checked" : "";
-  return `<details class="adx-order" data-order="${esc(o.id)}"><summary class="adx-order-row"><span class="adx-select-wrap"><input type="checkbox" class="adx-row-select" data-order-select="${esc(o.id)}"${selected} aria-label="Select order ${esc(o.id)}" /></span><span class="adx-order-id">${esc(o.id)}</span><span class="adx-order-who"><strong>${esc(c.name || "Customer")}</strong><small>${esc(when)} · ${nItems} item(s)</small></span><span class="adx-order-total">${esc(JA.money(o.total, o.currency))}</span><span class="status-pill ${esc(s)}">${esc(orderStatusLabel(s))}</span></summary><div class="adx-order-body"><div class="order-card-top"><div><p><strong>${esc(c.name || "Customer")}</strong></p><p>${esc(c.email || "")}</p><p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p><p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}<p>${esc(when)}</p></div><div><p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p><p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p></div></div><ul class="order-items">${(o.items || []).map((i) => `<li>${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}${i.bulkPercent ? ` <em class="bulk-tag">bulk ${esc(String(i.bulkPercent))}% off</em>` : ""}</li>`).join("")}</ul>${(o.bulkDiscount && o.bulkDiscount.length) ? `<p class="admin-note">Automatic bulk discount applied: ${o.bulkDiscount.map((b) => `${esc(b.name)} (${b.qty} units → ${esc(String(b.percent))}%)`).join(", ")}.</p>` : ""}${orderReviewHTML(o)}${o.proofUploadFailed ? `<p class="proof-upload-failed" role="alert">⚠️ Proof Upload Failed — ask the customer to resend the receipt.</p>` : ""}${shot ? receiptViewer(shot, `Payment receipt for ${o.id}`, `${o.id}-receipt`) : `<p class="empty">No receipt attached.</p>`}<div class="order-actions">${orderActionsHTML(o)}</div></div></details>`;
+  return `<details class="adx-order" data-order="${esc(o.id)}"><summary class="adx-order-row"><span class="adx-select-wrap"><input type="checkbox" class="adx-row-select" data-order-select="${esc(o.id)}"${selected} aria-label="Select order ${esc(o.id)}" /></span><span class="adx-order-id">${esc(o.id)}</span><span class="adx-order-who"><strong>${esc(c.name || "Customer")}</strong><small>${esc(when)} · ${nItems} item(s)</small></span><span class="adx-order-total">${esc(JA.money(o.total, o.currency))}</span><span class="status-pill ${esc(s)}">${esc(orderStatusLabel(s))}</span></summary><div class="adx-order-body"><div class="order-card-top"><div><p><strong>${esc(c.name || "Customer")}</strong></p><p>${esc(c.email || "")}</p><p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p><p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}<p>${esc(when)}</p></div><div><p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p><p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p></div></div><ul class="order-items">${(o.items || []).map((i) => `<li>${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}${i.note ? ` <small class="order-item-note">${esc(i.note)}</small>` : ""}${i.bulkPercent ? ` <em class="bulk-tag">bulk ${esc(String(i.bulkPercent))}% off</em>` : ""}</li>`).join("")}</ul>${(o.bulkDiscount && o.bulkDiscount.length) ? `<p class="admin-note">Automatic bulk discount applied: ${o.bulkDiscount.map((b) => `${esc(b.name)} (${b.qty} units → ${esc(String(b.percent))}%)`).join(", ")}.</p>` : ""}${orderReviewHTML(o)}${o.proofUploadFailed ? `<p class="proof-upload-failed" role="alert">⚠️ Proof Upload Failed — ask the customer to resend the receipt.</p>` : ""}${shot ? receiptViewer(shot, `Payment receipt for ${o.id}`, `${o.id}-receipt`) : `<p class="empty">No receipt attached.</p>`}<div class="order-actions">${orderActionsHTML(o)}</div></div></details>`;
 }
 let orderFilter = "all";
 function ordersPanel() {
@@ -2294,7 +2198,7 @@ function bindOrderButtons() {
     b.onclick = async () => {
       const id = b.dataset.partial;
       const order = serverOrders.find((o) => o.id === id) || {};
-      const symbol = order.currency === "NGN" ? "₦" : "F CFA";
+      const symbol = order.currency === "NGN" ? "₦" : "CFA";
       const raw = window.prompt(`Enter the amount received in ${symbol}. The order total is ${JA.money(order.total, order.currency)}.`, "");
       if (raw == null) return;
       const paidAmount = Number(String(raw).replace(/[^0-9]/g, ""));
@@ -2657,7 +2561,8 @@ function broadcastOverrideForProduct(slot, id) {
 }
 
 function broadcastProductUrl(p) {
-  return `${location.origin}/product.html?id=${encodeURIComponent(p.id)}`;
+  const path = JA.productUrl ? JA.productUrl(p) : ("/products/" + encodeURIComponent(p.slug || p.name || "product"));
+  return new URL(path, location.origin).href;
 }
 function broadcastPriceLine(p) {
   // Active selling price only, in both currencies - never priceCompare /
@@ -2706,7 +2611,7 @@ function broadcastOptionsLine(p) {
 function broadcastFullText(p) {
   // One-tap "Copy Details" caption: exactly the merchandise details.
   //   1. Product name (EN / FR)
-  //   2. Prices (₦ NGN / F CFA)
+  //   2. Prices (₦ NGN / CFA)
   //   3. Colours / options, when the product has any
   const lines = [broadcastDisplayName(p), broadcastPriceLine(p)];
   const options = broadcastOptionsLine(p);
@@ -3198,7 +3103,7 @@ async function fillMarketing() {
       const box = $("#mk-product-options"); const q = String($("#mk-product-search")?.value || "").trim().toLowerCase();
       if (!box) return;
       const rows = campaignProducts.filter((p) => !q || `${p.name || ""} ${p.sku || ""}`.toLowerCase().includes(q));
-      box.innerHTML = rows.length ? rows.map((p) => `<label class="mk-product-option"><input type="checkbox" name="campaignProduct" value="${esc(p.id)}" ${selectedProducts.has(String(p.id)) ? "checked" : ""} /><img src="${esc(p.image_url || p.image || "images/products/_placeholder.jpg")}" alt="" /><span><b>${esc(p.name || "Product")}</b><small>${p.priceCfa ? `${Number(p.priceCfa).toLocaleString()} F CFA` : `₦${Number(p.priceNgn || 0).toLocaleString()}`}${p.badge ? ` · ${esc(p.badge)}` : ""}</small></span></label>`).join("") : `<p class="empty">No matching products.</p>`;
+      box.innerHTML = rows.length ? rows.map((p) => `<label class="mk-product-option"><input type="checkbox" name="campaignProduct" value="${esc(p.id)}" ${selectedProducts.has(String(p.id)) ? "checked" : ""} /><img src="${esc(p.image_url || p.image || "images/products/_placeholder.jpg")}" alt="" /><span><b>${esc(p.name || "Product")}</b><small>${p.priceCfa ? `${Number(p.priceCfa).toLocaleString()} CFA` : `₦${Number(p.priceNgn || 0).toLocaleString()}`}${p.badge ? ` · ${esc(p.badge)}` : ""}</small></span></label>`).join("") : `<p class="empty">No matching products.</p>`;
     };
     try { const catalog = await api("api/catalog?all=1"); campaignProducts = catalog.products || []; paintProducts(); } catch (_err) { const box = $("#mk-product-options"); if (box) box.innerHTML = `<p class="empty">Catalog unavailable.</p>`; }
     $("#mk-product-search")?.addEventListener("input", paintProducts);
@@ -3243,9 +3148,9 @@ async function fillMarketing() {
     const d = await api("api/admin/growth/settings"); const s = d.settings || {}; mkGrowthSettings = s; const card = $("#mk-settings-card");
     if (card) {
       const tierRows = (s.bulkDiscountTiers || []).map((tier) => `<div class="mk-tier-row" data-bulk-tier><label>Minimum quantity<input type="number" min="2" name="bulkMin" value="${num(tier.minQuantity)}" required /></label><label>Discount %<input type="number" min="1" max="90" name="bulkPercent" value="${num(tier.percent)}" required /></label><button type="button" class="btn btn-line" data-remove-tier>Remove</button></div>`).join("");
-      card.innerHTML = `<h3 class="admin-h">Discounts, promos & referral settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="promosEnabled" ${s.promosEnabled === 0 || s.promosEnabled === false ? "" : "checked"} /> Promotions ON — promo codes, coupons and volume discounts are live at checkout</label><p class="admin-note">Master switch for every discount: when it is OFF, the checkout promo box disappears, no coupon can be redeemed, and no bulk discount is applied — your coupons and tiers are kept intact and come back the moment you switch it back ON.</p><h4>Flexible bulk / volume discounts</h4><p class="admin-note">Create quantity tiers such as 10 units = 5%, 15 units = 10%, or 30 units = 20%. With no tiers, no automatic volume discount is applied.</p><div id="mk-bulk-tiers">${tierRows || `<p class="admin-note" data-no-tiers>No volume discount tiers configured.</p>`}</div><button class="btn btn-line" type="button" id="mk-add-tier">+ Add discount tier</button><hr /><h4>Minimum order rule — Benin &amp; Togo deliveries</h4><label class="mk-toggle"><input type="checkbox" name="minimumOrderEnabled" ${s.minimumOrderEnabled === 0 || s.minimumOrderEnabled === false ? "" : "checked"} /> Minimum order requirement ON</label><div class="admin-grid"><label>Minimum order (F CFA)<input name="minOrderCfa" type="number" min="0" step="50" value="${num(s.minOrderCfa === undefined || s.minOrderCfa === null ? 5000 : s.minOrderCfa)}" /></label></div><p class="admin-note">Deliveries to Benin &amp; Togo must reach this basket total. Type <strong>0</strong> to switch the rule OFF completely. The naira floor follows automatically from the exchange rate below: <span id="mk-min-note"></span></p><hr /><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? F CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's promo discount %<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><button class="btn" type="submit">Save settings</button></form>`;
-      const cfaNote = () => { const f = $("#mk-set-form"); const note = $("#mk-cfa-note"); if (!f || !note) return; const spend = Number(f.minSpendNgn.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = rate > 0 ? `CFA shoppers qualify from ${Math.round(spend * rate).toLocaleString()} F CFA (₦${spend.toLocaleString()} × ${rate}).` : ""; };
-      const minNote = () => { const f = $("#mk-set-form"); const note = $("#mk-min-note"); if (!f || !note) return; const minCfa = Number(f.minOrderCfa.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = minCfa <= 0 ? "the rule is OFF — any basket total is accepted." : rate > 0 ? `${Math.round(minCfa).toLocaleString()} F CFA ≈ ₦${Math.round(minCfa / rate).toLocaleString()}.` : ""; };
+      card.innerHTML = `<h3 class="admin-h">Discounts, promos & referral settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="promosEnabled" ${s.promosEnabled === 0 || s.promosEnabled === false ? "" : "checked"} /> Promotions ON — promo codes, coupons and volume discounts are live at checkout</label><p class="admin-note">Master switch for every discount: when it is OFF, the checkout promo box disappears, no coupon can be redeemed, and no bulk discount is applied — your coupons and tiers are kept intact and come back the moment you switch it back ON.</p><h4>Flexible bulk / volume discounts</h4><p class="admin-note">Create quantity tiers such as 10 units = 5%, 15 units = 10%, or 30 units = 20%. With no tiers, no automatic volume discount is applied.</p><div id="mk-bulk-tiers">${tierRows || `<p class="admin-note" data-no-tiers>No volume discount tiers configured.</p>`}</div><button class="btn btn-line" type="button" id="mk-add-tier">+ Add discount tier</button><hr /><h4>Minimum order rule — Benin &amp; Togo deliveries</h4><label class="mk-toggle"><input type="checkbox" name="minimumOrderEnabled" ${s.minimumOrderEnabled === 0 || s.minimumOrderEnabled === false ? "" : "checked"} /> Minimum order requirement ON</label><div class="admin-grid"><label>Minimum order (CFA)<input name="minOrderCfa" type="number" min="0" step="50" value="${num(s.minOrderCfa === undefined || s.minOrderCfa === null ? 5000 : s.minOrderCfa)}" /></label></div><p class="admin-note">Deliveries to Benin &amp; Togo must reach this basket total. Type <strong>0</strong> to switch the rule OFF completely. The naira floor follows automatically from the exchange rate below: <span id="mk-min-note"></span></p><hr /><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's promo discount %<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><button class="btn" type="submit">Save settings</button></form>`;
+      const cfaNote = () => { const f = $("#mk-set-form"); const note = $("#mk-cfa-note"); if (!f || !note) return; const spend = Number(f.minSpendNgn.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = rate > 0 ? `CFA shoppers qualify from ${Math.round(spend * rate).toLocaleString()} CFA (₦${spend.toLocaleString()} × ${rate}).` : ""; };
+      const minNote = () => { const f = $("#mk-set-form"); const note = $("#mk-min-note"); if (!f || !note) return; const minCfa = Number(f.minOrderCfa.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = minCfa <= 0 ? "the rule is OFF — any basket total is accepted." : rate > 0 ? `${Math.round(minCfa).toLocaleString()} CFA ≈ ₦${Math.round(minCfa / rate).toLocaleString()}.` : ""; };
       cfaNote(); minNote(); ["minSpendNgn", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", cfaNote); });
       ["minOrderCfa", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", minNote); });
       const tiersBox = $("#mk-bulk-tiers");
@@ -3472,7 +3377,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=179" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=186" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3575,7 +3480,7 @@ function paintDesk(tab = "analytics") {
   }
   $("#cancel-edit")?.addEventListener("click", () => { restoreProductsReturn(); });
   $("#add-product")?.addEventListener("click", () => { rememberProductsReturn(); editingId = "new"; paintDesk("products"); });
-  bindMedia(); bindOptions(); bindCategories(); bindCfaPreview(); bindReviewsAdmin(existing ? existing.id : "");
+  bindMedia(); bindOptions(); bindCategories(); bindCfaPreview();
 
   if (tab === "products" && !editingId) {
     renderProdGrid(); bindProdGridEvents();
@@ -3826,7 +3731,11 @@ function bindCategories() {
       const res = await JA.deleteCategory(id, "beauty");
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not delete the category. No changes are live."); return; }
     }
-    JA.toast("Category deleted."); paintDesk("categories");
+    JA.toast("Category deleted.");
+    if (dashCat === id || prodCatSel === id) {
+      dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1;
+    }
+    paintDesk("categories");
   });
   document.getElementById("add-cat")?.addEventListener("click", async () => {
     const name = (document.getElementById("new-cat-name")?.value || "").trim();
@@ -3834,7 +3743,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=179", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=186", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

@@ -128,10 +128,13 @@ def _referenced_keys():
             res = c.table("orders").select("proof_url").execute()
             for row in (getattr(res, "data", None) or []):
                 values.append(str((row or {}).get("proof_url") or ""))
-            res = c.table("receipts").select("file_url, proof_url").execute()
+            # receipts stores its uploaded object in `file_url`. `proof_url`
+            # belongs to orders and is not a column on the receipts table in
+            # the production schema; selecting it makes this whole reference
+            # scan fail and can leave the nightly sweeper stuck.
+            res = c.table("receipts").select("file_url").execute()
             for row in (getattr(res, "data", None) or []):
                 values.append(str((row or {}).get("file_url") or ""))
-                values.append(str((row or {}).get("proof_url") or ""))
             _add("supabase orders+receipts", values)
     except Exception as exc:
         raise RuntimeError(f"could not read Supabase orders/receipts: {exc}") from exc

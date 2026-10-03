@@ -63,6 +63,7 @@ FULL_PRODUCT_COLUMNS = {
     "optionPrices", "optionCompareAt", "optionSupplierSku", "optionSku",
     "reviews", "dimensions", "bulkQty", "bulkPercent", "placeholderImage",
     "usesPlaceholder", "source", "supplierId", "supplierSku", "updated_at",
+    "enableCustomNote", "customNotePrompt",
 }
 
 
@@ -299,7 +300,9 @@ def test_every_admin_upload_handler_stamps_and_persists_the_fresh_url():
     # so a tile deleted/reordered mid-upload can never hand the fresh URL to
     # the wrong photo.
     assert "window.__editImages[at] = bustMediaCache(url);" in src
-    assert "if (swapEntry(res.url)) {" in src
+    assert "if (acceptUploadedUrl(res.url, false)) {" in src
+    assert '"/media"' in src
+    assert "persistEditedMedia()" in src
     # category assets
     assert "input.dataset.catUrl = freshUrl;" in src
     assert "pic.innerHTML = _catAssetHTML(freshUrl);" in src

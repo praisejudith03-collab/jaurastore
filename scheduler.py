@@ -20,20 +20,21 @@ TICK_SECONDS = 300
 # than one page of rows in memory.
 REMINDER_PAGE_SIZE = 20
 REMINDER_MAX_PER_TICK = 200
-SUPPLIER_PAGE_SIZE = int(os.environ.get("SUPPLIER_WATCHDOG_BATCH", "8") or 8)
-# How long one supplier-linked product waits before a day-time tick may check
-# it again. Tunable per deployment (a small catalogue on a fast supplier can
-# afford a shorter wait); the nightly sweep always ignores it.
+SUPPLIER_PAGE_SIZE = int(os.environ.get("SUPPLIER_WATCHDOG_BATCH", "2") or 2)
+# Hard-bounded unique external supplier URLs per five-minute tick. The
+# watchdog clamps this to 2 even if a deployment is misconfigured.
+SUPPLIER_LINKS_PER_TICK = min(2, max(1, int(
+    os.environ.get("SUPPLIER_WATCHDOG_LINKS_PER_TICK", "2") or 2)))
+# Cooldown is per supplier URL (not per product); nightly maintenance honors
+# the same interval instead of bypassing it with a full-catalogue burst.
 SUPPLIER_MIN_INTERVAL = int(os.environ.get("SUPPLIER_WATCHDOG_MIN_INTERVAL", "3600") or 3600)
 
 # ------------------------------------------------------------- nightly 2 AM
-# The off-peak deep pass: once per day, at 2:00 AM in the owner's timezone
-# (Africa/Porto-Novo, UTC+1 by default), the scheduler runs the full supplier
-# watchdog sweep (every linked product once, instead of the day-time batches
-# of 8) followed by the storage sweeper that purges orphaned / duplicate
-# media the day's edits left behind. Render's free tier has no real cron, so
-# the in-process loop IS the cron: each 5-minute tick checks whether the
-# nightly hour has passed and the deep pass has not run yet today.
+# The once-a-day maintenance pass runs one more cooldown-protected supplier
+# batch and the storage sweeper that purges orphaned / duplicate media the
+# day's edits left behind. Render's free tier has no real cron, so the
+# in-process loop IS the cron: each 5-minute tick checks whether the nightly
+# hour has passed and the pass has not run yet today.
 NIGHTLY_HOUR = int(os.environ.get("SUPPLIER_WATCHDOG_NIGHTLY_HOUR", "2") or 0)
 NIGHTLY_TZ_OFFSET = float(os.environ.get("SUPPLIER_WATCHDOG_NIGHTLY_TZ_OFFSET", "1") or 0)
 _last_nightly_date = ""
@@ -57,7 +58,11 @@ def _nightly_due(now=None):
 
 def _supplier_nightly(logger=None):
     import supplier_watchdog
-    return supplier_watchdog.nightly_sweep(logger=logger)
+    result = supplier_watchdog.nightly_sweep(
+        logger=logger, min_interval_seconds=SUPPLIER_MIN_INTERVAL,
+        link_limit=SUPPLIER_LINKS_PER_TICK)
+    _health["supplierLastRun"] = result.get("at") or _utc_now()
+    return result
 
 
 def _storage_sweeper(logger=None):
@@ -86,7 +91,7 @@ def _storage_sweeper(logger=None):
 
 
 def _nightly_run(logger=None):
-    """The 2 AM deep pass: full supplier sweep + storage sweeper, once a day."""
+    """At 2 AM run one paced supplier batch plus the bounded storage sweeper."""
     global _last_nightly_date
     now = datetime.datetime.utcnow()
     local = now + datetime.timedelta(hours=NIGHTLY_TZ_OFFSET)
@@ -219,11 +224,12 @@ def _persist_counters(logger=None):
 
 
 def _supplier_watchdog(logger=None):
-    """Run one bounded supplier-stock page in the web service process."""
+    """Run a two-link, cooldown-protected supplier batch in the web process."""
     import supplier_watchdog
     result = supplier_watchdog.tick(limit=SUPPLIER_PAGE_SIZE,
                                     min_interval_seconds=SUPPLIER_MIN_INTERVAL,
-                                    logger=logger)
+                                    logger=logger,
+                                    link_limit=SUPPLIER_LINKS_PER_TICK)
     _health["supplierLastRun"] = result.get("at") or _utc_now()
     return result
 
@@ -234,10 +240,12 @@ def _maintenance_tick(logger=None):
     _step("scheduler.remirror_strays", lambda: _remirror(logger), logger)
     _step("scheduler.repair_photos", lambda: _repair_photos(logger), logger)
     _step("scheduler.persist_counters", lambda: _persist_counters(logger), logger)
-    _step("supplier.watchdog", lambda: _supplier_watchdog(logger), logger)
-    # The once-a-day 2:00 AM deep pass (full supplier sweep + storage sweeper).
+    # Nightly maintenance replaces (rather than adds to) the regular supplier
+    # batch, so the same five-minute cycle never doubles the two-link ceiling.
     if _nightly_due():
         _step("scheduler.nightly", lambda: _nightly_run(logger), logger)
+    else:
+        _step("supplier.watchdog", lambda: _supplier_watchdog(logger), logger)
     _health["maintenanceLastRun"] = _utc_now()
 
 

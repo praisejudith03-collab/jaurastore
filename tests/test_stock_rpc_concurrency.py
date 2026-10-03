@@ -24,7 +24,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 PRODUCTS_DDL = Path("schema_sections/01_products.sql").read_text()
+PRODUCT_COMPATIBILITY_SQL = Path("schema_sections/09_product_compatibility.sql").read_text()
 STOCK_SQL = Path("schema_sections/16_stock.sql").read_text()
+INVENTORY_GUARDRAILS_SQL = Path("inventory_guardrails.sql").read_text()
 
 PRODUCTS = [
     # one unit left: the classic two-buyers race
@@ -46,15 +48,17 @@ def _seed_rows():
     values = []
     for p in PRODUCTS:
         opt = ("'" + json.dumps(p["optionStock"]) + "'") if p["optionStock"] else "null"
+        options = ("'[{\"title\":\"Colour\",\"values\":[\"Red\",\"Black\"]}]'"
+                   if p["id"] == "rpc-var" else "null")
         values.append(
             "('{id}', '{sku}', '{slug}', '{name}', {price}, {stock}, "
-            "{sq}, {opt}, true)".format(id=p["id"], sku=p["sku"], slug=p["slug"],
+            "{sq}, {opt}, {options}, true)".format(id=p["id"], sku=p["sku"], slug=p["slug"],
                                         name=p["name"], price=p["priceNgn"],
                                         stock=p["stock"], sq=p["stock_quantity"],
-                                        opt=opt))
+                                        opt=opt, options=options))
     # Only the columns the stock guard touches; the rest default.
     return ("insert into products (id, sku, slug, name, \"priceNgn\", stock, "
-            "stock_quantity, \"optionStock\", online) values " + ",".join(values))
+            "stock_quantity, \"optionStock\", options, online) values " + ",".join(values))
 
 
 @pytest.fixture(scope="module")
@@ -85,11 +89,16 @@ def pg():
                 if result.returncode != 0 and not error:
                     raise AssertionError(result.stderr)
                 return result
-            # The products table DDL + both stock RPCs, committed (the race
-            # sessions must see the seed rows).
+            # Products DDL + the compatibility-owned supplier RPC and stock
+            # RPCs, committed (race sessions must see seed rows).
             executable = Path(pgserver.__file__).parent / "pginstall/bin/psql"
-            setup = ("create schema stock_test; set search_path = stock_test, public;\n"
-                     + PRODUCTS_DDL + "\n" + STOCK_SQL + "\n" + _seed_rows() + "\n")
+            # Exercise the production public schema: SECURITY DEFINER stock
+            # RPCs pin search_path to public and therefore must never depend on
+            # a caller-supplied shadow schema.
+            setup = ("set search_path = public;\n"
+                     + PRODUCTS_DDL + "\n" + PRODUCT_COMPATIBILITY_SQL + "\n"
+                     + STOCK_SQL + "\n" + INVENTORY_GUARDRAILS_SQL + "\n"
+                     + _seed_rows() + "\n")
             result = subprocess.run(
                 [str(executable), "-X", "-qAt", "-v", "ON_ERROR_STOP=1",
                  "-h", str(base), "-p", "5432", "-U", "schema_test", "-d", "postgres"],
@@ -175,3 +184,67 @@ def test_release_restores_product_and_variant(pg):
     assert json.loads(_row(pg, "rpc-var", '"optionStock"'))["Red"] == 1
     assert _row(pg, "rpc-var", "stock_quantity") == "5"
     assert _row(pg, "rpc-var", "stock") == "5"
+
+
+def test_supplier_rpc_reduces_one_variant_and_preserves_concurrent_admin_edits(pg):
+    setup_sql = '''
+    update products set name='Admin title', "priceNgn"=7777,
+      "optionStock"='{"Red":5,"Black":4}'::jsonb,
+      stock=9, stock_quantity=9 where id='rpc-var';
+    select sync_supplier_stock('rpc-var',6,'{"Red":2}'::jsonb,false,'["Red","Black"]'::jsonb)::text;
+    '''
+    out = pg["run"](setup_sql)
+    assert out.stdout.strip().splitlines()[-1] == "true"
+    assert json.loads(_row(pg, "rpc-var", '"optionStock"')) == {"Red": 2, "Black": 4}
+    assert _row(pg, "rpc-var", "stock_quantity") == "6"
+    assert _row(pg, "rpc-var", "name") == "Admin title"
+    assert _row(pg, "rpc-var", '"priceNgn"') == "7777"
+
+
+def test_supplier_rpc_cannot_restore_a_checkout_reservation(pg):
+    pg["run"]('''
+      update products set "optionStock"='{"Red":1,"Black":4}'::jsonb,
+        stock=5,stock_quantity=5 where id='rpc-var';
+      select reserve_product_stock('rpc-var',1,'Red');
+    ''')
+    out = pg["run"]("select sync_supplier_stock('rpc-var',5,'{\"Red\":1}'::jsonb,false,'[\"Red\",\"Black\"]'::jsonb)::text;")
+    assert out.stdout.strip() == "true"
+    assert json.loads(_row(pg, "rpc-var", '"optionStock"')) == {"Red": 0, "Black": 4}
+    assert _row(pg, "rpc-var", "stock_quantity") == "4"
+
+
+def test_supplier_rpc_increases_only_when_explicitly_allowed(pg):
+    out = pg["run"]("select sync_supplier_stock('rpc-last',4,null,true,null)::text;")
+    assert out.stdout.strip() == "true"
+    assert _row(pg, "rpc-last", "stock_quantity") == "4"
+
+
+def test_supplier_rpc_cannot_recreate_an_option_removed_after_snapshot(pg):
+    # The supplier fetch began while both variants existed. Before the patch
+    # lands, an admin removes Red from both the option list and stock map.
+    pg["run"]('''
+      update products set options='[{"title":"Colour","values":["Red","Black"]}]'::jsonb,
+        "optionStock"='{"Red":1,"Black":4}'::jsonb,stock=5,stock_quantity=5
+        where id='rpc-var';
+      update products set options='[{"title":"Colour","values":["Black"]}]'::jsonb,
+        "optionStock"='{"Black":4}'::jsonb,stock=4,stock_quantity=4
+        where id='rpc-var';
+    ''')
+    out = pg["run"]("select sync_supplier_stock('rpc-var',50,'{\"Red\":25,\"Black\":2}'::jsonb,true,'[\"Red\",\"Black\"]'::jsonb)::text;")
+    assert out.stdout.strip() == "true"
+    assert json.loads(_row(pg, "rpc-var", '"optionStock"')) == {"Black": 2}
+    assert _row(pg, "rpc-var", "stock_quantity") == "2"
+
+
+def test_supplier_rpc_never_recreates_a_missing_product(pg):
+    out = pg["run"]("select sync_supplier_stock('rpc-missing',3,null,false,null)::text;")
+    assert out.stdout.strip() == "false"
+    assert pg["run"]("select count(*) from products where id='rpc-missing';").stdout.strip() == "0"
+
+
+def test_product_level_reservation_cannot_bypass_unassigned_variants(pg):
+    pg["run"]("update products set stock=5,stock_quantity=5, \"optionStock\"=null, "
+               "options='[\"Red\",\"Blue\"]'::jsonb where id='rpc-last';")
+    out = pg["run"]("select reserve_product_stock('rpc-last',1,null)::text;")
+    assert out.stdout.strip() == "false"
+    assert _row(pg, "rpc-last", "stock_quantity") == "5"

@@ -46,13 +46,20 @@ def test_stock_update_is_variant_isolated(monkeypatch):
     }</script>''')
     saved = {}
 
-    def fake_upsert(row, actor=None):
+    def fake_apply(pid, stock, option_changes=None, actor=None, allow_increase=False, option_snapshot_keys=None):
+        options = {"Chocolate": 5, "Black": 3}
+        for key, value in (option_changes or {}).items():
+            incoming = max(0, int(value or 0))
+            options[key] = incoming if allow_increase else min(options.get(key, 0), incoming)
+        row = {"id": pid, "optionStock": options,
+               "stock": sum(options.values()), "stock_quantity": sum(options.values()),
+               "supplierSku": product["supplierSku"]}
         saved.update(row)
         return row, "updated", True
 
-    monkeypatch.setattr(supplier_watchdog.catalog_mod, "upsert", fake_upsert)
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "apply_supplier_stock", fake_apply)
     ok, warnings = supplier_watchdog.sync_product(product)
     assert ok is True
     assert warnings == []
-    assert saved["optionStock"] == {"Chocolate": 0, "Black": 3}
-    assert saved["stock"] == 3
+    assert saved["optionStock"] == {"Chocolate": 0, "Black": 1}
+    assert saved["stock"] == 1

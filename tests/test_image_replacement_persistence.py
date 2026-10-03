@@ -218,6 +218,53 @@ def test_replacing_a_product_image_survives_every_readback(client, iso_catalog):
     assert new_url[len("/uploads/"):] in fake.objects
 
 
+def test_existing_product_media_replacement_publishes_and_purges_immediately(
+        client, iso_catalog, monkeypatch):
+    """The media-only edit is live before a separate Product Save is pressed."""
+    tok = login(client)
+    old_url = _upload(client, tok, "immediate-old.jpg")
+    new_url = _upload(client, tok, "immediate-new.jpg")
+    _save(client, tok, _row("jau-immediate-media", name="Immediate Media",
+                            image=old_url, images=[old_url]))
+
+    response = client.put(
+        "/api/admin/products/jau-immediate-media/media",
+        json={"images": [new_url]}, headers={"X-CSRF-Token": tok})
+    assert response.status_code == 200, response.data
+    saved = response.get_json()["product"]
+    assert saved["image"] == saved["image_url"] == new_url
+    assert saved["images"] == [new_url]
+    assert old_url[len("/uploads/"):] not in fake.objects
+    assert new_url[len("/uploads/"):] in fake.objects
+    assert _supabase_row("jau-immediate-media")["image"] == new_url
+
+    # A failed row save must not remove the only saved image. The new upload
+    # remains an unreferenced orphan, eligible for the guarded cleanup later.
+    newer_url = _upload(client, tok, "failed-replacement.jpg")
+    monkeypatch.setattr(catalog_mod, "upsert",
+                        lambda *_args, **_kwargs: (None, "error", False))
+    failed = client.put(
+        "/api/admin/products/jau-immediate-media/media",
+        json={"images": [newer_url]}, headers={"X-CSRF-Token": tok})
+    assert failed.status_code == 503
+    assert new_url[len("/uploads/"):] in fake.objects
+    assert _supabase_row("jau-immediate-media")["image"] == new_url
+
+
+def test_admin_editor_autopublishes_existing_product_media_without_full_save():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "js" / "admin.js").read_text()
+    assert '"/media"' in source
+    assert 'method: "PUT", json: { images }, label: "Product photos"' in source
+    assert "persistEditedMedia()" in source
+    assert "Photo update is live; unused replaced files were deleted." in source
+    assert "The previous saved photo is safe." in source
+    assert "const editorStillCurrent = session === Number(window.__editMediaSession || 0)" in source
+    assert "window.__editMediaSave = Promise.resolve();" not in source
+    assert "Keep the file until Save is confirmed" not in source
+
+
 def test_the_old_image_never_returns_after_a_third_save(client, iso_catalog):
     """Replace, then edit the price only: the OLD cover must not resurrect."""
     tok = login(client)

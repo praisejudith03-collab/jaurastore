@@ -48,46 +48,52 @@ def _row(pid="jau-ghost-1", **over):
 # ------------------------------------- the last line of defence before a write
 
 def test_a_product_deleted_during_a_sync_is_never_written_back(monkeypatch):
-    """The exact race: the row was selected while it was alive, the owner
-    deleted it, and only now does the watchdog try to save. Nothing may be
-    written - a write would re-create the row and clear the tombstone."""
+    """A tombstone blocks the stock-only write before it reaches storage."""
     written = []
     monkeypatch.setattr(catalog_mod, "deleted_product_ids", lambda: {"jau-ghost-1"})
-    monkeypatch.setattr(catalog_mod, "upsert",
-                        lambda row, actor=None: written.append(row["id"]))
+    monkeypatch.setattr(catalog_mod, "apply_supplier_stock",
+                        lambda *args, **kwargs: written.append(args))
 
     warnings = []
     ok, warnings = supplier_watchdog._save_synced(
         _row(), _row(stock=9), "supplier-watchdog", warnings)
 
-    assert written == [], "the watchdog re-created a product the owner deleted"
+    assert written == [], "the watchdog tried to update an owner-deleted product"
     assert ok is False
     assert warnings[0]["code"] == "product_deleted_during_sync"
 
 
-def test_a_live_product_still_syncs_normally(monkeypatch):
-    """The guard must not turn the watchdog off for ordinary products."""
-    written = []
+def test_a_live_product_receives_only_a_stock_patch(monkeypatch):
+    """No stale name/price/image payload can be replayed over concurrent edits."""
+    calls = []
+    latest = _row(name="Admin's current name", priceNgn=9000, image="latest.jpg")
     monkeypatch.setattr(catalog_mod, "deleted_product_ids", lambda: set())
-    monkeypatch.setattr(catalog_mod, "upsert",
-                        lambda row, actor=None: (written.append(row["id"]),
-                                                 (row, "updated", True))[1])
 
+    def patch(pid, stock, option_changes=None, actor=None, allow_increase=False, option_snapshot_keys=None):
+        calls.append((pid, stock, option_changes, actor, allow_increase))
+        latest["stock"] = latest["stock_quantity"] = stock
+        return latest, "updated", True
+
+    monkeypatch.setattr(catalog_mod, "apply_supplier_stock", patch)
+    stale = _row(name="Stale name", priceNgn=1000, image="old.jpg")
     warnings = []
     ok, warnings = supplier_watchdog._save_synced(
-        _row(), _row(stock=9), "supplier-watchdog", warnings)
+        stale, _row(stock=3, stock_quantity=3, name="Stale name",
+                    priceNgn=1000, image="old.jpg"),
+        "supplier-watchdog", warnings)
 
-    assert written == ["jau-ghost-1"]
     assert ok is True and warnings == []
+    assert calls == [("jau-ghost-1", 3, None, "supplier-watchdog", True)]
+    assert latest["name"] == "Admin's current name"
+    assert latest["priceNgn"] == 9000 and latest["image"] == "latest.jpg"
+    assert latest["stock"] == 3
 
 
-def test_the_never_recreate_list_is_honoured_before_the_written_check(monkeypatch):
-    """catalog.upsert() answers (None, "permanently-removed", True) for a
-    never-re-create row. Read as "saved=False" that would be reported as a
-    failed sync and the operator would go looking for a supplier problem."""
+def test_the_never_recreate_result_is_honoured_before_the_written_check(monkeypatch):
+    """The atomic UPDATE-only RPC reports a delete that won the race."""
     monkeypatch.setattr(catalog_mod, "deleted_product_ids", lambda: set())
-    monkeypatch.setattr(catalog_mod, "upsert",
-                        lambda row, actor=None: (None, "permanently-removed", True))
+    monkeypatch.setattr(catalog_mod, "apply_supplier_stock",
+                        lambda *args, **kwargs: (None, "permanently-removed", True))
 
     warnings = []
     ok, warnings = supplier_watchdog._save_synced(
@@ -99,8 +105,7 @@ def test_the_never_recreate_list_is_honoured_before_the_written_check(monkeypatc
 
 
 def test_a_deleted_id_is_skipped_by_both_the_tick_and_the_nightly_sweep(monkeypatch):
-    """The night pass touches every linked product, so it is the one most
-    likely to run hours after a deletion."""
+    """Neither the daytime nor nightly link batch may sync a tombstoned id."""
     monkeypatch.setattr(supplier_watchdog, "enabled", lambda: True)
     monkeypatch.setattr(supplier_watchdog.catalog_mod, "merged",
                         lambda include_hidden=False: [_row(), _row("jau-live-1")])
@@ -109,10 +114,11 @@ def test_a_deleted_id_is_skipped_by_both_the_tick_and_the_nightly_sweep(monkeypa
     supplier_watchdog._last_checked.clear()
 
     for run in (lambda: supplier_watchdog.tick(limit=10, min_interval_seconds=0),
-                lambda: supplier_watchdog.nightly_sweep()):
+                lambda: supplier_watchdog.nightly_sweep(min_interval_seconds=0)):
+        supplier_watchdog._last_checked.clear()
         synced = []
         monkeypatch.setattr(supplier_watchdog, "sync_product",
-                            lambda p, actor="supplier-watchdog":
+                            lambda p, actor="supplier-watchdog", allowed_urls=None:
                                 (synced.append(p["id"]), (True, []))[1])
         run()
         assert "jau-ghost-1" not in synced
@@ -128,12 +134,23 @@ class _Recorder:
         self.missing = set(missing)
         self.rpc_error = rpc_error
         self.deleted = []
+        self.tombstones = []
         self.rpc_calls = []
 
     def table(self, name):
         rec = self
 
         class _T:
+            def upsert(self_inner, rows, **_kwargs):
+                class _U:
+                    def execute(self_inner2):
+                        if name in rec.missing:
+                            raise RuntimeError(
+                                f'Could not find the table public.{name} (PGRST205)')
+                        rec.tombstones.extend(rows)
+                        return type("R", (), {"data": rows})()
+                return _U()
+
             def delete(self_inner):
                 class _D:
                     def in_(self_inner2, col, ids):
@@ -166,26 +183,41 @@ class _Recorder:
                 rec.rpc_calls.append((name, tuple(params["product_ids"])))
                 if rec.rpc_error:
                     raise rec.rpc_error
+                if "deleted_products" in rec.missing:
+                    raise RuntimeError("relation public.deleted_products does not exist")
                 return type("Res", (), {"data": list(params["product_ids"])})()
         return _R()
 
 
-def test_every_named_product_table_is_purged(monkeypatch):
-    """products, product_variants, product_prices, product_options and the
-    rest must all be swept - a survivor is exactly what the storage sweeper
-    later mistakes for live media."""
+def test_missing_atomic_delete_rpc_fails_closed(monkeypatch):
+    """Without the RPC, a REST delete can race a supplier write that already
+    passed its trigger; no row or media may be reported as deleted."""
     rec = _Recorder(rpc_error=RuntimeError("cascade not installed"))
+    legacy_writes = []
     monkeypatch.setattr(sb, "client", lambda: rec)
-    monkeypatch.setattr(sb, "add_deleted_id", lambda pid: True)
+    monkeypatch.setattr(sb, "add_deleted_id", lambda pid: legacy_writes.append(pid) or True)
 
     report = sb.hard_delete_products(["jau-x-1"])
 
-    tables = [t for t, _ in rec.deleted]
-    for expected in ("products", "product_variants", "product_prices",
-                     "product_options", "variant_stock", "product_reviews",
-                     "product_views", "featured_products"):
-        assert expected in tables, f"{expected} was never purged"
-    assert report["deleted"] == ["jau-x-1"]
+    assert report["deleted"] == []
+    assert report["errors"] and "hard_delete_products.sql" in report["errors"][0]
+    assert rec.deleted == []
+    assert legacy_writes == []
+
+
+def test_hard_delete_fails_closed_when_the_race_safe_guard_is_missing(monkeypatch):
+    """Without the SQL tombstone table/trigger, REST deletion can race a stale
+    save, so the route must not claim an absolute delete succeeded."""
+    rec = _Recorder(missing={"deleted_products"})
+    monkeypatch.setattr(sb, "client", lambda: rec)
+    monkeypatch.setattr(sb, "add_deleted_id", lambda pid: True)
+
+    report = sb.hard_delete_products(["jau-x-guard-missing"])
+
+    assert report["deleted"] == []
+    assert report["errors"] and "hard_delete_products.sql" in report["errors"][0]
+    assert rec.rpc_calls == [("hard_delete_products", ("jau-x-guard-missing",))]
+    assert rec.deleted == []
 
 
 def test_a_table_that_does_not_exist_is_skipped_not_failed(monkeypatch):
@@ -250,9 +282,9 @@ def test_the_cascade_and_the_sweep_never_both_delete_the_children(monkeypatch):
     assert len(rec.deleted) == len(set(rec.deleted))
 
 
-def test_a_missing_cascade_function_still_deletes_the_row(monkeypatch):
-    """Deploys that have not run the SQL yet must get a real delete, not a
-    silent no-op that reports success."""
+def test_a_missing_cascade_function_never_falls_back_to_an_unsafe_delete(monkeypatch):
+    """An incomplete migration is a visible failure, not a race-prone REST
+    delete that can let a stale supplier write recreate the product."""
     rec = _Recorder(rpc_error=RuntimeError(
         "Could not find the function public.hard_delete_products"))
     monkeypatch.setattr(sb, "client", lambda: rec)
@@ -260,8 +292,10 @@ def test_a_missing_cascade_function_still_deletes_the_row(monkeypatch):
 
     report = sb.hard_delete_products(["jau-x-5"])
 
-    assert ("products", ("jau-x-5",)) in rec.deleted
-    assert report["deleted"] == ["jau-x-5"]
+    assert rec.rpc_calls == [("hard_delete_products", ("jau-x-5",))]
+    assert rec.deleted == []
+    assert report["deleted"] == []
+    assert report["errors"]
 
 
 def test_a_failed_delete_is_never_reported_as_deleted(monkeypatch):
@@ -315,3 +349,26 @@ def test_the_sql_migration_creates_a_real_cascade():
     assert "create or replace function public.hard_delete_products" in lowered
     # the tombstone stays single-sourced in growth_settings
     assert "deleted_product_ids_json" in lowered
+
+
+def test_production_supplier_patch_calls_only_the_update_rpc(monkeypatch):
+    calls = []
+
+    class _RpcResult:
+        def execute(self):
+            return type("Result", (), {"data": True})()
+
+    class _Client:
+        def rpc(self, name, params):
+            calls.append((name, params))
+            return _RpcResult()
+
+    monkeypatch.setattr(sb, "client", lambda: _Client())
+    monkeypatch.setattr(sb, "invalidate_read_cache", lambda *_args: None)
+    ok = sb.apply_supplier_stock("jau-live-1", 4, {"Red": 2}, allow_increase=False)
+    assert ok is True
+    assert calls == [("sync_supplier_stock", {
+        "p_id": "jau-live-1", "p_stock": 4,
+        "p_option_stock_changes": {"Red": 2}, "p_allow_increase": False,
+        "p_option_snapshot_keys": None,
+    })]

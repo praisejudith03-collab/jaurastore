@@ -42,13 +42,16 @@ def test_abandoned_cart_threshold_is_twenty_minutes():
     assert datetime.timedelta(minutes=19, seconds=55) <= age <= datetime.timedelta(minutes=20, seconds=5)
 
 
-def test_admin_exposes_discount_and_merchandising_controls():
+def test_product_editor_excludes_redundant_discount_and_merchandising_fields():
     source = (ROOT / "js/admin.js").read_text(encoding="utf-8")
-    for label in ("Flexible bulk / volume discounts", "Minimum quantity",
-                  "Option price overrides", "Promo Discount", "Best Seller",
-                  "New Product Arrival", "Price reduction / strikethrough"):
-        assert label in source
-    assert "data-opt-price" in source and "bulkDiscountTiers" in source
+    form = source[source.index("function productForm(p = {})"):source.index("async function handleProductSubmit")]
+    for removed in ("Option price overrides", "Promo Discount", "Best Seller",
+                    "New Product Arrival", "Price reduction / strikethrough",
+                    "bulkQty", "bulkPercent", "data-opt-price"):
+        assert removed not in form, removed
+    # Shop-wide volume tiers remain available outside the product editor.
+    assert "bulkDiscountTiers" in source
+    assert "data-opt-price" not in source
 
 
 def test_watchdog_runs_hourly_and_audits_service_health():

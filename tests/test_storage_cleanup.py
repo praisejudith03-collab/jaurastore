@@ -322,6 +322,105 @@ def test_cli_tool_has_the_same_grace_window():
 
 # ---------------------------------------- the Supabase scan path (fake bucket)
 
+def test_supabase_reference_scan_uses_receipts_file_url_schema(monkeypatch):
+    """The live receipts table has file_url, not the orders-only proof_url."""
+    from types import SimpleNamespace
+    import db
+    import supabase_settings
+    import supabase_store
+
+    order_url = "/uploads/proofs/order-proof.jpg"
+    receipt_url = "/uploads/proofs/receipt-proof.jpg"
+
+    class Query:
+        def __init__(self, table):
+            self.table_name = table
+            self.fields = []
+
+        def select(self, projection):
+            self.fields = [part.strip() for part in projection.split(",")]
+            allowed = {"orders": {"proof_url"}, "receipts": {"file_url"}}
+            unknown = set(self.fields) - allowed.get(self.table_name, set())
+            if unknown:
+                raise RuntimeError(
+                    f"column {self.table_name}.{sorted(unknown)[0]} does not exist")
+            return self
+
+        def execute(self):
+            if self.table_name == "orders":
+                return SimpleNamespace(data=[{"proof_url": order_url}])
+            if self.table_name == "receipts":
+                return SimpleNamespace(data=[{"file_url": receipt_url}])
+            raise AssertionError(f"unexpected table {self.table_name}")
+
+    class Client:
+        def table(self, name):
+            return Query(name)
+
+    monkeypatch.setattr(catalog_mod, "merged", lambda **_kwargs: [])
+    monkeypatch.setattr(db, "query", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(supabase_store, "client", lambda: Client())
+    monkeypatch.setattr(supabase_settings, "enabled", lambda: False)
+    monkeypatch.setattr(storage_cleanup, "_category_rows", lambda: [])
+
+    keys, sources = storage_cleanup._referenced_keys()
+    assert keys == {"proofs/order-proof.jpg", "proofs/receipt-proof.jpg"}
+    assert sources["supabase orders+receipts"] == 2
+
+
+def test_supabase_order_delete_reads_receipt_file_url_only(monkeypatch):
+    """Order deletion can still purge a receipt against the production schema."""
+    from types import SimpleNamespace
+    import supabase_store
+
+    receipt_url = "https://jaura.supabase.co/storage/v1/object/public/uploads/proofs/receipt.png"
+    order_url = "https://jaura.supabase.co/storage/v1/object/public/uploads/proofs/order.png"
+    removed_urls = []
+
+    class Query:
+        def __init__(self, table):
+            self.table_name = table
+            self.operation = "select"
+            self.fields = []
+
+        def select(self, projection):
+            self.fields = [part.strip() for part in projection.split(",")]
+            allowed = {"receipts": {"id", "file_url"}, "orders": {"proof_url"}}
+            unknown = set(self.fields) - allowed.get(self.table_name, set())
+            if unknown:
+                raise RuntimeError(
+                    f"column {self.table_name}.{sorted(unknown)[0]} does not exist")
+            return self
+
+        def eq(self, _column, _value):
+            return self
+
+        def delete(self):
+            self.operation = "delete"
+            return self
+
+        def execute(self):
+            if self.operation == "delete":
+                return SimpleNamespace(data=[])
+            if self.table_name == "receipts":
+                return SimpleNamespace(data=[{"id": "R-1", "file_url": receipt_url}])
+            if self.table_name == "orders":
+                return SimpleNamespace(data=[{"proof_url": order_url}])
+            return SimpleNamespace(data=[])
+
+    class Client:
+        def table(self, name):
+            return Query(name)
+
+    monkeypatch.setattr(supabase_store, "client", lambda: Client())
+    monkeypatch.setattr(
+        supabase_store, "_delete_storage_object_from_url",
+        lambda url: removed_urls.append(url) or True)
+
+    assert supabase_store.delete_order("JA-RECEIPT-1") is True
+    assert removed_urls == [receipt_url, order_url]
+
+
 class _FakeStorageBucket:
     """Minimal in-memory Supabase bucket: list / download / remove."""
 

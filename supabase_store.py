@@ -388,18 +388,18 @@ def _canonicalize_product(row, _c=None):
         p["image_url"] = p["image"]
     if p.get("image") is None and p.get("image_url") is not None:
         p["image"] = p["image_url"]
-    if p.get("stock_quantity") is None and p.get("stock") is not None:
-        p["stock_quantity"] = p["stock"]
-    if p.get("stock") is None and p.get("stock_quantity") is not None:
-        p["stock"] = p["stock_quantity"]
+    # The canonical column wins by presence, not by truthiness. A NULL/blank
+    # stock_quantity is zero stock; reading the legacy `stock` alias in that
+    # case could silently resurrect inventory after a bad import.
+    if "stock_quantity" not in p:
+        p["stock_quantity"] = p.get("stock") if "stock" in p else 0
     try:
-        p["stock"] = int(p.get("stock") or 0)
+        stock_qty = max(0, int(str(p.get("stock_quantity") or "0").strip()))
     except (TypeError, ValueError):
-        p["stock"] = 0
-    try:
-        p["stock_quantity"] = int(p.get("stock_quantity") or 0)
-    except (TypeError, ValueError):
-        p["stock_quantity"] = 0
+        stock_qty = 0
+    p["stock_quantity"] = stock_qty
+    # Keep the legacy alias in lock-step for older storefront/mirror readers.
+    p["stock"] = stock_qty
     supplier = (p.get("supplierSku") or p.get("supplier_sku") or
                 p.get("supplierUrl") or p.get("supplier_url") or "")
     p["supplierSku"] = supplier
@@ -449,7 +449,7 @@ _CRITICAL_PRODUCT_COLUMNS = frozenset({
     "optionStock", "optionPrices", "optionCompareAt", "optionSupplierSku",
     "optionSku", "reviews", "dimensions", "bulkQty", "bulkPercent",
     "placeholderImage", "usesPlaceholder", "source", "supplierId",
-    "supplierSku", "updated_at",
+    "supplierSku", "updated_at", "enableCustomNote", "customNotePrompt",
 })
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
 
@@ -571,10 +571,10 @@ def _product_media_urls(row):
 
 
 # Every table that hangs off a product row and must go with it. `products`
-# itself is deleted by the cascade; these are listed so the explicit fallback
-# (used when the hard_delete_products SQL function is not installed yet) still
-# leaves nothing behind. Tables that do not exist are skipped silently - the
-# list is a superset, not a manifest.
+# itself is deleted by the atomic SQL function; the follow-up sweep also clears
+# historical orphan rows from legacy tables whose existing data prevented a
+# foreign key from being validated. Tables that do not exist are skipped - the
+# list is a superset, not a schema manifest.
 PRODUCT_CHILD_TABLES = (
     ("product_variants", "product_id"),
     ("product_prices", "product_id"),
@@ -615,11 +615,14 @@ def hard_delete_products(ids):
     deleted-ids list, which is what stops the bundled seed copy from being
     served again.
 
-    The deletion is a single SQL CASCADE: the ``hard_delete_products`` Postgres
-    function (see hard_delete_products.sql) deletes from ``products`` and lets
-    ``ON DELETE CASCADE`` take every child table with it. When that function is
-    not installed yet the same work is done table by table, so the behaviour is
-    identical either way.
+    The deletion and SQL tombstones must be committed together by the
+    ``hard_delete_products`` Postgres function (see hard_delete_products.sql).
+    A REST delete fallback is deliberately forbidden: it cannot share the
+    transaction/advisory lock with a concurrent supplier upsert, so it could
+    report success while a stale write recreates the row. If the migration is
+    missing or the RPC fails, fail closed and leave the row and its media
+    untouched. The follow-up child sweep clears historical orphan rows that
+    could not be attached to a foreign key during migration.
 
     Returns {"deleted": [ids], "files": n, "errors": [str]}. Never raises.
     """
@@ -644,39 +647,41 @@ def hard_delete_products(ids):
         except Exception as exc:
             report["errors"].append(f"read {pid}: {exc}")
 
-    # 2. delete the rows themselves. If this fails, do NOT purge media: the
-    #    product is still live and would be left with broken files.
-    #    Preferred path is one SQL statement that cascades every child table.
-    deleted_by_sql = False
+    # 2. Delete AND tombstone in one Postgres transaction. A table-by-table
+    #    REST fallback is not race-safe: it cannot share the advisory lock with
+    #    a supplier write already in flight, so the stale writer could land
+    #    after the parent delete. The SQL migration is therefore required.
     try:
         res = c.rpc("hard_delete_products", {"product_ids": ids}).execute()
-        deleted_by_sql = True
+        raw_deleted = getattr(res, "data", None)
+        if isinstance(raw_deleted, dict):
+            raw_deleted = raw_deleted.get("hard_delete_products")
+        if isinstance(raw_deleted, str):
+            raw_deleted = [raw_deleted]
+        if not isinstance(raw_deleted, (list, tuple)):
+            raise RuntimeError("hard_delete_products returned an invalid result")
+        deleted_ids = [str(pid or "").strip() for pid in raw_deleted
+                       if str(pid or "").strip()]
     except Exception as exc:
-        report.setdefault("cascadeFallback", True)
-        print(f"[supabase] cascade delete unavailable ({exc}); "
-              f"deleting row-by-row with the same effect")
-    try:
-        if not deleted_by_sql:
-            c.table("products").delete().in_("id", ids).execute()
-        report["deleted"] = list(ids)
-        invalidate_read_cache()
-    except Exception as exc:
-        report["errors"].append(f"delete: {exc}")
+        report["errors"].append(
+            "atomic hard delete unavailable or failed; apply/check hard_delete_products.sql: "
+            + str(exc))
         return report
 
-    # 3. durable tombstone, so the bundled seed copy stays suppressed too.
-    #    This is what makes the deletion ABSOLUTE: no mirror, watchdog, cache
-    #    re-hydration or redeploy can serve the id again.
+    report["deleted"] = deleted_ids
+    invalidate_read_cache()
+
+    # 3. Mirror the durable SQL tombstone into the legacy list only after the
+    #    atomic RPC succeeds. The SQL ledger is authoritative; this preserves
+    #    compatibility with older readers and seed suppression across deploys.
     for pid in ids:
         try:
-            add_deleted_id(pid)
+            if not add_deleted_id(pid):
+                report["errors"].append(f"tombstone mirror {pid}: write was not confirmed")
         except Exception as exc:
-            report["errors"].append(f"tombstone {pid}: {exc}")
+            report["errors"].append(f"tombstone mirror {pid}: {exc}")
 
-    # 4. child rows. With the SQL function installed the CASCADE already took
-    #    product_variants / product_prices / product_options / variant_stock /
-    #    reviews / views / featured_products with it; without it we sweep them
-    #    here so nothing is orphaned either way.
+    # 4. Clear historical orphans as well as the rows cascaded by the RPC.
     report["errors"].extend(_purge_product_children(c, ids))
 
     # 5. purge unreferenced files. storage.delete_upload() refuses to remove an
@@ -758,12 +763,57 @@ def reserve_product_stock(product_id, qty, option=None):
                     {"p_id": pid, "p_qty": qty, "p_option": opt}).execute()
         ok = _res_data(res)
         reserved = bool(ok and (ok[0] if isinstance(ok, list) else ok))
+        # A failed guard can mean another shopper just took stock. Invalidate
+        # too, so the 409 response and the next public read report that fresh
+        # remaining quantity rather than a cached pre-race number.
+        invalidate_read_cache("products_rows")
         if not reserved:
             return None          # out of stock / offline product
-        invalidate_read_cache()     # stock moved: the next catalogue read must show it
-        return product_by_id(pid)
+        # The RPC's successful UPDATE is authoritative. Do not turn a later
+        # read-back timeout into a false reservation failure: the caller would
+        # miss this line while rolling back earlier ones and leak its units.
+        return True
     except Exception as exc:
         print(f"[supabase] reserve_product_stock failed: {exc}")
+        return False
+
+
+def apply_supplier_stock(product_id, stock, option_changes=None, allow_increase=False,
+                         option_snapshot_keys=None):
+    """Patch only supplier-observed inventory on an existing product row.
+
+    The SQL RPC takes the product's advisory lock, merges only changed variant
+    keys, and performs UPDATE (never upsert). A deleted/stale product therefore
+    cannot be recreated by a watchdog run, and concurrent title/price/image
+    edits are untouched. By default, observed counts are also capped at the
+    latest database count to avoid restoring a checkout reservation made while
+    the supplier page was loading.
+    """
+    c = client()
+    if c is None:
+        return False
+    try:
+        pid = str(product_id or "").strip()
+        qty = max(0, int(stock))
+        if option_changes is not None and not isinstance(option_changes, dict):
+            return False
+        changes = option_changes
+        if not pid or qty > 10**7:
+            return False
+        result = c.rpc("sync_supplier_stock", {
+            "p_id": pid,
+            "p_stock": qty,
+            "p_option_stock_changes": changes,
+            "p_allow_increase": bool(allow_increase),
+            "p_option_snapshot_keys": option_snapshot_keys,
+        }).execute()
+        data = _res_data(result)
+        applied = bool(data and (data[0] if isinstance(data, list) else data))
+        invalidate_read_cache("products_rows")
+        return applied
+    except Exception as exc:
+        print(f"[supabase] apply supplier stock failed: {exc}")
+        invalidate_read_cache("products_rows")
         return False
 
 
@@ -1580,13 +1630,14 @@ def delete_order(order_id):
 
     urls = []
     try:
-        res = (c.table("receipts").select("id, file_url, proof_url")
+        # `receipts` stores the uploaded object in `file_url`; `proof_url`
+        # belongs to the parent `orders` row and is not present in this table.
+        res = (c.table("receipts").select("id, file_url")
                .eq("order_id", order_id).execute())
         for row in _res_data(res):
-            for key in ("file_url", "proof_url"):
-                u = str((row or {}).get(key) or "").strip()
-                if u:
-                    urls.append(u)
+            u = str((row or {}).get("file_url") or "").strip()
+            if u:
+                urls.append(u)
     except Exception as exc:
         print(f"[supabase] receipt lookup failed: {exc}")
     try:
@@ -1795,6 +1846,69 @@ def load_supplier_sync_warnings():
 # disk and is wiped with it. Keep the id list in growth_settings so a delete
 # survives deploys the same way categories and the Delivery page do.
 DELETED_IDS_KEY = "deleted_product_ids_json"
+HARD_DELETED_PRODUCTS_TABLE = "deleted_products"
+
+
+def _clean_deleted_ids(ids):
+    out = []
+    seen = set()
+    for item in ids or []:
+        pid = str(item or "").strip()
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        out.append(pid)
+    return out
+
+
+def _upsert_hard_deleted_ids(c, ids):
+    """Write transaction-safe permanent tombstones to the SQL ledger."""
+    clean = _clean_deleted_ids(ids)
+    if not clean:
+        return True
+    if c is None:
+        return False
+    c.table(HARD_DELETED_PRODUCTS_TABLE).upsert(
+        [{"product_id": pid} for pid in clean]
+    ).execute()
+    invalidate_read_cache("hard_deleted_ids")
+    return True
+
+
+def load_hard_deleted_ids():
+    """Load immutable SQL tombstones, or None if the ledger is unavailable.
+
+    This dedicated table is the transaction-safe source for absolute deletes.
+    The legacy JSON list below remains as a compatibility mirror for earlier
+    deployments, but only the SQL ledger + trigger can serialize a delete
+    against a concurrent upsert.
+    """
+    def _fetch():
+        c = client()
+        if c is None:
+            return None
+        try:
+            out = []
+            seen = set()
+            offset = 0
+            while True:
+                query = c.table(HARD_DELETED_PRODUCTS_TABLE).select("product_id")
+                res = _page(query, min(PAGE_SIZE, 500), offset).execute()
+                rows = _res_data(res)
+                for row in rows:
+                    pid = str((row or {}).get("product_id") or "").strip()
+                    if pid and pid not in seen:
+                        seen.add(pid)
+                        out.append(pid)
+                if len(rows) < min(PAGE_SIZE, 500):
+                    break
+                offset += len(rows)
+            return out
+        except Exception as exc:
+            print(f"[supabase] hard-deleted ids load failed: {exc}")
+            return None
+
+    return cached_read("hard_deleted_ids", _fetch)
 
 
 def load_deleted_ids():
@@ -1870,22 +1984,32 @@ def save_deleted_ids(ids):
 
 
 def add_deleted_id(pid):
-    """Add one product id to the durable tombstone list. Never raises.
+    """Record one permanent tombstone in the SQL ledger and legacy JSON list.
 
-    Returns True when the id is recorded (or already was). A failed read
-    still attempts a write of just this id so a momentary blip cannot leave
-    a delete with no tombstone at all.
+    The SQL table is the race-safe source of truth; the old growth_settings
+    array is retained for compatibility with older readers. Never raises and
+    returns True if either durable write confirms the id.
     """
     pid = str(pid or "").strip()
     if not pid:
         return False
+    ledger_written = False
+    c = client()
+    if c is not None:
+        try:
+            ledger_written = _upsert_hard_deleted_ids(c, [pid])
+        except Exception as exc:
+            print(f"[supabase] hard-delete tombstone write failed: {exc}")
     current = load_deleted_ids()
     if current is None:
-        # Best-effort single-id write: better a partial list than none.
-        return save_deleted_ids([pid])
-    if pid in current:
-        return True
-    return save_deleted_ids(list(current) + [pid])
+        # Best-effort compatibility write: the dedicated SQL ledger remains
+        # authoritative if the legacy JSON row is unavailable.
+        legacy_written = save_deleted_ids([pid])
+    elif pid in current:
+        legacy_written = True
+    else:
+        legacy_written = save_deleted_ids(list(current) + [pid])
+    return bool(ledger_written or legacy_written)
 
 
 def clear_deleted_id(pid):

@@ -18,18 +18,19 @@
 --     returns only the ids that were REALLY there, so a caller can never be
 --     told "deleted" for a row that survived.
 --
--- The durable "do not ever serve this id again" list stays in
--- growth_settings.deleted_product_ids_json and is still written by the app
--- (supabase_store.add_deleted_id) immediately after this call. It is
--- deliberately NOT duplicated here: two tombstone lists would eventually
--- disagree, and the disagreement is exactly how a deleted product returns.
+-- A dedicated deleted_products ledger and products trigger make the
+-- non-resurrection rule transactional. The app also mirrors ids into the
+-- legacy growth_settings.deleted_product_ids_json row for older readers, but
+-- that JSON array is NOT the concurrency guard: it cannot serialize a stale
+-- upsert that started at the same time as a delete.
 --
 -- Run it once in the Supabase SQL editor. It is idempotent: re-running it
 -- never loses data and never fails on a table that already exists.
 --
--- supabase_store.hard_delete_products() calls the function when it exists and
--- falls back to deleting row-by-row (with the same table list) when it does
--- not, so the app behaves identically either way.
+-- supabase_store.hard_delete_products() requires this function and fails
+-- closed if it is missing: a REST delete cannot share the transaction lock
+-- with a supplier upsert already in flight, so a row-by-row fallback could
+-- recreate a ghost immediately after reporting success.
 
 -- ---------------------------------------------------------------- children
 -- product_variants / product_prices / product_options exist on deployments
@@ -157,15 +158,66 @@ begin
     exception when others then
       raise notice
         'hard_delete_products: left %.% on its existing constraint (%). '
-        'It is still deleted row-by-row by the app.', t, new_name, sqlerrm;
+        'Historical orphan rows in this table are removed by the post-delete app sweep.',
+        t, new_name, sqlerrm;
     end;
   end loop;
 end $$;
 
+-- ---------------------------------------------------------- permanent guard
+-- Keep a small tombstone after the products row is gone. The advisory
+-- transaction lock is shared by the product trigger and the delete RPC:
+-- whichever transaction wins serializes first, so a stale upsert either lands
+-- before the delete (and is then deleted) or sees the tombstone and is rejected.
+create table if not exists public.deleted_products (
+  product_id text primary key,
+  deleted_at timestamptz not null default now()
+);
+alter table public.deleted_products enable row level security;
+revoke all on table public.deleted_products from public;
+
+do $$
+declare
+  r text;
+begin
+  foreach r in array array['anon', 'authenticated', 'authenticator'] loop
+    if exists (select 1 from pg_roles where rolname = r) then
+      execute format('revoke all on table public.deleted_products from %I', r);
+    end if;
+  end loop;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    execute 'grant select, insert, update on table public.deleted_products to service_role';
+  end if;
+end $$;
+
+create or replace function public.reject_hard_deleted_product()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended(new.id::text, 0));
+  if exists (select 1 from public.deleted_products d
+              where d.product_id = new.id::text) then
+    raise exception 'product id % was permanently deleted', new.id
+      using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.reject_hard_deleted_product() from public;
+
+drop trigger if exists products_reject_hard_deleted_id on public.products;
+create trigger products_reject_hard_deleted_id
+before insert or update on public.products
+for each row execute function public.reject_hard_deleted_product();
+
 -- ---------------------------------------------------------------- the delete
--- One statement, one transaction: the CASCADE takes every child row with it,
--- so there is no window in which the product is gone but its variants,
--- prices, options, stock rows, reviews or view counters are not.
+-- One statement, one transaction: record tombstones and delete the parent
+-- rows atomically. The CASCADE takes every child row with it, so there is no
+-- window in which the product is gone but its variants, prices, options,
+-- stock rows, reviews or view counters are not.
 create or replace function public.hard_delete_products(product_ids text[])
 returns text[]
 language plpgsql
@@ -174,10 +226,33 @@ set search_path = public
 as $$
 declare
   gone text[];
+  pid  text;
 begin
   if product_ids is null or coalesce(array_length(product_ids, 1), 0) = 0 then
     return '{}'::text[];
   end if;
+
+  -- Lock ids in a stable order to avoid deadlocks when a bulk delete overlaps
+  -- another write. The product trigger takes this same per-id transaction
+  -- lock, closing the stale-watchdog/upsert race across processes.
+  for pid in
+    select distinct nullif(btrim(input_id), '')
+      from unnest(product_ids) as input_ids(input_id)
+     where nullif(btrim(input_id), '') is not null
+     order by 1
+  loop
+    perform pg_advisory_xact_lock(hashtextextended(pid, 0));
+  end loop;
+
+  -- Commit a durable tombstone in the SAME transaction as the delete. Even an
+  -- id with no current row is tombstoned: a stale mirror cannot create it
+  -- later. Inserts/updates serialize on the advisory lock and the trigger
+  -- rejects them after this transaction commits.
+  insert into public.deleted_products (product_id)
+    select distinct nullif(btrim(input_id), '')
+      from unnest(product_ids) as input_ids(input_id)
+     where nullif(btrim(input_id), '') is not null
+  on conflict (product_id) do nothing;
 
   -- Report only ids that were really there. An unknown id comes back empty,
   -- so the app can never answer "deleted" for a row that survived.

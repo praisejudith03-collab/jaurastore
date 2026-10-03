@@ -90,6 +90,24 @@ def test_no_project_key_parser_fails_closed(monkeypatch):
     assert storage._key_from_url(ORIGIN + '/storage/v1/object/public/uploads/proofs/a.png') == ''
 
 
+def test_upload_delete_fails_closed_when_live_product_references_cannot_be_read(
+        monkeypatch, tmp_path):
+    import catalog
+
+    photo = tmp_path / "saved-photo.jpg"
+    photo.write_bytes(b"the only saved copy")
+    monkeypatch.setattr(Config, "UPLOAD_MODE", "local")
+    monkeypatch.setattr(storage, "_key_from_url", lambda _url: "products/saved-photo.jpg")
+    monkeypatch.setattr(storage, "resolve_local", lambda _key: str(photo))
+
+    def unavailable(**_kwargs):
+        raise RuntimeError("catalogue unavailable")
+
+    monkeypatch.setattr(catalog, "merged", unavailable)
+    assert storage.delete_upload("/uploads/products/saved-photo.jpg") is False
+    assert photo.read_bytes() == b"the only saved copy"
+
+
 def test_image_migration_refuses_other_buckets_before_client(monkeypatch):
     import migrate_images
     monkeypatch.setattr(migrate_images, '_client', lambda: pytest.fail('must not contact Supabase'))

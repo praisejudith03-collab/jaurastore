@@ -65,8 +65,8 @@ window.I18N_PHRASES = {
   "Naira — UBA": "Naira — UBA",
   "CFA (Benin) — MTN MoMo": "CFA (Bénin) — MTN MoMo",
   "Togo Moov:": "Moov Togo :",
-  "MTN MoMo Benin (F CFA)": "MTN MoMo Bénin (F CFA)",
-  "Moov Money Togo (F CFA)": "Moov Money Togo (F CFA)",
+  "MTN MoMo Benin (CFA)": "MTN MoMo Bénin (CFA)",
+  "Moov Money Togo (CFA)": "Moov Money Togo (CFA)",
   "UBA bank transfer (₦ Naira)": "Virement bancaire UBA (₦ Naira)",
   "Other bank transfer": "Autre virement bancaire",
 
@@ -154,11 +154,11 @@ window.I18N_PHRASES = {
     "Cette photo n'a pas été téléversée. L'envoi sera réessayé automatiquement.",
   "Enter the ₦ price. CFA is converted on the website.":
     "Saisissez le prix en ₦. Le CFA est converti sur le site.",
-  "Naira is the only price you enter on products. The website converts F CFA at":
-    "Le Naira est le seul prix que vous saisissez pour les produits. Le site convertit le F CFA à",
-  "Enter Naira only — F CFA is converted at 1 ₦ = 0.44.":
-    "Saisissez uniquement le Naira — le F CFA est converti à 1 ₦ = 0,44.",
-  "1 ₦ = 0.44 F CFA": "1 ₦ = 0,44 F CFA",
+  "Naira is the only price you enter on products. The website converts CFA at":
+    "Le Naira est le seul prix que vous saisissez pour les produits. Le site convertit le CFA à",
+  "Enter Naira only — CFA is converted at 1 ₦ = 0.44.":
+    "Saisissez uniquement le Naira — le CFA est converti à 1 ₦ = 0,44.",
+  "1 ₦ = 0.44 CFA": "1 ₦ = 0,44 CFA",
 
   // ----------------------------------------------------------- admin: orders
   "Orders": "Commandes",
@@ -365,16 +365,16 @@ window.I18N_PHRASES = {
   "J Aura Store (\"we\", \"us\") is a boutique retailer of fashion, beauty and lifestyle goods, serving customers in Nigeria, Benin and neighbouring West African states. Contact:":
     "J Aura Store (« nous ») est une boutique de mode, beauté et art de vivre, au service des clients du Nigeria, du Bénin et des États voisins d'Afrique de l'Ouest. Contact :",
   "2. Prices and currency": "2. Prix et devise",
-  "Naira is our base price. F CFA amounts shown on the site are converted at our house rate of":
-    "Le Naira est notre prix de base. Les montants en F CFA affichés sur le site sont convertis à notre taux maison de",
-  ". Where an item has no Naira price, it is listed in F CFA only. Prices may change without notice, but the price confirmed at checkout is the price you pay.":
-    ". Lorsqu'un article n'a pas de prix en Naira, il est affiché uniquement en F CFA. Les prix peuvent changer sans préavis, mais le prix confirmé à la commande est celui que vous payez.",
+  "Naira is our base price. CFA amounts shown on the site are converted at our house rate of":
+    "Le Naira est notre prix de base. Les montants en CFA affichés sur le site sont convertis à notre taux maison de",
+  ". Where an item has no Naira price, it is listed in CFA only. Prices may change without notice, but the price confirmed at checkout is the price you pay.":
+    ". Lorsqu'un article n'a pas de prix en Naira, il est affiché uniquement en CFA. Les prix peuvent changer sans préavis, mais le prix confirmé à la commande est celui que vous payez.",
   "3. Orders": "3. Commandes",
   "Placing an order creates an offer to buy. A contract is formed only when we confirm your payment. We may decline or cancel an order where an item is out of stock, mispriced, or where we suspect fraud.":
     "Passer commande constitue une offre d'achat. Le contrat n'est formé qu'à la confirmation de votre paiement. Nous pouvons refuser ou annuler une commande en cas de rupture de stock, d'erreur de prix ou de soupçon de fraude.",
   "4. Payment": "4. Paiement",
-  "We accept direct bank transfer in Naira (UBA) and in F CFA (MTN MoMo Benin). Send your payment screenshot through the link shown after checkout, quoting your order ID in the transfer remark.":
-    "Nous acceptons le virement bancaire direct en Naira (UBA) et en F CFA (MTN MoMo Bénin). Envoyez votre capture de paiement via le lien affiché après la commande, en indiquant votre numéro de commande dans le motif du virement.",
+  "We accept direct bank transfer in Naira (UBA) and in CFA (MTN MoMo Benin). Send your payment screenshot through the link shown after checkout, quoting your order ID in the transfer remark.":
+    "Nous acceptons le virement bancaire direct en Naira (UBA) et en CFA (MTN MoMo Bénin). Envoyez votre capture de paiement via le lien affiché après la commande, en indiquant votre numéro de commande dans le motif du virement.",
   "5. Delivery": "5. Livraison",
   "Delivery coverage and lead times are confirmed at checkout by city. Transport fare is quoted after your order is placed and depends on location and parcel weight.":
     "Les zones et délais de livraison sont confirmés à la commande selon la ville. Les frais de transport sont annoncés après la commande et dépendent de la localité et du poids du colis.",
@@ -390,6 +390,8 @@ window.I18N_PHRASES = {
    * pdp.* dictionary keys. */
   "Sold out": "Épuisé",
   "Out of stock": "Rupture de stock",
+  "Enable Custom Product Note": "Activer la note personnalisée sur l’article",
+  "e.g. colour, size, scent, or another detail": "ex. couleur, taille, parfum ou autre détail",
   "Choose <strong>Out of stock</strong> to stop sales. Choose <strong>In stock</strong> and set a quantity so customers can add it to cart.":
     "Choisissez <strong>Rupture de stock</strong> pour arrêter les ventes. Choisissez <strong>En stock</strong> et indiquez une quantité pour que les clients puissent l'ajouter au panier.",
 

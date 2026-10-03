@@ -11,6 +11,7 @@ is unavailable the tests skip rather than pretend to have checked anything.
 """
 import pathlib
 import subprocess
+import time
 
 import pytest
 
@@ -63,6 +64,7 @@ drop table if exists public.variant_stock cascade;
 drop table if exists public.product_options cascade;
 drop table if exists public.product_prices cascade;
 drop table if exists public.product_variants cascade;
+drop table if exists public.deleted_products cascade;
 drop table if exists public.products cascade;
 
 create table public.products (
@@ -143,6 +145,8 @@ def test_the_cascade_actually_takes_the_children(db):
     assert sorted(gone.strip("{}").split(",")) == ["p1", "p2"], gone
 
     assert one(db, "select count(*) from public.products") == "1"
+    assert one(db, "select count(*) from public.deleted_products "
+                   "where product_id in ('p1','p2')") == "2"
     # the child that had a RESTRICT foreign key - upgraded by the migration
     assert one(db, "select count(*) from public.variant_stock") == "0"
     # the child that had none
@@ -171,6 +175,65 @@ def test_it_reports_only_ids_that_were_really_there(db):
     assert one(db, "select public.hard_delete_products(array[]::text[])") == "{}"
     assert one(db, "select public.hard_delete_products(null)") == "{}"
     assert one(db, "select count(*) from public.products") == "1"
+    # Unknown ids are tombstoned too, so a later stale import cannot make one.
+    assert one(db, "select count(*) from public.deleted_products "
+                   "where product_id in ('p1','does-not-exist')") == "2"
+
+
+def test_hard_deleted_ids_cannot_be_reinserted_or_updated(db):
+    """A row-level trigger is the final guard against stale watchdog writes."""
+    fresh(db)
+    run(db, "insert into public.products (id, name) values ('p1','One')")
+    one(db, "select public.hard_delete_products(array['p1'])")
+    with pytest.raises(AssertionError, match="permanently deleted"):
+        run(db, "insert into public.products (id, name) values ('p1','Ghost')")
+    assert one(db, "select count(*) from public.products where id='p1'") == "0"
+    assert one(db, "select count(*) from public.deleted_products where product_id='p1'") == "1"
+
+
+def test_concurrent_stale_insert_waits_for_delete_then_hits_tombstone(db):
+    """An in-flight supplier insert cannot win after the atomic delete.
+
+    The deleter deliberately takes the same advisory lock and holds its
+    transaction open. The stale INSERT starts before commit and blocks inside
+    the trigger; once the tombstone commits, that trigger must see it and reject
+    the write (rather than using a stale statement snapshot to make a ghost).
+    """
+    fresh(db)
+    run(db, "insert into public.products (id, name) values ('p1','One')")
+    from pgserver._commands import POSTGRES_BIN_PATH
+    psql = str(POSTGRES_BIN_PATH / "psql")
+    delete_sql = """
+        begin;
+        select pg_advisory_xact_lock(hashtextextended('p1', 0));
+        select pg_sleep(0.35);
+        select public.hard_delete_products(array['p1']);
+        commit;
+    """
+    deleter = subprocess.Popen(
+        [psql, db.get_uri(), "-At", "-v", "ON_ERROR_STOP=1", "-f", "-"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True)
+    try:
+        deleter.stdin.write(delete_sql)
+        deleter.stdin.close()
+        deleter.stdin = None
+        time.sleep(0.08)  # let the delete transaction acquire its per-id lock
+        stale = subprocess.run(
+            [psql, db.get_uri(), "-At", "-v", "ON_ERROR_STOP=1", "-c",
+             "insert into public.products (id, name) values ('p1','Stale supplier copy')"],
+            capture_output=True, text=True, timeout=10)
+        stdout, stderr = deleter.communicate(timeout=10)
+    finally:
+        if deleter.poll() is None:
+            deleter.kill()
+            deleter.communicate()
+
+    assert deleter.returncode == 0, stderr
+    assert stale.returncode != 0, stale.stdout
+    assert "permanently deleted" in stale.stderr
+    assert one(db, "select count(*) from public.products where id='p1'") == "0"
+    assert one(db, "select count(*) from public.deleted_products where product_id='p1'") == "1"
 
 
 def test_one_table_of_orphans_cannot_abort_the_whole_migration(db):
@@ -268,8 +331,8 @@ def test_it_applies_on_a_database_with_no_supabase_roles(db):
 
 
 def test_the_app_calls_it_with_the_name_and_argument_in_the_file():
-    """A renamed parameter here would make every delete fall back to the slow
-    row-by-row path, silently. Keep the two in step."""
+    """A renamed parameter here would make every delete fail closed. Keep
+    the application and the atomic migration contract in step."""
     import supabase_store
     sql = SQL_PATH.read_text().lower()
     src = pathlib.Path(supabase_store.__file__).read_text()

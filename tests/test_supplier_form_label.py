@@ -1,18 +1,8 @@
-"""Admin product form pins the supplier-link field wording.
+"""The simplified product editor labels supplier links succinctly.
 
-Owner directive (2026-10-01):
-  * the product form's supplier field label reads EXACTLY
-    "Supplier URL for Auto Stock Sync";
-  * the form stays clean - the long explainer paragraph
-    ("For single products, this controls the whole product stock. For
-    products with variants...") must never appear again;
-  * the sync itself runs quietly in the background (watchdog), which
-    tests/test_no_background_supplier_sync.py pins;
-  * a supplier link already on a product can never be wiped by any save
-    path that later touches the product (covered by
-    tests/test_supplier_stock_rules.py).
-
-Run with:  python3 -m pytest tests/test_supplier_form_label.py -q
+The create/edit form calls the product-level field "Main supplier URL" and
+separates independent option URLs in their own section. Long watchdog prose and
+legacy metadata labels stay out of the product editor.
 """
 import os
 
@@ -24,11 +14,15 @@ def _admin_src():
     return src
 
 
-def test_supplier_field_label_is_exact():
+def test_supplier_fields_are_named_for_the_simplified_product_editor():
     src = _admin_src()
-    assert "Supplier URL for Auto Stock Sync" in src, (
-        "the admin product form must label the supplier field "
-        "exactly 'Supplier URL for Auto Stock Sync'")
+    start = src.index("function productForm(p = {})")
+    end = src.index("async function handleProductSubmit", start)
+    product_form = src[start:end]
+    assert '<label>Main supplier URL</label>' in product_form
+    assert 'name="supplierSku"' in product_form
+    assert "Options and variant supplier URLs" in product_form
+    assert "Supplier URL per option" in src
 
 
 def test_no_long_helper_paragraph_around_the_supplier_field():

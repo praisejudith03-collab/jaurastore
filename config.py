@@ -191,6 +191,6 @@ class Config:
 
     LOW_STOCK_THRESHOLD = 5
 
-    # Hard stock cap: when on, checkout refuses quantities above stock with
-    # HTTP 409. ENFORCE_STOCK=0 switches the check off instantly (no redeploy).
-    ENFORCE_STOCK = os.environ.get("ENFORCE_STOCK", "1") != "0"
+    # Deprecated compatibility setting. Inventory is a safety invariant now:
+    # no environment value may disable cart/checkout stock validation.
+    ENFORCE_STOCK = True

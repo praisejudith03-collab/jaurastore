@@ -9,6 +9,13 @@ window.JA_NET = (function () {
   var STORE = "jobs";
   var MAX_ATTEMPTS = 8;
   var MAX_QUEUE = 300;
+  // The floating sync pill is feedback, not a permanent queue monitor. Keep
+  // it transient: it slides away 1.4s after it appears and has a hard 5s cap.
+  // Durable offline jobs remain in IndexedDB/localStorage and the admin's
+  // Connection & sync panel; they must never pin a badge on screen forever.
+  var PILL_AUTO_DISMISS_MS = 1400;
+  var PILL_HARD_TIMEOUT_MS = 5000;
+  var PILL_TRANSITION_MS = 260;
 
   var token = "";
   var tokenAt = 0;
@@ -117,7 +124,10 @@ window.JA_NET = (function () {
     // with it the reCAPTCHA site key — the widget stayed empty.
     var opts = { credentials: "same-origin", cache: "no-store" };
     if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
-      opts.signal = AbortSignal.timeout(30000);
+      // CSRF bootstrap is part of the request budget too. Leaving this at
+      // 30s let a frozen config request hold every admin write before the
+      // actual API call (and its own timeout) ever started.
+      opts.signal = AbortSignal.timeout(5000);
     }
     inflight = fetch("/api/config", opts)
       .then(function (r) { return r.json(); })
@@ -286,49 +296,79 @@ window.JA_NET = (function () {
   }
 
   function send(job) {
-    return csrf().then(function (tok) {
-      // A fresh reCAPTCHA token per attempt: v3 tokens expire in ~2 minutes,
-      // so a queued offline retry must never reuse the original one.
+    var abortMs = job.timeout || (job.bodyKind === "blob" ? 300000 : 5000);
+    var deadlineAt = Date.now() + abortMs;
+    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = null;
+    var timedOut = new Promise(function (_resolve, reject) {
+      timer = setTimeout(function () {
+        try { if (ctl) ctl.abort(); } catch (e) {}
+        var err = new Error("Request timed out after " + Math.ceil(abortMs / 1000) + " seconds.");
+        err.name = "TimeoutError";
+        err.status = 0;
+        err.retryable = true;
+        err.timeout = true;
+        reject(err);
+      }, abortMs);
+    });
+
+    // One deadline covers CSRF bootstrap, reCAPTCHA, response headers AND the
+    // response body. Previously the 25s timer started only at fetch(), and
+    // cleared as soon as headers arrived; a hanging config/token/body request
+    // could therefore leave the outbox badge saying "Syncing" indefinitely.
+    var attempt = csrf().then(function (tok) {
+      // A fresh reCAPTCHA token per attempt: a queued retry must never reuse
+      // the expired token from the original submit.
       var rcp = job.recaptcha ? recaptcha(job.recaptcha) : Promise.resolve("");
       return rcp.then(function (rct) {
-      var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
-      var abortMs = job.timeout || (job.bodyKind === "blob" ? 300000 : 25000);
-      var timer = ctl ? setTimeout(function () { ctl.abort(); }, abortMs) : null;
-      var hdrs = headersFor(job, tok);
-      if (rct) hdrs["X-Recaptcha-Token"] = rct;
-      if (rct) { try { resetRecaptcha(); } catch (e) {} }
-      return fetch(job.url, {
-        method: job.method,
-        headers: hdrs,
-        body: buildBody(job),
-       credentials: "include",
-        signal: ctl ? ctl.signal : undefined,
-        cache: "no-store",
-        keepalive: !!job.keepalive,
-      }).then(function (r) {
-        if (timer) clearTimeout(timer);
-        var bad = r.status >= 500 || r.status === 429 || r.status === 0;
-        return r.text().then(function (t) {
-          var data = null;
-          try { data = JSON.parse(t); } catch (e) { data = null; }
-          if (!r.ok) {
-            var err = new Error((data && data.error) || ("HTTP " + r.status));
-            err.status = r.status; err.retryable = bad; err.data = data;
-            throw err;
-          }
-          return data || {};
+        if (Date.now() >= deadlineAt) {
+          var expired = new Error("Request timed out after " + Math.ceil(abortMs / 1000) + " seconds.");
+          expired.name = "TimeoutError"; expired.status = 0;
+          expired.retryable = true; expired.timeout = true;
+          throw expired;
+        }
+        var hdrs = headersFor(job, tok);
+        if (rct) hdrs["X-Recaptcha-Token"] = rct;
+        if (rct) { try { resetRecaptcha(); } catch (e) {} }
+        return fetch(job.url, {
+          method: job.method,
+          headers: hdrs,
+          body: buildBody(job),
+          credentials: "include",
+          signal: ctl ? ctl.signal : undefined,
+          cache: "no-store",
+          keepalive: !!job.keepalive,
         });
-      }, function (e) {
-        if (timer) clearTimeout(timer);
-        var err = e instanceof Error ? e : new Error("network");
-        err.retryable = true;
-        throw err;
       });
+    }).then(function (r) {
+      var bad = r.status >= 500 || r.status === 429 || r.status === 0;
+      return r.text().then(function (t) {
+        var data = null;
+        try { data = JSON.parse(t); } catch (e) { data = null; }
+        if (!r.ok) {
+          var err = new Error((data && data.error) || ("HTTP " + r.status));
+          err.status = r.status; err.retryable = bad; err.data = data;
+          throw err;
+        }
+        return data || {};
       });
+    }).catch(function (e) {
+      var err = e instanceof Error ? e : new Error("network");
+      if (ctl && ctl.signal.aborted && Date.now() >= deadlineAt) {
+        err.timeout = true;
+        err.name = "TimeoutError";
+        err.message = "Request timed out after " + Math.ceil(abortMs / 1000) + " seconds.";
+      }
+      if (err.retryable !== false) err.retryable = true;
+      throw err;
+    });
+
+    return Promise.race([attempt, timedOut]).finally(function () {
+      if (timer) clearTimeout(timer);
     });
   }
 
-  function enqueue(job) {
+  function enqueue(job, quietIndicator) {
     if (jobs.length >= MAX_QUEUE) {
       var evictAt = -1;
       for (var i = 0; i < jobs.length; i++) {
@@ -343,7 +383,10 @@ window.JA_NET = (function () {
       body: job.body || null, blob: job.blob || null, field: job.field || "file",
       filename: job.filename || "", extra: job.extra || null,
       recaptcha: job.recaptcha || "",
-      label: job.label || "", tries: 0, nextAt: 0, createdAt: Date.now(),
+      label: job.label || "", timeout: job.timeout || 0,
+      keepalive: !!job.keepalive,
+      tries: 0, nextAt: 0, createdAt: Date.now(),
+      badgeHidden: !!quietIndicator, notifiedFailure: false,
     };
     return idbPut(rec).then(function (stored) {
       jobs.push(rec);
@@ -390,7 +433,11 @@ window.JA_NET = (function () {
     ready.forEach(function (rec) {
       chain = chain.then(function () {
         if (navigator.onLine === false) return null;
-        if (force) rec.dead = false;
+        if (force) {
+          rec.dead = false;
+          rec.badgeHidden = false;
+          rec.notifiedFailure = false;
+        }
         return send(rec).then(function (data) {
           drop(rec);
           if (rec.label && window.JA && JA.toast) JA.toast(rec.label + " saved.");
@@ -401,20 +448,28 @@ window.JA_NET = (function () {
           rec.nextAt = Date.now() + Math.min(300000, Math.pow(2, rec.tries) * 5000);
           if (!err.retryable || rec.tries >= MAX_ATTEMPTS) {
             // A permanently failed change is dropped here on purpose. It used
-            // to be flagged `dead` and KEPT in the queue, where nothing ever
-            // removed it: the pill kept counting it and sat there reading
-            // "Syncing 1 change" for the rest of the session, long after the
-            // admin had moved on. The admin is told once, in a toast, and the
-            // queue returns to empty so the indicator closes immediately.
+            // to stay in the outbox forever and pin "Syncing 1 change" on
+            // screen. Tell the admin once, then remove the failed job.
             var label = rec.label || "Change";
             rec.dead = true;
             if (window.JA && JA.toast) {
-              JA.toast(err && err.error
-                ? label + " was not saved — " + err.error
-                : label + " could not be saved. Check your connection.");
+              JA.toast(label + " could not be saved. " +
+                ((err && (err.message || (err.data && err.data.error))) || "Check your connection."));
             }
             drop(rec);
             return;
+          }
+          // Keep the exact request durably queued, but don't leave a floating
+          // status widget for a background retry. A short standard toast tells
+          // the owner it is pending; the Connection & sync panel still shows
+          // the durable queue count, and Retry now remains available there.
+          rec.badgeHidden = true;
+          if (!rec.notifiedFailure && window.JA && JA.toast) {
+            rec.notifiedFailure = true;
+            var retryLabel = rec.label || "Change";
+            JA.toast(err && err.timeout
+              ? retryLabel + " is taking too long. It is safely queued to retry."
+              : retryLabel + " could not sync. It is safely queued to retry.");
           }
           return idbPut(rec).then(function () { lsPut(rec); });
         });
@@ -442,13 +497,15 @@ window.JA_NET = (function () {
       filename: opts.filename || "",
       extra: opts.extra || null,
       label: opts.label || "",
-      timeout: opts.timeout || (opts.blob ? 300000 : 25000),
+      timeout: opts.blob
+        ? (opts.timeout || 300000)
+        : Math.min(5000, Math.max(1, Number(opts.timeout) || 5000)),
       keepalive: !!opts.keepalive,
       onDone: opts.onDone || null,
     };
     // The forms Google reCAPTCHA v3 protects: checkout + payment receipt.
     if (job.method === "POST") {
-      if (/api\/orders(\?|$)/.test(path)) job.recaptcha = "checkout";
+      if (/api\/(?:orders|checkout)(\?|$)/.test(path)) job.recaptcha = "checkout";
       else if (/api\/payment-proof(\?|$)/.test(path)) job.recaptcha = "receipt";
     }
     if (opts.recaptcha) job.recaptcha = opts.recaptcha;
@@ -456,7 +513,10 @@ window.JA_NET = (function () {
     if (job.method === "GET" || !opts.queue) return send(job);
     if (navigator.onLine === false) return enqueue(job);
     return send(job).catch(function (err) {
-      if (err.retryable) return enqueue(job);
+      // A failed foreground request is queued for data safety, but it is no
+      // longer an active sync. Hide its floating pill and let the calling
+      // action show the ordinary temporary toast (Product/Delete/etc.).
+      if (err.retryable) return enqueue(job, true);
       throw err;
     });
   }
@@ -478,20 +538,51 @@ window.JA_NET = (function () {
   }
 
   // ------------------------------------------------------- status indicator
+  function clearPillTimers(el) {
+    if (!el) return;
+    clearTimeout(el._jaPillAutoTimer);
+    clearTimeout(el._jaPillHardTimer);
+    clearTimeout(el._jaPillRemoveTimer);
+    el._jaPillAutoTimer = el._jaPillHardTimer = el._jaPillRemoveTimer = null;
+  }
+
+  function dismissPill(el, suppressDisplayedJobs) {
+    if (!el) return;
+    if (suppressDisplayedJobs) {
+      var displayed = new Set(el._jaPillJobIds || []);
+      jobs.forEach(function (job) {
+        if (!displayed.has(job.id)) return;
+        job.badgeHidden = true;
+        idbPut(job);
+        lsPut(job);
+      });
+    }
+    clearTimeout(el._jaPillAutoTimer);
+    clearTimeout(el._jaPillHardTimer);
+    el._jaPillAutoTimer = el._jaPillHardTimer = null;
+    el.classList.add("is-dismissing");
+    clearTimeout(el._jaPillRemoveTimer);
+    el._jaPillRemoveTimer = setTimeout(function () {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }, PILL_TRANSITION_MS);
+  }
+
   function paintPill() {
     var el = document.getElementById("ja-sync-pill");
-    // Dead jobs are dropped on failure, so anything left here is either
-    // actually in flight or waiting out a retry backoff. Count the second
-    // kind separately: a job sleeping out its backoff is not "Syncing", and
-    // saying so made the pill look frozen on "Syncing 1 change".
-    var now = Date.now();
-    var waiting = 0;
-    jobs.forEach(function (j) { if (j.dead || (j.nextAt && j.nextAt > now)) waiting++; });
-    var live = jobs.length - waiting;
-    if (!jobs.length) {
-      if (el) el.remove();
+    var visible = jobs.filter(function (j) { return !j.badgeHidden; });
+    if (!visible.length) {
+      // Success, a failed/slow background retry, or an empty outbox: slide the
+      // transient widget away instead of leaving a fixed element in the UI.
+      if (el) dismissPill(el, false);
       return;
     }
+
+    // Dead jobs are dropped on failure. Count retry-backoff jobs separately:
+    // they are waiting, not actively syncing.
+    var now = Date.now();
+    var waiting = 0;
+    visible.forEach(function (j) { if (j.dead || (j.nextAt && j.nextAt > now)) waiting++; });
+    var live = visible.length - waiting;
     if (!el) {
       el = document.createElement("button");
       el.id = "ja-sync-pill";
@@ -499,23 +590,36 @@ window.JA_NET = (function () {
       el.className = "sync-pill";
       document.body.appendChild(el);
       el.addEventListener("click", function () { JA.toast("Sending…"); flush(true); });
+    } else if (el.classList.contains("is-dismissing")) {
+      // A genuinely new queued action arrived during the slide-out.
+      clearPillTimers(el);
+      el.classList.remove("is-dismissing");
     }
+
+    el._jaPillJobIds = visible.map(function (j) { return j.id; });
     var offline = navigator.onLine === false;
     el.className = "sync-pill" + (offline ? " is-offline" : "");
     var many = function (n) { return n + " change" + (n === 1 ? "" : "s"); };
     var label;
     if (offline) {
-      label = "Offline · " + jobs.length + " waiting";
+      label = "Offline · " + many(visible.length) + " waiting";
     } else if (live === 0) {
-      // Everything queued is sleeping on a retry timer. Say so, and say when
-      // it will try again, so the indicator reads as "waiting", not "stuck".
       var dueIn = 0;
-      jobs.forEach(function (j) { if (j.nextAt && j.nextAt > now) dueIn = Math.max(dueIn, j.nextAt - now); });
+      visible.forEach(function (j) { if (j.nextAt && j.nextAt > now) dueIn = Math.max(dueIn, j.nextAt - now); });
       label = "Retrying " + many(waiting) + (dueIn ? " in " + Math.max(1, Math.round(dueIn / 1000)) + "s" : "");
     } else {
       label = "Syncing " + many(live) + (waiting ? " · " + waiting + " waiting" : "");
     }
     el.innerHTML = '<span class="sync-dot"></span>' + label;
+
+    // Brief entrance feedback, then slide fully off-screen. Even if a browser
+    // timer fires late, the hard cap suppresses these jobs so later status
+    // polls cannot recreate a stuck badge.
+    clearTimeout(el._jaPillAutoTimer);
+    el._jaPillAutoTimer = setTimeout(function () { dismissPill(el, true); }, PILL_AUTO_DISMISS_MS);
+    if (!el._jaPillHardTimer) {
+      el._jaPillHardTimer = setTimeout(function () { dismissPill(el, true); }, PILL_HARD_TIMEOUT_MS);
+    }
   }
 
   window.addEventListener("online", function () { online = true; emit(); setTimeout(flush, 400); });

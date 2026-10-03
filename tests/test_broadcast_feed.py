@@ -100,6 +100,13 @@ def test_the_first_few_picks_are_automatically_queued_per_batch():
     assert "BC_AUTO_QUEUE_SIZE" in body
 
 
+def test_broadcast_links_resolve_clean_product_paths_without_double_slashes():
+    body = _func(ADMIN_JS, "broadcastProductUrl")
+    assert "new URL(path, location.origin).href" in body
+    assert '"/products/"' in body
+    assert '`${location.origin}/${path}`' not in body
+
+
 def test_each_card_carries_name_price_options_and_a_single_copy_button():
     body = _func(ADMIN_JS, "broadcastCardHTML")
     assert "broadcastProductUrl(p)" in body  # the plain "View" link may still point at the store page
@@ -157,9 +164,9 @@ def test_the_broadcast_message_mentions_available_colours_and_sizes():
     assert re.search(r"size\|length", body)
 
 
-def test_the_store_link_points_at_the_real_product_page():
+def test_the_store_link_uses_a_clean_public_product_slug():
     body = _func(ADMIN_JS, "broadcastProductUrl")
-    assert "/product.html?id=" in body
+    assert "/products/" in body or "JA.productUrl" in body
     assert "location.origin" in body
 
 

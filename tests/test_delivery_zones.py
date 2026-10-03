@@ -252,7 +252,7 @@ def test_the_benin_minimum_still_applies_with_a_valid_zone(client):
         "items": [{"id": "wix-008", "name": "x", "qty": 1, "price": 1}],
     }, headers={"X-CSRF-Token": tok})
     assert r.status_code == 400
-    assert "5,000 F CFA" in r.get_json()["error"]
+    assert "5,000 CFA" in r.get_json()["error"]
 
 
 def test_the_delivery_snapshot_is_persisted_with_the_order(client):

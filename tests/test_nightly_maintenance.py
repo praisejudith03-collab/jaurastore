@@ -1,15 +1,14 @@
-"""Nightly 2:00 AM maintenance: supplier sweep + storage sweeper + ghost guards.
+"""Nightly 2:00 AM maintenance: paced supplier batch + storage sweeper.
 
-Freeze the contract added for the emergency maintenance audit:
+Freeze the cleanup contract:
 
-  * the supplier watchdog has an off-peak deep pass that runs once per day
-    after 2:00 AM in the owner's timezone (default UTC+1, Porto-Novo),
-    in ADDITION to the small day-time batches;
+  * the 2 AM maintenance pass uses the same 1-2 unique supplier-link ceiling
+    and per-URL cooldown as daytime ticks (it is not a catalogue-wide bypass);
   * the nightly run also purges orphaned / duplicate upload media through
     the same protected plan as the admin's Storage cleanup card;
   * a hard-deleted product id can never be re-checked (and thereby
     re-created in Supabase) by an automated sync - not by a tick, not by
-    the nightly sweep, not by the remirror pass;
+    the nightly pass, not by the remirror pass;
   * the watchdog watches supplier PRICES: a rise raises an admin-visible
     warning, and the shop's own retail price is never rewritten.
 
@@ -77,10 +76,12 @@ def test_maintenance_tick_runs_the_nightly_pass_when_due(monkeypatch):
     monkeypatch.setattr(scheduler, "_nightly_run", lambda logger=None: {})
     scheduler._maintenance_tick(logger=None)
     assert "scheduler.nightly" in ran
+    assert "supplier.watchdog" not in ran, "nightly cycle replaces the daytime batch"
     monkeypatch.setattr(scheduler, "_nightly_due", lambda: False)
     ran.clear()
     scheduler._maintenance_tick(logger=None)
     assert "scheduler.nightly" not in ran
+    assert "supplier.watchdog" in ran
 
 
 def test_health_snapshot_advertises_the_nightly_schedule():
@@ -91,39 +92,55 @@ def test_health_snapshot_advertises_the_nightly_schedule():
 
 # ------------------------------------------------------- the nightly sweep
 
-def test_nightly_sweep_checks_every_product_exactly_once(monkeypatch):
-    """Each supplier-linked product is synced once - never twice, never zero
-    times because a day-time tick checked it recently."""
+def test_nightly_sweep_uses_the_two_link_ceiling(monkeypatch):
+    """Nightly maintenance must not bypass the link cap or URL cooldown."""
     synced = []
+    rows = [
+        {"id": "jau-ghost-1", "name": "Deleted", "stock": 3,
+         "supplierSku": "https://supplier.example/deleted"},
+        {"id": "jau-live-1", "name": "Live one", "stock": 3,
+         "supplierSku": "https://supplier.example/one"},
+        {"id": "jau-live-2", "name": "Live two", "stock": 3,
+         "supplierSku": "https://supplier.example/two"},
+        {"id": "jau-live-3", "name": "Live three", "stock": 3,
+         "supplierSku": "https://supplier.example/three"},
+        {"id": "jau-no-url", "name": "No URL", "stock": 1},
+    ]
     monkeypatch.setattr(supplier_watchdog, "enabled", lambda: True)
     monkeypatch.setattr(supplier_watchdog.catalog_mod, "merged",
-                        lambda include_hidden=False: [
-                            _ghost_row(), _ghost_row("jau-live-1"),
-                            _ghost_row("jau-live-2"),
-                            {"id": "jau-no-url", "name": "No URL", "stock": 1}])
+                        lambda include_hidden=False: rows)
     monkeypatch.setattr(catalog_mod, "deleted_product_ids", lambda: {"jau-ghost-1"})
-    monkeypatch.setattr(supplier_watchdog, "sync_product",
-                        lambda p, actor="supplier-watchdog": (synced.append(p["id"]), (True, []))[1])
+    def fake_sync(product, actor="supplier-watchdog", allowed_urls=None):
+        synced.append((product["id"], set(allowed_urls or [])))
+        return True, []
+    monkeypatch.setattr(supplier_watchdog, "sync_product", fake_sync)
     monkeypatch.setattr(supplier_watchdog, "_save_warnings", lambda w: None)
-    out = supplier_watchdog.nightly_sweep()
-    # every LIVE linked product once; the deleted id and the URL-less row never
-    assert sorted(synced) == ["jau-live-1", "jau-live-2"]
+    supplier_watchdog._last_checked.clear()
+    out = supplier_watchdog.nightly_sweep(max_products=100,
+                                          min_interval_seconds=3600,
+                                          link_limit=2)
+    assert [row[0] for row in synced] == ["jau-live-1", "jau-live-2"]
+    assert out["links"] == 2
     assert out["checked"] == 2 and out["updated"] == 2
 
 
 def test_nightly_sweep_is_bounded_and_terminates(monkeypatch):
-    """The sweep must finish: one pass over the candidates, capped, with no
-    re-check loop (an earlier design re-checked the same batch forever)."""
+    """One night pass selects no more than two distinct supplier links."""
     rows = [{"id": f"jau-live-{i}", "name": f"Bag {i}", "stock": 3,
-             "supplierSku": SUPPLIER} for i in range(150)]
+             "supplierSku": f"https://supplier.example/item/{i}"}
+            for i in range(150)]
     monkeypatch.setattr(supplier_watchdog.catalog_mod, "merged",
                         lambda include_hidden=False: rows)
     monkeypatch.setattr(catalog_mod, "deleted_product_ids", lambda: set())
+    synced = []
     monkeypatch.setattr(supplier_watchdog, "sync_product",
-                        lambda p, actor="supplier-watchdog": (False, []))
+                        lambda p, actor="supplier-watchdog", allowed_urls=None:
+                        (synced.append((p["id"], set(allowed_urls or []))), (False, []))[1])
     monkeypatch.setattr(supplier_watchdog, "_save_warnings", lambda w: None)
-    out = supplier_watchdog.nightly_sweep(max_products=100)
-    assert out["checked"] == 100            # capped, and finished
+    supplier_watchdog._last_checked.clear()
+    out = supplier_watchdog.nightly_sweep(max_products=100, link_limit=2)
+    assert out["links"] == 2 and out["checked"] == 2
+    assert len(synced) == 2 and len({next(iter(urls)) for _, urls in synced}) == 2
 
 
 # ------------------------------------------------- ghost products stay dead
@@ -141,7 +158,8 @@ def test_tick_never_syncs_a_hard_deleted_id(monkeypatch):
     monkeypatch.setattr(catalog_mod, "deleted_product_ids",
                         lambda: {"jau-ghost-1"})
     monkeypatch.setattr(supplier_watchdog, "sync_product",
-                        lambda p, actor="supplier-watchdog": (synced.append(p["id"]), (True, []))[1])
+                        lambda p, actor="supplier-watchdog", allowed_urls=None:
+                        (synced.append(p["id"]), (True, []))[1])
     monkeypatch.setattr(supplier_watchdog, "_save_warnings", lambda w: None)
     supplier_watchdog._last_checked.clear()
     out = supplier_watchdog.tick(limit=10, min_interval_seconds=0)
@@ -193,16 +211,17 @@ def test_hard_delete_tables_pin():
     The shop keeps variants, prices and options as jsonb columns ON the
     products row (optionStock / optionPrices / optionCompareAt / optionSku),
     so deleting the row takes them with it. Where a deployment has normalised
-    them into their own tables instead, they are named explicitly so those
-    rows are purged too - either by the SQL CASCADE (hard_delete_products.sql)
-    or by the explicit sweep below, whichever the database supports.
+    them into their own tables instead, they are named explicitly for the SQL
+    CASCADE and the post-delete orphan sweep. No REST fallback is allowed:
+    only the RPC can atomically tombstone and delete against stale writers.
     """
     src = open(os.path.join(ROOT, "supabase_store.py"), encoding="utf-8").read()
     fn = src[src.index("def hard_delete_products"):]
     fn = fn[:fn.index("\ndef ")]
-    # the row itself
-    assert 'c.table("products").delete()' in fn
-    # and the child tables, declared once and swept in a loop
+    # the parent delete is only issued through the atomic RPC
+    assert 'c.rpc("hard_delete_products", {"product_ids": ids}).execute()' in fn
+    assert "atomic hard delete unavailable or failed" in fn
+    # and the child tables, declared once and swept for historical orphans
     for table in ("product_variants", "product_prices", "product_options",
                   "variant_stock", "product_reviews", "product_views",
                   "featured_products"):
@@ -215,18 +234,17 @@ def test_hard_delete_tables_pin():
     assert "add_deleted_id" in fn
 
 
-def test_hard_delete_prefers_the_sql_cascade_and_falls_back_safely():
-    """One SQL CASCADE when the function is installed, an identical
-    table-by-table delete when it is not - and never a silent no-op."""
+def test_hard_delete_requires_the_atomic_sql_cascade():
+    """The RPC is mandatory; a REST fallback could race a stale upsert."""
     src = open(os.path.join(ROOT, "supabase_store.py"), encoding="utf-8").read()
     fn = src[src.index("def hard_delete_products"):]
     fn = fn[:fn.index("\ndef ")]
     assert 'c.rpc("hard_delete_products", {"product_ids": ids}).execute()' in fn
-    assert "deleted_by_sql = True" in fn
-    # a missing function must NOT look like a successful delete: the explicit
-    # delete still has to run before the ids are reported gone
-    assert "if not deleted_by_sql:" in fn
-    assert "report[\"deleted\"] = list(ids)" in fn
+    assert "if not isinstance(raw_deleted, (list, tuple)):" in fn
+    assert "atomic hard delete unavailable or failed" in fn
+    assert "return report" in fn
+    assert "report[\"deleted\"] = deleted_ids" in fn
+    assert "c.table(\"products\").delete()" not in fn
 
 
 # --------------------------------------------------------- supplier prices
@@ -262,14 +280,31 @@ def _variant_page(prices):
 
 @pytest.fixture()
 def saved(monkeypatch):
-    box = {}
+    class Box(dict):
+        pass
 
-    def fake_upsert(row, actor=None):
+    box = Box()
+
+    def fake_apply(pid, stock, option_changes=None, actor=None, allow_increase=False, option_snapshot_keys=None):
+        row = dict(getattr(box, "_source", {}))
+        options = dict(row.get("optionStock") or {})
+        if option_changes is not None:
+            for key, value in option_changes.items():
+                incoming = max(0, int(value or 0))
+                previous = max(0, int(options.get(key, 0) or 0))
+                options[key] = incoming if allow_increase else min(previous, incoming)
+            row["optionStock"] = options
+            stock = sum(max(0, int(value or 0)) for value in options.values())
+        elif not allow_increase:
+            previous = max(0, int(row.get("stock_quantity", row.get("stock", 0)) or 0))
+            stock = min(previous, int(stock))
+        row["stock"] = row["stock_quantity"] = int(stock)
         box.clear()
         box.update(row)
         return row, "updated", True
 
-    monkeypatch.setattr(supplier_watchdog.catalog_mod, "upsert", fake_upsert)
+    fake_apply.test_box = box
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "apply_supplier_stock", fake_apply)
     return box
 
 
@@ -281,8 +316,13 @@ def _price_product():
 
 
 def _run(monkeypatch, page):
+    product = _price_product()
+    try:
+        supplier_watchdog.catalog_mod.apply_supplier_stock.test_box._source = dict(product)
+    except Exception:
+        pass
     monkeypatch.setattr(supplier_watchdog, "fetch_url", lambda url: page)
-    return supplier_watchdog.sync_product(_price_product())
+    return supplier_watchdog.sync_product(product)
 
 
 def test_supplier_price_increase_raises_a_warning_not_a_rewrite(monkeypatch, saved):
@@ -299,7 +339,7 @@ def test_supplier_price_increase_raises_a_warning_not_a_rewrite(monkeypatch, sav
     up = [w for w in warns if w["code"] == "supplier_price_increased"]
     assert up and "Serum" in up[0]["reason"] and "42" in up[0]["reason"]
     # ... the stock update went through ...
-    assert saved.get("optionStock") == {"Serum": 3, "Cream": 5}
+    assert saved.get("optionStock") == {"Serum": 1, "Cream": 2}
     # ... and the shop's own retail price was NEVER rewritten by the supplier
     assert saved.get("priceNgn") == 5000
     assert (saved.get("optionPrices") or {}).get("Serum") != 42.0

@@ -115,21 +115,21 @@ def test_checkout_html_placeholders_are_empty_and_server_driven():
     html = open(os.path.join(ROOT, "checkout.html"), encoding="utf-8").read()
     # every element app.js paints must exist, and start out empty
     for attr in ("data-ngn-name", "data-ngn-bank", "data-ngn-acc",
-                 "data-cfa-name", "data-cfa-provider", "data-cfa-acc",
+                 "data-benin-name", "data-benin-provider", "data-benin-acc",
                  "data-togo-provider", "data-togo-acc", "data-togo-name"):
         assert attr in html, f"checkout.html is missing {attr}"
     # the "being updated" notices are gone for good
-    for gone in ("data-ngn-notice", "data-cfa-notice", "ck.emailNote"):
+    for gone in ("data-ngn-notice", "data-benin-notice", "ck.emailNote"):
         assert gone not in html, f"checkout.html still carries {gone}"
-    for attr in ("data-ngn-acc", "data-cfa-acc", "data-togo-acc",
-                 "data-ngn-name", "data-cfa-name"):
+    for attr in ("data-ngn-acc", "data-benin-acc", "data-togo-acc",
+                 "data-ngn-name", "data-benin-name"):
         m = re.search(re.escape(attr) + r"[^>]*>([^<]*)<", html)
         assert m, f"{attr} not found"
         assert m.group(1).strip() == "", f"{attr} ships with content: {m.group(1)!r}"
     # account rows start hidden; app.js reveals them only with a real value
     assert 'data-ngn-row-acc hidden' in html
-    assert 'data-cfa-row hidden' in html
-    assert 'data-togo-row hidden' in html
+    assert 'data-benin-row-acc hidden' in html
+    assert 'data-togo-row-acc hidden' in html
 
 
 def test_store_js_settings_have_no_payment_defaults():
@@ -213,7 +213,7 @@ def test_the_storefront_paints_payment_values_as_text_not_html():
     admin_js = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
     # app.js writes them through the textContent helper only
     for sel in ("[data-ngn-name]", "[data-ngn-bank]", "[data-ngn-acc]",
-                "[data-cfa-acc]", "[data-togo-acc]"):
+                "[data-benin-acc]", "[data-togo-acc]"):
         assert f'"{sel}"' in app_js
     m = re.search(r"const setText = \(sel, val\) => \{(.*?)\};", app_js, re.S)
     assert m and "textContent = val" in m.group(1), \
@@ -419,27 +419,17 @@ def test_clear_accepts_the_legacy_alias_names(client):
     assert r.get_json()["site"]["convBanner"] == ""
 
 
-def test_pay_intro_is_the_short_currency_wording():
-    """The intro paragraph tells the customer one thing: pay into the account
-    for the currency they picked. The old version also promised a receipt
-    "saved in the admin portal", which meant nothing to a shopper."""
-    expected = ("Make your payment directly into our bank account first in "
-                "the details below according to your currency choice.")
+def test_pay_intro_explains_payment_method_and_derived_currency():
+    expected = "Choose one of the three payment methods. The order currency follows your selection."
     html = open(os.path.join(ROOT, "checkout.html"), encoding="utf-8").read()
     assert expected in html
     i18n = open(os.path.join(ROOT, "js", "i18n.js"), encoding="utf-8").read()
-    assert expected in i18n, "the English ck.payIntro must carry the new wording"
-    assert "Payez d\u2019abord directement sur notre compte bancaire" in i18n, \
-        "the French ck.payIntro must be translated too"
-    # the purged strings are gone from every surface
+    assert f'"ck.payIntro": "{expected}"' in i18n
+    assert "Choisissez l’un des trois moyens de paiement. La devise de la commande suit votre choix." in i18n
     for gone in ("ck.payNotConfigured", "ck.emailNote"):
-        assert gone not in i18n, f"{gone} must not come back"
-    # the intro paragraph itself no longer promises an admin-portal receipt
-    m = re.search(r'data-i18n="ck\.payIntro">([^<]*)<', html)
-    assert m and "admin portal" not in m.group(1)
-    # and the "payment details are being updated" line is gone for good
+        assert gone not in i18n
     assert "being updated" not in i18n
-    assert "en cours de mise \u00e0 jour" not in i18n
+    assert "en cours de mise à jour" not in i18n
 
 
 def test_checkout_repaints_bank_details_when_the_site_row_lands():

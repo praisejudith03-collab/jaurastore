@@ -84,17 +84,14 @@ never deletes a supplier link, and writes a warning row for anything it could
 not read with confidence instead of guessing.
 
 The stock rule, per matched product/variant: supplier **out** → Jaura out;
-supplier **lower** → Jaura reduced to the supplier count; supplier **higher**
-→ Jaura is **not** raised above the owner's hand-entered quantity unless the
-safe setting below is on. Variants with no confident supplier match, products
-whose supplier page cannot be fetched/parsed, and uncertain readings are all
-left exactly as they are (with a logged warning).
+positive supplier quantity → `floor(quantity × 0.40)` sellable units (at least
+one when the supplier reports only a generic “in stock” signal). A restock
+restores that buffered quantity even after Jaura reached zero; the full
+supplier quantity is never exposed. Variants with no confident supplier match,
+products whose supplier page cannot be fetched/parsed, and uncertain readings
+are left exactly as they are (with a logged warning).
 
 - `SUPPLIER_WATCHDOG_ENABLED` (default `1`) — master switch for the sync.
-- `SUPPLIER_STOCK_AUTO_INCREASE` (default `0`/off) — the safe setting. Set it
-  to `1` ONLY if supplier restocks should automatically raise Jaura stock
-  above the owner's manually entered quantity. Reductions and out-of-stock
-  are always applied regardless of this setting.
 
 ### Price watch
 

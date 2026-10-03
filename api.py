@@ -1,5 +1,6 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
-import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, re, threading, time
+import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, re, threading, time, gc
+from functools import wraps
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
 from campaign_types import CAMPAIGN_TYPES, campaign_type_from, serialize_campaign
@@ -21,6 +22,53 @@ import supabase_store
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
+# A single web dyno is capped at 512 MB. Product videos may be tens of MB and
+# Pillow / the HTTP client can hold temporary copies while a file is resized or
+# uploaded, so only one request may materialize an upload buffer at a time.
+# Werkzeug spools multipart bodies to disk first; this gate protects the later
+# in-process byte buffers, without tying up regular storefront requests.
+_UPLOAD_BUFFER_SLOT = threading.BoundedSemaphore(1)
+
+
+def _upload_memory_guard(fn):
+    """Serialize memory-heavy upload handlers and close their temp streams."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        if request.mimetype != "multipart/form-data":
+            return fn(*args, **kwargs)
+        _UPLOAD_BUFFER_SLOT.acquire()
+        uploads = []
+        try:
+            # Parse/spool the multipart body only after taking the slot, so
+            # concurrent uploads cannot all keep in-memory form fields/files.
+            uploads = list(request.files.items(multi=True))
+            return fn(*args, **kwargs)
+        finally:
+            for _key, upload in uploads:
+                try:
+                    upload.close()
+                except Exception:
+                    pass
+            # Drop Pillow / HTTP / Python temporary objects before the next
+            # upload is allowed to allocate its own working buffer. The slot
+            # must still be released if a GC callback happens to raise.
+            try:
+                gc.collect()
+            finally:
+                _UPLOAD_BUFFER_SLOT.release()
+    return wrapped
+
+
+def _read_upload_buffer(file_storage, max_bytes):
+    """Read one bounded multipart file and close its spooled temp stream."""
+    try:
+        return file_storage.read(int(max_bytes) + 1)
+    finally:
+        try:
+            file_storage.close()
+        except Exception:
+            pass
+
 
 # Every /api/* answer is dynamic (live catalogue, stock, orders, settings), so
 # none of them may be served from a shared cache: a CDN holding a stale copy
@@ -32,6 +80,15 @@ def _api_no_store(resp):
     if "Cache-Control" not in resp.headers:
         resp.headers["Cache-Control"] = "no-store"
     return resp
+
+
+@api.get("/health")
+def api_health():
+    """Uncached, public health probe for monitors that require an /api route."""
+    import health_checks
+    body, status = health_checks.health_report()
+    return jsonify(body), status
+
 
 @api.get("/realtime-config")
 def realtime_config():
@@ -95,6 +152,11 @@ def _invalidate_category_cache():
         _category_cache["expires"] = 0.0
         _category_cache["payload"] = None
         _category_cache["source"] = None
+
+
+def invalidate_catalog_cache():
+    """Public invalidator for non-request writers such as the supplier worker."""
+    _invalidate_catalog_cache()
 
 
 def _invalidate_all_catalog_caches():
@@ -283,16 +345,18 @@ def public_config():
 
 @api.get("/products")
 def products():
-    """The seed catalogue as it ships, before any admin edit.
+    """Compatibility alias for the live public catalogue.
 
-    This used to call send_static_file(), but the app is created with
-    static_folder=None (everything is served from the project root), so that
-    call raised 500 on every request. The file is read directly instead.
+    Older integrations use /api/products while the current storefront uses
+    /api/catalog. Both must reflect merged database stock, never the bundled
+    seed snapshot. Keep this alias uncached at the HTTP layer for clients that
+    cannot revalidate ETags.
     """
-    body = jsonify(ok=True, products=[_public_product(p)
-                                      for p in catalog_mod.base_products()])
-    body.headers["Cache-Control"] = "no-store"
-    return body
+    body, _etag = _catalog_response_snapshot()["public"]
+    response = make_response(body, 200)
+    response.headers["Content-Type"] = "application/json; charset=utf-8"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 # ============================================================ public: catalog
 # Customers never see numerical stock: the public catalogue carries only an
@@ -305,14 +369,42 @@ _FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock",
                          # Supplier and per-option sourcing/SKU notes are
                          # internal admin reference data, never a shopper's
                          # business.
-                         "supplierId", "supplierSku", "supplierUrl",
-                         "supplier_url", "optionSupplierSku",
+                         "supplierId", "supplier_id", "supplierSku", "supplier_sku",
+                         "supplierUrl", "supplier_url", "supplierURL",
+                         "optionSupplierSku", "option_supplier_sku",
                          "optionSupplierUrls", "option_supplier_urls",
-                         "optionSku", "option_sku")
+                         "variantSupplierUrls", "variant_supplier_urls",
+                         "optionSku", "option_sku", "optionSkus", "option_skus",
+                         "variantSku", "variant_sku", "variantSkus", "variant_skus")
+
+
+def _has_supplier_reference(value):
+    """True for a non-empty supplier URL/SKU without exposing the value."""
+    if isinstance(value, dict):
+        return any(_has_supplier_reference(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_supplier_reference(item) for item in value)
+    return bool(str(value or "").strip())
+
+
+def _supplier_tracked(product):
+    """Public-safe signal for showing the supplier-availability notice.
+
+    Supplier URLs and SKUs stay private. The storefront only needs to know
+    whether this product is watched so it can show the availability caveat.
+    """
+    p = product if isinstance(product, dict) else {}
+    direct = ("supplierId", "supplier_id", "supplierSku", "supplier_sku",
+              "supplierUrl", "supplier_url", "supplierURL")
+    options = ("optionSupplierSku", "option_supplier_sku", "optionSupplierUrls",
+               "option_supplier_urls", "variantSupplierUrls", "variant_supplier_urls")
+    return (any(_has_supplier_reference(p.get(key)) for key in direct)
+            or any(_has_supplier_reference(p.get(key)) for key in options))
 
 
 def _public_product(p):
     out = {k: v for k, v in dict(p or {}).items() if k not in _FORBIDDEN_PUBLIC_KEYS}
+    out["supplierTracked"] = _supplier_tracked(p)
     qty = catalog_mod.stock_of(p)
     os_map = p.get("optionStock") if isinstance(p, dict) else None
     if isinstance(os_map, dict) and os_map:
@@ -724,6 +816,7 @@ PENDING_BALANCE_NOTICE = ("You have a pending balance. Please contact us on What
 
 @api.post("/uploads/proof")
 @sec.require_csrf
+@_upload_memory_guard
 def upload_proof():
     """Store a payment screenshot. Anyone may call it (a customer has no
     account), so it is size capped, magic-byte checked and rate limited."""
@@ -732,7 +825,7 @@ def upload_proof():
     f = request.files.get("file") or request.files.get("proof")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_RECEIPT_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_RECEIPT_BYTES)
     ok, msg, _ext = storage.validate_upload(data, f.filename or "", allow_pdf=True,
                                             max_bytes=storage.MAX_RECEIPT_BYTES)
     if not ok:
@@ -740,6 +833,7 @@ def upload_proof():
     ok, msg, url = storage.save_image(data, "proofs", f.filename or "",
                                       allow_pdf=True,
                                       max_bytes=storage.MAX_RECEIPT_BYTES)
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 500
     return jsonify(ok=True, url=url)
@@ -750,8 +844,8 @@ def _receipt_upload_error(status=422):
                    code="receipt_upload_failed", field="proof"), status
 
 
-def _order_receipt_row(order, data, ext, original_name, url):
-    """Build the receipts-table row for a checkout attachment."""
+def _order_receipt_row(order, file_size, ext, original_name, url):
+    """Build the receipts-table row without retaining the uploaded bytes."""
     oid = sec.clean(order.get("id"), 24).upper()
     customer = order.get("customer") or {}
     items = order.get("items") or []
@@ -774,7 +868,7 @@ def _order_receipt_row(order, data, ext, original_name, url):
         "items": item_text[:600], "quantity": str(quantity or ""),
         "amount": amount[:60], "note": "Checkout receipt",
         "file_url": url, "file_name": safe_name,
-        "file_size": len(data or b""), "file_type": storage.mime_for(ext),
+        "file_size": max(0, int(file_size or 0)), "file_type": storage.mime_for(ext),
     }
 
 
@@ -801,36 +895,46 @@ def _variant_values(variant):
 
 
 def _stock_available(product, variant="__default__"):
-    """Integer stock for one product+variant, falling back to product stock."""
+    """Integer availability; a selected but unassigned variant is zero stock."""
     if not isinstance(product, dict):
         return 0
     base = catalog_mod.stock_of(product)
+    selected = str(variant or "").strip()
     os_map = product.get("optionStock")
+    if not selected or selected == "__default__":
+        if (isinstance(os_map, dict) and os_map) or product.get("options"):
+            return 0
+        return base
+    # A variant quantity cannot be inferred from the product total. Missing
+    # maps/keys are unassigned inventory and therefore fail closed.
     if not isinstance(os_map, dict) or not os_map:
-        return base
-    vals = _variant_values(variant)
-    if not vals:
-        return base
-    folded = {}
-    for k, qty in os_map.items():
-        fk = _fold(k)
-        if not fk:
-            continue
-        try:
-            folded[fk] = max(0, int(qty or 0))
-        except (TypeError, ValueError):
-            folded[fk] = 0
-    for val in vals:
-        fk = _fold(val)
-        if fk and fk in folded:
-            return folded[fk]
-    return base
+        return 0
+    key = catalog_mod._option_stock_key_for(product, selected)
+    if key is None:
+        return 0
+    try:
+        variant_stock = max(0, int(str(os_map.get(key, "")).strip()))
+    except (TypeError, ValueError):
+        variant_stock = 0
+    return min(base, variant_stock)
 
 
 
 def _option_stock_key(product, variant):
     """The optionStock map key that matches a cart variant, or None."""
     return catalog_mod._option_stock_key_for(product, variant)
+
+
+def _live_stock_available(product_id, variant=""):
+    """Read fresh stock after a failed atomic reservation; None means unknown."""
+    try:
+        rows = catalog_mod.merged(include_hidden=True)
+        product = catalog_mod.product_index(rows).get(str(product_id or ""))
+    except Exception:
+        return None
+    if not product or product.get("online") is False:
+        return 0
+    return _stock_available(product, variant)
 
 
 def _order_stock_moves(payload):
@@ -864,7 +968,18 @@ def _order_stock_moves(payload):
         # catalogue at all (a deleted product) is left as written so the move
         # is still recorded rather than silently dropped.
         pid = str((product or {}).get("id") or "").strip() or pid
-        option = _option_stock_key(product, it.get("color") or it.get("variant") or "") if product else None
+        variant = str(it.get("color") or it.get("variant") or "").strip()
+        if product is None:
+            option = variant or "__unresolved_product__"
+        else:
+            option = _option_stock_key(product, variant) if variant else None
+            if variant and option is None:
+                # Preserve the unknown spelling so reserve_stock/the SQL RPC
+                # reject it instead of degrading to product-total stock.
+                option = variant
+            elif not variant and (product.get("options") or product.get("optionStock")):
+                # A variant product needs a selected, assigned stock key.
+                option = "__unassigned_variant__"
         moves.append({"id": pid, "option": option, "qty": qty})
     return moves
 
@@ -883,7 +998,10 @@ def _apply_stock_moves(moves, sign, actor=None):
         if not pid or not qty:
             continue
         try:
-            catalog_mod.apply_stock_delta(pid, qty, option_key=m.get("option"), actor=actor)
+            if qty > 0:
+                catalog_mod.release_stock(pid, qty, option_key=m.get("option"), actor=actor)
+            else:
+                catalog_mod.apply_stock_delta(pid, qty, option_key=m.get("option"), actor=actor)
         except Exception:
             continue
         applied.append(m)
@@ -900,14 +1018,12 @@ def _sync_order_stock(payload, old_status, new_status, actor=None):
     and a decline / reopen / delete restores the same quantities.
 
     One implementation for BOTH backends, because they now share the same
-    lifecycle: an order placed while stock enforcement is on reserves its
-    units atomically at CHECKOUT (PostgreSQL in production, the catalogue's
-    cross-process lock locally) and carries ``stockApplied`` from creation.
-    Confirming such an order only keeps the reservation; declining, reopening
-    or deleting it releases exactly those units back. An order without
-    ``stockApplied`` (placed with ENFORCE_STOCK off, or before reservations
-    existed) keeps the legacy behaviour: the first confirm decrements, and
-    only a confirmed order restores on decline.
+    lifecycle: every order reserves its units atomically at CHECKOUT
+    (PostgreSQL in production, the catalogue's cross-process lock locally)
+    and carries ``stockApplied`` from creation. Confirming such an order only
+    keeps the reservation; declining, reopening or deleting it releases
+    exactly those units back. A legacy order without ``stockApplied`` keeps
+    the old confirmation-time decrement and decline restore behavior.
     """
     if not isinstance(payload, dict):
         return payload
@@ -983,6 +1099,40 @@ def _server_unit_price(product, currency, variant=""):
     return currency_mod.to_ngn(cfa)
 
 
+OUT_OF_STOCK_MESSAGE = "This item is currently out of stock."
+CHECKOUT_PAYMENT_METHODS = {
+    "naira": {"currency": "NGN", "label": "Naira bank transfer"},
+    "benin_cfa": {"currency": "CFA", "label": "Benin CFA payment"},
+    "togo_cfa": {"currency": "CFA", "label": "Togo CFA payment"},
+}
+
+
+def _requested_quantity(value):
+    """Positive whole cart quantity, or None for blank, fractional, or huge input."""
+    if isinstance(value, bool):
+        return None
+    raw = str(value if value is not None else "").strip()
+    if not re.fullmatch(r"[0-9]+", raw):
+        return None
+    qty = int(raw)
+    return qty if 1 <= qty <= 999 else None
+
+
+def _stock_limit_error(available, product_id="", variant=""):
+    """Consistent customer message for zero stock and hard-ceiling failures."""
+    try:
+        remaining = max(0, int(available or 0))
+    except (TypeError, ValueError):
+        remaining = 0
+    message = (OUT_OF_STOCK_MESSAGE if remaining == 0 else
+               f"You cannot order more than the available stock ({remaining} remaining).")
+    line = {"id": str(product_id or "")}
+    if variant:
+        line["variant"] = str(variant)
+    return jsonify(ok=False, error=message, code="out_of_stock",
+                   availableStock=remaining, items=[line]), 409
+
+
 def _checkout_items(clean_items, currency):
     """Server-authoritative item validation + pricing.
 
@@ -1001,27 +1151,41 @@ def _checkout_items(clean_items, currency):
     """
     try:
         live = catalog_mod.merged(include_hidden=True)
+        products_map = catalog_mod.product_index(live)
     except Exception:
-        live = []
+        # A database outage must not be disguised as an unknown product, nor
+        # may checkout fall back to the bundled catalogue's stale inventory.
+        return [], 0, (jsonify(ok=False,
+                               error="Stock is temporarily unavailable. Please try again.",
+                               code="stock_unavailable"), 503)
     # Keyed by canonical id AND legacyId, so a cart saved against an old
     # wix-* id still prices and stock-checks against the right row.
-    products_map = catalog_mod.product_index(live)
 
     aggregated = {}
+    variant_quantities = {}
     for it in clean_items:
         sent_id = str(it.get("id") or "")
         prod = products_map.get(sent_id)
         # canonical id first: reservation, stock moves and the stored order
         # line must all address the row that actually exists.
         canon = str((prod or {}).get("id") or sent_id).strip()
-        key = (canon, str(it.get("color") or ""))
+        variant = str(it.get("color") or "")
+        note = (sec.clean(it.get("note"), 300)
+                if prod and bool(prod.get("enableCustomNote")) else "")
+        # Different item notes are separate order lines, but all such lines
+        # still share the same stock pool and are checked as one quantity.
+        key = (canon, variant, note)
         g = aggregated.setdefault(key, {
             "id": canon,
-            "variant": str(it.get("color") or ""),
+            "variant": variant,
+            "note": note,
             "qty": 0,
             "name": str(it.get("name") or ""),
         })
-        g["qty"] += int(it.get("qty") or 0)
+        qty = int(it.get("qty") or 0)
+        g["qty"] += qty
+        variant_key = (canon, variant)
+        variant_quantities[variant_key] = variant_quantities.get(variant_key, 0) + qty
 
     items = []
     subtotal = 0
@@ -1035,6 +1199,7 @@ def _checkout_items(clean_items, currency):
     except Exception:
         _promos_on = True                     # a hiccup must not gouge pricing
     total_quantity_by_product = {}
+    checked_variants = set()
     for group in aggregated.values():
         total_quantity_by_product[group["id"]] = total_quantity_by_product.get(group["id"], 0) + group["qty"]
     for g in aggregated.values():
@@ -1047,22 +1212,15 @@ def _checkout_items(clean_items, currency):
                 code="unknown_product",
                 items=[{"id": pid, "name": g["name"] or pid}]), 400)
         if prod.get("online") is False:
-            return [], 0, (jsonify(ok=False, error=(
-                f'"{prod.get("name") or g["name"]}" is out of stock. '
-                "Please remove it and try again."),
-                code="out_of_stock",
-                items=[{"id": pid, "name": prod.get("name") or g["name"],
-                        "variant": g["variant"]}]), 409)
-        avail = _stock_available(prod, g["variant"])
-        if Config.ENFORCE_STOCK and g["qty"] > avail:
-            return [], 0, (jsonify(ok=False, error=(
-                f'"{prod.get("name") or g["name"]}"'
-                + (f' ({g["variant"]})' if g["variant"] else "")
-                + " — this option is currently unavailable in the quantity "
-                "selected. Please remove it or choose fewer items."),
-                code="out_of_stock",
-                items=[{"id": pid, "name": prod.get("name") or g["name"],
-                        "variant": g["variant"]}]), 409)
+            return [], 0, _stock_limit_error(0, pid, g["variant"])
+        variant_key = (pid, g["variant"])
+        if variant_key not in checked_variants:
+            avail = _stock_available(prod, g["variant"])
+            # This is unconditional: the legacy ENFORCE_STOCK=0 switch is ignored.
+            # Stock is checked across notes as well as duplicate cart lines.
+            if variant_quantities.get(variant_key, 0) > avail:
+                return [], 0, _stock_limit_error(avail, pid, g["variant"])
+            checked_variants.add(variant_key)
         unit = _server_unit_price(prod, currency, g["variant"])
         bulk_percent = (catalog_mod.bulk_discount_for(prod, total_quantity_by_product[pid])
                         if _promos_on else 0)
@@ -1082,6 +1240,7 @@ def _checkout_items(clean_items, currency):
             "qty": g["qty"],
             "price": line_price,
             "color": g["variant"],
+            **({"note": g["note"]} if g["note"] else {}),
             **({"bulkPercent": bulk_percent} if bulk_percent else {}),
         })
     return items, subtotal, None
@@ -1102,19 +1261,69 @@ def _release_stock_lines(lines):
     release so a reserved variant is given back to the variant, not only to
     the product total.
     """
-    try:
-        from supabase_store import release_product_stock
-        for line in (lines or []):
-            pid, qty, option = (list(line) + [None, None])[:3] \
-                if isinstance(line, (list, tuple)) else (line, None, None)
-            try:
-                release_product_stock(pid, qty, option=option)
-            except Exception:
-                pass
-    except Exception:
-        pass
+    released_all = True
+    for line in (lines or []):
+        pid, qty, option = (list(line) + [None, None])[:3] \
+            if isinstance(line, (list, tuple)) else (line, None, None)
+        try:
+            # Dispatch by backend: the local release is protected by the same
+            # cross-process file lock as checkout reservations; production uses
+            # the atomic PostgreSQL release RPC.
+            result = catalog_mod.release_stock(pid, qty, option_key=option,
+                                               actor="checkout-rollback")
+            if not result:
+                released_all = False
+        except Exception:
+            released_all = False
     if lines:
         _invalidate_catalog_cache()
+    return released_all
+
+
+# ---------------------------------------------------------- public: cart guard
+@api.route("/cart", methods=["POST", "PUT"])
+@sec.require_csrf
+def validate_cart_stock():
+    """Validate a browser-local cart against the live catalogue.
+
+    The shop intentionally does not keep a server-side cart row; this route is
+    a stateless inventory gate used before localStorage is changed. Checkout
+    revalidates and atomically reserves again, because cart validation does not
+    hold stock. POST and PUT share the same full-cart contract so old/new shop
+    bundles can add lines or replace quantities without a bypass.
+    """
+    if request.content_length and request.content_length > 64 * 1024:
+        return jsonify(ok=False, error="Cart is too large."), 413
+    d = request.get_json(silent=True) or {}
+    raw_items = d.get("items") if isinstance(d, dict) else None
+    if not isinstance(raw_items, list):
+        return jsonify(ok=False, error="Send {items: [...]} to validate the cart."), 400
+    if len(raw_items) > 60:
+        return jsonify(ok=False, error="A cart may contain at most 60 different lines."), 400
+    if not raw_items:
+        return jsonify(ok=True, items=[], subtotal=0)
+
+    clean_items = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            return jsonify(ok=False, error="Cart items must be product lines."), 400
+        product_id = sec.clean(item.get("id"), 64)
+        qty = _requested_quantity(item.get("qty"))
+        if not product_id or qty is None:
+            return jsonify(ok=False, error="Each cart line needs a product and quantity from 1 to 999."), 400
+        clean_items.append({
+            "id": product_id,
+            "name": sec.clean(item.get("name"), 200),
+            "qty": qty,
+            "price": 0,  # ignored; server prices are never accepted from cart clients
+            "color": sec.clean(item.get("color") or item.get("variant"), 120),
+        })
+
+    currency = sec.clean(d.get("currency"), 3).upper() or "NGN"
+    validated, subtotal, error = _checkout_items(clean_items, currency)
+    if error:
+        return error
+    return jsonify(ok=True, items=validated, subtotal=subtotal)
 
 
 # The cross-border delivery minimum. 5,000 F CFA is the house default and
@@ -1213,18 +1422,20 @@ def _benin_togo_min(zone, country, currency, total, rate=None):
         return None                      # the owner switched the minimum off
     min_ngn = benin_togo_min_ngn(rate, min_cfa)
     if currency == "CFA" and total < min_cfa:
-        return (f"Benin & Togo deliveries: minimum order {min_cfa:,} F CFA "
+        return (f"Benin & Togo deliveries: minimum order {min_cfa:,} CFA "
                 f"(about {min_ngn:,} naira). Please add a few more items to meet "
                 "the minimum.")
     if currency == "NGN" and total < min_ngn:
         return (f"Benin & Togo deliveries: minimum order {min_ngn:,} naira "
-                f"(about {min_cfa:,} F CFA). Please add a few more items "
+                f"(about {min_cfa:,} CFA). Please add a few more items "
                 "to meet the minimum.")
     return None
 
 
 @api.post("/orders")
+@api.post("/checkout")
 @sec.require_csrf
+@_upload_memory_guard
 def create_order():
     """Store a completed checkout - the whole form plus the payment proof.
     Accepts JSON or multipart/form-data (field `order` = JSON, field `proof`
@@ -1243,8 +1454,12 @@ def create_order():
     except Exception:
         pass  # existing availability policy handles a transient settings read
 
-    # 30/hour: plenty for a real shopper, and mobile networks share one IP
-    limited = sec.guard("order", limit=30, window=3600)
+    # Keep a sensible per-shopper abuse limit without making every customer
+    # behind the same carrier/Wi-Fi NAT share one 30-order bucket. CSRF is
+    # session-bound, so hash it before using it as a rate-limit scope.
+    session_scope = hashlib.sha256(str(session.get("_csrf") or "").encode("utf-8")).hexdigest()[:24]
+    limited = sec.guard("order", limit=30, window=3600,
+                        key_extra="shopper:" + session_scope)
     if limited: return limited
     bounced = sec.recaptcha_gate("checkout")
     if bounced: return bounced
@@ -1312,21 +1527,44 @@ def create_order():
     items = d.get("items")
     if not isinstance(items, list) or not items:
         return jsonify(ok=False, error="Cart is empty."), 400
+    if len(items) > 60:
+        return jsonify(ok=False, error="A cart may contain at most 60 different lines."), 400
     clean_items = []
-    for it in items[:60]:
+    for it in items:
         if not isinstance(it, dict):
-            continue
+            return jsonify(ok=False, error="Cart items must be product lines."), 400
+        product_id = sec.clean(it.get("id"), 64)
+        qty = _requested_quantity(it.get("qty"))
+        if not product_id or qty is None:
+            return jsonify(ok=False, error="Each cart line needs a product and quantity from 1 to 999."), 400
         clean_items.append({
-            "id": sec.clean(it.get("id"), 64),
+            "id": product_id,
             "name": sec.clean(it.get("name"), 200),
-            "qty": sec.clean_int(it.get("qty"), 1, 1, 999),
+            "qty": qty,
             "price": sec.clean_int(it.get("price"), 0, 0, 10**9),
-            "color": sec.clean(it.get("color"), 60),
+            "color": sec.clean(it.get("color") or it.get("variant"), 120),
+            "note": sec.clean(it.get("note"), 300),
         })
-    if not clean_items:
-        return jsonify(ok=False, error="Cart is empty."), 400
 
-    currency = sec.clean(d.get("currency"), 3).upper() or "NGN"
+    requested_currency = sec.clean(d.get("currency"), 3).upper()
+    payment_method = sec.clean(d.get("paymentMethod"), 40).lower()
+    if not payment_method:
+        # Backwards compatibility for queued checkouts from older storefront
+        # bundles that sent only a currency/payment label.
+        legacy_payment = sec.clean(d.get("payment"), 80).lower()
+        country_hint = str(customer.get("country") or "").lower()
+        if requested_currency == "NGN":
+            payment_method = "naira"
+        elif "togo" in country_hint or "togo" in legacy_payment or "moov" in legacy_payment:
+            payment_method = "togo_cfa"
+        elif requested_currency in ("", "CFA"):
+            payment_method = "benin_cfa"
+    if payment_method not in CHECKOUT_PAYMENT_METHODS:
+        return jsonify(ok=False, error="Choose a valid payment method.", field="paymentMethod"), 400
+    currency = CHECKOUT_PAYMENT_METHODS[payment_method]["currency"]
+    if requested_currency and requested_currency != currency:
+        return jsonify(ok=False, error="The selected payment method and order currency do not match.",
+                       field="paymentMethod"), 400
     total = sec.clean_int(d.get("total"), 0, 0, 10**12)
 
     # ---- delivery zone + fare: the server is the authority ----
@@ -1408,7 +1646,7 @@ def create_order():
     proof_original_name = ""
     if proof_file:
         proof_original_name = proof_file.filename or "receipt"
-        proof_data = proof_file.read(storage.MAX_RECEIPT_BYTES + 1)
+        proof_data = _read_upload_buffer(proof_file, storage.MAX_RECEIPT_BYTES)
         ok, msg, proof_ext = storage.validate_upload(
             proof_data, proof_original_name, allow_pdf=True,
             max_bytes=storage.MAX_RECEIPT_BYTES)
@@ -1432,7 +1670,8 @@ def create_order():
         "discount": discount,
         "total": total,
         "currency": currency,
-        "payment": sec.clean(d.get("payment"), 60) or currency,
+        "paymentMethod": payment_method,
+        "payment": CHECKOUT_PAYMENT_METHODS[payment_method]["label"],
         "proofUrl": proof_url,
         "source": sec.clean(d.get("source"), 20) or "web",
         # The server-computed fare snapshot. The exact figure is agreed with
@@ -1465,54 +1704,58 @@ def create_order():
     prod_source = bool(catalog_mod._prod_source())
     reserved = []
 
-    if Config.ENFORCE_STOCK:
-        # Reserve every line atomically BEFORE the order is written, so two
-        # concurrent checkouts can never sell the same last unit. Production
-        # guards inside PostgreSQL (a single guarded UPDATE covers the product
-        # total AND the chosen variant); the local backend guards under the
-        # catalogue's cross-process lock. The variant key travels with every
-        # reservation - without it a sold-out variant kept its stale number
-        # and could be ordered again while other variants still had units.
-        reservation_moves = _order_stock_moves({"items": clean_items})
-        for move in reservation_moves:
-            pid = str(move.get("id") or "")
-            qty = int(move.get("qty") or 0)
-            option = move.get("option")
-            if not pid or qty <= 0:
-                continue
-            res = catalog_mod.reserve_stock(pid, qty, option_key=option, actor="checkout")
-            if res is None:
-                _release_stock_lines(reserved)
-                return jsonify(ok=False, error=(
-                    f'"{_product_display_name(clean_items, pid)}"'
-                    + (f' ({option})' if option else "")
-                    + " — this option is currently unavailable in the quantity "
-                    "selected. Please remove it or choose fewer items."),
-                    code="out_of_stock",
-                    items=[{"id": pid,
-                            "name": _product_display_name(clean_items, pid),
-                            "variant": option or ""}]), 409
-            if res is False:
-                _release_stock_lines(reserved)
+    # Reserve every line atomically BEFORE the order is written, so two
+    # concurrent checkouts can never sell the same last unit. Production
+    # guards inside PostgreSQL (a single guarded UPDATE covers the product
+    # total AND the chosen variant); the local backend guards under the
+    # catalogue's cross-process lock. The variant key travels with every
+    # reservation - without it a sold-out variant kept its stale number
+    # and could be ordered again while other variants still had units.
+    reservation_moves = _order_stock_moves({"items": clean_items})
+    for move in reservation_moves:
+        pid = str(move.get("id") or "")
+        qty = int(move.get("qty") or 0)
+        option = move.get("option")
+        if not pid or qty <= 0:
+            continue
+        res = catalog_mod.reserve_stock(pid, qty, option_key=option, actor="checkout")
+        if res is None:
+            if not _release_stock_lines(reserved):
                 return jsonify(ok=False, error=(
                     "We could not confirm your stock right now. "
                     "Please try again in a moment.")), 503
-            reserved.append((pid, qty, option))
-        if reserved:
-            # The reservation IS the stock move for this order. Recording it
-            # on the payload keeps confirm from decrementing a second time
-            # and lets decline / reopen / delete give exactly it back.
-            order["stockApplied"] = reservation_moves
-            _invalidate_catalog_cache()
+            available = _live_stock_available(pid, option)
+            if available is None:
+                return jsonify(ok=False, error=(
+                    "We could not confirm your stock right now. "
+                    "Please try again in a moment.")), 503
+            return _stock_limit_error(available, pid, option or "")
+        if res is False:
+            _release_stock_lines(reserved)
+            return jsonify(ok=False, error=(
+                "We could not confirm your stock right now. "
+                "Please try again in a moment.")), 503
+        reserved.append((pid, qty, option))
+    if reserved:
+        # The reservation IS the stock move for this order. Recording it
+        # on the payload keeps confirm from decrementing a second time
+        # and lets decline / reopen / delete give exactly it back.
+        order["stockApplied"] = reservation_moves
+        _invalidate_catalog_cache()
     sb_row["payload"] = order
 
+    proof_size = len(proof_data)
     if proof_data:
         try:
-            stored, up_msg, proof_url = storage.save_image(
-                proof_data, "proofs", proof_original_name,
-                allow_pdf=True, max_bytes=storage.MAX_RECEIPT_BYTES)
-        except Exception as exc:
-            stored, up_msg, proof_url = False, f"{exc.__class__.__name__}: {exc}", ""
+            try:
+                stored, up_msg, proof_url = storage.save_image(
+                    proof_data, "proofs", proof_original_name,
+                    allow_pdf=True, max_bytes=storage.MAX_RECEIPT_BYTES)
+            except Exception as exc:
+                stored, up_msg, proof_url = False, f"{exc.__class__.__name__}: {exc}", ""
+        finally:
+            # Do not hold the receipt bytes through the subsequent order writes.
+            proof_data = b""
         if not stored or not proof_url:
             print(f"[checkout] payment proof upload failed; order blocked: {up_msg}")
             _release_stock_lines(reserved)
@@ -1521,9 +1764,9 @@ def create_order():
         sb_row["proof_url"] = proof_url
         sb_row["payload"] = order
 
-    receipt_row = (_order_receipt_row(order, proof_data, proof_ext,
+    receipt_row = (_order_receipt_row(order, proof_size, proof_ext,
                                       proof_original_name, proof_url)
-                   if proof_data and proof_url else None)
+                   if proof_size and proof_url else None)
 
     if prod_source:
         # Supabase PostgreSQL is the record of the sale. A failed write is a
@@ -1808,15 +2051,16 @@ def complete_abandoned_cart():
 
 # ================================================== public: payment receipt
 ALLOWED_PAYMENT_METHODS = (
-    "UBA bank transfer (₦ Naira)",
-    "MTN MoMo Benin (F CFA)",
-    "Moov Money Togo (F CFA)",
+    "Naira bank transfer (NGN)",
+    "MTN MoMo Benin (CFA)",
+    "Moov Money Togo (CFA)",
     "Other bank transfer",
 )
 
 
 @api.post("/payment-proof")
 @sec.require_csrf
+@_upload_memory_guard
 def payment_proof():
     """A customer sends their receipt. The original file is stored in the
     configured storage and listed in the authenticated admin portal."""
@@ -1829,7 +2073,8 @@ def payment_proof():
     f = request.files.get("file") or request.files.get("receipt")
     if not f:
         return jsonify(ok=False, error="Choose your receipt file (JPG, PNG, PDF, DOC or DOCX)."), 400
-    data = f.read(storage.MAX_RECEIPT_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_RECEIPT_BYTES)
+    file_size = len(data)
     ok, msg, ext = storage.validate_upload(data, f.filename or "", allow_pdf=True,
                                            max_bytes=storage.MAX_RECEIPT_BYTES)
     if not ok:
@@ -1882,7 +2127,7 @@ def payment_proof():
         "email": email, "method": method, "items": details["items"],
         "quantity": details["quantity"], "amount": details["amount"],
         "note": details["note"], "file_url": url, "file_name": attach_name,
-        "file_size": len(data), "file_type": mime,
+        "file_size": file_size, "file_type": mime,
     }
 
     prod_source = bool(catalog_mod._prod_source())
@@ -1910,7 +2155,7 @@ def payment_proof():
                 "amount, note, file_url, file_name, file_size, mime) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (order_id, name, phone, email, method, details["items"], details["quantity"],
-                 details["amount"], details["note"], url, attach_name, len(data), mime),
+                 details["amount"], details["note"], url, attach_name, file_size, mime),
             )
         except Exception as exc:
             print(f"[sqlite] receipt cache write skipped: {exc}")
@@ -1920,7 +2165,7 @@ def payment_proof():
             "amount, note, file_url, file_name, file_size, mime) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (order_id, name, phone, email, method, details["items"], details["quantity"],
-             details["amount"], details["note"], url, attach_name, len(data), mime),
+             details["amount"], details["note"], url, attach_name, file_size, mime),
         )
         # mirror into Supabase when enabled (best effort outside production)
         from supabase_store import create_receipt as _sb_create_receipt
@@ -1939,11 +2184,12 @@ def payment_proof():
     try:
         import mailer
         mailer.notify_receipt_async(proof_row, attach_name, data, mime)
+        data = b""  # the notification thread owns its attachment bytes now
     except Exception:
         pass
 
     return jsonify(ok=True, stored=True, url=url,
-                   fileName=attach_name, size=len(data),
+                   fileName=attach_name, size=file_size,
                    message="Your receipt is saved in the admin portal. We will confirm your payment shortly.")
 
 
@@ -1968,8 +2214,11 @@ def public_order(oid):
     out = dict(row)
     out.pop("payload", None)
     out["items"] = [{"name": i.get("name", ""), "qty": i.get("qty", 1),
-                     "price": i.get("price", 0), "color": i.get("color", "")}
+                     "price": i.get("price", 0), "color": i.get("color", ""),
+                     **({"note": i.get("note")} if i.get("note") else {})}
                     for i in (payload.get("items") or [])]
+    out["paymentMethod"] = payload.get("paymentMethod") or ""
+    out["payment"] = payload.get("payment") or ""
     out["customer_notice"] = payload.get("customer_notice") or None
     out["payment_review"] = payload.get("payment_review") or None
     return jsonify(ok=True, order=out)
@@ -2146,20 +2395,41 @@ def admin_needs_attention():
     except Exception:
         products = {}
     low_stock = []
+    supplier_out_of_stock = []
+    supplier_low_stock = []
     for row in stock_rows:
         qty = int(row.get("qty") or 0)
-        threshold = min(5, int(row.get("low_threshold") or Config.LOW_STOCK_THRESHOLD))
+        threshold = max(0, min(5, int(row.get("low_threshold") or Config.LOW_STOCK_THRESHOLD)))
+        item = dict(row)
+        product = products.get(str(row.get("product_id") or "")) or {}
+        item["name"] = product.get("name") or row.get("variant_label") or row.get("product_id")
         if qty <= threshold:
-            item = dict(row)
-            product = products.get(str(row.get("product_id") or "")) or {}
-            item["name"] = product.get("name") or row.get("variant_label") or row.get("product_id")
             low_stock.append(item)
-    low_stock.sort(key=lambda row: (int(row.get("qty") or 0), str(row.get("name") or "")))
+        option_links = (product.get("optionSupplierSku")
+                        or product.get("optionSupplierUrls")
+                        or product.get("option_supplier_urls") or {})
+        has_supplier_link = bool(
+            product.get("supplierId") or product.get("supplierSku")
+            or product.get("supplierUrl") or product.get("supplier_url")
+            or (isinstance(option_links, dict) and any(bool(v) for v in option_links.values()))
+        )
+        if has_supplier_link and qty <= 0:
+            supplier_out_of_stock.append(item)
+        elif has_supplier_link and qty <= threshold:
+            supplier_low_stock.append(item)
+    stock_sort = lambda row: (int(row.get("qty") or 0), str(row.get("name") or ""))
+    low_stock.sort(key=stock_sort)
+    supplier_out_of_stock.sort(key=stock_sort)
+    supplier_low_stock.sort(key=stock_sort)
     supplier_warnings = supabase_store.load_supplier_sync_warnings()
     return jsonify(ok=True, pending=pending, stale=stale, lowStock=low_stock,
+                   supplierOutOfStock=supplier_out_of_stock,
+                   supplierLowStock=supplier_low_stock,
                    supplierWarnings=supplier_warnings,
                    counts={"pending": len(pending), "stale": len(stale),
                            "lowStock": len(low_stock),
+                           "supplierOutOfStock": len(supplier_out_of_stock),
+                           "supplierLowStock": len(supplier_low_stock),
                            "supplierWarnings": len(supplier_warnings)})
 
 
@@ -2320,6 +2590,7 @@ def _order_row(r):
     out.pop("payload", None)
     out["customer"] = payload.get("customer") or {}
     out["items"] = payload.get("items") or []
+    out["paymentMethod"] = payload.get("paymentMethod") or ""
     # The automatic bulk discount this order earned (per line), so the admin
     # order view can show why a line is cheaper than the list price.
     if payload.get("bulkDiscount"):
@@ -2739,8 +3010,8 @@ def admin_order_delete(oid):
                          actor=authmod.current_admin())
     else:
         # stock was reserved at checkout (both backends); deleting a pending
-        # order frees it. _sync_order_stock itself no-ops for a pending order
-        # that never reserved anything (ENFORCE_STOCK off, legacy rows).
+        # order frees it. _sync_order_stock itself no-ops for old pending rows
+        # that predate atomic reservations.
         _sync_order_stock(payload, "pending", "declined",
                           actor=authmod.current_admin())
 
@@ -2982,32 +3253,63 @@ def _product_save_response(payload):
     body = dict(ok=True, product=product, action=action, mirrored=mirrored,
                 meta=catalog_mod.meta())
     if overwrote_updated_at:
-        # A neutral receipt, NOT an error: the editor shows it as a quiet
-        # note and exits to the list exactly as it always does.
+        # Retained only for API diagnostics; the save remains successful and
+        # audit logging above is the operator-facing history.
         body["overwrote"] = overwrote_updated_at
-        body["notice"] = ("Saved. This product had been updated by another "
-                          "change while you were editing, so your copy is now "
-                          "the live one.")
     if merge_kept:
-        # Say what was preserved, so "the other admin's change is still there"
-        # is visible rather than a surprise - and so a field this save did NOT
-        # touch can never be mistaken for one it did.
+        # Quiet metadata for tests/diagnostics; no customer-facing toast or
+        # overwrite/merge notice is returned.
         body["merged"] = True
         body["kept"] = sorted(merge_kept)
-        body["notice"] = ((body.get("notice", "") + " ") if body.get("notice") else "") + (
-            "Kept the newer value of " + _merge_label(merge_kept) +
-            ", which you had not changed.")
     return jsonify(**body)
 
 
-def _merge_label(fields):
-    """A short, readable list of field names for the admin-facing notice."""
-    names = [str(f) for f in fields[:3]]
-    if len(fields) > 3:
-        names.append("and %d more" % (len(fields) - 3))
-    if len(names) == 1:
-        return names[0]
-    return ", ".join(names[:-1]) + " and " + names[-1]
+@api.put("/admin/products/<pid>/media")
+@authmod.require_admin
+@sec.require_csrf
+def admin_product_media_update(pid):
+    """Publish a product's media edit immediately, without waiting for Save.
+
+    The existing row is the merge base and only the media fields are marked
+    dirty. The ordinary all-or-nothing save path confirms the new references
+    before catalog.upsert hard-deletes now-unreferenced replaced uploads. If
+    upload, save, or database confirmation fails, the old saved reference is
+    untouched and the storage reference guard keeps that only copy safe.
+    """
+    if request.content_length and request.content_length > 64 * 1024:
+        return jsonify(ok=False, error="Media list is too large."), 413
+    product_id = sec.clean(pid, 64)
+    d = request.get_json(silent=True) or {}
+    raw_images = d.get("images") if isinstance(d, dict) else None
+    if not product_id or not isinstance(raw_images, list) or len(raw_images) > 20:
+        return jsonify(ok=False, error="A product and up to 20 media URLs are required."), 400
+    images = []
+    seen = set()
+    for raw in raw_images:
+        if not isinstance(raw, str):
+            return jsonify(ok=False, error="Every media entry must be a URL."), 400
+        url = raw.strip()
+        if not url or len(url) > 2000:
+            return jsonify(ok=False, error="Every media entry must be a valid URL."), 400
+        if url not in seen:
+            seen.add(url)
+            images.append(url)
+    if not images:
+        return jsonify(ok=False, error="Add a replacement photo before removing the last saved media."), 400
+    try:
+        current = catalog_mod.product_index(include_hidden=True).get(product_id)
+    except Exception:
+        return jsonify(ok=False, error=(
+            "The product could not be loaded, so its saved media was left unchanged.")), 503
+    if not current:
+        return jsonify(ok=False, error="That product is no longer available."), 404
+    product = dict(current)
+    product.update({"image": images[0], "image_url": images[0],
+                    "imageUrl": images[0], "images": images,
+                    "baseUpdatedAt": str(current.get("updated_at") or ""),
+                    "mergeBase": dict(current),
+                    "mergeFields": ["image", "image_url", "imageUrl", "images"]})
+    return _product_save_response(product)
 
 
 @api.post("/admin/products")
@@ -3420,6 +3722,7 @@ def admin_mail_test():
 @api.post("/admin/uploads/image")
 @authmod.require_admin
 @sec.require_csrf
+@_upload_memory_guard
 def admin_upload_image():
     """Product photo upload. Stored as a real file, never as a data URL."""
     limited = sec.guard("admin-upload", limit=60, window=600)
@@ -3427,11 +3730,12 @@ def admin_upload_image():
     f = request.files.get("file") or request.files.get("image")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_BYTES)
     ok, msg, _ext = storage.validate_image(data, f.filename or "")
     if not ok:
         return jsonify(ok=False, error=msg), 400
     ok, msg, url = storage.save_image(data, "products", f.filename or "")
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 500
     return jsonify(ok=True, url=url)
@@ -3440,6 +3744,7 @@ def admin_upload_image():
 @api.post("/admin/uploads/video")
 @authmod.require_admin
 @sec.require_csrf
+@_upload_memory_guard
 def admin_upload_video():
     """Homepage hero video upload (MP4 or WebM). Stored like every other
     upload: as a real file under /uploads/, never inside the database."""
@@ -3448,8 +3753,9 @@ def admin_upload_video():
     f = request.files.get("file") or request.files.get("video")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
     ok, msg, url = storage.save_video(data, "videos", f.filename or "")
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 400
     audit(authmod.current_admin(), "site.hero_video_upload", url, _ip())
@@ -3459,6 +3765,7 @@ def admin_upload_video():
 @api.post("/admin/uploads/category")
 @authmod.require_admin
 @sec.require_csrf
+@_upload_memory_guard
 def admin_upload_category():
     """Category cover / asset upload (image, video or document). Stored as a
     real file under /uploads/categories/, never as a data URL. Documents are
@@ -3468,11 +3775,12 @@ def admin_upload_category():
     f = request.files.get("file") or request.files.get("image")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
+    ext = storage._ext_from_bytes(data[:32])
     ok, msg, url = storage.save_asset(data, "categories", f.filename or "")
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 400
-    ext = storage._ext_from_bytes(data[:32])
     audit(authmod.current_admin(), "site.category_asset_upload", url, _ip())
     return jsonify(ok=True, url=url, kind=storage.kind_for(ext))
 
@@ -3480,6 +3788,7 @@ def admin_upload_category():
 @api.post("/admin/uploads/product")
 @authmod.require_admin
 @sec.require_csrf
+@_upload_memory_guard
 def admin_upload_product():
     """Product media upload: an image OR a video. The format is decided by the
     file's own bytes (never the name), so the same slot accepts a photo from
@@ -3490,7 +3799,7 @@ def admin_upload_product():
     f = request.files.get("file") or request.files.get("image")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
     ext = storage._ext_from_bytes(data[:32])
     kind = storage.kind_for(ext)
     if kind == "video":
@@ -3505,60 +3814,12 @@ def admin_upload_product():
         ok, msg, url = storage.save_image(data, "products", f.filename or "")
     else:
         return jsonify(ok=False, error="Only JPG, PNG, WebP, GIF, AVIF, MP4, WebM or MOV files can be uploaded here."), 400
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 500
     audit(authmod.current_admin(), "site.product_media_upload", url, _ip())
     return jsonify(ok=True, url=url, kind=kind)
 
-
-def _same_upload_ref(a, b):
-    ka = storage._key_from_url(str(a or ""))
-    kb = storage._key_from_url(str(b or ""))
-    if ka or kb:
-        return bool(ka and kb and ka == kb)
-    return str(a or "").split("?", 1)[0] == str(b or "").split("?", 1)[0]
-
-
-def _unlink_product_media(product_id, url):
-    product_id = sec.clean(product_id, 64)
-    if not product_id or not url:
-        return False
-    product = None
-    try:
-        for row in catalog_mod.merged(include_hidden=True):
-            if str((row or {}).get("id") or "") == product_id:
-                product = dict(row)
-                break
-    except Exception:
-        product = None
-    if not product:
-        return False
-    changed = False
-    images = []
-    raw_images = product.get("images") or []
-    if isinstance(raw_images, str):
-        try: raw_images = json.loads(raw_images)
-        except Exception: raw_images = []
-    for item in raw_images if isinstance(raw_images, list) else []:
-        ref = item if isinstance(item, str) else (item.get("url") or item.get("src") or item.get("image") if isinstance(item, dict) else "")
-        if ref and _same_upload_ref(ref, url):
-            changed = True
-            continue
-        if item:
-            images.append(item)
-    for key in ("image", "image_url", "imageUrl", "video", "video_url"):
-        if product.get(key) and _same_upload_ref(product.get(key), url):
-            product[key] = ""
-            changed = True
-    if changed:
-        string_images = [i for i in images if isinstance(i, str)]
-        product["images"] = string_images
-        product["image"] = string_images[0] if string_images else catalog_mod.PLACEHOLDER_IMG
-        product["image_url"] = product["image"]
-        saved, action, mirrored = catalog_mod.upsert(product, authmod.current_admin())
-        if not saved or mirrored is False:
-            raise RuntimeError("Product media unlink could not be saved.")
-    return changed
 
 
 @api.post("/admin/storage/cleanup")
@@ -3616,25 +3877,29 @@ def admin_storage_cleanup():
 @authmod.require_admin
 @sec.require_csrf
 def admin_upload_purge():
-    """Immediately unlink and permanently delete an uploaded media object."""
+    """Delete an unreferenced upload; never edit a product from this route.
+
+    A product replacement/removal must first save through catalog.upsert,
+    which purges its old-media diff after persistence. This endpoint is only
+    for purge-only cleanup (such as a new upload discarded before save), and
+    storage.delete_upload refuses to remove any object still referenced by a
+    live product. Ignore legacy productId fields rather than unlinking a saved
+    product as a side effect of a delete request.
+    """
     d = request.get_json(silent=True) or {}
     url = sec.safe_url(d.get("url") or d.get("fileUrl") or "", 500)
     if not url:
         return jsonify(ok=False, error="A media URL is required."), 400
-    product_id = sec.clean(d.get("productId") or "", 64)
-    try:
-        unlinked = _unlink_product_media(product_id, url) if product_id else False
-    except Exception as exc:
-        return jsonify(ok=False, error=str(exc) or "Could not unlink that media."), 503
     removed = storage.delete_upload(url)
     audit(authmod.current_admin(), "upload.purge",
-          f"product={product_id or '-'} removed={removed} {url[:180]}", _ip())
-    return jsonify(ok=True, removed=bool(removed), unlinked=bool(unlinked))
+          f"removed={removed} {url[:180]}", _ip())
+    return jsonify(ok=True, removed=bool(removed), unlinked=False)
 
 
 @api.post("/admin/uploads/hero")
 @authmod.require_admin
 @sec.require_csrf
+@_upload_memory_guard
 def admin_upload_hero():
     """Homepage hero upload: a video OR a document (or an image poster). Like
     every upload it is stored as a real file under /uploads/. Documents are
@@ -3644,11 +3909,12 @@ def admin_upload_hero():
     f = request.files.get("file") or request.files.get("video")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
+    ext = storage._ext_from_bytes(data[:32])
     ok, msg, url = storage.save_asset(data, "videos", f.filename or "")
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 400
-    ext = storage._ext_from_bytes(data[:32])
     audit(authmod.current_admin(), "site.hero_asset_upload", url, _ip())
     return jsonify(ok=True, url=url, kind=storage.kind_for(ext))
 

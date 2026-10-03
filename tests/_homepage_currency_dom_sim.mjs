@@ -159,8 +159,8 @@ catalogueFetches = 0;
 JA.setCurrency("CFA");
 
 check("currency switched synchronously", JA.currency() === "CFA");
-check("More from the house updates to rounded F CFA immediately", /F CFA\s*450/.test(newEl.innerHTML), newEl.innerHTML.replace(/\s+/g, " ").slice(0, 220));
-check("Most viewed updates to rounded F CFA immediately", /F CFA\s*450/.test(mostViewedEl.innerHTML), mostViewedEl.innerHTML.replace(/\s+/g, " ").slice(0, 220));
+check("More from the house shows amount-before-suffix CFA immediately", /450 CFA/.test(newEl.innerHTML), newEl.innerHTML.replace(/\s+/g, " ").slice(0, 220));
+check("Most viewed shows amount-before-suffix CFA immediately", /450 CFA/.test(mostViewedEl.innerHTML), mostViewedEl.innerHTML.replace(/\s+/g, " ").slice(0, 220));
 check("no page reload is needed for the DOM price update", sandbox.location.href.endsWith("index.html"));
 check("the immediate DOM update happened before the forced catalogue refresh finished", catalogueFetches >= 1, `${catalogueFetches} refresh fetch(es) scheduled`);
 

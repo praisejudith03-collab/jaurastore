@@ -271,7 +271,7 @@ def test_the_api_merges_per_field_and_still_answers_200(client, admin):
     assert body["ok"] is True
     assert body.get("merged") is True
     assert "priceNgn" in (body.get("kept") or [])
-    assert "price" in body.get("notice", "").lower() or "priceNgn" in body.get("notice", "")
+    assert "notice" not in body  # merge metadata is quiet; audit log is retained
 
     row = _row(client, "jau-merge-api-1")
     assert row["name"] == "API Merge Bag v2", "the admin's edit must be live"
@@ -410,18 +410,20 @@ def test_touching_a_control_records_the_fields_it_writes():
     table = table[:table.index("};") + 2]
     for control, fields in (
         ("name", ["name"]),
-        ("priceNgn", ["priceNgn", "priceCfa", "compareCfa"]),
+        ("priceNgn", ["priceNgn", "priceCfa"]),
         ("category", ["category"]),
-        ("online", ["online"]),
-        ("stock", ["stock", "stock_quantity"]),
+        ("supplierSku", ["supplierSku", "supplierUrl", "supplier_url"]),
+        ("stock", ["stock", "stock_quantity", "stockStatus"]),
+        ("enableCustomNote", ["enableCustomNote"]),
+        ("customNotePrompt", ["customNotePrompt"]),
     ):
         assert f"{control}:" in table, control
         for f in fields:
             assert f'"{f}"' in table, f"{control} must also mark {f}"
-    # the media strip and the variant rows are data-* driven
-    assert '"data-img-i"' in js
-    assert '"data-opt-row"' in js
-    assert '"data-var-row"' in js
+    # the media strip and variant rows use delegated data-* controls
+    for marker in ("data-img-i", "data-opt-row", "data-opt-stock",
+                   "data-opt-supplier", "data-var-row"):
+        assert f'"{marker}"' in js
     # and the listener is delegated, so re-rendered rows still count
     form = js[js.index('const form = $("#prod-form");'):]
     form = form[:form.index('addEventListener("change", (e) => trackEditedField(e.target), true);')

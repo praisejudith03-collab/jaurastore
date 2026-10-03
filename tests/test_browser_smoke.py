@@ -301,8 +301,8 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     in Naira FIRST, the floating pill is shown, and a tap on FCFA recalculates
     every price on screen without a reload. French (?lang=fr, the explicit
     form of what a French phone detects): the whole interface turns French,
-    the currency locks to FCFA, the pill disappears, and the checkout
-    surfaces the FCFA payment gateway instead of the Naira one.
+    the storefront currency locks to CFA, the pill disappears, and checkout
+    defaults to Benin CFA while keeping all three payment methods available.
     """
     # -- English default: NGN first, pill visible, tap FCFA recalculates.
     mobile.set_viewport_size({"width": 390, "height": 844})
@@ -316,7 +316,7 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     mobile.locator('.cur-float button[data-cur="CFA"]').click()
     mobile.wait_for_timeout(600)
     assert mobile.evaluate("JA.currency()") == "CFA"
-    expect(mobile.locator(".price").first).to_contain_text("F CFA")  # recalculated without reload
+    expect(mobile.locator(".price").first).to_contain_text("CFA")  # recalculated without reload
     assert mobile.locator(".price").first.evaluate(
         "el => el.isConnected"), "prices repainted in place, no navigation"
     # -- French: greeting + interface in French, FCFA locked, pill hidden.
@@ -329,11 +329,12 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
         "the floating currency pill stays hidden in French mode")
     expect(mobile.locator('.home-hero-static [data-i18n="home.kicker"]')).to_have_text(
         "Bienvenue. Prêt à faire vos achats ?")
-    expect(mobile.locator(".price").first).to_contain_text("F CFA")
+    expect(mobile.locator(".price").first).to_contain_text("CFA")
     # setCurrency cannot talk a French storefront out of FCFA
     mobile.evaluate("JA.setCurrency('NGN')")
     assert mobile.evaluate("JA.currency()") == "CFA"
-    # -- Checkout gateways follow the active/locked currency.
+    # -- Checkout presents all three payment methods; the selected method
+    # derives the order currency, rather than currency hiding a payment option.
     mobile.goto(live_shop + "/shop.html?lang=fr")
     # The storefront deliberately shows nothing until the authoritative
     # /api/catalog answer lands (store.js boot clears window.JA_SEED and awaits
@@ -345,31 +346,34 @@ def test_automatic_language_and_currency_logic(mobile, live_shop):
     mobile.wait_for_function(
         "() => { try { return typeof JA !== 'undefined' && Array.isArray(JA.products())"
         " && JA.products().length > 0; } catch (e) { return false; } }")
-    mobile.evaluate(
+    added = mobile.evaluate(
         "() => { const p = JA.products().find(p => JA.stockFor(p, '') > 0) || JA.products()[0];"
-        " JA.addToCart(p.id); }")
+        " return JA.addToCart(p.id); }")
+    assert added is True, "the server-validated cart addition should succeed"
     assert mobile.evaluate("JA.cartCount()") > 0, "the test item must be in the cart"
     mobile.goto(live_shop + "/checkout.html?lang=fr")
     expect(mobile.locator("[data-checkout]")).to_be_visible()
-    assert mobile.locator('[name=currency][value="CFA"]').is_checked(), (
-        "French checkout pre-selects the FCFA gateway")
-    expect(mobile.locator("[data-bank-cfa]")).to_be_visible()
+    expect(mobile.locator('[name=paymentMethod][value="benin_cfa"]')).to_be_checked()
+    expect(mobile.locator("[data-bank-benin]")).to_be_visible()
     expect(mobile.locator("[data-bank-ngn]")).to_be_hidden()
-    ng_card = mobile.locator(".pay-card").filter(has=mobile.locator('[value="NGN"]'))
-    assert ng_card.evaluate("el => el.hidden"), (
-        "the Naira pay-card is removed from a French (FCFA-locked) checkout")
-    # English checkout: Naira gateway surfaced first. The pill tap above
-    # left localStorage on CFA, and English mode honors that unprompted
-    # choice, so reset to Naira before checking the default gateway.
+    expect(mobile.locator("[data-bank-togo]")).to_be_hidden()
+    for method in ("naira", "benin_cfa", "togo_cfa"):
+        expect(mobile.locator(f'[name=paymentMethod][value="{method}"]')).to_be_visible()
+
+    # English checkout defaults to Naira even after the French page used CFA;
+    # each of the three methods remains selectable in both languages.
     mobile.goto(live_shop + "/shop.html?lang=en")
     mobile.evaluate("JA.setCurrency('NGN')")
     assert mobile.evaluate("JA.currency()") == "NGN"
     mobile.goto(live_shop + "/checkout.html?lang=en")
     expect(mobile.locator("[data-checkout]")).to_be_visible()
-    assert mobile.locator('[name=currency][value="NGN"]').is_checked(), (
-        "English checkout pre-selects the Naira gateway")
+    assert mobile.locator('[name=paymentMethod][value="naira"]').is_checked(), (
+        "English checkout defaults to the Naira method")
     expect(mobile.locator("[data-bank-ngn]")).to_be_visible()
-    expect(mobile.locator("[data-bank-cfa]")).to_be_hidden()
+    expect(mobile.locator("[data-bank-benin]")).to_be_hidden()
+    expect(mobile.locator("[data-bank-togo]")).to_be_hidden()
+    for method in ("naira", "benin_cfa", "togo_cfa"):
+        expect(mobile.locator(f'[name=paymentMethod][value="{method}"]')).to_be_visible()
 
 
 def test_owner_category_creation_product_and_reordering(mobile, live_shop):
@@ -385,6 +389,12 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
                               headers={'X-CSRF-Token':token}).ok
     mobile.goto(live_shop + '/admin.html')
     open_admin_tab(mobile, "categories")
+    # The admin first renders its local seed fallback, then hydrates categories
+    # from the authoritative API. Do not add/reorder against that transient
+    # list: the late hydration can repaint it and make a valid move look lost.
+    expect(mobile.locator('#cat-list > article')).to_have_count(2)
+    expect(mobile.locator('#cat-list > article').nth(0)).to_have_attribute('data-cat-id', 'household')
+    expect(mobile.locator('#cat-list > article').nth(1)).to_have_attribute('data-cat-id', 'beauty')
     mobile.locator('#new-cat-name').fill('Perfume')
     mobile.locator('#new-cat-fr').fill('Parfum')
     mobile.locator('#add-cat').click()
@@ -407,7 +417,9 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     mobile.locator('[data-tab="products"]:visible').first.click()
     mobile.locator('#add-product').click()
     mobile.locator('#prod-form [name="name"]').fill('Perfume browser sample')
-    mobile.locator('#prod-form [name="nameFr"]').fill('Parfum de démonstration')
+    # The create/edit form intentionally has one product title field; legacy
+    # per-language product metadata was removed from the simplified editor.
+    expect(mobile.locator('#prod-form [name="nameFr"]')).to_have_count(0)
     mobile.locator('#prod-form [name="priceNgn"]').fill('4000')
     mobile.locator('#prod-form [name="category"]').select_option('perfume')
     from pathlib import Path
@@ -425,7 +437,9 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     # parameter carries a language onto the next page load.
     mobile.evaluate("I18N.setLang('fr')")
     mobile.wait_for_timeout(500)
-    expect(mobile.locator('[data-shop-grid]')).to_contain_text('Parfum de démonstration')
+    # A product created through the streamlined editor has one canonical title;
+    # French storefronts use that title when no optional legacy translation exists.
+    expect(mobile.locator('[data-shop-grid]')).to_contain_text('Perfume browser sample')
     expect(mobile.locator('[data-shop-title]').last).to_have_text('Parfum')
     mobile.goto(live_shop + '/categories.html?lang=fr')
     expect(mobile.locator('[data-cat-list] a').first).to_have_attribute('href', 'shop.html?cat=perfume')
@@ -434,7 +448,8 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     with appmod.create_app().test_client() as fresh:
         assert fresh.get('/api/categories').json['categories'][0]['id'] == 'perfume'
         products = fresh.get('/api/catalog').json['products']
-    assert any(p['category'] == 'perfume' and p['nameFr'] == 'Parfum de démonstration' for p in products)
+    assert any(p['category'] == 'perfume' and p['name'] == 'Perfume browser sample'
+               for p in products)
 
 
 @pytest.mark.parametrize('language', ['en', 'fr'])

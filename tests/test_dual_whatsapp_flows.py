@@ -99,7 +99,7 @@ def test_item_lines_and_total_render_in_both_currencies():
     money = _fn_body(store, "money")
     assert money, "store.js must keep money()"
     assert '"₦"' in money or "₦" in money, "NGN totals render with the naira sign"
-    assert "F CFA" in money, "CFA totals render as F CFA"
+    assert '+ " CFA"' in money and "F CFA" not in money and "FCFA" not in money
     lines = _fn_body(_read("js", "app.js"), "orderSummaryLines")
     assert "qty" in lines and "JA.money(" in lines, \
         "each item line carries quantity and a currency-aware price"

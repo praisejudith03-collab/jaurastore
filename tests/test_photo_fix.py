@@ -430,22 +430,39 @@ def _function_body(source, name):
     return m.group(0)
 
 
-def test_replacing_or_removing_product_media_purges_bucket_objects():
-    """Swapping a product photo or pressing x permanently deletes the old file."""
+def test_replacing_or_removing_product_media_purges_only_after_save():
+    """Saved media is purged after catalog persistence; UI purge cannot unlink."""
     api = _read("api.py")
     assert "admin_upload_purge" in api
     assert "api.delete(\"/admin/uploads/purge\")" in api
-    assert "storage.delete_upload(url)" in _function_body(api, "admin_upload_purge")
+    purge_route = _function_body(api, "admin_upload_purge")
+    assert "storage.delete_upload(url)" in purge_route
+    assert "_unlink_product_media" not in purge_route
     catalog = _read("catalog.py")
     assert "def _purge_removed_media(" in catalog
     assert "delete_upload(ref)" in catalog
     admin = _read(os.path.join("js", "admin.js"))
     block = admin.split('e.target.closest("[data-del-img]")', 1)
     assert len(block) == 2, "the x (data-del-img) handler still exists in js/admin.js"
-    handler = block[1][:900]
+    handler = block[1][:1000]
     assert "__editImages.splice" in handler, "x removes the photo from the editor's list"
-    assert "purgeRemovedMedia(removed)" in handler
+    assert "__editRemovedImages.push(removed)" in handler, "x queues purge until save succeeds"
+    assert "purgeRemovedMedia(removed)" not in handler, "deletion cannot run before Save"
+    assert 'json: { url }' in admin, "purge-only requests must omit productId"
     assert "api/admin/uploads/purge" in admin and 'method: "DELETE"' in admin
+    save = admin.split("const removedMedia = Array.isArray(window.__editRemovedImages)", 1)
+    assert len(save) == 2 and "purgeRemovedMedia(entry)" in save[1][:800]
+
+
+def test_new_photo_previews_without_waiting_for_save_and_busts_the_url_cache():
+    admin = _read(os.path.join("js", "admin.js"))
+    assert "function bustMediaCache(url)" in admin
+    upload = admin.split("async function uploadProductImage(file, box)", 1)[1]
+    upload = upload[:upload.index("  box.addEventListener(\"click\"")]
+    assert "window.__editImages.push(entry);" in upload, "the local preview is present while uploading"
+    assert "window.__editImages[at] = bustMediaCache(url);" in upload
+    assert "paintMedia(box);" in upload, "the new image tile is repainted as soon as upload succeeds"
+    assert "await JA.upsertProduct({" in admin and "restoreProductsReturn();" in admin
 
 
 def test_receipt_deletion_still_removes_the_bucket_object():

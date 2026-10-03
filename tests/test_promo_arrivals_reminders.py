@@ -217,11 +217,15 @@ def test_new_arrivals_row_is_driven_by_the_badge():
     assert "arrivals.concat(featured, rest)" in block
 
 
-def test_admin_ribbon_offers_and_preselects_new_arrival():
+def test_simplified_product_editor_hides_the_legacy_arrival_badge_control():
     admin = read("js/admin.js")
-    assert '"New Product Arrival"' in admin or "New Product Arrival" in admin
-    assert 'name="badge"' in admin
-    assert 'p.badge === b ? "selected" : ""' in admin
+    start = admin.index("function productForm(p = {})")
+    end = admin.index("async function handleProductSubmit", start)
+    product_form = admin[start:end]
+    assert 'name="badge"' not in product_form
+    assert "New Product Arrival" not in product_form
+    # Existing storefront and API support for published arrival badges remains.
+    assert 'p.badge === "new"' in read("js/app.js")
 
 
 # ------------------------------------- issue 4: abandoned-cart reminders
