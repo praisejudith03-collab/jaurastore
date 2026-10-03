@@ -390,6 +390,8 @@ window.I18N_PHRASES = {
    * pdp.* dictionary keys. */
   "Sold out": "Épuisé",
   "Out of stock": "Rupture de stock",
+  "Enable Custom Product Note": "Activer la note personnalisée sur l’article",
+  "e.g. colour, size, scent, or another detail": "ex. couleur, taille, parfum ou autre détail",
   "Choose <strong>Out of stock</strong> to stop sales. Choose <strong>In stock</strong> and set a quantity so customers can add it to cart.":
     "Choisissez <strong>Rupture de stock</strong> pour arrêter les ventes. Choisissez <strong>En stock</strong> et indiquez une quantité pour que les clients puissent l'ajouter au panier.",
 

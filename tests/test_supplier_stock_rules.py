@@ -26,6 +26,33 @@ import supplier_watchdog  # noqa: E402
 SUPPLIER = "https://supplier.example/item/42"
 
 
+def test_public_catalog_flags_supplier_tracked_products_without_exposing_urls():
+    from api import _public_product
+
+    public = _public_product({
+        "id": "jau-public-supplier", "name": "Supplier-linked item", "stock": 4,
+        "supplier_id": "supplier-private-id", "supplierUrl": SUPPLIER,
+        "optionSupplierUrls": {"Colour: Black": [SUPPLIER]},
+    })
+    assert public["supplierTracked"] is True
+    assert not any(key in public for key in (
+        "supplier_id", "supplierUrl", "supplierSku", "supplier_sku", "optionSupplierUrls",
+        "optionSupplierSku", "variantSupplierUrls"))
+    assert SUPPLIER not in str(public)
+    assert "supplier-private-id" not in str(public)
+
+    ordinary = _public_product({"id": "jau-local-item", "stock": 1})
+    assert ordinary["supplierTracked"] is False
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
+    translations = open(os.path.join(root, "js", "i18n.js"), encoding="utf-8").read()
+    assert 'const supplierAvailabilityHTML = p.supplierTracked' in app_js
+    assert 'class="pdp-supplier-availability"' in app_js
+    assert "Supplier-linked availability is checked regularly" in translations
+    assert "La disponibilité auprès du fournisseur" in translations
+
+
 def _variants_html(*rows):
     """rows of (title, available, qty|None)."""
     items = []

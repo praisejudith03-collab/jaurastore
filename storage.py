@@ -754,7 +754,9 @@ def _referenced_by_a_product(key: str) -> bool:
                 if _key_from_url(str(ref or "")) == key:
                     return True
     except Exception:
-        return False
+        # A failed reference read is not proof that the object is unused. Keep
+        # the file; orphan cleanup can retry after the catalogue is readable.
+        return True
     return False
 
 

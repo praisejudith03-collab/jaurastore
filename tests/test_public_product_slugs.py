@@ -49,3 +49,25 @@ def test_public_slug_collision_fallback_never_exposes_an_internal_wix_id():
     }})
     assert slug.startswith("same-name-jau-")
     assert "wix" not in slug.lower()
+
+
+def test_campaign_email_uses_the_clean_products_path():
+    from mailer import campaign_email_html
+
+    body = campaign_email_html("New pieces", "Explore the collection", "", products=[{
+        "id": "wix-old-tote-003", "legacyId": "wix-old-tote-003",
+        "slug": "wix-old-tote-003", "name": "Coastal Tote Bag",
+        "priceCfa": 2500,
+    }])
+    assert "/products/coastal-tote-bag" in body
+    assert "//products/" not in body
+    assert "product.html?slug=" not in body
+    assert "/products/wix" not in body.lower()
+
+
+def test_product_jsonld_uses_a_clean_absolute_url_without_a_double_slash():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "js" / "app.js").read_text()
+    assert 'new URL(publicUrl, JA.SITE || "https://jaurastore.com.ng").href' in source
+    assert ' + "/" + publicUrl' not in source

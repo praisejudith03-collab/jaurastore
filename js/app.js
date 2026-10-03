@@ -1,5 +1,10 @@
 function param(name) {
-  return new URLSearchParams(location.search).get(name);
+  const value = new URLSearchParams(location.search).get(name);
+  if (value != null && (name !== "slug" || String(value).trim())) return value;
+  if (name !== "slug") return null;
+  const match = String(location.pathname || "").match(/^\/products\/([^/]+)\/?$/i);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch (e) { return match[1]; }
 }
 
 function compressImage(file, max = 1280, quality = 0.82, targetBytes = 900 * 1024) {
@@ -67,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=183";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=183";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=185";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=185";
 }
 
 function renderCategories() {
@@ -238,7 +243,7 @@ function renderHome() {
     } catch (e) {
       newIn.innerHTML = list.map((p) => {
         const img = (p.images && p.images[0]) || p.image || "";
-        const url = JA.productUrl ? JA.productUrl(p) : ("product.html?slug=" + encodeURIComponent(p.slug || p.name || "product"));
+        const url = JA.productUrl ? JA.productUrl(p) : ("/products/" + encodeURIComponent(p.slug || p.name || "product"));
         const name = p.name || "";
         return `<article class="card"><a class="card-media" href="${url}"><img src="${img}" alt="" loading="lazy" decoding="async" onerror="fallbackImg(event)"></a><div class="card-body"><h3><a href="${url}">${name}</a></h3></div></article>`;
       }).join("");
@@ -633,7 +638,7 @@ function paintMostViewed(host, items) {
     <div class="mv-rail">${live.map((p) => {
       const sold = !(Number(p.stock) > 0);
       return `<article class="mv-card${sold ? " is-oos" : ""}">
-        <a class="mv-card-link" href="${JA.productUrl ? JA.productUrl(p) : ("product.html?slug=" + encodeURIComponent(p.slug || p.name || "product"))}">
+        <a class="mv-card-link" href="${JA.productUrl ? JA.productUrl(p) : ("/products/" + encodeURIComponent(p.slug || p.name || "product"))}">
           <img src="${JA.asset(p.image)}" alt="" loading="lazy" onerror="fallbackImg(event)" />
           <strong>${JA.escape(JA.displayName(p))}</strong>
           ${(() => {
@@ -758,8 +763,8 @@ function paintProduct(root, p) {
   try {
     const name = JA.displayName(p);
     const desc = String(JA.displayDescription(p) || "").trim() || (name + " at Jaura Store. Pay in ₦ or CFA.");
-    const publicUrl = JA.productUrl ? JA.productUrl(p) : ("product.html?slug=" + encodeURIComponent(p.slug || p.name || "product"));
-    const url = (JA.SITE || "https://jaurastore.com.ng") + "/" + publicUrl;
+    const publicUrl = JA.productUrl ? JA.productUrl(p) : ("/products/" + encodeURIComponent(p.slug || p.name || "product"));
+    const url = new URL(publicUrl, JA.SITE || "https://jaurastore.com.ng").href;
     const img = (p.images && p.images[0]) || p.image;
     const cur = Number(p.priceNgn) > 0 ? "NGN" : "XOF";
     const price = Number(p.priceNgn) > 0 ? p.priceNgn : p.priceCfa;
@@ -834,6 +839,9 @@ function paintProduct(root, p) {
   const productNoteHTML = p.enableCustomNote
     ? `<label class="pdp-product-note"><span>${t("pdp.productNote")}</span><input type="text" name="productNote" maxlength="300" autocomplete="off" placeholder="${JA.escape(p.customNotePrompt || "")}" /></label>`
     : "";
+  const supplierAvailabilityHTML = p.supplierTracked
+    ? `<p class="pdp-supplier-availability" role="note">${t("pdp.supplierAvailability")}</p>`
+    : "";
   const gallery = (JA.galleryOf ? JA.galleryOf(p) : ((p.images && p.images.length ? p.images : [p.image]) || [])).filter(Boolean).slice(0, 20);
   const stockN = Number(p.stock) || 0;
   const rev = (JA.reviews && JA.reviews(p.id)) || [];
@@ -864,6 +872,7 @@ function paintProduct(root, p) {
       ${JA.priceHTML(p)}
       ${stockN > 0 ? "" : `<p class="pdp-stock">${t("pdp.oos")}</p>`}
       <p class="stock-line" data-stock-line role="status" aria-live="polite"></p>
+      ${supplierAvailabilityHTML}
       ${(() => {
         const tiers = JA.bulkDiscountTiers ? JA.bulkDiscountTiers() : [];
         const ownQty = Math.round(Number(p.bulkQty) || 0);
@@ -1183,9 +1192,9 @@ function renderCart() {
         const atMin = Number(i.qty) <= 1;
         return `
       <tr class="cart-row-tr">
-        <td><a href="${JA.productUrl ? JA.productUrl(i.product) : ("product.html?slug=" + encodeURIComponent(i.product.slug || i.product.name || "product"))}"><img src="${JA.asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a></td>
+        <td><a href="${JA.productUrl ? JA.productUrl(i.product) : ("/products/" + encodeURIComponent(i.product.slug || i.product.name || "product"))}"><img src="${JA.asset(i.product.image)}" alt="" onerror="fallbackImg(event)" /></a></td>
         <td>
-          <a href="${JA.productUrl ? JA.productUrl(i.product) : ("product.html?slug=" + encodeURIComponent(i.product.slug || i.product.name || "product"))}"><strong>${JA.escape(JA.displayName(i.product))}</strong></a>
+          <a href="${JA.productUrl ? JA.productUrl(i.product) : ("/products/" + encodeURIComponent(i.product.slug || i.product.name || "product"))}"><strong>${JA.escape(JA.displayName(i.product))}</strong></a>
           ${i.color ? `<div class="card-cat">${JA.escape(variantLabel(i.product, i.color))}</div>` : ""}
           ${i.note ? `<div class="cart-item-note"><strong>${t("pdp.productNote")}:</strong> ${JA.escape(i.note)}</div>` : ""}
         </td>

@@ -182,6 +182,36 @@ def test_variant_stock_cannot_be_bypassed_by_omitting_or_faking_selection(client
     assert product_row("jau-enf-variant-required")["stock"] == 5
 
 
+def test_custom_note_is_product_gated_and_carries_into_order_email(client):
+    import api as api_mod
+    from mailer import order_received_email_html
+
+    enabled = make_product("jau-enf-note-enabled", stock=3)
+    enabled.update({"enableCustomNote": True,
+                    "customNotePrompt": "Type the name to engrave"})
+    enabled, _action, _mirrored = catalog_mod.upsert(enabled, "tester")
+    assert enabled["customNotePrompt"] == "Type the name to engrave"
+    checked, _total, error = api_mod._checkout_items([{
+        "id": enabled["id"], "name": enabled["name"], "qty": 1,
+        "note": "Engrave Amina on the lid",
+    }], "NGN")
+    assert error is None
+    assert checked[0]["note"] == "Engrave Amina on the lid"
+    email = order_received_email_html({
+        "id": "JA-NOTE1", "currency": "NGN", "total": 2000,
+        "customer": {"name": "Amina"}, "items": checked,
+    })
+    assert "Product note: Engrave Amina on the lid" in email
+
+    disabled = make_product("jau-enf-note-disabled", stock=3)
+    ignored, _total, error = api_mod._checkout_items([{
+        "id": disabled["id"], "name": disabled["name"], "qty": 1,
+        "note": "This must not be persisted",
+    }], "NGN")
+    assert error is None
+    assert "note" not in ignored[0]
+
+
 def test_variant_availability_is_public_without_quantities(client):
     """Red: 5, Black: 0 - the shopper learns which colour is sold out, never
     how many Reds remain."""

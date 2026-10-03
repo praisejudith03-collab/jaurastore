@@ -355,10 +355,11 @@ def test_every_editable_field_is_shipped_by_the_admin_form():
     start = js.index("const res = await JA.upsertProduct({")
     end = js.index("});", start)
     payload = js[start:end]
+    assert 'const isOnline = !!fd.get("online");' in js
     for field in (
             "name,", "nameFr:", "category: savedCategory", "priceNgn,",
             "compareNgn,", "description: fd.get(", "descriptionFr:",
-            "dimensions:", "badge: fd.get(", "online: !!fd.get(",
+            "dimensions:", "badge: fd.get(", "online: isOnline",
             "featured: fd.get(", "colors:", "options,", "optionStock:",
             "optionPrices,", "optionCompareAt,", "optionSupplierSku,",
             "optionSku,", "supplierSku: supplierRef", "bulkQty,",

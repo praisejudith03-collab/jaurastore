@@ -462,6 +462,7 @@ ul { list-style: none; }
 .rating-stars { color: #e6a900; font-size: 14px; letter-spacing: 1px; line-height: 1; white-space: nowrap; }
 .pdp-product-note { display: grid; gap: 6px; margin: 16px 0; font-size: 13px; color: var(--taupe, #887562); }
 .pdp-product-note input { width: 100%; border: 1px solid var(--line, #e2e2e2); border-radius: 8px; padding: 11px 12px; font: inherit; color: var(--ink, #342922); }
+.pdp-supplier-availability { margin: 12px 0; padding: 11px 14px; border-left: 3px solid var(--gold, #b8956a); border-radius: 6px; background: var(--cream, #faf7f2); color: var(--ink, #342922); font-size: 13px; line-height: 1.5; }
 .cart-item-note, .ck-line-note, .order-item-note { display: block; margin-top: 4px; font-size: 12px; line-height: 1.45; color: var(--muted, #756a60); }
 .ck-line-note { font-weight: 400; }
 .order-item-note { font-style: italic; }

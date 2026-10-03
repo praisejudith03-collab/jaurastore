@@ -115,7 +115,7 @@ def test_live_categories_and_products_are_listed(client):
     seed_products = catalog_mod.base_products()[:3]
     for product in seed_products:
         slug = catalog_mod.public_slug(product)
-        public_url = f"{origin}/product.html?slug={slug}"
+        public_url = f"{origin}/products/{slug}"
         assert public_url in locs, f"missing product {product.get('id')} at clean slug {slug}"
         assert "wix-" not in public_url.lower()
 
@@ -210,8 +210,8 @@ def test_deleted_product_never_appears_in_sitemap(client, monkeypatch, tmp_path)
     monkeypatch.setattr(catalog_mod, "CATALOG_FILE", str(cat_file))
 
     body = _sitemap_body(client)
-    assert "/product.html?slug=10000-mah-power-bank" not in body
-    assert "/product.html?slug=10in1-raf-sandwich-maker" in body
+    assert "/products/10000-mah-power-bank" not in body
+    assert "/products/10in1-raf-sandwich-maker" in body
     # one fewer URL than before the deletion
     assert body.count("<url>") == len(appmod.SITEMAP_STATIC_PAGES) \
         + len(api_mod._categories_data()["categories"]) + (len(catalog_mod.merged()))
@@ -225,7 +225,7 @@ def test_offline_product_is_not_listed(client, monkeypatch, tmp_path):
     monkeypatch.setattr(catalog_mod, "CATALOG_FILE", str(cat_file))
 
     body = _sitemap_body(client)
-    assert "/product.html?slug=10in1-raf-sandwich-maker" not in body
+    assert "/products/10in1-raf-sandwich-maker" not in body
 
 
 # -------------------------------------------------- static file is gone

@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=183" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=185" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -368,14 +368,86 @@ function purgeRemovedMedia(entry) {
   const url = imgSrc(entry) || (typeof entry === "string" ? entry : "");
   if (!url || /^(data:|blob:)/i.test(url) || !window.JA_NET) return Promise.resolve(null);
   // Purge-only requests never carry productId: the endpoint must not mutate a
-  // saved product. Existing saved media is removed by catalog.upsert after the
-  // product save; this request is a safe follow-up for newly uploaded files
-  // that were discarded before that save.
+  // saved product. The storage reference guard rejects a still-live photo;
+  // catalog.upsert hard-deletes it immediately after a replacement gallery is
+  // confirmed. This also cleans a fresh upload discarded before it was saved.
   return window.JA_NET.api("api/admin/uploads/purge", {
     method: "DELETE",
     json: { url },
     label: "Media purge",
   }).catch(() => null);
+}
+function markEditedMediaFields() {
+  if (!(window.__editDirty instanceof Set)) window.__editDirty = new Set();
+  ["image", "image_url", "imageUrl", "images"].forEach((field) => window.__editDirty.add(field));
+}
+function persistEditedMedia() {
+  const productId = String(window.__editMediaProductId || "").trim();
+  const session = Number(window.__editMediaSession || 0);
+  if (!productId || productId === "new" || !window.JA_NET) {
+    return Promise.resolve({ ok: false, skipped: true });
+  }
+  markEditedMediaFields();
+  window.__editMediaRevision = Number(window.__editMediaRevision || 0) + 1;
+  const prior = window.__editMediaSave || Promise.resolve();
+  const task = Promise.resolve(prior).catch(() => null).then(async () => {
+    if (session !== Number(window.__editMediaSession || 0)
+        || productId !== String(window.__editMediaProductId || "")) {
+      return { ok: false, staleEditor: true };
+    }
+    const revision = Number(window.__editMediaRevision || 0);
+    if (revision <= Number(window.__editMediaSavedRevision || 0)) {
+      return { ok: true, skipped: true };
+    }
+    const current = window.__editImages || [];
+    if (current.some((entry) => entry && typeof entry === "object" && !entry.failed)) {
+      return { ok: false, deferred: true };
+    }
+    const images = current.filter((entry) => typeof entry === "string" && entry.trim())
+      .slice(0, 20);
+    // An empty editor can be the first half of an intentional replacement.
+    // Keep the saved reference until the replacement itself is uploaded.
+    if (!images.length) return { ok: false, deferred: true };
+    try {
+      const result = await window.JA_NET.api(
+        "api/admin/products/" + encodeURIComponent(productId) + "/media", {
+          method: "PUT", json: { images }, label: "Product photos",
+        });
+      if (!result || result.ok === false || !result.product) {
+        throw new Error((result && result.error) || "The photo change was not confirmed.");
+      }
+      const editorStillCurrent = session === Number(window.__editMediaSession || 0)
+        && productId === String(window.__editMediaProductId || "");
+      if (editorStillCurrent && window.JA
+          && typeof JA.applyServerProduct === "function") {
+        JA.applyServerProduct(result.product);
+      }
+      if (editorStillCurrent) {
+        window.__editMediaSavedRevision = Math.max(
+          Number(window.__editMediaSavedRevision || 0), revision);
+      }
+      if (editorStillCurrent && revision === Number(window.__editMediaRevision || 0)) {
+        const removed = Array.isArray(window.__editRemovedImages)
+          ? window.__editRemovedImages.slice() : [];
+        window.__editRemovedImages = [];
+        // Run only after the confirmed gallery write: a URL-only purge racing
+        // an in-flight save could otherwise delete a file the save is about
+        // to reference. The storage guard also protects shared gallery files.
+        removed.forEach((entry) => { void purgeRemovedMedia(entry); });
+        JA.toast("Photo update is live; unused replaced files were deleted.");
+      }
+      return { ok: true, data: result };
+    } catch (error) {
+      if (session === Number(window.__editMediaSession || 0)) {
+        const detail = error && (error.message || (error.data && error.data.error));
+        JA.toast("Photo update could not be saved. The previous saved photo is safe. "
+          + (detail || "Please try again or press Save Product."));
+      }
+      return { ok: false, error: (error && error.message) || "Photo save failed." };
+    }
+  });
+  window.__editMediaSave = task;
+  return task;
 }
 function editorOptions(p) {
   if (p && p.options && p.options.length) return p.options;
@@ -555,20 +627,35 @@ function bindMedia() {
       const at = entryAt();
       if (at < 0) return false;               // the owner deleted the tile meanwhile
       window.__editImages[at] = bustMediaCache(url);
+      markEditedMediaFields();
       paintMedia(box);
+      return true;
+    };
+    const acceptUploadedUrl = (url, queued = false) => {
+      if (!url) return false;
+      if (!swapEntry(url)) {
+        // The owner removed this pending tile while the upload was in flight.
+        // It has never been attached to the product, so the guarded purge is safe.
+        void purgeRemovedMedia(url);
+        return false;
+      }
+      if (window.__editMediaProductId) {
+        void persistEditedMedia();
+        if (queued) JA.toast("Queued photo uploaded; saving it to the live product now.");
+      } else if (queued) {
+        JA.toast("Queued photo uploaded — press Save Product to keep it.");
+      }
       return true;
     };
     const res = await photoSlot(() => window.JA_NET.api(endpoint, {
       method: "POST", blob: payload, field: "file", filename,
       queue: true, timeout: isVideo ? 300000 : 45000, label: isVideo ? "Video" : "Photo",
       onDone: (data) => {
-        if (data && data.url && swapEntry(data.url)) {
-          JA.toast("Queued photo is uploaded now — press Save to keep it.");
-        }
+        if (data && data.url) acceptUploadedUrl(data.url, true);
       },
     }));
     if (res && res.url) {
-      if (swapEntry(res.url)) {
+      if (acceptUploadedUrl(res.url, false)) {
         JA.toast(isVideo ? "Video uploaded."
           : (squeezed && squeezed.compressed
             ? "Photo uploaded — compressed " + readableBytes(squeezed.originalSize) + " → " + readableBytes(squeezed.size) + "."
@@ -590,14 +677,17 @@ function bindMedia() {
       const i = Number(del.getAttribute("data-del-img"));
       if (!window.__editImages) window.__editImages = [];
       const removed = window.__editImages.splice(i, 1)[0];
-      // Keep the file until Save is confirmed. catalog.upsert owns replacement
-      // cleanup for media already attached to the product; the post-save
-      // purge below also covers a just-uploaded tile discarded in this editor.
+      // The gallery is auto-published below for existing products. Do not
+      // delete a saved file here: persistEditedMedia waits for the replacement
+      // row to be confirmed, after which catalog.upsert hard-purges the old
+      // object. This keeps the only saved copy safe if upload/save fails.
       if (removed) {
+        markEditedMediaFields();
         if (!Array.isArray(window.__editRemovedImages)) window.__editRemovedImages = [];
         window.__editRemovedImages.push(removed);
       }
       paintMedia(box);
+      if (removed) void persistEditedMedia();
       return;
     }
     const tile = e.target.closest(".au-tile");
@@ -610,7 +700,9 @@ function bindMedia() {
       if (Number.isFinite(i) && i > 0 && arr[i] != null) {
         const picked = arr.splice(i, 1)[0];
         arr.unshift(picked);
+        markEditedMediaFields();
         paintMedia(box);
+        void persistEditedMedia();
         JA.toast("That photo is now the main one for this product.");
       }
       return;
@@ -959,6 +1051,14 @@ function productForm(p = {}) {
   ).join("");
   window.__editImages = productImages(p);
   window.__editRemovedImages = [];
+  window.__editMediaProductId = String((p && p.id) || "");
+  window.__editMediaSession = Number(window.__editMediaSession || 0) + 1;
+  window.__editMediaRevision = 0;
+  window.__editMediaSavedRevision = 0;
+  // Keep the promise chain itself across editor sessions. If an old media save
+  // is still in flight, a new editor must queue behind it instead of racing it.
+  // The session check in persistEditedMedia prevents the old result from
+  // repainting or changing the new editor's revision counter.
   // The row's updated_at as it was when THIS editor was opened. It is NOT a
   // lock and can never block a save: it rides along so the server can tell us
   // afterwards whether we overwrote a newer row (see _product_save_response).
@@ -999,10 +1099,10 @@ function productForm(p = {}) {
     <div class="field"><label>Add a description</label><textarea name="description" rows="3">${JA.escape(p.description || "")}</textarea></div>
     <div class="field"><label>Description (French — shown when the site is in French)</label><textarea name="descriptionFr" rows="3" placeholder="Optional">${JA.escape(p.descriptionFr || "")}</textarea></div>
     <h3>Product note</h3>
-    <label class="au-tog"><span>Allow a customer note on this product</span>
+    <label class="au-tog"><span>Enable Custom Product Note</span>
       <input type="checkbox" name="enableCustomNote" ${p.enableCustomNote ? "checked" : ""} />
     </label>
-    <div class="field"><label>Prompt shown to the customer</label><input name="customNotePrompt" maxlength="160" value="${JA.escape(p.customNotePrompt || "")}" placeholder="Enter the specific colour you want" /></div>
+    <div class="field"><label>Prompt shown to the customer</label><input name="customNotePrompt" maxlength="160" value="${JA.escape(p.customNotePrompt || "")}" placeholder="e.g. colour, size, scent, or another detail" /></div>
     <p class="admin-note">The prompt can ask for any product-specific detail, not just a colour. Customers’ answers stay with this item on the order; the general checkout order note remains separate.</p>
     <div class="field"><label>Dimensions / size (optional — shown on the product page and WhatsApp posts)</label><input name="dimensions" maxlength="160" value="${JA.escape(p.dimensions || "")}" placeholder="e.g. 30 x 20 x 10 cm" /></div>
     <div class="field"><label>Promo display ribbon (Sale, New Arrival, Best Seller)</label>
@@ -1085,6 +1185,13 @@ async function handleProductSubmit(e, existing) {
       rawImages = (window.__editImages || []).filter(Boolean);
     }
   }
+  // Existing-product media changes are saved as soon as the upload/delete
+  // settles. Let that confirmation finish before the full form save so two
+  // writes from this same editor cannot race each other.
+  if (window.__editMediaSave && typeof window.__editMediaSave.then === "function") {
+    try { await window.__editMediaSave; } catch (err) {}
+    rawImages = (window.__editImages || []).filter(Boolean);
+  }
   const stillUploading = rawImages.filter((s) => typeof s === "object" && !(s && s.failed));
   let images = rawImages.filter((s) => typeof s === "string" && s).slice(0, 20);
   if (!images.length && existing) {
@@ -1113,6 +1220,7 @@ async function handleProductSubmit(e, existing) {
   const id = fd.get("id") || ("jau-" + Date.now().toString(36));
   const num = (k) => { const v = fd.get(k); return v === "" || v == null ? null : Number(v); };
   const status = String(fd.get("stockStatus") || "in");
+  const isOnline = !!fd.get("online");
   let stock = num("stock");
   if (status === "out") stock = 0;
   else if (stock === null || stock === undefined) {
@@ -1253,7 +1361,7 @@ async function handleProductSubmit(e, existing) {
       bulkPercent,
       badge: fd.get("badge"),
       featured: fd.get("featured") === "yes",
-      online: !!fd.get("online"),
+      online: isOnline,
       colors: colorOpt ? colorOpt.values : [],
       options,
       optionStock: payloadOptionStock,
@@ -1294,7 +1402,10 @@ async function handleProductSubmit(e, existing) {
   if (res && res.mirrored === false) {
     savedMsg = "Saved on the server only — not yet on the cloud copy. Tap Retry now.";
   } else {
-    savedMsg = status === "out" ? "Saved · Live now · Out of stock." : "Saved · Live on the store now · " + images.length + " photo(s).";
+    const liveState = isOnline ? "Live on the store now" : "Hidden from the store";
+    savedMsg = status === "out"
+      ? `Saved · ${liveState} · Out of stock.`
+      : `Saved · ${liveState} · ${images.length} photo(s).`;
   }
   // Only now may the UI purge media the owner removed. The product write has
   // succeeded, so a storage reference guard sees the replacement row rather
@@ -2678,8 +2789,8 @@ function broadcastOverrideForProduct(slot, id) {
 }
 
 function broadcastProductUrl(p) {
-  const path = JA.productUrl ? JA.productUrl(p) : ("product.html?slug=" + encodeURIComponent(p.slug || p.name || "product"));
-  return `${location.origin}/${path}`;
+  const path = JA.productUrl ? JA.productUrl(p) : ("/products/" + encodeURIComponent(p.slug || p.name || "product"));
+  return new URL(path, location.origin).href;
 }
 function broadcastPriceLine(p) {
   // Active selling price only, in both currencies - never priceCompare /
@@ -3494,7 +3605,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=183" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=185" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3860,7 +3971,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=183", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=185", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

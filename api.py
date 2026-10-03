@@ -321,14 +321,42 @@ _FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock",
                          # Supplier and per-option sourcing/SKU notes are
                          # internal admin reference data, never a shopper's
                          # business.
-                         "supplierId", "supplierSku", "supplierUrl",
-                         "supplier_url", "optionSupplierSku",
+                         "supplierId", "supplier_id", "supplierSku", "supplier_sku",
+                         "supplierUrl", "supplier_url", "supplierURL",
+                         "optionSupplierSku", "option_supplier_sku",
                          "optionSupplierUrls", "option_supplier_urls",
-                         "optionSku", "option_sku")
+                         "variantSupplierUrls", "variant_supplier_urls",
+                         "optionSku", "option_sku", "optionSkus", "option_skus",
+                         "variantSku", "variant_sku", "variantSkus", "variant_skus")
+
+
+def _has_supplier_reference(value):
+    """True for a non-empty supplier URL/SKU without exposing the value."""
+    if isinstance(value, dict):
+        return any(_has_supplier_reference(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_supplier_reference(item) for item in value)
+    return bool(str(value or "").strip())
+
+
+def _supplier_tracked(product):
+    """Public-safe signal for showing the supplier-availability notice.
+
+    Supplier URLs and SKUs stay private. The storefront only needs to know
+    whether this product is watched so it can show the availability caveat.
+    """
+    p = product if isinstance(product, dict) else {}
+    direct = ("supplierId", "supplier_id", "supplierSku", "supplier_sku",
+              "supplierUrl", "supplier_url", "supplierURL")
+    options = ("optionSupplierSku", "option_supplier_sku", "optionSupplierUrls",
+               "option_supplier_urls", "variantSupplierUrls", "variant_supplier_urls")
+    return (any(_has_supplier_reference(p.get(key)) for key in direct)
+            or any(_has_supplier_reference(p.get(key)) for key in options))
 
 
 def _public_product(p):
     out = {k: v for k, v in dict(p or {}).items() if k not in _FORBIDDEN_PUBLIC_KEYS}
+    out["supplierTracked"] = _supplier_tracked(p)
     qty = catalog_mod.stock_of(p)
     os_map = p.get("optionStock") if isinstance(p, dict) else None
     if isinstance(os_map, dict) and os_map:
@@ -3175,6 +3203,54 @@ def _product_save_response(payload):
         body["merged"] = True
         body["kept"] = sorted(merge_kept)
     return jsonify(**body)
+
+
+@api.put("/admin/products/<pid>/media")
+@authmod.require_admin
+@sec.require_csrf
+def admin_product_media_update(pid):
+    """Publish a product's media edit immediately, without waiting for Save.
+
+    The existing row is the merge base and only the media fields are marked
+    dirty. The ordinary all-or-nothing save path confirms the new references
+    before catalog.upsert hard-deletes now-unreferenced replaced uploads. If
+    upload, save, or database confirmation fails, the old saved reference is
+    untouched and the storage reference guard keeps that only copy safe.
+    """
+    if request.content_length and request.content_length > 64 * 1024:
+        return jsonify(ok=False, error="Media list is too large."), 413
+    product_id = sec.clean(pid, 64)
+    d = request.get_json(silent=True) or {}
+    raw_images = d.get("images") if isinstance(d, dict) else None
+    if not product_id or not isinstance(raw_images, list) or len(raw_images) > 20:
+        return jsonify(ok=False, error="A product and up to 20 media URLs are required."), 400
+    images = []
+    seen = set()
+    for raw in raw_images:
+        if not isinstance(raw, str):
+            return jsonify(ok=False, error="Every media entry must be a URL."), 400
+        url = raw.strip()
+        if not url or len(url) > 2000:
+            return jsonify(ok=False, error="Every media entry must be a valid URL."), 400
+        if url not in seen:
+            seen.add(url)
+            images.append(url)
+    if not images:
+        return jsonify(ok=False, error="Add a replacement photo before removing the last saved media."), 400
+    try:
+        current = catalog_mod.product_index(include_hidden=True).get(product_id)
+    except Exception:
+        return jsonify(ok=False, error=(
+            "The product could not be loaded, so its saved media was left unchanged.")), 503
+    if not current:
+        return jsonify(ok=False, error="That product is no longer available."), 404
+    product = dict(current)
+    product.update({"image": images[0], "image_url": images[0],
+                    "imageUrl": images[0], "images": images,
+                    "baseUpdatedAt": str(current.get("updated_at") or ""),
+                    "mergeBase": dict(current),
+                    "mergeFields": ["image", "image_url", "imageUrl", "images"]})
+    return _product_save_response(product)
 
 
 @api.post("/admin/products")

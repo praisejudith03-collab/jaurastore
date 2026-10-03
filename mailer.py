@@ -738,7 +738,7 @@ def campaign_email_html(subject, content, recipient="", products=None):
                  + (f'<span style="background:#8f2635;color:white;padding:3px 8px;border-radius:10px;font-size:11px">{_esc(badge)}</span>' if badge else "")
                  + f'<h3 style="margin:8px 0">{_esc(name)}</h3><strong>{_esc(price_text)}</strong>'
                  + (f' <s style="color:#888">{_esc(compare_text)}</s>' if compare and compare > price else "")
-                 + f'<p><a href="{_esc(origin + "/product.html?slug=" + public_slug_value, quote=True)}" style="display:inline-block;background:#a97e48;color:#fff;padding:9px 15px;text-decoration:none;border-radius:6px">Shop now</a></p></div></div>')
+                 + f'<p><a href="{_esc(origin + "/products/" + public_slug_value, quote=True)}" style="display:inline-block;background:#a97e48;color:#fff;padding:9px 15px;text-decoration:none;border-radius:6px">Shop now</a></p></div></div>')
     if recipient:
         body += (f'<p style="margin:24px 0 0;padding-top:14px;border-top:1px solid #f0e8de;'
                  f'font-size:12px;color:#777">You are receiving Jaura Store updates because you shared '

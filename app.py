@@ -124,7 +124,7 @@ def build_sitemap() -> str:
         if not slug:
             continue
         urls.append(_sitemap_entry(
-            url_for("/product.html?slug=" + quote(slug, safe="")), today, "weekly", "0.6"))
+            url_for("/products/" + quote(slug, safe="")), today, "weekly", "0.6"))
 
     return ('<?xml version="1.0" encoding="UTF-8"?>\n'
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
@@ -242,7 +242,7 @@ def inject_product_meta(html_text, product):
     price = _product_price_line(product)
     options = _product_options_line(product)
     origin = (Config.SITE_ORIGIN or "").rstrip("/")
-    url = f"{origin}/product.html?slug={quote(slug, safe='')}"
+    url = f"{origin}/products/{quote(slug, safe='')}"
     desc_bits = [b for b in (price, options) if b]
     description = (" · ".join(desc_bits) or "Shop this piece at Jaura Store in Naira or CFA.")
     description = f"{description} — jaurastore.com.ng"
@@ -721,6 +721,48 @@ def create_app():
             return resp
         out = Response(body, mimetype="text/html; charset=utf-8")
         return out
+
+    @app.route("/products/<slug>")
+    def product_slug_page(slug):
+        """Serve a product at its clean, readable `/products/<slug>` URL.
+
+        Old `product.html?slug=...` links remain supported, but all generated
+        links, canonical tags and sitemap entries use this path. An imported
+        stored slug is accepted as an incoming alias and permanently redirected
+        to the current public slug, so legacy Wix/import artifacts are never
+        re-published in a share URL.
+        """
+        resp = static_for("product.html")
+        if resp is None or resp.status_code != 200:
+            return resp if resp is not None else ("Not found", 404)
+        try:
+            products = catalog_mod.merged()
+        except Exception:
+            products = []
+        wanted = str(slug or "").strip()
+        # Exact catalog IDs and legacy IDs remain valid incoming aliases even
+        # when catalogue normalization has already replaced their old slug.
+        product = next((p for p in products
+                        if wanted and wanted in {
+                            str((p or {}).get("id") or "").strip(),
+                            str((p or {}).get("legacyId") or "").strip(),
+                        }), None)
+        if product is None:
+            product = next((p for p in products
+                            if wanted in {str((p or {}).get("slug") or "").strip(),
+                                          catalog_mod.public_slug(p)}), None)
+        if product is None:
+            resp.status_code = 404
+            return resp
+        clean_slug = catalog_mod.public_slug(product)
+        if wanted != clean_slug:
+            return redirect("/products/" + quote(clean_slug, safe=""), code=301)
+        try:
+            with open(os.path.join(ROOT, "product.html"), "r", encoding="utf-8") as f:
+                body = inject_product_meta(f.read(), product)
+        except Exception:
+            return resp
+        return Response(body, mimetype="text/html; charset=utf-8")
 
     @app.route(LEGACY_PREFIX)
     @app.route(LEGACY_PREFIX + "/")

@@ -544,6 +544,31 @@ def test_no_supabase_store_call_site_is_out_of_date():
 
 
 # ------------------------------------------------------------ TASK 3: catalog
+def test_confirmed_product_save_is_live_immediately_and_respects_visibility(
+        client, iso_catalog, monkeypatch):
+    fake = _StrictSupabase(MIGRATE_COLUMNS)
+    monkeypatch.setattr(supabase_store, "client", lambda: fake)
+    tok = login(client)
+
+    hidden = client.post("/api/admin/products",
+                         json={"product": _row("jau-live-visibility", online=False)},
+                         headers={"X-CSRF-Token": tok})
+    assert hidden.status_code == 200, hidden.data
+    assert hidden.get_json()["ok"] is True and hidden.get_json()["mirrored"] is True
+    assert not any(p["id"] == "jau-live-visibility"
+                   for p in client.get("/api/catalog").get_json()["products"])
+    admin_rows = client.get("/api/catalog?all=1").get_json()["products"]
+    assert next(p for p in admin_rows if p["id"] == "jau-live-visibility")["online"] is False
+
+    current = dict(hidden.get_json()["product"])
+    current["online"] = True
+    published = client.post("/api/admin/products", json={"product": current},
+                            headers={"X-CSRF-Token": tok})
+    assert published.status_code == 200, published.data
+    public_rows = client.get("/api/catalog").get_json()["products"]
+    assert any(p["id"] == "jau-live-visibility" for p in public_rows)
+
+
 def test_full_save_reload_preserves_admin_product_fields(client, iso_catalog, monkeypatch):
     """A successful admin save pre-populates every high-risk field on reload."""
     fake = _StrictSupabase(MIGRATE_COLUMNS)
