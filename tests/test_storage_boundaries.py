@@ -112,3 +112,86 @@ def test_image_migration_refuses_other_buckets_before_client(monkeypatch):
     import migrate_images
     monkeypatch.setattr(migrate_images, '_client', lambda: pytest.fail('must not contact Supabase'))
     assert migrate_images.main(['--bucket', 'other']) == 2
+
+
+# ------------------------------------------------- the media purge's reference
+# Category covers are stored in the same public folders as product photos
+# ("categories/..."), but they are NOT product rows. The purge used to scan
+# products only, so a cover that only a category tile showed looked
+# unreferenced and the only copy was deleted - the home page then fell back to
+# the logo for good. These tests are the regression.
+def _categories(monkeypatch, tmp_path, rows):
+    """A real category table on disk, read through the same code production
+    uses (catalog._read_categories_file -> CATEGORIES_PATH)."""
+    import json
+
+    path = tmp_path / "categories.json"
+    path.write_text(json.dumps({"categories": rows}))
+    monkeypatch.setenv("CATEGORIES_PATH", str(path))
+    return path
+
+
+def _stored_file(monkeypatch, tmp_path, name="cover.jpg"):
+    """The one copy of an uploaded object, on the local backend."""
+    file = tmp_path / name
+    file.write_bytes(b"the only copy")
+    monkeypatch.setattr(Config, "UPLOAD_MODE", "local")
+    monkeypatch.setattr(storage, "resolve_local", lambda _key: str(file))
+    return file
+
+
+@pytest.mark.parametrize("stored", [
+    "categories/bags-cover.jpg",                     # the bare bucket key
+    "/uploads/categories/bags-cover.jpg",            # the local backend
+    ORIGIN + "/storage/v1/object/public/uploads/categories/bags-cover.jpg?v=9",
+])
+def test_every_spelling_of_a_category_cover_keeps_its_file(monkeypatch, tmp_path, stored):
+    monkeypatch.setattr(Config, "SUPABASE_URL", ORIGIN)
+    cover = _stored_file(monkeypatch, tmp_path)
+    _categories(monkeypatch, tmp_path, [{"id": "bags", "name": "Bags", "image": stored}])
+    assert storage.delete_upload("/uploads/categories/bags-cover.jpg") is False
+    assert cover.read_bytes() == b"the only copy"
+
+
+@pytest.mark.parametrize("field", ["image", "image_url", "imageUrl"])
+def test_the_cover_field_names_the_category_table_uses(monkeypatch, tmp_path, field):
+    cover = _stored_file(monkeypatch, tmp_path)
+    _categories(monkeypatch, tmp_path,
+                [{"id": "bags", "name": "Bags", field: "categories/bags-cover.jpg"}])
+    assert storage.delete_upload("/uploads/categories/bags-cover.jpg") is False
+    assert cover.read_bytes() == b"the only copy"
+
+
+def test_a_category_object_nobody_shows_is_still_purged(monkeypatch, tmp_path):
+    """The fix must not turn the purge into a no-op: an object no row shows
+    still goes, or the bucket fills with orphans."""
+    gone = _stored_file(monkeypatch, tmp_path, "gone.jpg")
+    _categories(monkeypatch, tmp_path,
+                [{"id": "bags", "name": "Bags", "image": "categories/bags-cover.jpg"}])
+    assert storage.delete_upload("/uploads/categories/gone.jpg") is True
+    assert not gone.exists()
+
+
+def test_an_unreadable_category_list_keeps_the_file(monkeypatch, tmp_path):
+    """"I could not ask" is not "nobody shows it"."""
+    cover = _stored_file(monkeypatch, tmp_path)
+    monkeypatch.setattr(storage, "_live_category_rows", lambda: None)
+    assert storage.delete_upload("/uploads/categories/bags-cover.jpg") is False
+    assert cover.read_bytes() == b"the only copy"
+
+
+def test_proofs_are_still_outside_the_purge_guard(monkeypatch, tmp_path):
+    """Private receipts are never product photos or category covers, so the
+    guard must not start protecting them from their own delete."""
+    proof = _stored_file(monkeypatch, tmp_path, "receipt.png")
+    _categories(monkeypatch, tmp_path, [{"id": "bags", "name": "Bags", "image": "categories/x.jpg"}])
+    assert storage.delete_upload("/uploads/proofs/receipt.png") is True
+    assert not proof.exists()
+
+
+def test_a_foreign_project_url_is_not_our_object(monkeypatch, tmp_path):
+    """The same path on somebody else's project must not keep a file here."""
+    monkeypatch.setattr(Config, "SUPABASE_URL", ORIGIN)
+    other = "https://other-project.supabase.co/storage/v1/object/public/uploads/categories/c.jpg"
+    assert storage._key_from_url(other) == ""
+    assert storage._reference_key(other) == ""
