@@ -32,19 +32,23 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import catalog as catalog_mod
 
-DEFAULT_BATCH_SIZE = 8
+DEFAULT_BATCH_SIZE = 2
+DEFAULT_LINKS_PER_TICK = 2
 MAX_BYTES = 700_000
 FETCH_TIMEOUT = 8
 CACHE_TTL_SECONDS = 20 * 60
 USER_AGENT = "jaurastore-supplier-watchdog/1.0 (+https://jaurastore.com.ng)"
 
-# Products that were checked recently. Kept in-process only; losing it on a
-# deploy merely lets the next tick check a product earlier, which is harmless.
+# Supplier URLs, not products, are the unit of cooldown. At most two unique
+# links are selected per scheduler tick (normally five minutes apart); each
+# link then waits an hour before it can be fetched again. The cache is an
+# additional guard for shared links used by multiple products.
 _last_checked: Dict[str, float] = {}
 _url_cache: Dict[str, Tuple[float, str]] = {}
 _last_summary: Dict[str, Any] = {
     "at": "",
     "checked": 0,
+    "links": 0,
     "updated": 0,
     "warnings": 0,
     "lastError": "",
@@ -728,8 +732,9 @@ def _fetch_rows(product: Dict[str, Any], url: str, labels: List[str],
     return []
 
 
-def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> Tuple[bool, List[Dict[str, Any]]]:
-    """Check one product, isolating option URLs from the main product URL.
+def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog",
+                 allowed_urls: Optional[set] = None) -> Tuple[bool, List[Dict[str, Any]]]:
+    """Check one product, optionally restricting this call to selected links.
 
     A URL entered for a particular option is authoritative for that option and
     uses the requested 50% buffer. Any option without its own URL can still be
@@ -742,10 +747,13 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> T
     pid = str(p.get("id") or "").strip()
     if not pid:
         return False, warnings
-    main_urls = main_supplier_urls(p)
+    allowed = None if allowed_urls is None else set(allowed_urls)
     all_urls = product_supplier_urls(p)
-    if not all_urls:
+    selected_urls = [url for url in all_urls if allowed is None or url in allowed]
+    if not selected_urls:
         return False, warnings
+    main_urls = [url for url in main_supplier_urls(p)
+                 if allowed is None or url in allowed]
     labels = variant_labels(p)
     keys = _stock_keys(p, labels)
 
@@ -772,8 +780,15 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> T
             _watch_prices(p, {"product": observed_price}, warnings)
         return _sync_whole_product(p, supplier_rows, actor, warnings)
 
-    option_urls = {key: option_supplier_urls_for(p, key)[:4] for key in keys}
-    option_url_keys = {key for key, urls in option_urls.items() if urls}
+    all_option_urls = {key: option_supplier_urls_for(p, key)[:4] for key in keys}
+    option_url_keys = {key for key, urls in all_option_urls.items() if urls}
+    # Keep an option's custom-URL ownership even when that URL was not selected
+    # in this paced batch; otherwise its product-level link could incorrectly
+    # overwrite the option before its own supplier page is checked.
+    option_urls = {
+        key: [url for url in urls if allowed is None or url in allowed]
+        for key, urls in all_option_urls.items()
+    }
     shared_keys = [key for key in keys if key not in option_url_keys]
     main_rows: List[Dict[str, Any]] = []
     if shared_keys and main_urls:
@@ -784,10 +799,12 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> T
     # A per-option URL wins outright for that key. It is checked on its own,
     # so a page for Black cannot mark Brown sold out (or restock it).
     option_matched: Dict[str, Dict[str, Any]] = {}
+    attempted_option_keys = set()
     for key in keys:
         urls = option_urls.get(key) or []
         if not urls:
             continue
+        attempted_option_keys.add(key)
         target_labels = _option_match_labels(p, key)
         other_labels = [label for other in keys if other != key
                         for label in _option_match_labels(p, other)]
@@ -795,8 +812,7 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> T
             rows = _fetch_rows(p, url, target_labels, warnings, "supplier_option")
             row = _option_page_row(target_labels, rows, other_labels)
             if row is not None:
-                option_matched[key] = row
-                break
+                option_matched.setdefault(key, row)
         if key not in option_matched:
             warnings.append(_warning(
                 p, "supplier_option_unreadable",
@@ -813,7 +829,8 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog") -> T
     if observed:
         _watch_prices(p, observed, warnings)
 
-    unmatched = [key for key in keys if key not in matched]
+    attempted_keys = (set(shared_keys) if main_urls else set()) | attempted_option_keys
+    unmatched = [key for key in keys if key in attempted_keys and key not in matched]
     if unmatched:
         warnings.append(_warning(
             p, "supplier_partial_match",
@@ -1097,105 +1114,146 @@ def _watch_prices(p: Dict[str, Any], observed: Dict[str, Optional[float]],
     _save_price_map()
 
 
-def tick(limit: int = DEFAULT_BATCH_SIZE, min_interval_seconds: int = 60 * 60, logger=None) -> Dict[str, Any]:
-    """Run one bounded supplier watchdog batch inside the web service."""
+def _active_supplier_urls(product: Dict[str, Any]) -> List[str]:
+    """Supplier links that can affect currently sellable stock.
+
+    Removed option values and their leftover URL-map entries are excluded so
+    stale imports can neither consume the link budget nor restore a variant.
+    """
+    p = product or {}
+    main = main_supplier_urls(p)
+    keys = _stock_keys(p, variant_labels(p))
+    if not keys:
+        return main
+    urls: List[str] = []
+    for key in keys:
+        own = option_supplier_urls_for(p, key)
+        for url in (own or main):
+            if url not in urls:
+                urls.append(url)
+    return urls
+
+
+def _run_scheduled_batch(limit: int, min_interval_seconds: int,
+                         link_limit: int, logger=None,
+                         label: str = "supplier watchdog") -> Dict[str, Any]:
+    """Sync at most two due supplier URLs, independently of product count."""
     global _last_summary
     if not enabled():
-        _last_summary = {**_last_summary, "at": _now(), "checked": 0, "updated": 0, "warnings": 0}
+        _last_summary = {**_last_summary, "at": _now(), "checked": 0,
+                         "links": 0, "updated": 0, "warnings": 0}
         return dict(_last_summary)
-    checked = updated = 0
-    warnings: List[Dict[str, Any]] = []
     try:
-        products = catalog_mod.merged(include_hidden=True)
+        products = catalog_mod.merged(include_hidden=True) or []
     except Exception as exc:
-        _last_summary = {"at": _now(), "checked": 0, "updated": 0, "warnings": 1, "lastError": str(exc)[:200]}
+        _last_summary = {"at": _now(), "checked": 0, "links": 0,
+                         "updated": 0, "warnings": 1,
+                         "lastError": str(exc)[:200]}
         return dict(_last_summary)
-    # Defence in depth against "ghost" products: a hard-deleted id must never
-    # be re-saved (and thereby re-created in Supabase) by an automated sync,
-    # even if a stale copy of the row somehow reaches this list.
     try:
         dead_ids = catalog_mod.deleted_product_ids()
     except Exception:
         dead_ids = set()
+
+    try:
+        max_products = max(1, int(limit or DEFAULT_BATCH_SIZE))
+    except (TypeError, ValueError):
+        max_products = DEFAULT_BATCH_SIZE
+    try:
+        # Hard cap at two even if a misconfigured environment asks for more.
+        max_links = min(DEFAULT_LINKS_PER_TICK,
+                        max(1, int(link_limit or DEFAULT_LINKS_PER_TICK)))
+    except (TypeError, ValueError):
+        max_links = DEFAULT_LINKS_PER_TICK
+    try:
+        cooldown = max(0, int(min_interval_seconds or 0))
+    except (TypeError, ValueError):
+        cooldown = 0
+
     now_ts = time.time()
-    candidates = []
-    for product in products or []:
-        pid = str((product or {}).get("id") or "").strip()
-        if not pid or not product_supplier_urls(product):
+    selected_urls: List[str] = []
+    selected_set = set()
+    candidate_products = 0
+    for product in products:
+        row = product or {}
+        pid = str(row.get("id") or "").strip()
+        if not pid or pid in dead_ids:
             continue
-        if pid in dead_ids:
+        due = []
+        for url in _active_supplier_urls(row):
+            try:
+                last = float(_last_checked.get(url) or 0)
+            except (TypeError, ValueError):
+                last = 0.0
+            if now_ts - last >= cooldown:
+                due.append(url)
+        if not due:
             continue
-        if now_ts - float(_last_checked.get(pid) or 0) < min_interval_seconds:
-            continue
-        candidates.append(product)
-        if len(candidates) >= max(1, int(limit or DEFAULT_BATCH_SIZE)):
+        candidate_products += 1
+        for url in due:
+            if url not in selected_set:
+                selected_set.add(url)
+                selected_urls.append(url)
+                # Failed fetches also cool down: a broken supplier must not be
+                # hammered on every five-minute scheduler tick.
+                _last_checked[url] = now_ts
+                if len(selected_urls) >= max_links:
+                    break
+        if len(selected_urls) >= max_links or candidate_products >= max_products:
             break
-    for product in candidates:
-        pid = str((product or {}).get("id") or "").strip()
-        _last_checked[pid] = now_ts
-        checked += 1
-        ok, warn = sync_product(product)
-        if ok:
-            updated += 1
-        warnings.extend(warn)
+
+    checked = updated = 0
+    warnings: List[Dict[str, Any]] = []
+    if selected_set:
+        # A URL shared by several products is fetched once (fetch_url's cache)
+        # but can safely update each matching live product from that snapshot.
+        for product in products:
+            row = product or {}
+            pid = str(row.get("id") or "").strip()
+            if not pid or pid in dead_ids:
+                continue
+            allowed = set(_active_supplier_urls(row)) & selected_set
+            if not allowed:
+                continue
+            checked += 1
+            ok, warn = sync_product(row, allowed_urls=allowed)
+            if ok:
+                updated += 1
+            warnings.extend(warn)
     _save_warnings(warnings)
     _last_summary = {
         "at": _now(),
         "checked": checked,
+        "links": len(selected_urls),
         "updated": updated,
         "warnings": len(warnings),
         "lastError": "",
     }
-    if logger and (checked or updated or warnings):
-        logger.info("supplier watchdog: checked=%s updated=%s warnings=%s", checked, updated, len(warnings))
+    if logger and (checked or selected_urls or warnings):
+        logger.info("%s: products=%s links=%s updated=%s warnings=%s",
+                    label, checked, len(selected_urls), updated, len(warnings))
     return dict(_last_summary)
 
 
-def nightly_sweep(logger=None, max_products: Optional[int] = None) -> Dict[str, Any]:
-    """The 2:00 AM deep pass: EVERY supplier-linked product, exactly once.
+def tick(limit: int = DEFAULT_BATCH_SIZE, min_interval_seconds: int = 60 * 60,
+         logger=None, link_limit: int = DEFAULT_LINKS_PER_TICK) -> Dict[str, Any]:
+    """Run one cooldown-protected batch of no more than two supplier links."""
+    return _run_scheduled_batch(limit, min_interval_seconds, link_limit,
+                                logger=logger, label="supplier watchdog")
 
-    The 5-minute ticks keep day-time stock fresh in small batches; this sweep
-    is the off-peak safety net that guarantees no product waits more than a
-    day for a supplier reading regardless of tick batching. Hard-deleted ids
-    are skipped so an automated pass can never re-create them."""
-    cap = max(1, max_products or int(os.environ.get("SUPPLIER_WATCHDOG_NIGHTLY_MAX", "400") or 400))
-    checked = updated = 0
-    warnings: List[Dict[str, Any]] = []
+
+def nightly_sweep(logger=None, max_products: Optional[int] = None,
+                  min_interval_seconds: int = 60 * 60,
+                  link_limit: int = DEFAULT_LINKS_PER_TICK) -> Dict[str, Any]:
+    """Run the same tightly paced supplier batch during nightly maintenance.
+
+    The historical full-catalogue sweep bypassed the link cooldown and could
+    burst hundreds of outbound requests at once. Nightly maintenance now uses
+    the exact same per-URL cooldown and two-link ceiling as daytime ticks.
+    """
     try:
-        products = catalog_mod.merged(include_hidden=True) or []
-    except Exception as exc:
-        _last_summary = {"at": _now(), "checked": 0, "updated": 0,
-                         "warnings": 1, "lastError": str(exc)[:200]}
-        return dict(_last_summary)
-    try:
-        dead_ids = catalog_mod.deleted_product_ids()
-    except Exception:
-        dead_ids = set()
-    todo = []
-    seen = set()
-    for product in products:
-        pid = str((product or {}).get("id") or "").strip()
-        if not pid or pid in seen or pid in dead_ids:
-            continue
-        if not product_supplier_urls(product):
-            continue
-        seen.add(pid)
-        todo.append(product)
-        if len(todo) >= cap:
-            break
-    now_ts = time.time()
-    for product in todo:
-        pid = str((product or {}).get("id") or "").strip()
-        _last_checked[pid] = now_ts
-        checked += 1
-        ok, warn = sync_product(product)
-        if ok:
-            updated += 1
-        warnings.extend(warn)
-    _save_warnings(warnings)
-    out = {"at": _now(), "checked": checked, "updated": updated,
-           "warnings": len(warnings), "lastError": ""}
-    if logger and (checked or updated or warnings):
-        logger.info("supplier nightly sweep: checked=%s updated=%s warnings=%s",
-                    checked, updated, len(warnings))
-    return out
+        cap = max_products or int(os.environ.get("SUPPLIER_WATCHDOG_NIGHTLY_MAX", "400") or 400)
+    except (TypeError, ValueError):
+        cap = DEFAULT_BATCH_SIZE
+    return _run_scheduled_batch(cap, min_interval_seconds, link_limit,
+                                logger=logger, label="supplier nightly batch")

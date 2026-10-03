@@ -1,5 +1,6 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
-import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, re, threading, time
+import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, re, threading, time, gc
+from functools import wraps
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
 from campaign_types import CAMPAIGN_TYPES, campaign_type_from, serialize_campaign
@@ -20,6 +21,53 @@ import delivery
 import supabase_store
 
 api = Blueprint("api", __name__, url_prefix="/api")
+
+# A single web dyno is capped at 512 MB. Product videos may be tens of MB and
+# Pillow / the HTTP client can hold temporary copies while a file is resized or
+# uploaded, so only one request may materialize an upload buffer at a time.
+# Werkzeug spools multipart bodies to disk first; this gate protects the later
+# in-process byte buffers, without tying up regular storefront requests.
+_UPLOAD_BUFFER_SLOT = threading.BoundedSemaphore(1)
+
+
+def _upload_memory_guard(fn):
+    """Serialize memory-heavy upload handlers and close their temp streams."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        if request.mimetype != "multipart/form-data":
+            return fn(*args, **kwargs)
+        _UPLOAD_BUFFER_SLOT.acquire()
+        uploads = []
+        try:
+            # Parse/spool the multipart body only after taking the slot, so
+            # concurrent uploads cannot all keep in-memory form fields/files.
+            uploads = list(request.files.items(multi=True))
+            return fn(*args, **kwargs)
+        finally:
+            for _key, upload in uploads:
+                try:
+                    upload.close()
+                except Exception:
+                    pass
+            # Drop Pillow / HTTP / Python temporary objects before the next
+            # upload is allowed to allocate its own working buffer. The slot
+            # must still be released if a GC callback happens to raise.
+            try:
+                gc.collect()
+            finally:
+                _UPLOAD_BUFFER_SLOT.release()
+    return wrapped
+
+
+def _read_upload_buffer(file_storage, max_bytes):
+    """Read one bounded multipart file and close its spooled temp stream."""
+    try:
+        return file_storage.read(int(max_bytes) + 1)
+    finally:
+        try:
+            file_storage.close()
+        except Exception:
+            pass
 
 
 # Every /api/* answer is dynamic (live catalogue, stock, orders, settings), so
@@ -768,6 +816,7 @@ PENDING_BALANCE_NOTICE = ("You have a pending balance. Please contact us on What
 
 @api.post("/uploads/proof")
 @sec.require_csrf
+@_upload_memory_guard
 def upload_proof():
     """Store a payment screenshot. Anyone may call it (a customer has no
     account), so it is size capped, magic-byte checked and rate limited."""
@@ -776,7 +825,7 @@ def upload_proof():
     f = request.files.get("file") or request.files.get("proof")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_RECEIPT_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_RECEIPT_BYTES)
     ok, msg, _ext = storage.validate_upload(data, f.filename or "", allow_pdf=True,
                                             max_bytes=storage.MAX_RECEIPT_BYTES)
     if not ok:
@@ -784,6 +833,7 @@ def upload_proof():
     ok, msg, url = storage.save_image(data, "proofs", f.filename or "",
                                       allow_pdf=True,
                                       max_bytes=storage.MAX_RECEIPT_BYTES)
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 500
     return jsonify(ok=True, url=url)
@@ -794,8 +844,8 @@ def _receipt_upload_error(status=422):
                    code="receipt_upload_failed", field="proof"), status
 
 
-def _order_receipt_row(order, data, ext, original_name, url):
-    """Build the receipts-table row for a checkout attachment."""
+def _order_receipt_row(order, file_size, ext, original_name, url):
+    """Build the receipts-table row without retaining the uploaded bytes."""
     oid = sec.clean(order.get("id"), 24).upper()
     customer = order.get("customer") or {}
     items = order.get("items") or []
@@ -818,7 +868,7 @@ def _order_receipt_row(order, data, ext, original_name, url):
         "items": item_text[:600], "quantity": str(quantity or ""),
         "amount": amount[:60], "note": "Checkout receipt",
         "file_url": url, "file_name": safe_name,
-        "file_size": len(data or b""), "file_type": storage.mime_for(ext),
+        "file_size": max(0, int(file_size or 0)), "file_type": storage.mime_for(ext),
     }
 
 
@@ -1385,6 +1435,7 @@ def _benin_togo_min(zone, country, currency, total, rate=None):
 @api.post("/orders")
 @api.post("/checkout")
 @sec.require_csrf
+@_upload_memory_guard
 def create_order():
     """Store a completed checkout - the whole form plus the payment proof.
     Accepts JSON or multipart/form-data (field `order` = JSON, field `proof`
@@ -1595,7 +1646,7 @@ def create_order():
     proof_original_name = ""
     if proof_file:
         proof_original_name = proof_file.filename or "receipt"
-        proof_data = proof_file.read(storage.MAX_RECEIPT_BYTES + 1)
+        proof_data = _read_upload_buffer(proof_file, storage.MAX_RECEIPT_BYTES)
         ok, msg, proof_ext = storage.validate_upload(
             proof_data, proof_original_name, allow_pdf=True,
             max_bytes=storage.MAX_RECEIPT_BYTES)
@@ -1693,13 +1744,18 @@ def create_order():
         _invalidate_catalog_cache()
     sb_row["payload"] = order
 
+    proof_size = len(proof_data)
     if proof_data:
         try:
-            stored, up_msg, proof_url = storage.save_image(
-                proof_data, "proofs", proof_original_name,
-                allow_pdf=True, max_bytes=storage.MAX_RECEIPT_BYTES)
-        except Exception as exc:
-            stored, up_msg, proof_url = False, f"{exc.__class__.__name__}: {exc}", ""
+            try:
+                stored, up_msg, proof_url = storage.save_image(
+                    proof_data, "proofs", proof_original_name,
+                    allow_pdf=True, max_bytes=storage.MAX_RECEIPT_BYTES)
+            except Exception as exc:
+                stored, up_msg, proof_url = False, f"{exc.__class__.__name__}: {exc}", ""
+        finally:
+            # Do not hold the receipt bytes through the subsequent order writes.
+            proof_data = b""
         if not stored or not proof_url:
             print(f"[checkout] payment proof upload failed; order blocked: {up_msg}")
             _release_stock_lines(reserved)
@@ -1708,9 +1764,9 @@ def create_order():
         sb_row["proof_url"] = proof_url
         sb_row["payload"] = order
 
-    receipt_row = (_order_receipt_row(order, proof_data, proof_ext,
+    receipt_row = (_order_receipt_row(order, proof_size, proof_ext,
                                       proof_original_name, proof_url)
-                   if proof_data and proof_url else None)
+                   if proof_size and proof_url else None)
 
     if prod_source:
         # Supabase PostgreSQL is the record of the sale. A failed write is a
@@ -2004,6 +2060,7 @@ ALLOWED_PAYMENT_METHODS = (
 
 @api.post("/payment-proof")
 @sec.require_csrf
+@_upload_memory_guard
 def payment_proof():
     """A customer sends their receipt. The original file is stored in the
     configured storage and listed in the authenticated admin portal."""
@@ -2016,7 +2073,8 @@ def payment_proof():
     f = request.files.get("file") or request.files.get("receipt")
     if not f:
         return jsonify(ok=False, error="Choose your receipt file (JPG, PNG, PDF, DOC or DOCX)."), 400
-    data = f.read(storage.MAX_RECEIPT_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_RECEIPT_BYTES)
+    file_size = len(data)
     ok, msg, ext = storage.validate_upload(data, f.filename or "", allow_pdf=True,
                                            max_bytes=storage.MAX_RECEIPT_BYTES)
     if not ok:
@@ -2069,7 +2127,7 @@ def payment_proof():
         "email": email, "method": method, "items": details["items"],
         "quantity": details["quantity"], "amount": details["amount"],
         "note": details["note"], "file_url": url, "file_name": attach_name,
-        "file_size": len(data), "file_type": mime,
+        "file_size": file_size, "file_type": mime,
     }
 
     prod_source = bool(catalog_mod._prod_source())
@@ -2097,7 +2155,7 @@ def payment_proof():
                 "amount, note, file_url, file_name, file_size, mime) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (order_id, name, phone, email, method, details["items"], details["quantity"],
-                 details["amount"], details["note"], url, attach_name, len(data), mime),
+                 details["amount"], details["note"], url, attach_name, file_size, mime),
             )
         except Exception as exc:
             print(f"[sqlite] receipt cache write skipped: {exc}")
@@ -2107,7 +2165,7 @@ def payment_proof():
             "amount, note, file_url, file_name, file_size, mime) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (order_id, name, phone, email, method, details["items"], details["quantity"],
-             details["amount"], details["note"], url, attach_name, len(data), mime),
+             details["amount"], details["note"], url, attach_name, file_size, mime),
         )
         # mirror into Supabase when enabled (best effort outside production)
         from supabase_store import create_receipt as _sb_create_receipt
@@ -2126,11 +2184,12 @@ def payment_proof():
     try:
         import mailer
         mailer.notify_receipt_async(proof_row, attach_name, data, mime)
+        data = b""  # the notification thread owns its attachment bytes now
     except Exception:
         pass
 
     return jsonify(ok=True, stored=True, url=url,
-                   fileName=attach_name, size=len(data),
+                   fileName=attach_name, size=file_size,
                    message="Your receipt is saved in the admin portal. We will confirm your payment shortly.")
 
 
@@ -3663,6 +3722,7 @@ def admin_mail_test():
 @api.post("/admin/uploads/image")
 @authmod.require_admin
 @sec.require_csrf
+@_upload_memory_guard
 def admin_upload_image():
     """Product photo upload. Stored as a real file, never as a data URL."""
     limited = sec.guard("admin-upload", limit=60, window=600)
@@ -3670,11 +3730,12 @@ def admin_upload_image():
     f = request.files.get("file") or request.files.get("image")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_BYTES)
     ok, msg, _ext = storage.validate_image(data, f.filename or "")
     if not ok:
         return jsonify(ok=False, error=msg), 400
     ok, msg, url = storage.save_image(data, "products", f.filename or "")
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 500
     return jsonify(ok=True, url=url)
@@ -3683,6 +3744,7 @@ def admin_upload_image():
 @api.post("/admin/uploads/video")
 @authmod.require_admin
 @sec.require_csrf
+@_upload_memory_guard
 def admin_upload_video():
     """Homepage hero video upload (MP4 or WebM). Stored like every other
     upload: as a real file under /uploads/, never inside the database."""
@@ -3691,8 +3753,9 @@ def admin_upload_video():
     f = request.files.get("file") or request.files.get("video")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
     ok, msg, url = storage.save_video(data, "videos", f.filename or "")
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 400
     audit(authmod.current_admin(), "site.hero_video_upload", url, _ip())
@@ -3702,6 +3765,7 @@ def admin_upload_video():
 @api.post("/admin/uploads/category")
 @authmod.require_admin
 @sec.require_csrf
+@_upload_memory_guard
 def admin_upload_category():
     """Category cover / asset upload (image, video or document). Stored as a
     real file under /uploads/categories/, never as a data URL. Documents are
@@ -3711,11 +3775,12 @@ def admin_upload_category():
     f = request.files.get("file") or request.files.get("image")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
+    ext = storage._ext_from_bytes(data[:32])
     ok, msg, url = storage.save_asset(data, "categories", f.filename or "")
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 400
-    ext = storage._ext_from_bytes(data[:32])
     audit(authmod.current_admin(), "site.category_asset_upload", url, _ip())
     return jsonify(ok=True, url=url, kind=storage.kind_for(ext))
 
@@ -3723,6 +3788,7 @@ def admin_upload_category():
 @api.post("/admin/uploads/product")
 @authmod.require_admin
 @sec.require_csrf
+@_upload_memory_guard
 def admin_upload_product():
     """Product media upload: an image OR a video. The format is decided by the
     file's own bytes (never the name), so the same slot accepts a photo from
@@ -3733,7 +3799,7 @@ def admin_upload_product():
     f = request.files.get("file") or request.files.get("image")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
     ext = storage._ext_from_bytes(data[:32])
     kind = storage.kind_for(ext)
     if kind == "video":
@@ -3748,6 +3814,7 @@ def admin_upload_product():
         ok, msg, url = storage.save_image(data, "products", f.filename or "")
     else:
         return jsonify(ok=False, error="Only JPG, PNG, WebP, GIF, AVIF, MP4, WebM or MOV files can be uploaded here."), 400
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 500
     audit(authmod.current_admin(), "site.product_media_upload", url, _ip())
@@ -3832,6 +3899,7 @@ def admin_upload_purge():
 @api.post("/admin/uploads/hero")
 @authmod.require_admin
 @sec.require_csrf
+@_upload_memory_guard
 def admin_upload_hero():
     """Homepage hero upload: a video OR a document (or an image poster). Like
     every upload it is stored as a real file under /uploads/. Documents are
@@ -3841,11 +3909,12 @@ def admin_upload_hero():
     f = request.files.get("file") or request.files.get("video")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = f.read(storage.MAX_VIDEO_BYTES + 1)
+    data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
+    ext = storage._ext_from_bytes(data[:32])
     ok, msg, url = storage.save_asset(data, "videos", f.filename or "")
+    data = b""
     if not ok:
         return jsonify(ok=False, error=msg), 400
-    ext = storage._ext_from_bytes(data[:32])
     audit(authmod.current_admin(), "site.hero_asset_upload", url, _ip())
     return jsonify(ok=True, url=url, kind=storage.kind_for(ext))
 

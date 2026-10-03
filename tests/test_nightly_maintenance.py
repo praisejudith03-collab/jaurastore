@@ -1,15 +1,14 @@
-"""Nightly 2:00 AM maintenance: supplier sweep + storage sweeper + ghost guards.
+"""Nightly 2:00 AM maintenance: paced supplier batch + storage sweeper.
 
-Freeze the contract added for the emergency maintenance audit:
+Freeze the cleanup contract:
 
-  * the supplier watchdog has an off-peak deep pass that runs once per day
-    after 2:00 AM in the owner's timezone (default UTC+1, Porto-Novo),
-    in ADDITION to the small day-time batches;
+  * the 2 AM maintenance pass uses the same 1-2 unique supplier-link ceiling
+    and per-URL cooldown as daytime ticks (it is not a catalogue-wide bypass);
   * the nightly run also purges orphaned / duplicate upload media through
     the same protected plan as the admin's Storage cleanup card;
   * a hard-deleted product id can never be re-checked (and thereby
     re-created in Supabase) by an automated sync - not by a tick, not by
-    the nightly sweep, not by the remirror pass;
+    the nightly pass, not by the remirror pass;
   * the watchdog watches supplier PRICES: a rise raises an admin-visible
     warning, and the shop's own retail price is never rewritten.
 
@@ -77,10 +76,12 @@ def test_maintenance_tick_runs_the_nightly_pass_when_due(monkeypatch):
     monkeypatch.setattr(scheduler, "_nightly_run", lambda logger=None: {})
     scheduler._maintenance_tick(logger=None)
     assert "scheduler.nightly" in ran
+    assert "supplier.watchdog" not in ran, "nightly cycle replaces the daytime batch"
     monkeypatch.setattr(scheduler, "_nightly_due", lambda: False)
     ran.clear()
     scheduler._maintenance_tick(logger=None)
     assert "scheduler.nightly" not in ran
+    assert "supplier.watchdog" in ran
 
 
 def test_health_snapshot_advertises_the_nightly_schedule():
@@ -91,39 +92,55 @@ def test_health_snapshot_advertises_the_nightly_schedule():
 
 # ------------------------------------------------------- the nightly sweep
 
-def test_nightly_sweep_checks_every_product_exactly_once(monkeypatch):
-    """Each supplier-linked product is synced once - never twice, never zero
-    times because a day-time tick checked it recently."""
+def test_nightly_sweep_uses_the_two_link_ceiling(monkeypatch):
+    """Nightly maintenance must not bypass the link cap or URL cooldown."""
     synced = []
+    rows = [
+        {"id": "jau-ghost-1", "name": "Deleted", "stock": 3,
+         "supplierSku": "https://supplier.example/deleted"},
+        {"id": "jau-live-1", "name": "Live one", "stock": 3,
+         "supplierSku": "https://supplier.example/one"},
+        {"id": "jau-live-2", "name": "Live two", "stock": 3,
+         "supplierSku": "https://supplier.example/two"},
+        {"id": "jau-live-3", "name": "Live three", "stock": 3,
+         "supplierSku": "https://supplier.example/three"},
+        {"id": "jau-no-url", "name": "No URL", "stock": 1},
+    ]
     monkeypatch.setattr(supplier_watchdog, "enabled", lambda: True)
     monkeypatch.setattr(supplier_watchdog.catalog_mod, "merged",
-                        lambda include_hidden=False: [
-                            _ghost_row(), _ghost_row("jau-live-1"),
-                            _ghost_row("jau-live-2"),
-                            {"id": "jau-no-url", "name": "No URL", "stock": 1}])
+                        lambda include_hidden=False: rows)
     monkeypatch.setattr(catalog_mod, "deleted_product_ids", lambda: {"jau-ghost-1"})
-    monkeypatch.setattr(supplier_watchdog, "sync_product",
-                        lambda p, actor="supplier-watchdog": (synced.append(p["id"]), (True, []))[1])
+    def fake_sync(product, actor="supplier-watchdog", allowed_urls=None):
+        synced.append((product["id"], set(allowed_urls or [])))
+        return True, []
+    monkeypatch.setattr(supplier_watchdog, "sync_product", fake_sync)
     monkeypatch.setattr(supplier_watchdog, "_save_warnings", lambda w: None)
-    out = supplier_watchdog.nightly_sweep()
-    # every LIVE linked product once; the deleted id and the URL-less row never
-    assert sorted(synced) == ["jau-live-1", "jau-live-2"]
+    supplier_watchdog._last_checked.clear()
+    out = supplier_watchdog.nightly_sweep(max_products=100,
+                                          min_interval_seconds=3600,
+                                          link_limit=2)
+    assert [row[0] for row in synced] == ["jau-live-1", "jau-live-2"]
+    assert out["links"] == 2
     assert out["checked"] == 2 and out["updated"] == 2
 
 
 def test_nightly_sweep_is_bounded_and_terminates(monkeypatch):
-    """The sweep must finish: one pass over the candidates, capped, with no
-    re-check loop (an earlier design re-checked the same batch forever)."""
+    """One night pass selects no more than two distinct supplier links."""
     rows = [{"id": f"jau-live-{i}", "name": f"Bag {i}", "stock": 3,
-             "supplierSku": SUPPLIER} for i in range(150)]
+             "supplierSku": f"https://supplier.example/item/{i}"}
+            for i in range(150)]
     monkeypatch.setattr(supplier_watchdog.catalog_mod, "merged",
                         lambda include_hidden=False: rows)
     monkeypatch.setattr(catalog_mod, "deleted_product_ids", lambda: set())
+    synced = []
     monkeypatch.setattr(supplier_watchdog, "sync_product",
-                        lambda p, actor="supplier-watchdog": (False, []))
+                        lambda p, actor="supplier-watchdog", allowed_urls=None:
+                        (synced.append((p["id"], set(allowed_urls or []))), (False, []))[1])
     monkeypatch.setattr(supplier_watchdog, "_save_warnings", lambda w: None)
-    out = supplier_watchdog.nightly_sweep(max_products=100)
-    assert out["checked"] == 100            # capped, and finished
+    supplier_watchdog._last_checked.clear()
+    out = supplier_watchdog.nightly_sweep(max_products=100, link_limit=2)
+    assert out["links"] == 2 and out["checked"] == 2
+    assert len(synced) == 2 and len({next(iter(urls)) for _, urls in synced}) == 2
 
 
 # ------------------------------------------------- ghost products stay dead
@@ -141,7 +158,8 @@ def test_tick_never_syncs_a_hard_deleted_id(monkeypatch):
     monkeypatch.setattr(catalog_mod, "deleted_product_ids",
                         lambda: {"jau-ghost-1"})
     monkeypatch.setattr(supplier_watchdog, "sync_product",
-                        lambda p, actor="supplier-watchdog": (synced.append(p["id"]), (True, []))[1])
+                        lambda p, actor="supplier-watchdog", allowed_urls=None:
+                        (synced.append(p["id"]), (True, []))[1])
     monkeypatch.setattr(supplier_watchdog, "_save_warnings", lambda w: None)
     supplier_watchdog._last_checked.clear()
     out = supplier_watchdog.tick(limit=10, min_interval_seconds=0)

@@ -36,7 +36,11 @@ services:
       - key: SUPPLIER_WATCHDOG_ENABLED
         value: "1"
       - key: SUPPLIER_WATCHDOG_BATCH
-        value: "8"
+        value: "2"
+      - key: SUPPLIER_WATCHDOG_LINKS_PER_TICK
+        value: "2"
+      - key: SUPPLIER_WATCHDOG_MIN_INTERVAL
+        value: "3600"
       # reCAPTCHA v2 Invisible (public site key + private secret).
       - key: RECAPTCHA_SITE_KEY
         sync: false

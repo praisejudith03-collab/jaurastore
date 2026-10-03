@@ -1,30 +1,14 @@
-"""Out-of-stock toggle persistence + admin product form field audit.
+"""Stock availability persistence + the cleaned admin product editor.
 
-Owner report (2026-10-01): switching a product to "Out of stock" (or setting
-its quantity to 0, or ``is_in_stock = false`` through the API) did not stick.
-Root cause: ``catalog.normalize`` treats the per-variant stock map as the
-truth for a variant product and re-sums the row's quantity from it, so the
-explicit whole-product switch was silently reverted by the stale variant
-numbers travelling in the same payload - and the storefront kept the product
-orderable. The admin editor compounded it by re-filling an explicitly typed
-0 quantity with the row's old value, and the /api/products/variants alias
-dropped the availability fields entirely.
+An explicit whole-product OFF (stockStatus "out" / is_in_stock false /
+a plain ``stock: 0`` patch) zeroes the row AND every variant. Variant-map
+writes still determine availability per option. The admin form now has no
+separate availability switch: blank, absent and zero quantities are zero, and
+variant totals determine the product quantity.
 
-These tests pin the fixed contract:
-
-* an explicit whole-product OFF (stockStatus "out" / is_in_stock false /
-  a plain ``stock: 0`` patch) zeroes the row AND every variant, and can
-  never be re-summed back to "in stock";
-* a plain positive quantity re-stocks a product whose variants were all
-  sold out (the mirror image - availability follows the typed number);
-* per-variant payload writes still win when the caller manages variants
-  itself (the long-standing variant-truth invariant is untouched);
-* every availability change is visible on the very next uncached
-  /api/catalog read (server snapshot purged, revalidation headers), with
-  the public row carrying stock_status / option_stock_status only;
-* the admin editor ships the availability intent (stockStatus) and every
-  other editable field, honours an explicit 0 quantity, and zeroes the
-  variant boxes when the switch is flipped.
+These tests pin the backend availability contract, immediate public-catalog
+visibility, and the reduced editor field set while preserving its custom-note,
+supplier-link and variant-stock workflows.
 """
 import os
 import sys
@@ -268,52 +252,58 @@ def test_availability_change_is_visible_on_the_next_uncached_read(
 
 # ------------------------------------------------- admin editor (js pins)
 
-def test_editor_no_longer_silently_refills_an_explicit_zero_quantity():
+def test_editor_uses_zero_for_blank_and_unassigned_stock():
     js = _admin_js()
-    assert 'else if (!(stock > 0)) stock =' not in js
-    assert "else if (stock === null || stock === undefined)" in js
+    submit = js[js.index("async function handleProductSubmit"):]
+    assert 'Math.max(0, parseInt(num("stock"), 10) || 0)' in submit
+    assert 'Math.max(0, parseInt(typedStock[value], 10) || 0)' in submit
+    # New products start at zero; editing an option product totals its
+    # assigned values rather than inventing a stock default.
+    form = js[js.index("function productForm(p = {})"):js.index("async function handleProductSubmit")]
+    assert ': (p.id ? Math.max(0, Number(p.stock) || 0) : 0)' in form
 
 
-def test_editor_zeroes_the_variant_inputs_when_the_switch_flips():
+def test_clean_editor_has_only_the_approved_product_controls():
+    """The product form stays focused on shop essentials. SKU/import,
+    discount, translation, visibility, rating and review-entry controls are
+    not part of the editor; verified reviews remain in their separate flow."""
+    import re
+
     js = _admin_js()
-    assert "const zeroVariantInputs" in js
-    assert "const restoreVariantInputs" in js
-    # the availability switch drives them
-    switch = js[js.index('status?.addEventListener("change"'):]
-    switch = switch[:switch.index("});") + 3]
-    assert "zeroVariantInputs()" in switch
-    assert "restoreVariantInputs()" in switch
-    assert "syncOptionStockTotals()" in switch
-    # typing an explicit 0 captures the sold-out intent instead of refilling
-    qty = js[js.index('qty?.addEventListener("input"'):]
-    qty = qty[:qty.index("});") + 3]
-    assert 'qty.value === "0"' in qty
-    assert 'status.value = "out"' in qty
+    form = js[js.index("function productForm(p = {})"):js.index("async function handleProductSubmit")]
+    names = set(re.findall(r'name="([^"]+)"', form))
+    assert names == {
+        "id", "name", "description", "category", "priceNgn", "supplierSku",
+        "stock", "enableCustomNote", "customNotePrompt",
+    }
+    for required in (
+        "Product title", "Description", "Category", "Price (Naira ₦)",
+        "Main supplier URL", "Stock quantity", "Enable a note for this product",
+        "Customer prompt", "id=\"media-box\"", "id=\"add-opt\"",
+    ):
+        assert required in form, required
+    for removed in (
+        "nameFr", "descriptionFr", "dimensions", "compareNgn", "bulkQty",
+        "bulkPercent", "stock-status", "stockStatus", "featured", "badge",
+        "data-opt-sku", "Customer Name", "Customer Stars", "Customer Review",
+    ):
+        assert removed not in form, removed
+    assert "function optionSkuHTML" not in js
+    assert "function currentOptionSku" not in js
+    assert "function variantPanelsHTML" not in js
+    assert "data-opt-supplier" in js
+    assert "data-opt-stock" in js
 
 
-def test_editor_remembers_variant_quantities_outside_the_repainted_dom():
-    """Out -> in within one editor session must restore the quantities that
-    were live before the flip, even though refreshOptionChips repaints the
-    variant inputs (a dataset attribute would be wiped with them)."""
+def test_editor_derives_availability_from_stock_and_keeps_variant_map():
     js = _admin_js()
-    # the stash lives on window, not on the inputs
-    assert "window.__editPrevOptionStock" in js
-    assert "inp.dataset.prev" not in js
-    zero = js[js.index("const zeroVariantInputs"):]
-    zero = zero[:zero.index("const restoreVariantInputs")]
-    assert "currentOptionStock()" in zero
-    assert "window.__editPrevOptionStock = prev;" in zero
-    restore = js[js.index("const restoreVariantInputs"):]
-    restore = restore[:restore.index("};") + 2]
-    assert "window.__editPrevOptionStock" in restore
-    # never clobber a quantity the admin re-typed while sold out
-    assert "!(Number(inp.value) > 0)" in restore
-    # the stash is reset every time an editor opens, so it can never leak
-    # from one product's session into the next
-    assert "window.__editImages = productImages(p);" in js
-    reset = js[js.index("window.__editImages = productImages(p);"):]
-    reset = reset[:reset.index("window.__editPrevOptionStock = null;") + len("window.__editPrevOptionStock = null;")]
-    assert "window.__editPrevOptionStock = null;" in reset
+    submit = js[js.index("async function handleProductSubmit"):]
+    assert 'stockStatus: stock > 0 ? "in" : "out"' in submit
+    assert "optionStock: payloadOptionStock," in submit
+    assert "optionSupplierSku," in submit
+    # No UI switch can restore stale quantity after an explicit zero.
+    assert 'name="stockStatus"' not in js
+    assert "window.__editPrevOptionStock" not in js
 
 
 def test_fresh_admin_login_refetches_the_stock_numbers():
@@ -326,47 +316,7 @@ def test_fresh_admin_login_refetches_the_stock_numbers():
     handler = handler[:handler.index("});") + 3]
     assert "await JA.reloadCatalog();" in handler
     assert handler.index("await JA.reloadCatalog();") < handler.index("paintDesk();")
-    # the refetch must never block the desk on a network failure
     assert "try { await JA.reloadCatalog(); } catch (e) {}" in handler
-
-
-def test_editor_ships_the_availability_intent_and_final_zeroing():
-    js = _admin_js()
-    assert "stockStatus: status," in js
-    assert "optionStock: payloadOptionStock," in js
-    assert 'if (status === "out" || stock === 0)' in js
-    assert "payloadOptionStock[k] = 0;" in js
-
-
-def test_editor_restock_guard_for_all_sold_out_variant_products():
-    js = _admin_js()
-    assert "payloadOptionStock = {};" in js
-    guard = js[js.index("let payloadOptionStock"):]
-    guard = guard[:guard.index("}", guard.index("payloadOptionStock = {};"))]
-    assert "!hasOptionStock && stock > 0" in guard
-
-
-def test_every_editable_field_is_shipped_by_the_admin_form():
-    """Field audit: every input the editor renders is part of the save
-    payload, so no toggle or box can silently stop reaching the server."""
-    js = _admin_js()
-    payload = js[js.index("JA.upsertProduct({"):js.index("})", 0)]
-    # capture the whole payload object (it spans until the closing call)
-    start = js.index("const res = await JA.upsertProduct({")
-    end = js.index("});", start)
-    payload = js[start:end]
-    assert 'const isOnline = !!fd.get("online");' in js
-    for field in (
-            "name,", "nameFr:", "category: savedCategory", "priceNgn,",
-            "compareNgn,", "description: fd.get(", "descriptionFr:",
-            "dimensions:", "badge: fd.get(", "online: isOnline",
-            "featured: fd.get(", "colors:", "options,", "optionStock:",
-            "optionPrices,", "optionCompareAt,", "optionSupplierSku,",
-            "optionSku,", "supplierSku: supplierRef", "bulkQty,",
-            "bulkPercent,", "stock,", "stock_quantity: stock,",
-            "stockStatus: status,", "image,", "images,",
-    ):
-        assert field in payload, field
 
 
 def test_normalize_round_trips_every_admin_field():

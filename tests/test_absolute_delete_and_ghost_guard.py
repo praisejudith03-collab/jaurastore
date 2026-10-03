@@ -105,8 +105,7 @@ def test_the_never_recreate_result_is_honoured_before_the_written_check(monkeypa
 
 
 def test_a_deleted_id_is_skipped_by_both_the_tick_and_the_nightly_sweep(monkeypatch):
-    """The night pass touches every linked product, so it is the one most
-    likely to run hours after a deletion."""
+    """Neither the daytime nor nightly link batch may sync a tombstoned id."""
     monkeypatch.setattr(supplier_watchdog, "enabled", lambda: True)
     monkeypatch.setattr(supplier_watchdog.catalog_mod, "merged",
                         lambda include_hidden=False: [_row(), _row("jau-live-1")])
@@ -115,10 +114,11 @@ def test_a_deleted_id_is_skipped_by_both_the_tick_and_the_nightly_sweep(monkeypa
     supplier_watchdog._last_checked.clear()
 
     for run in (lambda: supplier_watchdog.tick(limit=10, min_interval_seconds=0),
-                lambda: supplier_watchdog.nightly_sweep()):
+                lambda: supplier_watchdog.nightly_sweep(min_interval_seconds=0)):
+        supplier_watchdog._last_checked.clear()
         synced = []
         monkeypatch.setattr(supplier_watchdog, "sync_product",
-                            lambda p, actor="supplier-watchdog":
+                            lambda p, actor="supplier-watchdog", allowed_urls=None:
                                 (synced.append(p["id"]), (True, []))[1])
         run()
         assert "jau-ghost-1" not in synced

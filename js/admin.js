@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=185" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=186" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -463,13 +463,13 @@ function optionRowHTML(o, i) {
         <button type="button" class="au-opt-del" data-del-opt>Remove</button>
       </div>
       <div class="au-chips">${vals.map((v) => `<em>${JA.escape(v)}</em>`).join("")}</div>
-      <input name="opt-title-${i}" value="${JA.escape((o && o.title) || "")}" placeholder="Option name (Colour, Size, Type, Length, Scent…)" />
-      <input name="opt-vals-${i}" value="${JA.escape(vals.join(", "))}" placeholder="Values, comma separated — e.g. Ash, Blue, Black" />
+      <input name="opt-title-${i}" aria-label="Option name" value="${JA.escape((o && o.title) || "")}" placeholder="Option name, e.g. Colour" />
+      <input name="opt-vals-${i}" aria-label="Option values" value="${JA.escape(vals.join(", "))}" placeholder="Values separated by commas, e.g. Black, Brown" />
     </div>`;
 }
 function optionBlockHTML(opts) {
   const list = opts || [];
-  if (!list.length) return `<p class="admin-note" data-opt-empty>No options yet. Add Colour, Size, Type, Length or Scent so shoppers can choose on the product page.</p>`;
+  if (!list.length) return `<p class="admin-note" data-opt-empty>Optional: add a colour, size or other choice to manage stock and supplier links per variant.</p>`;
   return list.map((o, i) => optionRowHTML(o, i)).join("");
 }
 function collectOptions(root) {
@@ -496,22 +496,24 @@ function refreshOptionChips() {
   const count = document.getElementById("opt-count");
   if (count) count.textContent = `${document.querySelectorAll("[data-opt-row]").length}/20`;
   const existing = editingId && editingId !== "new" ? (JA.product(editingId) || {}) : {};
-  const status = document.getElementById("stock-status")?.value;
-  const qty = Number(document.getElementById("stock-qty")?.value);
-  const stock = status === "out" ? 0 : (qty > 0 ? qty : 24);
-  const typed = currentOptionStock();
-  const typedPrices = currentOptionPrices();
-  const typedCompare = currentOptionCompareAt();
-  const typedSupplier = currentOptionSupplierSku();
-  const typedSku = currentOptionSku();
-  const optionStock = { ...(existing.optionStock || {}), ...typed };
-  const optionPrices = { ...(existing.optionPrices || {}), ...typedPrices };
-  const optionCompareAt = { ...(existing.optionCompareAt || {}), ...typedCompare };
-  const optionSupplierSku = { ...(existing.optionSupplierSku || {}), ...typedSupplier };
-  const optionSku = { ...(existing.optionSku || {}), ...typedSku };
-  const fake = { ...existing, options: collectOptions(box || document), stock, optionStock, optionPrices, optionCompareAt, optionSupplierSku, optionSku };
+  const options = collectOptions(box || document);
+  const typedStock = keepActiveOptionMap(currentOptionStock(), options);
+  const typedSupplier = keepActiveOptionMap(currentOptionSupplierSku(), options);
+  const optionStock = options.length
+    ? { ...keepActiveOptionMap(existing.optionStock, options), ...typedStock } : {};
+  const optionSupplierSku = options.length
+    ? { ...keepActiveOptionMap(existing.optionSupplierSku, options), ...typedSupplier } : {};
+  const optionPrices = keepActiveOptionMap(existing.optionPrices, options);
+  const optionCompareAt = keepActiveOptionMap(existing.optionCompareAt, options);
+  const qty = Math.max(0, Number(document.getElementById("stock-qty")?.value) || 0);
+  const stock = options.length
+    ? Object.values(optionStockValues(options, optionStock)).reduce((n, value) => n + value, 0)
+    : qty;
+  const fake = { ...existing, options, stock, optionStock, optionPrices,
+    optionCompareAt, optionSupplierSku };
   const varBox = document.getElementById("var-box");
-  if (varBox) varBox.innerHTML = variantPanelsHTML(fake);
+  if (varBox) varBox.innerHTML = optionStockHTML(fake) + optionSupplierLinksHTML(fake);
+  syncOptionStockTotals();
 }
 function addOptionRow(title, values) {
   const box = document.getElementById("opt-box");
@@ -736,7 +738,7 @@ function bindOptions() {
       e.preventDefault();
       del.closest("[data-opt-row]")?.remove();
       if (!box.querySelector("[data-opt-row]")) {
-        box.innerHTML = `<p class="admin-note" data-opt-empty>No options yet. Add Colour, Size, Type, Length or Scent so shoppers can choose on the product page.</p>`;
+        box.innerHTML = `<p class="admin-note" data-opt-empty>Optional: add a colour, size or other choice to manage stock and supplier links per variant.</p>`;
       }
       refreshOptionChips();
     });
@@ -749,103 +751,53 @@ function bindOptions() {
     });
   }
   document.getElementById("add-opt")?.addEventListener("click", () => addOptionRow("", ""));
-  document.querySelectorAll("[data-preset]").forEach((b) => {
-    b.onclick = () => addOptionRow(b.dataset.preset, "");
-  });
-  const status = document.getElementById("stock-status");
-  const qty = document.getElementById("stock-qty");
-  // The whole-product "Out of stock" switch also switches off every variant:
-  // the per-variant quantity boxes are zeroed (their previous values are
-  // remembered on the input so toggling back restores them), because a
-  // variant left at 5 used to re-sum the saved row back to "in stock" - the
-  // "out of stock does not save" bug.
-  const zeroVariantInputs = () => {
-    const live = currentOptionStock();
-    const prev = { ...(window.__editPrevOptionStock || {}) };
-    Object.keys(live).forEach((k) => {
-      if (Number(live[k]) > 0) prev[k] = live[k];
-    });
-    window.__editPrevOptionStock = prev;
-    document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
-      inp.value = "0";
-    });
-  };
-  const restoreVariantInputs = () => {
-    const prev = window.__editPrevOptionStock;
-    if (!prev) return;
-    document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
-      const key = inp.getAttribute("data-opt-stock");
-      if (key && Object.prototype.hasOwnProperty.call(prev, key)
-          && !(Number(inp.value) > 0)) {
-        inp.value = String(prev[key]);
-      }
-    });
-    window.__editPrevOptionStock = null;
-  };
-  status?.addEventListener("change", () => {
-    if (!qty) return;
-    if (status.value === "out") {
-      if (Number(qty.value) > 0) qty.dataset.prev = qty.value;
-      qty.value = 0;
-      zeroVariantInputs();
-    } else {
-      if (!(Number(qty.value) > 0)) qty.value = qty.dataset.prev || "24";
-      restoreVariantInputs();
-    }
-    syncOptionStockTotals();
-    refreshOptionChips();
-  });
-  qty?.addEventListener("input", () => {
-    if (status) {
-      if (Number(qty.value) > 0) status.value = "in";
-      else if (qty.value === "0") {
-        // Typing an explicit 0 IS "sold out": capture that intent instead of
-        // silently re-filling the old quantity at save time.
-        status.value = "out";
-        zeroVariantInputs();
-        syncOptionStockTotals();
-      }
-    }
-    refreshOptionChips();
-  });
+  syncOptionStockTotals();
 }
 function currentOptionStock() {
   const map = {};
   document.querySelectorAll("[data-opt-stock]").forEach((inp) => {
-    const v = inp.getAttribute("data-opt-stock");
-    if (inp.value !== "") map[v] = Math.max(0, parseInt(inp.value, 10) || 0);
+    const key = inp.getAttribute("data-opt-stock");
+    if (key) map[key] = Math.max(0, parseInt(inp.value, 10) || 0);
   });
   return map;
 }
-function currentOptionPrices() {
-  const map = {};
-  document.querySelectorAll("[data-opt-price]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-price");
-    if (key && inp.value !== "") map[key] = Math.max(0, Number(inp.value) || 0);
+function activeOptionKeys(options) {
+  const keys = new Set();
+  (options || []).forEach((opt) => {
+    const title = String((opt && opt.title) || "Option").trim().toLowerCase();
+    (opt && opt.values || []).forEach((value) => {
+      const v = String(value || "").trim().toLowerCase();
+      if (!v) return;
+      keys.add(v);
+      keys.add(`${title}: ${v}`);
+    });
   });
-  return map;
+  return keys;
 }
-function currentOptionCompareAt() {
-  const map = {};
-  document.querySelectorAll("[data-opt-compare]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-compare");
-    if (key && inp.value !== "") map[key] = Math.max(0, Number(inp.value) || 0);
-  });
-  return map;
+function keepActiveOptionMap(map, options) {
+  const valid = activeOptionKeys(options);
+  if (!map || typeof map !== "object" || Array.isArray(map) || !valid.size) return {};
+  return Object.fromEntries(Object.entries(map).filter(([raw]) => {
+    const key = String(raw || "").trim().toLowerCase();
+    return valid.has(key);
+  }));
 }
-function optionPricingHTML(p) {
-  const options = p.options || [];
-  const overrides = p.optionPrices || {};
-  const compares = p.optionCompareAt || {};
-  const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
-    const key = `${opt.title}: ${value}`;
-    const inherited = Number(p.priceNgn) || 0;
-    const inheritedCompare = Number(p.compareNgn) || 0;
-    const valueNgn = overrides[key] != null ? overrides[key] : (overrides[value] != null ? overrides[value] : "");
-    const compareNgn = compares[key] != null ? compares[key] : (compares[value] != null ? compares[value] : "");
-    return `<label class="adx-var"><span class="adx-var-name"><strong>${JA.escape(key)}</strong><span>Blank inherits ${JA.money(inherited, "NGN")}</span></span><span class="adx-var-qty">Price ₦<input type="number" min="0" data-opt-price="${JA.escape(key)}" value="${valueNgn}" placeholder="${inherited}" /> <s>Was</s> ₦<input type="number" min="0" data-opt-compare="${JA.escape(key)}" value="${compareNgn}" placeholder="${inheritedCompare || ""}" /></span></label>`;
-  })).join("");
-  return `<h3>Option price overrides</h3><p class="admin-note">Leave the price blank to inherit the base product price. Set an override only when this option costs more or less. The optional "Was" price shows a crossed-out original next to it.</p>${rows ? `<div class="adx-vars">${rows}</div>` : `<p class="admin-note">Add product options above to set individual prices.</p>`}`;
+function optionStockValues(options, map) {
+  const first = (options || [])[0];
+  const values = (first && first.values) || [];
+  const title = String((first && first.title) || "option").trim();
+  const source = map && typeof map === "object" && !Array.isArray(map) ? map : {};
+  return Object.fromEntries(values.map((value) => {
+    const composite = `${title}: ${value}`;
+    const lowerValue = String(value || "").trim().toLowerCase();
+    const lowerComposite = composite.toLowerCase();
+    const found = Object.entries(source).find(([key]) => {
+      const normalized = String(key || "").trim().toLowerCase();
+      return normalized === lowerValue || normalized === lowerComposite;
+    });
+    const raw = source[value] ?? source[composite] ?? (found && found[1]);
+    return [value, Math.max(0, parseInt(raw, 10) || 0)];
+  }));
 }
 function optionSupplierLinksHTML(p) {
   // Per-option Supplier URL: a plain, manual field per variant/component
@@ -857,10 +809,10 @@ function optionSupplierLinksHTML(p) {
   const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
     const key = `${opt.title}: ${value}`;
     const url = links[key] != null ? links[key] : (links[value] != null ? links[value] : "");
-    const urlText = Array.isArray(url) ? url.join("\n") : String(url || "");
+    const urlText = Array.isArray(url) ? url.join(", ") : String(url || "");
     return `<label class="adx-var" data-optlink-row>
       <span class="adx-var-name"><strong>${JA.escape(key)}</strong></span>
-      <span class="adx-var-qty"><input type="text" data-opt-supplier="${JA.escape(key)}" placeholder="Supplier URL (optional)" value="${JA.escape(urlText)}" /></span>
+      <span class="adx-var-qty"><input type="text" inputmode="url" autocomplete="url" aria-label="Supplier URL for ${JA.escape(key)}" data-opt-supplier="${JA.escape(key)}" placeholder="Supplier URL (optional)" value="${JA.escape(urlText)}" /></span>
     </label>`;
   })).join("");
   return rows ? `<h3>Supplier URL per option</h3><div class="adx-vars">${rows}</div>` : "";
@@ -874,68 +826,40 @@ function currentOptionSupplierSku() {
   });
   return map;
 }
-function optionSkuHTML(p) {
-  const options = p.options || [];
-  const skus = p.optionSku || p.optionSkus || {};
-  const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
-    const key = `${opt.title}: ${value}`;
-    const sku = skus[key] != null ? skus[key] : (skus[value] != null ? skus[value] : "");
-    return `<label class="adx-var" data-opt-sku-row>
-      <span class="adx-var-name"><strong>${JA.escape(key)}</strong></span>
-      <span class="adx-var-qty"><input type="text" data-opt-sku="${JA.escape(key)}" placeholder="SKU / identifier (optional)" value="${JA.escape(sku || "")}" /></span>
-    </label>`;
-  })).join("");
-  return rows ? `<h3>SKU / identifier per option</h3><div class="adx-vars">${rows}</div>` : "";
-}
-function currentOptionSku() {
-  const map = {};
-  document.querySelectorAll("[data-opt-sku]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-sku");
-    const value = String(inp.value || "").trim();
-    if (key && value) map[key] = value;
-  });
-  return map;
-}
-function variantPanelsHTML(p) { return optionStockHTML(p) + optionPricingHTML(p) + optionSupplierLinksHTML(p) + optionSkuHTML(p); }
 function optionStockHTML(p) {
   const opt = (p.options || [])[0];
   const vals = (opt && opt.values) || p.colors || [];
-  if (!vals.length) {
-    return `<h3>Stock per option</h3>
-      <p class="admin-note">Add an option above (Colour, Size…) and a stock box appears here for each choice. Until then the single Quantity below is used.</p>`;
-  }
-  const os = p.optionStock || {};
-  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
-  const price = `${Number(p.compareNgn) > Number(p.priceNgn) ? `<s>${JA.money(p.compareNgn, "NGN")}</s> ` : ""}${JA.money(p.priceNgn || 0, "NGN")} · ${JA.money(toCfa(p.priceNgn), "CFA")}`;
+  if (!vals.length) return "";
+  const quantities = optionStockValues(p.options, p.optionStock);
   const rows = vals.map((v) => {
-    const qty = os[v] != null ? Number(os[v]) : "";
-    const state = qty === "" ? "" : (qty > 0 ? "in" : "out");
+    const qty = quantities[v];
+    const state = qty > 0 ? "in" : "out";
     return `<div class="adx-var" data-var-row>
-      <div class="adx-var-name"><strong>${JA.escape(v)}</strong><span>${price}</span></div>
-      <label class="adx-var-qty">Stock
-        <input type="number" min="0" inputmode="numeric" data-opt-stock="${JA.escape(v)}" value="${qty}" placeholder="0" />
+      <div class="adx-var-name"><strong>${JA.escape(v)}</strong></div>
+      <label class="adx-var-qty">Quantity
+        <input type="number" min="0" inputmode="numeric" data-opt-stock="${JA.escape(v)}" value="${qty}" />
       </label>
-      <em class="adx-var-state ${state}" data-var-state>${qty === "" ? "—" : (qty > 0 ? "In stock" : "Sold out")}</em>
+      <em class="adx-var-state ${state}" data-var-state>${qty > 0 ? "In stock" : "Sold out"}</em>
     </div>`;
   }).join("");
-  const total = vals.reduce((n, v) => n + (Number(os[v]) > 0 ? Number(os[v]) : 0), 0);
-  return `<h3>Stock per ${JA.escape((opt && opt.title) || "option")}</h3>
-    <p class="admin-note">Type how many pieces you have of each ${JA.escape((opt && opt.title) || "option").toLowerCase()}. The total quantity below updates by itself; a choice with 0 shows as sold out.</p>
+  const total = Object.values(quantities).reduce((n, quantity) => n + quantity, 0);
+  const title = JA.escape(String((opt && opt.title) || "option").trim());
+  return `<div class="variant-stock-section"><h4>Stock by ${title.toLowerCase()}</h4>
+    <p class="admin-note">Unassigned or blank variant quantities are zero. Product quantity below is the total of these values.</p>
     <div class="adx-vars">${rows}</div>
-    <p class="admin-note" id="opt-stock-total"><strong>Total: ${total}</strong> piece(s) across ${vals.length} ${JA.escape((opt && opt.title) || "option")} choice(s).</p>`;
+    <p class="admin-note" id="opt-stock-total"><strong>Total: ${total}</strong> piece(s).</p></div>`;
 }
 function syncOptionStockTotals() {
   const inputs = [...document.querySelectorAll("[data-opt-stock]")];
-  if (!inputs.length) return;
-  let total = 0, touched = false;
+  const qty = document.getElementById("stock-qty");
+  if (!inputs.length) {
+    if (qty) qty.readOnly = false;
+    return;
+  }
+  let total = 0;
   inputs.forEach((inp) => {
     const row = inp.closest("[data-var-row]");
     const state = row && row.querySelector("[data-var-state]");
-    if (inp.value === "") {
-      if (state) { state.textContent = "—"; state.className = "adx-var-state"; }
-      return;
-    }
-    touched = true;
     const n = Math.max(0, parseInt(inp.value, 10) || 0);
     total += n;
     if (state) {
@@ -944,12 +868,8 @@ function syncOptionStockTotals() {
     }
   });
   const totalEl = document.getElementById("opt-stock-total");
-  if (totalEl) totalEl.innerHTML = `<strong>Total: ${total}</strong> piece(s). This becomes the product quantity when you save.`;
-  if (!touched) return;
-  const qty = document.getElementById("stock-qty");
-  const status = document.getElementById("stock-status");
-  if (qty) qty.value = total;
-  if (status) status.value = total > 0 ? "in" : "out";
+  if (totalEl) totalEl.innerHTML = `<strong>Total: ${total}</strong> piece(s).`;
+  if (qty) { qty.value = total; qty.readOnly = true; }
 }
 function bindCfaPreview() {
   const form = document.getElementById("prod-form");
@@ -957,16 +877,12 @@ function bindCfaPreview() {
   if (!form || !el) return;
   const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   const paint = () => {
-    const n = Number(form.priceNgn && form.priceNgn.value) || 0;
-    const c = Number(form.compareNgn && form.compareNgn.value) || 0;
-    if (!(n > 0)) {
-      el.textContent = "Enter the ₦ price. The website will show CFA converted at 1 ₦ = 0.44.";
+    const ngn = Number(form.priceNgn && form.priceNgn.value) || 0;
+    if (!(ngn > 0)) {
+      el.textContent = "CFA price will be calculated from the Naira price.";
       return;
     }
-    const now = toCfa(n);
-    const was = c > 0 ? toCfa(c) : 0;
-    const line = was > now ? "<s>" + JA.money(was, "CFA") + "</s> " + JA.money(now, "CFA") : JA.money(now, "CFA");
-    el.innerHTML = "Website will show " + line + " · converted from ₦ at 1 ₦ = 0.44 CFA.";
+    el.textContent = `CFA price: ${JA.money(toCfa(ngn), "CFA")}`;
   };
   form.addEventListener("input", paint);
   paint();
@@ -983,38 +899,25 @@ function bindCfaPreview() {
  */
 const EDIT_FIELD_MAP = {
   name: ["name"],
-  nameFr: ["nameFr"],
   description: ["description"],
-  descriptionFr: ["descriptionFr"],
-  dimensions: ["dimensions"],
   enableCustomNote: ["enableCustomNote"],
   customNotePrompt: ["customNotePrompt"],
-  badge: ["badge"],
   category: ["category"],
-  online: ["online"],
-  featured: ["featured"],
-  sku: ["sku"],
   supplierSku: ["supplierSku", "supplierUrl", "supplier_url"],
-  // Money: priceCfa / compareCfa are derived from these by the editor, so they
-  // travel with them - a price typed on the phone must not be reverted by a
-  // photo swap made elsewhere.
-  priceNgn: ["priceNgn", "priceCfa", "compareCfa"],
-  compareNgn: ["compareNgn", "compareCfa"],
-  stock: ["stock", "stock_quantity"],
-  stockStatus: ["stockStatus", "stock", "stock_quantity"],
-  bulkQty: ["bulkQty"],
-  bulkPercent: ["bulkPercent"],
+  // CFA is derived from the entered Naira price.
+  priceNgn: ["priceNgn", "priceCfa"],
+  stock: ["stock", "stock_quantity", "stockStatus"],
 };
-// The media strip, the option editor and the variant rows are built from
-// data-* controls rather than named inputs.
+// Media, variant stock and per-option supplier controls use data attributes.
 const EDIT_DATA_PREFIXES = [
   ["data-img-i", ["image", "image_url", "imageUrl", "images"]],
-  ["data-opt-row", ["options", "optionPrices", "optionCompareAt", "optionStock",
-                    "optionSupplierSku", "optionSupplierUrls", "option_supplier_urls",
-                    "optionSku", "option_sku", "stock", "stock_quantity"]],
-  ["data-opt-sku", ["optionSku", "option_sku"]],
-  ["data-var-row", ["stock", "stock_quantity", "stockStatus"]],
-  ["data-var-state", ["stock", "stock_quantity", "stockStatus"]],
+  ["data-opt-row", ["options", "optionStock", "optionPrices", "optionCompareAt",
+                     "optionSupplierSku", "optionSupplierUrls", "option_supplier_urls",
+                     "stock", "stock_quantity", "stockStatus"]],
+  ["data-opt-stock", ["optionStock", "stock", "stock_quantity", "stockStatus"]],
+  ["data-opt-supplier", ["optionSupplierSku", "optionSupplierUrls", "option_supplier_urls"]],
+  ["data-var-row", ["stock", "stock_quantity"]],
+  ["data-var-state", ["stock", "stock_quantity"]],
 ];
 
 /** Record that the admin edited the field(s) behind a form control. */
@@ -1076,86 +979,44 @@ function productForm(p = {}) {
   // reset here with the rest of the per-editor state so it can never leak
   // from one product's editor into another's.
   window.__editDirty = new Set();
-  // Per-editor-session memory of the variant quantities that were live
-  // before the admin last flipped "Out of stock". It lives on window (not
-  // on the inputs) because refreshOptionChips repaints the variant boxes
-  // and would wipe a dataset attribute with them.
-  window.__editPrevOptionStock = null;
   window.__editUploads = [];
   const opts = editorOptions(p);
-  const inStock = p.id ? Number(p.stock) > 0 : true;
+  const savedOptionStock = keepActiveOptionMap(p.optionStock, opts);
+  const initialStock = opts.length
+    ? Object.values(optionStockValues(opts, savedOptionStock)).reduce((n, value) => n + value, 0)
+    : (p.id ? Math.max(0, Number(p.stock) || 0) : 0);
+  const quantityReadonly = opts.length ? "readonly" : "";
   return `<form id="prod-form" class="au-edit">
     <button type="button" class="au-back" id="cancel-edit">← Store Products</button>
-    <h2>Product ${preCat ? `· ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
+    <h2>${p.id ? "Edit product" : "New product"}${preCat ? ` · ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
-    <div class="field"><label>Product Name</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
-    <div class="field"><label>Product Name (French — shown when the site is in French)</label><input name="nameFr" maxlength="80" value="${JA.escape(p.nameFr || "")}" placeholder="Optional" /></div>
-    <input type="hidden" name="id" value="${p.id || ""}" />
-    <div class="au-2">
-      <div class="field"><label>Price ₦</label><div class="au-price"><input name="priceNgn" type="number" min="0" required value="${p.priceNgn || ""}" /><i>₦</i></div></div>
-      <div class="field"><label>Price reduction / strikethrough ₦</label><div class="au-price"><input name="compareNgn" type="number" min="0" value="${p.compareNgn || ""}" /><i>₦</i></div></div>
+    <input type="hidden" name="id" value="${JA.escape(p.id || "")}" />
+    <div class="field"><label>Product title</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
+    <div class="field"><label>Description</label><textarea name="description" rows="3" maxlength="2000">${JA.escape(p.description || "")}</textarea></div>
+    <div class="field"><label>Category</label><select name="category" required>${cats}</select></div>
+    <div class="field"><label>Price (Naira ₦)</label><div class="au-price"><input name="priceNgn" type="number" min="0" inputmode="numeric" required value="${p.priceNgn || ""}" /><i>₦</i></div>
+      <p class="admin-note" id="cfa-preview">CFA price will be calculated from the Naira price.</p>
     </div>
-    <p class="admin-note" id="cfa-preview">CFA on the website is converted from Naira at 1 ₦ = 0.44 CFA. You only enter ₦.</p>
-    <div class="field"><label>Add a description</label><textarea name="description" rows="3">${JA.escape(p.description || "")}</textarea></div>
-    <div class="field"><label>Description (French — shown when the site is in French)</label><textarea name="descriptionFr" rows="3" placeholder="Optional">${JA.escape(p.descriptionFr || "")}</textarea></div>
-    <h3>Product note</h3>
-    <label class="au-tog"><span>Enable Custom Product Note</span>
-      <input type="checkbox" name="enableCustomNote" ${p.enableCustomNote ? "checked" : ""} />
-    </label>
-    <div class="field"><label>Prompt shown to the customer</label><input name="customNotePrompt" maxlength="160" value="${JA.escape(p.customNotePrompt || "")}" placeholder="e.g. colour, size, scent, or another detail" /></div>
-    <p class="admin-note">The prompt can ask for any product-specific detail, not just a colour. Customers’ answers stay with this item on the order; the general checkout order note remains separate.</p>
-    <div class="field"><label>Dimensions / size (optional — shown on the product page and WhatsApp posts)</label><input name="dimensions" maxlength="160" value="${JA.escape(p.dimensions || "")}" placeholder="e.g. 30 x 20 x 10 cm" /></div>
-    <div class="field"><label>Promo display ribbon (Sale, New Arrival, Best Seller)</label>
-      <select name="badge">
-        <option value="">None</option>
-        ${[["sale","Sale / Promo Discount"],["new","New Product Arrival"],["bestseller","Best Seller"]].map(([b,label]) => `<option value="${b}" ${p.badge === b ? "selected" : ""}>${label}</option>`).join("")}
-      </select>
+    <div class="field"><label>Main supplier URL</label>
+      <input name="supplierSku" type="url" inputmode="url" autocomplete="url" value="${JA.escape(p.supplierSku || p.supplierUrl || p.supplier_url || "")}" placeholder="https://…" />
     </div>
-    <label class="au-tog"><span>Show in online store</span>
-      <input type="checkbox" name="online" ${p.online === false ? "" : "checked"} />
-    </label>
-    <div class="field"><label>Category</label><select name="category">${cats}</select></div>
-    <h3>Product options <small id="opt-count">${opts.length}/20</small></h3>
-    <div id="opt-box">${optionBlockHTML(opts)}</div>
-    <div class="au-opt-presets">
-      <button type="button" data-preset="Colour">+ Colour</button>
-      <button type="button" data-preset="Size">+ Size</button>
-      <button type="button" data-preset="Type">+ Type</button>
-      <button type="button" data-preset="Length">+ Length</button>
-      <button type="button" data-preset="Scent">+ Scent</button>
+    <section class="product-variants" aria-labelledby="product-options-title">
+      <h3 id="product-options-title">Options and variant supplier URLs <small id="opt-count">${opts.length}/20</small></h3>
+      <div id="opt-box">${optionBlockHTML(opts)}</div>
+      <button type="button" class="au-link-btn" id="add-opt">+ Add option</button>
+      <div id="var-box">${optionStockHTML({ ...p, options: opts, optionStock: savedOptionStock }) + optionSupplierLinksHTML({ ...p, options: opts })}</div>
+    </section>
+    <div class="field"><label>Stock quantity</label>
+      <input name="stock" id="stock-qty" type="number" min="0" inputmode="numeric" value="${initialStock}" ${quantityReadonly} />
+      <p class="admin-note">Zero or blank means out of stock. For products with options, enter each variant quantity above; this total is calculated automatically.</p>
     </div>
-    <button type="button" class="au-link-btn" id="add-opt">+ Add Option</button>
-    <div id="var-box">${variantPanelsHTML({ ...p, options: opts })}</div>
-    <h3>Inventory</h3>
-    <div class="au-2">
-      <div class="field"><label>Availability</label>
-        <select name="stockStatus" id="stock-status">
-          <option value="in" ${inStock ? "selected" : ""}>In stock</option>
-          <option value="out" ${inStock ? "" : "selected"}>Out of stock</option>
-        </select>
-      </div>
-      <div class="field"><label>Quantity</label>
-        <input name="stock" id="stock-qty" type="number" min="0" value="${p.id ? (p.stock ?? 0) : 24}" />
-      </div>
-    </div>
-    <p class="admin-note">Choose <strong>Out of stock</strong> to stop sales. Choose <strong>In stock</strong> and set a quantity so customers can add it to cart.</p>
-    <h3>Bulk discount for this product</h3>
-    <div class="au-2">
-      <div class="field"><label>Bulk discount — more than how many units?</label>
-        <input name="bulkQty" type="number" min="1" max="100000" value="${p.bulkQty || ""}" placeholder="e.g. 10" />
-      </div>
-      <div class="field"><label>Discount % (applies above that quantity)</label>
-        <input name="bulkPercent" type="number" min="1" max="90" value="${p.bulkPercent || ""}" placeholder="e.g. 15" />
-      </div>
-    </div>
-    <p class="admin-note">Optional. When a customer orders <strong>more</strong> than the unit count above of this one product, the discount % is taken off its unit price automatically at checkout — for example 10 and 15 means every unit above 10 is priced 15% off. Leave either box empty for no per-product bulk discount (shop-wide tiers, if any, still apply).</p>
-    <div class="field"><label>SKU</label><input name="sku" value="${JA.escape(p.sku || "")}" /></div>
-    <div class="field"><label>Supplier URL for Auto Stock Sync</label>
-      <input name="supplierSku" value="${JA.escape(p.supplierSku || p.supplierUrl || p.supplier_url || "")}" placeholder="https://…" />
-    </div>
-    <div class="field"><label>Featured</label>
-      <select name="featured"><option value="no">No</option><option value="yes" ${p.featured ? "selected" : ""}>Yes</option></select>
-    </div>
+    <section class="product-custom-note" aria-labelledby="custom-note-title">
+      <h3 id="custom-note-title">Custom order note</h3>
+      <label class="au-tog"><span>Enable a note for this product</span>
+        <input type="checkbox" name="enableCustomNote" ${p.enableCustomNote ? "checked" : ""} />
+      </label>
+      <div class="field"><label>Customer prompt</label><input name="customNotePrompt" maxlength="160" value="${JA.escape(p.customNotePrompt || "")}" placeholder="e.g. preferred colour, size, or another detail" /></div>
+    </section>
     <button class="btn au-save" type="submit">Save Product</button>
     ${p.id ? `<button type="button" class="au-del-prod" data-del="${JA.escape(p.id)}">Delete this product</button>` : ""}
   </form>`;
@@ -1216,93 +1077,26 @@ async function handleProductSubmit(e, existing) {
   }
   const image = images[0] || "";
   if (!image) { JA.toast("Please upload a photo."); return; }
-  const name = fd.get("name").trim();
+  const name = String(fd.get("name") || "").trim();
   const id = fd.get("id") || ("jau-" + Date.now().toString(36));
   const num = (k) => { const v = fd.get(k); return v === "" || v == null ? null : Number(v); };
-  const status = String(fd.get("stockStatus") || "in");
-  const isOnline = !!fd.get("online");
-  let stock = num("stock");
-  if (status === "out") stock = 0;
-  else if (stock === null || stock === undefined) {
-    // An EMPTY box means "leave the quantity alone" (keep the stored value,
-    // 24 for a brand-new row). An explicit 0 is a deliberate "sold out" and
-    // is honoured below - it used to be silently replaced by the old
-    // quantity, so the admin's out-of-stock choice never reached the server.
-    stock = (existing && Number(existing.stock) > 0) ? Number(existing.stock) : 24;
-  }
-  // Optional per-product bulk discount: both values or neither. An empty box
-  // means "no discount configured for this product".
-  let bulkQty = num("bulkQty");
-  let bulkPercent = num("bulkPercent");
-  if (!(bulkQty > 0) || !(bulkPercent > 0)) { bulkQty = null; bulkPercent = null; }
-  if (bulkQty != null) bulkQty = Math.min(100000, Math.round(bulkQty));
-  if (bulkPercent != null) bulkPercent = Math.min(90, Math.max(1, Math.round(bulkPercent)));
   const options = collectOptions(e.target);
-  const optionStock = {};
-  let hasOptionStock = false;
-  const firstVals = (options[0] && options[0].values) || [];
-  e.target.querySelectorAll("[data-opt-stock]").forEach((inp) => {
-    const v = inp.getAttribute("data-opt-stock");
-    if (!firstVals.includes(v) || inp.value === "") return;
-    optionStock[v] = Math.max(0, parseInt(inp.value, 10) || 0);
-    hasOptionStock = true;
-  });
-  if (hasOptionStock) stock = Object.values(optionStock).reduce((n, q) => n + q, 0);
-  // "Out of stock" (the switch, or an explicit 0 quantity) is a final
-  // whole-product decision: it wins over the variant sum - which used to
-  // re-stock the row from stale variant numbers - and zeroes every variant
-  // in the payload, so the storefront badge, the buy button and each
-  // variant chip all read sold out together.
-  let payloadOptionStock = { ...(hasOptionStock ? optionStock : (existing?.optionStock || {})) };
-  if (status === "out" || stock === 0) {
-    stock = 0;
-    Object.keys(payloadOptionStock).forEach((k) => { payloadOptionStock[k] = 0; });
-  } else if (!hasOptionStock && stock > 0
-             && Object.keys(payloadOptionStock).length
-             && Object.values(payloadOptionStock).every((v) => !(Number(v) > 0))) {
-    // Mirror image of the switch-off: re-stocking a product whose variants
-    // were all sold out with a plain quantity. The typed number is the new
-    // availability, so the all-zero variant map must not pin the row (and
-    // the storefront badge) to "out" forever.
-    payloadOptionStock = {};
-  }
-  const optionPrices = {};
-  e.target.querySelectorAll("[data-opt-price]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-price");
-    if (key && inp.value !== "") optionPrices[key] = Math.max(0, Number(inp.value) || 0);
-  });
-  const optionCompareAt = {};
-  e.target.querySelectorAll("[data-opt-compare]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-compare");
-    if (key && inp.value !== "") optionCompareAt[key] = Math.max(0, Number(inp.value) || 0);
-  });
-  const optionSupplierSku = {};
-  e.target.querySelectorAll("[data-opt-supplier]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-supplier");
-    const values = String(inp.value || "").split(/[\n,]+/).map((v) => v.trim()).filter(Boolean);
-    if (key && values.length) optionSupplierSku[key] = values.length === 1 ? values[0] : values;
-  });
-  const optionSku = {};
-  e.target.querySelectorAll("[data-opt-sku]").forEach((inp) => {
-    const key = inp.getAttribute("data-opt-sku");
-    const val = String(inp.value || "").trim();
-    if (key && val) optionSku[key] = val;
-  });
+  const variantValues = (options[0] && options[0].values) || [];
+  const typedStock = keepActiveOptionMap(currentOptionStock(), options);
+  const payloadOptionStock = variantValues.length
+    ? Object.fromEntries(variantValues.map((value) => [value, Math.max(0, parseInt(typedStock[value], 10) || 0)]))
+    : {};
+  const stock = variantValues.length
+    ? Object.values(payloadOptionStock).reduce((total, quantity) => total + quantity, 0)
+    : Math.max(0, parseInt(num("stock"), 10) || 0);
+  const isOnline = existing ? existing.online !== false : true;
+  const optionPrices = keepActiveOptionMap(existing?.optionPrices, options);
+  const optionCompareAt = keepActiveOptionMap(existing?.optionCompareAt, options);
+  const optionSupplierSku = keepActiveOptionMap(currentOptionSupplierSku(), options);
   const supplierRef = String(fd.get("supplierSku") || "").trim();
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
-  const priceNgn = num("priceNgn") || 0;
-  const compareNgn = num("compareNgn");
-  // The base price is only mandatory when at least one option/variant is not
-  // already covered by its own price override. A product where every option
-  // (e.g. Shampoo / Serum / Conditioner) has its own ₦ override sets its own
-  // price entirely and must never be blocked from saving just because the
-  // shared base-price box is empty/0 - the storefront already ignores the
-  // base price for any variant that carries an override (see JA.priceOf in
-  // js/store.js).
-  const allOptionKeys = options.flatMap((opt) => (opt.values || []).map((value) => `${opt.title}: ${value}`));
-  const everyOptionPriced = allOptionKeys.length > 0
-    && allOptionKeys.every((key) => optionPrices[key] != null && optionPrices[key] > 0);
-  if (!(priceNgn > 0) && !everyOptionPriced) { JA.toast("Enter the ₦ price, or set a price for every option."); return; }
+  const priceNgn = Math.max(0, num("priceNgn") || 0);
+  if (!(priceNgn > 0)) { JA.toast("Enter the Naira price."); return; }
   const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
   // Never let a save blank a category the row already has. The select is
@@ -1329,47 +1123,27 @@ async function handleProductSubmit(e, existing) {
       // same value", and a real edit would be silently discarded.
       mergeFields: window.__editDirty ? Array.from(window.__editDirty) : null,
       id,
-      sku: fd.get("sku") || existing?.sku || ("JAU-" + Date.now().toString(36).toUpperCase().slice(-6)),
+      sku: existing?.sku || ("JAU-" + Date.now().toString(36).toUpperCase().slice(-6)),
       slug: existing?.slug || slugify(name) || id,
       name,
       category: savedCategory,
       priceNgn,
-      compareNgn,
       priceCfa: toCfa(priceNgn),
-      compareCfa: compareNgn > 0 ? toCfa(compareNgn) : null,
       image,
       images,
-      // image/image_url/imageUrl are ONE logical field. The ...(existing)
-      // spread above carries the row's previous value of every alias, so the
-      // fresh cover must overwrite each spelling or the stale alias travels
-      // to the server beside the new photo (and used to WIN there - the
-      // "replacement never saves" bug). Keep all three in lock-step here.
+      // image/image_url/imageUrl are ONE logical field. Keep all aliases in
+      // lock-step so an old copy can never beat the newly selected cover.
       image_url: image,
       imageUrl: image,
-      description: fd.get("description"),
+      description: String(fd.get("description") || "").trim(),
       stock,
-      // The server prefers stock_quantity (catalog.normalize), so sending
-      // only the legacy `stock` key made every save keep the row's stale
-      // stock_quantity and the freshly typed quantity was silently discarded
-      // (seed products reverted to 24). Ship BOTH aliases, in sync.
       stock_quantity: stock,
-      // The explicit availability intent: "out" makes catalog.normalize
-      // zero the row and every variant, immune to the variant-sum revert.
-      stockStatus: status,
-      // Per-product bulk discount (null = none configured).
-      bulkQty,
-      bulkPercent,
-      badge: fd.get("badge"),
-      featured: fd.get("featured") === "yes",
-      online: isOnline,
+      stockStatus: stock > 0 ? "in" : "out",
       colors: colorOpt ? colorOpt.values : [],
       options,
       optionStock: payloadOptionStock,
       optionPrices,
       optionCompareAt,
-      nameFr: String(fd.get("nameFr") || "").trim() || existing?.nameFr || "",
-      descriptionFr: String(fd.get("descriptionFr") || "").trim() || existing?.descriptionFr || "",
-      dimensions: String(fd.get("dimensions") || "").trim(),
       enableCustomNote: !!fd.get("enableCustomNote"),
       customNotePrompt: String(fd.get("customNotePrompt") || "").trim().slice(0, 160),
       // Manual, owner-entered supplier reference link. The consolidated
@@ -1382,8 +1156,6 @@ async function handleProductSubmit(e, existing) {
       optionSupplierSku,
       optionSupplierUrls: optionSupplierSku,
       option_supplier_urls: optionSupplierSku,
-      optionSku,
-      option_sku: optionSku,
   });
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save Product"; }
   // Only a server-confirmed save leaves this editor. A queued retry or a
@@ -1403,9 +1175,9 @@ async function handleProductSubmit(e, existing) {
     savedMsg = "Saved on the server only — not yet on the cloud copy. Tap Retry now.";
   } else {
     const liveState = isOnline ? "Live on the store now" : "Hidden from the store";
-    savedMsg = status === "out"
-      ? `Saved · ${liveState} · Out of stock.`
-      : `Saved · ${liveState} · ${images.length} photo(s).`;
+    savedMsg = stock > 0
+      ? `Saved · ${liveState} · ${images.length} photo(s).`
+      : `Saved · ${liveState} · Out of stock.`;
   }
   // Only now may the UI purge media the owner removed. The product write has
   // succeeded, so a storage reference guard sees the replacement row rather
@@ -3605,7 +3377,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=185" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=186" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3971,7 +3743,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=185", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=186", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
