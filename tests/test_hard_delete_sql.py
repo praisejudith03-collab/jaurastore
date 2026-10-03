@@ -56,6 +56,13 @@ def one(db, sql):
     return _psql(db, "-At", "-c", sql).strip()
 
 
+# The approved, non-held schema sections a staging project needs BEFORE the
+# delete migration: 01 creates public.products (id text) and 09 repairs the
+# products columns the application contract names. Sections 15 (storage) and
+# 16 (stock) are deliberately excluded - they are on hold - and the migration
+# must work without them.
+APPROVED_SECTIONS = ("01_products.sql", "09_product_compatibility.sql")
+
 SCHEMA = """
 drop table if exists public.featured_products cascade;
 drop table if exists public.product_views cascade;
@@ -328,6 +335,86 @@ def test_it_applies_on_a_database_with_no_supabase_roles(db):
     # ...and the function is still created and still works
     assert one(db, "select count(*) from pg_proc "
                    "where proname = 'hard_delete_products'") == "1"
+
+
+def test_the_approved_products_sections_bootstrap_the_migration(db):
+    """The staging recipe, reproduced on a disposable PostgreSQL: approved
+    sections in dependency order, then the delete migration - no live database.
+
+    This is the SQL half of "apply only the approved sections needed to create
+    public.products, then hard_delete_products.sql": section 01 creates the
+    table (``id text``), section 09 repairs the columns the app contract in
+    verify_schema.py requires, and the migration must then apply on top of
+    exactly that schema, expose ``hard_delete_products(text[])``, be callable
+    by service_role and refused for anon/authenticated. Sections 15/16 are not
+    applied; the file may not depend on them.
+    """
+    sections_dir = SQL_PATH.parent / "schema_sections"
+    run(db, "drop schema if exists public cascade; create schema public;")
+    assert one(db, "select to_regclass('public.products') is null") == "t"
+
+    # Twice: applying a section again must be a no-op, like a retried paste in
+    # the SQL editor.
+    for _ in range(2):
+        for name in APPROVED_SECTIONS:
+            path = sections_dir / name
+            assert path.exists(), f"missing approved section {name}"
+            run(db, path.read_text())
+
+    assert one(db, "select to_regclass('public.products') is not null") == "t"
+    assert one(db, """
+        select data_type from information_schema.columns
+         where table_schema = 'public' and table_name = 'products'
+           and column_name = 'id'""") == "text"
+    # The columns the application contract (verify_schema.py) names.
+    for column in ("legacyId", "image_url", "stock_quantity", "images"):
+        assert one(db, f"""
+            select count(*) from information_schema.columns
+             where table_schema = 'public' and table_name = 'products'
+               and column_name = '{column}'""") == "1", column
+
+    for role in ("anon", "authenticated", "service_role"):
+        make_role(db, role)
+    try:
+        run(db, SQL_PATH.read_text())
+        run(db, SQL_PATH.read_text())          # idempotent here too
+
+        assert one(db, """
+            select count(*) from pg_proc p
+              join pg_namespace n on n.oid = p.pronamespace
+             where n.nspname = 'public'
+               and p.proname = 'hard_delete_products'
+               and pg_get_function_identity_arguments(p.oid)
+                   = 'product_ids text[]'""") == "1"
+        assert one(db, "select has_function_privilege('anon', "
+                       "'public.hard_delete_products(text[])', 'EXECUTE')") == "f"
+        assert one(db, "select has_function_privilege('authenticated', "
+                       "'public.hard_delete_products(text[])', 'EXECUTE')") == "f"
+        assert one(db, "select has_function_privilege('service_role', "
+                       "'public.hard_delete_products(text[])', 'EXECUTE')") == "t"
+
+        # One disposable product, a child row, one delete through the RPC.
+        run(db, """
+            insert into public.products (id, name, stock_quantity)
+              values ('jau-staging-1', 'Disposable Staging Piece', 2);
+            insert into public.product_variants (product_id, title)
+              values ('jau-staging-1', 'Red');
+        """)
+        assert one(db, "select public.hard_delete_products("
+                       "array['jau-staging-1'])") == "{jau-staging-1}"
+        assert one(db, "select count(*) from public.products "
+                       "where id = 'jau-staging-1'") == "0"
+        assert one(db, "select count(*) from public.product_variants "
+                       "where product_id = 'jau-staging-1'") == "0"
+        assert one(db, "select count(*) from public.deleted_products "
+                       "where product_id = 'jau-staging-1'") == "1"
+        # Never reuse a tombstoned id: the trigger has to refuse it.
+        with pytest.raises(AssertionError, match="permanently deleted"):
+            run(db, "insert into public.products (id, name) "
+                    "values ('jau-staging-1', 'Ghost')")
+    finally:
+        for role in ("anon", "authenticated", "service_role"):
+            drop_role(db, role)
 
 
 def test_the_app_calls_it_with_the_name_and_argument_in_the_file():

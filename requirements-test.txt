@@ -2,5 +2,9 @@
 # CI: pip install -r requirements.txt -r requirements-test.txt
 PyYAML>=6.0
 pgserver==0.1.4
+# PostgreSQL's real grammar, used by tests/test_hard_delete_sql.py to parse
+# hard_delete_products.sql. Without it that check silently skips, and the
+# migration is then only ever exercised by a database, never by the parser.
+pglast>=7.0
 
 playwright==1.62.0

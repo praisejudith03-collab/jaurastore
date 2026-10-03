@@ -378,6 +378,55 @@ def test_admin_product_delete_ok_when_supabase_confirms(client, monkeypatch):
     body = r.get_json()
     assert body["ok"] is True
     assert body["filesRemoved"] == 2
+    # The response names the backend that did the work, so a caller can tell a
+    # real Supabase delete from a local-only catalogue edit.
+    assert body["deleteMode"] == "supabase-hard"
+
+
+def test_admin_product_delete_cleanup_failure_is_not_reported_as_success(
+        client, monkeypatch):
+    """Row gone but media/tombstone cleanup failed -> 503 with the report."""
+    monkeypatch.setattr(Config, "ENV", "production")
+    monkeypatch.setattr(Config, "SUPABASE_URL", FAKE_ORIGIN)
+    monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
+    import supabase_store
+    seen = {}
+
+    def _hard(ids):
+        seen["ids"] = list(ids)
+        return {"deleted": list(ids), "files": 1,
+                "errors": ["storage: bucket unreachable"]}
+
+    monkeypatch.setattr(supabase_store, "hard_delete_products", _hard)
+    tok = _login(client)
+    r = client.delete("/api/admin/products/jau-cleanup", headers={"X-CSRF-Token": tok})
+    assert r.status_code == 503
+    body = r.get_json()
+    assert body["ok"] is False
+    assert "cleanup" in body["error"].lower()
+    assert body["report"]["errors"] == ["storage: bucket unreachable"]
+    assert seen["ids"] == ["jau-cleanup"]
+
+
+def test_admin_product_delete_local_mode_is_labelled(client, monkeypatch):
+    """Without Supabase as the source of truth the delete says so.
+
+    A local-only delete must never look like a Supabase delete to the caller:
+    the response carries deleteMode so the portal (and an operator reading a
+    log) can tell the two apart.
+    """
+    import catalog as catalog_mod
+    monkeypatch.setattr(catalog_mod, "_prod_source", lambda: False)
+    monkeypatch.setattr(catalog_mod, "_sync_repo_async", lambda: None)
+    monkeypatch.setattr(Config, "SUPABASE_URL", "")
+    monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "")
+    tok = _login(client)
+    r = client.delete("/api/admin/products/jau-local-mode",
+                      headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["deleteMode"] == "local-only"
 
 
 def _login(client):
