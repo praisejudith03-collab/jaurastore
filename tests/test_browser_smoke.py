@@ -417,7 +417,9 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     mobile.locator('[data-tab="products"]:visible').first.click()
     mobile.locator('#add-product').click()
     mobile.locator('#prod-form [name="name"]').fill('Perfume browser sample')
-    mobile.locator('#prod-form [name="nameFr"]').fill('Parfum de démonstration')
+    # The create/edit form intentionally has one product title field; legacy
+    # per-language product metadata was removed from the simplified editor.
+    expect(mobile.locator('#prod-form [name="nameFr"]')).to_have_count(0)
     mobile.locator('#prod-form [name="priceNgn"]').fill('4000')
     mobile.locator('#prod-form [name="category"]').select_option('perfume')
     from pathlib import Path
@@ -435,7 +437,9 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     # parameter carries a language onto the next page load.
     mobile.evaluate("I18N.setLang('fr')")
     mobile.wait_for_timeout(500)
-    expect(mobile.locator('[data-shop-grid]')).to_contain_text('Parfum de démonstration')
+    # A product created through the streamlined editor has one canonical title;
+    # French storefronts use that title when no optional legacy translation exists.
+    expect(mobile.locator('[data-shop-grid]')).to_contain_text('Perfume browser sample')
     expect(mobile.locator('[data-shop-title]').last).to_have_text('Parfum')
     mobile.goto(live_shop + '/categories.html?lang=fr')
     expect(mobile.locator('[data-cat-list] a').first).to_have_attribute('href', 'shop.html?cat=perfume')
@@ -444,7 +448,8 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     with appmod.create_app().test_client() as fresh:
         assert fresh.get('/api/categories').json['categories'][0]['id'] == 'perfume'
         products = fresh.get('/api/catalog').json['products']
-    assert any(p['category'] == 'perfume' and p['nameFr'] == 'Parfum de démonstration' for p in products)
+    assert any(p['category'] == 'perfume' and p['name'] == 'Perfume browser sample'
+               for p in products)
 
 
 @pytest.mark.parametrize('language', ['en', 'fr'])
