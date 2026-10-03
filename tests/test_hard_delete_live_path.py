@@ -550,6 +550,24 @@ def test_the_real_rpc_reports_only_ids_that_were_there(migrated, live):
                           f"product_id in ('{real}', '{ghost}')") == 2
 
 
+def test_the_empty_array_call_is_a_true_no_op(migrated, live):
+    """tools/staging_delete_check.py proves the RPC exists with an EMPTY call.
+
+    That probe must not delete, tombstone or otherwise touch anything - it is
+    what makes "is the migration applied?" answerable without writing.
+    """
+    migrated.sql("insert into public.products (id, name) "
+                 "values ('jau-live-7', 'Live Seven')")
+    before = migrated.count("deleted_products")
+
+    status = migrated.sql(
+        "select public.hard_delete_products(array[]::text[]);")
+
+    assert status.strip() == "{}"
+    assert migrated.count("products") == 1
+    assert migrated.count("deleted_products") == before, "a probe wrote a tombstone"
+
+
 def test_a_database_without_the_migration_fails_closed(bare_live, bare):
     """Staging today: no hard_delete_products(text[]). The row must survive.
 

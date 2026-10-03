@@ -1,12 +1,73 @@
 # Staging runbook: products schema + hard delete
 
 The operator procedure for a **disposable, non-production Supabase project**
-that is missing `public.products`. Every step is manual and runs in the
-Supabase SQL editor (or the Admin portal) because the migration needs database
-access that is deliberately not available to a build sandbox.
+that is missing `public.products`.
 
-> **Nothing in this file has been applied to any live project.** The SQL is
-> covered by disposable-PostgreSQL tests
+Two ways to run it:
+
+* **Automated (recommended).** Merge
+  `.github/workflows/staging-schema-migration.yml` to `main`, then run the
+  **Staging schema migration (products + hard delete)** workflow from the
+  Actions tab. It applies the three approved files with the credentials
+  already stored as repository secrets and verifies the result. See
+  [Automated path](#automated-path-github-actions) below.
+* **By hand.** The SQL editor steps in this document.
+
+Neither path runs `supabase_schema.sql` as a whole, sections 15/16, or the
+image migration. Do not "just run everything": sections 15 and 16 are on hold
+per `schema_sections/README.md`, and 16 ends in a `validate constraint` that
+fails on any existing row with negative stock.
+
+## Automated path (GitHub Actions)
+
+The workflow is guarded: it refuses a project ref that does not match
+`SUPABASE_URL`, defaults to a **read-only preflight**, and refuses to write
+when `public.products` already holds rows unless you say otherwise.
+
+1. **Add the DDL credential** (Settings → Secrets and variables → Actions).
+   One of:
+
+   | Secret | How to get it | Transport |
+   | --- | --- | --- |
+   | `SUPABASE_DB_URL` | Dashboard → Project Settings → Database → Connection string (URI). The same credential `python3 migrate_supabase.py --schema` documents. | `psql` |
+   | `SUPABASE_ACCESS_TOKEN` | Supabase → Account → Access Tokens → Generate new token. | Management API (no `psql`) |
+
+   `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are already configured for
+   the other workflows - the service-role key is **not** enough here, because
+   PostgREST does not expose DDL.
+
+2. **Run the workflow with `apply = false`** and your project ref typed into
+   `confirm_project_ref`. This is read-only: it prints the existing tables, the
+   `products` row count, and whether the delete function is already there.
+   Compare that output with Step 0 below before going further.
+3. **Run it again with `apply = true`** (and `allow_existing_rows = true` only
+   if the preflight proved the existing rows are disposable). It applies
+   `01_products.sql` → `09_product_compatibility.sql` →
+   `hard_delete_products.sql`, then verifies `to_regclass`,
+   `to_regprocedure('public.hard_delete_products(text[])')`, the
+   `deleted_products` ledger and the execute privileges.
+4. **Optional, and the real end-to-end proof:** run it once more with
+   `apply = true` and `live_purge_check = true`. That adds a disposable
+   product (`jau-staging-check-<uuid>`, `online=false`) plus one dummy object,
+   deletes them through the same function the Admin API calls, and verifies
+   from the outside that the row is gone, the object 404s and the id cannot be
+   re-created. Nothing else is touched.
+
+From a server shell with the same environment variables you can run the two
+tools directly:
+
+```sh
+python3 tools/apply_staging_schema.py --confirm-project-ref <ref>            # read-only
+python3 tools/apply_staging_schema.py --confirm-project-ref <ref> --apply    # write
+python3 tools/staging_delete_check.py --confirm-project-ref <ref>            # live check
+python3 tools/staging_delete_check.py --dry-run                              # plan only
+```
+
+The manual steps below remain the fallback and the reference for what the
+automated path does.
+
+> **Nothing in this repository's tooling has been run against a live
+> project.** The SQL is covered by disposable-PostgreSQL tests
 > (`tests/test_hard_delete_sql.py`, including the staging bootstrap recipe) and
 > the app paths by `tests/test_deleted_products_stay_deleted.py`,
 > `tests/test_site_settings_supabase.py`,

@@ -56,6 +56,16 @@ def one(db, sql):
     return _psql(db, "-At", "-c", sql).strip()
 
 
+def one_as(db, role, sql):
+    """Run a scalar query AS another role.
+
+    psql also prints the command tag for the surrounding ``set role`` /
+    ``reset role``, so the answer is the last line, not the whole output.
+    """
+    out = _psql(db, "-qAt", "-c", f"set role {role}; {sql}; reset role;")
+    return out.strip().splitlines()[-1].strip()
+
+
 # The approved, non-held schema sections a staging project needs BEFORE the
 # delete migration: 01 creates public.products (id text) and 09 repairs the
 # products columns the application contract names. Sections 15 (storage) and
@@ -438,3 +448,186 @@ def test_the_sql_is_valid_postgres():
     pglast = pytest.importorskip("pglast")
     stmts = pglast.parse_sql(SQL_PATH.read_text())
     assert len(stmts) >= 9
+
+
+# ------------------------------------------------- Query 4: the RLS lock -----
+# MIGRATION_COPY_PASTE.md promises that running Query 4 clears the three
+# "RLS Disabled in Public" advisor warnings left by the migration, and touches
+# nothing else. Whether that is true is a property of the DATABASE
+# (relrowsecurity on the table plus the privileges the API roles end up with),
+# not of the text, so it is checked here against a real PostgreSQL.
+def _query_4_sql():
+    """The exact text the operator pastes, straight from the generator."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "make_copy_paste_doc", SQL_PATH.parent / "tools" / "make_copy_paste_doc.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.QUERY_4_SQL
+
+
+QUERY_4 = _query_4_sql()
+RLS_CHILD_TABLES = ("product_variants", "product_prices", "product_options")
+
+
+def rls_enabled(db, table):
+    return one(db, "select relrowsecurity from pg_class "
+                   f"where oid = 'public.{table}'::regclass")
+
+
+def make_supabase_role(db, name):
+    """Create a role the shape Supabase gives it.
+
+    Supabase's service_role has BYPASSRLS, which is exactly why locking the
+    child tables cannot break the server-side delete path. Creating it as a
+    plain role here would be filtered by the no-policy RLS and would test the
+    wrong thing.
+    """
+    attribute = " bypassrls" if name == "service_role" else ""
+    run(db, f"do $$ begin execute 'create role {name} nologin{attribute}'; "
+            "exception when duplicate_object then null; end $$;")
+
+
+def grant_schema_usage(db, *roles):
+    """USAGE on schema public, which every Supabase API role has.
+
+    One test above recreates the schema with ``create schema public``; a
+    schema created that way grants nothing to anybody. Without this a role
+    would fail on the SCHEMA before RLS is ever consulted, and the test would
+    be measuring PostgreSQL's default ACLs instead of Query 4.
+    """
+    for role in roles:
+        run(db, f"grant usage on schema public to {role};")
+
+
+def test_query_4_locks_the_three_child_tables_and_leaves_products_alone(db):
+    """The advisor warning is real and Query 4 is what clears it."""
+    fresh(db)
+    for table in RLS_CHILD_TABLES:
+        assert rls_enabled(db, table) == "f", table      # the warning
+
+    run(db, QUERY_4)
+
+    for table in RLS_CHILD_TABLES:
+        assert rls_enabled(db, table) == "t", table      # cleared
+    # The deliberate exception: the storefront reads this table with the anon
+    # key for live stock, and RLS without a policy would stop those events.
+    assert rls_enabled(db, "products") == "f"
+
+
+def test_query_4_is_idempotent_and_safe_without_supabase_roles(db):
+    """A retried paste must be a no-op, and a bare PostgreSQL - where the
+    Supabase roles do not exist - must not abort mid-script."""
+    fresh(db)
+    assert not supabase_roles_present(db)
+    run(db, QUERY_4)
+    run(db, QUERY_4)                                     # <- the claim
+    for table in RLS_CHILD_TABLES:
+        assert rls_enabled(db, table) == "t", table
+
+
+def test_query_4_does_not_take_the_storefronts_anon_read_of_products(db):
+    """The whole point of the exception: the shop keeps reading products."""
+    run(db, SCHEMA)
+    make_role(db, "anon")
+    try:
+        grant_schema_usage(db, "anon")
+        run(db, SQL_PATH.read_text())
+        # The storefront's Realtime subscription and catalogue reads.
+        run(db, "grant select on table public.products to anon;")
+        run(db, QUERY_4)
+        assert rls_enabled(db, "products") == "f"
+        assert one(db, "select has_table_privilege('anon', "
+                       "'public.products', 'SELECT')") == "t"
+        run(db, "insert into public.products (id, name) values ('p1','One');")
+        # ...and it really can still read the row the shop is showing.
+        assert one_as(db, "anon", "select count(*) from public.products") == "1"
+    finally:
+        drop_role(db, "anon")
+
+
+def test_query_4_locks_the_api_roles_out_of_the_child_tables(db):
+    """anon/authenticated lose the child tables twice over: the grant is
+    revoked, and RLS with no policy returns nothing even if one is re-granted
+    by hand. service_role keeps its grants and (as on Supabase) bypasses RLS,
+    because the app sweeps child rows with it after a delete."""
+    run(db, SCHEMA)
+    for role in ("anon", "authenticated", "service_role"):
+        make_supabase_role(db, role)
+    try:
+        grant_schema_usage(db, "anon", "authenticated", "service_role")
+        run(db, SQL_PATH.read_text())
+        run(db, "insert into public.products (id, name) values ('p1','One');")
+        run(db, "insert into public.product_variants (product_id, sku) "
+                "values ('p1','SKU-RED');")
+        # A project where PostgREST already exposes the child tables: the
+        # grants exist, and Query 4 has to take them away.
+        for table in RLS_CHILD_TABLES:
+            run(db, f"grant select, insert, update, delete on table public.{table} "
+                    "to anon, authenticated;")
+        assert one(db, "select has_table_privilege('anon', "
+                       "'public.product_variants', 'SELECT')") == "t"
+
+        run(db, QUERY_4)
+
+        for role in ("anon", "authenticated"):
+            for table in RLS_CHILD_TABLES:
+                assert one(db, f"select has_table_privilege('{role}', "
+                               f"'public.{table}', 'SELECT')") == "f", (role, table)
+        for table in RLS_CHILD_TABLES:
+            assert one(db, "select has_table_privilege('service_role', "
+                           f"'public.{table}', 'SELECT')") == "t", table
+
+        # The lock is not "just" the revoke: a re-granted SELECT still returns
+        # nothing, because RLS has no policy to allow a row.
+        run(db, "grant select on table public.product_variants to anon;")
+        assert one_as(db, "anon", "select count(*) from public.product_variants") == "0"
+
+        # And the server's own path is untouched: it reads and sweeps the
+        # child rows with service_role (bypassrls, as on Supabase).
+        assert one_as(db, "service_role",
+                      "select count(*) from public.product_variants") == "1"
+        run(db, "set role service_role; "
+                "delete from public.product_variants where product_id = 'p1'; "
+                "reset role;")
+        assert one(db, "select count(*) from public.product_variants") == "0"
+    finally:
+        for role in ("anon", "authenticated", "service_role"):
+            drop_role(db, role)
+
+
+def test_query_4_does_not_break_the_atomic_delete_path(db):
+    """The migration's own recipe, then Query 4, then a real delete: the RPC
+    is SECURITY DEFINER, so the cascade keeps working with RLS on."""
+    run(db, SCHEMA)
+    for name in ("anon", "authenticated", "service_role"):
+        make_supabase_role(db, name)
+    try:
+        section = SQL_PATH.parent / "schema_sections"
+        for name in APPROVED_SECTIONS:
+            run(db, (section / name).read_text())
+        run(db, SQL_PATH.read_text())
+        run(db, QUERY_4)
+
+        run(db, "insert into public.products (id, name, stock_quantity) "
+                "values ('jau-rls-1','Disposable', 2);")
+        run(db, "insert into public.product_variants (product_id, title, sku) "
+                "values ('jau-rls-1','Red','SKU-1');")
+        assert one(db, "select public.hard_delete_products("
+                       "array['jau-rls-1'])") == "{jau-rls-1}"
+        assert one(db, "select count(*) from public.products "
+                       "where id = 'jau-rls-1'") == "0"
+        assert one(db, "select count(*) from public.product_variants "
+                       "where product_id = 'jau-rls-1'") == "0"
+        assert one(db, "select count(*) from public.deleted_products "
+                       "where product_id = 'jau-rls-1'") == "1"
+    finally:
+        for name in ("anon", "authenticated", "service_role"):
+            drop_role(db, name)
+
+
+def test_query_4_is_valid_postgres_and_publishes_the_same_text():
+    pglast = pytest.importorskip("pglast")
+    assert pglast.parse_sql(QUERY_4)
+    doc = (SQL_PATH.parent / "MIGRATION_COPY_PASTE.md").read_text()
+    assert QUERY_4.rstrip("\n") in doc, "the document does not carry Query 4"

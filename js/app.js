@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=186";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=186";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=188";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=188";
 }
 
 function renderCategories() {
@@ -251,9 +251,14 @@ function renderHome() {
   }
   const cats = document.querySelector("[data-home-cats]");
   if (cats) {
-    cats.innerHTML = JA.categories().map((c) => {
+    // The tiles the shopper sees before touching anything load eagerly: the
+    // category row is the first thing under the hero on a phone, and leaving
+    // all of it lazy made the top of the page a row of grey boxes. The rest
+    // stay lazy (and none of them are marked low - see mediaHTML in store.js).
+    const EAGER_TILES = 4;
+    cats.innerHTML = JA.categories().map((c, index) => {
       return `<a class="home-cat" href="shop.html?cat=${c.id}">
-        ${JA.mediaHTML(catCover(c), { alt: JA.categoryName(c.id) })}
+        ${JA.mediaHTML(catCover(c), { alt: JA.categoryName(c.id), eager: index < EAGER_TILES })}
         <span>${JA.escape(JA.categoryName(c.id))}</span>
       </a>`;
     }).join("");

@@ -735,8 +735,65 @@ def _delete_s3(key: str) -> bool:
         return False
 
 
+def _reference_key(value: str) -> str:
+    """The storage key an image reference points at, or "" for anything else.
+
+    ``_key_from_url`` only recognises the URL shapes this app hands out. A row
+    written by an older client - or by a script - can also carry the bucket
+    key on its own ("categories/cover.jpg"), and treating that as "not ours"
+    is how a live reference stops protecting its file. This is deliberately
+    conservative: anything it cannot place in one of the guarded public
+    folders returns "" and is simply not a reference either way.
+    """
+    key = _key_from_url(value)
+    if key:
+        return key
+    raw = str(value or "").split("?", 1)[0].split("#", 1)[0].strip().lstrip("/")
+    if not raw or "://" in raw or ".." in raw:
+        return ""
+    if raw.startswith("uploads/"):
+        raw = raw[len("uploads/"):]
+    if raw.split("/", 1)[0].lower() not in ("products", "categories", "videos"):
+        return ""
+    return raw
+
+
+def _live_category_rows():
+    """Every category row the shop is showing, from whichever backend is live.
+
+    Category covers live in the same public folders as product photos (see
+    ``_referenced_by_a_product`` below), so the purge guard has to be able to
+    ask for them too. Returns ``None`` when the live list cannot be read at
+    all, which the caller treats as "unknown, keep the file" - the disk copy
+    is only a fallback, the Supabase mirror is what production serves.
+    """
+    rows = []
+    readable = False
+    try:
+        import catalog
+        file_data, _path = catalog._read_categories_file()
+        if isinstance(file_data, dict) and isinstance(file_data.get("categories"), list):
+            rows.extend(c for c in file_data["categories"] if isinstance(c, dict))
+            readable = True
+    except Exception:
+        return None
+    try:
+        import supabase_store
+        if supabase_store.enabled():
+            # The mirror is authoritative in production, and the disk copy can
+            # be older than a cover the admin set after the last deploy.
+            for source in (supabase_store.load_categories(),
+                           supabase_store.load_categories_table()):
+                if source:
+                    rows.extend(r for r in source if isinstance(r, dict))
+                    readable = True
+    except Exception:
+        return None
+    return rows if readable else []
+
+
 def _referenced_by_a_product(key: str) -> bool:
-    """True when a live product row still shows this stored object.
+    """True when a live product row OR category cover still shows this object.
 
     Product photos live in the same bucket as payment proofs, and the deletes
     that run from the orders/receipts screens take objects out of it by URL.
@@ -744,6 +801,13 @@ def _referenced_by_a_product(key: str) -> bool:
     delete the only copy of a shop photo, and the card fell back to "PHOTO
     COMING SOON" for good. Only the public asset folders are guarded (proofs
     are private and are never product photos).
+
+    Category covers are stored in those same folders but are NOT product rows:
+    this used to scan products only, so replacing or clearing a category image
+    could purge a cover that the home page was still showing - the tile fell
+    back to the logo and the only copy was gone. The scan is deliberately
+    conservative: anything and everything that still points at the key keeps
+    the file, and an unreadable reference list keeps it too.
     """
     if key.split("/", 1)[0].lower() not in ("products", "categories", "videos"):
         return False
@@ -751,7 +815,14 @@ def _referenced_by_a_product(key: str) -> bool:
         import catalog
         for p in catalog.merged(include_hidden=True):
             for ref in [p.get("image")] + list(p.get("images") or []):
-                if _key_from_url(str(ref or "")) == key:
+                if _reference_key(str(ref or "")) == key:
+                    return True
+        rows = _live_category_rows()
+        if rows is None:
+            return True
+        for row in rows:
+            for field in ("image", "image_url", "imageUrl"):
+                if _reference_key(str(row.get(field) or "")) == key:
                     return True
     except Exception:
         # A failed reference read is not proof that the object is unused. Keep
@@ -771,8 +842,9 @@ def delete_upload(value: str) -> bool:
     if not key or ".." in key:
         return False
     if _referenced_by_a_product(key):
-        # A product still shows this photo; deleting it would blank the shop
-        # card. The row has to be edited first.
+        # A product row or a category cover still shows this object; deleting
+        # it would blank a shop card or the home-page tile for good. The row
+        # has to be edited first.
         return False
     removed = False
     if Config.UPLOAD_MODE == "supabase" or "/storage/v1/object/" in (value or ""):
