@@ -9,9 +9,11 @@ access that is deliberately not available to a build sandbox.
 > covered by disposable-PostgreSQL tests
 > (`tests/test_hard_delete_sql.py`, including the staging bootstrap recipe) and
 > the app paths by `tests/test_deleted_products_stay_deleted.py`,
-> `tests/test_site_settings_supabase.py` and
-> `tests/test_image_replacement_persistence.py`; the live steps below still
-> have to be run by a human and their output recorded.
+> `tests/test_site_settings_supabase.py`,
+> `tests/test_image_replacement_persistence.py` and
+> `tests/test_hard_delete_live_path.py` (which drives the real store against
+> real PostgreSQL); the live steps below still have to be run by a human and
+> their output recorded.
 
 ## Safety rules
 
