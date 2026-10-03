@@ -256,6 +256,85 @@ def test_remove_on_prod_source_still_tombs(monkeypatch):
     assert pid in mem.ids
 
 
+def test_remove_prod_source_fails_closed_when_the_rpc_removes_nothing(monkeypatch):
+    """The RPC's own report decides - a row that survived is never "deleted".
+
+    This is the shape a database without hard_delete_products.sql answers (or
+    any transient RPC failure): ``deleted`` empty. Reporting success there
+    would tell the admin a product is gone while it is still on sale, and the
+    durable tombstone would hide a live row from the catalogue. The caller
+    must instead get ``deleted: False`` and the error, and nothing may be
+    tombstoned or soft-deleted behind its back.
+    """
+    pid = "jau-del-test-3"
+    monkeypatch.setattr(catmod, "_prod_source", lambda: True)
+    monkeypatch.setattr(catmod, "_sync_repo_async", lambda: None)
+    mem = _MemGrowth()
+    _wire(monkeypatch, mem)
+    monkeypatch.setattr(supabase_store, "hard_delete_products",
+                        lambda ids: {"deleted": [], "files": 0,
+                                     "errors": ["atomic hard delete failed"]})
+    soft_calls = []
+    monkeypatch.setattr(supabase_store, "delete_products",
+                        lambda ids: soft_calls.append(list(ids)))
+
+    report = catmod.remove(pid, actor="test")
+
+    assert report["mode"] == "hard"
+    assert report["deleted"] is False
+    assert report["errors"] and "hard delete failed" in report["errors"][0]
+    assert mem.ids == [] and mem.adds == [], "a surviving row must not be tombstoned"
+    assert soft_calls == [], "no non-atomic REST fallback in the Supabase path"
+
+
+def test_remove_prod_source_reports_cleanup_errors_after_a_real_delete(monkeypatch):
+    """The row IS gone: the delete stands, the cleanup failure is surfaced."""
+    pid = "jau-del-test-4"
+    monkeypatch.setattr(catmod, "_prod_source", lambda: True)
+    monkeypatch.setattr(catmod, "_sync_repo_async", lambda: None)
+    mem = _MemGrowth()
+    _wire(monkeypatch, mem)
+    monkeypatch.setattr(supabase_store, "hard_delete_products",
+                        lambda ids: {"deleted": list(ids), "files": 1,
+                                     "errors": ["storage: bucket unreachable"]})
+
+    report = catmod.remove(pid, actor="test")
+
+    assert report["deleted"] is True
+    assert report["mode"] == "hard"
+    assert report["files"] == 1
+    assert report["errors"] == ["storage: bucket unreachable"]
+    assert pid in mem.ids, "a removed row still needs its durable tombstone"
+
+
+def test_remove_local_mode_is_distinguishable_and_still_tombs(monkeypatch, tmp_path):
+    """A local-only delete reports mode "local" - it is not a Supabase delete."""
+    pid = "jau-del-test-5"
+    ov = tmp_path / "catalog.json"
+    ov.write_text(json.dumps({
+        "products": [{"id": pid, "name": "Local Gone"}], "deleted": []}))
+    monkeypatch.setattr(catmod, "CATALOG_FILE", str(ov))
+    monkeypatch.setattr(catmod, "_prod_source", lambda: False)
+    monkeypatch.setattr(catmod, "_sync_repo_async", lambda: None)
+    monkeypatch.setattr(supabase_store, "enabled", lambda: False)
+    mem = _MemGrowth()
+    _wire(monkeypatch, mem)
+    remote = []
+    monkeypatch.setattr(supabase_store, "hard_delete_products",
+                        lambda ids: remote.append(list(ids)) or
+                        {"deleted": list(ids), "files": 0, "errors": []})
+
+    report = catmod.remove(pid, actor="test")
+
+    assert report["mode"] == "local"
+    assert report["deleted"] is True
+    assert pid in mem.ids
+    data = json.loads(ov.read_text())
+    assert pid in data["deleted"]
+    assert pid not in {p["id"] for p in data["products"]}
+    assert remote == [], "no Supabase is configured: nothing remote to delete"
+
+
 def test_upsert_clears_durable_tombstone(monkeypatch, tmp_path):
     """Re-creating a product under the same id must un-hide it forever."""
     pid = "jau-del-test-3"

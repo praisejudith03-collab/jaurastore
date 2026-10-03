@@ -373,3 +373,94 @@ def test_supplier_link_survives_an_image_replacement(client, app, iso_catalog):
     # stock numbers stay admin-only too
     assert "stock" not in pub and "stock_quantity" not in pub
     assert pub.get("stock_status") == "in"
+
+
+# ------------------------------------------- replacement is a save, not a delete
+def test_a_replacement_never_calls_the_hard_delete_rpc(client, iso_catalog, monkeypatch):
+    """A gallery swap is an ordinary save - the delete RPC must never run.
+
+    ``hard_delete_products`` writes a PERMANENT tombstone for the product id'd
+    it removes. Calling it for a photo replacement would delete the product
+    itself and then reject every future save under that id ("product id was
+    permanently deleted"), so the replacement path has to stay a save:
+    confirm the new gallery, then purge only the old unreferenced object.
+    """
+    tok = login(client)
+    old_url = _upload(client, tok, "norpc-old.jpg")
+    new_url = _upload(client, tok, "norpc-new.jpg")
+    _save(client, tok, _row("jau-norpc", name="No RPC", image=old_url,
+                            images=[old_url]))
+
+    calls = []
+    monkeypatch.setattr(supabase_store, "hard_delete_products",
+                        lambda ids: calls.append(list(ids)) or
+                        {"deleted": list(ids), "files": 0, "errors": []})
+
+    r = client.put("/api/admin/products/jau-norpc/media",
+                   json={"images": [new_url]}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    assert r.get_json()["product"]["image"] == new_url
+    assert calls == [], "image replacement must never hard-delete the product"
+    assert _supabase_row("jau-norpc")["image"] == new_url
+    assert old_url[len("/uploads/"):] not in fake.objects
+    assert new_url[len("/uploads/"):] in fake.objects
+
+
+def test_the_new_gallery_is_saved_before_any_old_media_is_purged(
+        client, iso_catalog, monkeypatch):
+    """Save (and read back) the new gallery FIRST, purge the old one after.
+
+    The purge is driven by catalog.upsert's production branch, which returns
+    before it if the row was not confirmed written. That order is what makes
+    "the previous saved photo is safe" true when the save fails.
+    """
+    tok = login(client)
+    old_url = _upload(client, tok, "order-old.jpg")
+    new_url = _upload(client, tok, "order-new.jpg")
+    _save(client, tok, _row("jau-order-purge", name="Ordered Purge",
+                            image=old_url, images=[old_url]))
+
+    events = []
+    real_upsert = catalog_mod.upsert
+
+    def traced_upsert(product, actor=None):
+        events.append("save")
+        return real_upsert(product, actor)
+
+    monkeypatch.setattr(catalog_mod, "upsert", traced_upsert)
+    monkeypatch.setattr(catalog_mod, "_purge_removed_media",
+                        lambda before, after=None: events.append("purge") or 0)
+
+    r = client.put("/api/admin/products/jau-order-purge/media",
+                   json={"images": [new_url]}, headers={"X-CSRF-Token": tok})
+
+    assert r.status_code == 200, r.data
+    assert events == ["save", "purge"], events
+
+
+def test_a_failed_cloud_save_keeps_the_previous_photo_and_purges_nothing(
+        client, iso_catalog, monkeypatch):
+    """No confirmed row write -> no purge, and the old photo is still there.
+
+    This is the failure the incident got wrong the other way round: an
+    unconfirmed save must leave the saved reference untouched, and the newly
+    uploaded file stays an unreferenced orphan for the guarded cleanup.
+    """
+    tok = login(client)
+    old_url = _upload(client, tok, "keep-old.jpg")
+    new_url = _upload(client, tok, "keep-new.jpg")
+    _save(client, tok, _row("jau-keep-old", name="Keep Old", image=old_url,
+                            images=[old_url]))
+
+    purges = []
+    monkeypatch.setattr(catalog_mod, "_purge_removed_media",
+                        lambda before, after=None: purges.append((before, after)))
+    monkeypatch.setattr(supabase_store, "upsert_products", lambda rows: False)
+
+    r = client.put("/api/admin/products/jau-keep-old/media",
+                   json={"images": [new_url]}, headers={"X-CSRF-Token": tok})
+
+    assert r.status_code == 503, r.data
+    assert purges == [], "an unconfirmed save must not remove the saved photo"
+    assert old_url[len("/uploads/"):] in fake.objects
+    assert _supabase_row("jau-keep-old")["image"] == old_url

@@ -3451,14 +3451,22 @@ def admin_product_variants_upsert_alias():
 @authmod.require_admin
 @sec.require_csrf
 def admin_product_delete(pid):
-    """Soft-delete one product. In production the tombstone MUST land in
+    """Delete one product. In production the hard delete MUST land in
     Supabase first: a failed portal call never reports success, so the admin
     can retry instead of believing a product is gone while it still sells.
 
-    Soft-deleting the products-table row alone is not enough for a seed
-    product: catalog.merged() unions the 258 bundled seed rows on every
-    read, so the durable deleted-ids list in growth_settings must be
-    written too (see catalog.remove / supabase_store.add_deleted_id).
+    The response always says WHICH backend did the work (``deleteMode``):
+    ``"supabase-hard"`` means the atomic RPC removed the row, purged the
+    media and wrote the durable tombstone; ``"local-only"`` means this
+    deployment is not Supabase-authoritative and only the local catalogue
+    changed. A Supabase delete that removed nothing, or removed the row but
+    failed a media/tombstone cleanup step, is a 503 with the RPC report - it
+    is never reported as a successful Supabase delete.
+
+    Deleting the products-table row alone is not enough for a seed product:
+    catalog.merged() unions the bundled seed rows on every read, so the
+    durable deleted-ids list must be written too (see catalog.remove /
+    supabase_store.add_deleted_id).
     """
     pid = sec.clean(pid, 64)
     files_removed = 0
@@ -3468,7 +3476,10 @@ def admin_product_delete(pid):
         existing_for_purge = {}
     product_name_for_purge = str((existing_for_purge or {}).get("name") or "")
     abandoned_removed = 0
+    delete_mode = "local-only"
+    notes = []
     if catalog_mod._prod_source():
+        delete_mode = "supabase-hard"
         from supabase_store import hard_delete_products
         report = hard_delete_products([pid])
         files_removed = int(report.get("files") or 0)
@@ -3485,19 +3496,31 @@ def admin_product_delete(pid):
         catalog_mod._sync_repo_async()
     else:
         before = catalog_mod.merged(include_hidden=True)
-        catalog_mod.remove(pid, authmod.current_admin())
+        report = catalog_mod.remove(pid, authmod.current_admin()) or {}
         after = catalog_mod.merged(include_hidden=True)
+        if not report.get("deleted"):
+            return jsonify(ok=False, error=(
+                "The product could not be removed from the local catalogue. "
+                "No changes were made."), report=report), 503
         # catalog.remove() already purges; this count is informational.
         before_keys = {storage._key_from_url(u) for p in before if str((p or {}).get("id") or "") == pid for u in getattr(catalog_mod, "_media_refs")(p)}
         after_keys = {storage._key_from_url(u) for p in after for u in getattr(catalog_mod, "_media_refs")(p)}
         files_removed = len([k for k in before_keys if k and k not in after_keys])
+        # A local-only delete that could not reach an active Supabase mirror
+        # is still a local delete; say so instead of failing silently.
+        notes = [str(e) for e in (report.get("errors") or [])]
         abandoned_removed = _purge_local_abandoned_carts_for_product(pid, product_name_for_purge)
-    audit(authmod.current_admin(), "product.delete", f"{pid} files_removed={files_removed} abandoned_carts={abandoned_removed}", _ip())
+    audit(authmod.current_admin(), "product.delete", f"{pid} files_removed={files_removed} abandoned_carts={abandoned_removed} mode={delete_mode}", _ip())
     # A deleted product leaves both the catalogue and the category lists:
     # purge every representation so the storefront grid AND the category
     # menu reflect the removal on the next request.
     _invalidate_all_catalog_caches()
-    return jsonify(ok=True, id=pid, filesRemoved=files_removed, abandonedCartsRemoved=abandoned_removed, meta=catalog_mod.meta())
+    body = dict(ok=True, id=pid, filesRemoved=files_removed,
+                abandonedCartsRemoved=abandoned_removed,
+                deleteMode=delete_mode, meta=catalog_mod.meta())
+    if notes:
+        body["notes"] = notes
+    return jsonify(**body)
 
 @api.put("/admin/products")
 @authmod.require_admin

@@ -2655,6 +2655,10 @@ def upsert(product, actor=None):
     # the guard see the OLD row on the mirror and refuse, so every replaced
     # photo leaked in the bucket forever. The production (_prod_source) path
     # already mirrors-then-purges; this keeps both paths in the same order.
+    #
+    # The purge is also skipped entirely when the mirror rejected the row: the
+    # old photo is still the saved one then, and "a failed save keeps the
+    # previous image" has to hold on this path too.
     mirrored = True
     try:
         from supabase_store import upsert_products, enabled
@@ -2666,18 +2670,36 @@ def upsert(product, actor=None):
             mirrored = not enabled()
         except Exception:
             mirrored = True
-    if previous:
+    if previous and mirrored:
         _purge_removed_media(previous, clean)
     _sync_repo_async()
     return clean, action, mirrored
 
 
 def remove(pid, actor=None):
-    """Soft-delete one product: it is dropped from the live catalogue.
+    """Delete one product from the live catalogue, and report what happened.
 
-    Always records the id in the durable Supabase tombstone list so a seed
-    product stays invisible across Render redeploys (the local override
-    ``deleted`` list alone is wiped with the disk).
+    In production (Supabase is the source of truth) the delete is the atomic
+    ``hard_delete_products(text[])`` RPC, and the RPC's OWN report decides the
+    outcome. A row that was not confirmed removed - a missing migration, a
+    failed call, a concurrent writer that got there first - comes back with
+    ``deleted: False`` and the durable tombstone is deliberately NOT written,
+    so a caller can never mistake a local catalogue edit for a real Supabase
+    delete. There is no row-by-row REST fallback: it cannot share the
+    transaction lock with a supplier upsert already in flight and could report
+    success while a stale write recreates the row (see
+    supabase_store.hard_delete_products).
+
+    The local/development path keeps its own semantics - the override file is
+    the source of truth there - and reports ``mode: "local"``, so the
+    Supabase path is always distinguishable from a local-only delete. An
+    active Supabase mirror is still brought in step, but a mirror failure is
+    reported rather than hidden.
+
+    Returns ``None`` for an empty id, otherwise::
+
+        {"id": str, "mode": "hard"|"local", "deleted": bool,
+         "files": int, "errors": [str]}
     """
     pid = str(pid or "").strip()
     if not pid:
@@ -2689,24 +2711,40 @@ def remove(pid, actor=None):
     except Exception:
         existing_product = None
 
+    report = {"id": pid, "mode": "local", "deleted": False, "files": 0,
+              "errors": []}
+
     def _tombstone():
+        """Record the durable deleted-ids entry; never hide a failed write."""
         try:
             from supabase_store import add_deleted_id
-            add_deleted_id(pid)
-        except Exception:
-            pass
+            if not add_deleted_id(pid):
+                report["errors"].append(
+                    "durable tombstone write was not confirmed")
+        except Exception as exc:
+            report["errors"].append(f"durable tombstone: {exc}")
 
     if _prod_source():
+        report["mode"] = "hard"
         try:
             from supabase_store import hard_delete_products
-            hard_delete_products([pid])
-        except Exception:
-            from supabase_store import delete_products
-            delete_products([pid])
-            _purge_removed_media(existing_product, None)
+            result = hard_delete_products([pid]) or {}
+        except Exception as exc:
+            # Fail closed: nothing is deleted, so nothing is claimed deleted
+            # and no tombstone is written for a row that may still be live.
+            report["errors"].append(f"hard delete RPC raised: {exc}")
+            return report
+        report["deleted"] = pid in {str(x) for x in (result.get("deleted") or [])}
+        report["files"] = int(result.get("files") or 0)
+        for err in (result.get("errors") or []):
+            report["errors"].append(str(err))
+        if not report["deleted"]:
+            # The atomic RPC removed nothing. Never answer "deleted" for a row
+            # that survived; the caller retries.
+            return report
         _tombstone()
         _sync_repo_async()
-        return None
+        return report
 
     def _apply(data, _path):
         data["products"] = [p for p in (data.get("products") or []) if p.get("id") != pid]
@@ -2719,17 +2757,39 @@ def remove(pid, actor=None):
         return data
 
     _mutate(actor, _apply)
-    _purge_removed_media(existing_product, None)
+    report["deleted"] = True
+    report["files"] = int(_purge_removed_media(existing_product, None) or 0)
     _purge_local_product_rows(pid)
+    # When a Supabase mirror is active, bring it in step with the local
+    # catalogue. The local file is the source of truth here, so an unreachable
+    # mirror is reported, not treated as a failed local delete.
     try:
-        from supabase_store import hard_delete_products
-        hard_delete_products([pid])
+        from supabase_store import enabled as _sb_enabled
+        mirrored = bool(_sb_enabled())
     except Exception:
-        from supabase_store import delete_products
-        delete_products([pid])
+        mirrored = False
+    if mirrored:
+        try:
+            from supabase_store import hard_delete_products
+            result = hard_delete_products([pid]) or {}
+            report["files"] = max(report["files"],
+                                  int(result.get("files") or 0))
+            for err in (result.get("errors") or []):
+                report["errors"].append(str(err))
+            if pid not in {str(x) for x in (result.get("deleted") or [])}:
+                raise RuntimeError("the mirror row was not removed")
+        except Exception as exc:
+            report["errors"].append(f"supabase mirror hard delete: {exc}")
+            # Best-effort legacy soft tombstone so older readers still hide a
+            # mirror row that could not be removed outright.
+            try:
+                from supabase_store import delete_products
+                delete_products([pid])
+            except Exception as inner:
+                report["errors"].append(f"supabase soft tombstone: {inner}")
     _tombstone()
     _sync_repo_async()
-    return None
+    return report
 
 
 def _purge_local_product_rows(pid):
