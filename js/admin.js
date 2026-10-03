@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=186" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=187" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -454,6 +454,20 @@ function editorOptions(p) {
   if (p && p.colors && p.colors.length) return [{ title: "Colour", type: "COLOR", values: p.colors }];
   return [];
 }
+function generatedSku() {
+  // The code the save used to invent silently. It is now only the fallback for
+  // an empty field: the owner can type their own supplier/warehouse code.
+  return "JAU-" + Date.now().toString(36).toUpperCase().slice(-6);
+}
+function productSku(typed, existing) {
+  // The typed value wins, then the row's saved code, and only then a new one -
+  // so re-saving a product from an older editor never renumbers it and never
+  // overwrites a real supplier code with a generated one.
+  const value = String(typed == null ? "" : typed).trim().toUpperCase();
+  if (value) return value.slice(0, 40);
+  const saved = String((existing && existing.sku) || "").trim();
+  return saved || generatedSku();
+}
 function optionRowHTML(o, i) {
   const vals = (o && o.values) || [];
   return `
@@ -499,10 +513,13 @@ function refreshOptionChips() {
   const options = collectOptions(box || document);
   const typedStock = keepActiveOptionMap(currentOptionStock(), options);
   const typedSupplier = keepActiveOptionMap(currentOptionSupplierSku(), options);
+  const typedSku = keepActiveOptionMap(currentOptionSku(), options);
   const optionStock = options.length
     ? { ...keepActiveOptionMap(existing.optionStock, options), ...typedStock } : {};
   const optionSupplierSku = options.length
     ? { ...keepActiveOptionMap(existing.optionSupplierSku, options), ...typedSupplier } : {};
+  const optionSku = options.length
+    ? { ...keepActiveOptionMap(existing.optionSku || existing.optionSkus, options), ...typedSku } : {};
   const optionPrices = keepActiveOptionMap(existing.optionPrices, options);
   const optionCompareAt = keepActiveOptionMap(existing.optionCompareAt, options);
   const qty = Math.max(0, Number(document.getElementById("stock-qty")?.value) || 0);
@@ -510,9 +527,9 @@ function refreshOptionChips() {
     ? Object.values(optionStockValues(options, optionStock)).reduce((n, value) => n + value, 0)
     : qty;
   const fake = { ...existing, options, stock, optionStock, optionPrices,
-    optionCompareAt, optionSupplierSku };
+    optionCompareAt, optionSupplierSku, optionSku };
   const varBox = document.getElementById("var-box");
-  if (varBox) varBox.innerHTML = optionStockHTML(fake) + optionSupplierLinksHTML(fake);
+  if (varBox) varBox.innerHTML = optionStockHTML(fake) + optionSupplierLinksHTML(fake) + optionSkuHTML(fake);
   syncOptionStockTotals();
 }
 function addOptionRow(title, values) {
@@ -826,6 +843,33 @@ function currentOptionSupplierSku() {
   });
   return map;
 }
+function optionSkuHTML(p) {
+  // Per-variant SKU: the merchant/warehouse code for ONE variant (the
+  // product_variants.sku column, and the supplier sheet that lists it). It is
+  // deliberately a separate field from the supplier URL above it - a code is
+  // not a link, and conflating the two is how a SKU ends up being fetched as
+  // a web page. Blank rows are simply not saved.
+  const options = p.options || [];
+  const skus = p.optionSku || p.optionSkus || {};
+  const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
+    const key = `${opt.title}: ${value}`;
+    const sku = skus[key] != null ? skus[key] : (skus[value] != null ? skus[value] : "");
+    return `<label class="adx-var" data-optsku-row>
+      <span class="adx-var-name"><strong>${JA.escape(key)}</strong></span>
+      <span class="adx-var-qty"><input type="text" autocomplete="off" maxlength="120" aria-label="SKU for ${JA.escape(key)}" data-opt-sku="${JA.escape(key)}" placeholder="SKU (optional)" value="${JA.escape(String(sku || ""))}" /></span>
+    </label>`;
+  })).join("");
+  return rows ? `<h3>SKU per option</h3><div class="adx-vars">${rows}</div>` : "";
+}
+function currentOptionSku() {
+  const map = {};
+  document.querySelectorAll("[data-opt-sku]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-sku");
+    const value = String(inp.value || "").trim();
+    if (key && value) map[key] = value;
+  });
+  return map;
+}
 function optionStockHTML(p) {
   const opt = (p.options || [])[0];
   const vals = (opt && opt.values) || p.colors || [];
@@ -871,20 +915,52 @@ function syncOptionStockTotals() {
   if (totalEl) totalEl.innerHTML = `<strong>Total: ${total}</strong> piece(s).`;
   if (qty) { qty.value = total; qty.readOnly = true; }
 }
+/* The CFA figure the shop will show, with its arithmetic spelled out.
+ * Naira is the BASE currency and is stored exactly as typed; every CFA amount
+ * is derived from it at the house rate and rounded UP to a clean 50 (see
+ * currency.py, mirrored by JA.toCfa). Printing the derivation next to the
+ * field means "the card shows 800 and I typed 1 800" is answered on the spot
+ * instead of looking like a rounding bug. */
+function cfaProof(ngn) {
+  const amount = Number(ngn) || 0;
+  if (!(amount > 0)) return "CFA price will be calculated from the Naira price.";
+  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
+  const cfa = toCfa(amount);
+  const converted = Math.ceil(amount * 0.44);
+  const money = JA.money ? JA.money(cfa, "CFA") : `${cfa} F CFA`;
+  return `CFA price: ${money}. ${amount} NGN x 0.44 = ${converted} F CFA, rounded up to the nearest 50.`;
+}
+/* What the buyer reads where the custom note is asked for. Shown under the
+ * field while the owner types, so the prompt can be read the way a customer
+ * reads it - and so an empty prompt is visibly empty rather than a toggle the
+ * owner cannot see the effect of. */
+function notePromptPreview(prompt) {
+  const text = String(prompt == null ? "" : prompt).trim();
+  if (!text) return "The customer is not asked anything until you write a prompt.";
+  return `The customer sees: "${text}"`;
+}
 function bindCfaPreview() {
   const form = document.getElementById("prod-form");
   const el = document.getElementById("cfa-preview");
   if (!form || !el) return;
-  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   const paint = () => {
     const ngn = Number(form.priceNgn && form.priceNgn.value) || 0;
-    if (!(ngn > 0)) {
-      el.textContent = "CFA price will be calculated from the Naira price.";
-      return;
-    }
-    el.textContent = `CFA price: ${JA.money(toCfa(ngn), "CFA")}`;
+    el.textContent = cfaProof(ngn);
   };
   form.addEventListener("input", paint);
+  paint();
+}
+function bindNotePrompt() {
+  const form = document.getElementById("prod-form");
+  const textarea = form && form.querySelector('textarea[name="customNotePrompt"]');
+  const out = document.getElementById("note-preview");
+  if (!form || !textarea || !out) return;
+  const paint = () => {
+    out.textContent = notePromptPreview(textarea.value);
+    const count = document.getElementById("note-count");
+    if (count) count.textContent = `${String(textarea.value || "").length}/160`;
+  };
+  textarea.addEventListener("input", paint);
   paint();
 }
 /* ------------------------------------------------ which fields did we edit?
@@ -899,6 +975,7 @@ function bindCfaPreview() {
  */
 const EDIT_FIELD_MAP = {
   name: ["name"],
+  sku: ["sku"],
   description: ["description"],
   enableCustomNote: ["enableCustomNote"],
   customNotePrompt: ["customNotePrompt"],
@@ -916,6 +993,7 @@ const EDIT_DATA_PREFIXES = [
                      "stock", "stock_quantity", "stockStatus"]],
   ["data-opt-stock", ["optionStock", "stock", "stock_quantity", "stockStatus"]],
   ["data-opt-supplier", ["optionSupplierSku", "optionSupplierUrls", "option_supplier_urls"]],
+  ["data-opt-sku", ["optionSku", "optionSkus", "option_sku", "variantSku"]],
   ["data-var-row", ["stock", "stock_quantity"]],
   ["data-var-state", ["stock", "stock_quantity"]],
 ];
@@ -992,10 +1070,14 @@ function productForm(p = {}) {
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
     <input type="hidden" name="id" value="${JA.escape(p.id || "")}" />
     <div class="field"><label>Product title</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
+    <div class="field"><label>SKU (your code for this product)</label>
+      <input name="sku" maxlength="40" autocomplete="off" value="${JA.escape(p.sku || "")}" placeholder="e.g. JAU-${JA.escape(String(p.id || "").replace(/^jau-/, "").slice(-6) || "000000")}" />
+      <p class="admin-note">Used on your supplier sheets and in order item lines. Leave it blank to keep the saved code; a brand-new product is given one automatically.</p>
+    </div>
     <div class="field"><label>Description</label><textarea name="description" rows="3" maxlength="2000">${JA.escape(p.description || "")}</textarea></div>
     <div class="field"><label>Category</label><select name="category" required>${cats}</select></div>
     <div class="field"><label>Price (Naira ₦)</label><div class="au-price"><input name="priceNgn" type="number" min="0" inputmode="numeric" required value="${p.priceNgn || ""}" /><i>₦</i></div>
-      <p class="admin-note" id="cfa-preview">CFA price will be calculated from the Naira price.</p>
+      <p class="admin-note" id="cfa-preview">${JA.escape(cfaProof(p.priceNgn))}</p>
     </div>
     <div class="field"><label>Main supplier URL</label>
       <input name="supplierSku" type="url" inputmode="url" autocomplete="url" value="${JA.escape(p.supplierSku || p.supplierUrl || p.supplier_url || "")}" placeholder="https://…" />
@@ -1004,7 +1086,7 @@ function productForm(p = {}) {
       <h3 id="product-options-title">Options and variant supplier URLs <small id="opt-count">${opts.length}/20</small></h3>
       <div id="opt-box">${optionBlockHTML(opts)}</div>
       <button type="button" class="au-link-btn" id="add-opt">+ Add option</button>
-      <div id="var-box">${optionStockHTML({ ...p, options: opts, optionStock: savedOptionStock }) + optionSupplierLinksHTML({ ...p, options: opts })}</div>
+      <div id="var-box">${optionStockHTML({ ...p, options: opts, optionStock: savedOptionStock }) + optionSupplierLinksHTML({ ...p, options: opts }) + optionSkuHTML({ ...p, options: opts })}</div>
     </section>
     <div class="field"><label>Stock quantity</label>
       <input name="stock" id="stock-qty" type="number" min="0" inputmode="numeric" value="${initialStock}" ${quantityReadonly} />
@@ -1015,7 +1097,11 @@ function productForm(p = {}) {
       <label class="au-tog"><span>Enable a note for this product</span>
         <input type="checkbox" name="enableCustomNote" ${p.enableCustomNote ? "checked" : ""} />
       </label>
-      <div class="field"><label>Customer prompt</label><input name="customNotePrompt" maxlength="160" value="${JA.escape(p.customNotePrompt || "")}" placeholder="e.g. preferred colour, size, or another detail" /></div>
+      <div class="field"><label>Customer prompt</label>
+        <textarea name="customNotePrompt" rows="3" maxlength="160" placeholder="e.g. preferred colour, size, or another detail">${JA.escape(p.customNotePrompt || "")}</textarea>
+        <p class="admin-note" id="note-preview">${JA.escape(notePromptPreview(p.customNotePrompt))}</p>
+        <p class="admin-note"><span id="note-count">${String(p.customNotePrompt || "").length}/160</span> characters - shown to the customer on the product page.</p>
+      </div>
     </section>
     <button class="btn au-save" type="submit">Save Product</button>
     ${p.id ? `<button type="button" class="au-del-prod" data-del="${JA.escape(p.id)}">Delete this product</button>` : ""}
@@ -1093,6 +1179,9 @@ async function handleProductSubmit(e, existing) {
   const optionPrices = keepActiveOptionMap(existing?.optionPrices, options);
   const optionCompareAt = keepActiveOptionMap(existing?.optionCompareAt, options);
   const optionSupplierSku = keepActiveOptionMap(currentOptionSupplierSku(), options);
+  const optionSku = keepActiveOptionMap(currentOptionSku(), options);
+  // The product's own code: typed, else the row's saved one, else generated.
+  const sku = productSku(fd.get("sku"), existing);
   const supplierRef = String(fd.get("supplierSku") || "").trim();
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
   const priceNgn = Math.max(0, num("priceNgn") || 0);
@@ -1123,7 +1212,7 @@ async function handleProductSubmit(e, existing) {
       // same value", and a real edit would be silently discarded.
       mergeFields: window.__editDirty ? Array.from(window.__editDirty) : null,
       id,
-      sku: existing?.sku || ("JAU-" + Date.now().toString(36).toUpperCase().slice(-6)),
+      sku,
       slug: existing?.slug || slugify(name) || id,
       name,
       category: savedCategory,
@@ -1156,6 +1245,10 @@ async function handleProductSubmit(e, existing) {
       optionSupplierSku,
       optionSupplierUrls: optionSupplierSku,
       option_supplier_urls: optionSupplierSku,
+      // Per-variant SKUs, keyed exactly like the stock and supplier maps
+      // ("Colour: Red"), so the server's alias handling stores them together.
+      optionSku,
+      optionSkus: optionSku,
   });
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save Product"; }
   // Only a server-confirmed save leaves this editor. A queued retry or a
@@ -3377,7 +3470,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=186" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=187" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3480,7 +3573,7 @@ function paintDesk(tab = "analytics") {
   }
   $("#cancel-edit")?.addEventListener("click", () => { restoreProductsReturn(); });
   $("#add-product")?.addEventListener("click", () => { rememberProductsReturn(); editingId = "new"; paintDesk("products"); });
-  bindMedia(); bindOptions(); bindCategories(); bindCfaPreview();
+  bindMedia(); bindOptions(); bindCategories(); bindCfaPreview(); bindNotePrompt();
 
   if (tab === "products" && !editingId) {
     renderProdGrid(); bindProdGridEvents();
@@ -3743,7 +3836,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=186", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=187", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
