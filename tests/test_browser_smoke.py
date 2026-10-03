@@ -389,6 +389,12 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
                               headers={'X-CSRF-Token':token}).ok
     mobile.goto(live_shop + '/admin.html')
     open_admin_tab(mobile, "categories")
+    # The admin first renders its local seed fallback, then hydrates categories
+    # from the authoritative API. Do not add/reorder against that transient
+    # list: the late hydration can repaint it and make a valid move look lost.
+    expect(mobile.locator('#cat-list > article')).to_have_count(2)
+    expect(mobile.locator('#cat-list > article').nth(0)).to_have_attribute('data-cat-id', 'household')
+    expect(mobile.locator('#cat-list > article').nth(1)).to_have_attribute('data-cat-id', 'beauty')
     mobile.locator('#new-cat-name').fill('Perfume')
     mobile.locator('#new-cat-fr').fill('Parfum')
     mobile.locator('#add-cat').click()
