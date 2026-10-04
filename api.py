@@ -1240,6 +1240,12 @@ def _checkout_items(clean_items, currency):
             "qty": g["qty"],
             "price": line_price,
             "color": g["variant"],
+            # The product photo, resolved SERVER-side from the live catalogue
+            # row (never taken from the cart payload): it is what the admin
+            # order list, the fulfillment screens and the confirmation email
+            # use to show a thumbnail beside the line. Stored with the order
+            # so a later photo edit or deletion cannot leave a blank row.
+            "image": catalog_mod.primary_image(prod),
             **({"note": g["note"]} if g["note"] else {}),
             **({"bulkPercent": bulk_percent} if bulk_percent else {}),
         })
@@ -2215,8 +2221,9 @@ def public_order(oid):
     out.pop("payload", None)
     out["items"] = [{"name": i.get("name", ""), "qty": i.get("qty", 1),
                      "price": i.get("price", 0), "color": i.get("color", ""),
+                     "image": i.get("image", ""),
                      **({"note": i.get("note")} if i.get("note") else {})}
-                    for i in (payload.get("items") or [])]
+                    for i in _order_items_with_images(payload.get("items") or [])]
     out["paymentMethod"] = payload.get("paymentMethod") or ""
     out["payment"] = payload.get("payment") or ""
     out["customer_notice"] = payload.get("customer_notice") or None
@@ -2581,6 +2588,55 @@ def _admin_date_bounds():
     return start, end
 
 
+_ORDER_IMAGE_TTL = 60.0
+_order_image_cache = {"at": 0.0, "map": {}}
+
+
+def _order_image_index():
+    """id -> photo path, for order lines stored before thumbnails existed.
+
+    Rebuilt at most once a minute: the admin order list decodes up to 200 rows
+    per request and ``catalog.merged`` must not run once per row. A failed
+    read returns an empty map, so the backfill degrades to "no thumbnail"
+    rather than breaking the order list.
+    """
+    now = time.monotonic()
+    if _order_image_cache["map"] and now - float(_order_image_cache["at"] or 0) < _ORDER_IMAGE_TTL:
+        return _order_image_cache["map"]
+    index = {}
+    try:
+        live = catalog_mod.merged(include_hidden=True)
+    except Exception:
+        live = []
+    for prod in live or []:
+        if not isinstance(prod, dict):
+            continue
+        photo = catalog_mod.primary_image(prod)
+        for key in (prod.get("id"), prod.get("legacyId")):
+            key = str(key or "").strip()
+            if key and photo:
+                index.setdefault(key, photo)
+    _order_image_cache["at"] = now
+    _order_image_cache["map"] = index
+    return index
+
+
+def _order_items_with_images(items):
+    """Give every order line its product photo, if it does not already have one."""
+    rows = [i for i in (items or []) if isinstance(i, dict)]
+    index = _order_image_index() if any(not i.get("image") for i in rows) else {}
+    out = []
+    for item in (items or []):
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        line = dict(item)
+        if not line.get("image"):
+            line["image"] = index.get(str(line.get("id") or ""), "")
+        out.append(line)
+    return out
+
+
 def _order_row(r):
     try:
         payload = json.loads(r["payload"] or "{}")
@@ -2589,7 +2645,7 @@ def _order_row(r):
     out = dict(r)
     out.pop("payload", None)
     out["customer"] = payload.get("customer") or {}
-    out["items"] = payload.get("items") or []
+    out["items"] = _order_items_with_images(payload.get("items") or [])
     out["paymentMethod"] = payload.get("paymentMethod") or ""
     # The automatic bulk discount this order earned (per line), so the admin
     # order view can show why a line is cheaper than the list price.

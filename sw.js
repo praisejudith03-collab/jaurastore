@@ -2,7 +2,7 @@
    Pages are network-first so a visitor with a connection always sees the
    newest store; when the connection drops, the last copy is served instead of
    an error. Saving is handled separately by js/net.js (outbox + retry). */
-const VERSION = "jaura-v188";
+const VERSION = "jaura-v189";
 const CORE = [
   "./",
   "./index.html",
@@ -11,31 +11,31 @@ const CORE = [
   "./cart.html",
   "./checkout.html",
   "./order-complete.html",
-  "./css/style.css?v=188",
-  "./js/products-data.js?v=188",
-  "./js/i18n.js?v=188",
-  "./js/net.js?v=188",
-  "./js/store.js?v=188",
-  "./js/app.js?v=188",
-  "./images/brand/logo.jpg?v=188",
-  "./images/brand/favicon.png?v=188",
-  "./images/brand/apple-touch.png?v=188",
-  "./images/brand/og-cover.jpg?v=188",
+  "./css/style.css?v=189",
+  "./js/products-data.js?v=189",
+  "./js/i18n.js?v=189",
+  "./js/net.js?v=189",
+  "./js/store.js?v=189",
+  "./js/app.js?v=189",
+  "./images/brand/logo.jpg?v=189",
+  "./images/brand/favicon.png?v=189",
+  "./images/brand/apple-touch.png?v=189",
+  "./images/brand/og-cover.jpg?v=189",
   // The same-origin favicon fallback. The 32/48/180/192 icons the <head>
   // points at are Supabase objects on another origin: they are immutable at
   // their key and served by that CDN, so the worker never precaches them.
-  "./images/brand/favicon-16.png?v=188",
+  "./images/brand/favicon-16.png?v=189",
   "./static/logo.png",
-  "./static/fonts/allura-latin-400-normal.woff2?v=188",
-  "./static/fonts/cormorant-garamond-latin-400-normal.woff2?v=188",
-  "./static/fonts/cormorant-garamond-latin-500-normal.woff2?v=188",
-  "./static/fonts/cormorant-garamond-latin-600-normal.woff2?v=188",
-  "./static/fonts/cormorant-garamond-latin-700-normal.woff2?v=188",
-  "./static/fonts/cormorant-garamond-latin-400-italic.woff2?v=188",
-  "./static/fonts/outfit-latin-300-normal.woff2?v=188",
-  "./static/fonts/outfit-latin-400-normal.woff2?v=188",
-  "./static/fonts/outfit-latin-500-normal.woff2?v=188",
-  "./static/fonts/outfit-latin-600-normal.woff2?v=188",
+  "./static/fonts/allura-latin-400-normal.woff2?v=189",
+  "./static/fonts/cormorant-garamond-latin-400-normal.woff2?v=189",
+  "./static/fonts/cormorant-garamond-latin-500-normal.woff2?v=189",
+  "./static/fonts/cormorant-garamond-latin-600-normal.woff2?v=189",
+  "./static/fonts/cormorant-garamond-latin-700-normal.woff2?v=189",
+  "./static/fonts/cormorant-garamond-latin-400-italic.woff2?v=189",
+  "./static/fonts/outfit-latin-300-normal.woff2?v=189",
+  "./static/fonts/outfit-latin-400-normal.woff2?v=189",
+  "./static/fonts/outfit-latin-500-normal.woff2?v=189",
+  "./static/fonts/outfit-latin-600-normal.woff2?v=189",
 ];
 const MAX_ASSETS = 140;
 
@@ -131,10 +131,53 @@ function isMedia(request, url) {
 
 // Only a good copy is worth serving: a cached error/opaque body would hide the
 // photo the network could still deliver.
+//
+// AND ONLY A RECENT ONE. This is the ghost-image fix. A photo the owner
+// deleted or replaced was still being handed to a customer's phone by a cache
+// entry taken weeks earlier - the shop's network could say 404 and the device
+// would keep showing the piece that no longer exists. A copy younger than
+// MEDIA_MAX_AGE still answers instantly (that is what keeps the grid quick on
+// a 4G phone), and anything older must be confirmed against the network
+// first. If the network says the photo is gone, the stale entry is deleted and
+// the browser's own fetch takes over; if the network is simply unreachable,
+// the old copy is still better than a broken icon, so it is served.
+const MEDIA_MAX_AGE = 5 * 60 * 1000;
+
 async function cachedMedia(request) {
   const cache = await caches.open(VERSION);
   const hit = await cache.match(request);
-  return hit && hit.ok ? hit : null;
+  if (!hit) return null;
+  if (!hit.ok) {
+    cache.delete(request);
+    return null;
+  }
+  if (freshEnough(hit, MEDIA_MAX_AGE)) return hit;
+  try {
+    const res = await fetch(request);
+    if (res && res.ok) {
+      cache.put(request, res.clone()).then(() => trim(cache));
+      return res;
+    }
+    // The server answered and did NOT have the photo (a purge): stop serving
+    // the ghost, let the page's own onerror fallback do its job.
+    cache.delete(request);
+    return null;
+  } catch (e) {
+    return hit;                    // offline: a stale photo beats a hole
+  }
+}
+
+// How old a cached response is, from its own Date header (the browser stamps
+// every response it stores). No parseable date counts as stale, which is the
+// safe direction.
+function freshEnough(res, maxAgeMs) {
+  try {
+    const when = Date.parse(res.headers.get("date") || "");
+    if (!when) return false;
+    return Date.now() - when < maxAgeMs;
+  } catch (e) {
+    return false;
+  }
 }
 
 self.addEventListener("fetch", async (event) => {
@@ -161,11 +204,13 @@ self.addEventListener("fetch", async (event) => {
     return;
   }
   if (isMedia(req, url)) {
-    // Photos and videos are the shop: never stand between one and the network.
-    // A copy we already have is served; anything else falls through to the
-    // browser's own fetch, which retries by itself. Answering here with a
-    // synthetic 504 (or an opaque redirect body for /uploads) is what turned
-    // a photo that would have loaded into a permanent broken icon.
+    // Photos and videos are the shop: never stand between one and the NETWORK
+    // for long. A copy we already have is served while it is recent, an older
+    // one is confirmed first (a deleted photo must not keep ghosting), and a
+    // request we have no copy of falls through to the browser's own fetch,
+    // which retries by itself. Answering here with a synthetic 504 (or an
+    // opaque redirect body for /uploads) is what turned a photo that would
+    // have loaded into a permanent broken icon.
     const hit = await cachedMedia(req);
     if (hit) event.respondWith(hit);
     return;

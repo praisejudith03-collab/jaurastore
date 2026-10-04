@@ -354,10 +354,27 @@ def _items_table(order):
         item_note = str(item.get("note") or "").strip()[:300]
         note_html = (f"<div style=\"color:#6b6b6b;font-size:12px;margin-top:2px\">"
                      f"Product note: {_esc(item_note)}</div>" if item_note else "")
+        # A small photo beside the name, so the person packing the order can
+        # match the physical piece without reading the whole line. Sized with
+        # width/height ATTRIBUTES as well as inline CSS: Outlook and Gmail
+        # strip the style, the attributes stop a 1200px photo rendering at
+        # full width in the inbox. No thumbnail (or a broken URL) must never
+        # leave a gap - the cell simply carries no image then.
+        thumb_src = _absolute_url(item.get("image") or "")
+        thumb_html = ""
+        if thumb_src:
+            thumb_html = (
+                f'<img src="{_esc(thumb_src)}" alt="" width="56" height="56" '
+                'style="display:block;width:56px;height:56px;object-fit:cover;'
+                'border-radius:6px;border:1px solid #eee" />')
         rows.append(
             "<tr>"
             f"<td style=\"padding:10px 12px;border-bottom:1px solid #eee;text-align:left\">"
-            f"<div style=\"font-weight:600\">{name}</div>{variant_html}{note_html}</td>"
+            f"<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\">"
+            f"<tr><td style=\"padding:0;vertical-align:top\">{thumb_html}</td>"
+            f"<td style=\"padding:0 0 0 10px;vertical-align:top\">"
+            f"<div style=\"font-weight:600\">{name}</div>{variant_html}{note_html}</td></tr>"
+            f"</table></td>"
             f"<td style=\"padding:10px 12px;border-bottom:1px solid #eee;text-align:right;white-space:nowrap\">"
             f"{_esc(_money(unit, currency))}</td>"
             f"<td style=\"padding:10px 12px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap\">"

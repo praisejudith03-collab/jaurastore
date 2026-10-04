@@ -632,9 +632,20 @@ def create_app():
 
         Requests are admin-restricted for proofs (they contain customer
         payment evidence); product photos stay public.
+
+        Cache policy is DELIBERATELY short for photos. A photo the owner
+        deletes or replaces must stop showing on a customer's phone, and the
+        old "keep it for a year" instinct is exactly how a deleted product
+        image kept appearing on a device that had already seen it. Five
+        minutes still covers a browsing session (a grid opens, a product page
+        taps through, a cart refreshes) while a purge becomes invisible by the
+        next visit; ``must-revalidate`` forbids serving a stale copy without
+        asking. Proofs are never cached at all - they are private payment
+        evidence, not shop artwork.
         """
         key = (p or "").lstrip("/")
-        if key.split("/", 1)[0].lower() == "proofs" and not authmod.current_admin():
+        is_proof = key.split("/", 1)[0].lower() == "proofs"
+        if is_proof and not authmod.current_admin():
             abort(404)
         if Config.ENV == "testing":
             full = storage.resolve_local(key)
@@ -642,12 +653,23 @@ def create_app():
                 response = send_from_directory(os.path.dirname(full), os.path.basename(full))
                 if os.path.splitext(full)[1].lower() in (".pdf", ".doc", ".docx"):
                     response.headers["Content-Disposition"] = "attachment"
+                response.headers["Cache-Control"] = (
+                    "no-store, no-cache, must-revalidate" if is_proof
+                    else "public, max-age=300, must-revalidate")
                 return response
         # Production uploads are Supabase public HTTPS URLs; the dyno never
         # reads or serves an upload from its ephemeral filesystem.
         redirect_to = storage.public_redirect_for(key)
         if redirect_to:
-            return redirect(redirect_to, code=302)
+            response = redirect(redirect_to, code=302)
+            # The 302 is cacheable by default (a browser is free to keep a
+            # 301/302 for a long time), which would pin a device to the direct
+            # object URL - and its own long cache - even after the photo is
+            # gone. Bound it here too.
+            response.headers["Cache-Control"] = (
+                "no-store, no-cache, must-revalidate" if is_proof
+                else "public, max-age=300, must-revalidate")
+            return response
         abort(404)
 
 

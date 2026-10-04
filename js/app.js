@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=188";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=188";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=189";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=189";
 }
 
 function renderCategories() {
@@ -746,6 +746,15 @@ function renderProduct() {
     const thumbs = gallery.length > 1
       ? `<div class="pdp-thumbs">${gallery.map((src, i) => `<button type="button" class="pdp-thumb${i === 0 ? " is-on" : ""}" data-src="${JA.escape(JA.asset(src))}" data-thumb="${i}">${JA.mediaHTML(src, { alt: p.name, ph })}</button>`).join("")}</div>`
       : "";
+    let soldOut = false;
+    try { soldOut = !(JA.stockFor ? JA.stockFor(p, "") > 0 : Number(p.stock) > 0); }
+    catch (e) { soldOut = !(Number(p.stock) > 0); }
+    const rightCol = `<div>
+        <h1>${JA.escape(p.name || "")}</h1>
+        ${JA.priceHTML(p)}
+        ${soldOut ? `<p class="stock-line is-low">${t("pdp.oos")}</p>` : ""}
+        <div class="pdp-actions"><button class="btn" data-buy ${soldOut ? "disabled" : ""}>${soldOut ? t("pdp.oos") : t("pdp.add")}</button></div>
+      </div>`;
     root.innerHTML = `<div class="pdp-gallery">
         <div class="pdp-img" data-media-slot>
           ${gallery.length > 1 ? `<button type="button" class="pdp-nav pdp-prev" data-gal="-1" aria-label="Previous">‹</button>` : ""}
@@ -754,12 +763,22 @@ function renderProduct() {
         </div>
         ${thumbs}
       </div>
-      <div>
-        <h1>${JA.escape(p.name || "")}</h1>
-        ${JA.priceHTML(p)}
-        <div class="pdp-actions"><button class="btn" data-buy>${t("pdp.add")}</button></div>
-      </div>`;
-    root.querySelector("[data-buy]")?.addEventListener("click", () => JA.addToCart(p.id, 1));
+      ${rightCol}`;
+    // The fallback must never be the one place a sold-out product still
+    // offers Add to cart: this page is exactly what a shopper sees when the
+    // full editor failed, so the disabled state is set from BOTH the
+    // published per-variant status and the availability helper, not from the
+    // raw quantity alone.
+    const buy = root.querySelector("[data-buy]");
+    if (buy && !buy.disabled && JA.stockLeft) {
+      let left = 0;
+      try { left = JA.stockLeft(p, ""); } catch (e) { left = Number(p.stock) || 0; }
+      if (left <= 0) {
+        buy.disabled = true;
+        buy.textContent = t("pdp.oos");
+      }
+    }
+    buy?.addEventListener("click", () => JA.addToCart(p.id, 1));
   }
 }
 
@@ -841,8 +860,14 @@ function paintProduct(root, p) {
   const extra = (p.additionalInfo || []).map((sec) =>
     `<div class="pdp-info"><strong>${JA.escape(sec.title || t("pdp.details"))}</strong><p>${JA.escape(sec.description || "")}</p></div>`
   ).join("");
+  // Compact, single-line note field. The merchant's own prompt is the LABEL
+  // when they wrote one (e.g. "Enter preferred color or scent"), because a
+  // placeholder vanishes the moment the shopper starts typing and is faint on
+  // a phone; the translated label is the fallback for a product whose prompt
+  // is blank. One line of the form, one line of screen.
+  const notePrompt = String(p.customNotePrompt || "").trim();
   const productNoteHTML = p.enableCustomNote
-    ? `<label class="pdp-product-note"><span>${t("pdp.productNote")}</span><input type="text" name="productNote" maxlength="300" autocomplete="off" placeholder="${JA.escape(p.customNotePrompt || "")}" /></label>`
+    ? `<label class="pdp-product-note"><span>${JA.escape(notePrompt || t("pdp.productNote"))}</span><input type="text" name="productNote" maxlength="300" autocomplete="off" enterkeyhint="done" placeholder="${JA.escape(notePrompt ? "" : t("pdp.productNote"))}" /></label>`
     : "";
   const supplierAvailabilityHTML = p.supplierTracked
     ? `<p class="pdp-supplier-availability" role="note">${t("pdp.supplierAvailability")}</p>`
@@ -875,7 +900,7 @@ function paintProduct(root, p) {
       <div class="kicker">${JA.categoryName(p.category)}</div>
       <h1>${JA.escape(JA.displayName(p))}</h1>
       ${JA.priceHTML(p)}
-      ${stockN > 0 ? "" : `<p class="pdp-stock">${t("pdp.oos")}</p>`}
+      ${stockN > 0 ? "" : `<p class="stock-line is-low">${t("pdp.oos")}</p>`}
       <p class="stock-line" data-stock-line role="status" aria-live="polite"></p>
       ${supplierAvailabilityHTML}
       ${(() => {
@@ -1435,7 +1460,7 @@ function showOrderDone(order) {
       ${((JA.getProof && JA.getProof(order.id, order.proof)) || (String(order.proof || "").startsWith("data:") ? order.proof : "")) ? `<p class="proof-label">${t("ck.uploadReceipt")}</p><img class="proof-preview" src="${(JA.getProof && JA.getProof(order.id, order.proof)) || order.proof}" alt="Payment screenshot" />` : ""}
       <table class="ck-table" style="margin-top:22px">
         <thead><tr><th>${t("ck.product")}</th><th>${t("ck.total")}</th></tr></thead>
-        <tbody>${order.items.map((i) => `<tr><td>${i.qty}× ${JA.escape(i.name)}${i.color ? " · " + JA.escape(variantLabel(i, i.color)) : ""}${i.note ? `<small class="ck-line-note">${t("pdp.productNote")}: ${JA.escape(i.note)}</small>` : ""}${i.bulkPercent ? ` <em class="bulk-tag">${t("bulk.label")} ${i.bulkPercent}%</em>` : ""}</td><td>${JA.money(i.price * i.qty, order.currency)}</td></tr>`).join("")}</tbody>
+        <tbody>${order.items.map((i) => `<tr><td><span class="receipt-line">${JA.lineThumb ? JA.lineThumb(i, null, i.name) : ""}<span>${i.qty}× ${JA.escape(i.name)}${i.color ? " · " + JA.escape(variantLabel(i, i.color)) : ""}${i.note ? `<small class="ck-line-note">${t("pdp.productNote")}: ${JA.escape(i.note)}</small>` : ""}${i.bulkPercent ? ` <em class="bulk-tag">${t("bulk.label")} ${i.bulkPercent}%</em>` : ""}</span></span></td><td>${JA.money(i.price * i.qty, order.currency)}</td></tr>`).join("")}</tbody>
         <tfoot><tr class="ck-total"><th>${t("ck.total")}</th><td>${JA.money(order.total, order.currency)}</td></tr></tfoot>
       </table>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:22px">
@@ -2580,6 +2605,10 @@ function renderCheckout() {
         color: i.color,
         note: String(i.note || "").trim().slice(0, 300),
         price: JA.bulkUnit(i.product, JA.cartQtyFor(i.id), cur, i.color),
+        // The line's photo, so the receipt the customer sees immediately has
+        // its thumbnail; the server re-resolves the same field from the live
+        // catalogue when the order is stored.
+        image: i.product.image || "",
       })),
     });
     // A completed checkout must close the captured cart before the twenty-minute

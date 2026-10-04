@@ -116,6 +116,10 @@ _started = threading.Event()
 _start_lock = threading.Lock()
 _health = {
     "maintenanceLastRun": "",
+    "stockGuardrailLastRun": "",
+    "stockGuardrailChecked": 0,
+    "stockGuardrailFixed": 0,
+    "stockGuardrailDisagreements": 0,
     "remindersLastRun": "",
     "supplierLastRun": "",
     "nightlyLastRun": "",
@@ -234,6 +238,41 @@ def _supplier_watchdog(logger=None):
     return result
 
 
+def _stock_guardrail(logger=None):
+    """Keep every stored row's quantities consistent with what the shop serves.
+
+    The write paths (a checkout reservation, an admin save, a supplier
+    mirror) fix the rows they touch. This is the sweep for the rows they do
+    not: a row whose variants all reached zero while its total still said
+    otherwise, or a total that drifted away from its variant sum. It is a
+    no-op on a healthy catalogue (one read, no writes), so it runs on the
+    regular maintenance tick rather than waiting for the nightly pass - a
+    product that sold out must never keep advertising itself as in stock
+    between two nightly runs.
+
+    Rows whose two stock spellings merely DISAGREE are counted, never
+    rewritten: which number the shop means is the owner's decision, and the
+    count is surfaced on the admin health screen.
+    """
+    import catalog as _catalog
+    result = _catalog.stock_guardrail_sweep(actor="scheduler.stock_guardrail")
+    _health["stockGuardrailLastRun"] = _utc_now()
+    _health["stockGuardrailChecked"] = int(result.get("checked") or 0)
+    _health["stockGuardrailFixed"] = int(result.get("fixed") or 0)
+    _health["stockGuardrailDisagreements"] = int(result.get("disagreements") or 0)
+    if result.get("fixed"):
+        # The storefront answered from a snapshot taken before the repair;
+        # the next request must not keep serving the old availability.
+        try:
+            import api as _api
+            _api._invalidate_all_catalog_caches()
+        except Exception:
+            pass
+    if result.get("skipped"):
+        _health["lastError"] = f"stock guardrail: {result['skipped']}"[:200]
+    return result
+
+
 def _maintenance_tick(logger=None):
     _step("scheduler.keep_alive", lambda: _keep_alive(logger), logger)
     _step("scheduler.daily_backup", lambda: _run_backup(logger), logger)
@@ -246,6 +285,9 @@ def _maintenance_tick(logger=None):
         _step("scheduler.nightly", lambda: _nightly_run(logger), logger)
     else:
         _step("supplier.watchdog", lambda: _supplier_watchdog(logger), logger)
+    # After the supplier batch, so a supplier-side quantity that landed this
+    # tick is reconciled in the same pass instead of the next one.
+    _step("stock.guardrail", lambda: _stock_guardrail(logger), logger)
     _health["maintenanceLastRun"] = _utc_now()
 
 
@@ -374,6 +416,16 @@ def health_snapshot(repair=True):
                      if _nightly_enabled() else "off"),
         "jobs": "supplier sweep + storage sweeper",
     }
+    guardrail = {
+        "schedule": f"every {TICK_SECONDS}s maintenance tick",
+        "lastRun": _health.get("stockGuardrailLastRun") or "",
+        "checked": _health.get("stockGuardrailChecked") or 0,
+        "fixed": _health.get("stockGuardrailFixed") or 0,
+        # Rows whose two stock spellings disagree. Never auto-repaired: the
+        # owner decides which number is right. A non-zero count is worth a
+        # look, not an alarm.
+        "disagreements": _health.get("stockGuardrailDisagreements") or 0,
+    }
     return {**_health, "started": _started.is_set(),
             "backgroundAlive": alive,
             "nightly": nightly,
@@ -385,6 +437,7 @@ def health_snapshot(repair=True):
             "threadName": BACKGROUND_THREAD,
             "intervalSeconds": TICK_SECONDS,
             "supplier": supplier,
+            "stockGuardrail": guardrail,
             "recentFailures": recent}
 
 
