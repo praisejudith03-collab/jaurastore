@@ -308,6 +308,12 @@ def optimize_image_bytes(data: bytes, ext: str) -> tuple:
     return out, out_ext
 
 
+# The Cache-Control a PUBLIC uploaded photo is stored and served with. Short
+# and revalidating on purpose: a deleted photo must stop showing (the ghost
+# report), while a browsing session still gets its picture from the cache.
+PUBLIC_MEDIA_CACHE_CONTROL = "public, max-age=300, must-revalidate"
+
+
 def _is_sensitive(folder: str) -> bool:
     """True when the folder holds private material (payment proofs/receipts)."""
     return _folder_name(folder) in SENSITIVE_FOLDERS
@@ -329,7 +335,9 @@ def _save(data: bytes, folder: str, ext: str, s3_content_type: str = "") -> tupl
             return False, "Supabase Storage upload failed.", ""
 
     if Config.UPLOAD_MODE == "s3":
-        ok2, _msg2, url = _save_s3(data, key, ext, content_type)
+        ok2, _msg2, url = _save_s3(
+            data, key, ext, content_type,
+            cache_control="" if _is_sensitive(folder) else PUBLIC_MEDIA_CACHE_CONTROL)
         if ok2:
             return True, "stored", url
         if Config.ENV != "testing":
@@ -347,14 +355,229 @@ def _save(data: bytes, folder: str, ext: str, s3_content_type: str = "") -> tupl
 
 def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf: bool = False,
                max_bytes: int = MAX_BYTES):
-    """Validate and upload an image/receipt through Supabase Storage."""
+    """Validate and upload an image/receipt through Supabase Storage.
+
+    Re-encoded before storage: a phone original is downscaled and written back
+    as a progressive JPEG, or as WebP when the image carries transparency (a
+    WebP with an alpha channel is smaller than a PNG and keeps the alpha).
+    Opaque photos deliberately stay JPEG: the same URL is used in the order
+    emails, and WebP does not render in every desktop mail client.
+
+    Every PUBLIC image also gets its .400w.webp companion built by the
+    background queue (see enqueue_thumbnail): a phone downloading a shop grid
+    should never have to pull the full-size object for a 300px card. The
+    companion is built after the response, so an upload is never slower - and
+    never fails - because of it.
+    """
     ok, msg, ext = validate_upload(data, filename, allow_pdf=allow_pdf,
                                    max_bytes=max_bytes, kind="media")
     if not ok:
         return False, msg, ""
     if kind_for(ext) == "image" and not _is_sensitive(folder):
         data, ext = optimize_image_bytes(data, ext)
-    return _save(data, folder, ext)
+    ok, msg, url = _save(data, folder, ext)
+    if ok and kind_for(ext) == "image" and not _is_sensitive(folder):
+        # A thumbnail is an optimisation, never a condition: if the queue is
+        # unavailable the photo is still stored and still served.
+        try:
+            enqueue_thumbnail(url)
+        except Exception:                              # pragma: no cover
+            pass
+    return ok, msg, url
+
+
+# ------------------------------------------------------- WebP companions
+#
+# js/store.js (thumbFor) already understands the sibling convention the
+# catalogue photos use: "images/products/x.jpg" is shown through
+# "images/products/x.400w.webp" when that file ships next to it. An UPLOADED
+# photo has no such file in the repo, so it gets the same companion written
+# into the bucket under "<key>.400w.webp" - by the background queue, right
+# after the object it belongs to, so a grid of uploads is a grid of small
+# WebPs and the original stays available for anything that needs the detail.
+THUMB_SUFFIX = ".400w.webp"
+THUMB_LONGEST_EDGE = 400
+THUMB_QUALITY = 78
+THUMB_MAX_SOURCE_BYTES = 25 * 1024 * 1024
+
+
+def thumb_key(key: str) -> str:
+    """The companion key for one of our object keys ("" when it has none)."""
+    k = clean(key, 500).lstrip("/")
+    if not k or k.endswith(THUMB_SUFFIX) or ".." in k:
+        return ""
+    base, dot, ext = k.rpartition(".")
+    if not dot or not 1 <= len(ext) <= 5:
+        return ""
+    if ext.lower() not in IMAGE_EXT:
+        return ""
+    return base + THUMB_SUFFIX
+
+
+def make_thumb_bytes(data: bytes) -> bytes:
+    """A 400px WebP copy of a photo, or b"" when it cannot be made.
+
+    Never raises and never upscales: a photo already smaller than the edge is
+    still re-encoded (WebP at quality 78 is smaller than the JPEG it replaces),
+    and anything that does not decode is simply skipped.
+    """
+    if not data or len(data) > THUMB_MAX_SOURCE_BYTES:
+        return b""
+    try:
+        from PIL import Image, ImageOps
+    except Exception:
+        return b""
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img.load()
+            img = ImageOps.exif_transpose(img)
+            if img.mode == "P":
+                img = img.convert("RGBA" if "transparency" in img.info else "RGB")
+            elif img.mode in ("CMYK", "LAB", "I", "F", "1", "L"):
+                img = img.convert("RGBA" if img.mode in ("LA", "P") else "RGB")
+            elif img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGB")
+            w, h = img.size
+            longest = max(w, h)
+            if longest > THUMB_LONGEST_EDGE:
+                scale = THUMB_LONGEST_EDGE / float(longest)
+                resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+                img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))),
+                                 resample)
+            buf = io.BytesIO()
+            img.save(buf, "WEBP", quality=THUMB_QUALITY, method=6)
+            out = buf.getvalue()
+    except Exception:
+        return b""
+    return out or b""
+
+
+def store_thumbnail_bytes(thumb: bytes, key: str) -> str:
+    """Write ``thumb`` to the companion key beside ``key`` (best-effort).
+
+    Returns the companion URL, or "" when it could not be written. Storage is
+    chosen exactly like _save() so the companion always lands next to the
+    object it belongs to - including the local disk in test/development, where
+    the /uploads/<key> route reads it back.
+    """
+    companion = thumb_key(key)
+    if not thumb or not companion:
+        return ""
+    folder = companion.split("/", 1)[0]
+    if _is_sensitive(folder):
+        # Defence in depth: payment evidence is never copied into a second
+        # object, whatever the caller asks for.
+        return ""
+    try:
+        if Config.UPLOAD_MODE == "supabase":
+            ok, _msg, url = _save_supabase(
+                thumb, companion, "webp", "image/webp", folder)
+            if ok:
+                if Config.ENV == "testing":
+                    _write_local(companion, thumb)
+                return url
+        if Config.UPLOAD_MODE == "s3":
+            ok, _msg, url = _save_s3(thumb, companion, "webp", "image/webp",
+                                     PUBLIC_MEDIA_CACHE_CONTROL)
+            if ok:
+                return url
+        _write_local(companion, thumb)
+        return "/uploads/" + companion
+    except Exception as exc:
+        print(f"[thumb] companion write skipped: {exc.__class__.__name__}")
+        return ""
+
+
+def _write_local(key: str, data: bytes) -> bool:
+    """Best-effort local write of one object (used in test/development)."""
+    try:
+        full = _local_path(key)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "wb") as fh:
+            fh.write(data)
+        return True
+    except Exception:
+        return False
+
+
+def store_thumbnail(data: bytes, key: str) -> str:
+    """Build and store the companion for one object (never raises)."""
+    return store_thumbnail_bytes(make_thumb_bytes(data), key)
+
+
+def fetch_object(key: str) -> bytes:
+    """The bytes of one of our stored objects (b"" when unreachable).
+
+    Local disk first (test / development, and any key the dyno still holds),
+    then the Supabase bucket. Never raises: the caller is a background job
+    that must not die on one missing object.
+    """
+    k = clean(key, 500).lstrip("/")
+    if not k or ".." in k:
+        return b""
+    local = resolve_local(k)
+    if local:
+        try:
+            with open(local, "rb") as fh:
+                return fh.read()
+        except Exception:
+            pass
+    try:
+        if not (Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY):
+            return b""
+        import supabase_store
+        client = supabase_store.client()
+        if client is None:
+            return b""
+        data = client.storage.from_(supabase_store._bucket()).download(k)
+        if isinstance(data, dict):      # older storage3 clients wrap the body
+            data = data.get("data") or data.get("body")
+        if hasattr(data, "read"):
+            data = data.read()
+        if isinstance(data, memoryview):
+            data = data.tobytes()
+        return bytes(data) if isinstance(data, (bytes, bytearray)) else b""
+    except Exception:
+        return b""
+
+
+def _task_build_thumb(payload):
+    """Queue job: build the .400w.webp companion for one object."""
+    key = clean((payload or {}).get("key"), 500).lstrip("/")
+    companion = thumb_key(key)
+    if not key or not companion:
+        return {"skipped": "not a companion-able key"}
+    data = fetch_object(key)
+    if not data:
+        return {"skipped": "object unreachable", "key": key}
+    thumb = make_thumb_bytes(data)
+    if not thumb:
+        return {"skipped": "not a decodable image", "key": key}
+    url = store_thumbnail_bytes(thumb, key)
+    return {"ok": bool(url), "key": companion,
+            "bytes": len(thumb), "from": len(data)}
+
+
+def enqueue_thumbnail(value: str) -> str:
+    """Ask the background queue for this object's companion (never raises).
+
+    Called from the upload path, so it must be cheap and infallible: if the
+    queue is unavailable the job is simply not queued (the backfill tool and
+    the next upload of the same photo both cover it). Returns the job id.
+    """
+    try:
+        key = _key_from_url(value) or ""
+        if not key or not thumb_key(key):
+            return ""
+        if _is_sensitive(key.split("/", 1)[0]):
+            return ""
+        import task_queue
+        task_queue.register("thumb.build", _task_build_thumb,
+                            label="Build thumbnail")
+        job = task_queue.enqueue("thumb.build", {"key": key}, dedupe=True)
+        return str((job or {}).get("id") or "")
+    except Exception:
+        return ""
 
 
 def save_asset(data: bytes, folder: str = "misc", filename: str = "", max_bytes: int = None):
@@ -385,7 +608,8 @@ def _local_path(key: str) -> str:
     return os.path.join(base, key.replace("/", os.sep))
 
 
-def _save_s3(data: bytes, key: str, ext: str, content_type: str = ""):
+def _save_s3(data: bytes, key: str, ext: str, content_type: str = "",
+             cache_control: str = ""):
     """S3 / R2 upload. Requires boto3 plus credentials in .env."""
     if not (Config.S3_BUCKET and Config.S3_ACCESS_KEY and Config.S3_SECRET_KEY):
         return False, "s3 not configured", ""
@@ -405,12 +629,17 @@ def _save_s3(data: bytes, key: str, ext: str, content_type: str = ""):
         if Config.S3_ENDPOINT:
             kwargs["endpoint_url"] = Config.S3_ENDPOINT
         client = boto3.client("s3", **kwargs)
+        extra = {}
+        if cache_control:
+            # Never a year: a photo the owner deletes must stop showing. An
+            # empty cache_control (payment proofs) sends no header at all.
+            extra["CacheControl"] = cache_control
         client.put_object(
             Bucket=Config.S3_BUCKET,
             Key=key,
             Body=data,
             ContentType=content_type or "application/octet-stream",
-            CacheControl="public, max-age=31536000",
+            **extra,
         )
         base = (Config.S3_PUBLIC_BASE or "").rstrip("/")
         if not base:
@@ -457,11 +686,30 @@ def _save_supabase(data: bytes, key: str, ext: str, content_type: str,
         return False, "supabase client unavailable", ""
     sensitive = _is_sensitive(folder)
     bucket = supabase_store._bucket()
+    # The object's OWN cache lifetime, not just our redirect's. Public photos
+    # are referenced BY their bucket URL, so this header is what a phone obeys
+    # after following a link once: without it Supabase serves "max-age=3600"
+    # and a photo the owner deleted keeps appearing for an hour (or much
+    # longer behind a cache that was never asked to revalidate). Five minutes
+    # + must-revalidate makes a purge visible almost immediately while a
+    # browsing session still never re-downloads the same picture.
+    # Sent as an extra header and RETRIED without it, because an older
+    # storage client that rejects an unknown option must not break uploads.
+    options = {"content-type": content_type or "application/octet-stream"}
+    if not sensitive:
+        options["cache-control"] = PUBLIC_MEDIA_CACHE_CONTROL
     try:
-        c.storage.from_(bucket).upload(
-            key, data, {"content-type": content_type or "application/octet-stream"})
+        c.storage.from_(bucket).upload(key, data, options)
     except Exception as exc:
-        return False, f"supabase upload failed ({exc.__class__.__name__})", ""
+        if len(options) > 1:
+            try:
+                c.storage.from_(bucket).upload(
+                    key, data,
+                    {"content-type": content_type or "application/octet-stream"})
+            except Exception as exc2:
+                return False, f"supabase upload failed ({exc2.__class__.__name__})", ""
+        else:
+            return False, f"supabase upload failed ({exc.__class__.__name__})", ""
     if sensitive:
         try:
             res = c.storage.from_(bucket).create_signed_url(
@@ -735,8 +983,65 @@ def _delete_s3(key: str) -> bool:
         return False
 
 
+def _reference_key(value: str) -> str:
+    """The storage key an image reference points at, or "" for anything else.
+
+    ``_key_from_url`` only recognises the URL shapes this app hands out. A row
+    written by an older client - or by a script - can also carry the bucket
+    key on its own ("categories/cover.jpg"), and treating that as "not ours"
+    is how a live reference stops protecting its file. This is deliberately
+    conservative: anything it cannot place in one of the guarded public
+    folders returns "" and is simply not a reference either way.
+    """
+    key = _key_from_url(value)
+    if key:
+        return key
+    raw = str(value or "").split("?", 1)[0].split("#", 1)[0].strip().lstrip("/")
+    if not raw or "://" in raw or ".." in raw:
+        return ""
+    if raw.startswith("uploads/"):
+        raw = raw[len("uploads/"):]
+    if raw.split("/", 1)[0].lower() not in ("products", "categories", "videos"):
+        return ""
+    return raw
+
+
+def _live_category_rows():
+    """Every category row the shop is showing, from whichever backend is live.
+
+    Category covers live in the same public folders as product photos (see
+    ``_referenced_by_a_product`` below), so the purge guard has to be able to
+    ask for them too. Returns ``None`` when the live list cannot be read at
+    all, which the caller treats as "unknown, keep the file" - the disk copy
+    is only a fallback, the Supabase mirror is what production serves.
+    """
+    rows = []
+    readable = False
+    try:
+        import catalog
+        file_data, _path = catalog._read_categories_file()
+        if isinstance(file_data, dict) and isinstance(file_data.get("categories"), list):
+            rows.extend(c for c in file_data["categories"] if isinstance(c, dict))
+            readable = True
+    except Exception:
+        return None
+    try:
+        import supabase_store
+        if supabase_store.enabled():
+            # The mirror is authoritative in production, and the disk copy can
+            # be older than a cover the admin set after the last deploy.
+            for source in (supabase_store.load_categories(),
+                           supabase_store.load_categories_table()):
+                if source:
+                    rows.extend(r for r in source if isinstance(r, dict))
+                    readable = True
+    except Exception:
+        return None
+    return rows if readable else []
+
+
 def _referenced_by_a_product(key: str) -> bool:
-    """True when a live product row still shows this stored object.
+    """True when a live product row OR category cover still shows this object.
 
     Product photos live in the same bucket as payment proofs, and the deletes
     that run from the orders/receipts screens take objects out of it by URL.
@@ -744,6 +1049,13 @@ def _referenced_by_a_product(key: str) -> bool:
     delete the only copy of a shop photo, and the card fell back to "PHOTO
     COMING SOON" for good. Only the public asset folders are guarded (proofs
     are private and are never product photos).
+
+    Category covers are stored in those same folders but are NOT product rows:
+    this used to scan products only, so replacing or clearing a category image
+    could purge a cover that the home page was still showing - the tile fell
+    back to the logo and the only copy was gone. The scan is deliberately
+    conservative: anything and everything that still points at the key keeps
+    the file, and an unreadable reference list keeps it too.
     """
     if key.split("/", 1)[0].lower() not in ("products", "categories", "videos"):
         return False
@@ -751,7 +1063,14 @@ def _referenced_by_a_product(key: str) -> bool:
         import catalog
         for p in catalog.merged(include_hidden=True):
             for ref in [p.get("image")] + list(p.get("images") or []):
-                if _key_from_url(str(ref or "")) == key:
+                if _reference_key(str(ref or "")) == key:
+                    return True
+        rows = _live_category_rows()
+        if rows is None:
+            return True
+        for row in rows:
+            for field in ("image", "image_url", "imageUrl"):
+                if _reference_key(str(row.get(field) or "")) == key:
                     return True
     except Exception:
         # A failed reference read is not proof that the object is unused. Keep
@@ -771,8 +1090,9 @@ def delete_upload(value: str) -> bool:
     if not key or ".." in key:
         return False
     if _referenced_by_a_product(key):
-        # A product still shows this photo; deleting it would blank the shop
-        # card. The row has to be edited first.
+        # A product row or a category cover still shows this object; deleting
+        # it would blank a shop card or the home-page tile for good. The row
+        # has to be edited first.
         return False
     removed = False
     if Config.UPLOAD_MODE == "supabase" or "/storage/v1/object/" in (value or ""):

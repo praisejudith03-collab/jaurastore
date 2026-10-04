@@ -1,6 +1,6 @@
 """Blocker 7 - every Admin Portal action reaches its endpoint and works.
 
-The Admin Portal has 46 routes. Each one is exercised here as a real logged-in
+The Admin Portal has 54 routes. Each one is exercised here as a real logged-in
 admin through the Flask test client, asserting not just "it returned 200" but
 that the action actually took effect and that the response carries the
 canonical field names the portal reads back.
@@ -71,6 +71,17 @@ EXPECTED_ADMIN_ROUTES = {
 
     # Customer search history and background-worker crash reports.
     ("GET", "/api/admin/searches"),
+    # The Email Broadcast Hub: audience, preview, queue, progress, cancel.
+    ("GET", "/api/admin/marketing/broadcast/audience"),
+    ("POST", "/api/admin/marketing/broadcast/preview"),
+    ("POST", "/api/admin/marketing/broadcast"),
+    ("GET", "/api/admin/marketing/broadcast/<cid>"),
+    ("POST", "/api/admin/marketing/broadcast/<cid>/cancel"),
+    # The background task queue (async deletions + broadcasts): list, poll one
+    # job, and put a parked job back on the queue.
+    ("GET", "/api/admin/tasks/jobs"),
+    ("GET", "/api/admin/tasks/jobs/<job_id>"),
+    ("POST", "/api/admin/tasks/jobs/<job_id>/retry"),
     ("GET", "/api/admin/job-failures"),
     ("DELETE", "/api/admin/job-failures"),
     ("DELETE", "/api/admin/job-failures/<int:fid>"),

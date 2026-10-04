@@ -14,6 +14,7 @@ sleeping.
 import datetime, gc, os, threading, time
 
 import observability
+import task_queue
 
 TICK_SECONDS = 300
 # One tick never processes more than this many reminders, and never holds more
@@ -104,6 +105,7 @@ def _nightly_run(logger=None):
     # been traced by _step; a None result still counts as "attempted today" so
     # a broken supplier page cannot re-run the sweep every 5 minutes).
     _last_nightly_date = local.date().isoformat()
+    _collect()
     return {"supplier": supplier, "sweeper": sweeper}
 
 # Compatibility names kept for health/tests/admin copy; they now refer to the
@@ -116,6 +118,10 @@ _started = threading.Event()
 _start_lock = threading.Lock()
 _health = {
     "maintenanceLastRun": "",
+    "stockGuardrailLastRun": "",
+    "stockGuardrailChecked": 0,
+    "stockGuardrailFixed": 0,
+    "stockGuardrailDisagreements": 0,
     "remindersLastRun": "",
     "supplierLastRun": "",
     "nightlyLastRun": "",
@@ -183,18 +189,75 @@ def _keep_alive(logger=None):
 
 
 _PHOTO_REPAIR_PER_RUN = 60
+# One chunk of a batch job. Render gives the free instance 512MB; five records
+# per pass keeps the transient allocation (the row, its media refs, the new
+# photo bytes) small enough that a full repair pass cannot push RSS over the
+# ceiling. Never raised above ten.
+CHUNK_SIZE = int(os.environ.get("JAURA_CHUNK_SIZE", "5") or 5)
+CHUNK_SIZE = max(1, min(10, CHUNK_SIZE))
 _last_photo_repair = ""
 
 
+def _collect():
+    """Explicit gc between chunks: the memory half of the chunk contract."""
+    try:
+        gc.collect()
+    except Exception:                             # pragma: no cover
+        pass
+
+
+def _backoff_seconds(attempt, base=2.0, cap=60.0):
+    """Exponential backoff for attempt N (1-based), capped."""
+    try:
+        attempt = int(attempt)
+    except (TypeError, ValueError):
+        attempt = 1
+    return min(float(cap), float(base) * (2 ** max(0, attempt - 1)))
+
+
+def _chunked(job, fn, chunks, chunk_size=None, logger=None, stop_when=None):
+    """Run ``fn(chunk_size)`` in bounded chunks with a gc() between each.
+
+    ``fn`` must accept a ``limit`` and return a dict. The loop stops early when
+    the caller's ``stop_when(result)`` says the work is exhausted, or when a
+    chunk raises - a crash in chunk 3 must not abandon chunks 4..n silently, it
+    is traced by ``_note_failure`` and the sweep starts again next tick.
+    """
+    chunk_size = max(1, min(10, int(chunk_size or CHUNK_SIZE)))
+    last = {}
+    for index in range(max(1, int(chunks or 1))):
+        try:
+            last = fn(chunk_size) or {}
+        except Exception as exc:                  # pragma: no cover - traced
+            _note_failure(job, exc, logger=logger, attempt=index + 1)
+            break
+        _collect()
+        try:
+            if stop_when and stop_when(last):
+                break
+        except Exception:
+            break
+    return last
+
+
 def _repair_photos(logger=None):
-    """Once a day: re-point products whose stored photo is missing."""
+    """Once a day: re-point products whose stored photo is missing.
+
+    The repair used to happen in one 60-row call; it now runs the same total
+    work in five-row chunks, collecting between them, so the daily pass has a
+    flat memory profile on the 512MB instance.
+    """
     global _last_photo_repair
     today = datetime.date.today().isoformat()
     if _last_photo_repair == today:
         return
     import catalog as catalog_mod
-    report = catalog_mod.repair_dead_photos(limit=_PHOTO_REPAIR_PER_RUN,
-                                            actor="scheduler")
+    chunks = max(1, _PHOTO_REPAIR_PER_RUN // CHUNK_SIZE)
+    report = _chunked(
+        "scheduler.repair_photos",
+        lambda limit: catalog_mod.repair_dead_photos(limit=limit, actor="scheduler"),
+        chunks=chunks, logger=logger,
+        stop_when=lambda r: not (r.get("missing") or r.get("repaired")))
     _last_photo_repair = today
     if logger:
         logger.info("photo repair: checked=%s missing=%s repaired=%s",
@@ -230,7 +293,44 @@ def _supplier_watchdog(logger=None):
                                     min_interval_seconds=SUPPLIER_MIN_INTERVAL,
                                     logger=logger,
                                     link_limit=SUPPLIER_LINKS_PER_TICK)
+    _collect()
     _health["supplierLastRun"] = result.get("at") or _utc_now()
+    return result
+
+
+def _stock_guardrail(logger=None):
+    """Keep every stored row's quantities consistent with what the shop serves.
+
+    The write paths (a checkout reservation, an admin save, a supplier
+    mirror) fix the rows they touch. This is the sweep for the rows they do
+    not: a row whose variants all reached zero while its total still said
+    otherwise, or a total that drifted away from its variant sum. It is a
+    no-op on a healthy catalogue (one read, no writes), so it runs on the
+    regular maintenance tick rather than waiting for the nightly pass - a
+    product that sold out must never keep advertising itself as in stock
+    between two nightly runs.
+
+    Rows whose two stock spellings merely DISAGREE are counted, never
+    rewritten: which number the shop means is the owner's decision, and the
+    count is surfaced on the admin health screen.
+    """
+    import catalog as _catalog
+    result = _catalog.stock_guardrail_sweep(actor="scheduler.stock_guardrail")
+    _collect()
+    _health["stockGuardrailLastRun"] = _utc_now()
+    _health["stockGuardrailChecked"] = int(result.get("checked") or 0)
+    _health["stockGuardrailFixed"] = int(result.get("fixed") or 0)
+    _health["stockGuardrailDisagreements"] = int(result.get("disagreements") or 0)
+    if result.get("fixed"):
+        # The storefront answered from a snapshot taken before the repair;
+        # the next request must not keep serving the old availability.
+        try:
+            import api as _api
+            _api._invalidate_all_catalog_caches()
+        except Exception:
+            pass
+    if result.get("skipped"):
+        _health["lastError"] = f"stock guardrail: {result['skipped']}"[:200]
     return result
 
 
@@ -240,12 +340,21 @@ def _maintenance_tick(logger=None):
     _step("scheduler.remirror_strays", lambda: _remirror(logger), logger)
     _step("scheduler.repair_photos", lambda: _repair_photos(logger), logger)
     _step("scheduler.persist_counters", lambda: _persist_counters(logger), logger)
+    # The task queue's own thread drains within a second of a request; this
+    # step is the net under it - a job that was parked by backoff, left behind
+    # by a death+restart, or enqueued while the thread was being respawned is
+    # picked up on the next five-minute tick instead of waiting for the admin
+    # to notice a stuck panel.
+    _step("tasks.sweep", lambda: task_queue.drain(logger=logger), logger)
     # Nightly maintenance replaces (rather than adds to) the regular supplier
     # batch, so the same five-minute cycle never doubles the two-link ceiling.
     if _nightly_due():
         _step("scheduler.nightly", lambda: _nightly_run(logger), logger)
     else:
         _step("supplier.watchdog", lambda: _supplier_watchdog(logger), logger)
+    # After the supplier batch, so a supplier-side quantity that landed this
+    # tick is reconciled in the same pass instead of the next one.
+    _step("stock.guardrail", lambda: _stock_guardrail(logger), logger)
     _health["maintenanceLastRun"] = _utc_now()
 
 
@@ -278,7 +387,11 @@ def _abandoned_tick(logger=None, attempts=3):
             result = {"sent": 0, "failed": 1}
         if not result.get("failed") or attempt + 1 >= attempts:
             break
-        time.sleep(2 ** attempt)
+        # Same exponential ladder as every other retry (2s, 4s, 8s ...) and a
+        # collection between attempts: the retry path is the one most likely to
+        # be holding a half-built page of rows when it gives up.
+        _collect()
+        time.sleep(_backoff_seconds(attempt + 1, cap=30.0))
     result = {"sent": total_sent, "failed": int(result.get("failed") or 0)}
     if logger and (result["sent"] or result["failed"]):
         logger.info("abandoned-cart reminders: sent=%s failed=%s",
@@ -307,6 +420,10 @@ def _loop(logger=None):
             _maintenance_tick(logger)
             _abandoned_tick(logger)
             _release_memory(BACKGROUND_THREAD, logger)
+            # The deletion/broadcast worker is event-driven (it wakes on
+            # enqueue, not on the five-minute tick); this just guarantees it is
+            # running even if it died between ticks.
+            _step("tasks.ensure_alive", lambda: task_queue.ensure_alive(), logger)
         except Exception as exc:                  # pragma: no cover
             _note_failure("scheduler.background_tick", exc, logger=logger)
         time.sleep(TICK_SECONDS)
@@ -335,10 +452,23 @@ def ensure_alive(app=None):
             restarted.append(BACKGROUND_THREAD)
     if restarted:
         _health["restarts"] = int(_health.get("restarts") or 0) + len(restarted)
-        observability.record_failure(
-            "scheduler.worker_died",
-            RuntimeError("restarted dead worker(s): " + ", ".join(restarted)),
-            logger=logger)
+        # A single bounce is self-healing and must not page anyone: it is
+        # logged, counted in /healthz ("restarts") and only escalated to a
+        # recorded failure when the same worker keeps dying. The GitHub
+        # notifier is silenced for the escalation too - the record is for the
+        # job panel and job_failures, not a false alarm.
+        if int(_health["restarts"]) >= 2 or len(restarted) > 1:
+            observability.record_failure(
+                "scheduler.worker_died",
+                RuntimeError("restarted dead worker(s): " + ", ".join(restarted)),
+                logger=logger, notify=False, worker=BACKGROUND_THREAD)
+        elif logger:
+            logger.info("scheduler worker restarted (self-heal #%s): %s",
+                        _health["restarts"], ", ".join(restarted))
+    try:
+        task_queue.ensure_alive(app)
+    except Exception as exc:                      # pragma: no cover
+        _note_failure("tasks.ensure_alive", exc, logger=logger)
     return restarted
 
 
@@ -374,7 +504,22 @@ def health_snapshot(repair=True):
                      if _nightly_enabled() else "off"),
         "jobs": "supplier sweep + storage sweeper",
     }
+    guardrail = {
+        "schedule": f"every {TICK_SECONDS}s maintenance tick",
+        "lastRun": _health.get("stockGuardrailLastRun") or "",
+        "checked": _health.get("stockGuardrailChecked") or 0,
+        "fixed": _health.get("stockGuardrailFixed") or 0,
+        # Rows whose two stock spellings disagree. Never auto-repaired: the
+        # owner decides which number is right. A non-zero count is worth a
+        # look, not an alarm.
+        "disagreements": _health.get("stockGuardrailDisagreements") or 0,
+    }
+    try:
+        tasks = task_queue.stats()
+    except Exception:                             # pragma: no cover
+        tasks = {}
     return {**_health, "started": _started.is_set(),
+            "tasks": tasks,
             "backgroundAlive": alive,
             "nightly": nightly,
             # Backwards-compatible booleans: both old logical workers are now
@@ -385,6 +530,7 @@ def health_snapshot(repair=True):
             "threadName": BACKGROUND_THREAD,
             "intervalSeconds": TICK_SECONDS,
             "supplier": supplier,
+            "stockGuardrail": guardrail,
             "recentFailures": recent}
 
 
@@ -403,4 +549,8 @@ def start(app=None):
         _note_failure("scheduler.backup_baseline", exc, logger=logger)
     with _start_lock:
         _spawn(BACKGROUND_THREAD, _loop, logger)
+    try:
+        task_queue.start(app)
+    except Exception as exc:                      # pragma: no cover
+        _note_failure("tasks.start", exc, logger=logger)
     return True

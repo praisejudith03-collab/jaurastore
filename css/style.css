@@ -460,8 +460,25 @@ ul { list-style: none; }
 .card-rating { display: inline-flex; align-items: center; gap: 5px; margin-top: 5px; color: var(--taupe, #887562); font-size: 12px; text-decoration: none; }
 .card-rating:hover { color: var(--ink, #342922); }
 .rating-stars { color: #e6a900; font-size: 14px; letter-spacing: 1px; line-height: 1; white-space: nowrap; }
-.pdp-product-note { display: grid; gap: 6px; margin: 16px 0; font-size: 13px; color: var(--taupe, #887562); }
-.pdp-product-note input { width: 100%; border: 1px solid var(--line, #e2e2e2); border-radius: 8px; padding: 11px 12px; font: inherit; color: var(--ink, #342922); }
+.pdp-product-note { display: grid; gap: 5px; margin: 12px 0; font-size: 13px; line-height: 1.35; color: var(--taupe, #887562); }
+.pdp-product-note > span { display: block; }
+.pdp-product-note input {
+  width: 100%;
+  /* One line, never a tall box: the height is fixed and the browser's own
+     control styling is switched off so a phone cannot fall back to a
+     multi-line-looking field. */
+  height: 42px;
+  min-height: 42px;
+  max-height: 42px;
+  line-height: 20px;
+  border: 1px solid var(--line, #e2e2e2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--ink, #342922);
+  -webkit-appearance: none;
+  appearance: none;
+}
 .pdp-supplier-availability { margin: 12px 0; padding: 11px 14px; border-left: 3px solid var(--gold, #b8956a); border-radius: 6px; background: var(--cream, #faf7f2); color: var(--ink, #342922); font-size: 13px; line-height: 1.5; }
 .cart-item-note, .ck-line-note, .order-item-note { display: block; margin-top: 4px; font-size: 12px; line-height: 1.45; color: var(--muted, #756a60); }
 .ck-line-note { font-weight: 400; }
@@ -620,8 +637,8 @@ ul { list-style: none; }
   color: #6d5303;
   font-size: 13px;
 }
-.pdp-actions { display: flex; gap: 12px; margin: 22px 0; flex-wrap: wrap; }
-.pdp-actions .btn { flex: 1; min-width: 180px; }
+.pdp-actions { display: flex; gap: 10px; margin: 16px 0; flex-wrap: wrap; }
+.pdp-actions .btn { flex: 1; min-width: 0; }
 .swatches { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 20px; }
 .swatches button {
   border: 1px solid var(--line);
@@ -1292,6 +1309,38 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #f8f0e2; }
 .order-done, .order-lookup { max-width: 640px; }
 .order-items { margin: 12px 0 16px; padding-left: 18px; }
 .order-items li { padding: 4px 0; }
+/* Order lines carry a small photo of the piece (admin list + fulfillment
+   view): a fixed 40x40 box so a portrait photo cannot stretch the row. */
+.order-items li.order-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  list-style: none;
+}
+.order-items { padding-left: 4px; }
+.order-item-thumb {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border: 1px solid var(--line, #e2e2e2);
+  border-radius: 6px;
+  background: #fcf8f4;
+}
+.order-item-text { flex: 1 1 auto; min-width: 0; }
+/* A receipt line on the customer's own confirmation screen: same 40x40 photo
+   box as the admin list, so both sides of the order see the same picture. */
+.receipt-line { display: flex; align-items: flex-start; gap: 8px; }
+.receipt-line > span { flex: 1 1 auto; min-width: 0; }
+.line-thumb {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border: 1px solid var(--line, #e2e2e2);
+  border-radius: 6px;
+  background: #fcf8f4;
+}
 .order-card {
   background: var(--paper);
   border: 1px solid var(--line);
@@ -7535,3 +7584,77 @@ body.store-paused{overflow:hidden}
 }
 .stock-line.is-in-stock { color: #24733a; font-weight: 700; }
 .stock-line.is-out-of-stock { color: var(--oos, #a82e22); font-weight: 700; }
+
+/* ---------------------------------------------------------------- mobile PDP
+   Compaction pass for phone widths. Written last on purpose: the sheet has
+   older .pdp rules further down, and the price/action area must win on a
+   phone (an !important here beats an !important earlier in the file only
+   because the selector list is longer, so keep the specificity explicit).
+   The goal is one screen for name + price + options + buy button, with the
+   gallery able to breathe rather than dominate. */
+@media (max-width: 640px) {
+  .wrap.pdp,
+  [data-pdp] {
+    gap: 14px !important;
+    padding: 10px 0 32px !important;
+  }
+  .pdp-img {
+    min-height: 0 !important;
+    max-height: 58vh;
+    border-radius: 12px;
+  }
+  .pdp h1 {
+    font-size: clamp(17px, 5.4vw, 21px) !important;
+    line-height: 1.22 !important;
+    margin: 2px 0 6px !important;
+  }
+  .pdp .price { margin: 4px 0 6px !important; line-height: 1.15 !important; }
+  .pdp .stock-line { margin: 4px 0 0 !important; }
+  .pdp .swatches,
+  .pdp-opt {
+    margin: 8px 0 10px !important;
+    gap: 6px !important;
+  }
+  .pdp-opt { display: block; }
+  .pdp-opt label,
+  .pdp-opt span.pdp-opt-label { margin-bottom: 4px !important; }
+  .pdp-product-note { margin: 10px 0 !important; gap: 4px !important; }
+  .pdp-actions {
+    margin: 12px 0 4px !important;
+    gap: 8px !important;
+  }
+  .pdp-actions .btn { min-width: 0 !important; padding: 13px 16px !important; }
+  .pdp-supplier-availability { margin: 8px 0 !important; padding: 9px 11px !important; font-size: 12px !important; }
+  .pdp-reviews { margin-top: 16px !important; }
+}
+
+/* ============================================ admin: broadcast hub + jobs
+ * The email Broadcast Hub (/admin/marketing/broadcast) and the background-job
+ * panel that finishes deletions and broadcasts. Kept in the same visual
+ * language as the rest of the Marketing desk: a card, a count line, and rows
+ * that never overflow a phone screen.
+ */
+.mk-hub-count { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; }
+.mk-hub-count strong { font-size: 22px; line-height: 1.1; }
+.mk-hub-count small { color: #6b6b6b; font-size: 12px; }
+.mk-hub-audience { margin-bottom: 12px; padding: 12px 14px; background: #faf7f2; border: 1px solid #eadfce; border-radius: 10px; }
+.mk-hub-preview { margin: 14px 0; border: 1px solid #eadfce; border-radius: 10px; overflow: hidden; background: #fff; }
+.mk-hub-preview-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #eadfce; background: #faf7f2; }
+.mk-hub-preview-head #mk-hub-preview-meta { flex: 1; color: #6b6b6b; font-size: 12px; }
+.mk-hub-preview iframe { display: block; width: 100%; height: 520px; border: 0; background: #fff; }
+.mk-hub-bar { height: 8px; border-radius: 999px; background: #f0e8de; overflow: hidden; }
+.mk-hub-bar span { display: block; height: 100%; background: #a97e48; transition: width .3s ease; }
+.mk-hub-progress { margin-top: 12px; }
+.mk-hub-progress .btn { margin-left: 8px; }
+.mk-jobs-list { display: flex; flex-direction: column; gap: 8px; }
+.mk-jobs-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 10px 12px; border: 1px solid #eadfce; border-radius: 10px; background: #fff; }
+.mk-jobs-row strong { display: block; font-size: 14px; }
+.mk-jobs-row small { display: block; color: #6b6b6b; font-size: 12px; }
+.mk-jobs-row p { grid-column: 1 / -1; margin: 0; }
+.mk-jobs-row.is-failed { border-color: #e3b3b3; background: #fdf6f6; }
+.mk-jobs-row.is-retry { border-color: #e8d5b0; }
+.mk-jobs-row .btn { margin-top: 6px; padding: 6px 10px; font-size: 12px; }
+@media (max-width: 600px) {
+  .mk-hub-preview iframe { height: 420px; }
+  .mk-jobs-row { grid-template-columns: 1fr; }
+}

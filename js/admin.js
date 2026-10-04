@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=186" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=190" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -454,6 +454,20 @@ function editorOptions(p) {
   if (p && p.colors && p.colors.length) return [{ title: "Colour", type: "COLOR", values: p.colors }];
   return [];
 }
+function generatedSku() {
+  // The code the save used to invent silently. It is now only the fallback for
+  // an empty field: the owner can type their own supplier/warehouse code.
+  return "JAU-" + Date.now().toString(36).toUpperCase().slice(-6);
+}
+function productSku(typed, existing) {
+  // The typed value wins, then the row's saved code, and only then a new one -
+  // so re-saving a product from an older editor never renumbers it and never
+  // overwrites a real supplier code with a generated one.
+  const value = String(typed == null ? "" : typed).trim().toUpperCase();
+  if (value) return value.slice(0, 40);
+  const saved = String((existing && existing.sku) || "").trim();
+  return saved || generatedSku();
+}
 function optionRowHTML(o, i) {
   const vals = (o && o.values) || [];
   return `
@@ -499,10 +513,13 @@ function refreshOptionChips() {
   const options = collectOptions(box || document);
   const typedStock = keepActiveOptionMap(currentOptionStock(), options);
   const typedSupplier = keepActiveOptionMap(currentOptionSupplierSku(), options);
+  const typedSku = keepActiveOptionMap(currentOptionSku(), options);
   const optionStock = options.length
     ? { ...keepActiveOptionMap(existing.optionStock, options), ...typedStock } : {};
   const optionSupplierSku = options.length
     ? { ...keepActiveOptionMap(existing.optionSupplierSku, options), ...typedSupplier } : {};
+  const optionSku = options.length
+    ? { ...keepActiveOptionMap(existing.optionSku || existing.optionSkus, options), ...typedSku } : {};
   const optionPrices = keepActiveOptionMap(existing.optionPrices, options);
   const optionCompareAt = keepActiveOptionMap(existing.optionCompareAt, options);
   const qty = Math.max(0, Number(document.getElementById("stock-qty")?.value) || 0);
@@ -510,9 +527,9 @@ function refreshOptionChips() {
     ? Object.values(optionStockValues(options, optionStock)).reduce((n, value) => n + value, 0)
     : qty;
   const fake = { ...existing, options, stock, optionStock, optionPrices,
-    optionCompareAt, optionSupplierSku };
+    optionCompareAt, optionSupplierSku, optionSku };
   const varBox = document.getElementById("var-box");
-  if (varBox) varBox.innerHTML = optionStockHTML(fake) + optionSupplierLinksHTML(fake);
+  if (varBox) varBox.innerHTML = optionStockHTML(fake) + optionSupplierLinksHTML(fake) + optionSkuHTML(fake);
   syncOptionStockTotals();
 }
 function addOptionRow(title, values) {
@@ -826,6 +843,33 @@ function currentOptionSupplierSku() {
   });
   return map;
 }
+function optionSkuHTML(p) {
+  // Per-variant SKU: the merchant/warehouse code for ONE variant (the
+  // product_variants.sku column, and the supplier sheet that lists it). It is
+  // deliberately a separate field from the supplier URL above it - a code is
+  // not a link, and conflating the two is how a SKU ends up being fetched as
+  // a web page. Blank rows are simply not saved.
+  const options = p.options || [];
+  const skus = p.optionSku || p.optionSkus || {};
+  const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
+    const key = `${opt.title}: ${value}`;
+    const sku = skus[key] != null ? skus[key] : (skus[value] != null ? skus[value] : "");
+    return `<label class="adx-var" data-optsku-row>
+      <span class="adx-var-name"><strong>${JA.escape(key)}</strong></span>
+      <span class="adx-var-qty"><input type="text" autocomplete="off" maxlength="120" aria-label="SKU for ${JA.escape(key)}" data-opt-sku="${JA.escape(key)}" placeholder="SKU (optional)" value="${JA.escape(String(sku || ""))}" /></span>
+    </label>`;
+  })).join("");
+  return rows ? `<h3>SKU per option</h3><div class="adx-vars">${rows}</div>` : "";
+}
+function currentOptionSku() {
+  const map = {};
+  document.querySelectorAll("[data-opt-sku]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-sku");
+    const value = String(inp.value || "").trim();
+    if (key && value) map[key] = value;
+  });
+  return map;
+}
 function optionStockHTML(p) {
   const opt = (p.options || [])[0];
   const vals = (opt && opt.values) || p.colors || [];
@@ -871,20 +915,52 @@ function syncOptionStockTotals() {
   if (totalEl) totalEl.innerHTML = `<strong>Total: ${total}</strong> piece(s).`;
   if (qty) { qty.value = total; qty.readOnly = true; }
 }
+/* The CFA figure the shop will show, with its arithmetic spelled out.
+ * Naira is the BASE currency and is stored exactly as typed; every CFA amount
+ * is derived from it at the house rate and rounded UP to a clean 50 (see
+ * currency.py, mirrored by JA.toCfa). Printing the derivation next to the
+ * field means "the card shows 800 and I typed 1 800" is answered on the spot
+ * instead of looking like a rounding bug. */
+function cfaProof(ngn) {
+  const amount = Number(ngn) || 0;
+  if (!(amount > 0)) return "CFA price will be calculated from the Naira price.";
+  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
+  const cfa = toCfa(amount);
+  const converted = Math.ceil(amount * 0.44);
+  const money = JA.money ? JA.money(cfa, "CFA") : `${cfa} F CFA`;
+  return `CFA price: ${money}. ${amount} NGN x 0.44 = ${converted} F CFA, rounded up to the nearest 50.`;
+}
+/* What the buyer reads where the custom note is asked for. Shown under the
+ * field while the owner types, so the prompt can be read the way a customer
+ * reads it - and so an empty prompt is visibly empty rather than a toggle the
+ * owner cannot see the effect of. */
+function notePromptPreview(prompt) {
+  const text = String(prompt == null ? "" : prompt).trim();
+  if (!text) return "The customer is not asked anything until you write a prompt.";
+  return `The customer sees: "${text}"`;
+}
 function bindCfaPreview() {
   const form = document.getElementById("prod-form");
   const el = document.getElementById("cfa-preview");
   if (!form || !el) return;
-  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
   const paint = () => {
     const ngn = Number(form.priceNgn && form.priceNgn.value) || 0;
-    if (!(ngn > 0)) {
-      el.textContent = "CFA price will be calculated from the Naira price.";
-      return;
-    }
-    el.textContent = `CFA price: ${JA.money(toCfa(ngn), "CFA")}`;
+    el.textContent = cfaProof(ngn);
   };
   form.addEventListener("input", paint);
+  paint();
+}
+function bindNotePrompt() {
+  const form = document.getElementById("prod-form");
+  const textarea = form && form.querySelector('textarea[name="customNotePrompt"]');
+  const out = document.getElementById("note-preview");
+  if (!form || !textarea || !out) return;
+  const paint = () => {
+    out.textContent = notePromptPreview(textarea.value);
+    const count = document.getElementById("note-count");
+    if (count) count.textContent = `${String(textarea.value || "").length}/160`;
+  };
+  textarea.addEventListener("input", paint);
   paint();
 }
 /* ------------------------------------------------ which fields did we edit?
@@ -899,6 +975,7 @@ function bindCfaPreview() {
  */
 const EDIT_FIELD_MAP = {
   name: ["name"],
+  sku: ["sku"],
   description: ["description"],
   enableCustomNote: ["enableCustomNote"],
   customNotePrompt: ["customNotePrompt"],
@@ -916,6 +993,7 @@ const EDIT_DATA_PREFIXES = [
                      "stock", "stock_quantity", "stockStatus"]],
   ["data-opt-stock", ["optionStock", "stock", "stock_quantity", "stockStatus"]],
   ["data-opt-supplier", ["optionSupplierSku", "optionSupplierUrls", "option_supplier_urls"]],
+  ["data-opt-sku", ["optionSku", "optionSkus", "option_sku", "variantSku"]],
   ["data-var-row", ["stock", "stock_quantity"]],
   ["data-var-state", ["stock", "stock_quantity"]],
 ];
@@ -992,10 +1070,14 @@ function productForm(p = {}) {
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
     <input type="hidden" name="id" value="${JA.escape(p.id || "")}" />
     <div class="field"><label>Product title</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
+    <div class="field"><label>SKU (your code for this product)</label>
+      <input name="sku" maxlength="40" autocomplete="off" value="${JA.escape(p.sku || "")}" placeholder="e.g. JAU-${JA.escape(String(p.id || "").replace(/^jau-/, "").slice(-6) || "000000")}" />
+      <p class="admin-note">Used on your supplier sheets and in order item lines. Leave it blank to keep the saved code; a brand-new product is given one automatically.</p>
+    </div>
     <div class="field"><label>Description</label><textarea name="description" rows="3" maxlength="2000">${JA.escape(p.description || "")}</textarea></div>
     <div class="field"><label>Category</label><select name="category" required>${cats}</select></div>
     <div class="field"><label>Price (Naira ₦)</label><div class="au-price"><input name="priceNgn" type="number" min="0" inputmode="numeric" required value="${p.priceNgn || ""}" /><i>₦</i></div>
-      <p class="admin-note" id="cfa-preview">CFA price will be calculated from the Naira price.</p>
+      <p class="admin-note" id="cfa-preview">${JA.escape(cfaProof(p.priceNgn))}</p>
     </div>
     <div class="field"><label>Main supplier URL</label>
       <input name="supplierSku" type="url" inputmode="url" autocomplete="url" value="${JA.escape(p.supplierSku || p.supplierUrl || p.supplier_url || "")}" placeholder="https://…" />
@@ -1004,7 +1086,7 @@ function productForm(p = {}) {
       <h3 id="product-options-title">Options and variant supplier URLs <small id="opt-count">${opts.length}/20</small></h3>
       <div id="opt-box">${optionBlockHTML(opts)}</div>
       <button type="button" class="au-link-btn" id="add-opt">+ Add option</button>
-      <div id="var-box">${optionStockHTML({ ...p, options: opts, optionStock: savedOptionStock }) + optionSupplierLinksHTML({ ...p, options: opts })}</div>
+      <div id="var-box">${optionStockHTML({ ...p, options: opts, optionStock: savedOptionStock }) + optionSupplierLinksHTML({ ...p, options: opts }) + optionSkuHTML({ ...p, options: opts })}</div>
     </section>
     <div class="field"><label>Stock quantity</label>
       <input name="stock" id="stock-qty" type="number" min="0" inputmode="numeric" value="${initialStock}" ${quantityReadonly} />
@@ -1015,7 +1097,11 @@ function productForm(p = {}) {
       <label class="au-tog"><span>Enable a note for this product</span>
         <input type="checkbox" name="enableCustomNote" ${p.enableCustomNote ? "checked" : ""} />
       </label>
-      <div class="field"><label>Customer prompt</label><input name="customNotePrompt" maxlength="160" value="${JA.escape(p.customNotePrompt || "")}" placeholder="e.g. preferred colour, size, or another detail" /></div>
+      <div class="field"><label>Customer prompt</label>
+        <textarea name="customNotePrompt" rows="3" maxlength="160" placeholder="e.g. preferred colour, size, or another detail">${JA.escape(p.customNotePrompt || "")}</textarea>
+        <p class="admin-note" id="note-preview">${JA.escape(notePromptPreview(p.customNotePrompt))}</p>
+        <p class="admin-note"><span id="note-count">${String(p.customNotePrompt || "").length}/160</span> characters - shown to the customer on the product page.</p>
+      </div>
     </section>
     <button class="btn au-save" type="submit">Save Product</button>
     ${p.id ? `<button type="button" class="au-del-prod" data-del="${JA.escape(p.id)}">Delete this product</button>` : ""}
@@ -1093,6 +1179,9 @@ async function handleProductSubmit(e, existing) {
   const optionPrices = keepActiveOptionMap(existing?.optionPrices, options);
   const optionCompareAt = keepActiveOptionMap(existing?.optionCompareAt, options);
   const optionSupplierSku = keepActiveOptionMap(currentOptionSupplierSku(), options);
+  const optionSku = keepActiveOptionMap(currentOptionSku(), options);
+  // The product's own code: typed, else the row's saved one, else generated.
+  const sku = productSku(fd.get("sku"), existing);
   const supplierRef = String(fd.get("supplierSku") || "").trim();
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
   const priceNgn = Math.max(0, num("priceNgn") || 0);
@@ -1123,7 +1212,7 @@ async function handleProductSubmit(e, existing) {
       // same value", and a real edit would be silently discarded.
       mergeFields: window.__editDirty ? Array.from(window.__editDirty) : null,
       id,
-      sku: existing?.sku || ("JAU-" + Date.now().toString(36).toUpperCase().slice(-6)),
+      sku,
       slug: existing?.slug || slugify(name) || id,
       name,
       category: savedCategory,
@@ -1156,6 +1245,10 @@ async function handleProductSubmit(e, existing) {
       optionSupplierSku,
       optionSupplierUrls: optionSupplierSku,
       option_supplier_urls: optionSupplierSku,
+      // Per-variant SKUs, keyed exactly like the stock and supplier maps
+      // ("Colour: Red"), so the server's alias handling stores them together.
+      optionSku,
+      optionSkus: optionSku,
   });
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save Product"; }
   // Only a server-confirmed save leaves this editor. A queued retry or a
@@ -1503,7 +1596,8 @@ function bindProductBulk() {
       const results = await Promise.all(products.map((p) => JA.removeProduct(p.id)));
       button.disabled = false;
       const ok = results.filter((r) => r && r.ok !== false).length;
-      selectedProductIds.clear(); JA.toast(`${ok} product${ok === 1 ? "" : "s"} deleted${ok < products.length ? ` · ${products.length - ok} failed` : ""}.`);
+      const queued = results.filter((r) => r && r.queued).length;
+      selectedProductIds.clear(); JA.toast(`${ok} product${ok === 1 ? "" : "s"} deleted${queued ? " (files purging in the background)" : ""}${ok < products.length ? ` · ${products.length - ok} failed` : ""}.`);
       renderProdGrid(); bindProdGridEvents(); return;
     }
     const online = action === "show";
@@ -1532,7 +1626,9 @@ function bindProdGridEvents() {
           renderProdGrid(); bindProdGridEvents();   // the server list is still the truth
           return;
         }
-        JA.toast("Deleted from the website.");
+        JA.toast(res.queued
+          ? "Deleted from the website — photos are purged in the background."
+          : "Deleted from the website.");
         editingId = null;
         renderProdGrid(); bindProdGridEvents();
       }
@@ -1591,6 +1687,22 @@ function applyProductFilter(e) {
 }
 
 function esc(v) { return JA.escape(String(v == null ? "" : v)); }
+// One small product photo for an order line. Used by the order list and the
+// fulfillment view so the person packing the parcel can match the piece
+// without reading the whole line. A line whose product has no photo (or an
+// order placed before the field existed) falls back to the shop's branded
+// placeholder instead of leaving a hole in the row.
+function orderItemThumb(item) {
+  const raw = String((item && item.image) || "").trim() || "images/products/_placeholder.jpg";
+  // A plain <img> with the shop's own onerror handler: fallbackImg swaps in the
+  // branded placeholder AND reports a genuinely missing photo to the server.
+  // A <picture> with a .400w.webp <source> is deliberately NOT used here - a
+  // source that 404s breaks the image instead of falling back, and it would
+  // also make the photo-healing report fire for a companion that simply does
+  // not exist yet (see tests/test_photo_fix.py).
+  return `<img class="order-item-thumb" src="${esc(JA.asset(raw))}" alt="" ` +
+    `width="40" height="40" loading="lazy" decoding="async" onerror="fallbackImg(event)" />`;
+}
 function analyticsPanel() {
   return `
     <section class="needs-attention" id="needs-attention">
@@ -1811,7 +1923,7 @@ function orderReviewHTML(o) {
 function orderCardHTML(o) {
   const c = o.customer || {}; const shot = o.proofUrl || (JA.getProof && JA.getProof(o.id, o.proof)) || ""; const when = o.at ? new Date(o.at).toLocaleString() : ""; const s = o.status || "pending"; const nItems = (o.items || []).reduce((n, i) => n + (Number(i.qty) || 0), 0);
   const selected = selectedOrderIds.has(String(o.id)) ? " checked" : "";
-  return `<details class="adx-order" data-order="${esc(o.id)}"><summary class="adx-order-row"><span class="adx-select-wrap"><input type="checkbox" class="adx-row-select" data-order-select="${esc(o.id)}"${selected} aria-label="Select order ${esc(o.id)}" /></span><span class="adx-order-id">${esc(o.id)}</span><span class="adx-order-who"><strong>${esc(c.name || "Customer")}</strong><small>${esc(when)} · ${nItems} item(s)</small></span><span class="adx-order-total">${esc(JA.money(o.total, o.currency))}</span><span class="status-pill ${esc(s)}">${esc(orderStatusLabel(s))}</span></summary><div class="adx-order-body"><div class="order-card-top"><div><p><strong>${esc(c.name || "Customer")}</strong></p><p>${esc(c.email || "")}</p><p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p><p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}<p>${esc(when)}</p></div><div><p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p><p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p></div></div><ul class="order-items">${(o.items || []).map((i) => `<li>${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}${i.note ? ` <small class="order-item-note">${esc(i.note)}</small>` : ""}${i.bulkPercent ? ` <em class="bulk-tag">bulk ${esc(String(i.bulkPercent))}% off</em>` : ""}</li>`).join("")}</ul>${(o.bulkDiscount && o.bulkDiscount.length) ? `<p class="admin-note">Automatic bulk discount applied: ${o.bulkDiscount.map((b) => `${esc(b.name)} (${b.qty} units → ${esc(String(b.percent))}%)`).join(", ")}.</p>` : ""}${orderReviewHTML(o)}${o.proofUploadFailed ? `<p class="proof-upload-failed" role="alert">⚠️ Proof Upload Failed — ask the customer to resend the receipt.</p>` : ""}${shot ? receiptViewer(shot, `Payment receipt for ${o.id}`, `${o.id}-receipt`) : `<p class="empty">No receipt attached.</p>`}<div class="order-actions">${orderActionsHTML(o)}</div></div></details>`;
+  return `<details class="adx-order" data-order="${esc(o.id)}"><summary class="adx-order-row"><span class="adx-select-wrap"><input type="checkbox" class="adx-row-select" data-order-select="${esc(o.id)}"${selected} aria-label="Select order ${esc(o.id)}" /></span><span class="adx-order-id">${esc(o.id)}</span><span class="adx-order-who"><strong>${esc(c.name || "Customer")}</strong><small>${esc(when)} · ${nItems} item(s)</small></span><span class="adx-order-total">${esc(JA.money(o.total, o.currency))}</span><span class="status-pill ${esc(s)}">${esc(orderStatusLabel(s))}</span></summary><div class="adx-order-body"><div class="order-card-top"><div><p><strong>${esc(c.name || "Customer")}</strong></p><p>${esc(c.email || "")}</p><p>${esc(c.phone || "")} · ${esc([c.city, c.zone].filter(Boolean).join(" / "))}</p><p>${esc([c.address, c.country].filter(Boolean).join(", "))}</p>${c.note ? `<p class="order-note"><em>Note:</em> ${esc(c.note)}</p>` : ""}<p>${esc(when)}</p></div><div><p style="margin-top:8px"><strong>${esc(JA.money(o.total, o.currency))}</strong> · ${o.currency === "NGN" ? "Naira" : "CFA"}</p><p class="admin-note">Pay by ${esc(o.payment || o.currency || "")}</p></div></div><ul class="order-items">${(o.items || []).map((i) => `<li class="order-item">${orderItemThumb(i)}<span class="order-item-text">${i.qty}× ${esc(i.name)}${i.color ? " · " + esc(i.color) : ""}${i.note ? ` <small class="order-item-note">${esc(i.note)}</small>` : ""}${i.bulkPercent ? ` <em class="bulk-tag">bulk ${esc(String(i.bulkPercent))}% off</em>` : ""}</span></li>`).join("")}</ul>${(o.bulkDiscount && o.bulkDiscount.length) ? `<p class="admin-note">Automatic bulk discount applied: ${o.bulkDiscount.map((b) => `${esc(b.name)} (${b.qty} units → ${esc(String(b.percent))}%)`).join(", ")}.</p>` : ""}${orderReviewHTML(o)}${o.proofUploadFailed ? `<p class="proof-upload-failed" role="alert">⚠️ Proof Upload Failed — ask the customer to resend the receipt.</p>` : ""}${shot ? receiptViewer(shot, `Payment receipt for ${o.id}`, `${o.id}-receipt`) : `<p class="empty">No receipt attached.</p>`}<div class="order-actions">${orderActionsHTML(o)}</div></div></details>`;
 }
 let orderFilter = "all";
 function ordersPanel() {
@@ -1938,7 +2050,7 @@ function renderProofPage() {
       b.disabled = true; let res = null;
       try { res = await window.JA_NET.api("api/admin/payment-proofs/" + encodeURIComponent(id), { method: "DELETE" }); } catch (e) { res = null; }
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not delete that receipt."); b.disabled = false; return; }
-      JA.toast("Receipt deleted."); fillProofs();
+      JA.toast(res.queued ? "Receipt queued — the file is being removed now." : "Receipt deleted."); fillProofs();
     };
   });
 }
@@ -2409,6 +2521,231 @@ function bindAccount() {
     return d.note || (d.committed ? "Committed locally, but not pushed to GitHub." : "Sync complete. No repository changes to push.");
   });
 }
+/* ============================================= email broadcast hub
+ * The owner asked for the promotional hub at /admin/marketing/broadcast: see
+ * who is on the list, compose, read the email before it goes out, then let the
+ * server send it in the background. Nothing here waits for hundreds of
+ * inboxes: queueing answers at once with a campaign id, and this card polls
+ * that campaign's progress.
+ *
+ * It is deliberately separate from the "Broadcast feed" card below, which
+ * builds copy for a social post - different job, different buttons.
+ */
+function broadcastHubCard() {
+  return `<div class="admin-card mk-hub-card" id="mk-hub-card">
+    <h3 class="admin-h">Email broadcast hub</h3>
+    <p class="admin-note">Send to everyone who left an email at checkout or registered an account, minus anyone who unsubscribed. A big list goes out in small background batches, so this page never has to wait for it.</p>
+    <div class="mk-hub-audience" id="mk-hub-audience"><p class="admin-note">Checking the audience…</p></div>
+    <form id="mk-hub-form" class="mk-campaign-form">
+      <label>Broadcast type <select name="kind" id="mk-hub-kind"></select></label>
+      <label>Subject <input name="subject" id="mk-hub-subject" maxlength="180" required /></label>
+      <label>Message <textarea name="content" id="mk-hub-content" rows="6" maxlength="10000" required></textarea></label>
+      <label id="mk-hub-coupon-row" hidden>Coupon code to announce <input id="mk-hub-coupon" maxlength="40" placeholder="JAURA10" /></label>
+      <fieldset class="mk-product-picker"><legend>Products to feature <small>(optional, up to 12)</small></legend><input id="mk-hub-product-search" type="search" placeholder="Search catalog…" autocomplete="off" /><div id="mk-hub-product-options"><p class="empty">Loading catalog…</p></div></fieldset>
+      <div class="mk-campaign-foot">
+        <button type="button" class="btn btn-line" id="mk-hub-preview">Preview</button>
+        <button type="button" class="btn btn-line" id="mk-hub-refresh">Refresh audience</button>
+        <a class="btn btn-line" href="api/admin/customers.csv" download="jaura-customers.csv">Export contacts</a>
+        <button class="btn" type="submit" id="mk-hub-queue">Queue broadcast</button>
+      </div>
+      <p class="admin-note" id="mk-hub-status" role="status" aria-live="polite"></p>
+    </form>
+    <div class="mk-hub-preview" id="mk-hub-preview-wrap" hidden>
+      <div class="mk-hub-preview-head"><strong>Preview</strong><span id="mk-hub-preview-meta"></span><button type="button" class="btn btn-line" id="mk-hub-preview-close">Close</button></div>
+      <iframe id="mk-hub-preview-frame" title="Email preview" sandbox="" referrerpolicy="no-referrer"></iframe>
+    </div>
+    <div class="mk-hub-progress" id="mk-hub-progress"></div>
+  </div>`;
+}
+
+function backgroundJobsCard() {
+  return `<div class="admin-card mk-jobs-card" id="mk-jobs-card">
+    <h3 class="admin-h">Background jobs</h3>
+    <p class="admin-note">Deletions and broadcasts finish here. A queued job is work the server has accepted; a failed one carries its reason and can be retried without re-running the request.</p>
+    <div class="mk-jobs-stats" id="mk-jobs-stats"></div>
+    <div id="mk-jobs-list"><p class="empty">Loading…</p></div>
+    <div class="mk-campaign-foot"><button type="button" class="btn btn-line" id="mk-jobs-refresh">Refresh</button></div>
+  </div>`;
+}
+
+let mkHubPoll = null;
+
+async function fillBroadcastHub() {
+  const card = $("#mk-hub-card");
+  if (!card || card.dataset.bound === "1") return;
+  card.dataset.bound = "1";
+  // Every repaint of the Marketing desk rebuilds this card, so the previous
+  // progress poller must go with the DOM it was painting into - otherwise a
+  // finished broadcast keeps a timer alive for the rest of the session.
+  if (mkHubPoll) { clearInterval(mkHubPoll); mkHubPoll = null; }
+  const api = (path, opts) => window.JA_NET.api(path, opts);
+  const paintAudience = (d) => {
+    const box = $("#mk-hub-audience");
+    if (!box) return;
+    const total = Number(d.total || 0);
+    window.__mkHubTotal = total;
+    // The server decides which broadcast types exist (its stored campaign type
+    // is CHECK-constrained), so the composer renders exactly that list.
+    window.__mkHubKinds = d.kinds || window.__mkHubKinds || [];
+    box.innerHTML = `<p class="mk-hub-count"><strong>${total.toLocaleString()}</strong> recipient${total === 1 ? "" : "s"}`
+      + `<small>${Number(d.fromOrders || 0).toLocaleString()} from order history · ${Number(d.fromAccounts || 0).toLocaleString()} from registered accounts`
+      + (Number(d.fromRemoteOnly || 0) ? ` · ${Number(d.fromRemoteOnly).toLocaleString()} from the server copy` : "")
+      + ` · ${Number(d.suppressed || 0).toLocaleString()} unsubscribed (excluded)</small></p>`
+      + (d.sample && d.sample.length ? `<p class="admin-note">Sample: ${d.sample.slice(0, 6).map((e) => esc(e)).join(", ")}${total > 6 ? " …" : ""}</p>` : "");
+  };
+  const loadAudience = async () => {
+    try { paintAudience(await api("api/admin/marketing/broadcast/audience")); }
+    catch (err) { const box = $("#mk-hub-audience"); if (box) box.innerHTML = `<p class="empty">The audience list is unavailable right now.</p>`; }
+  };
+  const paintKinds = () => {
+    try {
+      const kinds = window.__mkHubKinds || [];
+      const select = $("#mk-hub-kind");
+      if (select && kinds.length) select.innerHTML = kinds.map((k) => `<option value="${esc(k.kind)}">${esc(k.label)}</option>`).join("");
+    } catch (err) {}
+  };
+  await loadAudience();
+  paintKinds();
+  $("#mk-hub-refresh")?.addEventListener("click", loadAudience);
+
+  // Featured products: same list the campaign composer uses, one page at a time.
+  const selected = new Set();
+  const optionsBox = $("#mk-hub-product-options");
+  const paintProducts = (rows) => {
+    if (!optionsBox) return;
+    optionsBox.innerHTML = rows.length ? rows.map((p) => `<label class="mk-product-option"><input type="checkbox" name="hubProduct" value="${esc(p.id)}" ${selected.has(String(p.id)) ? "checked" : ""} /><img src="${esc(p.image_url || p.image || "images/products/_placeholder.jpg")}" alt="" /><span><b>${esc(p.name || "Product")}</b><small>${p.priceCfa ? `${Number(p.priceCfa).toLocaleString()} CFA` : `₦${Number(p.priceNgn || 0).toLocaleString()}`}</small></span></label>`).join("") : `<p class="empty">No matching products.</p>`;
+  };
+  let catalog = [];
+  try { catalog = (await api("api/catalog?all=1")).products || []; } catch (err) { if (optionsBox) optionsBox.innerHTML = `<p class="empty">Catalog unavailable.</p>`; }
+  const filter = () => {
+    const q = String($("#mk-hub-product-search")?.value || "").trim().toLowerCase();
+    paintProducts(catalog.filter((p) => !q || `${p.name || ""} ${p.sku || ""}`.toLowerCase().includes(q)));
+  };
+  filter();
+  optionsBox?.addEventListener("change", (e) => {
+    const input = e.target.closest('input[name="hubProduct"]');
+    if (!input) return;
+    if (input.checked && selected.size >= 12) { input.checked = false; JA.toast("Choose no more than 12 products."); return; }
+    input.checked ? selected.add(input.value) : selected.delete(input.value);
+  });
+  $("#mk-hub-product-search")?.addEventListener("input", filter);
+  $("#mk-hub-kind")?.addEventListener("change", () => {
+    const row = $("#mk-hub-coupon-row");
+    if (row) row.hidden = $("#mk-hub-kind")?.value !== "coupon";
+  });
+
+  const payload = () => ({
+    kind: $("#mk-hub-kind")?.value,
+    subject: String($("#mk-hub-subject")?.value || "").trim(),
+    content: String($("#mk-hub-content")?.value || "").trim(),
+    couponCode: String($("#mk-hub-coupon")?.value || "").trim(),
+    productIds: [...selected],
+  });
+
+  $("#mk-hub-preview")?.addEventListener("click", async () => {
+    const wrap = $("#mk-hub-preview-wrap"), meta = $("#mk-hub-preview-meta"), frame = $("#mk-hub-preview-frame");
+    const status = $("#mk-hub-status");
+    try {
+      const p = payload();
+      if (!p.subject || !p.content) throw new Error("Add a subject and a message first.");
+      const d = await api("api/admin/marketing/broadcast/preview", { method: "POST", json: p });
+      if (d && d.ok === false) throw new Error(d.error || "Could not build the preview.");
+      if (frame) frame.srcdoc = d.html || "";
+      if (meta) meta.textContent = `${Number(d.recipients || 0).toLocaleString()} recipient${d.recipients === 1 ? "" : "s"} · nothing sent yet`;
+      if (wrap) wrap.hidden = false;
+      if (status) status.textContent = "Preview built. Nobody has received this email.";
+    } catch (err) { if (status) status.textContent = err.message || "Could not build the preview."; JA.toast(err.message || "Could not build the preview."); }
+  });
+  $("#mk-hub-preview-close")?.addEventListener("click", () => { const wrap = $("#mk-hub-preview-wrap"); if (wrap) wrap.hidden = true; });
+
+  $("#mk-hub-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (mkHubPoll) { clearInterval(mkHubPoll); mkHubPoll = null; }
+    const btn = $("#mk-hub-queue"), status = $("#mk-hub-status");
+    try {
+      const p = payload();
+      if (!p.subject || !p.content) throw new Error("Add a subject and a message first.");
+      if (!confirm(`Queue this broadcast for ${Number(window.__mkHubTotal || 0).toLocaleString()} recipients? It sends in the background.`)) return;
+      if (btn) { btn.disabled = true; btn.textContent = "Queueing…"; }
+      const d = await api("api/admin/marketing/broadcast", { method: "POST", json: p });
+      if (d && d.ok === false) throw new Error(d.error || "Could not queue the broadcast.");
+      if (status) status.textContent = `Queued ${Number(d.recipientCount || 0).toLocaleString()} recipients as ${d.campaignId} (job ${d.jobId}). It is sending now — you can leave this page.`;
+      JA.toast("Broadcast queued.");
+      trackBroadcast(d.campaignId);
+    } catch (err) {
+      if (status) status.textContent = err.message || "Could not queue the broadcast.";
+      JA.toast(err.message || "Could not queue the broadcast.");
+    } finally { if (btn) { btn.disabled = false; btn.textContent = "Queue broadcast"; } }
+  });
+
+  const trackBroadcast = (campaignId) => {
+    const box = $("#mk-hub-progress");
+    const paint = (c) => {
+      if (!box) return;
+      const sent = Number(c.sentCount || 0), failed = Number(c.failedCount || 0);
+      const total = Math.max(1, Number(c.recipientCount || 0));
+      const pct = Math.min(100, Math.round(((sent + failed) / total) * 100));
+      box.innerHTML = `<div class="mk-hub-bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>`
+        + `<p class="admin-note">${esc(c.id)} · ${esc(c.status)} · ${sent.toLocaleString()} sent${failed ? ` · ${failed.toLocaleString()} failed` : ""} of ${Number(c.recipientCount || 0).toLocaleString()}`
+        + `${/sent|partial|failed|cancelled/.test(String(c.status)) ? "" : " · sending in the background"}`
+        + `${/queued|sending/.test(String(c.status)) ? ` <button type="button" class="btn btn-line" id="mk-hub-cancel">Stop</button>` : ""}</p>`;
+      const stop = $("#mk-hub-cancel");
+      if (stop) stop.onclick = async () => {
+        if (!confirm("Stop this broadcast at the next batch?")) return;
+        try { const d = await api("api/admin/marketing/broadcast/" + encodeURIComponent(campaignId) + "/cancel", { method: "POST" }); JA.toast("Broadcast stopped."); if (d && d.campaign) paint(d.campaign); }
+        catch (err) { JA.toast(err.message || "Could not stop the broadcast."); }
+      };
+    };
+    const tick = async () => {
+      try {
+        const d = await api("api/admin/marketing/broadcast/" + encodeURIComponent(campaignId));
+        if (d && d.campaign) paint(d.campaign);
+        if (d && d.campaign && /sent|partial|failed|cancelled/.test(String(d.campaign.status))) {
+          if (mkHubPoll) { clearInterval(mkHubPoll); mkHubPoll = null; }
+          loadAudience();
+        }
+      } catch (err) {}
+    };
+    tick();
+    mkHubPoll = setInterval(tick, 4000);
+  };
+  // A reload during a broadcast keeps tracking it (the campaign log carries the
+  // current status, and the hub is where the owner watches it).
+  const status = $("#mk-hub-status");
+  if (status) status.textContent = "Compose a broadcast, preview it, then queue it. Queueing never blocks this page.";
+}
+
+async function fillBackgroundJobs() {
+  const card = $("#mk-jobs-card");
+  if (!card || card.dataset.bound === "1") return;
+  card.dataset.bound = "1";
+  const api = (path, opts) => window.JA_NET.api(path, opts);
+  const paint = (d) => {
+    const stats = $("#mk-jobs-stats"), list = $("#mk-jobs-list");
+    const s = (d && d.stats) || {};
+    if (stats) {
+      stats.innerHTML = `<p class="mk-hub-count"><strong>${Number(s.pending || 0).toLocaleString()}</strong> waiting`
+        + `<small>${Number(s.done || 0).toLocaleString()} done · ${Number(s.failed || 0).toLocaleString()} failed · chunks of ${Number(s.batchSize || 0)} · ${s.threadAlive ? "worker running" : "worker restarting"}</small></p>`;
+    }
+    if (!list) return;
+    const jobs = (d && d.jobs) || [];
+    list.innerHTML = jobs.length ? `<div class="mk-jobs-list">${jobs.map((j) => `<article class="mk-jobs-row is-${esc(j.state || "")}"><div><strong>${esc(j.label || j.kind)}</strong><small>${esc(j.target || "")} ${j.attempts ? `· attempt ${Number(j.attempts)}` : ""}</small></div><div><b>${esc(j.state || "")}</b><small>${esc(j.finishedAt || j.createdAt || "")}</small>${j.state === "failed" ? `<button type="button" class="btn btn-line" data-job-retry="${esc(j.id)}">Retry</button>` : ""}</div>${j.lastError ? `<p class="admin-note">${esc(j.lastError)}</p>` : ""}</article>`).join("")}</div>` : `<p class="empty">Nothing has run yet.</p>`;
+    list.querySelectorAll("[data-job-retry]").forEach((b) => {
+      b.onclick = async () => {
+        b.disabled = true;
+        try { await api("api/admin/tasks/jobs/" + encodeURIComponent(b.dataset.jobRetry) + "/retry", { method: "POST" }); JA.toast("Job re-queued."); load(); }
+        catch (err) { JA.toast(err.message || "Could not re-queue that job."); b.disabled = false; }
+      };
+    });
+  };
+  const load = async () => {
+    try { paint(await api("api/admin/tasks/jobs")); }
+    catch (err) { const list = $("#mk-jobs-list"); if (list) list.innerHTML = `<p class="empty">The job list is unavailable right now.</p>`; }
+  };
+  $("#mk-jobs-refresh")?.addEventListener("click", load);
+  await load();
+}
+
 function marketingPanel() {
   return `<div class="admin-card mk-campaign-card" id="mk-campaign-card">
     <h3 class="admin-h">Send campaign</h3>
@@ -2430,6 +2767,8 @@ function marketingPanel() {
     </form>
     <h4 class="mk-campaign-log-title">Past campaigns</h4><div class="adx-filter-bar mk-campaign-filters" aria-label="Filter campaigns"><input id="marketing-search" type="search" placeholder="Search campaigns…" autocomplete="off" value="${esc(marketingSearch)}" /><label>From <input id="marketing-from" type="date" value="${esc(marketingFrom)}" /></label><label>To <input id="marketing-to" type="date" value="${esc(marketingTo)}" /></label><button type="button" class="btn btn-line" id="marketing-filter-clear">Clear</button></div><div id="mk-campaign-log"><p class="empty">Loading…</p></div>
   </div>
+  ${broadcastHubCard()}
+  ${backgroundJobsCard()}
   ${broadcastFeedCardHTML()}
   <div class="admin-card" id="mk-settings-card"><h3 class="admin-h">Referral settings</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-coupons-card"><h3 class="admin-h">Coupons</h3><p class="admin-note">Loading…</p></div><div class="admin-card mk-referrals-card" id="mk-referrals-card"><h3 class="admin-h">Referral codes</h3><p class="admin-note">Loading…</p></div><div class="admin-card" id="mk-backup-card"><h3 class="admin-h">Backups</h3><p class="admin-note">Product data is backed up to GitHub automatically every night at midnight. Customer orders stay on the server. You can also run a backup right now.</p><button type="button" class="btn" id="mk-backup-now">Back up now</button><p class="admin-note" id="mk-backup-out" hidden></p></div>`;
 }
@@ -3051,6 +3390,8 @@ function bindBroadcastFeed() {
 }
 async function fillMarketing() {
   const api = (path, opts) => window.JA_NET.api(path, opts);
+  try { await fillBroadcastHub(); } catch (err) {}
+  try { await fillBackgroundJobs(); } catch (err) {}
   const num = (v) => esc(String(v == null ? "" : v));
   const campaignDefaults = {
     abandoned_cart: { subject: "Your Jaura Store cart is waiting", content: "You left something special behind. Complete your order while your favourites are still available." },
@@ -3377,7 +3718,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=186" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=190" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3474,13 +3815,15 @@ function paintDesk(tab = "analytics") {
         JA.toast((res && res.error) || "Could not delete the product. No changes were made.");
         return;
       }
-      JA.toast("Deleted from the website.");
+      JA.toast(res.queued
+        ? "Deleted from the website — photos are purged in the background."
+        : "Deleted from the website.");
       restoreProductsReturn();
     });
   }
   $("#cancel-edit")?.addEventListener("click", () => { restoreProductsReturn(); });
   $("#add-product")?.addEventListener("click", () => { rememberProductsReturn(); editingId = "new"; paintDesk("products"); });
-  bindMedia(); bindOptions(); bindCategories(); bindCfaPreview();
+  bindMedia(); bindOptions(); bindCategories(); bindCfaPreview(); bindNotePrompt();
 
   if (tab === "products" && !editingId) {
     renderProdGrid(); bindProdGridEvents();
@@ -3743,7 +4086,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=186", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=190", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -4868,9 +5211,30 @@ function bindSiteBranding() {
 /** Apply a ?return_url=/admin/products?category=bags&page=2 deep link (or the
  *  loose un-encoded spelling) so a reload / shared link reopens the exact
  *  products list position. Returns the requested desk, if any. */
+// Real URLs under /admin: the shell is one file for every desk, so the path
+// is what the browser shows while the portal picks the tab. Deep links keep
+// working exactly as before via ?desk=/?tab= - a path only ever ADDS a way in.
+const ADMIN_PATH_DESKS = {
+  "": "analytics", analytics: "analytics", products: "products",
+  orders: "orders", sales: "sales", marketing: "marketing",
+  "marketing/broadcast": "marketing", categories: "categories",
+  delivery: "delivery", settings: "settings", account: "account",
+};
+
+function adminPathDesk(pathname) {
+  const raw = String(pathname || "").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
+  if (raw === "admin.html" || raw === "admin") return "analytics";
+  if (!raw.startsWith("admin")) return "";
+  return ADMIN_PATH_DESKS[raw.slice("admin".length).replace(/^\/+/, "")] || "";
+}
+
 function applyAdminDeepLink() {
   let desk = "";
   let state = {};
+  // A real path wins over nothing, and loses to nothing: /admin/marketing/
+  // broadcast is the URL the owner asked for, so it opens the Marketing desk.
+  const pathDesk = adminPathDesk(window.location.pathname);
+  if (pathDesk) desk = pathDesk;
   try {
     const search = new URLSearchParams(window.location.search);
     let target = search.get("return_url") || search.get("returnUrl") || "";
@@ -4886,7 +5250,9 @@ function applyAdminDeepLink() {
     if (target && !target.includes("q=") && search.get("q")) {
       target += "&q=" + search.get("q");
     }
-    desk = search.get("desk") || search.get("tab") || "";
+    // A ?desk=/?tab= in the URL still wins; the path is the fallback, so an
+    // old bookmark keeps working exactly as it did.
+    desk = search.get("desk") || search.get("tab") || desk;
     if (target) {
       const parsed = productsStateFromUrl(target);
       if (Object.keys(parsed).length) { state = parsed; desk = desk || "products"; }
@@ -4909,7 +5275,11 @@ async function bootAdmin() {
   const ok = await JA.isAdmin();
   if (ok) {
     const desk = applyAdminDeepLink();
-    paintDesk(desk === "products" ? "products" : "analytics");
+    paintDesk(TAB_TITLES[desk] ? desk : "analytics");
+    if (/\/admin\/marketing\/broadcast\/?$/.test(window.location.pathname || "")) {
+      // Straight to the hub, the section the URL names.
+      try { document.getElementById("mk-hub-card")?.scrollIntoView({ block: "start" }); } catch (e) {}
+    }
     // A deep-linked products desk must show its filters, not just carry them.
     if (desk === "products" && !editingId) {
       const sel = document.getElementById("prod-cat");

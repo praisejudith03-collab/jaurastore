@@ -264,20 +264,23 @@ def test_editor_uses_zero_for_blank_and_unassigned_stock():
 
 
 def test_clean_editor_has_only_the_approved_product_controls():
-    """The product form stays focused on shop essentials. SKU/import,
-    discount, translation, visibility, rating and review-entry controls are
-    not part of the editor; verified reviews remain in their separate flow."""
+    """The product form stays focused on shop essentials. The SKU is one of
+    them again, at BOTH levels (one code for the product, one per variant);
+    import, discount, translation, visibility, rating and review-entry
+    controls are still not part of the editor, and verified reviews remain in
+    their separate flow."""
     import re
 
     js = _admin_js()
     form = js[js.index("function productForm(p = {})"):js.index("async function handleProductSubmit")]
     names = set(re.findall(r'name="([^"]+)"', form))
     assert names == {
-        "id", "name", "description", "category", "priceNgn", "supplierSku",
+        "id", "name", "sku", "description", "category", "priceNgn", "supplierSku",
         "stock", "enableCustomNote", "customNotePrompt",
     }
     for required in (
-        "Product title", "Description", "Category", "Price (Naira ₦)",
+        "Product title", "SKU (your code for this product)", "Description",
+        "Category", "Price (Naira ₦)",
         "Main supplier URL", "Stock quantity", "Enable a note for this product",
         "Customer prompt", "id=\"media-box\"", "id=\"add-opt\"",
     ):
@@ -285,11 +288,14 @@ def test_clean_editor_has_only_the_approved_product_controls():
     for removed in (
         "nameFr", "descriptionFr", "dimensions", "compareNgn", "bulkQty",
         "bulkPercent", "stock-status", "stockStatus", "featured", "badge",
-        "data-opt-sku", "Customer Name", "Customer Stars", "Customer Review",
+        "Customer Name", "Customer Stars", "Customer Review",
     ):
         assert removed not in form, removed
-    assert "function optionSkuHTML" not in js
-    assert "function currentOptionSku" not in js
+    # Both SKU levels are deliberate: tests/test_editor_sku_and_note_prompt.py
+    # pins their behaviour. The variant SKU is its own field, never the
+    # supplier URL field that sits next to it.
+    assert "function optionSkuHTML" in js
+    assert "function currentOptionSku" in js
     assert "function variantPanelsHTML" not in js
     assert "data-opt-supplier" in js
     assert "data-opt-stock" in js

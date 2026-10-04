@@ -1,0 +1,106 @@
+# Apply the APPROVED products schema + the hard-delete migration to Supabase,
+# and verify the delete path against the live project.
+#
+# WHY THIS EXISTS
+#   hard_delete_products.sql has never been applied to a live database (the
+#   PR check shows Supabase Preview skipping), and a sandbox cannot reach
+#   Supabase at all. This workflow runs the SAME approved SQL that is in the
+#   repository, with credentials already stored as Actions secrets, so no key
+#   is ever copied anywhere.
+#
+# WHAT IT APPLIES (in this order, nothing else)
+#   schema_sections/01_products.sql            -> public.products (id text)
+#   schema_sections/09_product_compatibility.sql -> products-only repair
+#   hard_delete_products.sql                   -> delete RPC + ON DELETE CASCADE
+# It deliberately does NOT run supabase_schema.sql (sections 15 and 16 stay on
+# hold), inventory_guardrails.sql, or the image migration. See
+# STAGING_HARD_DELETE_RUNBOOK.md and schema_sections/README.md.
+#
+# CREDENTIALS
+#   SUPABASE_URL                 (already configured) - identifies the project
+#   plus ONE of:
+#   SUPABASE_DB_URL              Postgres connection string -> psql path,
+#                                the same credential `migrate_supabase.py
+#                                --schema` documents
+#   SUPABASE_ACCESS_TOKEN        Supabase Management API token -> HTTPS path
+#   The service-role key alone cannot create tables or functions: PostgREST
+#   does not expose DDL.
+#
+# SAFETY
+#   * `confirm_project_ref` must equal the project ref inside SUPABASE_URL, so
+#     a copy/paste cannot point this at the wrong project.
+#   * `apply` defaults to false: the default run is read-only.
+#   * The preflight refuses to touch a project whose public.products already
+#     holds rows unless `allow_existing_rows` is set.
+#   * `live_purge_check` creates ONE uniquely named disposable product plus one
+#     dummy object, deletes both through the real admin path, and reports. It
+#     is off by default and never touches an existing product.
+name: Staging schema migration (products + hard delete)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_project_ref:
+        description: "Target project ref (must match the SUPABASE_URL secret host)"
+        required: true
+      apply:
+        description: "false = read-only preflight only"
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+      allow_existing_rows:
+        description: "true = proceed even if public.products already has rows"
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+      live_purge_check:
+        description: "true = also run the disposable product delete/purge check"
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      CONFIRM_REF: ${{ inputs.confirm_project_ref }}
+      APPLY: ${{ inputs.apply }}
+      ALLOW_EXISTING: ${{ inputs.allow_existing_rows }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Only needed for the SUPABASE_DB_URL transport.
+      - name: Install the PostgreSQL client
+        if: env.SUPABASE_DB_URL != ''
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      - name: Apply the approved schema + hard-delete migration
+        run: |
+          set -euo pipefail
+          ARGS=(--confirm-project-ref "$CONFIRM_REF")
+          if [ "$APPLY" = "true" ]; then ARGS+=(--apply); fi
+          if [ "$ALLOW_EXISTING" = "true" ]; then ARGS+=(--allow-existing-rows); fi
+          python3 tools/apply_staging_schema.py "${ARGS[@]}"
+
+      - name: Verify the repo's SQL is still the approved set
+        # A drift guard: the section files this workflow applies must still be
+        # the generated ones (tools/split_schema.py --check is read-only).
+        run: python3 tools/split_schema.py --check
+
+      - name: Live delete + Storage purge check (disposable product)
+        if: ${{ inputs.apply == 'true' && inputs.live_purge_check == 'true' }}
+        run: |
+          set -euo pipefail
+          python3 tools/staging_delete_check.py --confirm-project-ref "$CONFIRM_REF"

@@ -119,6 +119,22 @@ CREATE INDEX IF NOT EXISTS idx_campaigns_sent_at ON marketing_campaigns(sent_at 
 
 -- Addresses that asked not to receive promotional campaigns. The address is
 -- retained only as a suppression key so a later import cannot re-subscribe it.
+-- Per-recipient send log for a broadcast. The campaign row's counters say how
+-- many went out; this says WHO, which is what makes a big broadcast resumable
+-- after a restart or a redeploy (already-sent addresses are skipped, so nobody
+-- gets the same promotion twice) and what lets a failed address be retried on
+-- its own. Addresses live here only as the key of a send record.
+CREATE TABLE IF NOT EXISTS marketing_campaign_sends (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  campaign_id TEXT NOT NULL,
+  email       TEXT NOT NULL COLLATE NOCASE,
+  status      TEXT NOT NULL DEFAULT 'sent',
+  detail      TEXT,
+  at          TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(campaign_id, email)
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_sends_campaign ON marketing_campaign_sends(campaign_id);
+
 CREATE TABLE IF NOT EXISTS marketing_suppressions (
   email       TEXT PRIMARY KEY COLLATE NOCASE,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))

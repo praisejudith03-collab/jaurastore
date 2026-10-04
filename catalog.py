@@ -384,6 +384,31 @@ def photo_repair_candidates(product):
     return [rel for _s, _n, rel in scored]
 
 
+def primary_image(product):
+    """The ONE photo that stands for a product in a list, an order line or an
+    email thumbnail.
+
+    A short, stable rule so the storefront card, the admin order row, the
+    receipt and the confirmation email can never disagree about which photo
+    represents a line: the cover (``image``) first, then the same field under
+    its legacy aliases, then the first real entry of the gallery. Returns ""
+    when the row genuinely has no photo - callers fall back to their own
+    branded placeholder rather than inventing a path here.
+    """
+    p = dict(product or {})
+    for key in ("image", "image_url", "imageUrl"):
+        value = str(p.get(key) or "").strip()
+        if value:
+            return value
+    gallery = p.get("images")
+    if isinstance(gallery, (list, tuple)):
+        for entry in gallery:
+            value = str(entry or "").strip()
+            if value:
+                return value
+    return ""
+
+
 def resolve_images(products):
     """Apply resolve_image to a list of products."""
     return [resolve_image(p) for p in (products or [])]
@@ -854,6 +879,208 @@ def stock_of(product):
         return max(0, int(str(raw).strip())) if raw is not None and str(raw).strip() else 0
     except (TypeError, ValueError):
         return 0
+
+
+# ------------------------------------------------------- stock guardrails ---
+# ONE derived availability for a stored row, used by the background sweep and
+# by anything that has to answer "is this sellable?" from the quantities
+# themselves. There is no persisted status column to go stale: the quantity is
+# the truth, and an explicit whole-product OFF still wins over it.
+def derived_stock_status(product):
+    """``"out"`` / ``"in"`` for one row, derived from its own quantities.
+
+    Mirrors api._public_product (the storefront's answer) and the /api/stock
+    screen, so the database row, the admin view and the shop cannot disagree.
+    A row whose EVERY variant is zero is out; a row with any variant left is
+    in. A deliberate OFF (stockStatus "out", is_in_stock false) is out even if
+    a stale number travels beside it.
+    """
+    p = product if isinstance(product, dict) else {}
+    if _explicit_out_of_stock(p):
+        return "out"
+    os_map = p.get("optionStock")
+    if isinstance(os_map, dict) and os_map:
+        total = 0
+        for value in os_map.values():
+            try:
+                total += max(0, int(str(value).strip() or 0))
+            except (TypeError, ValueError):
+                continue                      # a junk variant counts as zero
+        return "in" if total > 0 else "out"
+    return "in" if stock_of(p) > 0 else "out"
+
+
+def derived_variant_statuses(product):
+    """``{"Red": "out", "Black": "in"}`` for a variant-tracked row, else {}.
+
+    The same map the storefront receives (option_stock_status) so a variant
+    that just sold its last unit reads "out" for every reader, not only for
+    the one that happened to recompute it.
+    """
+    p = product if isinstance(product, dict) else {}
+    os_map = p.get("optionStock")
+    if not isinstance(os_map, dict) or not os_map:
+        return {}
+    out = {}
+    for key, value in os_map.items():
+        try:
+            qty = max(0, int(str(value).strip() or 0))
+        except (TypeError, ValueError):
+            qty = 0
+        out[str(key)] = "in" if qty > 0 else "out"
+    return out
+
+
+def stock_guardrail_fix(product):
+    """``(row, changed_fields)`` repairing only the invariants this app owns.
+
+    Deliberately NOT repaired: a row whose legacy ``stock`` alias says a
+    positive number while the canonical ``stock_quantity`` says 0 (or the
+    reverse). That disagreement is ambiguous - on this shop it is usually a
+    table created with ``stock_quantity default 0`` before the real numbers
+    were imported into ``stock`` - and writing EITHER value over the other can
+    destroy the only copy of the truth. Those rows are reported by the sweep
+    instead (see ``stock_guardrail_report``), never rewritten.
+
+    What IS repaired, because the app itself owns these and every write path
+    already enforces them (``normalize``), so repairing only ever makes a row
+    agree with what the shop is ALREADY serving:
+
+      * ``optionStock`` values are non-negative integers (junk reads as 0),
+      * a variant-tracked row's total IS the sum of its variants - the classic
+        "shows In Stock, then fails checkout" drift.
+
+    A row that has been deliberately switched off (``stockStatus: "out"``) is
+    ALSO left exactly as written. Its availability is already derived as
+    "out" on every read, and zeroing the numbers the owner typed would throw
+    away the quantities she needs the moment she switches the product back
+    on - the same data-loss trap as the stock-column clash.
+
+    Returns the row unchanged with ``[]`` when it is already consistent, so a
+    sweep over a healthy catalogue writes nothing at all.
+    """
+    p = dict(product or {})
+    changed = []
+    os_raw = p.get("optionStock")
+    if isinstance(os_raw, dict) and os_raw:
+        os_map = _clean_option_stock(os_raw)
+        if os_map != os_raw:
+            changed.append("optionStock")
+        total = sum(int(v or 0) for v in os_map.values())
+        for field in ("stock", "stock_quantity"):
+            try:
+                current = int(str(p.get(field)).strip())
+            except (TypeError, ValueError):
+                current = None
+            if current != total:
+                changed.append(field)
+        if changed:
+            p["optionStock"] = os_map
+            p["stock"] = total
+            p["stock_quantity"] = total
+    return p, changed
+
+
+def stock_guardrail_report():
+    """Rows whose two stock spellings disagree. Report only; never rewrite.
+
+    ``{"checked": n, "disagreements": [{"id", "stock", "stock_quantity",
+    "status"}, ...]}``
+
+    Reads the RAW backend rows, not ``merged()``: normalization collapses
+    ``stock_quantity`` onto the ``stock`` column, so a merged row can no longer
+    show the disagreement this is looking for. Both values are integers and
+    they say different things, and which one the shop means is an operator
+    decision - so the sweep surfaces them (health and stock screens) instead of
+    guessing. This is the one class of drift a background pass must never
+    "fix" silently: on this shop it is usually a table created with
+    ``stock_quantity default 0`` before the real numbers were imported into
+    ``stock``, and writing either value over the other destroys the only copy
+    of the truth.
+    """
+    rows = []
+    try:
+        from supabase_store import products_table_rows
+        live = products_table_rows()
+        if isinstance(live, list):
+            rows = live
+    except Exception:
+        rows = []
+    if not rows:
+        try:
+            rows = (overrides() or {}).get("products") or []
+        except Exception:
+            rows = []
+    out = []
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        if isinstance(row.get("optionStock"), dict) and row.get("optionStock"):
+            continue                       # variant rows: the sum above is truth
+        try:
+            alias = int(str(row.get("stock")).strip())
+            canon = int(str(row.get("stock_quantity")).strip())
+        except (TypeError, ValueError):
+            continue                       # a missing spelling is not a clash
+        if alias == canon or alias < 0 or canon < 0:
+            continue
+        out.append({"id": str(row.get("id")), "stock": alias,
+                    "stock_quantity": canon,
+                    "status": derived_stock_status(row)})
+    return {"checked": len(rows), "disagreements": out}
+
+
+def stock_guardrail_sweep(actor="stock-guardrail", limit=0):
+    """The BACKGROUND half of the stock guardrail. Never raises.
+
+    The write paths fix the rows they touch; this pass catches the ones they
+    did not - a row edited straight in the database, an import, an older
+    mirror, a supplier write that landed outside the app - and brings them
+    back to the invariants ``normalize`` enforces, so "In Stock" can never
+    survive a row whose variants are all zero.
+
+    It is cheap when there is nothing to do (one read, zero writes) and it
+    writes ONLY rows that violate an invariant, so running it on a timer never
+    churns ``updated_at`` across the catalogue. Rows whose two stock spellings
+    merely disagree are counted in ``disagreements`` and left alone - see
+    ``stock_guardrail_report``.
+
+    Returns ``{"checked", "fixed", "ids", "disagreements", "disagreementIds",
+    "skipped"}``.
+    """
+    report = {"checked": 0, "fixed": 0, "ids": [], "skipped": "",
+              "disagreements": 0, "disagreementIds": []}
+    try:
+        rows = merged(include_hidden=True)
+    except Exception as exc:                  # a read failure is never a repair
+        report["skipped"] = f"catalogue unreadable: {exc}"
+        return report
+    rows = [r for r in (rows or []) if isinstance(r, dict) and r.get("id")]
+    if limit:
+        rows = rows[:limit]
+    for row in rows:
+        report["checked"] += 1
+        fixed, changed = stock_guardrail_fix(row)
+        if not changed:
+            continue
+        try:
+            saved = upsert(fixed, actor=actor)
+        except Exception as exc:
+            report["skipped"] = f"{row.get('id')}: {exc}"
+            continue
+        product = saved[0] if isinstance(saved, tuple) and saved else None
+        action = saved[1] if isinstance(saved, tuple) and len(saved) > 1 else None
+        mirrored = saved[2] if isinstance(saved, tuple) and len(saved) > 2 else True
+        if product and action not in ("error", "rejected", "permanently-removed",
+                                      "test-fixture") and mirrored is not False:
+            report["fixed"] += 1
+            report["ids"].append(str(row.get("id")))
+        else:
+            report["skipped"] = f"{row.get('id')}: not saved ({action})"
+    flagged = stock_guardrail_report()
+    report["disagreements"] = len(flagged.get("disagreements") or [])
+    report["disagreementIds"] = [f["id"] for f in (flagged.get("disagreements") or [])[:20]]
+    return report
 
 
 def _clean_option_stock(raw):
@@ -2790,6 +3017,40 @@ def remove(pid, actor=None):
     _tombstone()
     _sync_repo_async()
     return report
+
+
+def hide_now(pid, actor=None):
+    """Hide a product from the live catalogue at once, without purging anything.
+
+    The async delete needs the shop to stop selling a product on the very next
+    read - the Supabase RPC that removes the row and its media is queued and may
+    take seconds. This writes exactly the local ``deleted`` list the synchronous
+    path writes (and drops any local override row for the id), so ``merged()``
+    stops serving it immediately; media and the products-table row are left to
+    the worker. Returns True when the local hide landed.
+    """
+    pid = str(pid or "").strip()
+    if not pid:
+        return False
+
+    def _apply(data, _path):
+        data["products"] = [p for p in (data.get("products") or [])
+                            if str((p or {}).get("id") or "") != pid]
+        deleted = list(data.get("deleted") or [])
+        if pid not in deleted:
+            deleted.append(pid)
+        data["deleted"] = deleted
+        data["updatedAt"] = (datetime.datetime.utcnow()
+                             .isoformat(timespec="seconds") + "Z")
+        data["updatedBy"] = actor or ""
+        return data
+
+    try:
+        _mutate(actor, _apply)
+        return True
+    except Exception as exc:                       # pragma: no cover - best effort
+        print(f"[catalog] immediate hide skipped: {exc}")
+        return False
 
 
 def _purge_local_product_rows(pid):
