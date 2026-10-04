@@ -245,3 +245,20 @@ def test_the_service_worker_no_longer_serves_any_cached_media_copy_forever():
     assert "cache.delete(request)" in body, \
         "a copy the server no longer has must be evicted, not served"
     assert "return hit" in body, "offline must still fall back to the last copy"
+
+
+def test_no_upload_path_hands_out_a_year_long_cache_any_more():
+    """S3 used to pin every object for 31536000s, proofs included."""
+    src = open(os.path.join(ROOT, "storage.py"), encoding="utf-8").read()
+    assert "max-age=31536000" not in src, \
+        "an uploaded photo must not be pinned for a year - that is the ghost"
+    assert "PUBLIC_MEDIA_CACHE_CONTROL" in src
+    # the S3 write only sends the header when it has a bounded policy
+    assert 'extra["CacheControl"] = cache_control' in src
+
+
+def test_the_stored_photo_policy_and_the_route_agree():
+    import storage
+    assert storage.PUBLIC_MEDIA_CACHE_CONTROL == "public, max-age=300, must-revalidate"
+    app_src = open(os.path.join(ROOT, "app.py"), encoding="utf-8").read()
+    assert storage.PUBLIC_MEDIA_CACHE_CONTROL in app_src

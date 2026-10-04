@@ -308,6 +308,12 @@ def optimize_image_bytes(data: bytes, ext: str) -> tuple:
     return out, out_ext
 
 
+# The Cache-Control a PUBLIC uploaded photo is stored and served with. Short
+# and revalidating on purpose: a deleted photo must stop showing (the ghost
+# report), while a browsing session still gets its picture from the cache.
+PUBLIC_MEDIA_CACHE_CONTROL = "public, max-age=300, must-revalidate"
+
+
 def _is_sensitive(folder: str) -> bool:
     """True when the folder holds private material (payment proofs/receipts)."""
     return _folder_name(folder) in SENSITIVE_FOLDERS
@@ -329,7 +335,9 @@ def _save(data: bytes, folder: str, ext: str, s3_content_type: str = "") -> tupl
             return False, "Supabase Storage upload failed.", ""
 
     if Config.UPLOAD_MODE == "s3":
-        ok2, _msg2, url = _save_s3(data, key, ext, content_type)
+        ok2, _msg2, url = _save_s3(
+            data, key, ext, content_type,
+            cache_control="" if _is_sensitive(folder) else PUBLIC_MEDIA_CACHE_CONTROL)
         if ok2:
             return True, "stored", url
         if Config.ENV != "testing":
@@ -385,7 +393,8 @@ def _local_path(key: str) -> str:
     return os.path.join(base, key.replace("/", os.sep))
 
 
-def _save_s3(data: bytes, key: str, ext: str, content_type: str = ""):
+def _save_s3(data: bytes, key: str, ext: str, content_type: str = "",
+             cache_control: str = ""):
     """S3 / R2 upload. Requires boto3 plus credentials in .env."""
     if not (Config.S3_BUCKET and Config.S3_ACCESS_KEY and Config.S3_SECRET_KEY):
         return False, "s3 not configured", ""
@@ -405,12 +414,17 @@ def _save_s3(data: bytes, key: str, ext: str, content_type: str = ""):
         if Config.S3_ENDPOINT:
             kwargs["endpoint_url"] = Config.S3_ENDPOINT
         client = boto3.client("s3", **kwargs)
+        extra = {}
+        if cache_control:
+            # Never a year: a photo the owner deletes must stop showing. An
+            # empty cache_control (payment proofs) sends no header at all.
+            extra["CacheControl"] = cache_control
         client.put_object(
             Bucket=Config.S3_BUCKET,
             Key=key,
             Body=data,
             ContentType=content_type or "application/octet-stream",
-            CacheControl="public, max-age=31536000",
+            **extra,
         )
         base = (Config.S3_PUBLIC_BASE or "").rstrip("/")
         if not base:
@@ -457,11 +471,30 @@ def _save_supabase(data: bytes, key: str, ext: str, content_type: str,
         return False, "supabase client unavailable", ""
     sensitive = _is_sensitive(folder)
     bucket = supabase_store._bucket()
+    # The object's OWN cache lifetime, not just our redirect's. Public photos
+    # are referenced BY their bucket URL, so this header is what a phone obeys
+    # after following a link once: without it Supabase serves "max-age=3600"
+    # and a photo the owner deleted keeps appearing for an hour (or much
+    # longer behind a cache that was never asked to revalidate). Five minutes
+    # + must-revalidate makes a purge visible almost immediately while a
+    # browsing session still never re-downloads the same picture.
+    # Sent as an extra header and RETRIED without it, because an older
+    # storage client that rejects an unknown option must not break uploads.
+    options = {"content-type": content_type or "application/octet-stream"}
+    if not sensitive:
+        options["cache-control"] = PUBLIC_MEDIA_CACHE_CONTROL
     try:
-        c.storage.from_(bucket).upload(
-            key, data, {"content-type": content_type or "application/octet-stream"})
+        c.storage.from_(bucket).upload(key, data, options)
     except Exception as exc:
-        return False, f"supabase upload failed ({exc.__class__.__name__})", ""
+        if len(options) > 1:
+            try:
+                c.storage.from_(bucket).upload(
+                    key, data,
+                    {"content-type": content_type or "application/octet-stream"})
+            except Exception as exc2:
+                return False, f"supabase upload failed ({exc2.__class__.__name__})", ""
+        else:
+            return False, f"supabase upload failed ({exc.__class__.__name__})", ""
     if sensitive:
         try:
             res = c.storage.from_(bucket).create_signed_url(

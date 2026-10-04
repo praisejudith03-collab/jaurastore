@@ -54,9 +54,16 @@ class FakeBucket:
     def upload(self, path, file, file_options=None):
         if self._owner.fail_uploads:
             raise ConnectionError("bucket unreachable")
+        options = file_options or {}
+        # An older storage client rejects an option it does not know. The
+        # upload path is expected to notice and retry WITHOUT it rather than
+        # lose the photo (see storage._save_supabase).
+        if self._owner.reject_cache_control and options.get("cache-control"):
+            raise TypeError("unexpected upload option: cache-control")
+        self._owner.cache_headers.append((path, options.get("cache-control", "")))
         data = file.read() if hasattr(file, "read") else bytes(file)
         self._owner.objects.setdefault(self._name, {})[path] = (
-            data, (file_options or {}).get("content-type", ""))
+            data, options.get("content-type", ""))
         return {"Key": f"{self._name}/{path}"}
 
     def create_signed_url(self, path, expires_in, options=None):
@@ -134,6 +141,8 @@ class FakeSupabaseClient:
         self.signed = []         # (bucket, path, expires_in) for every sign
         self.token_seq = 0
         self.fail_uploads = False
+        self.reject_cache_control = False   # old client: unknown option = error
+        self.cache_headers = []             # (path, cache-control) per upload
         self.tables = {}         # table name -> [row dicts]
         self.storage = FakeStorage(self)
 
@@ -547,3 +556,52 @@ def test_boot_restores_variant_stock_from_supabase(monkeypatch, tmp_path):
              for r in query("SELECT * FROM variant_stock") }
     assert rows == {("wix-001", "Red"): 3, ("wix-002", "__default__"): 11}
     execute("DELETE FROM variant_stock")        # leave the shared test DB clean
+
+
+# ------------------------------------------------- photos must not outlive
+# ------------------------------------------------- their deletion in a cache
+def test_an_uploaded_photo_is_stored_with_a_short_revalidating_cache(fake):
+    """The object's OWN Cache-Control, not just our redirect's.
+
+    Products reference the bucket URL directly, so Supabase's default
+    "max-age=3600" is what a phone obeys - and a deleted photo kept appearing
+    for an hour (or far longer behind a cache that was never asked to
+    revalidate). Five minutes + must-revalidate makes a purge visible almost
+    immediately while a browsing session still never re-downloads the same
+    picture.
+    """
+    ok, _msg, url = storage.save_image(_png(), folder="products", filename="p.png")
+    assert ok, _msg
+    assert fake.cache_headers, "the upload must carry a cache-control option"
+    stored_key, header = fake.cache_headers[-1]
+    assert header == "public, max-age=300, must-revalidate", header
+    key = url.split("/uploads/")[-1].lstrip("/")
+    assert stored_key.endswith(key), (stored_key, key)
+    assert key in fake.objects.get("uploads", {}), "the object really landed"
+
+
+def test_the_photo_cache_policy_matches_the_uploads_route():
+    """One number, one meaning, in both places."""
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "app.py"), encoding="utf-8").read()
+    assert storage.PUBLIC_MEDIA_CACHE_CONTROL in src, \
+        "the route and the stored object must agree, or a purge half-works"
+
+
+def test_an_old_client_that_rejects_the_option_still_gets_the_photo(fake):
+    """A storage client that does not know the option must not lose an upload."""
+    fake.reject_cache_control = True
+    ok, msg, url = storage.save_image(_png(), folder="products", filename="p.png")
+    assert ok, msg
+    assert fake.objects.get("uploads"), "the retry without the option must still store the file"
+    assert url.endswith(".png")
+    assert fake.cache_headers[-1][1] == "", \
+        "the retry is the plain upload: no cache-control to reject"
+
+
+def test_a_payment_proof_is_never_given_a_public_cache_header(fake):
+    ok, _msg, url = storage.save_image(_png(), folder="proofs", filename="r.png")
+    assert ok
+    assert "sign" in url, "a proof comes back as a signed URL"
+    assert fake.cache_headers[-1][1] == "", \
+        "payment evidence is private and must not carry a public cache policy"
