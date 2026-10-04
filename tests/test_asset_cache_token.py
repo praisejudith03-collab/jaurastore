@@ -14,7 +14,7 @@ ASSETS = {
     "js/admin.js": "794c74f68ec11adde1e21e24a042cd0148ba810aeb141b19823b59fab08bcee7",
     "js/i18n.js": "ea588613ee0b2225f83be9a86364adfec811fdb1dfe215ab1068346ed49dcd83",
     "js/net.js": "972876c0f8dadf54702dec9925a28f990fe48a907b99c22553e381fafe6eab90",
-    "sw.js": "de76d217b341ef8151fe1d91f58d73de30f959601a483dff27b91cc3ea85e453",
+    "sw.js": "bf0929f2b5d1ab3a63be533bc61ce0b8534aa10fa49a22e8a29262cb87a1850f",
 }
 
 def _refs(text):
