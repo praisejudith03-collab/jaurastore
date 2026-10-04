@@ -347,13 +347,37 @@ def test_referral_payout_skips_when_site_settings_unreachable(sb, monkeypatch):
     execute("DELETE FROM coupons")
 
 
+@pytest.fixture()
+def manual_queue():
+    """Drive the task queue from the test thread, never from the worker.
+
+    The API's delete path is asynchronous by design; a live worker would race
+    the assertion that the request itself did NOT run the heavy half. Manual
+    mode keeps the thread alive but idle, and this fixture always restores it.
+    """
+    import task_queue
+    task_queue.reset()
+    task_queue.set_manual(True)
+    yield task_queue
+    task_queue.set_manual(False)
+    task_queue.reset()
+
+
 # ------------------------------------------------ product delete (strict)
-def test_admin_product_delete_503_when_supabase_delete_fails(client, monkeypatch):
-    """A failed Supabase hard delete must never be reported as successful."""
+def test_admin_product_delete_503_when_the_durable_tombstone_fails(
+        client, monkeypatch, manual_queue):
+    """A delete that could not be made durable is never reported as successful.
+
+    The tombstone is written in the request path on purpose: it is what stops
+    the product selling, so a failed write must surface (503) instead of
+    queueing work for a row that is still live.
+    """
     monkeypatch.setattr(Config, "ENV", "production")
     monkeypatch.setattr(Config, "SUPABASE_URL", FAKE_ORIGIN)
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
     import supabase_store
+    task_queue = manual_queue
+    monkeypatch.setattr(supabase_store, "add_deleted_id", lambda pid: False)
     monkeypatch.setattr(supabase_store, "hard_delete_products",
                         lambda ids: {"deleted": [], "files": 0, "errors": ["down"]})
     tok = _login(client)
@@ -362,30 +386,106 @@ def test_admin_product_delete_503_when_supabase_delete_fails(client, monkeypatch
     assert r.status_code == 503
     body = r.get_json()
     assert body["ok"] is False and "Supabase" in body["error"]
+    assert "tombstone" in body["error"].lower()
+    assert task_queue.pending() == 0, "a failed tombstone must not queue work"
 
 
-def test_admin_product_delete_ok_when_supabase_confirms(client, monkeypatch):
+def test_admin_product_delete_queues_the_hard_delete_and_answers_immediately(
+        client, monkeypatch, manual_queue):
+    """The portal gets 200 + a job id at once; the RPC runs on the worker.
+
+    The request path must do exactly one small durable write. The multi-second
+    Supabase RPC that used to run inline is what timed the browser out with
+    "Could not reach server" while the delete was still running.
+    """
+    import time
     monkeypatch.setattr(Config, "ENV", "production")
     monkeypatch.setattr(Config, "SUPABASE_URL", FAKE_ORIGIN)
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
     import supabase_store
-    monkeypatch.setattr(supabase_store, "hard_delete_products",
-                        lambda ids: {"deleted": list(ids), "files": 2, "errors": []})
+    task_queue = manual_queue
+    tombstones = []
+    monkeypatch.setattr(supabase_store, "add_deleted_id",
+                        lambda pid: tombstones.append(pid) or True)
+    seen = {}
+
+    def _hard(ids):
+        seen["ids"] = list(ids)
+        return {"deleted": list(ids), "files": 2, "errors": []}
+
+    monkeypatch.setattr(supabase_store, "hard_delete_products", _hard)
     tok = _login(client)
+    started = time.monotonic()
     r = client.delete("/api/admin/products/jau-001",
                       headers={"X-CSRF-Token": tok})
-    assert r.status_code == 200
+    elapsed = time.monotonic() - started
+    assert r.status_code == 200, r.data
     body = r.get_json()
     assert body["ok"] is True
-    assert body["filesRemoved"] == 2
-    # The response names the backend that did the work, so a caller can tell a
-    # real Supabase delete from a local-only catalogue edit.
-    assert body["deleteMode"] == "supabase-hard"
+    assert body["deleted"] is True
+    # The response names the backend: "queued" is a real state, not a claim
+    # that Supabase already removed the row.
+    assert body["deleteMode"] == "queued"
+    assert body["queued"] is True and body["jobId"].startswith("JOB-")
+    assert body["filesRemoved"] == 0 and body["filesPending"] is True
+    assert tombstones == ["jau-001"], "the tombstone must land in the request"
+    assert "ids" not in seen, "the hard delete RPC must not run inside the request"
+    assert elapsed < 1.0
+    # The worker then performs the heavy half, and the job panel can prove it.
+    task_queue.wait_idle(timeout=5)
+    assert seen["ids"] == ["jau-001"], "the worker never ran the RPC"
+    job = task_queue.get(body["jobId"])
+    assert job["state"] == "done"
+    assert job["result"]["filesRemoved"] == 2
+    panel = client.get("/api/admin/tasks/jobs").get_json()
+    assert panel["ok"] is True
+    assert any(j["id"] == body["jobId"] for j in panel["jobs"])
+    assert panel["stats"]["done"] >= 1
 
 
-def test_admin_product_delete_cleanup_failure_is_not_reported_as_success(
+def test_admin_product_delete_cleanup_failure_lands_in_the_job_panel(
+        client, monkeypatch, manual_queue):
+    """Row gone, one media/tombstone step failed -> a partial job, still never
+    a clean success. The old path answered 503 in the request, which is what
+    the browser turned into a timeout; the operator now sees the same failure
+    in the job panel and can retry it."""
+    monkeypatch.setattr(Config, "ENV", "production")
+    monkeypatch.setattr(Config, "SUPABASE_URL", FAKE_ORIGIN)
+    monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
+    import supabase_store
+    task_queue = manual_queue
+    monkeypatch.setattr(supabase_store, "add_deleted_id", lambda pid: True)
+    seen = {}
+
+    def _hard(ids):
+        seen["ids"] = list(ids)
+        return {"deleted": list(ids), "files": 1,
+                "errors": ["storage: bucket unreachable"]}
+
+    monkeypatch.setattr(supabase_store, "hard_delete_products", _hard)
+    tok = _login(client)
+    r = client.delete("/api/admin/products/jau-cleanup",
+                      headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["deleteMode"] == "queued"
+    task_queue.wait_idle(timeout=5)
+    assert seen["ids"] == ["jau-cleanup"]
+    job = task_queue.get(body["jobId"])
+    assert job["state"] == "done"
+    assert job["result"]["filesRemoved"] == 1
+    assert job["result"]["partial"] is True
+    assert job["result"]["errors"] == ["storage: bucket unreachable"]
+
+
+def test_admin_product_delete_sync_escape_hatch_keeps_the_strict_contract(
         client, monkeypatch):
-    """Row gone but media/tombstone cleanup failed -> 503 with the report."""
+    """``?sync=1`` still blocks on the RPC and still fails closed.
+
+    Two callers need it: the migration runbook's manual verification (one
+    request, one answer) and any integration that must not proceed until the
+    row is provably gone.
+    """
     monkeypatch.setattr(Config, "ENV", "production")
     monkeypatch.setattr(Config, "SUPABASE_URL", FAKE_ORIGIN)
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
@@ -399,13 +499,25 @@ def test_admin_product_delete_cleanup_failure_is_not_reported_as_success(
 
     monkeypatch.setattr(supabase_store, "hard_delete_products", _hard)
     tok = _login(client)
-    r = client.delete("/api/admin/products/jau-cleanup", headers={"X-CSRF-Token": tok})
-    assert r.status_code == 503
+    r = client.delete("/api/admin/products/jau-sync",
+                      headers={"X-CSRF-Token": tok, "X-Jaura-Sync": "1"},
+                      query_string={"sync": "1"})
+    assert r.status_code == 503, r.data
     body = r.get_json()
     assert body["ok"] is False
     assert "cleanup" in body["error"].lower()
     assert body["report"]["errors"] == ["storage: bucket unreachable"]
-    assert seen["ids"] == ["jau-cleanup"]
+    assert seen["ids"] == ["jau-sync"]
+    # And the confirming case is still the labelled inline Supabase delete.
+    monkeypatch.setattr(supabase_store, "hard_delete_products",
+                        lambda ids: {"deleted": list(ids), "files": 2, "errors": []})
+    r = client.delete("/api/admin/products/jau-sync-2",
+                      headers={"X-CSRF-Token": tok},
+                      query_string={"sync": "1"})
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["deleteMode"] == "supabase-hard"
+    assert body["filesRemoved"] == 2
 
 
 def test_admin_product_delete_local_mode_is_labelled(client, monkeypatch):

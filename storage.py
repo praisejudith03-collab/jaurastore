@@ -355,14 +355,229 @@ def _save(data: bytes, folder: str, ext: str, s3_content_type: str = "") -> tupl
 
 def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf: bool = False,
                max_bytes: int = MAX_BYTES):
-    """Validate and upload an image/receipt through Supabase Storage."""
+    """Validate and upload an image/receipt through Supabase Storage.
+
+    Re-encoded before storage: a phone original is downscaled and written back
+    as a progressive JPEG, or as WebP when the image carries transparency (a
+    WebP with an alpha channel is smaller than a PNG and keeps the alpha).
+    Opaque photos deliberately stay JPEG: the same URL is used in the order
+    emails, and WebP does not render in every desktop mail client.
+
+    Every PUBLIC image also gets its .400w.webp companion built by the
+    background queue (see enqueue_thumbnail): a phone downloading a shop grid
+    should never have to pull the full-size object for a 300px card. The
+    companion is built after the response, so an upload is never slower - and
+    never fails - because of it.
+    """
     ok, msg, ext = validate_upload(data, filename, allow_pdf=allow_pdf,
                                    max_bytes=max_bytes, kind="media")
     if not ok:
         return False, msg, ""
     if kind_for(ext) == "image" and not _is_sensitive(folder):
         data, ext = optimize_image_bytes(data, ext)
-    return _save(data, folder, ext)
+    ok, msg, url = _save(data, folder, ext)
+    if ok and kind_for(ext) == "image" and not _is_sensitive(folder):
+        # A thumbnail is an optimisation, never a condition: if the queue is
+        # unavailable the photo is still stored and still served.
+        try:
+            enqueue_thumbnail(url)
+        except Exception:                              # pragma: no cover
+            pass
+    return ok, msg, url
+
+
+# ------------------------------------------------------- WebP companions
+#
+# js/store.js (thumbFor) already understands the sibling convention the
+# catalogue photos use: "images/products/x.jpg" is shown through
+# "images/products/x.400w.webp" when that file ships next to it. An UPLOADED
+# photo has no such file in the repo, so it gets the same companion written
+# into the bucket under "<key>.400w.webp" - by the background queue, right
+# after the object it belongs to, so a grid of uploads is a grid of small
+# WebPs and the original stays available for anything that needs the detail.
+THUMB_SUFFIX = ".400w.webp"
+THUMB_LONGEST_EDGE = 400
+THUMB_QUALITY = 78
+THUMB_MAX_SOURCE_BYTES = 25 * 1024 * 1024
+
+
+def thumb_key(key: str) -> str:
+    """The companion key for one of our object keys ("" when it has none)."""
+    k = clean(key, 500).lstrip("/")
+    if not k or k.endswith(THUMB_SUFFIX) or ".." in k:
+        return ""
+    base, dot, ext = k.rpartition(".")
+    if not dot or not 1 <= len(ext) <= 5:
+        return ""
+    if ext.lower() not in IMAGE_EXT:
+        return ""
+    return base + THUMB_SUFFIX
+
+
+def make_thumb_bytes(data: bytes) -> bytes:
+    """A 400px WebP copy of a photo, or b"" when it cannot be made.
+
+    Never raises and never upscales: a photo already smaller than the edge is
+    still re-encoded (WebP at quality 78 is smaller than the JPEG it replaces),
+    and anything that does not decode is simply skipped.
+    """
+    if not data or len(data) > THUMB_MAX_SOURCE_BYTES:
+        return b""
+    try:
+        from PIL import Image, ImageOps
+    except Exception:
+        return b""
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img.load()
+            img = ImageOps.exif_transpose(img)
+            if img.mode == "P":
+                img = img.convert("RGBA" if "transparency" in img.info else "RGB")
+            elif img.mode in ("CMYK", "LAB", "I", "F", "1", "L"):
+                img = img.convert("RGBA" if img.mode in ("LA", "P") else "RGB")
+            elif img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGB")
+            w, h = img.size
+            longest = max(w, h)
+            if longest > THUMB_LONGEST_EDGE:
+                scale = THUMB_LONGEST_EDGE / float(longest)
+                resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+                img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))),
+                                 resample)
+            buf = io.BytesIO()
+            img.save(buf, "WEBP", quality=THUMB_QUALITY, method=6)
+            out = buf.getvalue()
+    except Exception:
+        return b""
+    return out or b""
+
+
+def store_thumbnail_bytes(thumb: bytes, key: str) -> str:
+    """Write ``thumb`` to the companion key beside ``key`` (best-effort).
+
+    Returns the companion URL, or "" when it could not be written. Storage is
+    chosen exactly like _save() so the companion always lands next to the
+    object it belongs to - including the local disk in test/development, where
+    the /uploads/<key> route reads it back.
+    """
+    companion = thumb_key(key)
+    if not thumb or not companion:
+        return ""
+    folder = companion.split("/", 1)[0]
+    if _is_sensitive(folder):
+        # Defence in depth: payment evidence is never copied into a second
+        # object, whatever the caller asks for.
+        return ""
+    try:
+        if Config.UPLOAD_MODE == "supabase":
+            ok, _msg, url = _save_supabase(
+                thumb, companion, "webp", "image/webp", folder)
+            if ok:
+                if Config.ENV == "testing":
+                    _write_local(companion, thumb)
+                return url
+        if Config.UPLOAD_MODE == "s3":
+            ok, _msg, url = _save_s3(thumb, companion, "webp", "image/webp",
+                                     PUBLIC_MEDIA_CACHE_CONTROL)
+            if ok:
+                return url
+        _write_local(companion, thumb)
+        return "/uploads/" + companion
+    except Exception as exc:
+        print(f"[thumb] companion write skipped: {exc.__class__.__name__}")
+        return ""
+
+
+def _write_local(key: str, data: bytes) -> bool:
+    """Best-effort local write of one object (used in test/development)."""
+    try:
+        full = _local_path(key)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "wb") as fh:
+            fh.write(data)
+        return True
+    except Exception:
+        return False
+
+
+def store_thumbnail(data: bytes, key: str) -> str:
+    """Build and store the companion for one object (never raises)."""
+    return store_thumbnail_bytes(make_thumb_bytes(data), key)
+
+
+def fetch_object(key: str) -> bytes:
+    """The bytes of one of our stored objects (b"" when unreachable).
+
+    Local disk first (test / development, and any key the dyno still holds),
+    then the Supabase bucket. Never raises: the caller is a background job
+    that must not die on one missing object.
+    """
+    k = clean(key, 500).lstrip("/")
+    if not k or ".." in k:
+        return b""
+    local = resolve_local(k)
+    if local:
+        try:
+            with open(local, "rb") as fh:
+                return fh.read()
+        except Exception:
+            pass
+    try:
+        if not (Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY):
+            return b""
+        import supabase_store
+        client = supabase_store.client()
+        if client is None:
+            return b""
+        data = client.storage.from_(supabase_store._bucket()).download(k)
+        if isinstance(data, dict):      # older storage3 clients wrap the body
+            data = data.get("data") or data.get("body")
+        if hasattr(data, "read"):
+            data = data.read()
+        if isinstance(data, memoryview):
+            data = data.tobytes()
+        return bytes(data) if isinstance(data, (bytes, bytearray)) else b""
+    except Exception:
+        return b""
+
+
+def _task_build_thumb(payload):
+    """Queue job: build the .400w.webp companion for one object."""
+    key = clean((payload or {}).get("key"), 500).lstrip("/")
+    companion = thumb_key(key)
+    if not key or not companion:
+        return {"skipped": "not a companion-able key"}
+    data = fetch_object(key)
+    if not data:
+        return {"skipped": "object unreachable", "key": key}
+    thumb = make_thumb_bytes(data)
+    if not thumb:
+        return {"skipped": "not a decodable image", "key": key}
+    url = store_thumbnail_bytes(thumb, key)
+    return {"ok": bool(url), "key": companion,
+            "bytes": len(thumb), "from": len(data)}
+
+
+def enqueue_thumbnail(value: str) -> str:
+    """Ask the background queue for this object's companion (never raises).
+
+    Called from the upload path, so it must be cheap and infallible: if the
+    queue is unavailable the job is simply not queued (the backfill tool and
+    the next upload of the same photo both cover it). Returns the job id.
+    """
+    try:
+        key = _key_from_url(value) or ""
+        if not key or not thumb_key(key):
+            return ""
+        if _is_sensitive(key.split("/", 1)[0]):
+            return ""
+        import task_queue
+        task_queue.register("thumb.build", _task_build_thumb,
+                            label="Build thumbnail")
+        job = task_queue.enqueue("thumb.build", {"key": key}, dedupe=True)
+        return str((job or {}).get("id") or "")
+    except Exception:
+        return ""
 
 
 def save_asset(data: bytes, folder: str = "misc", filename: str = "", max_bytes: int = None):

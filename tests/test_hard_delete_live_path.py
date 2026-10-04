@@ -589,9 +589,28 @@ def test_a_database_without_the_migration_fails_closed(bare_live, bare):
 
 
 # ---------------------------------------------------------- the Admin button
-def test_admin_delete_hard_deletes_in_the_real_database(client, migrated, live):
-    """Save a product through the API, delete it through the portal, and check
-    the database - not a mock - for every promised effect."""
+@pytest.fixture()
+def manual_queue():
+    """Queue work from the test thread: no worker races the DB assertions."""
+    import task_queue
+    task_queue.reset()
+    task_queue.set_manual(True)
+    yield task_queue
+    task_queue.set_manual(False)
+    task_queue.reset()
+
+
+def test_admin_delete_answers_at_once_and_the_worker_hard_deletes(
+        client, migrated, live, manual_queue):
+    """Save a product, delete it through the portal, and check the database.
+
+    The request must NOT run the multi-second RPC (that is what timed the
+    browser out): it writes the tombstone, answers 200 + ``deleteMode:
+    "queued"`` and a job id, with the row still present. The queued worker then
+    performs the real delete against the real database, and every promised
+    effect is checked there - row gone, children cascaded, tombstone row
+    written, media purged.
+    """
     tok = _login(client)
     url = _url("admin-del.jpg")
     live.objects.add(_key(url))
@@ -602,6 +621,40 @@ def test_admin_delete_hard_deletes_in_the_real_database(client, migrated, live):
     assert migrated.count("products", f"id = '{pid}'") == 1
 
     r = client.delete(f"/api/admin/products/{pid}", headers={"X-CSRF-Token": tok})
+
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["deleteMode"] == "queued"
+    assert body["queued"] is True and str(body["jobId"]).startswith("JOB-")
+    # The durable tombstone is already written, so the product can never come
+    # back; the row itself is still there because the RPC has not run yet.
+    assert migrated.count("deleted_products", f"product_id = '{pid}'") == 1
+    assert migrated.count("products", f"id = '{pid}'") == 1, \
+        "the request ran the heavy half inline"
+
+    manual_queue.wait_idle(timeout=30)
+    job = manual_queue.get(body["jobId"])
+    assert job["state"] == "done", job
+    assert migrated.count("products", f"id = '{pid}'") == 0
+    assert migrated.count("deleted_products", f"product_id = '{pid}'") == 1
+    assert _key(url) not in live.objects
+    assert job["result"]["filesRemoved"] == 1
+
+
+def test_the_sync_hatch_still_blocks_and_still_hard_deletes(
+        client, migrated, live):
+    """``?sync=1`` keeps the old one-request contract for the runbook."""
+    tok = _login(client)
+    url = _url("admin-sync.jpg")
+    live.objects.add(_key(url))
+    pid = "jau-live-4b"
+    _save(client, tok, {"id": pid, "name": "Live Four B", "priceNgn": 5000,
+                        "stock": 1, "image": url, "images": [url]})
+
+    r = client.delete(f"/api/admin/products/{pid}",
+                      headers={"X-CSRF-Token": tok},
+                      query_string={"sync": "1"})
 
     assert r.status_code == 200, r.data
     body = r.get_json()
@@ -621,7 +674,9 @@ def test_admin_delete_is_503_and_keeps_the_row_without_the_migration(
     bare.sql(f"insert into public.products (id, name) "
              f"values ('{pid}', 'Live Five')")
 
-    r = client.delete(f"/api/admin/products/{pid}", headers={"X-CSRF-Token": tok})
+    r = client.delete(f"/api/admin/products/{pid}",
+                      headers={"X-CSRF-Token": tok},
+                      query_string={"sync": "1"})
 
     assert r.status_code == 503, r.data
     body = r.get_json()
@@ -629,6 +684,79 @@ def test_admin_delete_is_503_and_keeps_the_row_without_the_migration(
     assert "Supabase" in body["error"]
     assert body["report"]["deleted"] == []
     assert bare.count("products", f"id = '{pid}'") == 1, "the row was touched"
+
+
+def test_a_database_without_any_ledger_fails_closed_even_async(
+        client, bare, bare_live):
+    """No tombstone table AND no ledger table: nothing is queued, nothing is
+    claimed.
+
+    The async path is still fail-closed where it matters. Without a durable
+    place to record the delete the request answers 503 - it must never hide a
+    product on the strength of a tombstone write that did not land, and it must
+    never queue a purge for a row that is still live.
+    """
+    import task_queue
+    task_queue.reset()
+    tok = _login(client)
+    pid = "jau-live-6"
+    bare.sql(f"insert into public.products (id, name) "
+             f"values ('{pid}', 'Live Six')")
+
+    r = client.delete(f"/api/admin/products/{pid}", headers={"X-CSRF-Token": tok})
+
+    assert r.status_code == 503, r.data
+    body = r.get_json()
+    assert body["ok"] is False
+    assert "tombstone" in body["error"].lower()
+    assert task_queue.pending() == 0, "work was queued for a live row"
+    assert bare.count("products", f"id = '{pid}'") == 1, "the row must survive"
+
+
+def test_a_queued_delete_that_keeps_failing_is_reported_not_hidden(
+        client, migrated, live, manual_queue, monkeypatch):
+    """A queued job that cannot finish parks in the panel with its reason.
+
+    The operator's fear is a product that still sells after a delete; the
+    second-worst outcome is a purge that quietly never happened. This pins the
+    job panel as the place where that becomes visible, with the row untouched
+    and the tombstone keeping the id out of the shop.
+    """
+    tok = _login(client)
+    pid = "jau-live-7"
+    _save(client, tok, {"id": pid, "name": "Live Seven", "priceNgn": 5000,
+                        "stock": 1})
+
+    real_rpc = supabase_store.hard_delete_products
+
+    def _boom(ids):
+        raise RuntimeError("storage: bucket unreachable")
+
+    monkeypatch.setattr(supabase_store, "hard_delete_products", _boom)
+    r = client.delete(f"/api/admin/products/{pid}", headers={"X-CSRF-Token": tok})
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["deleteMode"] == "queued"
+
+    manual_queue.wait_idle(timeout=30)
+    job = manual_queue.get(body["jobId"])
+    assert job["state"] == "failed", job
+    assert "bucket unreachable" in job["lastError"], job
+    assert job["attempts"] == manual_queue.MAX_ATTEMPTS
+    # The tombstone keeps it out of the shop; the row is still there for the
+    # admin to retry against.
+    assert migrated.count("deleted_products", f"product_id = '{pid}'") == 1
+    assert migrated.count("products", f"id = '{pid}'") == 1
+
+    # Retrying from the panel re-queues it, and the real RPC (through the
+    # bridge, against the real database) then completes it.
+    monkeypatch.setattr(supabase_store, "hard_delete_products", real_rpc)
+    retry = client.post(f"/api/admin/tasks/jobs/{body['jobId']}/retry",
+                        headers={"X-CSRF-Token": tok})
+    assert retry.status_code == 200, retry.data
+    manual_queue.wait_idle(timeout=30)
+    assert manual_queue.get(body["jobId"])["state"] == "done"
+    assert migrated.count("products", f"id = '{pid}'") == 0
 
 
 # ------------------------------------------------------------- image replace

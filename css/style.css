@@ -7627,3 +7627,34 @@ body.store-paused{overflow:hidden}
   .pdp-supplier-availability { margin: 8px 0 !important; padding: 9px 11px !important; font-size: 12px !important; }
   .pdp-reviews { margin-top: 16px !important; }
 }
+
+/* ============================================ admin: broadcast hub + jobs
+ * The email Broadcast Hub (/admin/marketing/broadcast) and the background-job
+ * panel that finishes deletions and broadcasts. Kept in the same visual
+ * language as the rest of the Marketing desk: a card, a count line, and rows
+ * that never overflow a phone screen.
+ */
+.mk-hub-count { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; }
+.mk-hub-count strong { font-size: 22px; line-height: 1.1; }
+.mk-hub-count small { color: #6b6b6b; font-size: 12px; }
+.mk-hub-audience { margin-bottom: 12px; padding: 12px 14px; background: #faf7f2; border: 1px solid #eadfce; border-radius: 10px; }
+.mk-hub-preview { margin: 14px 0; border: 1px solid #eadfce; border-radius: 10px; overflow: hidden; background: #fff; }
+.mk-hub-preview-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #eadfce; background: #faf7f2; }
+.mk-hub-preview-head #mk-hub-preview-meta { flex: 1; color: #6b6b6b; font-size: 12px; }
+.mk-hub-preview iframe { display: block; width: 100%; height: 520px; border: 0; background: #fff; }
+.mk-hub-bar { height: 8px; border-radius: 999px; background: #f0e8de; overflow: hidden; }
+.mk-hub-bar span { display: block; height: 100%; background: #a97e48; transition: width .3s ease; }
+.mk-hub-progress { margin-top: 12px; }
+.mk-hub-progress .btn { margin-left: 8px; }
+.mk-jobs-list { display: flex; flex-direction: column; gap: 8px; }
+.mk-jobs-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 10px 12px; border: 1px solid #eadfce; border-radius: 10px; background: #fff; }
+.mk-jobs-row strong { display: block; font-size: 14px; }
+.mk-jobs-row small { display: block; color: #6b6b6b; font-size: 12px; }
+.mk-jobs-row p { grid-column: 1 / -1; margin: 0; }
+.mk-jobs-row.is-failed { border-color: #e3b3b3; background: #fdf6f6; }
+.mk-jobs-row.is-retry { border-color: #e8d5b0; }
+.mk-jobs-row .btn { margin-top: 6px; padding: 6px 10px; font-size: 12px; }
+@media (max-width: 600px) {
+  .mk-hub-preview iframe { height: 420px; }
+  .mk-jobs-row { grid-template-columns: 1fr; }
+}

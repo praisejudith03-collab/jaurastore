@@ -3,7 +3,10 @@ import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, re,
 from functools import wraps
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 from config import Config
-from campaign_types import CAMPAIGN_TYPES, campaign_type_from, serialize_campaign
+from campaign_types import (CAMPAIGN_TYPES, BROADCAST_KINDS,
+                            broadcast_kind_from, broadcast_kind_options,
+                            campaign_type_for_broadcast,
+                            campaign_type_from, serialize_campaign)
 from db import execute, one, query, audit
 import security as sec
 import auth as authmod
@@ -19,6 +22,7 @@ import delivery
 # NameError and 500'd the whole dashboard. supabase_store imports nothing
 # from api, so this is import-cycle safe.
 import supabase_store
+import task_queue
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
@@ -2790,8 +2794,29 @@ def admin_payment_proofs():
 @authmod.require_admin
 @sec.require_csrf
 def admin_payment_proof_delete(pid):
-    """Delete one payment receipt and its Storage object."""
+    """Delete one payment receipt and its Storage object.
+
+    In production the row lookup stays in the request (it is one small read and
+    it is what turns a stale id into an honest 404), while the Storage purge and
+    the row delete run on the background queue: deleting a receipt should never
+    depend on a Storage round trip finishing inside the proxy timeout.
+    ``?sync=1`` performs the whole delete inline, as before.
+    """
     prod_source = bool(catalog_mod._prod_source())
+    if prod_source and not _wants_sync():
+        from supabase_store import load_receipt
+        row = load_receipt(pid)
+        if not row:
+            return jsonify(ok=False, error="That receipt is no longer there."), 404
+        job = task_queue.enqueue("receipt.delete", {
+            "id": str(pid), "orderId": row.get("order_id"),
+            "fileUrl": row.get("file_url") or "",
+            "actor": authmod.current_admin(), "ip": _ip(),
+        })
+        audit(authmod.current_admin(), "payment_proof.delete",
+              f"{pid} {row.get('order_id') or ''} queued job={job['id']}", _ip())
+        return jsonify(ok=True, id=str(pid), queued=True, deleteMode="queued",
+                       jobId=job["id"], fileRemoved=False, job=job)
     if prod_source:
         from supabase_store import load_receipt, delete_receipt_strict
         row = load_receipt(pid)
@@ -3044,6 +3069,130 @@ def _purge_local_abandoned_carts_for_product(product_id, product_name=""):
     except Exception as exc:
         print(f"[abandoned] remote product cart purge skipped: {exc}")
     return removed
+
+
+# --------------------------------------------------- background task queue
+# An admin deletion used to run its whole Supabase half - the atomic RPC, the
+# child cascade, the Storage purge, the abandoned-cart sweep - inside the HTTP
+# request. On the free instance that is a multi-second call: the browser timed
+# out with "Could not reach server" while the delete was still running, and the
+# operator retried work that had already started. The request now does one
+# small durable write (the tombstone, so the product stops selling) and hands
+# the heavy half to task_queue, which chunks it, retries it with backoff and
+# reports it in the job panel below. DELETE ...?sync=1 keeps the old inline,
+# fail-closed behaviour for the runbook and for tests that pin it.
+
+def _wants_sync():
+    return str(request.args.get("sync") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _task_product_delete(payload):
+    """The heavy half of a product delete, on the worker thread.
+
+    Reuses catalog.remove(), so the production path is still the atomic
+    hard_delete_products RPC with its own tombstone bookkeeping and media
+    purge - no new SQL, no second implementation to drift.
+    """
+    pid = sec.clean(payload.get("id"), 64)
+    if not pid:
+        return {"skipped": "no id"}
+    actor = str(payload.get("actor") or "scheduler")[:80]
+    name = str(payload.get("name") or "")[:200]
+    report = catalog_mod.remove(pid, actor) or {}
+    abandoned = _purge_local_abandoned_carts_for_product(pid, name)
+    errors = [str(e) for e in (report.get("errors") or [])]
+    # A replay finds the row already gone. The RPC's contract is "report only
+    # the ids that were there, and any error that stopped it" (pinned by
+    # test_the_real_rpc_reports_only_ids_that_were_there), so an empty delete
+    # WITH an error is a failure to retry, while an empty delete with NO error
+    # means there is nothing left to remove. Never a silent success otherwise.
+    if not report.get("deleted") and errors:
+        raise RuntimeError(
+            "the Supabase hard delete did not confirm this row: "
+            + "; ".join(errors))
+    _invalidate_all_catalog_caches()
+    try:
+        audit(actor, "product.delete",
+              f"{pid} files_removed={report.get('files') or 0} "
+              f"abandoned_carts={abandoned} mode=queued", "")
+    except Exception:
+        pass
+    return {"id": pid, "deleted": bool(report.get("deleted")),
+            "alreadyGone": not report.get("deleted"),
+            "filesRemoved": int(report.get("files") or 0),
+            "abandonedCartsRemoved": abandoned,
+            "partial": bool(errors), "errors": errors[:5]}
+
+
+def _task_receipt_delete(payload):
+    """Purge one payment receipt's Storage object, then its row."""
+    pid = str(payload.get("id") or "").strip()
+    if not pid:
+        return {"skipped": "no id"}
+    from supabase_store import load_receipt, delete_receipt_strict
+    row = load_receipt(pid) or {}
+    file_url = str(payload.get("fileUrl") or row.get("file_url") or "")
+    order_id = payload.get("orderId") or row.get("order_id")
+    if not row and not file_url:
+        return {"id": pid, "alreadyGone": True}
+    file_removed = bool(storage.delete_upload(file_url)) if file_url else False
+    if row and not delete_receipt_strict(receipt_id=pid, order_id=order_id,
+                                         file_url=file_url):
+        raise RuntimeError(
+            f"Supabase did not confirm removal of receipt {pid}")
+    try:
+        audit(str(payload.get("actor") or "scheduler"), "payment_proof.delete",
+              f"{pid} {order_id or ''} stored queued", str(payload.get("ip") or ""))
+    except Exception:
+        pass
+    return {"id": pid, "fileRemoved": file_removed}
+
+
+def _task_media_delete(payload):
+    """Purge one unreferenced Storage object (discarded upload)."""
+    url = sec.safe_url(payload.get("url") or "", 500)
+    if not url:
+        return {"skipped": "no url"}
+    removed = bool(storage.delete_upload(url))
+    return {"url": url[:180], "removed": removed}
+
+
+task_queue.register("product.delete", _task_product_delete,
+                    label="Delete product", actor=True)
+task_queue.register("receipt.delete", _task_receipt_delete,
+                    label="Delete payment receipt")
+task_queue.register("media.delete", _task_media_delete,
+                    label="Delete media file")
+
+
+@api.get("/admin/tasks/jobs")
+@authmod.require_admin
+def admin_task_jobs():
+    """The background job panel: what was queued, what landed, what retried."""
+    return jsonify(ok=True, jobs=task_queue.snapshot(40),
+                   stats=task_queue.stats())
+
+
+@api.get("/admin/tasks/jobs/<job_id>")
+@authmod.require_admin
+def admin_task_job(job_id):
+    """Poll one job - the portal uses it right after a queued delete."""
+    job = task_queue.get(job_id)
+    if not job:
+        return jsonify(ok=False, error="Unknown job."), 404
+    return jsonify(ok=True, job=job)
+
+
+@api.post("/admin/tasks/jobs/<job_id>/retry")
+@authmod.require_admin
+@sec.require_csrf
+def admin_task_job_retry(job_id):
+    """Put a parked job back on the queue instead of re-running the request."""
+    if not task_queue.requeue(job_id):
+        return jsonify(ok=False, error="That job is not waiting to be retried."), 404
+    audit(authmod.current_admin(), "task.retry", str(job_id)[:80], _ip())
+    return jsonify(ok=True, jobId=job_id, job=task_queue.get(job_id))
 
 
 @api.delete("/admin/orders/<oid>")
@@ -3507,24 +3656,86 @@ def admin_product_variants_upsert_alias():
 @authmod.require_admin
 @sec.require_csrf
 def admin_product_delete(pid):
-    """Delete one product. In production the hard delete MUST land in
-    Supabase first: a failed portal call never reports success, so the admin
-    can retry instead of believing a product is gone while it still sells.
+    """Delete one product. Fast, durable and honest about what is still running.
 
-    The response always says WHICH backend did the work (``deleteMode``):
-    ``"supabase-hard"`` means the atomic RPC removed the row, purged the
-    media and wrote the durable tombstone; ``"local-only"`` means this
-    deployment is not Supabase-authoritative and only the local catalogue
-    changed. A Supabase delete that removed nothing, or removed the row but
-    failed a media/tombstone cleanup step, is a 503 with the RPC report - it
-    is never reported as a successful Supabase delete.
+    The portal used to wait for the whole Supabase half of a delete inside the
+    request: the atomic RPC, the child cascade and the Storage purge. For a
+    product with a gallery that is a multi-second call, and the browser gave up
+    with "Could not reach server" long before the server finished - so the
+    operator retried a delete that had already started. The default path now
+    is:
+
+      1. write the durable tombstone (one small Supabase write) - this is what
+         stops the product selling, and it is the only part that must never be
+         lost if the process dies a second later;
+      2. hide it locally so the very next read in this process stops serving it;
+      3. queue the heavy half (RPC + cascade + media purge + abandoned carts)
+         on the background task queue, which chunks it and retries with backoff;
+      4. answer 200 immediately with ``deleteMode: "queued"`` and a ``jobId``.
+
+    ``deleteMode`` still tells the caller which backend did the work. The old
+    inline, fail-closed behaviour - 200 only when the RPC confirmed the row
+    removed, 503 with the RPC report otherwise - is kept verbatim behind
+    ``?sync=1`` for the runbook and for callers that must block on the outcome.
+    A tombstone that could not be written is still a 503, so a failed delete is
+    never reported as a successful one.
 
     Deleting the products-table row alone is not enough for a seed product:
-    catalog.merged() unions the bundled seed rows on every read, so the
-    durable deleted-ids list must be written too (see catalog.remove /
-    supabase_store.add_deleted_id).
+    catalog.merged() unions the bundled seed rows on every read, so the durable
+    deleted-ids list must be written too (supabase_store.add_deleted_id).
     """
     pid = sec.clean(pid, 64)
+    if catalog_mod._prod_source() and not _wants_sync():
+        return _queue_product_delete(pid)
+    return _sync_product_delete(pid)
+
+
+def _queue_product_delete(pid):
+    """The fast path: tombstone now, purge on the queue."""
+    try:
+        existing = catalog_mod.product_index(include_hidden=True).get(pid) or {}
+    except Exception:
+        existing = {}
+    name = str((existing or {}).get("name") or "")[:200]
+    actor = authmod.current_admin()
+    try:
+        from supabase_store import add_deleted_id
+        confirmed = bool(add_deleted_id(pid))
+        detail = ""
+    except Exception as exc:
+        confirmed, detail = False, str(exc)
+    if not confirmed:
+        return jsonify(ok=False, error=(
+            "The durable tombstone could not be written in Supabase, so the "
+            "product was not deleted. Nothing was removed - retry so it cannot "
+            "come back after the next deploy."), detail=detail[:200]), 503
+    # The durable tombstone is what hides it for every reader; the local list
+    # is what hides it for this process on the very next request, without
+    # waiting for the queue worker to reach the job.
+    catalog_mod.hide_now(pid, actor)
+    job = task_queue.enqueue("product.delete",
+                             {"id": pid, "name": name, "actor": actor,
+                              "ip": _ip()})
+    _invalidate_all_catalog_caches()
+    audit(actor, "product.delete",
+          f"{pid} queued job={job['id']} tombstone=confirmed mode=queued", _ip())
+    return jsonify(ok=True, id=pid, deleted=True, queued=True,
+                   deleteMode="queued", jobId=job["id"],
+                   filesRemoved=0, filesPending=True,
+                   abandonedCartsRemoved=0, meta=catalog_mod.meta())
+
+
+def _sync_product_delete(pid):
+    """The original inline delete: blocks, and never claims work it did not do.
+
+    A Supabase delete that removed nothing, or removed the row but failed a
+    media/tombstone cleanup step, is a 503 with the RPC report - it is never
+    reported as a successful Supabase delete. ``deleteMode`` says which backend
+    did the work: ``"supabase-hard"`` (the atomic RPC removed the row, purged
+    the media and wrote the durable tombstone) or ``"local-only"`` (this
+    deployment is not Supabase-authoritative and only the local catalogue
+    changed).
+    """
     files_removed = 0
     try:
         existing_for_purge = catalog_mod.product_index(include_hidden=True).get(pid) or {}
@@ -3548,6 +3759,7 @@ def admin_product_delete(pid):
                 "The product row was removed, but one or more media/tombstone "
                 "cleanup steps failed. Retry so no media or tombstones are left behind."),
                 report=report), 503
+        catalog_mod.hide_now(pid, authmod.current_admin())
         abandoned_removed = _purge_local_abandoned_carts_for_product(pid, product_name_for_purge)
         catalog_mod._sync_repo_async()
     else:
@@ -3577,6 +3789,7 @@ def admin_product_delete(pid):
     if notes:
         body["notes"] = notes
     return jsonify(**body)
+
 
 @api.put("/admin/products")
 @authmod.require_admin
@@ -3969,6 +4182,17 @@ def admin_upload_purge():
     url = sec.safe_url(d.get("url") or d.get("fileUrl") or "", 500)
     if not url:
         return jsonify(ok=False, error="A media URL is required."), 400
+    if catalog_mod._prod_source() and not _wants_sync():
+        # The reference guard still runs on the worker: a discarded upload is
+        # only ever purged after storage.delete_upload re-checks that no live
+        # product shows it.
+        job = task_queue.enqueue("media.delete", {"url": url,
+                                                 "actor": authmod.current_admin(),
+                                                 "ip": _ip()})
+        audit(authmod.current_admin(), "upload.purge",
+              f"queued job={job['id']} {url[:180]}", _ip())
+        return jsonify(ok=True, queued=True, removed=False, unlinked=False,
+                       deleteMode="queued", jobId=job["id"])
     removed = storage.delete_upload(url)
     audit(authmod.current_admin(), "upload.purge",
           f"removed={removed} {url[:180]}", _ip())
@@ -5132,6 +5356,410 @@ def _marketing_recipient_count():
     for _email in _iter_marketing_recipients():
         total += 1
     return total
+
+
+# ------------------------------------------------------- Broadcast Hub
+# /admin/marketing/broadcast: look at who is on the list, compose a broadcast,
+# read the exact email before it goes out, then hand the sending to the same
+# background queue the deletions use. The old composer (POST
+# /admin/marketing/campaigns) still exists and still sends inline; the hub
+# never makes an operator wait for hundreds of inboxes, and never holds a
+# whole recipient list in memory: recipients are streamed a page at a time and
+# each pass is logged per address, so a redeploy mid-broadcast resumes instead
+# of restarting.
+BROADCAST_CHUNK = 10            # addresses per pass
+BROADCAST_PASSES_PER_JOB = 3    # then re-queue itself, keeping memory flat
+
+
+def _broadcast_local_sets():
+    """Every contact email already on this instance, split by source.
+
+    Two small sets of plain address strings (never rows), read a page at a
+    time. The sets are what make "where did this address come from?" answerable
+    without a second full pass over the contact book, and they are bounded by
+    MARKETING_MAX_RECIPIENTS.
+    """
+    accounts, orderers = set(), set()
+    for table, bucket in (("customers", accounts), ("orders", orderers)):
+        offset = 0
+        while True:
+            rows = query(f"SELECT email FROM {table} "
+                         "WHERE email IS NOT NULL AND email != '' "
+                         "ORDER BY email LIMIT ? OFFSET ?",
+                         (MARKETING_PAGE_SIZE, offset))
+            if not rows:
+                break
+            for row in rows:
+                email = sec.clean_email(row["email"])
+                if email:
+                    bucket.add(email)
+            if len(rows) < MARKETING_PAGE_SIZE:
+                break
+            offset += MARKETING_PAGE_SIZE
+    return accounts, orderers
+
+
+def _broadcast_recipient_sources():
+    """(total, from orders, from accounts, remote-only, suppressed).
+
+    ``total`` is streamed from the SAME iterator the sender walks and the order
+    the composer shows, so the number on the button and the number of inboxes
+    that receive the broadcast cannot drift apart. Addresses known only to the
+    Supabase copies (a redeploy wiped the local SQLite) are reported separately
+    rather than guessed into one of the two buckets.
+    """
+    accounts, orderers = _broadcast_local_sets()
+    total = from_orders = from_accounts = remote_only = 0
+    for email in _iter_marketing_recipients():
+        total += 1
+        if email in accounts:
+            from_accounts += 1
+        elif email in orderers:
+            from_orders += 1
+        else:
+            remote_only += 1
+    return total, from_orders, from_accounts, remote_only, len(_marketing_suppressed_emails())
+
+
+def _broadcast_public(row):
+    """One campaign row as the hub shows it (never any recipient address)."""
+    row = dict(row or {})
+    return {
+        "id": row.get("id"),
+        "campaignType": row.get("campaign_type"),
+        "subject": row.get("subject"),
+        "content": row.get("content"),
+        "recipientCount": int(row.get("recipient_count") or 0),
+        "sentCount": int(row.get("sent_count") or 0),
+        "failedCount": int(row.get("failed_count") or 0),
+        "status": row.get("status") or "queued",
+        "sentAt": row.get("sent_at") or "",
+        "createdAt": row.get("created_at") or "",
+    }
+
+
+def _broadcast_counters(campaign_id):
+    counts = {"sent": 0, "failed": 0}
+    try:
+        for row in query("SELECT status, COUNT(*) n FROM marketing_campaign_sends "
+                         "WHERE campaign_id=? GROUP BY status", (campaign_id,)):
+            if row["status"] in counts:
+                counts[row["status"]] = int(row["n"] or 0)
+    except Exception as exc:                       # pragma: no cover
+        print(f"[broadcast] send log read skipped: {exc}")
+    return counts
+
+
+def _broadcast_sent_emails(campaign_id):
+    """Addresses already dealt with on a previous pass (resume, no duplicates)."""
+    out = set()
+    offset = 0
+    while True:
+        rows = query("SELECT email FROM marketing_campaign_sends "
+                     "WHERE campaign_id=? AND status='sent' "
+                     "ORDER BY email LIMIT ? OFFSET ?",
+                     (campaign_id, MARKETING_PAGE_SIZE, offset))
+        if not rows:
+            break
+        for row in rows:
+            email = sec.clean_email(row["email"])
+            if email:
+                out.add(email)
+        if len(rows) < MARKETING_PAGE_SIZE:
+            break
+        offset += MARKETING_PAGE_SIZE
+    return out
+
+
+# Where each in-flight broadcast has walked to. A generator keeps its paging
+# position, so a pass resumes exactly where the last one stopped instead of
+# re-walking the whole contact book (which would be quadratic over a big list).
+# A restart loses the generator - that is safe: the per-address send log means
+# a fresh walk just skips what already went out.
+_broadcast_streams = {}
+BROADCAST_MAX_STREAMS = 2
+
+
+def _broadcast_stream(campaign_id):
+    state = _broadcast_streams.get(campaign_id)
+    if state is None:
+        if len(_broadcast_streams) >= BROADCAST_MAX_STREAMS:
+            _broadcast_streams.pop(next(iter(_broadcast_streams)), None)
+        state = {"gen": _iter_marketing_recipients(),
+                 "skip": _broadcast_sent_emails(campaign_id)}
+        _broadcast_streams[campaign_id] = state
+    return state
+
+
+def _campaign_status(campaign_id):
+    row = one("SELECT status FROM marketing_campaigns WHERE id=?", (campaign_id,))
+    if not row:
+        return ""
+    try:
+        return str(row["status"] or "")
+    except Exception:                              # pragma: no cover - other row types
+        return str(dict(row).get("status") or "")
+
+
+def _broadcast_finish(campaign_id):
+    """Write the final counters/status and mirror them to the audit table."""
+    counts = _broadcast_counters(campaign_id)
+    row = one("SELECT * FROM marketing_campaigns WHERE id=?", (campaign_id,))
+    if not row:
+        return {}
+    total = counts["sent"] + counts["failed"]
+    status = ("sent" if not counts["failed"]
+              else ("partial" if counts["sent"] else "failed"))
+    execute("UPDATE marketing_campaigns SET sent_count=?, failed_count=?, "
+            "status=?, recipient_count=MAX(recipient_count, ?) WHERE id=?",
+            (counts["sent"], counts["failed"], status, total, campaign_id))
+    updated = one("SELECT * FROM marketing_campaigns WHERE id=?", (campaign_id,))
+    try:
+        from supabase_store import mirror_marketing_campaign
+        mirror_marketing_campaign(serialize_campaign(dict(updated)))
+    except Exception as exc:
+        print(f"[broadcast] campaign mirror skipped: {exc}")
+    return _broadcast_public(updated)
+
+
+def _task_campaign_dispatch(payload):
+    """Send the next chunk of one broadcast, then hand the baton back.
+
+    Runs on the task-queue worker: one pass sends at most
+    ``BROADCAST_CHUNK * BROADCAST_PASSES_PER_JOB`` addresses, records each one,
+    collects, and re-queues itself with a short delay while addresses remain.
+    That is what keeps a 5,000-inbox broadcast from ever holding more than a
+    page of rows - and what lets the operator cancel it between two passes.
+    """
+    campaign_id = str(payload.get("campaign") or "").strip()
+    if not campaign_id:
+        return {"skipped": "no campaign"}
+    row = one("SELECT * FROM marketing_campaigns WHERE id=?", (campaign_id,))
+    if not row:
+        return {"skipped": "unknown campaign"}
+    if str(row["status"]) == "cancelled":
+        return {"cancelled": True}
+    if str(row["status"]) == "queued":
+        execute("UPDATE marketing_campaigns SET status='sending' WHERE id=?",
+                (campaign_id,))
+    import mailer
+    if not mailer.configured():
+        raise RuntimeError("Resend is not configured (MAIL_FROM / RESEND_API_KEY)")
+    products = []
+    try:
+        wanted = set(payload.get("productIds") or [])
+        if wanted:
+            products = [p for p in catalog_mod.merged()
+                        if str((p or {}).get("id") or "") in wanted]
+    except Exception:
+        products = []
+    state = _broadcast_stream(campaign_id)
+    done = state["skip"]
+    sent_this_pass = 0
+    budget = BROADCAST_CHUNK * BROADCAST_PASSES_PER_JOB
+    for email in state["gen"]:
+        if sent_this_pass >= budget:
+            break
+        if email in done:
+            continue
+        if _campaign_status(campaign_id) == "cancelled":
+            break
+        ok, detail = False, ""
+        try:
+            ok, detail = mailer.send_campaign_email(
+                email, row["subject"], row["content"], products)
+        except Exception as exc:
+            ok, detail = False, str(exc)
+        execute("INSERT OR REPLACE INTO marketing_campaign_sends "
+                "(campaign_id, email, status, detail, at) "
+                "VALUES (?,?,?,?,datetime('now'))",
+                (campaign_id, email, "sent" if ok else "failed", str(detail)[:300]))
+        sent_this_pass += 1
+        if sent_this_pass % BROADCAST_CHUNK == 0:
+            # One chunk is in the log; release it before the next one.
+            gc.collect()
+    counts = _broadcast_counters(campaign_id)
+    existing = int(row["recipient_count"] or 0)
+    execute("UPDATE marketing_campaigns SET sent_count=?, failed_count=?, "
+            "recipient_count=? WHERE id=?",
+            (counts["sent"], counts["failed"], max(existing, counts["sent"] + counts["failed"]),
+             campaign_id))
+    if _campaign_status(campaign_id) == "cancelled":
+        _broadcast_streams.pop(campaign_id, None)
+        return {"cancelled": True, "sent": counts["sent"], "failed": counts["failed"]}
+    # More addresses to try? Hand the baton back with a short delay so the
+    # worker's memory is flat and the queue stays responsive to other jobs.
+    if sent_this_pass >= budget:
+        task_queue.enqueue("campaign.dispatch", payload, dedupe=False, delay=1.0)
+        return {"continues": True, "sent": counts["sent"], "failed": counts["failed"],
+                "batch": sent_this_pass}
+    _broadcast_streams.pop(campaign_id, None)
+    final = _broadcast_finish(campaign_id)
+    return {"finished": True, "sent": counts["sent"], "failed": counts["failed"],
+            "status": final.get("status")}
+
+
+task_queue.register("campaign.dispatch", _task_campaign_dispatch,
+                    label="Send broadcast")
+
+
+@api.get("/admin/marketing/broadcast/audience")
+@authmod.require_admin
+def admin_broadcast_audience():
+    """Who is on the list, and where each address came from.
+
+    Reads order history and registered accounts (the same two sources the
+    broadcast uses), reports how many asked to be left out, and shows only a
+    short sample - the full list is the CSV export, not this screen.
+    """
+    total, from_orders, from_accounts, remote_only, suppressed = (
+        _broadcast_recipient_sources())
+    sample = []
+    for email in _iter_marketing_recipients(page_size=25):
+        sample.append(email)
+        if len(sample) >= 12:
+            break
+    return jsonify(ok=True, total=total,
+                   fromOrders=from_orders, fromAccounts=from_accounts,
+                   fromRemoteOnly=remote_only,
+                   suppressed=suppressed, sample=sample,
+                   kinds=broadcast_kind_options(),
+                   ceiling=MARKETING_MAX_RECIPIENTS)
+
+
+@api.post("/admin/marketing/broadcast/preview")
+@authmod.require_admin
+@sec.require_csrf
+def admin_broadcast_preview():
+    """Render the exact email without sending it to anyone."""
+    d = request.get_json(silent=True) or {}
+    subject = sec.clean(d.get("subject"), 180, allow_newlines=False)
+    content = sec.clean(d.get("content"), 10000)
+    if not subject:
+        return jsonify(ok=False, error="Add an email subject."), 400
+    if not content:
+        return jsonify(ok=False, error="Write a broadcast message."), 400
+    plans, err = _broadcast_products(d.get("productIds"))
+    if err:
+        return err
+    import mailer
+    html = mailer.campaign_email_html(subject, content, "", plans)
+    return jsonify(ok=True, subject=subject, html=html,
+                   recipients=_marketing_recipient_count(),
+                   preview=True, dryRun=True)
+
+
+def _broadcast_products(raw_ids):
+    """Resolve up to 12 selected products for the email body."""
+    selected = raw_ids or []
+    if not isinstance(selected, list) or len(selected) > 12:
+        return None, (jsonify(ok=False,
+                              error="Choose no more than 12 products."), 400)
+    wanted = {sec.clean(pid, 80) for pid in selected if sec.clean(pid, 80)}
+    products = [p for p in catalog_mod.merged()
+                if str((p or {}).get("id") or "") in wanted]
+    if len(products) != len(wanted):
+        return None, (jsonify(ok=False,
+                              error="One or more selected products are unavailable."), 400)
+    return products, None
+
+
+@api.post("/admin/marketing/broadcast")
+@authmod.require_admin
+@sec.require_csrf
+def admin_broadcast_queue():
+    """Queue a broadcast. Answers at once; the worker sends it in chunks."""
+    d = request.get_json(silent=True) or {}
+    kind = broadcast_kind_from(d.get("kind") or d.get("broadcastKind"))
+    if not kind:
+        return jsonify(ok=False, error=(
+            "Choose a broadcast type: " + ", ".join(sorted(BROADCAST_KINDS)) + ".")), 400
+    campaign_type = campaign_type_for_broadcast(kind)
+    subject = sec.clean(d.get("subject"), 180, allow_newlines=False)
+    content = sec.clean(d.get("content"), 10000)
+    if not subject:
+        return jsonify(ok=False, error="Add an email subject."), 400
+    if not content:
+        return jsonify(ok=False, error="Write a broadcast message."), 400
+    products, err = _broadcast_products(d.get("productIds"))
+    if err:
+        return err
+    coupon = sec.clean(d.get("couponCode"), 40)
+    if kind == "coupon" and not coupon:
+        return jsonify(ok=False, error="Add the coupon code to announce."), 400
+    import mailer
+    if not mailer.configured():
+        return jsonify(ok=False, error=(
+            "Resend is not configured. Set MAIL_FROM and RESEND_API_KEY before sending.")), 400
+    recipient_count = _marketing_recipient_count()
+    if not recipient_count:
+        return jsonify(ok=False, error="There are no customer emails on file yet."), 400
+    if recipient_count > MARKETING_MAX_RECIPIENTS:
+        return jsonify(ok=False, error=(
+            f"That is {recipient_count} addresses, above the "
+            f"{MARKETING_MAX_RECIPIENTS} ceiling for one broadcast. Split it.")), 400
+    now = _utcnow()
+    campaign_id = "CMP-" + secrets.token_hex(6).upper()
+    if kind == "coupon" and f"**{coupon}**" not in content and coupon not in content:
+        content = content.rstrip() + f"\n\nUse code {coupon} at checkout."
+    execute(
+        "INSERT INTO marketing_campaigns (id,campaign_type,subject,content,recipient_count,"
+        "sent_count,failed_count,status,sent_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (campaign_id, campaign_type, subject, content, recipient_count,
+         0, 0, "queued", now, now),
+    )
+    payload = {"campaign": campaign_id, "kind": kind, "actor": authmod.current_admin(),
+               "productIds": [str(p.get("id")) for p in products]}
+    job = task_queue.enqueue("campaign.dispatch", payload)
+    row = one("SELECT * FROM marketing_campaigns WHERE id=?", (campaign_id,))
+    try:
+        from supabase_store import mirror_marketing_campaign
+        mirror_marketing_campaign(serialize_campaign(dict(row)))
+    except Exception as exc:
+        print(f"[broadcast] campaign mirror skipped: {exc}")
+    audit(authmod.current_admin(), "marketing.broadcast",
+          f"{campaign_id} {kind} queued job={job['id']} recipients={recipient_count}", _ip())
+    return jsonify(ok=True, campaign=_broadcast_public(row), campaignId=campaign_id,
+                   recipientCount=recipient_count, queued=True, jobId=job["id"])
+
+
+@api.get("/admin/marketing/broadcast/<cid>")
+@authmod.require_admin
+def admin_broadcast_status(cid):
+    """Progress for one broadcast: counters, per-address log, queue job."""
+    cid = sec.clean(cid, 80)
+    row = one("SELECT * FROM marketing_campaigns WHERE id=?", (cid,))
+    if not row:
+        return jsonify(ok=False, error="Unknown broadcast."), 404
+    counts = _broadcast_counters(cid)
+    public = _broadcast_public(row)
+    public["sentCount"] = counts["sent"]
+    public["failedCount"] = counts["failed"]
+    public["done"] = (counts["sent"] + counts["failed"] >=
+                      max(1, int(row["recipient_count"] or 0)))
+    return jsonify(ok=True, campaign=public, logCounts=counts)
+
+
+@api.post("/admin/marketing/broadcast/<cid>/cancel")
+@authmod.require_admin
+@sec.require_csrf
+def admin_broadcast_cancel(cid):
+    """Stop a broadcast at the next chunk boundary.
+
+    Already-sent addresses are kept: cancelling never un-sends an email, it
+    only stops the next pass from going out. The row is re-countable and the
+    log keeps the truth, so the operator can see exactly how far it got.
+    """
+    cid = sec.clean(cid, 80)
+    row = one("SELECT * FROM marketing_campaigns WHERE id=?", (cid,))
+    if not row:
+        return jsonify(ok=False, error="Unknown broadcast."), 404
+    if str(row["status"]) in ("sent", "failed", "partial", "cancelled"):
+        return jsonify(ok=True, campaign=_broadcast_public(row), alreadyDone=True)
+    execute("UPDATE marketing_campaigns SET status='cancelled' WHERE id=?", (cid,))
+    audit(authmod.current_admin(), "marketing.broadcast_cancel", cid, _ip())
+    current = one("SELECT * FROM marketing_campaigns WHERE id=?", (cid,))
+    return jsonify(ok=True, campaign=_broadcast_public(current), cancelled=True)
 
 
 @api.get("/admin/marketing/recipients")

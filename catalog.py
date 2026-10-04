@@ -3019,6 +3019,40 @@ def remove(pid, actor=None):
     return report
 
 
+def hide_now(pid, actor=None):
+    """Hide a product from the live catalogue at once, without purging anything.
+
+    The async delete needs the shop to stop selling a product on the very next
+    read - the Supabase RPC that removes the row and its media is queued and may
+    take seconds. This writes exactly the local ``deleted`` list the synchronous
+    path writes (and drops any local override row for the id), so ``merged()``
+    stops serving it immediately; media and the products-table row are left to
+    the worker. Returns True when the local hide landed.
+    """
+    pid = str(pid or "").strip()
+    if not pid:
+        return False
+
+    def _apply(data, _path):
+        data["products"] = [p for p in (data.get("products") or [])
+                            if str((p or {}).get("id") or "") != pid]
+        deleted = list(data.get("deleted") or [])
+        if pid not in deleted:
+            deleted.append(pid)
+        data["deleted"] = deleted
+        data["updatedAt"] = (datetime.datetime.utcnow()
+                             .isoformat(timespec="seconds") + "Z")
+        data["updatedBy"] = actor or ""
+        return data
+
+    try:
+        _mutate(actor, _apply)
+        return True
+    except Exception as exc:                       # pragma: no cover - best effort
+        print(f"[catalog] immediate hide skipped: {exc}")
+        return False
+
+
 def _purge_local_product_rows(pid):
     """Hard-delete the local database rows a product owned.
 

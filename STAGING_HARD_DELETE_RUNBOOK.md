@@ -211,9 +211,19 @@ images. Never use a real catalogue id.
      saved, and **only** if no other product references it;
    - the product still exists (an image replacement is a save, never a
      hard-delete; the id must not be tombstoned).
-3. **Delete** the disposable product through `/admin`. Verify:
-   - the response is `ok: true` with `deleteMode: "supabase-hard"` (a local-only
-     delete reports `"local-only"` and must not be mistaken for a Supabase one);
+3. **Delete** the disposable product through `/admin`. The portal now answers
+   before the heavy half runs, so there are two things to verify - the reply,
+   and the job that finishes it.
+   - the reply is `ok: true` with `deleteMode: "queued"` and a `jobId`
+     (a local-only delete reports `"local-only"` and must not be mistaken for a
+     Supabase one). `deleted: true` here means *hidden and tombstoned*, not
+     "the row is already gone" - the request deliberately does not wait for the
+     RPC;
+   - the delete is confirmed in the job panel (`/admin` -> Marketing ->
+     "Background jobs", or `GET /api/admin/tasks/jobs`): the same `jobId`
+     reaches `state: "done"` with `filesRemoved` set. A `state: "failed"` job
+     carries the reason and can be retried from the panel; the product stays
+     hidden either way because the tombstone was already written;
    - the row is gone:
      ```sql
      select count(*) from public.products
@@ -224,9 +234,14 @@ images. Never use a real catalogue id.
    - child rows are gone (`product_variants`, `product_prices`,
      `product_options`, `variant_stock`, `product_reviews`, `product_views`,
      `featured_products` - only for tables that exist);
-   - the product's unshared Storage object is purged. A 503 with a `report`
-     means the row was removed but a cleanup step failed: **retry** so no media
-     or tombstones are left behind.
+   - the product's unshared Storage object is purged. A job that ends
+     `partial` means the row was removed but a media/tombstone step failed:
+     **retry** from the panel so no media or tombstones are left behind.
+   - operators who want the old blocking answer can call the same endpoint with
+     `?sync=1`: that request waits for the RPC and answers `deleteMode:
+     "supabase-hard"` (`200`, with `filesRemoved`) or a `503` with the RPC
+     `report`. Use it when a single request must not return until the row is
+     provably gone; use the default when the portal must not time out.
 4. Do **not** reuse the id: the trigger rejects it with
    `product id ... was permanently deleted`, by design.
 
@@ -235,3 +250,48 @@ images. Never use a real catalogue id.
 For each step: the query/file, the project reference (never a key), the result,
 and any error verbatim. Anything not run must be reported as not run -
 "CI passed" and "the tests pass locally" are not live verification.
+
+## Step 6 - the rest of the overhaul, in one place
+
+**Broadcast hub (email).** `/admin/marketing/broadcast` opens the Marketing
+desk with the Broadcast hub. Three things live there, in order:
+
+1. **Audience** - `GET /api/admin/marketing/broadcast/audience` streams the
+   contact book (`total`, `fromOrders`, `fromAccounts`, `remoteOnly`,
+   `suppressed`, a `sample`) and the four compose kinds (New Arrivals, Promo,
+   Coupon, Appreciation). Suppressed addresses are counted, never listed, and
+   never sent to.
+2. **Preview** - `POST .../broadcast/preview` renders the exact email
+   (`html`, `recipients`) and sends nothing (`dryRun: true`). Always preview
+   before queueing: the preview is the only place the real markup is visible.
+3. **Queue** - `POST .../broadcast` creates the campaign row with
+   `status: "queued"` and answers immediately with `campaignId`,
+   `recipientCount` and a `jobId`; the worker sends at most 30 addresses per
+   pass, logs every address (`marketing_campaign_sends`) and re-queues itself
+   until the list is done. Watch it on the same card (progress) or
+   `GET /api/admin/marketing/broadcast/<campaignId>`; stop it with
+   `POST /api/admin/marketing/broadcast/<campaignId>/cancel`. A restart is
+   safe: the per-address log means a resumed run never re-sends and never
+   re-walks the whole list.
+
+Testing mail delivery needs `RESEND_API_KEY` + `MAIL_FROM`; without them the
+queued job parks with "Resend is not configured" and the panel shows it.
+
+**Thumbnails for photos uploaded before the queue existed.** New uploads get
+their `.400w.webp` companion from the background queue
+(`storage.save_image` -> `enqueue_thumbnail`). Older bucket objects do not have
+one yet, and that is what the backfill tool is for:
+
+```bash
+python3 tools/backfill_thumbs.py            # dry run: what it would write
+python3 tools/backfill_thumbs.py --apply    # write the companions
+```
+
+It needs `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` in the environment, never
+touches `uploads/proofs/*`, is idempotent, and never rewrites an original.
+
+**Background jobs panel.** Every queued deletion and every broadcast pass is
+listed with its state (`queued`, `running`, `done`, `failed`) on the Marketing
+desk ("Background jobs"), and in `GET /api/admin/tasks/jobs`. A `failed` job
+carries the reason and a Retry button; `POST /api/admin/tasks/jobs/<jobId>/retry`
+does the same from an integration.

@@ -811,6 +811,23 @@ def create_app():
         session.pop("customer_id", None)
         return _account_page()
 
+    @app.route("/admin")
+    @app.route("/admin/")
+    @app.route("/admin/<path:rest>")
+    def admin_spa(rest=""):
+        """Serve the single-page portal on its real desk URLs.
+
+        /admin.html has always been the portal, but a link you can send - or
+        bookmark - should not have to be a query string. The whole portal is
+        one static shell whose tabs are client-side, so every /admin/... path
+        serves the same file and js/admin.js opens the matching desk (see
+        pathDesk()), including /admin/marketing/broadcast.
+
+        Deliberately outside any auth gate: the shell carries no data at all,
+        and every /api/admin/... call it makes is authenticated on its own.
+        """
+        return static_for("admin.html")
+
     @app.route("/account/<path:rest>")
     def account_spa(rest):
         return _account_page()
