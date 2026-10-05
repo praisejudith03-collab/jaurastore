@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=190";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=190";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=191";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=191";
 }
 
 function renderCategories() {
@@ -857,9 +857,6 @@ function paintProduct(root, p) {
   // Compare against the name in the SAME language: a row whose French
   // description merely repeats its French name is still an empty description.
   const showDesc = desc && desc.toLowerCase() !== String(JA.displayName(p) || "").toLowerCase();
-  const extra = (p.additionalInfo || []).map((sec) =>
-    `<div class="pdp-info"><strong>${JA.escape(sec.title || t("pdp.details"))}</strong><p>${JA.escape(sec.description || "")}</p></div>`
-  ).join("");
   // Compact, single-line note field. The merchant's own prompt is the LABEL
   // when they wrote one (e.g. "Enter preferred color or scent"), because a
   // placeholder vanishes the moment the shopper starts typing and is faint on
@@ -868,9 +865,6 @@ function paintProduct(root, p) {
   const notePrompt = String(p.customNotePrompt || "").trim();
   const productNoteHTML = p.enableCustomNote
     ? `<label class="pdp-product-note"><span>${JA.escape(notePrompt || t("pdp.productNote"))}</span><input type="text" name="productNote" maxlength="300" autocomplete="off" enterkeyhint="done" placeholder="${JA.escape(notePrompt ? "" : t("pdp.productNote"))}" /></label>`
-    : "";
-  const supplierAvailabilityHTML = p.supplierTracked
-    ? `<p class="pdp-supplier-availability" role="note">${t("pdp.supplierAvailability")}</p>`
     : "";
   const gallery = (JA.galleryOf ? JA.galleryOf(p) : ((p.images && p.images.length ? p.images : [p.image]) || [])).filter(Boolean).slice(0, 20);
   const stockN = Number(p.stock) || 0;
@@ -884,8 +878,12 @@ function paintProduct(root, p) {
     const avg = n ? list.reduce((sum, r) => sum + Number(r.rating != null ? r.rating : r.stars) || 0, 0) / n : 0;
     return n ? starsOf(avg) + ` ${avg.toFixed(1)} · ` + t(n === 1 ? "rev.count" : "rev.countMany", { n }) : t(reviewFilter ? "rev.noMatch" : "rev.empty");
   };
+  // A document in the gallery must not turn the PDP into a download page:
+  // the PDP shows the product photo/video, and a doc renders as a plain
+  // label chip with no download link (owner request 2026-10-05).
   const mainHTML = (idx) => JA.mediaHTML(gallery[idx], {
-    full: true, eager: idx === 0, alt: p.name, ph: p.placeholderImage, attrs: { "data-main-img": "" },
+    full: true, eager: idx === 0, alt: p.name, ph: p.placeholderImage,
+    docLink: false, attrs: { "data-main-img": "" },
   });
   root.innerHTML = `
     <div class="pdp-gallery">
@@ -894,7 +892,7 @@ function paintProduct(root, p) {
         ${mainHTML(0)}
         ${gallery.length > 1 ? `<button type="button" class="pdp-nav pdp-next" data-gal="1" aria-label="Next">›</button>` : ""}
       </div>
-      ${gallery.length > 1 ? `<div class="pdp-thumbs">${gallery.map((src, i) => `<button type="button" class="pdp-thumb${i === 0 ? " is-on" : ""}" data-src="${JA.escape(JA.asset(src))}" data-thumb="${i}">${JA.mediaHTML(src, { alt: p.name, ph: p.placeholderImage })}</button>`).join("")}</div>` : ""}
+      ${gallery.length > 1 ? `<div class="pdp-thumbs">${gallery.map((src, i) => `<button type="button" class="pdp-thumb${i === 0 ? " is-on" : ""}" data-src="${JA.escape(JA.asset(src))}" data-thumb="${i}">${JA.mediaHTML(src, { alt: p.name, ph: p.placeholderImage, docLink: false })}</button>`).join("")}</div>` : ""}
     </div>
     <div>
       <div class="kicker">${JA.categoryName(p.category)}</div>
@@ -902,22 +900,9 @@ function paintProduct(root, p) {
       ${JA.priceHTML(p)}
       ${stockN > 0 ? "" : `<p class="stock-line is-low">${t("pdp.oos")}</p>`}
       <p class="stock-line" data-stock-line role="status" aria-live="polite"></p>
-      ${supplierAvailabilityHTML}
-      ${(() => {
-        const tiers = JA.bulkDiscountTiers ? JA.bulkDiscountTiers() : [];
-        const ownQty = Math.round(Number(p.bulkQty) || 0);
-        const ownPct = Math.round(Number(p.bulkPercent) || 0);
-        const own = ownQty > 0 && ownPct > 0
-          ? `<li>More than ${ownQty} units: ${ownPct}% off</li>` : "";
-        if (!tiers.length && !own) return "";
-        return `<div class="pdp-bulk"><strong>${t("bulk.label")}</strong><ul>${own}${tiers.map((tier) =>
-          `<li>${tier.minQuantity}+ units: ${tier.percent}% off</li>`).join("")}</ul></div>`;
-      })()}
       <button type="button" class="wish-btn pdp-wish ${JA.isWished(p.id) ? "is-on" : ""}" data-wish="${p.id}"><svg class="wish-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg><span>${t("nav.wishlist")}</span></button>
       ${showDesc ? `<p class="pdp-desc">${JA.escape(desc)}</p>` : ""}
-      ${p.dimensions ? `<p class="pdp-dims"><strong>${t("pdp.dimensions") || "Dimensions"}:</strong> ${JA.escape(p.dimensions)}</p>` : ""}
       ${optHTML}
-      ${extra}
       ${productNoteHTML}
       <div class="kicker">${t("pdp.qty")}</div>
       <div class="qty">
@@ -929,7 +914,6 @@ function paintProduct(root, p) {
         <button class="btn" data-buy ${p.stock <= 0 ? "disabled" : ""}>${p.stock <= 0 ? t("pdp.oos") : t("pdp.add")}</button>
         <a class="btn btn-line" href="checkout.html">${t("pdp.payIn", { cur: JA.currency() === "NGN" ? "₦" : "CFA" })}</a>
       </div>
-      <p style="font-size:13px;color:var(--taupe)">${t("pdp.hint", { sku: p.sku || p.id })}</p>
       <section class="pdp-reviews" id="reviews" data-reviews="${JA.escape(p.id)}">
         <h3>${t("rev.title")}</h3>
         <p class="rev-avg">${reviewSummary(initialReviews)}</p>
@@ -1047,21 +1031,25 @@ function paintProduct(root, p) {
       stockLine.classList.add("is-in-stock");
     }
     if (qty) {
+      // Owner rule (2026-10-05): the shelf number never caps what a shopper
+      // may ask for. The quantity a supplier mirror shows can lag a sale, so
+      // the selector allows any amount (999 is the server's own line limit);
+      // the reservation at checkout drains the real shelf. Only "Out of
+      // Stock" (nothing left at all) is a hard brake.
+      const MAX_QTY = 999;
+      const room = avail > 0 ? MAX_QTY : 1;
       const cur = parseInt(qty.value, 10) || 1;
-      const max = Math.max(1, left);
-      qty.value = Math.min(Math.max(1, cur), max);
-      qty.max = String(Math.max(1, left));
+      qty.value = Math.min(Math.max(1, cur), room);
+      qty.max = String(room);
       root.querySelectorAll("[data-q]").forEach((b) => {
         if (b.dataset.q === "-") b.disabled = (parseInt(qty.value, 10) || 1) <= 1;
-        else b.disabled = (parseInt(qty.value, 10) || 1) >= left || left <= 0;
+        else b.disabled = avail <= 0 || (parseInt(qty.value, 10) || 1) >= room;
       });
     }
-    if (buyBtn && avail <= 0) {
-      buyBtn.disabled = true;
-      buyBtn.textContent = t("pdp.oos");
-    } else if (buyBtn && Number(p.stock) > 0) {
-      buyBtn.disabled = left <= 0;
-      if (left > 0 && buyBtn.textContent === t("pdp.oos")) buyBtn.textContent = t("pdp.add");
+    if (buyBtn) {
+      const inStock = avail > 0;
+      buyBtn.disabled = !inStock;
+      buyBtn.textContent = inStock ? t("pdp.add") : t("pdp.oos");
     }
   };
   root.querySelectorAll("[data-opt]").forEach((b) => {
@@ -1104,23 +1092,12 @@ function paintProduct(root, p) {
       }
     }
     const variant = variantFull();
-    // Hard stock gate: never let the shopper ask for more units than are
-    // actually available (what is in stock, minus what is already in the
-    // cart). The server re-checks this on /api/orders, but blocking here
-    // means the customer is told before they reach checkout.
+    // Owner rule (2026-10-05): no quantity gate at all. The shopper may ask
+    // for any amount of an in-stock item;
+    // the server drains the real shelf (never below zero) and only refuses a
+    // product that has nothing left at all. The button is already disabled
+    // for that out-of-stock case above.
     const want = Math.max(1, parseInt(qty.value, 10) || 1);
-    const room = JA.stockLeft ? JA.stockLeft(p, variant) : want;
-    if (room <= 0) {
-      JA.toast(JA.stockProblemLine([{ name: JA.displayName(p) || p.name, available: JA.stockFor(p, variant), requested: want }]));
-      updateStockUI();
-      return;
-    }
-    if (want > room) {
-      JA.toast(JA.stockProblemLine([{ name: JA.displayName(p) || p.name, available: JA.stockFor(p, variant), requested: JA.cartQtyFor(p.id, variant) + want }]));
-      qty.value = String(room);
-      updateStockUI();
-      return;
-    }
     const productNote = root.querySelector("[name=productNote]")?.value || "";
     JA.addToCart(p.id, want, variant, productNote);
     setTimeout(updateStockUI, 50);
@@ -2022,6 +1999,15 @@ function validateCheckoutForm(form, options = {}) {
   }
   const firstControl = checkoutFieldControl(form, failures[0].name);
   if (firstControl) {
+    // Direct the shopper to the exact missing field: focus, smooth-scroll,
+    // and a highlight that re-fires on every submit. The hash makes the
+    // position survive an accidental reload as well.
+    const host = checkoutFieldErrorHost(firstControl) || firstControl;
+    host.classList.add("is-missing");
+    window.setTimeout(() => host.classList.remove("is-missing"), 1800);
+    if (firstControl.id) {
+      try { history.replaceState(history.state, "", `#${firstControl.id}`); } catch (e) {}
+    }
     firstControl.focus?.({ preventScroll: true });
     firstControl.scrollIntoView?.({ behavior: "smooth", block: "center" });
   }
@@ -2164,6 +2150,75 @@ function closeCapturedCheckoutCart() {
   }).catch(() => null);
 }
 
+/* ------------------------------------------------ checkout draft (no data loss)
+ * An accidental refresh, a back-swipe or a phone that kills the tab must not
+ * cost a shopper the shipping address they just typed. Every text field,
+ * the zone select, the order note and the payment method are stashed in
+ * localStorage as they are edited, restored the moment the checkout paints,
+ * and dropped only when the order has actually been placed. Payment proof is
+ * a File handle and deliberately never stored - it cannot be re-attached to a
+ * file input without the shopper picking it again.
+ */
+const CHECKOUT_DRAFT_KEY = "jaura_checkout_draft";
+const CHECKOUT_DRAFT_FIELDS = ["firstName", "lastName", "country", "address",
+  "city", "zone", "phone", "email", "note"];
+
+function checkoutFieldInput(form, name) {
+  return form.querySelector(`[name="${name}"]`);
+}
+
+function readCheckoutDraft() {
+  try {
+    const raw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
+    const box = raw ? JSON.parse(raw) : null;
+    if (!box || typeof box !== "object") return null;
+    return (box.fields && typeof box.fields === "object") ? box : null;
+  } catch (e) { return null; }
+}
+
+function saveCheckoutDraft(form) {
+  if (!form) return;
+  try {
+    const fields = {};
+    CHECKOUT_DRAFT_FIELDS.forEach((name) => {
+      const el = checkoutFieldInput(form, name);
+      if (!el) return;
+      const value = String(el.value == null ? "" : el.value);
+      if (value.trim() || name === "zone" || name === "country") fields[name] = value;
+    });
+    const picked = form.querySelector("[name=paymentMethod]:checked");
+    const data = { at: Date.now(), fields };
+    if (picked && picked.value) data.paymentMethod = picked.value;
+    localStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify(data));
+  } catch (e) { /* private mode / quota: the form still works */ }
+}
+
+function restoreCheckoutDraft(form) {
+  const box = readCheckoutDraft();
+  if (!form || !box) return false;
+  let restored = false;
+  CHECKOUT_DRAFT_FIELDS.forEach((name) => {
+    const el = checkoutFieldInput(form, name);
+    const value = box.fields ? box.fields[name] : undefined;
+    if (!el || value == null || value === "") return;
+    // Never overwrite a value the page already knows (an account email, a
+    // server-painted zone list) - the draft only fills blanks.
+    if (String(el.value || "").trim()) return;
+    el.value = String(value);
+    restored = true;
+  });
+  if (box.paymentMethod) {
+    const radio = form.querySelector(`[name=paymentMethod][value="${box.paymentMethod}"]`);
+    if (radio && !radio.checked) { radio.checked = true; restored = true; }
+  }
+  return restored;
+}
+
+function clearCheckoutDraft() {
+  try { localStorage.removeItem(CHECKOUT_DRAFT_KEY); } catch (e) {}
+  try { sessionStorage.removeItem(CHECKOUT_DRAFT_KEY); } catch (e) {}
+}
+
 function renderCheckout() {
   const form = document.querySelector("[data-checkout]");
   const empty = document.querySelector("[data-empty]");
@@ -2206,6 +2261,9 @@ function renderCheckout() {
     form.dataset.paymentInitialized = "1";
   }
 
+  // Draft first (an accidental refresh must not lose the typed address),
+  // then the signed-in email may fill a still-empty field.
+  const draftRestored = restoreCheckoutDraft(form);
   paintCheckoutTotals(form);
   const me = JA.customer && JA.customer();
   if (me?.email && form.querySelector("[name=email]") && !form.querySelector("[name=email]").value) {
@@ -2221,14 +2279,27 @@ function renderCheckout() {
     window.clearTimeout(captureTimer);
     captureTimer = window.setTimeout(() => captureCheckoutCart(form), 500);
   };
+  const scheduleDraftSave = () => {
+    window.clearTimeout(form.__jaDraftTimer);
+    form.__jaDraftTimer = window.setTimeout(() => saveCheckoutDraft(form), 250);
+  };
   form.querySelectorAll("[required]").forEach((control) => {
     ["input", "change"].forEach((eventName) => {
       control.addEventListener(eventName, () => {
         clearCheckoutFieldError(form, control.name);
-        if (control.name !== "proof") scheduleCartCapture();
+        if (control.name !== "proof") { scheduleCartCapture(); scheduleDraftSave(); }
       });
     });
   });
+  // Optional fields (the order note) and the payment radios persist too.
+  ["note", "zone", "country"].forEach((name) => {
+    const el = checkoutFieldInput(form, name);
+    if (el) ["input", "change"].forEach((eventName) => el.addEventListener(eventName, scheduleDraftSave));
+  });
+  form.querySelectorAll("[name=paymentMethod]").forEach((radio) => {
+    radio.addEventListener("change", scheduleDraftSave);
+  });
+  if (draftRestored) scheduleCartCapture();
   // Capture any prefilled/account email, and refresh the inactivity clock as
   // the guest edits the checkout. No account creation or password is needed.
   scheduleCartCapture();
@@ -2473,31 +2544,15 @@ function renderCheckout() {
       resetButton();
       return;
     }
-    if (JA.stockProblems) {
-      const probs = JA.stockProblems();
-      if (probs.length) {
-        const msg = JA.stockProblemLine(probs);
-        JA.toast(msg);
-        try {
-          let warn = document.querySelector("[data-ck-stock-warn]");
-          if (!warn) {
-            warn = document.createElement("div");
-            warn.setAttribute("data-ck-stock-warn", "");
-            warn.className = "stock-warn";
-            form.insertBefore(warn, form.querySelector(".ck-place")?.parentElement || form.firstChild);
-          }
-          warn.textContent = msg;
-          warn.hidden = false;
-        } catch (e) {}
-        resetButton();
-        return;
-      } else {
-        try {
-          const warn = document.querySelector("[data-ck-stock-warn]");
-          if (warn) warn.hidden = true;
-        } catch (e) {}
-      }
-    }
+    // Owner rule (2026-10-05): a cart whose quantity exceeds the mirrored
+    // shelf is NOT blocked here - the server accepts it and drains whatever
+    // is really left. Only a product with nothing left at all is refused (by
+    // the server, as Out of Stock). The old [data-ck-stock-warn] refusal is
+    // gone with the rest of the quantity guard.
+    try {
+      const warn = document.querySelector("[data-ck-stock-warn]");
+      if (warn) warn.hidden = true;
+    } catch (e) {}
     // Benin & Togo deliveries: the minimum order is an ADMIN SETTING
     // (Admin -> Marketing, growth setting minOrderCfa, served on /api/site).
     // It used to be hardcoded at 5,000 CFA / 12,000 naira; now the guard
@@ -2622,6 +2677,7 @@ function renderCheckout() {
     // completion URL, and refreshing it loads order-complete.html normally.
     const submission = order.submission;
     const finishOrder = () => {
+      clearCheckoutDraft();
       JA.clearCart();
       ckPromo = null;
       form.dataset.done = "1";
@@ -3000,6 +3056,34 @@ async function boot() {
   // storefront currency toggle. All three payment methods remain available
   // in every language; renderCheckout derives NGN/CFA from the selected method.
 
+  // The page shell (header, nav, footer, cart badges) is painted NOW, before
+  // the catalogue roundtrip: it needs no product data, and leaving the whole
+  // document blank while the API answers is what read as a "slow white
+  // screen". The catalogue-dependent sections keep their skeleton (which the
+  // inline critical CSS paints immediately) until the live rows land.
+  try { JA.mountChrome(); } catch (e) { console.error(e); }
+
+  const draw = () => {
+    if (page === "home") renderHome();
+    if (page === "categories") renderCategories();
+    if (page === "shop") {
+      renderShop();
+      showEmptyCartShopNotice();
+    }
+    if (page === "product") renderProduct();
+    if (page === "home" || page === "shop") renderMostViewed();
+    try { JA.startCardPlay && JA.startCardPlay(); } catch (e) {}
+    if (page === "cart") renderCart();
+    if (page === "checkout") renderCheckout();
+    if (page === "order-complete") renderOrderComplete();
+    if (page === "delivery") renderDeliveryPage();
+    if (page === "wishlist") renderWishlist();
+    if (page === "account") renderAccount();
+    if (page === "contact") bindContactForm();
+    if (window.I18N && typeof window.I18N.apply === "function") window.I18N.apply();
+    watchReveal();
+  };
+
   // Never paint cached catalogue rows or stock. A short skeleton is honest;
   // a stale in-stock card that disappears a second later is not.
   const catalogPages = new Set(["home", "shop", "categories", "product", "cart", "checkout", "wishlist"]);
@@ -3023,7 +3107,12 @@ async function boot() {
     if (loading) loading.remove();
   }
 
-  try { JA.mountChrome(); } catch (e) { console.error(e); }
+  // The shell was mounted ONCE, before the catalogue roundtrip. It is
+  // deliberately not rebuilt here: mountChrome() replaces the entire
+  // header/footer DOM, and rebuilding it the instant the (prefetched)
+  // catalogue landed swapped live nodes out from under real taps - and made
+  // header geometry checks flaky in CI. Live banner, branding and social
+  // repaints all arrive through the ja:site listener bound by that mount.
 
   // The owner's category table and the live site row (banner text, branding,
   // bank details, delivery zones, the editable Delivery page). Both are
@@ -3092,26 +3181,6 @@ async function boot() {
     window.addEventListener("focus", play);
   });
   if (page === "home") mountHeroVideo();
-  const draw = () => {
-    if (page === "home") renderHome();
-    if (page === "categories") renderCategories();
-    if (page === "shop") {
-      renderShop();
-      showEmptyCartShopNotice();
-    }
-    if (page === "product") renderProduct();
-    if (page === "home" || page === "shop") renderMostViewed();
-    try { JA.startCardPlay && JA.startCardPlay(); } catch (e) {}
-    if (page === "cart") renderCart();
-    if (page === "checkout") renderCheckout();
-    if (page === "order-complete") renderOrderComplete();
-    if (page === "delivery") renderDeliveryPage();
-    if (page === "wishlist") renderWishlist();
-    if (page === "account") renderAccount();
-    if (page === "contact") bindContactForm();
-    if (window.I18N && typeof window.I18N.apply === "function") window.I18N.apply();
-    watchReveal();
-  };
   draw();
   // Instant product transitions: the moment a shopper touches (or hovers) a
   // product card we warm its hero image, so by the time product.html paints

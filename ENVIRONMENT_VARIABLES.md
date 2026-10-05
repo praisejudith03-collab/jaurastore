@@ -75,6 +75,30 @@ data, storage, and the admin login. Do not delete the shop-email variables
 above, or receipts stop reaching the inbox. Removing obsolete variables does not
 mutate products, orders, customers, receipts, reviews, or catalogue data.
 
+## Schema auto-migration on boot
+
+`auto_migrate.py` runs once per process at startup (after `init_db`/`migrate`,
+never in tests) and applies the additive `ALTER TABLE ... ADD COLUMN IF NOT
+EXISTS` statements the live Supabase `site_settings` table may be missing — so
+a schema lag can never surface as an admin save error. The owner-statement is
+the first one applied:
+
+```sql
+alter table site_settings add column if not exists popup_banner_active boolean not null default true;
+```
+
+PostgREST cannot run DDL, so the module tries, in order: a direct Postgres
+connection, `psql`, then a Supabase SQL RPC (`exec_sql`, `execute_sql`,
+`run_sql`, `execute_sql`, `apply_schema_migration`). A failed attempt only logs
+the exact statement to run in the Supabase SQL editor; boot is never blocked.
+
+- `SUPABASE_DB_URL` (or `DATABASE_URL`) — the Supabase **connection string**
+  (Dashboard → Project Settings → Database → Connection string → URI). With it
+  set, the boot pass heals the schema by itself; without it the app still boots
+  and the admin save path retries the heal on the next attempt.
+- `AUTO_MIGRATE_IN_TESTS=1` (testing only) — run the pass under
+  `FLASK_ENV=testing` too.
+
 ## Supplier stock sync (in-process watchdog)
 
 Product stock can follow the supplier page attached to a product's **Supplier
@@ -83,15 +107,24 @@ URL for Auto Stock Sync** field. The sync runs quietly inside the web service
 never deletes a supplier link, and writes a warning row for anything it could
 not read with confidence instead of guessing.
 
-The stock rule, per matched product/variant: supplier **out** → Jaura out;
-positive supplier quantity → `floor(quantity × 0.40)` sellable units (at least
-one when the supplier reports only a generic “in stock” signal). A restock
-restores that buffered quantity even after Jaura reached zero; the full
-supplier quantity is never exposed. Variants with no confident supplier match,
-products whose supplier page cannot be fetched/parsed, and uncertain readings
-are left exactly as they are (with a logged warning).
+The stock rule, per matched product/variant (owner rule, 2026-10-05): the
+supplier count is mirrored **1:1** — no safety buffer, no one-unit clamp. A
+page that only says “in stock” (a flag, not a count) keeps the shelf the shop
+already has and, when that shelf is empty, opens
+`SUPPLIER_IN_STOCK_UNITS` units so multi-unit orders go through. Supplier
+**out** → Jaura out. Variants with no confident supplier match, products whose
+supplier page cannot be fetched/parsed, and uncertain readings are left exactly
+as they are (with a logged warning).
+
+The checkout never refuses an order over a mirrored quantity: the request is
+taken, the real shelf is drained atomically to zero (never below) and any
+shortfall is recorded on the order (`stockShortfall`) for the admin. Only an
+item with nothing available at all is refused, as *This item is currently out
+of stock.*
 
 - `SUPPLIER_WATCHDOG_ENABLED` (default `1`) — master switch for the sync.
+- `SUPPLIER_IN_STOCK_UNITS` (default `10`) — the shelf opened when the
+  supplier page confirms availability without printing a number.
 
 ### Price watch
 

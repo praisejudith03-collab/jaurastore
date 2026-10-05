@@ -61,5 +61,8 @@ def test_stock_update_is_variant_isolated(monkeypatch):
     ok, warnings = supplier_watchdog.sync_product(product)
     assert ok is True
     assert warnings == []
-    assert saved["optionStock"] == {"Chocolate": 0, "Black": 1}
-    assert saved["stock"] == 1
+    # Black is a bare "available: true" (no count): it is opened to the
+    # multi-unit fallback, never clamped to one unit.
+    assert saved["optionStock"] == {"Chocolate": 0,
+                                    "Black": supplier_watchdog.SUPPLIER_IN_STOCK_UNITS}
+    assert saved["stock"] == supplier_watchdog.SUPPLIER_IN_STOCK_UNITS

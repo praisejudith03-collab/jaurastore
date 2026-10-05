@@ -1123,17 +1123,24 @@ def _requested_quantity(value):
 
 
 def _stock_limit_error(available, product_id="", variant=""):
-    """Consistent customer message for zero stock and hard-ceiling failures."""
+    """The one stock refusal a customer may ever see: the item is out.
+
+    Owner rule (2026-10-05): the shop never turns a sale away over the mirrored
+    quantity. A supplier page read (or an admin shelf number) is an estimate,
+    so asking for more units than the mirror currently shows is NOT an error -
+    the order is taken and the shelf is drained to zero (never below). The old
+    old quantity refusal (N remaining) was the message the owner asked to
+    remove for good; the only remaining stock refusal is this out-of-stock
+    notice for a row with nothing left at all.
+    """
     try:
         remaining = max(0, int(available or 0))
     except (TypeError, ValueError):
         remaining = 0
-    message = (OUT_OF_STOCK_MESSAGE if remaining == 0 else
-               f"You cannot order more than the available stock ({remaining} remaining).")
     line = {"id": str(product_id or "")}
     if variant:
         line["variant"] = str(variant)
-    return jsonify(ok=False, error=message, code="out_of_stock",
+    return jsonify(ok=False, error=OUT_OF_STOCK_MESSAGE, code="out_of_stock",
                    availableStock=remaining, items=[line]), 409
 
 
@@ -1220,10 +1227,17 @@ def _checkout_items(clean_items, currency):
         variant_key = (pid, g["variant"])
         if variant_key not in checked_variants:
             avail = _stock_available(prod, g["variant"])
-            # This is unconditional: the legacy ENFORCE_STOCK=0 switch is ignored.
-            # Stock is checked across notes as well as duplicate cart lines.
-            if variant_quantities.get(variant_key, 0) > avail:
-                return [], 0, _stock_limit_error(avail, pid, g["variant"])
+            # Owner rule (2026-10-05): an order is refused ONLY when the item
+            # has nothing left at all. A request larger than the mirrored
+            # quantity ("available stock") is accepted - the number can lag a
+            # sale or the supplier page, and blocking it produced the refused
+            # multi-unit carts the owner reported. The reservation below still
+            # drains the real shelf, never below zero, and a shortfall is
+            # recorded on the order for the admin to see.
+            # Unconditional: the legacy ENFORCE_STOCK=0 switch is ignored.
+            # Checked across notes as well as duplicate cart lines.
+            if avail <= 0:
+                return [], 0, _stock_limit_error(0, pid, g["variant"])
             checked_variants.add(variant_key)
         unit = _server_unit_price(prod, currency, g["variant"])
         bulk_percent = (catalog_mod.bulk_discount_for(prod, total_quantity_by_product[pid])
@@ -1714,44 +1728,60 @@ def create_order():
     prod_source = bool(catalog_mod._prod_source())
     reserved = []
 
-    # Reserve every line atomically BEFORE the order is written, so two
-    # concurrent checkouts can never sell the same last unit. Production
+    # Reserve every line atomically BEFORE the order is written. Production
     # guards inside PostgreSQL (a single guarded UPDATE covers the product
     # total AND the chosen variant); the local backend guards under the
     # catalogue's cross-process lock. The variant key travels with every
-    # reservation - without it a sold-out variant kept its stale number
-    # and could be ordered again while other variants still had units.
+    # reservation - without it a sold-out variant kept its stale number.
+    # Owner rule (2026-10-05): this reservation drains the shelf (never below
+    # zero) but never refuses the order - see the shortfall branch below.
     reservation_moves = _order_stock_moves({"items": clean_items})
+    shortfall = []
     for move in reservation_moves:
         pid = str(move.get("id") or "")
         qty = int(move.get("qty") or 0)
         option = move.get("option")
         if not pid or qty <= 0:
             continue
-        res = catalog_mod.reserve_stock(pid, qty, option_key=option, actor="checkout")
-        if res is None:
-            if not _release_stock_lines(reserved):
-                return jsonify(ok=False, error=(
-                    "We could not confirm your stock right now. "
-                    "Please try again in a moment.")), 503
-            available = _live_stock_available(pid, option)
-            if available is None:
-                return jsonify(ok=False, error=(
-                    "We could not confirm your stock right now. "
-                    "Please try again in a moment.")), 503
-            return _stock_limit_error(available, pid, option or "")
-        if res is False:
-            _release_stock_lines(reserved)
-            return jsonify(ok=False, error=(
-                "We could not confirm your stock right now. "
-                "Please try again in a moment.")), 503
-        reserved.append((pid, qty, option))
+        try:
+            res = catalog_mod.reserve_stock(pid, qty, option_key=option, actor="checkout")
+        except Exception:
+            res = False
+        # reserve_stock answers a truthy result on success, None when the
+        # shelf is short and False when the write itself failed.
+        if res:
+            reserved.append((pid, qty, option))
+            continue
+        # The shelf could not cover the request. Owner rule (2026-10-05): the
+        # customer is NEVER turned away on the number. Drain whatever is really
+        # left (never below zero) and keep the order, recording the shortfall
+        # so the admin sees the order needs sourcing beyond the mirror. A
+        # reservation write failure is treated the same way: the order is the
+        # priority, and "stockApplied" records only what actually moved.
+        left = _live_stock_available(pid, option)
+        applied = 0
+        if left:
+            try:
+                if catalog_mod.reserve_stock(pid, left, option_key=option,
+                                             actor="checkout"):
+                    applied = left
+            except Exception:
+                applied = 0
+        if applied:
+            reserved.append((pid, applied, option))
+        shortfall.append({"id": pid, "variant": option or "",
+                          "requested": qty, "applied": applied})
     if reserved:
         # The reservation IS the stock move for this order. Recording it
         # on the payload keeps confirm from decrementing a second time
         # and lets decline / reopen / delete give exactly it back.
-        order["stockApplied"] = reservation_moves
+        order["stockApplied"] = [{"id": pid, "option": option, "qty": qty}
+                                 for pid, qty, option in reserved]
         _invalidate_catalog_cache()
+    if shortfall:
+        # Not an error: visible on the order for the admin, never thrown back
+        # at the customer as a refusal.
+        order["stockShortfall"] = shortfall
     sb_row["payload"] = order
 
     proof_size = len(proof_data)

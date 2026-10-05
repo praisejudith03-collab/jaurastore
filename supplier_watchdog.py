@@ -39,6 +39,19 @@ FETCH_TIMEOUT = 8
 CACHE_TTL_SECONDS = 20 * 60
 USER_AGENT = "jaurastore-supplier-watchdog/1.0 (+https://jaurastore.com.ng)"
 
+# ---------------------------------------------------------------- stock rules
+# Owner rule (2026-10-05): the shop sells what the supplier actually has. The
+# supplier count is mirrored 1:1 - there is no 40%/50% "safety buffer" and no
+# one-unit clamp any more. Pages that only print "In stock" (a flag, not a
+# count) used to be read as the number 1, which hard-capped the storefront at
+# a single unit and answered "You cannot order more than the available stock
+# (1 remaining)" to any shopper who asked for two. A flagged page now keeps
+# the shop's existing shelf, and a sold-out row is opened to this many units
+# so multi-unit orders go through; the database still re-checks the real
+# quantity atomically at checkout, so a wrong guess can never oversell
+# silently - it surfaces to the admin as an out-of-stock line instead.
+SUPPLIER_IN_STOCK_UNITS = max(1, int(os.environ.get("SUPPLIER_IN_STOCK_UNITS", "10") or 10))
+
 # Supplier URLs, not products, are the unit of cooldown. At most two unique
 # links are selected per scheduler tick (normally five minutes apart); each
 # link then waits an hour before it can be fetched again. The cache is an
@@ -286,28 +299,40 @@ def match_score(jaura_label: str, supplier_label: str) -> int:
 
 
 def _availability_from_value(value: Any) -> Optional[int]:
-    """Return 0/1/qty when a parsed field clearly describes stock."""
+    """Return 0/qty when a parsed field clearly describes stock."""
+    return _availability_reading(value)[0]
+
+
+def _availability_reading(value: Any) -> Tuple[Optional[int], bool]:
+    """``(units, flagged)`` for one parsed availability field.
+
+    ``flagged`` is True when the page confirmed availability but printed no
+    count at all ("In stock", ``available: true``). The caller must not treat
+    that as the number 1: it is the difference between "the supplier has at
+    least one" and "the supplier has exactly one", and reading it as 1 is what
+    hard-capped the storefront at a single unit.
+    """
     if isinstance(value, bool):
-        return 1 if value else 0
+        return (1, True) if value else (0, False)
     if isinstance(value, (int, float)):
-        return max(0, int(value))
+        return max(0, int(value)), False
     text = str(value or "").strip().lower()
     if not text:
-        return None
+        return None, False
     compact = re.sub(r"[^a-z0-9]+", "", text)
     if any(term.replace(" ", "") in compact for term in _AVAILABILITY_OUT):
-        return 0
+        return 0, False
     if any(term in text for term in _OUT_TERMS):
-        return 0
+        return 0, False
     # Explicit quantities win over generic availability words.
     m = re.search(r"(?:stock|qty|quantity|inventory)[^0-9]{0,16}(\d{1,7})", text)
     if m:
-        return max(0, int(m.group(1)))
+        return max(0, int(m.group(1))), False
     if any(term.replace(" ", "") in compact for term in _AVAILABILITY_IN):
-        return 1
+        return 1, True
     if any(term in text for term in _IN_TERMS):
-        return 1
-    return None
+        return 1, True
+    return None, False
 
 
 def _label_from_dict(row: Dict[str, Any]) -> str:
@@ -366,6 +391,36 @@ def _stock_from_dict(row: Dict[str, Any]) -> Optional[int]:
                 if qty is not None:
                     return qty
     return None
+
+
+def _stock_flag_from_dict(row: Dict[str, Any]) -> bool:
+    """True when the dict's stock reading is a bare availability signal.
+
+    Mirrors ``_stock_from_dict`` field for field, so the flag always describes
+    the value that actually produced the quantity.
+    """
+    for key in ("quantity", "qty", "stock", "inventory", "inventory_quantity",
+                "quantityAvailable", "available_quantity", "stock_quantity"):
+        if key in row:
+            return _availability_reading(row.get(key))[1]
+    for key in ("available", "isAvailable", "inStock", "in_stock", "soldOut",
+                "sold_out", "disabled", "availability", "stockStatus", "stock_status"):
+        if key not in row:
+            continue
+        value = row.get(key)
+        if key in ("soldOut", "sold_out", "disabled") and isinstance(value, bool):
+            return True
+        return _availability_reading(value)[1]
+    offers = row.get("offers")
+    if isinstance(offers, dict):
+        return _stock_flag_from_dict(offers)
+    if isinstance(offers, list):
+        for offer in offers:
+            if isinstance(offer, dict):
+                flag = _stock_flag_from_dict(offer)
+                if flag is not None:
+                    return flag
+    return True
 
 
 # ------------------------------------------------------------------ prices
@@ -492,7 +547,8 @@ def _walk_json(node: Any, rows: List[Dict[str, Any]], depth: int = 0) -> None:
         label = _label_from_dict(node)
         qty = _stock_from_dict(node)
         if label and qty is not None:
-            row = {"label": label, "qty": max(0, int(qty)), "source": "json"}
+            row = {"label": label, "qty": max(0, int(qty)), "source": "json",
+                   "flag": _stock_flag_from_dict(node)}
             price = _price_from_dict(node)
             if price is not None:
                 row["price"] = price
@@ -546,9 +602,9 @@ def parse_supplier_variants(text: str, jaura_labels: Iterable[str] = ()) -> List
         text or "", flags=re.I | re.S):
         label = html.unescape(m.group(1)).strip()
         chunk = html.unescape(m.group(0)).lower()
-        qty = _availability_from_value(chunk)
+        qty, flagged = _availability_reading(chunk)
         if label and qty is not None:
-            row = {"label": label, "qty": qty, "source": "html-attr"}
+            row = {"label": label, "qty": qty, "source": "html-attr", "flag": flagged}
             pm = re.search(r"data-price\s*=\s*[\"']([^\"']{1,32})[\"']", chunk, flags=re.I)
             if pm:
                 price = parse_price(pm.group(1))
@@ -573,9 +629,10 @@ def parse_supplier_variants(text: str, jaura_labels: Iterable[str] = ()) -> List
                 if idx < 0:
                     continue
                 window = lowered[max(0, idx - 180): idx + len(search) + 220]
-                qty = _availability_from_value(window)
+                qty, flagged = _availability_reading(window)
                 if qty is not None:
-                    rows.append({"label": str(cand), "qty": qty, "source": "text"})
+                    rows.append({"label": str(cand), "qty": qty,
+                                 "source": "text", "flag": flagged})
                     break
 
     # Dedupe by folded label, keeping an exact quantity/out-of-stock over a
@@ -587,7 +644,8 @@ def parse_supplier_variants(text: str, jaura_labels: Iterable[str] = ()) -> List
             continue
         key = fold(label)
         qty = max(0, int(row.get("qty") or 0))
-        incoming = {"label": label, "qty": qty, "source": row.get("source") or ""}
+        incoming = {"label": label, "qty": qty, "source": row.get("source") or "",
+                    "flag": bool(row.get("flag"))}
         if row.get("price") is not None:
             incoming["price"] = row["price"]
         prev = by_label.get(key)
@@ -603,6 +661,10 @@ def parse_supplier_variants(text: str, jaura_labels: Iterable[str] = ()) -> List
         elif incoming_source == "text" and prev_source != "text":
             continue
         elif qty == 0 or qty > int(prev.get("qty") or 0):
+            by_label[key] = incoming
+        elif bool(prev.get("flag")) and not bool(incoming.get("flag")):
+            # A bare "In stock" must never shadow an exact count for the same
+            # label: the dedicated count is the better reading.
             by_label[key] = incoming
         # Same label seen twice at the same strength: keep whichever row
         # carried a price so the price watch never loses its reading.
@@ -852,8 +914,10 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog",
             warnings.append(_warning(p, "supplier_stock_uncertain", f"Stock for '{key}' could not be read with confidence; left unchanged."))
             next_stock[key] = old
             continue
-        new_qty = (_apply_option_stock_rule(int(qty), old)
-                   if key in option_url_keys else _apply_stock_rule(int(qty), old))
+        flagged = bool(row.get("flag"))
+        new_qty = (_apply_option_stock_rule(int(qty), old, flagged=flagged)
+                   if key in option_url_keys
+                   else _apply_stock_rule(int(qty), old, flagged=flagged))
         next_stock[key] = new_qty
         if new_qty != old:
             changed = True
@@ -865,20 +929,29 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog",
     return _save_synced(p, row, actor, warnings)
 
 
-def _apply_stock_rule(qty: int, old: int) -> int:
-    """The standing 40% buffer for product-level supplier stock."""
-    qty = max(0, int(qty or 0))
+def _apply_stock_rule(qty: int, old: int, flagged: bool = False) -> int:
+    """The stock the shop should offer for one supplier reading.
+
+    An exact supplier count is mirrored 1:1 - no safety buffer, no one-unit
+    clamp. A bare availability flag (``flagged``) carries no number, so the
+    shop keeps the shelf it already had and, when that shelf is empty, opens
+    ``SUPPLIER_IN_STOCK_UNITS`` units (multi-unit purchases included) instead
+    of the old single unit.
+    """
+    try:
+        qty = max(0, int(qty or 0))
+    except (TypeError, ValueError):
+        qty = 0
     if qty <= 0:
         return 0
-    return max(1, (qty * 40) // 100)
+    if flagged:
+        return max(max(0, int(old or 0)), SUPPLIER_IN_STOCK_UNITS)
+    return qty
 
 
-def _apply_option_stock_rule(qty: int, old: int) -> int:
-    """Use the requested 50% buffer only for an option's own supplier URL."""
-    qty = max(0, int(qty or 0))
-    if qty <= 0:
-        return 0
-    return max(1, (qty * 50) // 100)
+def _apply_option_stock_rule(qty: int, old: int, flagged: bool = False) -> int:
+    """Per-option-URL supplier stock. Same 1:1, uncapped contract."""
+    return _apply_stock_rule(qty, old, flagged=flagged)
 
 
 def _whole_product_row(product: Dict[str, Any], supplier_rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -914,7 +987,7 @@ def _sync_whole_product(p: Dict[str, Any], supplier_rows: List[Dict[str, Any]],
         warnings.append(_warning(p, "supplier_stock_uncertain", "Stock could not be read with confidence; left unchanged."))
         return False, warnings
     old = max(0, int(p.get("stock") if p.get("stock") is not None else (p.get("stock_quantity") or 0) or 0))
-    new_qty = _apply_stock_rule(int(qty), old)
+    new_qty = _apply_stock_rule(int(qty), old, flagged=bool(row.get("flag")))
     if new_qty == old:
         return False, warnings
     out = {**p, "stock": new_qty, "stock_quantity": new_qty}

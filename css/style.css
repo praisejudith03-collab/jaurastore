@@ -479,7 +479,6 @@ ul { list-style: none; }
   -webkit-appearance: none;
   appearance: none;
 }
-.pdp-supplier-availability { margin: 12px 0; padding: 11px 14px; border-left: 3px solid var(--gold, #b8956a); border-radius: 6px; background: var(--cream, #faf7f2); color: var(--ink, #342922); font-size: 13px; line-height: 1.5; }
 .cart-item-note, .ck-line-note, .order-item-note { display: block; margin-top: 4px; font-size: 12px; line-height: 1.45; color: var(--muted, #756a60); }
 .ck-line-note { font-weight: 400; }
 .order-item-note { font-style: italic; }
@@ -1509,6 +1508,21 @@ textarea[aria-invalid="true"] {
 .ck-inline-tooltip::before {
   content: "⚠️";
   font-size: 11px;
+}
+/* The exact field the submit stopped on: a brief ring so the shopper's eye
+   lands on it after the smooth scroll (owner request 2026-10-05). */
+.field.is-missing,
+.fare-field.is-missing,
+.ck-upload.is-missing {
+  border-radius: 8px;
+  animation: ck-missing-pulse 1.8s ease-out 1;
+}
+@keyframes ck-missing-pulse {
+  0%, 55% { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.22); }
+  100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .field.is-missing, .fare-field.is-missing, .ck-upload.is-missing { animation: none; }
 }
 .ck-interstate-notice {
   margin-top: 10px;
@@ -3236,23 +3250,6 @@ body.welcome-open { overflow: hidden; }
   line-height: 1.55;
 }
 .pdp-opt { margin: 14px 0 6px; }
-.pdp-info {
-  margin: 12px 0 18px;
-  padding: 12px 14px;
-  background: #ffffff;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  max-width: 460px;
-}
-.pdp-info strong {
-  display: block;
-  font-size: 11px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--taupe);
-  margin-bottom: 6px;
-}
-.pdp-info p { color: var(--muted); font-size: 13px; white-space: pre-line; }
 .opt-chip {
   display: inline-flex;
   align-items: center;
@@ -6022,6 +6019,7 @@ body[data-page="admin"] { background: #f8f9fc !important; }
 }
 .media-doc-chip span { font-size: 10px; font-weight: 400; color: var(--taupe); letter-spacing: 0; }
 .media-doc-chip:hover { border-color: var(--gold-deep); color: var(--gold-deep); }
+.media-doc-chip.is-static { cursor: default; }
 .au-tile .media-doc-chip, .card .media-doc-chip, .pdp-thumb .media-doc-chip,
 .pdp-img .media-doc-chip { width: 100%; height: 100%; min-height: 100%; border: 0; border-radius: 8px; }
 .au-cat-pic .cat-doc-chip { min-width: 88px; min-height: 88px; }
@@ -7624,7 +7622,6 @@ body.store-paused{overflow:hidden}
     gap: 8px !important;
   }
   .pdp-actions .btn { min-width: 0 !important; padding: 13px 16px !important; }
-  .pdp-supplier-availability { margin: 8px 0 !important; padding: 9px 11px !important; font-size: 12px !important; }
   .pdp-reviews { margin-top: 16px !important; }
 }
 

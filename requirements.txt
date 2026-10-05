@@ -3,6 +3,13 @@ python-dotenv==1.0.1
 gunicorn==23.0.0
 pytest==8.2.2
 supabase==2.31.0
+# Boot-time schema auto-migration (auto_migrate.py) needs a direct
+# Postgres connection to run additive ALTER TABLE statements that
+# PostgREST cannot. The module degrades gracefully (psql or a Supabase
+# exec_sql RPC first, otherwise a no-op), so this stays optional at
+# runtime - installing it here is what lets Render heal the live
+# site_settings schema by itself on the next boot.
+psycopg2-binary>=2.9.9
 # Product/category photos are downscaled + re-encoded at upload time
 # (storage.optimize_image_bytes) so a 4G shopper never downloads a 6 MB
 # phone original. Falls back to storing the original bytes if unavailable.

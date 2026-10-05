@@ -1,6 +1,7 @@
 """Real Chromium/mobile smoke tests. No live shop writes or GitHub pushes."""
 import os
 import threading
+import time
 
 import pytest
 from playwright.sync_api import sync_playwright, expect
@@ -70,6 +71,84 @@ def open_admin_tab(page, tab):
     if btn.count() == 0:
         page.locator("[data-admin-more]").click()
     page.locator(f'[data-tab="{tab}"]:visible').first.click()
+
+
+_HEADER_BOXES_JS = """() => {
+  const rect = (el) => {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left, y: r.top, width: r.width, height: r.height };
+  };
+  const header = document.querySelector("#site-header");
+  const at = (sel) => (header ? rect(header.querySelector(sel)) : null);
+  return {
+    menu: at(".header-slot--left [data-open-menu]"),
+    logo: at(".logo"),
+    right: at(".header-slot.nav-right"),
+    controls: header ? Array.from(header.querySelectorAll(
+      ".header-slot.nav-right button, .header-slot.nav-right a")).map(rect) : [],
+    diagnostics: header ? {
+      bodyClass: document.body.className,
+      display: getComputedStyle(header).display,
+      visibility: getComputedStyle(header).visibility,
+      sheets: Array.from(document.styleSheets).map((s) => s.href || "inline"),
+      fonts: document.fonts ? document.fonts.status : "n/a",
+    } : null,
+  };
+}"""
+
+
+def _box(locator, timeout=15000):
+    """A non-empty box for ``locator``, waiting for the layout to settle.
+
+    Playwright answers ``None`` for an element whose box is empty, so a chrome
+    repaint or a font swap racing the measurement used to break CI with
+    "TypeError: 'NoneType' object is not subscriptable" - a test-side race that
+    said nothing about the layout. Wait for a real box first: a genuine
+    collapse then fails loudly with the selector in the message, and a
+    transient one simply settles.
+    """
+    deadline = time.monotonic() + timeout / 1000.0
+    box = None
+    while True:
+        box = locator.bounding_box()
+        if box and box["width"] > 0 and box["height"] > 0:
+            return box
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"no measurable box for {locator!r} within {timeout}ms: {box!r}")
+        time.sleep(0.05)
+
+
+_HEADER_SETTLED_JS = """() => {
+  const header = document.querySelector("#site-header");
+  const ok = (sel) => {
+    const el = header && header.querySelector(sel);
+    const r = el && el.getBoundingClientRect();
+    return Boolean(r && r.width > 0 && r.height > 0);
+  };
+  return ok(".header-slot--left [data-open-menu]") && ok(".logo")
+    && ok(".header-slot.nav-right");
+}"""
+
+
+def _header_boxes(page, timeout=15000):
+    """The three header slots + the right-hand controls, read in ONE JS turn.
+
+    The header is re-mounted whenever the storefront repaints its chrome, so
+    measuring across several protocol round-trips can land on a detached or
+    not-yet-laid-out node and come back ``None``. Wait for all three rects to
+    be non-empty, then read them atomically; if the layout never settles, the
+    failure carries the computed styles and the loaded style sheets so the CI
+    annotation alone is enough to diagnose it.
+    """
+    try:
+        page.wait_for_function(_HEADER_SETTLED_JS, timeout=timeout)
+    except Exception as exc:
+        raise AssertionError(
+            "the header never settled into a measurable layout: "
+            f"{page.evaluate(_HEADER_BOXES_JS)}") from exc
+    return page.evaluate(_HEADER_BOXES_JS)
 
 
 @pytest.mark.parametrize("path", ["/", "/shop.html", "/categories.html", "/faq.html",
@@ -169,17 +248,18 @@ def test_header_controls_do_not_overlap(mobile, live_shop, width):
     expect(logo).to_be_visible()
     right = mobile.locator("#site-header .header-slot.nav-right")
     expect(right).to_be_visible()
-    m, a, b = menu.bounding_box(), logo.bounding_box(), right.bounding_box()
+    boxes = _header_boxes(mobile)
+    m, a, b = boxes["menu"], boxes["logo"], boxes["right"]
     # one row: the vertical centres agree within 2px
     assert abs((m["y"] + m["height"] / 2) - (a["y"] + a["height"] / 2)) <= 2
     assert abs((a["y"] + a["height"] / 2) - (b["y"] + b["height"] / 2)) <= 2
     # menu left of logo, logo left of the controls - no overlaps
     assert m["x"] + m["width"] <= a["x"] + 1
     assert a["x"] + a["width"] <= b["x"] + 1
-    for control in mobile.locator("#site-header .header-slot.nav-right button, "
-                                  "#site-header .header-slot.nav-right a").all():
-        box = control.bounding_box()
-        assert box and box["x"] >= 0 and box["x"] + box["width"] <= width
+    for box in boxes["controls"]:
+        assert box and box["width"] > 0 and box["height"] > 0, \
+            f"a right-hand control collapsed at {width}px: {box}"
+        assert box["x"] >= 0 and box["x"] + box["width"] <= width
     # the old header dropdowns never come back
     assert mobile.locator("#site-header .lang-switch").count() == 0
     assert mobile.locator("#site-header .currency-switch").count() == 0
@@ -197,7 +277,7 @@ def test_desktop_logo_is_centered_on_one_row_and_currency_pill_floats(mobile, li
     mobile.goto(live_shop + "/")
     logo = mobile.locator("#site-header .logo img")
     expect(logo).to_be_visible()
-    box = logo.bounding_box()
+    box = _box(logo)
     # The logo's horizontal centre must be the header row's horizontal
     # centre (within 3px), and its vertical centre must match the
     # controls' - i.e. one row.
@@ -209,7 +289,7 @@ def test_desktop_logo_is_centered_on_one_row_and_currency_pill_floats(mobile, li
     assert abs(logo_mid_x - row_mid_x) <= 3, (
         f"header logo centre {logo_mid_x} != header row centre {row_mid_x} "
         "- the Option A centred-logo lock regressed")
-    right_box = mobile.locator("#site-header .header .nav-right").bounding_box()
+    right_box = _box(mobile.locator("#site-header .header .nav-right"))
     logo_mid = box["y"] + box["height"] / 2
     right_mid = right_box["y"] + right_box["height"] / 2
     assert abs(logo_mid - right_mid) <= 2, (
@@ -221,7 +301,7 @@ def test_desktop_logo_is_centered_on_one_row_and_currency_pill_floats(mobile, li
     assert mobile.locator("#site-header .header .lang-switch").count() == 0
     pill = mobile.locator(".cur-float")
     expect(pill).to_be_visible()
-    pbox = pill.bounding_box()
+    pbox = _box(pill)
     assert width - (pbox["x"] + pbox["width"]) <= 24, (
         f"the pill must hug the right edge (right:20px), box {pbox}")
     bottom_gap = 900 - (pbox["y"] + pbox["height"])
@@ -241,7 +321,7 @@ def test_desktop_logo_is_centered_on_one_row_and_currency_pill_floats(mobile, li
     assert on_bg.replace(" ", "") == "rgb(51,37,26)", (
         f"the active currency must be #33251A, got {on_bg}")
     wa = mobile.locator(".wa-float")
-    wbox = wa.bounding_box()
+    wbox = _box(wa)
     assert 900 - (wbox["y"] + wbox["height"]) <= 25, (
         f"WhatsApp must hug bottom:20px, box {wbox}")
     # The rule the owner actually asked for: the two floating controls are
@@ -272,8 +352,8 @@ def test_the_floating_pill_never_covers_whatsapp_on_a_phone(mobile, live_shop, p
     wa = mobile.locator(".wa-float")
     expect(pill).to_be_visible()
     expect(wa).to_be_visible()
-    pbox = pill.bounding_box()
-    wbox = wa.bounding_box()
+    pbox = _box(pill)
+    wbox = _box(wa)
     assert pbox and wbox
     # No intersection at all, and the pill is the one on top.
     overlap_x = min(pbox["x"] + pbox["width"], wbox["x"] + wbox["width"]) - max(pbox["x"], wbox["x"])

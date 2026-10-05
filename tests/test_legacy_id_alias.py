@@ -175,16 +175,23 @@ def test_checkout_accepts_a_legacy_id_and_uses_the_server_price(client):
     assert _find("jau-alias-buy")["priceNgn"] == 8000
 
 
-def test_checkout_enforces_stock_for_a_legacy_id(client):
+def test_legacy_id_over_order_is_taken_and_drains_the_canonical_row(client):
+    """Owner rule (2026-10-05): a cart line carrying a legacyId can order more
+    than the mirrored shelf - the order is accepted and drains the canonical
+    row to zero. The numeric shelf is never leaked to the client."""
     _make("jau-alias-stock", legacy="wix-alias-stock", price=8000, stock=2)
     r = _place(client, "JA-ALIAS2",
                [{"id": "wix-alias-stock", "name": "Alias", "qty": 5, "price": 8000}])
-    assert r.status_code == 409, r.get_json()
-    assert r.get_json().get("code") == "out_of_stock"
-    body = r.get_json()
-    assert not any(str(v).isdigit() and int(v) == 2
-                   for v in [body.get("available", "x")]), \
-        "the response leaked a numerical stock count"
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json().get("ok") is True
+    row = _find("jau-alias-stock")
+    assert max(0, int(row.get("stock") or 0)) == 0
+    # a drained row is the only refusal left, and it is the same for an alias
+    empty = _place(client, "JA-ALIAS2B",
+                   [{"id": "wix-alias-stock", "name": "Alias", "qty": 1, "price": 8000}])
+    assert empty.status_code == 409, empty.get_json()
+    assert empty.get_json().get("code") == "out_of_stock"
+    assert empty.get_json().get("error") == "This item is currently out of stock."
 
 
 def test_confirming_a_legacy_id_order_decrements_the_canonical_row(client):
