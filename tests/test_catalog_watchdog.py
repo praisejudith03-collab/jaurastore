@@ -23,6 +23,8 @@ import json
 import os
 import sys
 import threading
+import urllib.error
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -300,7 +302,24 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/api/catalog"):
-            body = json.dumps(self.server.api_payload).encode()
+            parsed = urllib.parse.urlsplit(self.path)
+            query = urllib.parse.parse_qs(parsed.query)
+            payload = dict(self.server.api_payload)
+            if query.get("watchdog_page") == ["1"]:
+                limit = int(query.get("limit", ["50"])[0])
+                offset = int(query.get("offset", ["0"])[0])
+                all_products = payload["products"]
+                page = all_products[offset:offset + limit]
+                next_offset = offset + len(page)
+                payload["products"] = page
+                payload["pagination"] = {
+                    "limit": limit, "offset": offset, "total": len(all_products),
+                    "nextOffset": next_offset if next_offset < len(all_products) else None,
+                    "hasMore": next_offset < len(all_products),
+                }
+                self.server.catalog_offsets.append(offset)
+                self.server.catalog_page_sizes.append(len(page))
+            body = json.dumps(payload).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -317,8 +336,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if self.path.startswith("/rest/v1/products"):
-            rng = (self.headers.get("Range") or "0-499")
+            rng = (self.headers.get("Range") or "0-49")
             start, end = (int(x) for x in rng.split("-"))
+            self.server.product_ranges.append((start, end))
             rows = self.server.db_rows[start:end + 1]
             total = len(self.server.db_rows)
             body = json.dumps(rows).encode()
@@ -333,6 +353,17 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+class _LocalServerBundle:
+    """Keep existing three-value fixture unpacking and expose request logs."""
+    def __init__(self, base, db_rows, payload, server):
+        self.base, self.db_rows, self.payload, self.server = base, db_rows, payload, server
+
+    def __iter__(self):
+        yield self.base
+        yield self.db_rows
+        yield self.payload
+
+
 @pytest.fixture()
 def local_servers(monkeypatch):
     db_rows, payload = _production_shape()
@@ -340,22 +371,146 @@ def local_servers(monkeypatch):
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     srv.api_payload, srv.db_rows = payload, db_rows
     srv.deleted_ids = {"wix-229"}
+    srv.catalog_offsets, srv.catalog_page_sizes, srv.product_ranges = [], [], []
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
-    # force multiple pages so the Range walk is really exercised
-    monkeypatch.setattr(wd, "DB_PAGE", 100)
-    yield base, db_rows, payload
+    # Force the implementation's 50-row pages to be exercised.
+    monkeypatch.setattr(wd, "DB_PAGE", 50)
+    monkeypatch.setattr(wd, "CATALOG_PAGE", 50)
+    yield _LocalServerBundle(base, db_rows, payload, srv)
     srv.shutdown()
     srv.server_close()
 
 
 def test_fetch_layers_read_the_whole_table_and_catalog(local_servers):
     base, db_rows, payload = local_servers
+    assert wd.DB_PAGE == wd.CATALOG_PAGE == 50
     got_payload = wd.fetch_public_catalog(base, attempts=1)
     assert len(got_payload["products"]) == len(payload["products"])
+    assert "pagination" not in got_payload
+    assert local_servers.server.catalog_offsets == [0, 50, 100, 150, 200, 250]
+    assert max(local_servers.server.catalog_page_sizes) <= 50
+
     got_rows = wd.fetch_db_rows(base, "test-key")
     assert len(got_rows) == len(db_rows)           # every page, incl. tombstone
     assert got_rows == db_rows
+    assert [start for start, _end in local_servers.server.product_ranges] == [
+        0, 50, 100, 150, 200, 250]
+    assert all(end - start + 1 == 50
+               for start, end in local_servers.server.product_ranges)
+
+
+def test_public_catalog_supports_old_unpaginated_render_during_rollout(monkeypatch):
+    """A watchdog deploy should keep running while Render is rolling its API
+    change out; an older response without pagination is still accepted."""
+    _db_rows, payload = _production_shape()
+    seen = {}
+
+    def fake_get(url, headers=None, timeout=120):
+        seen["url"] = url
+        return 200, {}, json.dumps(payload).encode()
+
+    monkeypatch.setattr(wd, "_get", fake_get)
+    result = wd.fetch_public_catalog("https://shop.test", attempts=1)
+    assert result == payload
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(seen["url"]).query)
+    assert query == {"watchdog_page": ["1"], "limit": ["50"], "offset": ["0"]}
+
+
+def test_transient_500s_recover_to_a_clean_watchdog_pass(monkeypatch, tmp_path):
+    """A temporary Render and PostgREST 500 is retried per page, so main()
+    returns a clean pass (and Actions will not run the issue-opening step).
+    """
+    db_rows, payload = _production_shape()
+    calls = {"catalog": 0, "products": 0}
+    catalog_offsets, product_ranges, delays = [], [], []
+
+    def transient_500(url):
+        raise urllib.error.HTTPError(url, 500, "Internal Server Error", {}, None)
+
+    def fake_get(url, headers=None, timeout=120):
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.path == "/api/catalog":
+            query = urllib.parse.parse_qs(parsed.query)
+            assert query.get("watchdog_page") == ["1"]
+            limit = int(query["limit"][0])
+            offset = int(query["offset"][0])
+            catalog_offsets.append(offset)
+            if offset == 0 and calls["catalog"] == 0:
+                calls["catalog"] += 1
+                transient_500(url)
+            page = payload["products"][offset:offset + limit]
+            next_offset = offset + len(page)
+            response = dict(payload)
+            response["products"] = page
+            response["pagination"] = {
+                "limit": limit, "offset": offset,
+                "total": len(payload["products"]),
+                "nextOffset": next_offset if next_offset < len(payload["products"]) else None,
+                "hasMore": next_offset < len(payload["products"]),
+            }
+            return 200, {}, json.dumps(response).encode()
+
+        if parsed.path == "/rest/v1/products":
+            start, end = (int(x) for x in headers["Range"].split("-"))
+            product_ranges.append((start, end))
+            if start == 0 and calls["products"] == 0:
+                calls["products"] += 1
+                transient_500(url)
+            page = db_rows[start:end + 1]
+            last = start + len(page) - 1
+            return (206, {"content-range": f"{start}-{last}/{len(db_rows)}"},
+                    json.dumps(page).encode())
+
+        if parsed.path == "/rest/v1/growth_settings":
+            body = json.dumps([{"value": json.dumps(["wix-229"])}]).encode()
+            return 200, {}, body
+        raise AssertionError(f"unexpected watchdog request: {parsed.path}")
+
+    monkeypatch.setattr(wd, "_get", fake_get)
+    monkeypatch.setattr(wd.time, "sleep", delays.append)
+    monkeypatch.setattr(wd, "fetch_service_health", lambda *_a, **_k: None)
+    monkeypatch.setattr(wd, "STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setenv("WATCHDOG_BASE_URL", "https://shop.test")
+    monkeypatch.setenv("SUPABASE_URL", "https://db.test")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-key")
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = wd.main()
+    text = out.getvalue()
+
+    assert rc == 0, text
+    assert "PASS  every online Supabase product is on the public storefront" in text
+    assert "FAIL" not in text
+    assert text.count("transient HTTP 500") == 2
+    assert delays == [2, 2]                     # first exponential retry delay
+    assert catalog_offsets[:2] == [0, 0]         # failed page retried, not skipped
+    assert catalog_offsets[2:] == [50, 100, 150, 200, 250]
+    assert product_ranges[:2] == [(0, 49), (0, 49)]
+    assert [start for start, _end in product_ranges[2:]] == [50, 100, 150, 200, 250]
+    assert json.loads((tmp_path / "state.json").read_text())["liveCount"] == sum(
+        row.get("online") is not False for row in db_rows)
+
+
+def test_get_with_retries_uses_exponential_backoff_for_server_errors(monkeypatch):
+    assert wd.DB_PAGE == wd.CATALOG_PAGE == 50
+    assert wd.REQUEST_TIMEOUT >= 60
+    assert wd.RETRY_DELAYS == (2, 4, 8, 16)
+    calls, delays = [], []
+
+    def fake_get(url, headers=None, timeout=120):
+        calls.append((url, timeout))
+        if len(calls) <= 3:
+            raise urllib.error.HTTPError(url, 500, "Internal Server Error", {}, None)
+        return 200, {}, b"ok"
+
+    monkeypatch.setattr(wd, "_get", fake_get)
+    monkeypatch.setattr(wd.time, "sleep", delays.append)
+    assert wd._get_with_retries("https://db.test/rest/v1/products") == (200, {}, b"ok")
+    assert [delay for delay in delays] == [2, 4, 8]
+    assert len(calls) == 4
+    assert all(timeout == wd.REQUEST_TIMEOUT for _url, timeout in calls)
 
 
 def test_fetch_deleted_ids_reads_the_durable_list(local_servers):
@@ -366,7 +521,7 @@ def test_fetch_deleted_ids_reads_the_durable_list(local_servers):
     assert ids == {"wix-229"}
 
 
-def test_fetch_deleted_ids_returns_none_on_a_broken_read():
+def test_fetch_deleted_ids_returns_none_on_a_broken_read(monkeypatch):
     class _500Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
             pass
@@ -376,6 +531,7 @@ def test_fetch_deleted_ids_returns_none_on_a_broken_read():
             self.end_headers()
 
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _500Handler)
+    monkeypatch.setattr(wd.time, "sleep", lambda _delay: None)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     broken_base = f"http://127.0.0.1:{srv.server_address[1]}"
     try:
@@ -426,7 +582,15 @@ def test_watchdog_workflow_stays_safe():
     assert data["concurrency"]["group"] == "catalog-watchdog"
     assert data["concurrency"]["cancel-in-progress"] is False
     job = data["jobs"]["watch"]
-    assert job["timeout-minutes"], "the job must have a timeout"
+    assert job["timeout-minutes"] == 25
+    steps = job["steps"]
+    watchdog_step = next(step for step in steps if step.get("id") == "watchdog")
+    assert "timeout" in watchdog_step["run"] and "20m" in watchdog_step["run"]
+    failure_step = next(step for step in steps if step.get("name") == "Open or update the alert issue")
+    assert "steps.watchdog.outcome == 'failure'" in failure_step["if"]
+    recovery_step = next(step for step in steps if step.get("name") == "Close the alert issue on recovery")
+    assert "steps.watchdog.outcome == 'success'" in recovery_step["if"]
+    assert "gh issue close" in recovery_step["run"]
     # the service key may only ever arrive from the repository secrets
     code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
     assert "secrets.SUPABASE_URL" in code and "secrets.SUPABASE_SERVICE_ROLE_KEY" in code

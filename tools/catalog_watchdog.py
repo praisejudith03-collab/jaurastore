@@ -54,16 +54,22 @@ environment, and failures are reported as counts and product ids only.
 
 Exit codes: 0 = healthy, 1 = invariant broken, 2 = could not measure.
 """
+import http.client
 import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
 DEFAULT_BASE = "https://jaurastore.com.ng"
-REQUEST_TIMEOUT = 45
-RETRY_DELAYS = (2, 5)
+# Render can take roughly 50 seconds to cold-start. Leave headroom for that,
+# while still bounding each paginated request so one hung endpoint cannot
+# consume the whole Actions job.
+REQUEST_TIMEOUT = 60
+RETRY_DELAYS = (2, 4, 8, 16)  # exponential backoff; five attempts total
+REQUEST_ATTEMPTS = len(RETRY_DELAYS) + 1
 
 # How far the live catalogue may shrink between two runs before this is
 # treated as data loss rather than curation. Retiring a handful of products
@@ -108,8 +114,11 @@ def is_test_fixture(row):
         return True
     return str(row.get("name") or "").strip().lower().startswith(FIXTURE_NAME_PREFIX)
 
-# PostgREST page size for the independent table read.
-DB_PAGE = 500
+# Keep both production sources to small responses. Besides reducing response
+# size, this limits the work behind each Render/Supabase request and lets a
+# transient failure retry just one 50-row page.
+DB_PAGE = 50
+CATALOG_PAGE = 50
 DB_ROW_CEILING = 100_000        # a sane stop against a runaway pagination loop
 
 # Columns that only the products table carries. The bundled local snapshot
@@ -129,17 +138,46 @@ def _get(url, headers=None, timeout=REQUEST_TIMEOUT):
     return _request(url, headers=headers, timeout=timeout)
 
 
-def _get_with_retries(url, headers=None, attempts=3):
-    """Bounded GET retries for transient storefront/PostgREST failures."""
+def _get_with_retries(url, headers=None, attempts=REQUEST_ATTEMPTS,
+                      timeout=REQUEST_TIMEOUT):
+    """Retry only transient HTTP/network failures with bounded exponential backoff.
+
+    Permanent client errors and programming errors fail immediately; retries
+    are reserved for timeouts, connection blips, rate limits, and HTTP 5xx.
+    ``attempts`` is the total number of tries, including the first request.
+    """
+    attempts = max(1, int(attempts))
     last = None
-    for attempt in range(max(1, attempts)):
+    attempts_used = 0
+    retryable = False
+    for attempt in range(attempts):
+        attempts_used = attempt + 1
         try:
-            return _get(url, headers=headers)
-        except Exception as exc:                    # noqa: BLE001 - summarized
+            return _get(url, headers=headers, timeout=timeout)
+        except urllib.error.HTTPError as exc:
             last = exc
-            if attempt < min(len(RETRY_DELAYS), attempts - 1):
-                time.sleep(RETRY_DELAYS[attempt])
-    raise RuntimeError(f"request failed after {max(1, attempts)} attempt(s): {last}")
+            retryable = exc.code in (408, 425, 429) or 500 <= exc.code <= 599
+            if not retryable:
+                break
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError,
+                http.client.HTTPException) as exc:
+            last = exc
+            retryable = True
+        except Exception as exc:                  # noqa: BLE001 - summarized
+            last = exc
+            retryable = False
+            break
+
+        if attempt + 1 >= attempts:
+            break
+        delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+        status = getattr(last, "code", None)
+        reason = f"HTTP {status}" if status else type(last).__name__
+        print(f"WARN  transient {reason} (attempt {attempts_used}/{attempts}); "
+              f"retrying in {delay}s")
+        time.sleep(delay)
+
+    raise RuntimeError(f"request failed after {attempts_used} attempt(s): {last}")
 
 
 def describe_worker_failure(background):
@@ -195,22 +233,71 @@ def fetch_service_health(base):
     return payload
 
 
-def fetch_public_catalog(base, attempts=3):
-    """GET /api/catalog with retries (a free dyno's cold start is ~50s)."""
-    url = base.rstrip("/") + "/api/catalog"
-    last = None
-    for attempt in range(attempts):
+def fetch_public_catalog(base, attempts=REQUEST_ATTEMPTS, page_size=CATALOG_PAGE):
+    """Read the Render catalog in small pages, retrying each transient failure.
+
+    The pagination query is opt-in at /api/catalog so existing storefront
+    clients still receive the original full response. If this watchdog runs
+    during a rolling deploy against an older app that ignores the query, its
+    unpaginated response is accepted for backwards compatibility.
+    """
+    page_size = max(1, min(CATALOG_PAGE, int(page_size)))
+    endpoint = base.rstrip("/") + "/api/catalog"
+    offset, total, first_payload = 0, None, None
+    products = []
+
+    while True:
+        query = urllib.parse.urlencode({
+            "watchdog_page": "1", "limit": page_size, "offset": offset,
+        })
+        url = endpoint + "?" + query
+        _status, _hdrs, body = _get_with_retries(url, attempts=attempts)
         try:
-            _status, _hdrs, body = _get(url)
             payload = json.loads(body.decode("utf-8"))
-            if not payload.get("ok") or not isinstance(payload.get("products"), list):
-                raise ValueError("the catalog payload is not ok / not product-shaped")
-            return payload
-        except Exception as exc:                    # noqa: BLE001 - reported below
-            last = exc
-            if attempt + 1 < attempts:
-                time.sleep(5 * (attempt + 1))
-    raise RuntimeError(f"could not read {url}: {last}")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise RuntimeError(f"the catalog response is not valid JSON: {exc}") from exc
+        if not payload.get("ok") or not isinstance(payload.get("products"), list):
+            raise RuntimeError("the catalog payload is not ok / not product-shaped")
+
+        pagination = payload.get("pagination")
+        if not isinstance(pagination, dict):
+            # Older app versions ignore watchdog_page and return the complete
+            # catalogue. Do not break a watchdog rollout just because the
+            # service deploy is still in progress.
+            if offset == 0:
+                return payload
+            raise RuntimeError("the catalog stopped returning pagination metadata")
+
+        try:
+            page_offset = int(pagination.get("offset"))
+            page_total = int(pagination.get("total"))
+        except (TypeError, ValueError):
+            raise RuntimeError("the catalog returned invalid pagination metadata")
+        page = payload["products"]
+        if page_offset != offset or page_total < 0 or len(page) > page_size:
+            raise RuntimeError("the catalog returned an inconsistent page")
+        if page_total > DB_ROW_CEILING:
+            raise RuntimeError("the catalog pagination total exceeded the safety ceiling")
+        if total is None:
+            total, first_payload = page_total, payload
+        elif page_total != total:
+            raise RuntimeError("the catalog total changed during pagination")
+
+        products.extend(page)
+        if len(products) > total:
+            raise RuntimeError("the catalog returned more products than its pagination total")
+        if len(products) == total:
+            break
+        if not page or pagination.get("hasMore") is False:
+            raise RuntimeError("the catalog ended before all pages were read")
+        offset += len(page)
+        if offset > DB_ROW_CEILING:
+            raise RuntimeError("catalog pagination did not converge - aborting")
+
+    result = dict(first_payload)
+    result["products"] = products
+    result.pop("pagination", None)
+    return result
 
 
 def fetch_db_rows(supabase_url, service_key):
@@ -240,7 +327,7 @@ def fetch_db_rows(supabase_url, service_key):
         if not isinstance(page, list):
             raise RuntimeError("PostgREST returned an unexpected payload shape")
         rows.extend(page)
-        # Content-Range: "0-499/276" (or "*/276" for an empty page)
+        # Content-Range: "0-49/276" (or "*/276" for an empty page)
         total = None
         content_range = hdrs.get("content-range") or ""
         if "/" in content_range:
@@ -277,15 +364,14 @@ def fetch_deleted_ids(supabase_url, service_key):
     This is the SAME key the app reads (supabase_store.DELETED_IDS_KEY ->
     growth_settings.deleted_product_ids_json), so "the owner deleted it" means
     the same thing here as it does in the storefront. Returns a set of ids;
-    None when the read failed (the caller then runs without deletion
-    tolerance rather than inventing either an empty or a full list). Uses a
-    single attempt - the streak tolerance below still guards a product that
-    is missing for a less benign reason.
+    None when the read still fails after transient retries (the caller then
+    runs without deletion tolerance rather than inventing either an empty or a
+    full list).
     """
     url = (supabase_url.rstrip("/") + "/rest/v1/growth_settings"
            "?select=value&key=eq." + urllib.parse.quote(DELETED_IDS_KEY))
     try:
-        _status, _hdrs, body = _get(url, headers={
+        _status, _hdrs, body = _get_with_retries(url, headers={
             "apikey": service_key,
             "Authorization": "Bearer " + service_key,
         })

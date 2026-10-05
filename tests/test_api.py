@@ -352,6 +352,42 @@ def test_catalogue_round_trip_is_live_immediately(client):
     assert not any(p["id"] == "jau-unit" for p in cat["products"])
 
 
+def test_watchdog_catalog_pages_are_opt_in_and_limited_to_50(client, monkeypatch):
+    """Only the watchdog opts into small Render responses; storefront callers
+    keep the complete public catalogue response and metadata counts stay total.
+    """
+    import api as apimod
+
+    products = [{"id": f"page-{i}", "online": True} for i in range(123)]
+    body = json.dumps({"ok": True, "products": products,
+                       "meta": {"count": 130}, "homepageFeatured": {}})
+    snapshot = {"public": (body, 'W/"catalog-test"'),
+                "admin": (body, 'W/"catalog-test"')}
+    monkeypatch.setattr(apimod, "_catalog_response_snapshot", lambda: snapshot)
+
+    full = client.get("/api/catalog").get_json()
+    assert len(full["products"]) == 123
+    assert "pagination" not in full
+
+    first = client.get("/api/catalog?watchdog_page=1&limit=500&offset=0")
+    second = client.get("/api/catalog?watchdog_page=1&limit=50&offset=50")
+    final = client.get("/api/catalog?watchdog_page=1&limit=50&offset=100")
+    assert first.status_code == second.status_code == final.status_code == 200
+    assert len(first.get_json()["products"]) == 50   # request cannot exceed the server cap
+    assert len(second.get_json()["products"]) == 50
+    assert len(final.get_json()["products"]) == 23
+    assert [first.get_json()["products"][0]["id"],
+            second.get_json()["products"][0]["id"],
+            final.get_json()["products"][0]["id"]] == ["page-0", "page-50", "page-100"]
+    assert first.get_json()["meta"]["count"] == 130
+    assert first.get_json()["pagination"] == {
+        "limit": 50, "offset": 0, "total": 123,
+        "nextOffset": 50, "hasMore": True,
+    }
+    assert final.get_json()["pagination"]["hasMore"] is False
+    assert "no-store" in first.headers["Cache-Control"]
+
+
 def test_upload_rejects_files_that_are_not_images(client):
     tok = csrf(client)
     r = client.post("/api/uploads/proof", data={"file": (io.BytesIO(b"MZ fake exe"), "x.jpg")},

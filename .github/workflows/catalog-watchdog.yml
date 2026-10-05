@@ -53,7 +53,9 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    # Give bounded retries and all 50-row pages room to recover from transient
+    # production 5xx responses before the workflow reports an actual failure.
+    timeout-minutes: 25
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -72,11 +74,13 @@ jobs:
           key: watchdog-state-${{ github.run_id }}
           restore-keys: watchdog-state-
       - name: Run the catalog watchdog
+        id: watchdog
         run: |
-          # The Python task has bounded per-request retries. Leave a margin for
-          # issue reporting instead of letting Actions kill the whole job.
+          # The Python task has bounded per-request retries and 50-row pages.
+          # Leave a margin for issue reporting instead of letting Actions kill
+          # the whole job before the script's own timeout.
           set -o pipefail
-          timeout --signal=TERM --kill-after=15s 9m \
+          timeout --signal=TERM --kill-after=15s 20m \
             python3 tools/catalog_watchdog.py 2>&1 | tee watchdog.log
       - name: Save the catalogue size for the next run
         if: always()
@@ -85,7 +89,7 @@ jobs:
           path: .watchdog-state.json
           key: watchdog-state-${{ github.run_id }}
       - name: Open or update the alert issue
-        if: failure()
+        if: failure() && steps.watchdog.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -109,7 +113,9 @@ jobs:
             gh issue create --title "Catalog watchdog: products missing from the storefront" --body-file issue-body.md
           fi
       - name: Close the alert issue on recovery
-        if: success()
+        # Recovery is determined by the watchdog itself, not by the optional
+        # cache-save/reporting steps later in this job.
+        if: always() && steps.watchdog.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
