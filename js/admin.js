@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=194" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=195" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -3894,6 +3894,7 @@ function salesPanel() {
     <div class="an-top">
       <h3 class="admin-h" style="margin:0">Confirmed sales</h3>
       <div class="an-range">
+        <a class="btn btn-line" href="/admin/accounting">Open accounting spreadsheet</a>
         ${opts.map(([v, label]) => `<button type="button" class="an-rng${String(salesRange) === v ? " is-on" : ""}" data-sales-range="${v}">${label}</button>`).join("")}
         <a class="an-rng" id="sales-csv" href="api/admin/sales.csv?days=${encodeURIComponent(salesRange)}">Export CSV</a>
       </div>
@@ -3983,6 +3984,7 @@ const ADX_ICONS = {
   delivery: `<svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="18" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="17.5" cy="18" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   settings: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1m0-12.8l-2.1 2.1M7.7 16.3l-2.1 2.1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
   account: `<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`,
+  accounting: `<svg viewBox="0 0 24 24"><path d="M4 19.5h16M6.5 16V9.5h3V16m2.5 0V5h3v11m2.5 0v-4.5h3V16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   more: `<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.9" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.9" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.9" fill="currentColor" stroke="none"/></svg>`,
 };
 
@@ -4052,8 +4054,8 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=194" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
-        <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=195" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
       <main class="adx-main">
@@ -4082,6 +4084,7 @@ function paintDesk(tab = "analytics") {
       <button type="button" data-tab="delivery" class="${tab === "delivery" ? "is-on" : ""}">${ADX_ICONS.delivery}<span>Delivery</span></button>
       <button type="button" data-tab="settings" class="${tab === "settings" ? "is-on" : ""}">${ADX_ICONS.settings}<span>Settings</span></button>
       <button type="button" data-tab="account" class="${tab === "account" ? "is-on" : ""}">${ADX_ICONS.account}<span>Account</span></button>
+      <a class="admin-more-link" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a>
     </div>`;
   const signOut = async () => { await JA.logoutAdmin(); paintLogin("Signed out."); };
   $("#logout").onclick = signOut;
@@ -4420,7 +4423,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=194", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=195", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

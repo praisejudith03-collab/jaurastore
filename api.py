@@ -15,6 +15,7 @@ import storage
 import catalog as catalog_mod
 import analytics as analytics_mod
 import currency as currency_mod
+import accounting as accounting_mod
 import delivery
 # Imported at module scope so routes can reference it directly (e.g. the
 # /admin/needs-attention supplier-warning queue). Historically most call
@@ -33,6 +34,7 @@ api = Blueprint("api", __name__, url_prefix="/api")
 # Werkzeug spools multipart bodies to disk first; this gate protects the later
 # in-process byte buffers, without tying up regular storefront requests.
 _UPLOAD_BUFFER_SLOT = threading.BoundedSemaphore(1)
+_ACCOUNTING_BATCH_LOCK = threading.RLock()
 
 
 def _upload_memory_guard(fn):
@@ -2657,6 +2659,310 @@ def admin_sales_csv():
     resp.headers["Content-Disposition"] = "attachment; filename=jaura-sales.csv"
     return resp
 
+
+# -------------------------------------------------------- admin: accounting
+_ACCOUNTING_MAX_BATCH_ORDERS = 500
+
+
+def _accounting_uses_supabase():
+    return bool(catalog_mod._prod_source())
+
+
+def _accounting_orders():
+    """Confirmed-order source, uncapped across years and strict in production."""
+    if _accounting_uses_supabase():
+        return supabase_store.load_confirmed_orders_for_accounting()
+    rows = query(
+        "SELECT id, payload, total, currency, status, at, updated_at, customer_name "
+        "FROM orders WHERE status='confirmed' ORDER BY at DESC")
+    return [dict(row) for row in rows]
+
+
+def _accounting_batches():
+    if _accounting_uses_supabase():
+        return supabase_store.load_accounting_batches()
+    row = one("SELECT value FROM growth_settings WHERE key=?",
+              (supabase_store.ACCOUNTING_BATCHES_KEY,))
+    if not row or not row["value"]:
+        return []
+    try:
+        value = json.loads(row["value"])
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _accounting_save_batches(batches):
+    serialized = json.dumps(list(batches or []), ensure_ascii=False,
+                            separators=(",", ":"))
+    if _accounting_uses_supabase():
+        if not supabase_store.save_accounting_batches(batches):
+            return False
+    try:
+        execute(
+            "INSERT INTO growth_settings (key,value) VALUES (?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (supabase_store.ACCOUNTING_BATCHES_KEY, serialized))
+    except Exception as exc:
+        # Supabase is the production source; the local database is just its
+        # cache, so a cache-only failure must not undo a confirmed remote save.
+        if not _accounting_uses_supabase():
+            print(f"[accounting] local batch archive failed: {exc}")
+            return False
+    return True
+
+
+def _accounting_load_order(order_id):
+    if _accounting_uses_supabase():
+        return supabase_store.load_order_for_accounting(order_id)
+    row = one(
+        "SELECT id,payload,total,currency,status,at,updated_at,customer_name "
+        "FROM orders WHERE id=?", (order_id,))
+    return dict(row) if row else {}
+
+
+def _accounting_save_order(order, payload):
+    oid = str(accounting_mod.order_value(order, "id") or "")
+    now = _utcnow()
+    encoded = json.dumps(payload, ensure_ascii=False)
+    if _accounting_uses_supabase():
+        if not supabase_store.update_order(oid, payload=payload):
+            return False
+    try:
+        execute("UPDATE orders SET payload=?, updated_at=? WHERE id=?",
+                (encoded, now, oid))
+    except Exception as exc:
+        if not _accounting_uses_supabase():
+            print(f"[accounting] local order write failed: {exc}")
+            return False
+    return True
+
+
+def _accounting_archived_ids(batches):
+    archived = set()
+    for batch in batches or []:
+        if not isinstance(batch, dict):
+            continue
+        for oid in batch.get("orderIds") or []:
+            if oid:
+                archived.add(str(oid))
+    return archived
+
+
+def _accounting_order_entry(order, archived_ids=None, payload=None):
+    if payload is not None:
+        order = dict(order or {})
+        order["payload"] = payload
+    return accounting_mod.entry_from_order(order, archived_ids)
+
+
+@api.get("/admin/accounting")
+@authmod.require_admin
+def admin_accounting():
+    orders = _accounting_orders()
+    if orders is None:
+        return jsonify(ok=False, error="The accounting ledger could not be read from Supabase."), 503
+    batches = _accounting_batches()
+    if batches is None:
+        return jsonify(ok=False, error="Archived batches could not be read from Supabase."), 503
+    archived_ids = _accounting_archived_ids(batches)
+    include_deleted = request.args.get("includeDeleted") == "true"
+    entries = []
+    for order in orders:
+        if not isinstance(order, dict) and not hasattr(order, "keys"):
+            continue
+        entry = _accounting_order_entry(order, archived_ids)
+        if include_deleted or not entry["deleted"]:
+            entries.append(entry)
+    response = jsonify(
+        ok=True,
+        entries=entries,
+        batches=[batch for batch in batches if isinstance(batch, dict)],
+        archivedOrderIds=sorted(archived_ids),
+        currentExchangeRate=float(accounting_mod.current_exchange_rate()),
+        legacyRate=float(accounting_mod.LEGACY_RATE),
+        totals={"confirmedOrders": len(entries),
+                "legacySnapshots": sum(1 for entry in entries if entry["legacySnapshot"])},
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+def _accounting_mutation_error(message, status=400):
+    return jsonify(ok=False, error=message), status
+
+
+def _get_mutable_accounting_order(oid):
+    order = _accounting_load_order(oid)
+    if order is None:
+        return None, None, (jsonify(ok=False, error="The accounting order could not be read."), 503)
+    if not order:
+        return None, None, (jsonify(ok=False, error="Confirmed order not found."), 404)
+    if str(accounting_mod.order_value(order, "status") or "") != "confirmed":
+        return None, None, (jsonify(ok=False, error="Only confirmed orders appear in Accounting."), 409)
+    batches = _accounting_batches()
+    if batches is None:
+        return None, None, (jsonify(ok=False, error="Archived batches could not be verified."), 503)
+    archived_ids = _accounting_archived_ids(batches)
+    if str(oid) in archived_ids:
+        return None, None, (jsonify(ok=False, error="Orders in an archived delivery batch are locked."), 409)
+    payload = accounting_mod.order_payload(order)
+    snapshot = payload.get("accounting")
+    if not isinstance(snapshot, dict):
+        snapshot = accounting_mod.account_block(order)
+    else:
+        snapshot = dict(snapshot)
+    return order, (payload, snapshot, archived_ids), None
+
+
+def _accounting_entry_reply(order, payload, archived_ids):
+    return _accounting_order_entry(order, archived_ids, payload=payload)
+
+
+@api.patch("/admin/accounting/orders/<oid>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_order_update(oid):
+    oid = sec.clean(oid, 24).upper()
+    d = request.get_json(silent=True) or {}
+    fields = {"saleAmount", "supplierCostNgn", "deliveryExpense", "notes"}
+    changed = fields.intersection(d)
+    if not changed:
+        return _accounting_mutation_error("Provide at least one accounting field to update.")
+    order, context, error = _get_mutable_accounting_order(oid)
+    if error:
+        return error
+    payload, snapshot, archived_ids = context
+    if snapshot.get("deletedAt"):
+        return _accounting_mutation_error("Restore this accounting record before editing it.", 409)
+    for field in changed - {"notes"}:
+        value = accounting_mod.validated_amount(d.get(field))
+        if value is None:
+            return _accounting_mutation_error(f"{field} must be a non-negative whole amount.")
+        snapshot[field] = value
+    if "notes" in changed:
+        snapshot["notes"] = sec.clean(d.get("notes"), 500)
+    snapshot["updatedAt"] = _utcnow()
+    snapshot["updatedBy"] = authmod.current_admin()
+    payload["accounting"] = snapshot
+    if not _accounting_save_order(order, payload):
+        return jsonify(ok=False, error="The accounting edit could not be confirmed in Supabase."), 503
+    audit(authmod.current_admin(), "accounting.edit", oid + " " + ",".join(sorted(changed)), _ip())
+    return jsonify(ok=True, entry=_accounting_entry_reply(order, payload, archived_ids))
+
+
+@api.delete("/admin/accounting/orders/<oid>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_order_delete(oid):
+    oid = sec.clean(oid, 24).upper()
+    order, context, error = _get_mutable_accounting_order(oid)
+    if error:
+        return error
+    payload, snapshot, archived_ids = context
+    if not snapshot.get("deletedAt"):
+        snapshot["deletedAt"] = _utcnow()
+        snapshot["deletedBy"] = authmod.current_admin()
+        payload["accounting"] = snapshot
+        if not _accounting_save_order(order, payload):
+            return jsonify(ok=False, error="The accounting record could not be removed."), 503
+    audit(authmod.current_admin(), "accounting.delete", oid, _ip())
+    return jsonify(ok=True, id=oid, deleted=True)
+
+
+@api.post("/admin/accounting/orders/<oid>/restore")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_order_restore(oid):
+    oid = sec.clean(oid, 24).upper()
+    order, context, error = _get_mutable_accounting_order(oid)
+    if error:
+        return error
+    payload, snapshot, archived_ids = context
+    snapshot.pop("deletedAt", None)
+    snapshot.pop("deletedBy", None)
+    snapshot["updatedAt"] = _utcnow()
+    snapshot["updatedBy"] = authmod.current_admin()
+    payload["accounting"] = snapshot
+    if not _accounting_save_order(order, payload):
+        return jsonify(ok=False, error="The accounting record could not be restored."), 503
+    audit(authmod.current_admin(), "accounting.restore", oid, _ip())
+    return jsonify(ok=True, entry=_accounting_entry_reply(order, payload, archived_ids))
+
+
+@api.post("/admin/accounting/batches")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_batch_create():
+    d = request.get_json(silent=True) or {}
+    raw_ids = d.get("orderIds")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return _accounting_mutation_error("Select one or more confirmed orders first.")
+    order_ids = list(dict.fromkeys(sec.clean(value, 24).upper()
+                                   for value in raw_ids if sec.clean(value, 24)))
+    if not order_ids or len(order_ids) > _ACCOUNTING_MAX_BATCH_ORDERS:
+        return _accounting_mutation_error(
+            f"A delivery batch must contain between 1 and {_ACCOUNTING_MAX_BATCH_ORDERS} orders.")
+
+    with _ACCOUNTING_BATCH_LOCK:
+        orders = _accounting_orders()
+        if orders is None:
+            return jsonify(ok=False, error="Confirmed orders could not be read."), 503
+        batches = _accounting_batches()
+        if batches is None:
+            return jsonify(ok=False, error="Existing batches could not be read."), 503
+        archived_ids = _accounting_archived_ids(batches)
+        by_id = {str(accounting_mod.order_value(order, "id") or ""): order
+                 for order in orders}
+        missing = [oid for oid in order_ids if oid not in by_id]
+        if missing:
+            return jsonify(ok=False, error=(
+                "Some selected orders are no longer confirmed: " + ", ".join(missing[:10])),
+                code="orders_changed"), 409
+        entries = [accounting_mod.entry_from_order(by_id[oid], archived_ids)
+                   for oid in order_ids]
+        if any(entry["deleted"] for entry in entries):
+            return _accounting_mutation_error("Restore removed records before archiving them.", 409)
+        if any(entry["archived"] for entry in entries):
+            return _accounting_mutation_error("One or more selected orders are already archived.", 409)
+        currencies = {entry["currency"] for entry in entries}
+        if len(currencies) != 1:
+            return _accounting_mutation_error("A delivery batch must use one ledger currency.", 409)
+        currency = currencies.pop()
+        requested_currency = accounting_mod.normalize_currency(d.get("currency"))
+        if requested_currency and requested_currency != currency:
+            return _accounting_mutation_error("The selected orders do not match the active ledger.", 409)
+
+        now = _utcnow()
+        name = sec.clean(d.get("name"), 100) or f"{currency} delivery · {now[:10]}"
+        totals = accounting_mod.batch_totals(entries, currency)
+        batch_id = "BATCH-" + secrets.token_hex(6).upper()
+        # Store an immutable snapshot, so later edits to live order records
+        # cannot rewrite what was fulfilled or what the bank batch contained.
+        snapshot_rows = [{key: entry.get(key) for key in (
+            "id", "date", "customer", "itemsSummary", "currency", "saleAmount",
+            "supplierCostNgn", "supplierCostCfa", "supplierCostInCurrency",
+            "deliveryExpense", "netProfit", "netCashProfit", "exchangeRate", "notes",
+            "legacySnapshot")}
+            for entry in entries]
+        batch = {
+            "id": batch_id,
+            "name": name,
+            "createdAt": now,
+            "currency": currency,
+            "orderIds": order_ids,
+            "orders": snapshot_rows,
+            "totals": totals,
+        }
+        updated_batches = list(batches) + [batch]
+        if not _accounting_save_batches(updated_batches):
+            return jsonify(ok=False, error="The batch could not be saved to the accounting database."), 503
+
+    audit(authmod.current_admin(), "accounting.batch.archive",
+          f"{batch_id} {len(order_ids)} orders", _ip())
+    return jsonify(ok=True, batch=batch, archivedOrderIds=order_ids)
+
+
 # ---------------------------------------------------------- admin: orders
 def _admin_date_bounds():
     """Return an inclusive start and exclusive end for admin date filters.
@@ -3026,6 +3332,16 @@ def admin_order_update(oid):
             review["status"] = "resolved"
             review["resolvedAt"] = now
         payload.pop("customer_notice", None)
+        # Store the confirmed order's exchange rate alongside the order itself.
+        # This is the first-confirmation moment and is intentionally immutable:
+        # later edits to Admin -> Marketing's cfaRate cannot reprice history.
+        # Existing confirmed records without a snapshot are handled as clearly
+        # labelled legacy estimates by the accounting view.
+        if not isinstance(payload.get("accounting"), dict):
+            payload["accounting"] = accounting_mod.new_snapshot(
+                row["total"] if row["total"] is not None else payload.get("total"),
+                row["currency"] or payload.get("currency"),
+                accounting_mod.current_exchange_rate(), now)
     elif status == "pending" and old_status == "declined":
         # A deliberate reopen clears the old decline banner. A partial-payment
         # action is handled above and installs its own current notice instead.

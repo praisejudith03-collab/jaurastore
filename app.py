@@ -822,6 +822,15 @@ def create_app():
         session.pop("customer_id", None)
         return _account_page()
 
+    @app.route("/admin/accounting")
+    @app.route("/admin/accounting/")
+    def admin_accounting_page():
+        """Serve the standalone spreadsheet without booting the main Admin SPA."""
+        resp = static_for("accounting.html")
+        if resp is None:
+            return "Not found", 404
+        return resp
+
     @app.route("/admin")
     @app.route("/admin/")
     @app.route("/admin/<path:rest>")

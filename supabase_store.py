@@ -2321,6 +2321,95 @@ def load_orders(limit=500, offset=0, columns="*"):
         return []
 
 
+ACCOUNTING_BATCHES_KEY = "accounting_batches_json"
+
+
+def load_confirmed_orders_for_accounting(page_size=500, max_rows=100_000):
+    """Return every confirmed order needed by the dedicated accounting page.
+
+    The orders table is already the durable accounting source: confirmation
+    snapshots are stored in each order's JSON payload. Read in stable PostgREST
+    pages so long-running multi-year ledgers are not capped by the first 500
+    rows. ``None`` means the production read failed; an empty list is healthy.
+    """
+    c = client()
+    if c is None:
+        return None
+    rows, offset = [], 0
+    page_size = max(1, min(1000, int(page_size or 500)))
+    max_rows = max(page_size, int(max_rows or 100_000))
+    try:
+        while True:
+            builder = (c.table("orders")
+                       .select("id,status,payload,total,currency,at,updated_at,customer_name")
+                       .eq("status", "confirmed")
+                       .order("at", desc=True))
+            page = _res_data(_page(builder, page_size, offset).execute()) or []
+            rows.extend(page)
+            if len(rows) > max_rows:
+                raise RuntimeError("confirmed-order ledger exceeded the safety ceiling")
+            if len(page) < page_size:
+                break
+            offset += len(page)
+        return rows
+    except Exception as exc:
+        print(f"[supabase] confirmed accounting orders read failed: {exc}")
+        return None
+
+
+def load_order_for_accounting(order_id):
+    """Read one order for an authenticated accounting edit.
+
+    ``None`` means the read failed, ``{}`` means the order does not exist.
+    """
+    c = client()
+    if c is None:
+        return None
+    try:
+        rows = _res_data(c.table("orders").select("*")
+                         .eq("id", str(order_id)).limit(1).execute()) or []
+        return dict(rows[0]) if rows else {}
+    except Exception as exc:
+        print(f"[supabase] accounting order read failed: {exc}")
+        return None
+
+
+def load_accounting_batches():
+    """Read the archived batch snapshots from the existing key/value store."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        rows = _res_data(c.table("growth_settings").select("value")
+                         .eq("key", ACCOUNTING_BATCHES_KEY).limit(1).execute()) or []
+        if not rows:
+            return []
+        raw = rows[0].get("value")
+        value = json.loads(raw) if isinstance(raw, str) and raw else raw
+        return value if isinstance(value, list) else []
+    except Exception as exc:
+        print(f"[supabase] accounting batches read failed: {exc}")
+        return None
+
+
+def save_accounting_batches(batches):
+    """Strictly persist an archive list; True only after Supabase confirms."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        value = json.dumps(list(batches or []), ensure_ascii=False,
+                           separators=(",", ":"))
+        c.table("growth_settings").upsert({
+            "key": ACCOUNTING_BATCHES_KEY,
+            "value": value,
+        }).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] accounting batches save failed: {exc}")
+        return False
+
+
 def load_receipts(limit=500):
     """Return receipts from Supabase, or None when the production read fails."""
     c = client()
