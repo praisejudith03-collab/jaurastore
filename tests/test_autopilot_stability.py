@@ -219,7 +219,7 @@ def _declares(selector_text, target):
     return False
 
 
-@pytest.mark.parametrize("width", [320, 360, 390, 414])
+@pytest.mark.parametrize("width", [320, 375, 390, 414])
 def test_money_tokens_are_nowrap_at_phone_widths(width):
     """`white-space: nowrap` on every money token, at every phone width."""
     css = _read("css/style.css")
@@ -236,7 +236,7 @@ def test_money_tokens_are_nowrap_at_phone_widths(width):
                 break
 
 
-@pytest.mark.parametrize("width", [320, 360, 390, 414])
+@pytest.mark.parametrize("width", [320, 375, 390, 414])
 def test_phone_prices_use_a_responsive_clamp(width):
     """A responsive clamp() is what keeps the one-line price inside a card."""
     css = _read("css/style.css")
@@ -304,7 +304,7 @@ def live_shop(monkeypatch, tmp_path):
         thread.join()
 
 
-@pytest.mark.parametrize("width", [320, 360, 390, 414])
+@pytest.mark.parametrize("width", [320, 375, 390, 414])
 def test_mobile_card_prices_measure_as_one_line(live_shop, width):
     """The real measurement: a Chromium lays the card out and the money token
     must occupy ONE line box that sits inside its card. Skipped where no
