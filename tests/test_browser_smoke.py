@@ -13,6 +13,14 @@ from db import execute
 from _pw import PW
 
 
+# CI installs chromium (`.github/workflows/ci.yml`). There, a browser that will
+# not launch is a broken build, not a reason to skip - otherwise this whole
+# module reports green having opened no page at all. Locally the switch stays
+# off and the tests skip with a printed reason (`pytest -rs`).
+REQUIRE_BROWSER = os.environ.get("JA_REQUIRE_BROWSER", "").strip().lower() not in (
+    "", "0", "false", "no", "off")
+
+
 @pytest.fixture()
 def live_shop(monkeypatch, tmp_path):
     import db
@@ -48,6 +56,10 @@ def mobile():
                 executable_path=os.environ.get("CHROMIUM_EXECUTABLE"),
                 args=["--no-sandbox", "--disable-dev-shm-usage"])
         except Exception as exc:
+            if REQUIRE_BROWSER:
+                pytest.fail(
+                    "JA_REQUIRE_BROWSER is set but chromium could not launch, so "
+                    f"no page was ever opened: {exc}")
             pytest.skip(f"Playwright chromium not available: {exc}")
         context = browser.new_context(viewport={"width": 390, "height": 844},
                                       is_mobile=True, has_touch=True, service_workers="block")

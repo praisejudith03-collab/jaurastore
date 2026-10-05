@@ -455,11 +455,17 @@ def test_supplier_counts_are_never_capped_at_one_unit():
 # ===========================================================================
 def test_ci_fails_the_build_on_any_regression():
     ci = _read(".github", "workflows", "ci.yml")
-    assert "python -m pytest tests/" in ci
-    assert "--junitxml=pytest-results.xml" in ci
+    # The workflow delegates to tools/ci_check.sh so that the command CI runs
+    # and the command a human runs before pushing are literally the same one.
+    # tests/test_ci_pipeline.py asserts the script itself runs the full suite.
+    assert "bash tools/ci_check.sh --ci" in ci
     assert "continue-on-error" not in ci
     assert "|| true" not in ci
     assert re.search(r"^on:\s*\n\s*push:", ci, re.M)
+    script = _read("tools", "ci_check.sh")
+    assert "-m pytest tests/" in script
+    assert "--junitxml=pytest-results.xml" in script, (
+        "the report the workflow annotates and uploads must be produced")
     # This anti-regression module is part of the full run the workflow executes.
     assert (ROOT / "tests" / "test_enterprise_hardening.py").exists()
 

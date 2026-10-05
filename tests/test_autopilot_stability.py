@@ -54,6 +54,14 @@ from db import execute, init_db  # noqa: E402
 
 EMAIL = "jaurastore@gmail.com"
 SAVE_BUDGET_MS = 100.0
+
+# CI installs chromium explicitly (`.github/workflows/ci.yml`), so a browser
+# that will not start there is a BROKEN BUILD, not a reason to skip. Without
+# this switch the four mobile measurements below report green while measuring
+# nothing - the flake that looks like a pass. Locally the switch stays off and
+# the tests keep skipping with a printed reason (`pytest -rs`).
+REQUIRE_BROWSER = os.environ.get("JA_REQUIRE_BROWSER", "").strip().lower() not in (
+    "", "0", "false", "no", "off")
 DRAWER_SIM = os.path.join(ROOT, "tests", "_admin_attention_drawer_sim.mjs")
 CART_SIM = os.path.join(ROOT, "tests", "_stock_bounds_cart_sim.mjs")
 
@@ -301,8 +309,12 @@ def test_mobile_card_prices_measure_as_one_line(live_shop, width):
     """The real measurement: a Chromium lays the card out and the money token
     must occupy ONE line box that sits inside its card. Skipped where no
     browser can be installed (this sandbox); CI runs it for real."""
-    playwright = pytest.importorskip("playwright.sync_api")
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:  # pragma: no cover - depends on the machine
+        if REQUIRE_BROWSER:
+            pytest.fail(f"JA_REQUIRE_BROWSER is set but Playwright is missing: {exc}")
+        pytest.skip(f"Playwright is not installed: {exc}")
 
     # A demanding, realistic worst case: a variant range with big prices.
     catalog_mod.upsert({
@@ -319,6 +331,10 @@ def test_mobile_card_prices_measure_as_one_line(live_shop, width):
                 executable_path=os.environ.get("CHROMIUM_EXECUTABLE"),
                 args=["--no-sandbox", "--disable-dev-shm-usage"])
         except Exception as exc:  # pragma: no cover - browser not installed
+            if REQUIRE_BROWSER:
+                pytest.fail(
+                    "JA_REQUIRE_BROWSER is set but chromium could not launch, so "
+                    f"nothing was measured: {exc}")
             pytest.skip(f"Playwright chromium not available: {exc}")
         context = browser.new_context(viewport={"width": width, "height": 844},
                                       is_mobile=True, has_touch=True,

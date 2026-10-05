@@ -49,6 +49,9 @@ migration-*.json
 
 # Local verification artifacts and temporary preview configuration
 .cache/
+# The pytest JUnit report tools/ci_check.sh writes (CI uploads its own copy as
+# an artifact). It is a per-run result, never source.
+pytest-results.xml
 data/.analytics-restore.lock
 
 # Supplier stock sync (tools/supplier_stock_sync.py) run artifacts: an image
