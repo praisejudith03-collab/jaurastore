@@ -83,8 +83,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # v169 bundle could still post a payload whose stale image_url silently
 # restored the previous product photo, so every shared asset ships v170.
 # Bumped to v185 for the media autosave, session-race guard, and clean JSON-LD URL.
-# Bumped to v194 for the admin mobile-first layout and viewport checks.
-SHARED_TOKEN = "194"
+# Bumped to v195 for the dual-currency accounting desk and its standalone assets.
+SHARED_TOKEN = "195"
 
 
 def _image_size(path):

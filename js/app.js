@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=194";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=194";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=195";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=195";
 }
 
 function renderCategories() {

@@ -42,7 +42,12 @@ EMAIL = "jaurastore@gmail.com"
 # removed without updating this list the audit test at the bottom fails, so the
 # coverage here cannot silently rot.
 EXPECTED_ADMIN_ROUTES = {
-("GET", "/api/admin/analytics"),
+("GET", "/api/admin/accounting"),
+    ("PATCH", "/api/admin/accounting/orders/<oid>"),
+    ("DELETE", "/api/admin/accounting/orders/<oid>"),
+    ("POST", "/api/admin/accounting/orders/<oid>/restore"),
+    ("POST", "/api/admin/accounting/batches"),
+    ("GET", "/api/admin/analytics"),
     ("GET", "/api/admin/audit"), ("POST", "/api/admin/backup"),
     ("PUT", "/api/admin/categories"), ("GET", "/api/admin/coupons"),
     ("POST", "/api/admin/coupons"), ("DELETE", "/api/admin/coupons/<code>"),
