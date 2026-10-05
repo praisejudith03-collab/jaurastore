@@ -68,6 +68,17 @@ set +e
 STATUS=$?
 set -e
 
+# A skip is not a pass. In CI every dependency (chromium, node, pgserver,
+# Pillow, pglast) is installed, so nothing may skip there - otherwise the
+# build would report green while quietly measuring less than it claims.
+if [ "$STATUS" -eq 0 ]; then
+  if [ "$REQUIRE_BROWSER" = "1" ]; then
+    "$PY" tools/ci_report.py pytest-results.xml --fail-on-skips || STATUS=$?
+  else
+    "$PY" tools/ci_report.py pytest-results.xml || STATUS=$?
+  fi
+fi
+
 echo
 if [ "$STATUS" -eq 0 ]; then
   echo "ci_check.sh: PASS - the suite is green, this commit may ship."

@@ -18,6 +18,7 @@ never contain an escape hatch that turns a red build green.
 """
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -184,6 +185,52 @@ def test_failures_are_readable_and_kept(ci):
 def test_the_workflow_is_read_only(ci):
     assert ci["permissions"] == {"contents": "read"}, (
         "CI only reads the repo; a test run must never be able to push")
+
+
+def test_a_skipped_test_fails_the_ci_build(tmp_path):
+    """The teeth behind 'green means everything ran'."""
+    report = tmp_path / "report.xml"
+    report.write_text(
+        '<?xml version="1.0"?><testsuites><testsuite name="pytest">'
+        '<testcase classname="tests.test_x" name="test_ok" time="0.1"/>'
+        '<testcase classname="tests.test_x" name="test_slow" time="0.1">'
+        '<skipped message="Playwright chromium not available"/></testcase>'
+        "</testsuite></testsuites>",
+        encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(ROOT / "tools" / "ci_report.py"),
+                           str(report), "--fail-on-skips"],
+                          capture_output=True, text=True)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "tests.test_x::test_slow" in proc.stdout
+    assert "1 skipped" in proc.stdout
+    # ...and the same report is informational (exit 0) when skips are allowed,
+    # which is how a developer with no browser installed still gets a verdict.
+    ok = subprocess.run([sys.executable, str(ROOT / "tools" / "ci_report.py"), str(report)],
+                        capture_output=True, text=True)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+def test_a_failing_report_exits_nonzero(tmp_path):
+    report = tmp_path / "report.xml"
+    report.write_text(
+        '<?xml version="1.0"?><testsuites><testsuite name="pytest">'
+        '<testcase classname="tests.test_x" name="test_bad" time="0.1">'
+        '<failure message="boom">assert 1 == 2</failure></testcase>'
+        "</testsuite></testsuites>",
+        encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(ROOT / "tools" / "ci_report.py"), str(report)],
+                          capture_output=True, text=True)
+    assert proc.returncode == 1
+
+
+def test_the_script_audits_skips_when_dependencies_are_guaranteed():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+    assert "tools/ci_report.py" in script, (
+        "the run must be summarised and its skips audited")
+    assert "--fail-on-skips" in script, "CI must refuse to call a skipped run green"
+    assert 'if [ "$REQUIRE_BROWSER" = "1" ]' in script, (
+        "the skip audit belongs to the environment where every dependency is "
+        "installed; a browser-less laptop still gets a verdict")
 
 
 def test_the_documented_pre_push_ritual_is_this_script():
