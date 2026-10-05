@@ -63,10 +63,24 @@ def mobile():
             pytest.skip(f"Playwright chromium not available: {exc}")
         context = browser.new_context(viewport={"width": 390, "height": 844},
                                       is_mobile=True, has_touch=True, service_workers="block")
-        context.add_init_script("sessionStorage.setItem('jaura_welcome_seen', '1')")
+        context.add_init_script(
+            "try { sessionStorage.setItem('jaura_welcome_seen', '1'); } catch (e) {}"
+        )
         page = context.new_page()
         errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+
+        def capture_page_error(error):
+            message = str(error)
+            # The marketing email preview is intentionally sandboxed without
+            # allow-same-origin. Browser access to storage/service workers from
+            # that opaque-origin frame is blocked by design, not an app error.
+            lower = message.lower()
+            if ("service worker is disabled because the context is sandboxed" in lower
+                    or "document is sandboxed and lacks the 'allow-same-origin' flag" in lower):
+                return
+            errors.append(message)
+
+        page.on("pageerror", capture_page_error)
         yield page
         browser.close()
         assert not errors, errors
@@ -247,7 +261,7 @@ def test_advanced_actions(mobile, live_shop, monkeypatch):
     assert mobile.evaluate("JA.syncPending()") == 0
 
 
-@pytest.mark.parametrize("width", [320, 360, 390, 680, 1440])
+@pytest.mark.parametrize("width", [320, 360, 375, 390, 414, 680, 1440])
 def test_header_controls_do_not_overlap(mobile, live_shop, width):
     """Option A (owner request 2026-09-27): menu left, logo centred, search +
     cart right - at every width the three slots stay on one row, never
@@ -275,6 +289,172 @@ def test_header_controls_do_not_overlap(mobile, live_shop, width):
     # the old header dropdowns never come back
     assert mobile.locator("#site-header .lang-switch").count() == 0
     assert mobile.locator("#site-header .currency-switch").count() == 0
+
+
+@pytest.mark.parametrize("width", [320, 375, 390, 414, 1440])
+def test_admin_dashboard_fits_phone_and_desktop_viewports(mobile, live_shop, width):
+    """Measure the real Admin Portal at the four requested phone widths and
+    desktop: controls stay inside the viewport, summary bars stay inside the
+    attention card, and navigation/refresh labels occupy a single line."""
+    mobile.set_viewport_size({"width": width, "height": 900})
+    response = mobile.request.post(
+        live_shop + "/api/admin/login",
+        data={"email": "jaurastore@gmail.com", "password": PW},
+    )
+    assert response.ok, response.text()
+    mobile.goto(live_shop + "/admin.html")
+    expect(mobile.locator(".adx-head h1")).to_be_visible()
+    expect(mobile.locator("#needs-attention")).to_be_visible()
+    mobile.wait_for_function(
+        "() => { const box = document.querySelector('#needs-attention-box'); "
+        "return box && !box.textContent.includes('Checking orders and stock'); }"
+    )
+
+    # The test database is intentionally small and may have no stock warnings.
+    # Render summaries through the same production helper so their real text,
+    # button padding, and flex sizing are measured at every viewport.
+    mobile.evaluate("""() => {
+      const box = document.querySelector('#needs-attention-box');
+      if (typeof attentionSummaryBar !== 'function') throw new Error('summary renderer missing');
+      box.querySelector('.needs-bars')?.remove();
+      const summaries = [
+        attentionSummaryBar('lowStock', 236),
+        attentionSummaryBar('outOfStock', 8),
+        attentionSummaryBar('supplierLow', 12),
+      ].join('');
+      box.insertAdjacentHTML('afterbegin', `<div class="needs-bars">${summaries}</div>`);
+    }""")
+
+    measurements = mobile.evaluate("""() => {
+      const rect = (el) => {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+                 width: r.width, height: r.height };
+      };
+      const label = (el) => {
+        const textNode = el.querySelector('span') || el;
+        const range = document.createRange();
+        range.selectNodeContents(textNode);
+        const lineBoxes = [...range.getClientRects()].filter(r => r.width > 0 && r.height > 0);
+        return { text: (textNode.innerText || textNode.textContent || '').trim(),
+                 lines: lineBoxes.length, whiteSpace: getComputedStyle(el).whiteSpace,
+                 box: rect(el) };
+      };
+      const visible = (el) => {
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0;
+      };
+      const width = document.documentElement.clientWidth;
+      const viewportActions = width <= 920
+        ? [...document.querySelectorAll('.adx-head-actions .btn')]
+        : [...document.querySelectorAll('.adx-side-foot .adx-nav-btn')];
+      const allActions = viewportActions.filter(visible).map(label);
+      const refresh = ['#needs-attention-refresh', '#an-refresh']
+        .map(selector => document.querySelector(selector)).filter(visible).map(label);
+      const attentionCard = rect(document.querySelector('#needs-attention'));
+      const bars = [...document.querySelectorAll('#needs-attention-box .attention-bar')].map(bar => ({
+        box: rect(bar),
+        parent: attentionCard,
+        action: rect(bar.querySelector('em')),
+        actionText: (bar.querySelector('em')?.textContent || '').trim(),
+      }));
+      const selectors = [
+        '#admin-root', '.adx', '.adx-main', '.adx-head', '.adx-head-actions',
+        '.needs-attention', '.needs-bars', '.an-top', '.an-range',
+        '#needs-attention-refresh', '#an-refresh', '.admin-app-nav',
+      ];
+      const critical = selectors.flatMap(selector =>
+        [...document.querySelectorAll(selector)].filter(visible).map(el => ({ selector, box: rect(el) }))
+      );
+      return {
+        viewport: width,
+        documentWidth: document.documentElement.scrollWidth,
+        bodyWidth: document.body.scrollWidth,
+        actions: allActions,
+        refresh,
+        bars,
+        critical,
+      };
+    }""")
+
+    assert measurements["documentWidth"] <= width, measurements
+    assert measurements["bodyWidth"] <= width, measurements
+    assert len(measurements["actions"]) == 2, measurements["actions"]
+    assert [action["text"].lower() for action in measurements["actions"]] == [
+        "view store", "sign out",
+    ], measurements["actions"]
+    assert len(measurements["refresh"]) == 2, measurements["refresh"]
+    assert [action["text"].lower() for action in measurements["refresh"]] == [
+        "refresh", "refresh",
+    ], measurements["refresh"]
+    for action in measurements["actions"] + measurements["refresh"]:
+        assert action["lines"] == 1, f"label wraps at {width}px: {action}"
+        assert action["box"]["left"] >= -1 and action["box"]["right"] <= width + 1, action
+        if width <= 920:
+            assert action["whiteSpace"] == "nowrap", action
+    assert len(measurements["bars"]) == 3, measurements["bars"]
+    for bar in measurements["bars"]:
+        assert bar["box"]["left"] >= -1 and bar["box"]["right"] <= width + 1, bar
+        assert bar["box"]["left"] >= bar["parent"]["left"] + 10, bar
+        assert bar["box"]["right"] <= bar["parent"]["right"] - 10, bar
+        assert bar["actionText"] == "Tap to view", bar
+        assert bar["box"]["right"] - bar["action"]["right"] >= 8, (
+            f"the tap hint must stay inset from the bar edge at {width}px: {bar}"
+        )
+    for item in measurements["critical"]:
+        assert item["box"]["left"] >= -1 and item["box"]["right"] <= width + 1, (
+            f"{item['selector']} escapes the {width}px viewport: {item}"
+        )
+
+    # Exercise every primary desk, not only the default dashboard: tables get
+    # their own horizontal scroll region while cards, forms, and controls stay
+    # within the page viewport at the same widths.
+    tab_titles = {
+        "analytics": "Dashboard", "products": "Products", "orders": "Orders",
+        "sales": "Sales", "marketing": "Marketing", "categories": "Categories",
+        "delivery": "Delivery", "settings": "Settings", "account": "Account",
+    }
+    for tab, title in tab_titles.items():
+        open_admin_tab(mobile, tab)
+        expect(mobile.locator(".adx-head h1")).to_have_text(title)
+        panel_layout = mobile.evaluate("""() => {
+          const rect = (el) => {
+            const r = el.getBoundingClientRect();
+            return { left: r.left, right: r.right, width: r.width };
+          };
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0;
+          };
+          const viewport = document.documentElement.clientWidth;
+          const roots = ['#admin-root', '.adx', '.adx-main', '.panel.is-on']
+            .flatMap(selector => [...document.querySelectorAll(selector)].filter(visible)
+              .map(el => ({ selector, box: rect(el), scrollWidth: el.scrollWidth,
+                           clientWidth: el.clientWidth })));
+          const controls = [...document.querySelectorAll('.panel.is-on button, .panel.is-on a, ' +
+            '.panel.is-on input, .panel.is-on select, .panel.is-on textarea')]
+            .filter(visible).filter(el => !el.closest('.table-wrap, .an-scroll, .an-svg-scroll'))
+            .map(el => ({ tag: el.tagName, text: (el.innerText || el.getAttribute('aria-label') || '').trim(),
+                          box: rect(el) }));
+          return { viewport, documentWidth: document.documentElement.scrollWidth,
+                   bodyWidth: document.body.scrollWidth, roots, controls };
+        }""")
+        assert panel_layout["documentWidth"] <= width, f"{tab}: {panel_layout}"
+        assert panel_layout["bodyWidth"] <= width, f"{tab}: {panel_layout}"
+        for item in panel_layout["roots"]:
+            assert item["box"]["left"] >= -1 and item["box"]["right"] <= width + 1, (
+                f"{tab} {item['selector']} escapes {width}px: {item}"
+            )
+            assert item["scrollWidth"] <= item["clientWidth"] + 1, (
+                f"{tab} {item['selector']} has uncontained content: {item}"
+            )
+        for control in panel_layout["controls"]:
+            assert control["box"]["left"] >= -1 and control["box"]["right"] <= width + 1, (
+                f"{tab} control escapes {width}px: {control}"
+            )
 
 
 def test_desktop_logo_is_centered_on_one_row_and_currency_pill_floats(mobile, live_shop):

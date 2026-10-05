@@ -7774,3 +7774,207 @@ body.attention-drawer-open { overflow: hidden; }
   .price .price-range { font-size: .9em !important; }
   .adx-card-price.adx-price-range { font-size: 11px !important; }
 }
+
+/* -------------------------------------------------------------------------
+   Admin portal: mobile-first layout and viewport containment (2026-10-05).
+   The phone layout is the baseline; wider dashboard columns are added only
+   at min-width breakpoints. Keep these rules scoped to the admin page so the
+   storefront's independent grids and controls are not affected. */
+body[data-page="admin"] #site-footer { display: none !important; }
+body[data-page="admin"] #admin-root,
+body[data-page="admin"] .adx,
+body[data-page="admin"] .adx-main,
+body[data-page="admin"] .adx-head,
+body[data-page="admin"] .adx-periods,
+body[data-page="admin"] .adx-2col,
+body[data-page="admin"] .adx-grid,
+body[data-page="admin"] .admin-card,
+body[data-page="admin"] .needs-attention,
+body[data-page="admin"] .needs-attention-head,
+body[data-page="admin"] .needs-bars,
+body[data-page="admin"] .needs-grid,
+body[data-page="admin"] .an-top,
+body[data-page="admin"] .an-range,
+body[data-page="admin"] .adx-periods > *,
+body[data-page="admin"] .adx-2col > *,
+body[data-page="admin"] .adx-grid > *,
+body[data-page="admin"] .form-grid > *,
+body[data-page="admin"] .needs-grid > * {
+  min-width: 0;
+  max-width: 100%;
+}
+body[data-page="admin"] .adx {
+  width: 100%;
+  max-width: 1240px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(12px, 2.5vw, 18px);
+  padding: clamp(10px, 3vw, 18px) clamp(10px, 3.6vw, 18px) 130px;
+}
+body[data-page="admin"] .adx-side { display: none; }
+body[data-page="admin"] .adx-main { width: 100%; }
+body[data-page="admin"] .adx-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+body[data-page="admin"] .adx-head h1 {
+  flex: 1 1 120px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: clamp(18px, 4.8vw, 28px) !important;
+  line-height: 1.12;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+}
+body[data-page="admin"] .adx-head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: clamp(4px, 1.5vw, 8px);
+  max-width: 100%;
+}
+body[data-page="admin"] .adx-head-actions .btn,
+body[data-page="admin"] .needs-attention-head .btn,
+body[data-page="admin"] #needs-attention-refresh,
+body[data-page="admin"] .an-range #an-refresh {
+  box-sizing: border-box;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 42px;
+  padding: 9px clamp(8px, 2.2vw, 14px);
+  font-size: clamp(0.75rem, 2.5vw, 0.875rem);
+  letter-spacing: 0.035em;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+  flex: 0 0 auto;
+}
+body[data-page="admin"] .adx-head-actions .btn { padding-inline: clamp(8px, 2.4vw, 14px); }
+body[data-page="admin"] .needs-attention {
+  width: 100%;
+  padding: clamp(12px, 3.5vw, 18px);
+}
+body[data-page="admin"] .needs-attention-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: clamp(6px, 2vw, 10px);
+  margin-bottom: 12px;
+}
+body[data-page="admin"] .needs-attention-head > div { min-width: 0; }
+body[data-page="admin"] .needs-attention-head h2 {
+  font-size: clamp(17px, 4.6vw, 21px);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+body[data-page="admin"] .needs-attention-head p {
+  font-size: clamp(11px, 3.1vw, 13px);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+body[data-page="admin"] .needs-bars { width: 100%; gap: 7px; }
+body[data-page="admin"] .attention-bar {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  gap: clamp(6px, 1.9vw, 10px);
+  padding: 10px clamp(9px, 3vw, 14px);
+}
+body[data-page="admin"] .attention-bar i { flex: 0 0 auto; }
+body[data-page="admin"] .attention-bar span {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: clamp(11px, 3.2vw, 13px);
+  overflow-wrap: normal;
+  word-break: normal;
+}
+body[data-page="admin"] .attention-bar em {
+  flex: 0 0 auto;
+  margin-right: 1px;
+  font-size: clamp(10px, 2.9vw, 12px);
+  white-space: nowrap;
+}
+body[data-page="admin"] .needs-grid { grid-template-columns: minmax(0, 1fr); }
+body[data-page="admin"] .an-top { align-items: flex-start; }
+body[data-page="admin"] .an-range { width: 100%; gap: 6px; }
+body[data-page="admin"] .an-range .an-rng {
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px clamp(9px, 2.6vw, 13px);
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+body[data-page="admin"] .adx-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 138px), 1fr));
+  gap: clamp(8px, 2vw, 14px);
+}
+body[data-page="admin"] .adx-periods {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(8px, 2vw, 14px);
+}
+body[data-page="admin"] .adx-period { min-width: 0; padding: clamp(11px, 3vw, 16px); }
+body[data-page="admin"] .adx-period b { font-size: clamp(22px, 7vw, 34px); overflow-wrap: anywhere; }
+body[data-page="admin"] .adx-2col { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+body[data-page="admin"] .form-grid { grid-template-columns: minmax(0, 1fr); }
+body[data-page="admin"] .admin-card { padding: clamp(12px, 3.5vw, 20px); }
+body[data-page="admin"] .table-wrap,
+body[data-page="admin"] .an-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+body[data-page="admin"] .an-range button,
+body[data-page="admin"] .adx-head-actions .btn,
+body[data-page="admin"] .needs-attention-head .btn {
+  text-overflow: clip;
+  word-break: normal;
+}
+body[data-page="admin"] .adx-side-foot .adx-nav-btn {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+@media (min-width: 641px) {
+  body[data-page="admin"] .adx-grid {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr));
+  }
+  body[data-page="admin"] .needs-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  }
+  body[data-page="admin"] .an-top { align-items: center; }
+  body[data-page="admin"] .an-range { width: auto; }
+  body[data-page="admin"] .adx-periods { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  body[data-page="admin"] .adx-2col { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+  body[data-page="admin"] .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  body[data-page="admin"] .admin-card { padding: 18px; }
+}
+
+@media (min-width: 921px) {
+  body[data-page="admin"] .adx {
+    grid-template-columns: 232px minmax(0, 1fr);
+    gap: 22px;
+    padding: 22px 18px 130px;
+  }
+  body[data-page="admin"] .adx-side { display: flex; min-width: 0; }
+  body[data-page="admin"] .adx-head { align-items: center; gap: 12px; margin-bottom: 18px; }
+  body[data-page="admin"] .adx-head h1 {
+    flex: 1 1 auto;
+    font-size: clamp(20px, 4vw, 28px) !important;
+    overflow-wrap: normal !important;
+  }
+  body[data-page="admin"] .adx-head-actions { display: none; }
+  body[data-page="admin"] .adx-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  body[data-page="admin"] .adx-periods { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  body[data-page="admin"] .needs-attention-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+}

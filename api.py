@@ -508,6 +508,32 @@ def catalog():
     admin = bool(authmod.current_admin())
     include_hidden = admin and request.args.get("all") == "1"
     body, etag = _catalog_response_snapshot()["admin" if include_hidden else "public"]
+
+    # The production watchdog opts into bounded pages, which keeps each Render
+    # response small and lets it retry only a failed page. The ordinary
+    # storefront contract is untouched: without this explicit flag /catalog
+    # continues to return every public product.
+    if request.args.get("watchdog_page") == "1" and not include_hidden:
+        payload = json.loads(body)
+        products = payload.get("products") or []
+        limit = sec.clean_int(request.args.get("limit"), 50, 1, 50)
+        offset = sec.clean_int(request.args.get("offset"), 0, 0, 100_000)
+        total = len(products)
+        page = products[offset:offset + limit]
+        next_offset = offset + len(page)
+        payload["products"] = page
+        payload["pagination"] = {
+            "limit": limit,
+            "offset": offset,
+            "total": total,
+            "nextOffset": next_offset if next_offset < total else None,
+            "hasMore": next_offset < total,
+        }
+        response = jsonify(payload)
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers.add("Vary", "Cookie")
+        return response
+
     policy = ("private, no-cache, must-revalidate" if include_hidden else
               "private, no-cache, must-revalidate, max-age=0")
     return _etag_response(body, etag, policy, vary_cookie=True)

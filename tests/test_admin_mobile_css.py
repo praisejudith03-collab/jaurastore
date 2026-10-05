@@ -88,6 +88,13 @@ def test_admin_page_hides_the_shop_header():
         css), "the shop #site-header must be hidden on the admin page"
 
 
+def test_admin_page_hides_the_storefront_footer():
+    css = _css()
+    assert _prop(_rule(css, 'body[data-page="admin"] #site-footer'), "display") == "none", (
+        "admin pages must not render the storefront footer below the portal"
+    )
+
+
 def test_admin_dock_is_pinned_to_the_bottom_of_the_screen():
     """Owner directive 2026-09-12: the admin dock is position: fixed at the
     bottom of the screen — the storefront dock's thumb-friendly shape."""
@@ -238,3 +245,47 @@ def test_referral_codes_table_keeps_actions_in_a_touch_scroll_region():
     assert "overflow-x: auto" in css
     assert "min-width: 0" in css
     assert "data-mk-ref-del" in open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
+
+
+def test_admin_portal_layout_is_mobile_first_and_adds_desktop_columns():
+    """Phone layout is the baseline; the sidebar and extra dashboard columns
+    are progressive enhancements, and all admin grid children may shrink."""
+    css = _css()
+    start = css.rfind("Admin portal: mobile-first layout")
+    assert start >= 0, "the admin responsive foundation must stay grouped at the end"
+    admin_css = css[start:]
+    base = admin_css.split("@media (min-width: 641px)", 1)[0]
+    shell = _rule(base, 'body[data-page="admin"] .adx')
+    assert _prop(shell, "width") == "100%"
+    assert _prop(shell, "grid-template-columns") == "minmax(0, 1fr)"
+    assert _prop(_rule(base, 'body[data-page="admin"] .adx-side'), "display") == "none"
+    assert "min-width: 0" in base and "max-width: 100%" in base
+    tablet = _media_blocks(admin_css, "@media (min-width: 641px)")
+    desktop = _media_blocks(admin_css, "@media (min-width: 921px)")
+    assert tablet and desktop
+    assert _prop(_rule(desktop[-1], 'body[data-page="admin"] .adx'),
+                 "grid-template-columns") == "232px minmax(0, 1fr)"
+    assert _prop(_rule(desktop[-1], 'body[data-page="admin"] .adx-side'),
+                 "display") == "flex"
+
+
+def test_admin_navigation_and_card_header_actions_never_wrap_labels():
+    css = _css()
+    selector = (
+        'body[data-page="admin"] .adx-head-actions .btn, '
+        'body[data-page="admin"] .needs-attention-head .btn, '
+        'body[data-page="admin"] #needs-attention-refresh, '
+        'body[data-page="admin"] .an-range #an-refresh'
+    )
+    actions = _rule(css, selector)
+    assert _prop(actions, "white-space") == "nowrap"
+    assert _prop(actions, "word-break") == "normal"
+    assert _prop(actions, "overflow-wrap") == "normal"
+    assert _prop(actions, "font-size") == "clamp(0.75rem, 2.5vw, 0.875rem)"
+    assert _prop(actions, "width") == "auto"
+    assert _prop(_rule(css, 'body[data-page="admin"] .attention-bar'), "width") == "100%"
+    assert _prop(_rule(css, 'body[data-page="admin"] .attention-bar em'),
+                 "white-space") == "nowrap"
+    desktop_nav = _rule(css, 'body[data-page="admin"] .adx-side-foot .adx-nav-btn')
+    assert _prop(desktop_nav, "white-space") == "nowrap"
+    assert _prop(desktop_nav, "word-break") == "normal"
