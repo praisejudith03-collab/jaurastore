@@ -539,3 +539,8 @@ def test_shell_first_boot_paints_chrome_before_the_data_roundtrip():
     await_ready = boot.index("await catalogReady")
     assert chrome < await_ready, \
         "the page shell must paint before the catalogue roundtrip"
+    # And exactly once: mountChrome() replaces the whole header/footer DOM, so
+    # a second repaint when the catalogue lands swaps live nodes out from under
+    # the customer (and flaked the CI header-geometry check at 390px).
+    assert boot.count("JA.mountChrome()") == 1, \
+        "the shell must be mounted once, not rebuilt after the catalogue"

@@ -10,7 +10,7 @@ ASSETS = {
     "css/style.css": "01d202293ab55b2f889f1640866a0e835a4dc0193ba17fab16aaaff4588fb74f",
     "css/fonts.css": "8ee6e7dc8bd9679f865e12f53ea4cc26d887daab9268ef4328bae440945033d0",
     "js/store.js": "b108111eb1bf77dab2a5807abba35a8e7f62f6ef752051ec0c88dd2dc0a0321f",
-    "js/app.js": "c68f2a3b4e527a8b37fffbaf73abe2194e2af5141b38693eedeeee96da0179ab",
+    "js/app.js": "64c29335f037a41aed6ecbe684ecf634883b073a728e6a0c486914d41646d50f",
     "js/admin.js": "30658491ef29d62e7602b5d8ca10c3f9ffdabcf218cf3aecf916eb1e3f67e483",
     "js/i18n.js": "2590d9d64ad9293fc9de6849b08995478cb939535956d586d24de2a1d4727d9d",
     "js/net.js": "972876c0f8dadf54702dec9925a28f990fe48a907b99c22553e381fafe6eab90",

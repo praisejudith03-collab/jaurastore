@@ -3107,7 +3107,12 @@ async function boot() {
     if (loading) loading.remove();
   }
 
-  try { JA.mountChrome(); } catch (e) { console.error(e); }
+  // The shell was mounted ONCE, before the catalogue roundtrip. It is
+  // deliberately not rebuilt here: mountChrome() replaces the entire
+  // header/footer DOM, and rebuilding it the instant the (prefetched)
+  // catalogue landed swapped live nodes out from under real taps - and made
+  // header geometry checks flaky in CI. Live banner, branding and social
+  // repaints all arrive through the ja:site listener bound by that mount.
 
   // The owner's category table and the live site row (banner text, branding,
   // bank details, delivery zones, the editable Delivery page). Both are
