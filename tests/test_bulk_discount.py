@@ -210,14 +210,22 @@ def test_order_payload_and_admin_view_carry_the_discount(client):
     assert match["bulkDiscount"][0]["percent"] == 15
 
 
-def test_discount_never_applies_below_stock_reality(client):
-    """The discount cannot be used to order past the stock: 11 units of a
-    10-stock product is still an over-order."""
+def test_discount_never_pushes_the_shelf_below_zero(client):
+    """Owner rule (2026-10-05): 11 units of a 10-unit mirror are an order, not
+    an error - the discount applies, the shelf drains to zero, and only an
+    EMPTY product is refused."""
     make_product("jau-blk-stock", price=1000, stock=10, bulk_qty=5, bulk_percent=30)
     r = place(client, "JA-BLK007", [{"id": "jau-blk-stock", "name": "X", "qty": 11,
                                      "price": 1000}])
-    assert r.status_code == 409
-    assert r.get_json()["code"] == "out_of_stock"
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["items"][0]["bulkPercent"] == 30
+    row = next(p for p in catalog_mod.merged(include_hidden=True)
+               if str(p.get("id")) == "jau-blk-stock")
+    assert max(0, int(row.get("stock") or 0)) == 0
+    empty = place(client, "JA-BLK008", [{"id": "jau-blk-stock", "name": "X", "qty": 1,
+                                         "price": 1000}])
+    assert empty.status_code == 409, empty.get_json()
+    assert empty.get_json()["error"] == "This item is currently out of stock."
 
 
 # --------------------------------------------------------- storefront wiring
@@ -244,10 +252,18 @@ def test_simplified_product_editor_hides_legacy_per_product_discount_fields():
 
 
 def test_customer_screens_show_the_applied_discount():
-    """PDP block, checkout summary and the order-complete table all label the
-    discount - the customer must never wonder why the price dropped."""
+    """Cart, checkout summary and the order-complete table label the discount
+    when it applies - the customer must never wonder why the price dropped.
+
+    The PDP no longer advertises the offer in an informational box (owner
+    request 2026-10-05: the PDP carries title/price/gallery/qty/actions only),
+    but the discount itself is untouched: it still lands on the cart line and
+    on every money screen that shows the reduced price.
+    """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     app = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
-    assert "bulk-tag" in app                                   # PDP + checkout + receipt
-    assert "More than ${ownQty} units: ${ownPct}% off" in app   # per-product offer
+    assert "bulk-tag" in app                                    # cart + checkout + receipt
     assert "bulkPercent" in app
+    assert "pdp-bulk" not in app, "the PDP bulk advert box must stay purged"
+    store = open(os.path.join(root, "js", "store.js"), encoding="utf-8").read()
+    assert "bulkDiscountTiers" in store                          # tiers still read live

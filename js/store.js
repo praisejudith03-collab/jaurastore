@@ -731,15 +731,29 @@ const JA = (() => {
       // "reload" plus a one-shot token makes the URL unique, and the explicit
       // no-cache request headers stop any proxy in between from answering.
       if (opts.fresh) url += (url.indexOf("?") >= 0 ? "&" : "?") + "_fresh=" + Date.now();
-      const res = await fetch(url, {
-        credentials: "same-origin",
-        // Normal page transitions may reuse the short private HTTP response
-        // cache (ETag revalidation after 20 seconds). A user-requested fresh
-        // refresh still bypasses every intermediary and gets a unique URL.
-        cache: opts.fresh ? "reload" : "default",
-        headers: opts.fresh ? { "Cache-Control": "no-cache", "Pragma": "no-cache" } : {},
-        signal: AbortSignal.timeout(30000),
-      });
+      // The storefront pages start this exact request from an inline <head>
+      // script, while the HTML is still parsing - the grid no longer waits for
+      // the whole bundle before its first API call. It is consumed once (a
+      // Response body can only be read once); a forced refresh and the admin
+      // view always issue their own request.
+      let res = null;
+      if (!adminView && !opts.fresh && typeof window.__JA_CATALOG_FETCH__ === "object"
+          && window.__JA_CATALOG_FETCH__ && typeof window.__JA_CATALOG_FETCH__.then === "function") {
+        const early = window.__JA_CATALOG_FETCH__;
+        window.__JA_CATALOG_FETCH__ = null;
+        try { res = await early; } catch (e) { res = null; }
+      }
+      if (!res || !res.ok) {
+        res = await fetch(url, {
+          credentials: "same-origin",
+          // Normal page transitions may reuse the short private HTTP response
+          // cache (ETag revalidation after 20 seconds). A user-requested fresh
+          // refresh still bypasses every intermediary and gets a unique URL.
+          cache: opts.fresh ? "reload" : "default",
+          headers: opts.fresh ? { "Cache-Control": "no-cache", "Pragma": "no-cache" } : {},
+          signal: AbortSignal.timeout(30000),
+        });
+      }
       if (res.ok) {
         const d = await res.json();
         if (d && Array.isArray(d.products) && (strict || d.products.length)) {
@@ -1520,6 +1534,12 @@ const JA = (() => {
     return Math.max(0, avail - inCart);
   }
   function stockProblems() {
+    // Owner rule (2026-10-05): asking for MORE units than the mirrored shelf
+    // currently shows is not a problem and must never be reported as one -
+    // the mirror can lag a sale or a supplier page, so the checkout takes the
+    // order and drains whatever is really left. The only stock problem left
+    // is an item with nothing available at all (or a genuinely unassigned
+    // variant), which is what this reports and what the server refuses.
     const groups = {};
     cart().forEach((i) => {
       const key = String(i.id) + "\u0000" + String(i.color || "");
@@ -1534,14 +1554,14 @@ const JA = (() => {
       const p = product(g.id);
       if (!p) return;
       const avail = stockFor(p, g.variant);
-      if (g.requested > avail) {
+      if (avail <= 0) {
         out.push({
           id: g.id,
           name: displayName(p) || p.name || g.id,
           variant: g.variant,
-          available: avail,
+          available: 0,
           requested: g.requested,
-          left: avail,
+          left: 0,
           asked: g.requested,
         });
       }
@@ -1553,10 +1573,10 @@ const JA = (() => {
     if (list && !Array.isArray(list)) list = [list];
     if (!list) list = stockProblems();
     if (!list.length) return "";
-    const p = list[0];
-    const left = Math.max(0, Number(p.available != null ? p.available : p.left) || 0);
-    if (left <= 0) return "This item is currently out of stock.";
-    return `You cannot order more than the available stock (${left} remaining).`;
+    // The only line this helper may ever produce: the item is out of stock.
+    // The old quantity refusal ("cannot order more than ... N remaining")
+    // is gone for good (owner rule, 2026-10-05).
+    return "This item is currently out of stock.";
   }
   function bulkUnit(p, qty, cur, variant = "") {
     const unit = priceOf(p, cur, variant);
@@ -2460,6 +2480,11 @@ const JA = (() => {
       return `<video src="${escape(assetSrc)}"${cls} muted loop playsinline preload="metadata"${attrs}></video>`;
     }
     if (kind === "doc") {
+      // `docLink: false` renders the document as a plain label: the PDP uses
+      // it so a product page never carries a download field.
+      if (opts.docLink === false) {
+        return `<span class="media-doc-chip is-static">${escape(opts.docLabel || "PDF")}</span>`;
+      }
       return `<a class="media-doc-chip" href="${escape(assetSrc)}" target="_blank" rel="noopener">${escape(opts.docLabel || "PDF")}<span>View / Download</span></a>`;
     }
     const ph = opts.ph || "images/products/_placeholder.jpg";
@@ -2742,8 +2767,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=190";
-        const FLYER = "images/brand/logo-flyer.jpg?v=190";
+        const LOGO = "images/brand/logo.jpg?v=191";
+        const FLYER = "images/brand/logo-flyer.jpg?v=191";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2939,7 +2964,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=190" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=191" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3238,7 +3263,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=190" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=191" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3374,7 +3399,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=190", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=191", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3408,7 +3433,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=190";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=191";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3467,7 +3492,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=190");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=191");
     document.title = title;
     [
       ["name", "description", description],

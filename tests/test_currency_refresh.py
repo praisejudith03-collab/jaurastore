@@ -97,7 +97,9 @@ def test_store_exposes_a_cache_invalidating_refresh():
 
 def test_normal_navigation_uses_the_browser_catalogue_cache_but_refresh_bypasses_it():
     store = _read(os.path.join("js", "store.js"))
-    load = store.split("async function loadSeed(", 1)[1][:2000]
+    # The loader now also consults the inline <head> prefetch before it builds
+    # its own request, so the window has to reach past that block.
+    load = store.split("async function loadSeed(", 1)[1][:3600]
     assert 'cache: opts.fresh ? "reload" : "default"' in load
     assert 'headers: opts.fresh ? { "Cache-Control": "no-cache", "Pragma": "no-cache" } : {}' in load
     assert "_fresh=" in load

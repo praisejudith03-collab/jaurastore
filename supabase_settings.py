@@ -95,6 +95,14 @@ def get_site_settings():
     healed = {col: floor for col, floor in PAYMENT_FALLBACKS.items()
               if not _stored_text(row.get(col))}
     merged = {**DEFAULT_SETTINGS, **row}
+    # A live row that predates the canonical boolean (the column is added on
+    # boot, but a project without a database connection keeps saving through
+    # the legacy text flag - see _update_site_settings_resilient). Serving
+    # that flag as the boolean is what keeps an Admin OFF a real OFF.
+    if "popup_banner_active" not in row:
+        legacy = _stored_text(row.get("welcome_enabled")).lower()
+        if legacy:
+            merged["popup_banner_active"] = legacy not in ("0", "false", "no", "off")
     for col, floor in PAYMENT_FALLBACKS.items():
         if not _stored_text(merged.get(col)):
             merged[col] = floor
@@ -142,7 +150,7 @@ DROP_RETRY_SECONDS = 300
 
 # "drop" maps a column -> the monotonic time it was dropped, so the entry can
 # expire. It still answers `in` and .clear() like the list it replaced.
-_SITE_SHAPE = {"fill": [], "drop": {}, "values": {}}
+_SITE_SHAPE = {"fill": [], "drop": {}, "values": {}, "legacy": {}}
 
 
 def _drop_active(column):
@@ -181,6 +189,10 @@ CRITICAL_SETTINGS = (
     # dropped the boolean and keeps rendering it for customers.
     "popup_banner_active",
 )
+# Columns whose missing-column error was already handed to auto_migrate in
+# this worker. One heal attempt per column per process: the schema is not
+# going to appear and disappear between two saves.
+_HEAL_ATTEMPTED = set()
 _NULL_VALUE_RE = re.compile(r'null value in column "([^"]+)"')
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
 _PG_MISSING_COLUMN_RE = re.compile(r'column "([^"]+)" of relation')
@@ -192,6 +204,34 @@ def _site_repair_statement(column):
         return ("alter table site_settings add column if not exists "
                 "popup_banner_active boolean not null default true")
     return f"alter table site_settings add column if not exists {column} text not null default ''"
+
+
+def _heal_column(column):
+    """Create one missing site_settings column through auto_migrate.
+
+    Returns True when the column now exists (so the caller may retry the same
+    update) and False when no backend could run the ALTER.
+    """
+    if not column or column in _HEAL_ATTEMPTED:
+        return False
+    _HEAL_ATTEMPTED.add(column)
+    try:
+        import auto_migrate
+    except Exception as exc:
+        print(f"[supabase] auto-migration unavailable: {exc}")
+        return False
+    if column not in auto_migrate.SITE_SETTINGS_COLUMNS:
+        return False
+    try:
+        healed = auto_migrate.ensure_site_settings_columns([column])
+    except Exception as exc:          # never let the heal break the save path
+        print(f"[supabase] auto-migration for {column!r} failed: {exc}")
+        return False
+    if healed:
+        # The row is writable again: forget any remembered drop.
+        _SITE_SHAPE["drop"].pop(column, None)
+        print(f"[supabase] site_settings column {column!r} created automatically")
+    return bool(healed)
 
 
 def _remember_site_shape(kind, column):
@@ -258,6 +298,38 @@ def _update_site_settings_resilient(c, clean):
                         f'"{col}" ({str(exc)[:160]}). One statement repairs '
                         f'the live table: {_site_repair_statement(col)}'
                     ) from exc
+                # Auto-migration: a column the app owns is created on the
+                # spot (the boot pass usually did it already, but a first
+                # save after a deploy must heal itself too). Only a heal that
+                # actually created the column retries the identical update -
+                # otherwise the next branch handles the fallback and the
+                # update is not repeated forever.
+                if col in _HEAL_ATTEMPTED:
+                    healed = False
+                else:
+                    healed = _heal_column(col)
+                if healed and col in pending:
+                    last_column = col
+                    continue
+                if col == "popup_banner_active":
+                    # Last-resort fallback for a project with no direct
+                    # database connection: store the owner's ON/OFF in the
+                    # legacy text flag that already exists, so the save
+                    # answers HTTP 200 and the storefront honours it (see
+                    # get_site_settings). The boolean is created on the next
+                    # boot once a connection is configured.
+                    wanted = bool(pending.get(col))
+                    pending["welcome_enabled"] = "1" if wanted else "0"
+                    _SITE_SHAPE["values"]["welcome_enabled"] = pending["welcome_enabled"]
+                    _SITE_SHAPE.setdefault("legacy", {})[col] = "welcome_enabled"
+                    pending.pop(col, None)
+                    _remember_site_shape("drop", col)
+                    last_column = "welcome_enabled"
+                    print("[supabase] site_settings update: popup_banner_active "
+                          "column is missing and could not be created now; the "
+                          "toggle was stored in welcome_enabled instead "
+                          "(auto-migration retries on the next boot)")
+                    continue
                 if col in CRITICAL_SETTINGS:
                     # Dropping this one would answer "saved" while the value
                     # never reached the table.
@@ -350,8 +422,17 @@ def update_site_settings(values):
     # Verify-after-write: a column that was dropped (or a row that was never
     # written) must not be reported as saved. Payment details either persist
     # or the Admin is told exactly why they did not.
+    def _stored_in_legacy_column(key, value):
+        """A dropped column whose intent reached its legacy fallback."""
+        fallback = (_SITE_SHAPE.get("legacy") or {}).get(key)
+        if not fallback:
+            return False
+        wanted = "1" if value is True else ("0" if value is False else str(value))
+        return _stored_text(stored.get(fallback)) == wanted
+
     lost = [k for k, v in clean.items()
-            if _stored_text(v) and not _same_value(stored.get(k), v)]
+            if _stored_text(v) and not _same_value(stored.get(k), v)
+            and not _stored_in_legacy_column(k, v)]
     if lost:
         critical = sorted(k for k in lost if k in CRITICAL_SETTINGS)
         if critical:

@@ -8,10 +8,17 @@ The production defects this file pins shut forever:
   * per-variant stock was validated at checkout but the reservation was
     variant-blind, so a sold-out variant kept its stale number and could be
     ordered again while other variants still had units;
-  * two customers ordering the last unit at the same time could both succeed
-    (validation and decrement were separate, unlocked steps);
-  * ordinary public catalogue rows must not leak counts, while a rejected
-    add/order must report the exact remaining count needed to fix the basket.
+  * the shelf itself was not atomic: validation and decrement were separate,
+    unlocked steps, so the same last unit could be taken twice and the shelf
+    could be driven below zero;
+  * ordinary public catalogue rows must not leak counts; an EMPTY row (or an
+    empty variant) is the one and only stock refusal left.
+
+Owner rule (2026-10-05): a mirrored supplier count never refuses a sale. A
+request larger than the shelf is accepted, the shelf is drained to zero (never
+below) and the shortfall is recorded on the order for the admin - the old
+"You cannot order more than the available stock (N remaining)" refusal is gone
+for good. The atomic draining below is what keeps that honest.
 
 Everything here runs on the local backend (no Supabase needed): reservation
 goes through catalog.reserve_stock, which guards under the catalogue's
@@ -45,8 +52,6 @@ os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = PW
 EMAIL = "jaurastore@gmail.com"
 OUT_OF_STOCK = "This item is currently out of stock."
 
-def over_limit(remaining):
-    return f"You cannot order more than the available stock ({remaining} remaining)."
 FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock", "variantStock", "inventory")
 
 
@@ -262,59 +267,69 @@ def test_zero_stock_product_is_not_orderable(client):
     assert r.get_json()["error"] == OUT_OF_STOCK
 
 
-def test_variants_are_enforced_individually(client):
+def test_variants_are_tracked_individually_and_only_an_empty_one_is_refused(client):
     make_product("jau-enf-var2", stock=15, option_stock={"Red": 5, "Black": 10},
                  options=COLOR_OPTS)
     ok = place(client, "JA-ENF010", [{"id": "jau-enf-var2", "name": "X", "qty": 4,
                                       "price": 2000, "color": "Red"}])
     assert ok.status_code == 200, ok.get_json()
+    # Owner rule: no quantity refusal - 6 asked while 1 is left is an order.
     over_red = place(client, "JA-ENF011", [{"id": "jau-enf-var2", "name": "X", "qty": 6,
                                             "price": 2000, "color": "Red"}])
-    assert over_red.status_code == 409
-    body = over_red.get_json()
-    assert body["code"] == "out_of_stock"
-    assert body["error"] == over_limit(1)
+    assert over_red.status_code == 200, over_red.get_json()
+    row = product_row("jau-enf-var2")
+    assert row["optionStock"]["Red"] == 0, "the Red shelf drained"
+    assert row["optionStock"]["Black"] == 10, "Black was not touched"
     over_black = place(client, "JA-ENF012", [{"id": "jau-enf-var2", "name": "X", "qty": 11,
                                               "price": 2000, "color": "Black"}])
-    assert over_black.status_code == 409
-    assert over_black.get_json()["error"] == over_limit(10)
-    # what is LEFT of each variant still fits: 1 Red + 10 Black
-    both = place(client, "JA-ENF013", [
-        {"id": "jau-enf-var2", "name": "X", "qty": 1, "price": 2000, "color": "Red"},
-        {"id": "jau-enf-var2", "name": "X", "qty": 10, "price": 2000, "color": "Black"},
-    ])
-    assert both.status_code == 200, both.get_json()
+    assert over_black.status_code == 200, over_black.get_json()
+    row = product_row("jau-enf-var2")
+    assert row["optionStock"]["Black"] == 0 and row["stock"] == 0
+    # The one remaining refusal: an EMPTY variant.
+    gone = place(client, "JA-ENF013", [{"id": "jau-enf-var2", "name": "X", "qty": 1,
+                                        "price": 2000, "color": "Red"}])
+    assert gone.status_code == 409, gone.get_json()
+    assert gone.get_json()["error"] == OUT_OF_STOCK
+    assert product_row("jau-enf-var2")["stock"] == 0, "never below zero"
 
 
 def test_duplicate_variant_lines_are_aggregated_before_checking(client):
-    """3 + 3 of a 5-unit variant is an over-order even though each line fits."""
+    """3 + 3 of a 5-unit variant: accepted (owner rule), the 5 real units
+    drained, and the shelf never goes negative."""
     make_product("jau-enf-var3", stock=5, option_stock={"Red": 5, "Black": 0},
                  options=COLOR_OPTS)
     r = place(client, "JA-ENF014", [
         {"id": "jau-enf-var3", "name": "X", "qty": 3, "price": 2000, "color": "Red"},
         {"id": "jau-enf-var3", "name": "X", "qty": 3, "price": 2000, "color": "Colour: Red"},
     ])
-    assert r.status_code == 409
-    assert r.get_json()["error"] == over_limit(5)
-    assert product_row("jau-enf-var3")["stock"] == 5, "partial checkout reservations must roll back"
+    assert r.status_code == 200, r.get_json()
+    row = product_row("jau-enf-var3")
+    assert row["optionStock"]["Red"] == 0
+    assert row["stock"] == 0, "drained to zero, never below"
 
 
-def test_checkout_error_includes_authoritative_remaining_stock(client):
-    """The exact error contract reports authoritative remaining stock."""
+def test_over_order_is_accepted_and_the_shortfall_is_recorded(client):
+    """Owner rule: 9 asked from a 2-unit mirror = an order, not an error. The
+    shelf drains to zero and the order carries the shortfall for the admin."""
     make_product("jau-enf-num", stock=2)
     r = place(client, "JA-ENF015", [{"id": "jau-enf-num", "name": "Silk Press",
                                      "qty": 9, "price": 2000}])
-    assert r.status_code == 409
-    assert r.get_json()["error"] == over_limit(2)
+    assert r.status_code == 200, r.get_json()
+    assert product_row("jau-enf-num")["stock"] == 0
+    from db import one
+    payload = json.loads(one("SELECT payload FROM orders WHERE id=?",
+                             ("JA-ENF015",))["payload"])
+    assert payload["stockApplied"] == [{"id": "jau-enf-num", "option": None, "qty": 2}]
+    assert payload["stockShortfall"] == [{"id": "jau-enf-num", "variant": "",
+                                          "requested": 9, "applied": 2}]
 
 
-def test_ten_units_reject_a_fifteen_unit_checkout(client):
+def test_fifteen_units_from_a_ten_unit_shelf_are_accepted(client):
     make_product("jau-enf-10-to-15", stock=10)
     r = place(client, "JA-ENF015A", [{"id": "jau-enf-10-to-15", "name": "X",
                                       "qty": 15, "price": 2000}])
-    assert r.status_code == 409
-    assert r.get_json()["error"] == over_limit(10)
-    assert product_row("jau-enf-10-to-15")["stock"] == 10
+    assert r.status_code == 200, r.get_json()
+    assert product_row("jau-enf-10-to-15")["stock"] == 0, "drained, never below"
 
 
 def test_cart_validator_is_csrf_protected_stateless_and_server_priced(client):
@@ -330,11 +345,13 @@ def test_cart_validator_is_csrf_protected_stateless_and_server_priced(client):
     assert result["items"][0]["price"] == 4000
     assert product_row("jau-enf-cart")["stock"] == 10, "cart validation must not reserve"
 
+    # Owner rule: a cart larger than the mirror validates (200) instead of
+    # being refused with a quantity message - and validation never reserves.
     too_many = {"currency": "NGN", "items": [{"id": "jau-enf-cart", "qty": 15}]}
-    rejected = client.put("/api/cart", json=too_many,
+    accepted = client.put("/api/cart", json=too_many,
                           headers={"X-CSRF-Token": token})
-    assert rejected.status_code == 409
-    assert rejected.get_json()["error"] == over_limit(10)
+    assert accepted.status_code == 200, accepted.get_json()
+    assert accepted.get_json()["ok"] is True
     assert product_row("jau-enf-cart")["stock"] == 10
 
 
@@ -367,7 +384,7 @@ def test_catalog_category_and_cart_reads_handle_concurrent_shoppers(client, app)
     assert product_row("jau-enf-public-race")["stock"] == 10
 
 
-def test_checkout_alias_enforces_the_same_atomic_inventory_limit(client):
+def test_checkout_alias_drains_the_last_unit_without_going_negative(client):
     make_product("jau-enf-checkout-alias", stock=1)
     body = {
         "id": "JA-ENF-CHECKOUT-ALIAS", "currency": "NGN", "total": 2000,
@@ -379,9 +396,8 @@ def test_checkout_alias_enforces_the_same_atomic_inventory_limit(client):
     }
     response = client.post("/api/checkout", json=body,
                            headers={"X-CSRF-Token": csrf(client)})
-    assert response.status_code == 409
-    assert response.get_json()["error"] == over_limit(1)
-    assert product_row("jau-enf-checkout-alias")["stock"] == 1
+    assert response.status_code == 200, response.get_json()
+    assert product_row("jau-enf-checkout-alias")["stock"] == 0
 
 
 def test_null_blank_absent_negative_and_zero_stock_fail_closed(client, monkeypatch):
@@ -510,38 +526,38 @@ def _race_orders(app, pid, n, qty=1, color="", tag="R"):
     return results
 
 
-def test_concurrent_orders_for_the_last_unit_oversell_exactly_one(client, app):
-    """Two (or eight) customers ordering the last unit at the same time: one
-    order succeeds, the rest are told it is unavailable, and the stock never
-    goes below zero."""
+def test_concurrent_orders_for_the_last_unit_never_go_negative(client, app):
+    """Eight shoppers want the last unit at the same moment. Owner rule: all
+    eight orders are taken (nobody is refused on the number) while the shelf
+    is drained exactly once and never below zero."""
     make_product("jau-enf-race", stock=1)
     results = _race_orders(app, "jau-enf-race", 8, qty=1, tag="R1")
-    assert results.count(200) == 1, results
-    assert results.count(409) == 7, results
+    assert results.count(200) == 8, results
     assert product_row("jau-enf-race")["stock"] == 0
 
 
-def test_concurrent_orders_never_oversell_a_limited_run(client, app):
-    """5 units, 8 shoppers wanting 2 each: at most two orders fit."""
+def test_concurrent_orders_never_drive_a_limited_run_below_zero(client, app):
+    """5 units, 8 shoppers wanting 2 each. All eight orders are accepted, but
+    the shelf can only ever give away the 5 real units."""
     make_product("jau-enf-race2", stock=5)
     results = _race_orders(app, "jau-enf-race2", 8, qty=2, tag="R2")
-    assert results.count(200) <= 2, results
-    assert product_row("jau-enf-race2")["stock"] >= 0
+    assert results.count(200) == 8, results
+    stock = product_row("jau-enf-race2")["stock"]
+    assert stock >= 0, stock
     # what was reserved can never exceed what existed
-    reserved = 5 - product_row("jau-enf-race2")["stock"]
-    assert reserved <= 5
-    assert reserved == 2 * results.count(200)
+    assert 0 <= 5 - stock <= 5
 
 
-def test_concurrent_orders_for_the_last_variant_unit(client, app):
-    """Red: 1, Black: 4 - the race for the last Red leaves Black untouched."""
+def test_concurrent_orders_for_the_last_variant_unit_leave_others_intact(client, app):
+    """Red: 1, Black: 4 - all six Red orders are taken, Red drains exactly
+    once (never below zero) and Black is untouched."""
     make_product("jau-enf-race3", stock=5, option_stock={"Red": 1, "Black": 4},
                  options=COLOR_OPTS)
     results = _race_orders(app, "jau-enf-race3", 6, qty=1, color="Red", tag="R3")
-    assert results.count(200) == 1, results
+    assert results.count(200) == 6, results
     row = product_row("jau-enf-race3")
     assert row["optionStock"]["Red"] == 0
-    assert row["optionStock"]["Black"] == 4
+    assert row["optionStock"]["Black"] == 4, "another variant was not touched"
     assert row["stock"] == 4
 
 
@@ -632,11 +648,14 @@ def test_stock_manager_rejects_unknown_products(client):
 
 
 # ================================================= E. storefront contract
-def test_store_js_uses_the_exact_stock_rejection_messages():
+def test_store_js_only_ever_reports_out_of_stock():
+    """The client may only tell a shopper an item is OUT - never that a
+    quantity exceeded a mirror (owner rule, 2026-10-05)."""
     src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "js", "store.js"), encoding="utf-8").read()
     assert OUT_OF_STOCK in src
-    assert "You cannot order more than the available stock (${left} remaining)." in src
+    assert "You cannot order more than the available stock" not in src
+    assert "remaining)" not in src
     assert "you asked for" not in src
     assert "Only ${left}" not in src
     assert "units of ${name}" not in src

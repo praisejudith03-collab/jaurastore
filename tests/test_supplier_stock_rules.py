@@ -1,8 +1,10 @@
 """Supplier stock sync rules - freeze the owner-specified contract.
 
-  * product-level supplier counts -> floor(40%); option-URL counts -> floor(50%)
+  * product-level supplier counts    -> mirrored 1:1 (no buffer, no cap)
+  * option-URL counts                -> mirrored 1:1 (no buffer, no cap)
+  * bare "In stock" (no count)       -> keeps the shelf, opens a multi-unit one
   * supplier out / 0                 -> only the matched product/variant goes out
-  * restock                          -> restores only the matched buffered option
+  * restock                          -> restores only the matched variant
   * simple products                  -> the product-level 40% rule applies
   * variant products                 -> own URL overrides the main URL per option
   * unmatched variants               -> keep current stock, warning logged
@@ -47,10 +49,14 @@ def test_public_catalog_flags_supplier_tracked_products_without_exposing_urls():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
     translations = open(os.path.join(root, "js", "i18n.js"), encoding="utf-8").read()
-    assert 'const supplierAvailabilityHTML = p.supplierTracked' in app_js
-    assert 'class="pdp-supplier-availability"' in app_js
-    assert "Supplier-linked availability is checked regularly" in translations
-    assert "La disponibilité auprès du fournisseur" in translations
+    # The PDP was purged of every supplier-facing notice (owner request
+    # 2026-10-05): the flag stays private server-side, the page shows no
+    # supplier box, and the translated strings are gone too - a leftover
+    # translation is how a removed box creeps back in.
+    assert "supplierAvailabilityHTML" not in app_js
+    assert "pdp-supplier-availability" not in app_js
+    assert "Supplier-linked availability" not in translations
+    assert "disponibilité auprès du fournisseur" not in translations
 
 
 def _variants_html(*rows):
@@ -127,9 +133,10 @@ def test_supplier_lower_reduces_to_supplier_count(monkeypatch, saved):
     ok, warns = _sync(monkeypatch, _product(),
                       _variants_html(("Serum", True, 3), ("Cream", True, 4)))
     assert ok is True
-    assert saved["optionStock"]["Serum"] == 1
-    assert saved["optionStock"]["Cream"] == 1
-    assert saved["stock"] == 2
+    # The supplier's own count is the shelf: 3 sells as 3, 4 as 4.
+    assert saved["optionStock"]["Serum"] == 3
+    assert saved["optionStock"]["Cream"] == 4
+    assert saved["stock"] == 7
 
 
 def test_supplier_out_of_stock_zeroes_the_matched_variant(monkeypatch, saved):
@@ -137,26 +144,32 @@ def test_supplier_out_of_stock_zeroes_the_matched_variant(monkeypatch, saved):
                       _variants_html(("Serum", False, None), ("Cream", True, 4)))
     assert ok is True
     assert saved["optionStock"]["Serum"] == 0
-    assert saved["optionStock"]["Cream"] == 1
-    assert saved["stock"] == 1
+    assert saved["optionStock"]["Cream"] == 4
+    assert saved["stock"] == 4
 
 
-def test_supplier_count_uses_the_forty_percent_buffer(monkeypatch, saved):
+def test_supplier_count_is_sold_one_to_one_without_a_buffer(monkeypatch, saved):
+    """No 40% buffer: 25 units on the supplier page are 25 units on the PDP."""
     ok, warns = _sync(monkeypatch, _product(),
                       _variants_html(("Serum", True, 25), ("Cream", True, 4)))
     assert ok is True
-    assert saved["optionStock"]["Serum"] == 10
-    assert saved["optionStock"]["Cream"] == 1
-    assert saved["stock"] == 11
+    assert saved["optionStock"]["Serum"] == 25
+    assert saved["optionStock"]["Cream"] == 4
+    assert saved["stock"] == 29
 
 
-def test_generic_in_stock_signal_restores_a_positive_variant(monkeypatch, saved):
-    p = _product(optionStock={"Serum": 0, "Cream": 4}, stock=4)
+def test_generic_in_stock_signal_opens_a_multi_unit_shelf(monkeypatch, saved):
+    """A bare "In stock" is not the number 1.
+
+    It opens the sold-out variant to the multi-unit fallback and never
+    shrinks a variant whose shelf is already higher.
+    """
+    p = _product(optionStock={"Serum": 0, "Cream": 25}, stock=25)
     ok, _ = _sync(monkeypatch, p,
-                  _variants_html(("Serum", True, None), ("Cream", True, 4)))
+                  _variants_html(("Serum", True, None), ("Cream", True, None)))
     assert ok is True
-    assert saved["optionStock"]["Serum"] == 1
-    assert saved["optionStock"]["Cream"] == 1
+    assert saved["optionStock"]["Serum"] == supplier_watchdog.SUPPLIER_IN_STOCK_UNITS
+    assert saved["optionStock"]["Cream"] == 25, "a bigger shelf is never shrunk by a flag"
 
 
 
@@ -164,7 +177,7 @@ def test_unmatched_variants_keep_their_stock_and_warn(monkeypatch, saved):
     html = _variants_html(("Serum", True, 2))   # supplier page has no Cream row
     ok, warns = _sync(monkeypatch, _product(), html)
     assert ok is True
-    assert saved["optionStock"]["Serum"] == 1
+    assert saved["optionStock"]["Serum"] == 2
     assert saved["optionStock"]["Cream"] == 4, "unmatched variant must not move"
     assert any(w["code"] == "supplier_partial_match" for w in warns)
 
@@ -209,13 +222,12 @@ def _colour_product(**over):
 
 def test_option_supplier_urls_win_and_watchdog_restocks_black_and_brown_separately(
         monkeypatch, saved):
-    """The 50% option URLs override a conflicting main page for each colour.
+    """The option URLs override a conflicting main page for each colour.
 
-    This exercises the actual watchdog tick (the same cycle used in service),
-    not just the ratio helper. A 100-unit Black listing and 40-unit Brown
-    listing restore only those options to 50 and 20. The main product URL says
-    Black is sold out and Brown has 100; neither result may leak into the
-    explicitly linked option URLs.
+    This exercises the actual watchdog tick (the same cycle used in service).
+    A 100-unit Black listing and a 40-unit Brown listing are mirrored 1:1. The
+    main product URL says Black is sold out and Brown has 100; neither result
+    may leak into the explicitly linked option URLs.
     """
     p = _colour_product()
     pages = {
@@ -242,11 +254,11 @@ def test_option_supplier_urls_win_and_watchdog_restocks_black_and_brown_separate
     assert result["checked"] == 1 and result["updated"] == 1
     assert calls == ["https://supplier.example/tote-black",
                      "https://supplier.example/tote-brown"]
-    assert saved["optionStock"] == {"Black": 50, "Brown": 20}
-    assert saved["stock"] == saved["stock_quantity"] == 70
+    assert saved["optionStock"] == {"Black": 100, "Brown": 40}
+    assert saved["stock"] == saved["stock_quantity"] == 140
 
 
-def test_option_url_out_of_stock_is_isolated_and_non_url_option_keeps_40_percent(
+def test_option_url_out_of_stock_is_isolated_and_main_url_sells_one_to_one(
         monkeypatch, saved):
     p = _colour_product(optionStock={"Black": 8, "Brown": 10}, stock=18,
                         optionSupplierSku={"Colour: Black": "https://supplier.example/tote-black"})
@@ -261,12 +273,12 @@ def test_option_url_out_of_stock_is_isolated_and_non_url_option_keeps_40_percent
     ok, warnings = supplier_watchdog.sync_product(p)
 
     assert ok is True
-    assert saved["optionStock"] == {"Black": 0, "Brown": 40}
-    assert saved["stock"] == saved["stock_quantity"] == 40
+    assert saved["optionStock"] == {"Black": 0, "Brown": 100}
+    assert saved["stock"] == saved["stock_quantity"] == 100
     assert not any(w["code"] == "supplier_partial_match" for w in warnings)
 
 
-def test_option_url_buffer_survives_a_real_local_watchdog_catalog_cycle(tmp_path, monkeypatch):
+def test_option_url_one_to_one_survives_a_real_local_watchdog_catalog_cycle(tmp_path, monkeypatch):
     """Exercise tick -> stock-only catalog patch -> persisted local row.
 
     The storage backend here is the test/local catalog, not a real Supabase
@@ -301,8 +313,8 @@ def test_option_url_buffer_survives_a_real_local_watchdog_catalog_cycle(tmp_path
     assert result["checked"] == 1 and result["updated"] == 1
     assert calls == ["https://supplier.example/tote-black",
                      "https://supplier.example/tote-brown"]
-    assert stored["optionStock"] == {"Black": 50, "Brown": 20}
-    assert stored["stock"] == stored["stock_quantity"] == 70
+    assert stored["optionStock"] == {"Black": 100, "Brown": 40}
+    assert stored["stock"] == stored["stock_quantity"] == 140
 
 
 def test_removed_option_supplier_url_is_never_polled_or_restored():
@@ -324,8 +336,8 @@ def test_simple_product_syncs_as_a_whole(monkeypatch, saved):
     ok, warns = _sync(monkeypatch, p,
                       '<script type="application/json">{"quantity": 5, "name": "Shea Glow Set"}</script>')
     assert ok is True
-    assert saved["stock"] == 2
-    assert saved["stock_quantity"] == 2
+    assert saved["stock"] == 5
+    assert saved["stock_quantity"] == 5
     assert "optionStock" not in saved or not saved.get("optionStock")
 
 
@@ -347,13 +359,13 @@ def test_simple_product_out_of_stock(monkeypatch, saved):
     assert saved["stock_quantity"] == 0
 
 
-def test_simple_product_restock_sets_the_buffered_sellable_quantity(monkeypatch, saved):
+def test_simple_product_restock_mirrors_the_supplier_count(monkeypatch, saved):
     p = _product(options=[], optionStock={}, stock=0)
     ok, warns = _sync(monkeypatch, p,
                       '<script type="application/json">{"quantity": 100, "name": "Shea Glow Set"}</script>')
     assert ok is True
-    assert saved["stock"] == 40
-    assert saved["stock_quantity"] == 40
+    assert saved["stock"] == 100
+    assert saved["stock_quantity"] == 100
 
 
 # ------------------------------------------------------------- link safety
@@ -362,7 +374,7 @@ def test_the_supplier_link_itself_survives_a_sync(monkeypatch, saved):
     ok, warns = _sync(monkeypatch, _product(),
                       _variants_html(("Serum", True, 7), ("Cream", True, 4)))
     assert ok is True
-    assert saved["optionStock"]["Serum"] == 2
+    assert saved["optionStock"]["Serum"] == 7
     assert saved.get("supplierSku") == SUPPLIER, "a sync must never strip the supplier link"
 
 

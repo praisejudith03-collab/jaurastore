@@ -317,6 +317,17 @@ def create_app():
     init_db()
     try:
         migrate()                      # add columns added after the first release
+        # Supabase auto-migration: PostgREST cannot run DDL, so a live
+        # `site_settings` table missing a newer column (popup_banner_active on
+        # a project created before the welcome pop-up) used to answer every
+        # Admin save with a schema error. Apply the additive, idempotent
+        # ALTERs on boot; a no-op when Supabase or a direct database
+        # connection is not configured, and never blocks boot.
+        try:
+            import auto_migrate
+            auto_migrate.run(app.logger)
+        except Exception as exc:
+            app.logger.warning("schema auto-migration skipped: %s", exc)
         analytics_mod.prune()          # drop raw analytics past the retention window
         # Categories are read live from the Supabase `categories` table in
         # production (no local file is written on boot). On the test/dev

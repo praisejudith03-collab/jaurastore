@@ -339,7 +339,8 @@ def test_supplier_price_increase_raises_a_warning_not_a_rewrite(monkeypatch, sav
     up = [w for w in warns if w["code"] == "supplier_price_increased"]
     assert up and "Serum" in up[0]["reason"] and "42" in up[0]["reason"]
     # ... the stock update went through ...
-    assert saved.get("optionStock") == {"Serum": 1, "Cream": 2}
+    # One-to-one supplier counts (no 40% buffer): 3 and 5 sell as 3 and 5.
+    assert saved.get("optionStock") == {"Serum": 3, "Cream": 5}
     # ... and the shop's own retail price was NEVER rewritten by the supplier
     assert saved.get("priceNgn") == 5000
     assert (saved.get("optionPrices") or {}).get("Serum") != 42.0

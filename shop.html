@@ -14,26 +14,54 @@
   <meta property="og:title" content="All Products · Jaura Store" />
   <meta property="og:description" content="Browse 250+ pieces at Jaura Store. Filter by category, colour and size. Pay in ₦ or CFA." />
   <meta property="og:url" content="https://jaurastore.com.ng/shop.html" />
-  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=190" />
+  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=191" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="All Products · Jaura Store" />
   <meta name="twitter:description" content="Browse 250+ pieces at Jaura Store. Filter by category, colour and size. Pay in ₦ or CFA." />
-  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=190" />
+  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=191" />
   <!-- brand icons: Supabase public-assets bucket (tools/upload_brand_assets.py) -->
   <link rel="icon" type="image/png" sizes="32x32" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="48x48" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/favicon-48.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/apple-touch-180.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/icon-192.png" />
   <!-- same-origin fallback: still a legible mark if the bucket is unreachable -->
-  <link rel="icon" type="image/png" sizes="16x16" href="/images/brand/favicon-16.png?v=190" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/brand/favicon-16.png?v=191" />
   <!-- /brand icons -->
   <link rel="preload" as="image" href="images/banners/wordmark-bg.jpg" fetchpriority="high" />
-  <link rel="stylesheet" href="css/fonts.css?v=190" />
+  <link rel="stylesheet" href="css/fonts.css?v=191" />
   <!-- product photos live in the shop's Supabase storage bucket:
        open that connection while the HTML is still parsing so the
        first photo starts the moment the grid renders -->
   <link rel="preconnect" href="https://rvkweyipqgsggcnimhxf.supabase.co" />
-  <link rel="stylesheet" href="css/style.css?v=190" />
+  <!-- Critical first-paint CSS: the shell (background, text colour, grid
+       skeleton) paints from these few hundred bytes while the 250 KB
+       stylesheet is still downloading. style.css loads right after and
+       overrides everything here, so this is additive only. -->
+  <style>
+    body{margin:0;background:#fdfaf7;color:#22170f;font-family:Outfit,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+    .wrap{width:min(1180px,calc(100% - 32px));margin-inline:auto}
+    .product-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;min-height:220px}
+    .catalog-skeleton-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .catalog-skeleton-grid i,.catalog-skeleton-head{display:block;background:linear-gradient(90deg,#f4ece2 25%,#eadfd2 37%,#f4ece2 63%);background-size:400% 100%;animation:ja-shimmer 1.2s ease-in-out infinite;border-radius:10px;min-height:170px}
+    .catalog-skeleton-head{min-height:22px;max-width:180px;margin:8px 0 14px}
+    .product-grid>i.ja-sk{display:block;min-height:170px;border-radius:10px;background:linear-gradient(90deg,#f4ece2 25%,#eadfd2 37%,#f4ece2 63%);background-size:400% 100%;animation:ja-shimmer 1.2s ease-in-out infinite}
+    @keyframes ja-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+    @media (prefers-reduced-motion:reduce){.catalog-skeleton-grid i,.catalog-skeleton-head,.product-grid>i.ja-sk{animation:none}}
+  </style>
+  <script>
+    /* Start the catalogue request while the HTML is still parsing. The shop
+       grid used to wait for ~500 KB of scripts before its first API call; the
+       response is reused by js/store.js (never fetched twice). A failure is
+       ignored - store.js retries on its own. */
+    (function () {
+      try {
+        window.__JA_CATALOG_FETCH__ = fetch("api/catalog", {
+          credentials: "same-origin", cache: "default"
+        }).catch(function () { return null; });
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="css/style.css?v=191" />
 </head>
 <body data-page="shop" class="au-shop">
   <div id="site-header"></div>
@@ -58,7 +86,7 @@
         </select>
         </div>
       </div>
-      <div class="product-grid" data-shop-grid></div>
+      <div class="product-grid" data-shop-grid><!-- first-paint placeholders (see the inline critical CSS) --><i class="ja-sk" aria-hidden="true"></i><i class="ja-sk" aria-hidden="true"></i><i class="ja-sk" aria-hidden="true"></i><i class="ja-sk" aria-hidden="true"></i><i class="ja-sk" aria-hidden="true"></i><i class="ja-sk" aria-hidden="true"></i><i class="ja-sk" aria-hidden="true"></i><i class="ja-sk" aria-hidden="true"></i></div>
       <div class="pager" data-pager></div>
     </div>
   </div>
@@ -71,11 +99,11 @@
   </aside>
   <section class="wrap" data-most-viewed aria-label="Most viewed products"></section>
   <div id="site-footer"></div>
-  <script src="js/products-data.js?v=190"></script>
-  <script src="js/i18n-phrases.js?v=190"></script>
-  <script src="js/i18n.js?v=190"></script>
-  <script src="js/net.js?v=190"></script>
-  <script src="js/store.js?v=190"></script>
-  <script src="js/app.js?v=190"></script>
+  <script src="js/products-data.js?v=191"></script>
+  <script src="js/i18n-phrases.js?v=191"></script>
+  <script src="js/i18n.js?v=191"></script>
+  <script src="js/net.js?v=191"></script>
+  <script src="js/store.js?v=191"></script>
+  <script src="js/app.js?v=191"></script>
 </body>
 </html>
