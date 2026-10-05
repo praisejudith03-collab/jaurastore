@@ -73,19 +73,19 @@ def _order_payload(order_id, pid, name, qty, price, total):
     }
 
 
-def test_over_order_is_taken_and_drains_the_shelf(client):
-    """Owner rule (2026-10-05): an order larger than the mirror is accepted -
-    there is no quantity refusal any more. 25 asked of a 24-unit shelf leaves
-    the shelf on zero, never below, and the order records the shortfall."""
+def test_over_order_is_rejected_without_draining_the_shelf(client):
+    """A 25-unit request cannot be placed against a 24-unit saved quantity."""
     pid = "wix-001"
     name = _seed_name(pid)
     payload = _order_payload("JA-OVER1", pid, name, 25, 1000, 25000)
     r = client.post("/api/orders", json=payload,
                     headers={"X-CSRF-Token": csrf(client)})
-    assert r.status_code == 200, r.get_json()
+    assert r.status_code == 409, r.get_json()
+    assert r.get_json()["code"] == "insufficient_stock"
+    assert r.get_json()["error"] == "Only 24 items remaining in stock"
     row = next(p for p in catalog_mod.merged(include_hidden=True)
                if str(p.get("id")) == pid)
-    assert max(0, int(row.get("stock") or 0)) == 0, row
+    assert max(0, int(row.get("stock") or 0)) == 24, row
 
 
 def test_stock_cannot_be_bypassed_when_enforce_off(client, monkeypatch):
@@ -105,7 +105,7 @@ def test_stock_cannot_be_bypassed_when_enforce_off(client, monkeypatch):
                     headers={"X-CSRF-Token": csrf(client)})
     assert r.status_code == 409, r.get_json()
     assert r.get_json().get("code") == "out_of_stock"
-    assert r.get_json().get("error") == "This item is currently out of stock."
+    assert r.get_json().get("error") == "Out of Stock"
 
 
 def test_sales_confirmed_only_and_csv(client):

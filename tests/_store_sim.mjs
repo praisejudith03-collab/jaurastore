@@ -336,13 +336,13 @@ const offlineFixture = (id, name) => ({
     JA.displayOptionValue({ title: "Colour", values: ["Black"],
       valuesFr: ["Noir profond"] }, "Black") === "Noir profond");
 
-  // The regression that would actually cost money: if the French label ever
-  // reached the stock lookup, optionStock (keyed by the RAW value) would miss
-  // and the variant would sell from the product total instead.
+  // The regression that would actually cost money: if a translated or
+  // otherwise unknown label reaches stock lookup, it must fail closed instead
+  // of borrowing another variant's product-level total.
   const stocked = { id: "jau-fr-stock", name: "Stocked", nameFr: "En stock",
                     options: [opt], stock: 9, optionStock: { Black: 3, "Light blue": 0 } };
   check("stock is found by the raw value, not by the French label",
-    JA.stockFor(stocked, "Black") === 3 && JA.stockFor(stocked, "Noir") === 9,
+    JA.stockFor(stocked, "Black") === 3 && JA.stockFor(stocked, "Noir") === 0,
     "Black=" + JA.stockFor(stocked, "Black") + " Noir=" + JA.stockFor(stocked, "Noir"));
   check("a sold-out variant is still sold out in French",
     JA.stockFor(stocked, "Light blue") === 0);

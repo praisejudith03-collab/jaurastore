@@ -1470,6 +1470,42 @@ def _prefer_real_photos(rows, local_rows):
     return out
 
 
+def product_for_save(pid):
+    """Load one product for a save/merge without rebuilding the full catalog.
+
+    Production uses an indexed id/legacyId lookup in Supabase. The local path
+    reads the override row first and then a matching bundled seed row. This is
+    intentionally narrower than product_index(), which is for whole-catalog
+    consumers and can require several remote reads.
+    """
+    wanted = str(pid or "").strip()
+    if not wanted:
+        return None
+    if _prod_source():
+        try:
+            from supabase_store import product_by_id
+            return product_by_id(wanted)
+        except Exception:
+            return None
+
+    data, _path = _load_overrides()
+    rows = data.get("products") or []
+    for row in rows:
+        if str((row or {}).get("id") or "").strip() == wanted:
+            return resolve_image(_clean_cfa_prices(_fold_p(dict(row))))
+    for row in rows:
+        if str((row or {}).get("legacyId") or "").strip() == wanted:
+            return resolve_image(_clean_cfa_prices(_fold_p(dict(row))))
+    seed = _seed_products()
+    for row in seed:
+        if str((row or {}).get("id") or "").strip() == wanted:
+            return resolve_image(_clean_cfa_prices(_fold_p(dict(row))))
+    for row in seed:
+        if str((row or {}).get("legacyId") or "").strip() == wanted:
+            return resolve_image(_clean_cfa_prices(_fold_p(dict(row))))
+    return None
+
+
 def product_index(products=None, include_hidden=True):
     """Map every resolvable id -> the product row, canonical id first.
 
@@ -2776,12 +2812,15 @@ def remirror_strays(actor=None):
 def upsert(product, actor=None):
     """Save (create or edit) one product. Returns (product, action, mirrored).
 
-    In production (Supabase enabled, not testing) the write goes straight to
-    PostgreSQL: no local override file is touched, and a failed Supabase
-    write returns (None, "error", False) so the route can surface a clear
-    error instead of reporting success. The returned product is the row
-    re-queried from Supabase.
+    Production admin edits may carry ``_saveDirtyFields`` (a private request
+    hint, never persisted). Those writes patch only changed columns and use
+    the row returned by the same database request, avoiding a catalogue scan
+    and a second read-back. All other callers retain the full-save behavior.
     """
+    product = dict(product or {})
+    save_dirty_fields = product.pop("_saveDirtyFields", None)
+    save_existing = bool(product.pop("_saveExisting", False))
+    fast_requested = bool(save_dirty_fields and save_existing and _prod_source())
     clean = normalize(product)
     if clean is None:
         return None, "rejected", True
@@ -2798,21 +2837,23 @@ def upsert(product, actor=None):
     # writer may resurrect a hard-deleted id.
     if is_permanently_removed(clean):
         return None, "permanently-removed", True
-    try:
-        from supabase_store import load_hard_deleted_ids
-        hard_deleted = load_hard_deleted_ids() or []
-        if clean["id"] in {str(x or "").strip() for x in hard_deleted}:
-            return None, "permanently-removed", True
-    except Exception:
-        # The PostgreSQL trigger is the final race-safe guard if the read path
-        # is unavailable; a transient read never turns into a false save error.
-        pass
+    if not fast_requested:
+        try:
+            from supabase_store import load_hard_deleted_ids
+            hard_deleted = load_hard_deleted_ids() or []
+            if clean["id"] in {str(x or "").strip() for x in hard_deleted}:
+                return None, "permanently-removed", True
+        except Exception:
+            # The PostgreSQL trigger is the final race-safe guard if the read
+            # path is unavailable; a transient read never becomes a false save error.
+            pass
 
     live = []
-    try:
-        live = merged(include_hidden=True)
-    except Exception:
-        live = []                     # never block a save on a Supabase read
+    if not fast_requested:
+        try:
+            live = merged(include_hidden=True)
+        except Exception:
+            live = []                 # never block a save on a Supabase read
     # An ordinary admin edit (a price change, a photo swap) does not re-emit
     # legacyId. Dropping it would silently break every old wix-* link, order
     # line and review pointing at this row, so carry the stored alias forward.
@@ -2823,15 +2864,52 @@ def upsert(product, actor=None):
                 if keep:
                     clean["legacyId"] = keep
                 break
-    taken = {str(p.get("slug") or "").strip().lower() for p in live
-             if p and str(p.get("id") or "") != clean["id"] and p.get("slug")}
-    wanted = str(clean.get("slug") or "")
-    clean["slug"] = _free_slug(wanted, clean["id"], taken)
-
-    previous = next((p for p in live if str((p or {}).get("id") or "") == clean["id"]), None)
-    action = "updated" if previous else "created"
+    if fast_requested:
+        previous = None
+        action = "updated"
+    else:
+        taken = {str(p.get("slug") or "").strip().lower() for p in live
+                 if p and str(p.get("id") or "") != clean["id"] and p.get("slug")}
+        wanted = str(clean.get("slug") or "")
+        clean["slug"] = _free_slug(wanted, clean["id"], taken)
+        previous = next((p for p in live if str((p or {}).get("id") or "") == clean["id"]), None)
+        action = "updated" if previous else "created"
 
     if _prod_source():
+        if fast_requested:
+            try:
+                from supabase_store import update_product_fields
+                state, saved_row = update_product_fields(clean, save_dirty_fields)
+            except Exception:
+                state, saved_row = "error", None
+            if state == "updated" and saved_row:
+                # Keep the existing re-save contract: a deliberately restored
+                # soft-deleted product must not remain hidden by the durable
+                # compatibility list. The permanent SQL tombstone is separate
+                # and remains enforced by is_permanently_removed/the DB guard.
+                try:
+                    from supabase_store import clear_deleted_id
+                    clear_deleted_id(clean["id"])
+                except Exception:
+                    pass
+                # Media fields never use this fast path, so no old upload can
+                # be purged without the normal before/after reference guard.
+                _sync_repo_async()
+                return saved_row, "updated", True
+            if state == "permanently-removed":
+                return None, "permanently-removed", True
+            if state == "error":
+                return None, "error", False
+            # Missing row (typically a bundled seed product that has not yet
+            # been materialized in PostgreSQL): preserve the hard-tombstone
+            # check before falling back to the durable full upsert below.
+            try:
+                from supabase_store import load_hard_deleted_ids
+                if clean["id"] in {str(x or "").strip()
+                                   for x in (load_hard_deleted_ids() or [])}:
+                    return None, "permanently-removed", True
+            except Exception:
+                pass
         try:
             from supabase_store import upsert_products, clear_deleted_id
             ok = bool(upsert_products([clean]))

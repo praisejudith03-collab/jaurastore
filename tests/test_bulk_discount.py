@@ -210,22 +210,29 @@ def test_order_payload_and_admin_view_carry_the_discount(client):
     assert match["bulkDiscount"][0]["percent"] == 15
 
 
-def test_discount_never_pushes_the_shelf_below_zero(client):
-    """Owner rule (2026-10-05): 11 units of a 10-unit mirror are an order, not
-    an error - the discount applies, the shelf drains to zero, and only an
-    EMPTY product is refused."""
+def test_discount_applies_at_exact_stock_and_over_limit_is_rejected(client):
+    """Bulk discounts do not weaken exact product inventory limits."""
     make_product("jau-blk-stock", price=1000, stock=10, bulk_qty=5, bulk_percent=30)
-    r = place(client, "JA-BLK007", [{"id": "jau-blk-stock", "name": "X", "qty": 11,
-                                     "price": 1000}])
-    assert r.status_code == 200, r.get_json()
-    assert r.get_json()["items"][0]["bulkPercent"] == 30
+    exact = place(client, "JA-BLK007", [{"id": "jau-blk-stock", "name": "X", "qty": 10,
+                                         "price": 1000}])
+    assert exact.status_code == 200, exact.get_json()
+    assert exact.get_json()["items"][0]["bulkPercent"] == 30
     row = next(p for p in catalog_mod.merged(include_hidden=True)
                if str(p.get("id")) == "jau-blk-stock")
     assert max(0, int(row.get("stock") or 0)) == 0
-    empty = place(client, "JA-BLK008", [{"id": "jau-blk-stock", "name": "X", "qty": 1,
+    empty = place(client, "JA-BLK009", [{"id": "jau-blk-stock", "name": "X", "qty": 1,
                                          "price": 1000}])
     assert empty.status_code == 409, empty.get_json()
-    assert empty.get_json()["error"] == "This item is currently out of stock."
+    assert empty.get_json()["error"] == "Out of Stock"
+
+    make_product("jau-blk-over", price=1000, stock=10, bulk_qty=5, bulk_percent=30)
+    over = place(client, "JA-BLK008", [{"id": "jau-blk-over", "name": "X", "qty": 11,
+                                        "price": 1000}])
+    assert over.status_code == 409
+    assert over.get_json()["error"] == "Only 10 items remaining in stock"
+    untouched = next(p for p in catalog_mod.merged(include_hidden=True)
+                     if str(p.get("id")) == "jau-blk-over")
+    assert untouched["stock"] == 10
 
 
 # --------------------------------------------------------- storefront wiring
