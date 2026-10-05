@@ -363,11 +363,10 @@ def products():
     return response
 
 # ============================================================ public: catalog
-# Customers never see numerical stock: the public catalogue carries only an
-# In Stock / Out of Stock flag, plus - for a product sold per variant - a
-# per-variant in/out map (option_stock_status). No count, no threshold, no
-# "only N left": the exact quantity is a business secret (the admin portal,
-# with a session, still gets the numbers it needs to manage the shop).
+# Product quantities are shared with the storefront so it can cap quantity
+# controls and explain an over-limit request before checkout. Only the exact
+# inventory fields below are public; supplier references and internal stock
+# aliases remain private. Admin rows continue to carry the canonical fields.
 _FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock",
                          "variantStock", "inventory",
                          # Supplier and per-option sourcing/SKU notes are
@@ -412,20 +411,21 @@ def _public_product(p):
     qty = catalog_mod.stock_of(p)
     os_map = p.get("optionStock") if isinstance(p, dict) else None
     if isinstance(os_map, dict) and os_map:
-        # Variant product: the map is the truth (catalog.normalize keeps
-        # stock == sum(optionStock)). The product is sellable only while at
-        # least one variant still has units, and each variant's own state is
-        # published WITHOUT its number so the storefront can grey out a
-        # sold-out colour without learning how many Reds are left.
+        # Variant quantities are authoritative; keep the product total equal
+        # to their sum, and publish the exact per-variant remainder so the
+        # storefront can strictly cap each selection (and the server can give
+        # an accurate "Only N items remaining" message).
         cleaned = {}
         for k, v in os_map.items():
             try:
                 cleaned[str(k)] = max(0, int(v or 0))
             except (TypeError, ValueError):
                 cleaned[str(k)] = 0
+        out["option_stock_available"] = cleaned
         out["option_stock_status"] = {k: ("in" if v > 0 else "out")
                                       for k, v in cleaned.items()}
         qty = sum(cleaned.values())
+    out["stock_available"] = qty
     out["stock_status"] = "in" if qty > 0 else "out"
     return out
 
@@ -490,9 +490,10 @@ def _catalog_response_snapshot():
 def catalog():
     """Live catalogue, revalidated on EVERY request.
 
-    Public rows never expose numerical stock.  Admin ``?all=1`` remains a
-    private browser response and is varied by Cookie, preventing the full
-    inventory from entering a shared cache.
+    Public rows expose only the exact sellable quantity fields emitted by
+    ``_public_product``; storage aliases and supplier notes stay private.
+    Admin ``?all=1`` remains a private browser response and is varied by
+    Cookie, preventing the full product rows from entering a shared cache.
 
     The response carries ``no-cache, must-revalidate`` with a strong-ish
     ETag: the browser always revalidates (an unchanged catalogue answers
@@ -932,8 +933,7 @@ def _option_stock_key(product, variant):
 def _live_stock_available(product_id, variant=""):
     """Read fresh stock after a failed atomic reservation; None means unknown."""
     try:
-        rows = catalog_mod.merged(include_hidden=True)
-        product = catalog_mod.product_index(rows).get(str(product_id or ""))
+        product = catalog_mod.product_for_save(product_id)
     except Exception:
         return None
     if not product or product.get("online") is False:
@@ -1103,7 +1103,7 @@ def _server_unit_price(product, currency, variant=""):
     return currency_mod.to_ngn(cfa)
 
 
-OUT_OF_STOCK_MESSAGE = "This item is currently out of stock."
+OUT_OF_STOCK_MESSAGE = "Out of Stock"
 CHECKOUT_PAYMENT_METHODS = {
     "naira": {"currency": "NGN", "label": "Naira bank transfer"},
     "benin_cfa": {"currency": "CFA", "label": "Benin CFA payment"},
@@ -1112,36 +1112,36 @@ CHECKOUT_PAYMENT_METHODS = {
 
 
 def _requested_quantity(value):
-    """Positive whole cart quantity, or None for blank, fractional, or huge input."""
+    """Positive whole cart quantity within the maximum supported inventory."""
     if isinstance(value, bool):
         return None
     raw = str(value if value is not None else "").strip()
     if not re.fullmatch(r"[0-9]+", raw):
         return None
     qty = int(raw)
-    return qty if 1 <= qty <= 999 else None
+    return qty if 1 <= qty <= 10**7 else None
 
 
-def _stock_limit_error(available, product_id="", variant=""):
-    """The one stock refusal a customer may ever see: the item is out.
-
-    Owner rule (2026-10-05): the shop never turns a sale away over the mirrored
-    quantity. A supplier page read (or an admin shelf number) is an estimate,
-    so asking for more units than the mirror currently shows is NOT an error -
-    the order is taken and the shelf is drained to zero (never below). The old
-    old quantity refusal (N remaining) was the message the owner asked to
-    remove for good; the only remaining stock refusal is this out-of-stock
-    notice for a row with nothing left at all.
-    """
+def _stock_limit_error(available, product_id="", variant="", requested=1):
+    """Return a precise stock boundary error for an unavailable cart line."""
     try:
         remaining = max(0, int(available or 0))
     except (TypeError, ValueError):
         remaining = 0
-    line = {"id": str(product_id or "")}
+    try:
+        requested = max(1, int(requested or 1))
+    except (TypeError, ValueError):
+        requested = 1
+    line = {"id": str(product_id or ""), "requested": requested}
     if variant:
         line["variant"] = str(variant)
-    return jsonify(ok=False, error=OUT_OF_STOCK_MESSAGE, code="out_of_stock",
-                   availableStock=remaining, items=[line]), 409
+    if remaining <= 0:
+        return jsonify(ok=False, error=OUT_OF_STOCK_MESSAGE, code="out_of_stock",
+                       availableStock=0, items=[line]), 409
+    return jsonify(ok=False,
+                   error=f"Only {remaining} items remaining in stock",
+                   code="insufficient_stock", availableStock=remaining,
+                   requestedQuantity=requested, items=[line]), 409
 
 
 def _checkout_items(clean_items, currency):
@@ -1150,8 +1150,8 @@ def _checkout_items(clean_items, currency):
     Loads every product from the live catalogue (Supabase in production),
     aggregates duplicate lines, validates online/qty/stock and returns
     (items, subtotal, error_response). The error response is 400 for an
-    unknown product, 409 with code ``out_of_stock`` for an unavailable line
-    - and never contains a numerical stock count (only In/Out of Stock).
+    unknown product and 409 when any line exceeds current availability; the
+    response includes the exact remainder needed to correct the cart.
 
     Every line comes back with the product's CANONICAL id (a legacy wix-*
     cart line is resolved onto the real row), so the stock reservation and
@@ -1173,7 +1173,6 @@ def _checkout_items(clean_items, currency):
     # wix-* id still prices and stock-checks against the right row.
 
     aggregated = {}
-    variant_quantities = {}
     for it in clean_items:
         sent_id = str(it.get("id") or "")
         prod = products_map.get(sent_id)
@@ -1183,8 +1182,8 @@ def _checkout_items(clean_items, currency):
         variant = str(it.get("color") or "")
         note = (sec.clean(it.get("note"), 300)
                 if prod and bool(prod.get("enableCustomNote")) else "")
-        # Different item notes are separate order lines, but all such lines
-        # still share the same stock pool and are checked as one quantity.
+        # Different notes remain distinct order lines, but they consume the
+        # same product/variant inventory pool.
         key = (canon, variant, note)
         g = aggregated.setdefault(key, {
             "id": canon,
@@ -1193,10 +1192,7 @@ def _checkout_items(clean_items, currency):
             "qty": 0,
             "name": str(it.get("name") or ""),
         })
-        qty = int(it.get("qty") or 0)
-        g["qty"] += qty
-        variant_key = (canon, variant)
-        variant_quantities[variant_key] = variant_quantities.get(variant_key, 0) + qty
+        g["qty"] += int(it.get("qty") or 0)
 
     items = []
     subtotal = 0
@@ -1210,10 +1206,29 @@ def _checkout_items(clean_items, currency):
     except Exception:
         _promos_on = True                     # a hiccup must not gouge pricing
     total_quantity_by_product = {}
-    checked_variants = set()
-    for group in aggregated.values():
-        total_quantity_by_product[group["id"]] = total_quantity_by_product.get(group["id"], 0) + group["qty"]
-    for g in aggregated.values():
+    inventory_request_totals = {}
+    inventory_pool_by_group = {}
+    for group_key, group in aggregated.items():
+        pid = group["id"]
+        prod = products_map.get(pid)
+        total_quantity_by_product[pid] = total_quantity_by_product.get(pid, 0) + group["qty"]
+        if not prod:
+            continue
+        variant = group["variant"]
+        option_key = _option_stock_key(prod, variant) if variant else None
+        if not variant:
+            pool_key = (pid, "__default__")
+        elif option_key is not None:
+            # Normalize aliases such as "Red" and "Colour: Red" onto the
+            # same shelf so different cart spellings cannot split the cap.
+            pool_key = (pid, str(option_key))
+        else:
+            pool_key = (pid, "__invalid__" + _fold(variant))
+        inventory_pool_by_group[group_key] = pool_key
+        inventory_request_totals[pool_key] = inventory_request_totals.get(pool_key, 0) + group["qty"]
+
+    checked_pools = set()
+    for group_key, g in aggregated.items():
         pid = g["id"]
         prod = products_map.get(pid)
         if prod is None:
@@ -1223,22 +1238,15 @@ def _checkout_items(clean_items, currency):
                 code="unknown_product",
                 items=[{"id": pid, "name": g["name"] or pid}]), 400)
         if prod.get("online") is False:
-            return [], 0, _stock_limit_error(0, pid, g["variant"])
-        variant_key = (pid, g["variant"])
-        if variant_key not in checked_variants:
+            return [], 0, _stock_limit_error(0, pid, g["variant"], g["qty"])
+        pool_key = inventory_pool_by_group.get(group_key)
+        if pool_key not in checked_pools:
             avail = _stock_available(prod, g["variant"])
-            # Owner rule (2026-10-05): an order is refused ONLY when the item
-            # has nothing left at all. A request larger than the mirrored
-            # quantity ("available stock") is accepted - the number can lag a
-            # sale or the supplier page, and blocking it produced the refused
-            # multi-unit carts the owner reported. The reservation below still
-            # drains the real shelf, never below zero, and a shortfall is
-            # recorded on the order for the admin to see.
-            # Unconditional: the legacy ENFORCE_STOCK=0 switch is ignored.
-            # Checked across notes as well as duplicate cart lines.
-            if avail <= 0:
-                return [], 0, _stock_limit_error(0, pid, g["variant"])
-            checked_variants.add(variant_key)
+            requested = inventory_request_totals.get(pool_key, g["qty"])
+            if avail <= 0 or requested > avail:
+                return [], 0, _stock_limit_error(
+                    avail, pid, g["variant"], requested)
+            checked_pools.add(pool_key)
         unit = _server_unit_price(prod, currency, g["variant"])
         bulk_percent = (catalog_mod.bulk_discount_for(prod, total_quantity_by_product[pid])
                         if _promos_on else 0)
@@ -1334,7 +1342,7 @@ def validate_cart_stock():
         product_id = sec.clean(item.get("id"), 64)
         qty = _requested_quantity(item.get("qty"))
         if not product_id or qty is None:
-            return jsonify(ok=False, error="Each cart line needs a product and quantity from 1 to 999."), 400
+            return jsonify(ok=False, error="Each cart line needs a product and quantity from 1 to 10000000."), 400
         clean_items.append({
             "id": product_id,
             "name": sec.clean(item.get("name"), 200),
@@ -1560,7 +1568,7 @@ def create_order():
         product_id = sec.clean(it.get("id"), 64)
         qty = _requested_quantity(it.get("qty"))
         if not product_id or qty is None:
-            return jsonify(ok=False, error="Each cart line needs a product and quantity from 1 to 999."), 400
+            return jsonify(ok=False, error="Each cart line needs a product and quantity from 1 to 10000000."), 400
         clean_items.append({
             "id": product_id,
             "name": sec.clean(it.get("name"), 200),
@@ -1729,14 +1737,11 @@ def create_order():
     reserved = []
 
     # Reserve every line atomically BEFORE the order is written. Production
-    # guards inside PostgreSQL (a single guarded UPDATE covers the product
-    # total AND the chosen variant); the local backend guards under the
-    # catalogue's cross-process lock. The variant key travels with every
-    # reservation - without it a sold-out variant kept its stale number.
-    # Owner rule (2026-10-05): this reservation drains the shelf (never below
-    # zero) but never refuses the order - see the shortfall branch below.
+    # uses a guarded PostgreSQL UPDATE and the local backend uses the same
+    # cross-process catalogue lock as stock edits. If another shopper takes
+    # units between validation and reservation, return a precise 409 and roll
+    # back every earlier line so this rejected checkout changes no inventory.
     reservation_moves = _order_stock_moves({"items": clean_items})
-    shortfall = []
     for move in reservation_moves:
         pid = str(move.get("id") or "")
         qty = int(move.get("qty") or 0)
@@ -1747,30 +1752,24 @@ def create_order():
             res = catalog_mod.reserve_stock(pid, qty, option_key=option, actor="checkout")
         except Exception:
             res = False
-        # reserve_stock answers a truthy result on success, None when the
-        # shelf is short and False when the write itself failed.
         if res:
             reserved.append((pid, qty, option))
             continue
-        # The shelf could not cover the request. Owner rule (2026-10-05): the
-        # customer is NEVER turned away on the number. Drain whatever is really
-        # left (never below zero) and keep the order, recording the shortfall
-        # so the admin sees the order needs sourcing beyond the mirror. A
-        # reservation write failure is treated the same way: the order is the
-        # priority, and "stockApplied" records only what actually moved.
+
+        # False means the database/write failed; None means the atomic stock
+        # guard rejected an over-limit request or a concurrent sellout.
+        _release_stock_lines(reserved)
+        if res is False:
+            return jsonify(ok=False,
+                           error="Stock is temporarily unavailable. Please try again.",
+                           code="stock_unavailable"), 503
         left = _live_stock_available(pid, option)
-        applied = 0
-        if left:
-            try:
-                if catalog_mod.reserve_stock(pid, left, option_key=option,
-                                             actor="checkout"):
-                    applied = left
-            except Exception:
-                applied = 0
-        if applied:
-            reserved.append((pid, applied, option))
-        shortfall.append({"id": pid, "variant": option or "",
-                          "requested": qty, "applied": applied})
+        if left is None:
+            return jsonify(ok=False,
+                           error="Stock is temporarily unavailable. Please try again.",
+                           code="stock_unavailable"), 503
+        return _stock_limit_error(left, pid, option or "", qty)
+
     if reserved:
         # The reservation IS the stock move for this order. Recording it
         # on the payload keeps confirm from decrementing a second time
@@ -1778,10 +1777,6 @@ def create_order():
         order["stockApplied"] = [{"id": pid, "option": option, "qty": qty}
                                  for pid, qty, option in reserved]
         _invalidate_catalog_cache()
-    if shortfall:
-        # Not an error: visible on the order for the admin, never thrown back
-        # at the customer as a refusal.
-        order["stockShortfall"] = shortfall
     sb_row["payload"] = order
 
     proof_size = len(proof_data)
@@ -3330,82 +3325,75 @@ def admin_products_csv():
     response.headers["Content-Disposition"] = "attachment; filename=jaura-products.csv"
     return response
 
-def _product_save_response(payload):
-    """Shared zero-data-loss product save surface for admin API aliases.
+def _product_save_meta(product):
+    """Lightweight save receipt; a write response must not rebuild the catalog."""
+    row = product if isinstance(product, dict) else {}
+    return {
+        "updatedAt": str(row.get("updated_at") or row.get("updatedAt") or ""),
+        "updatedBy": str(authmod.current_admin() or ""),
+    }
 
-    Concurrency policy: LAST WRITE WINS. There is no version/timestamp
-    freshness check that can reject a save - see the block below. Two admins
-    (or an admin and a background watchdog) saving the same product both get
-    200 and the newest complete row is the live one.
 
-    Every path through here is explicit about persistence: the row must be
-    confirmed written by the storage backend (Supabase in production, the
-    locked override file locally) before ``ok:true`` is ever answered, a
-    failure is surfaced as a 503 with the reason (never swallowed), and the
-    write is recorded in the audit trail so a "my product disappeared"
-    report can be traced to the exact save, actor and time. Successful
-    writes purge every server-side catalogue representation (product list
-    AND category menu), so both the storefront and /admin read fresh
-    database rows on the very next request.
+def _product_save_response(payload, stored_row_hint=None):
+    """Save a product without losing untouched concurrent fields.
+
+    Existing admin editors send ``mergeBase``/``mergeFields``. The route reads
+    only that product by id, applies the three-way field merge, and in
+    production patches only changed database columns. Persistence failures
+    remain explicit; a successful response confirms the row written to the
+    durable backend and invalidates the public catalogue/category snapshots.
     """
-    # ---- LAST WRITE WINS: no blocking freshness check ---------------------
-    # This used to be a hard 409 ("This product was changed by someone else
-    # while you were editing..."). In practice it mis-fired constantly and
-    # locked admins out of their own shop: the stored row's updated_at moves
-    # for reasons that have nothing to do with a human editing it (the 5
-    # minute supplier watchdog writing a stock number, a cache re-hydration
-    # pass, a repo mirror, a second tab that merely opened the product), so a
-    # perfectly good save was rejected with a popup the admin could not act on
-    # - "close the editor and re-apply everything".
-    #
-    # The row is now saved unconditionally: the newest complete copy wins, on
-    # every device, from every admin, instantly. Autosaves, watchdog runs and
-    # background mirrors therefore have no way to lock an open editor, because
-    # there is no longer a version key whose movement can block a save.
-    #
-    # The token the editor sends (baseUpdatedAt = the updated_at it was shown
-    # when it OPENED) is still honoured, but only as a non-blocking RECEIPT:
-    # when the stored row had moved on we record the overwrite in the audit
-    # trail and tell the client, so a crossed edit stays traceable instead of
-    # disappearing behind a popup. The save itself is never refused.
+    save_started = time.perf_counter()
+    # Updated-at movement never blocks a valid save. The target-row lookup is
+    # still used for both baseUpdatedAt audit receipts and the field-level
+    # three-way merge; unrelated newer values are retained while explicitly
+    # dirty fields are applied, so a later supplier/other-admin write cannot
+    # be silently reverted by a stale full-row editor copy.
     payload = dict(payload or {})
     base_updated_at = str(payload.pop("baseUpdatedAt", "") or "").strip()
+    pid = str(payload.get("id") or "").strip()
     overwrote_updated_at = ""
-    stored_row = None
-    if base_updated_at:
-        pid = str(payload.get("id") or "").strip()
-        if pid:
-            try:
-                current = catalog_mod.product_index(include_hidden=True).get(pid)
-            except Exception:
-                current = None          # a failed read never blocks a save
-            if current is not None:
-                stored_row = current
-                current_updated_at = str(current.get("updated_at") or "").strip()
-                if current_updated_at and current_updated_at != base_updated_at:
-                    overwrote_updated_at = current_updated_at
-
-    # ---- per-field merge: two admins, two fields, no lost work -----------
-    # Last-write-wins stops the save being REFUSED, but it is row-level: the
-    # editor sends the whole product from its in-memory copy, so a price typed
-    # on a phone is reverted by a photo swap made on a laptop a minute later.
-    # When the editor also sends the row as it was when it was OPENED
-    # (mergeBase), each field the admin did not touch keeps whatever is in the
-    # database now, and every field they DID change is theirs.
-    #
-    # This is a merge, never a guard: it decides which values win and can
-    # never turn a save into an error. Callers that send no base copy (API
-    # integrations, CSV imports, mirrors, the supplier watchdog) keep plain
-    # last-write-wins, which is what they want.
+    stored_row = (stored_row_hint if isinstance(stored_row_hint, dict)
+                  and str(stored_row_hint.get("id") or "").strip() == pid else None)
     merge_kept = []
     merge_base = payload.pop("mergeBase", None)
     merge_dirty = payload.pop("mergeFields", None)
+    merge_fields = {str(field) for field in merge_dirty} if isinstance(merge_dirty, list) else set()
+
+    # Existing product edits carry a three-way merge base plus the fields the
+    # admin actually changed. For ordinary text/stock/price edits, send only
+    # those changed columns to the database. The database's atomic UPDATE
+    # preserves every untouched value without a catalogue-wide read first.
+    # Media writes stay on the full path because old photo references must be
+    # compared before the storage cleanup guard can purge them.
+    media_fields = {"image", "image_url", "imageUrl", "images", "video", "video_url"}
+    fast_dirty = set()
+    if (pid and isinstance(merge_base, dict) and merge_base
+            and str(merge_base.get("id") or "") == pid
+            and merge_fields and not (merge_fields & media_fields)
+            and catalog_mod._prod_source()):
+        fast_dirty = merge_fields
+        payload["_saveDirtyFields"] = sorted(fast_dirty)
+        payload["_saveExisting"] = True
+
+    # A direct primary-key/legacy-id lookup preserves baseUpdatedAt receipts
+    # and the existing per-field merge semantics without scanning the catalog.
+    if pid and stored_row is None:
+        try:
+            stored_row = catalog_mod.product_for_save(pid)
+        except Exception:
+            stored_row = None          # a failed read never blocks a save
+    if stored_row is not None and base_updated_at:
+        current_updated_at = str(stored_row.get("updated_at") or "").strip()
+        if current_updated_at and current_updated_at != base_updated_at:
+            overwrote_updated_at = current_updated_at
+
+    # Apply the existing three-way merge on both backends. Production then
+    # persists only the dirty columns; local/compatibility saves write the
+    # merged complete row, preserving exactly the same field ownership rules.
     if isinstance(merge_base, dict) and merge_base:
         try:
             from product_merge import merge_is_worthwhile, merge_product_edit
-            if stored_row is None and payload.get("id"):
-                stored_row = catalog_mod.product_index(
-                    include_hidden=True).get(str(payload.get("id")))
             if merge_is_worthwhile(merge_base, payload, stored_row):
                 payload, merge_kept = merge_product_edit(
                     merge_base, payload, stored_row, dirty=merge_dirty)
@@ -3455,7 +3443,8 @@ def _product_save_response(payload):
     if mirrored is False:
         return jsonify(ok=False, error=(
             "The product could not be saved to Supabase. No changes were made."),
-            product=product, action=action, mirrored=False, meta=catalog_mod.meta()), 503
+            product=product, action=action, mirrored=False,
+            meta=_product_save_meta(product)), 503
     try:
         audit(authmod.current_admin(), f"product.{'create' if action == 'created' else 'update'}",
               f"{product.get('id')} «{product.get('name','')}» online={product.get('online')} "
@@ -3486,7 +3475,7 @@ def _product_save_response(payload):
     # rows on the next request.
     _invalidate_all_catalog_caches()
     body = dict(ok=True, product=product, action=action, mirrored=mirrored,
-                meta=catalog_mod.meta())
+                meta=_product_save_meta(product))
     if overwrote_updated_at:
         # Retained only for API diagnostics; the save remains successful and
         # audit logging above is the operator-facing history.
@@ -3496,7 +3485,10 @@ def _product_save_response(payload):
         # overwrite/merge notice is returned.
         body["merged"] = True
         body["kept"] = sorted(merge_kept)
-    return jsonify(**body)
+    response = jsonify(**body)
+    response.headers["Server-Timing"] = (
+        f"product-save;dur={(time.perf_counter() - save_started) * 1000:.2f}")
+    return response
 
 
 @api.put("/admin/products/<pid>/media")
@@ -3532,7 +3524,7 @@ def admin_product_media_update(pid):
     if not images:
         return jsonify(ok=False, error="Add a replacement photo before removing the last saved media."), 400
     try:
-        current = catalog_mod.product_index(include_hidden=True).get(product_id)
+        current = catalog_mod.product_for_save(product_id)
     except Exception:
         return jsonify(ok=False, error=(
             "The product could not be loaded, so its saved media was left unchanged.")), 503
@@ -3544,7 +3536,7 @@ def admin_product_media_update(pid):
                     "baseUpdatedAt": str(current.get("updated_at") or ""),
                     "mergeBase": dict(current),
                     "mergeFields": ["image", "image_url", "imageUrl", "images"]})
-    return _product_save_response(product)
+    return _product_save_response(product, stored_row_hint=current)
 
 
 @api.post("/admin/products")
@@ -3587,7 +3579,7 @@ def admin_product_variants_upsert_alias():
         return jsonify(ok=False, error="productId is required."), 400
     read_error = None
     try:
-        product = catalog_mod.product_index(include_hidden=True).get(pid)
+        product = catalog_mod.product_for_save(pid)
     except Exception as exc:
         product = None
         read_error = exc
@@ -3608,6 +3600,7 @@ def admin_product_variants_upsert_alias():
                 "Nothing was changed - please retry.")), 503
         return jsonify(ok=False, error="Product not found."), 404
     patch = dict(product)
+    dirty_fields = set()
     # Explicitly collect every variant/admin field this endpoint may own.
     aliases = {
         "options": ("options",),
@@ -3629,6 +3622,7 @@ def admin_product_variants_upsert_alias():
         for name in names:
             if name in d:
                 patch[canonical] = d.get(name)
+                dirty_fields.add(canonical)
                 if canonical == "supplierSku":
                     patch["supplierUrl"] = d.get(name)
                     patch["supplier_url"] = d.get(name)
@@ -3643,6 +3637,7 @@ def admin_product_variants_upsert_alias():
                        and str(flag).strip().lower()
                        in ("false", "0", "out", "no", "off")))
             patch["stockStatus"] = "out" if off else "in"
+            dirty_fields.add("stockStatus")
             break
     # A plain `stock: 0` on a product that tracks per-variant quantities
     # means "the whole product is switched off" (the reported "out of stock
@@ -3672,6 +3667,7 @@ def admin_product_variants_upsert_alias():
                 if current_map else 0
             if explicit_qty == 0:
                 patch["stockStatus"] = "out"
+                dirty_fields.add("stockStatus")
             elif current_map and map_sum == 0:
                 # The mirror image: re-stocking a product whose variants were
                 # all sold out with a plain whole-product quantity. The typed
@@ -3680,7 +3676,12 @@ def admin_product_variants_upsert_alias():
                 # forever. Per-variant tracking simply resumes the next time
                 # variant quantities are saved.
                 patch["optionStock"] = {}
-    return _product_save_response(patch)
+                dirty_fields.add("optionStock")
+    if dirty_fields:
+        patch["baseUpdatedAt"] = str(product.get("updated_at") or "")
+        patch["mergeBase"] = dict(product)
+        patch["mergeFields"] = sorted(dirty_fields)
+    return _product_save_response(patch, stored_row_hint=product)
 
 @api.delete("/admin/products/<pid>")
 @authmod.require_admin

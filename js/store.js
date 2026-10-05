@@ -396,14 +396,11 @@ const JA = (() => {
   function markPending(id) { const p = pendingMap(); p[id] = Date.now(); write(KEYS.pending, p); }
   function clearPending(id) { const p = pendingMap(); delete p[id]; write(KEYS.pending, p); }
 
-  // The PUBLIC catalogue answer deliberately strips the stock numbers (they
-  // are a business secret): a public row carries only stock_status ("in" /
-  // "out") and, for a product sold per variant, an option_stock map. The
-  // storefront however decides "sold out" from a NUMBER (stockFor ->
-  // Number(p.stock)), so a public row with no `stock` key read as 0 and the
-  // whole shop rendered "Out of stock" with Add-to-cart dead. Translate the
-  // public shape into the numeric one the UI expects, without ever inventing
-  // a count for a product the server says is unavailable.
+  // Public rows deliberately omit the storage columns (`stock`,
+  // `stock_quantity`, `optionStock`) but include purpose-built exact
+  // availability fields (`stock_available` and `option_stock_available`).
+  // Normalize those API fields into the numeric shape used by selectors and
+  // cart guards; retain the status-only fallback for older cached responses.
   /** Fold the snake_case French aliases onto the camelCase keys the
    * storefront reads.
    *
@@ -466,14 +463,38 @@ const JA = (() => {
     out.bulkQty = pick(out.bulkQty, out.bulk_qty, out.bulkQuantity, out.bulk_quantity, out.bulkDiscountQty, out.bulk_discount_qty);
     out.bulkPercent = pick(out.bulkPercent, out.bulk_percent, out.bulkDiscountPercent, out.bulk_discount_percent);
     out.reviews = Array.isArray(out.reviews) ? out.reviews : (Array.isArray(out.customerReviews) ? out.customerReviews : (Array.isArray(out.customer_reviews) ? out.customer_reviews : []));
+    // Public product rows expose only the purpose-built availability aliases,
+    // not the admin storage columns. Preserve their exact integer values so
+    // quantity inputs and cart validation share the same inventory boundary.
+    const publicVariantRaw = pick(out.option_stock_available,
+      out.optionStockAvailable, out.variant_stock_available);
+    const publicVariantStock = optionMap(publicVariantRaw);
+    if (Object.keys(publicVariantStock).length) {
+      const map = {};
+      let sum = 0;
+      Object.keys(publicVariantStock).forEach((key) => {
+        const quantity = Math.max(0, Math.round(Number(publicVariantStock[key]) || 0));
+        map[key] = quantity;
+        sum += quantity;
+      });
+      out.optionStock = map;
+      // stockFor() historically consumes this compatibility map before the
+      // numeric option map; carry the same exact integer counts through it.
+      out.optionStockStatus = Object.assign({}, map);
+      out.stock = sum;
+      return out;
+    }
+    const publicStock = pick(out.stock_available, out.stockAvailable, out.availableStock);
+    if (publicStock != null) {
+      out.stock = Math.max(0, Math.round(Number(publicStock) || 0));
+      return out;
+    }
     // An admin row (?all=1) already carries the real number: keep it exactly.
     if (typeof out.stock === "number") return out;
-    // Public per-variant availability (the server never ships the numbers):
-    // {"Red": "out", "Black": "in"}. Translate it into the shape stockFor()
-    // reads - a variant marked "out" has 0 available, an "in" variant a high
-    // sentinel (the server re-checks the real quantity when the order is
-    // placed). Without this the storefront could not tell a sold-out colour
-    // from an available one at all.
+    // Compatibility for an older status-only catalogue response:
+    // {"Red": "out", "Black": "in"}. Current responses include exact
+    // quantities above; on an old cached response, keep sold-out variants at
+    // zero and use a temporary sentinel for "in" until the server rechecks.
     const oss = out.option_stock_status;
     if (oss && typeof oss === "object" && !Array.isArray(oss) && Object.keys(oss).length) {
       const status = {};
@@ -1399,8 +1420,18 @@ const JA = (() => {
     });
   }
   function cartServerError(err) {
+    if (err && err.data && err.data.code === "out_of_stock") return "Out of Stock";
     if (err && (err.status === 409 || err.status === 400) && err.message) return err.message;
     return "We couldn't verify current stock. Please try again.";
+  }
+  function notifyStockLimit(message, id, variant, err) {
+    try {
+      const data = err && err.data || {};
+      window.dispatchEvent(new CustomEvent("ja:stock-limit", { detail: {
+        id: String(id || ""), variant: String(variant || ""), message: String(message || ""),
+        available: Number(data.availableStock), code: String(data.code || ""),
+      } }));
+    } catch (e) { /* inline UI is an enhancement; the toast remains */ }
   }
   function saveCart(items) {
     write(KEYS.cart, items);
@@ -1478,10 +1509,10 @@ const JA = (() => {
         && !(p.optionStockStatus && Object.keys(p.optionStockStatus).length)) {
       return 0;
     }
-    // Per-variant availability from the public in/out map (no numbers ship to
-    // the browser): a variant the server marks "out" reads 0 here, whatever
-    // the product-level sentinel says. A variant missing from the map falls
-    // through to the product level.
+    // Per-variant availability from the public map. Current responses carry
+    // exact integer counts; the status-only compatibility map uses 0 or a
+    // sentinel. A variant marked "out" always reads 0, regardless of the
+    // product-level quantity.
     const status = p.optionStockStatus;
     if (status && typeof status === "object" && !Array.isArray(status) && Object.keys(status).length) {
       const foldedStatus = {};
@@ -1498,10 +1529,14 @@ const JA = (() => {
       }
     }
     const base = Math.max(0, Math.round(Number(p.stock) || 0));
+    const selectedVariant = !!String(variant || "").trim()
+      && String(variant || "").trim() !== "__default__";
     const os = p.optionStock;
-    if (!os || typeof os !== "object" || !Object.keys(os).length) return base;
+    if (!os || typeof os !== "object" || !Object.keys(os).length) {
+      return selectedVariant ? 0 : base;
+    }
     const vals = stockVariantValues(variant);
-    if (!vals.length) return base;
+    if (!vals.length) return selectedVariant ? 0 : base;
     const folded = {};
     Object.keys(os).forEach((k) => {
       const fk = stockFold(k);
@@ -1513,7 +1548,9 @@ const JA = (() => {
       const fk = stockFold(vals[i]);
       if (fk && Object.prototype.hasOwnProperty.call(folded, fk)) return folded[fk];
     }
-    return base;
+    // A selected but unmapped variant has no assigned inventory. Falling
+    // back to the product total would let it borrow another variant's stock.
+    return selectedVariant ? 0 : base;
   }
   function cartQtyFor(id, variant) {
     const items = cart().filter((i) => i.id === id);
@@ -1534,12 +1571,9 @@ const JA = (() => {
     return Math.max(0, avail - inCart);
   }
   function stockProblems() {
-    // Owner rule (2026-10-05): asking for MORE units than the mirrored shelf
-    // currently shows is not a problem and must never be reported as one -
-    // the mirror can lag a sale or a supplier page, so the checkout takes the
-    // order and drains whatever is really left. The only stock problem left
-    // is an item with nothing available at all (or a genuinely unassigned
-    // variant), which is what this reports and what the server refuses.
+    // Aggregate duplicate lines (including different custom notes) against
+    // the same product/variant pool. Checkout uses this as an early UX guard;
+    // the API repeats the check against live stock and atomic reservation.
     const groups = {};
     cart().forEach((i) => {
       const key = String(i.id) + "\u0000" + String(i.color || "");
@@ -1553,15 +1587,15 @@ const JA = (() => {
       const g = groups[key];
       const p = product(g.id);
       if (!p) return;
-      const avail = stockFor(p, g.variant);
-      if (avail <= 0) {
+      const available = stockFor(p, g.variant);
+      if (available <= 0 || g.requested > available) {
         out.push({
           id: g.id,
           name: displayName(p) || p.name || g.id,
           variant: g.variant,
-          available: 0,
+          available,
           requested: g.requested,
-          left: 0,
+          left: Math.max(0, available - g.requested),
           asked: g.requested,
         });
       }
@@ -1573,10 +1607,10 @@ const JA = (() => {
     if (list && !Array.isArray(list)) list = [list];
     if (!list) list = stockProblems();
     if (!list.length) return "";
-    // The only line this helper may ever produce: the item is out of stock.
-    // The old quantity refusal ("cannot order more than ... N remaining")
-    // is gone for good (owner rule, 2026-10-05).
-    return "This item is currently out of stock.";
+    const problem = list[0] || {};
+    const available = Math.max(0, Math.floor(Number(problem.available) || 0));
+    if (available <= 0) return "Out of Stock";
+    return `Only ${available} items remaining in stock`;
   }
   function bulkUnit(p, qty, cur, variant = "") {
     const unit = priceOf(p, cur, variant);
@@ -1602,7 +1636,21 @@ const JA = (() => {
       const p = product(id);
       const want = Math.max(1, Math.round(Number(qty) || 1));
       if (!p) {
-        toast("This item is currently out of stock.");
+        toast("Out of Stock");
+        return false;
+      }
+      const available = stockFor(p, String(color || ""));
+      const alreadyInCart = cartQtyFor(id, String(color || ""));
+      const remaining = Math.max(0, available - alreadyInCart);
+      if (available <= 0) {
+        toast("Out of Stock");
+        notifyStockLimit("Out of Stock", id, color, null);
+        return false;
+      }
+      if (want > remaining) {
+        const message = `Only ${remaining} items remaining in stock`;
+        toast(message);
+        notifyStockLimit(message, id, color, null);
         return false;
       }
       const items = cart().map((item) => ({ ...item }));
@@ -1614,7 +1662,11 @@ const JA = (() => {
       try {
         await validateCartOnServer(items, "POST");
       } catch (err) {
-        toast(cartServerError(err));
+        const message = cartServerError(err);
+        toast(message);
+        if (err && err.data && ["out_of_stock", "insufficient_stock"].includes(err.data.code)) {
+          notifyStockLimit(message, id, color, err);
+        }
         return false;
       }
       // Checkout/clear may complete while the stock probe is in flight.
@@ -1649,12 +1701,32 @@ const JA = (() => {
       const priorQty = Math.max(0, Number(previous && previous.qty) || 0);
       next.qty = want;
       // Decreases/removals always remain possible, including when a supplier
-      // has since reduced stock. Increases must pass the live server guard.
+      // has since reduced stock. Increases must stay within the exact shelf
+      // count after accounting for other cart lines in the same pool.
       if (want > priorQty) {
+        const p = product(id);
+        const available = stockFor(p, String(color || ""));
+        const reservedByOthers = Math.max(0, cartQtyFor(id, String(color || "")) - priorQty);
+        const remaining = Math.max(0, available - reservedByOthers);
+        if (available <= 0) {
+          toast("Out of Stock");
+          notifyStockLimit("Out of Stock", id, color, null);
+          return false;
+        }
+        if (want > remaining) {
+          const message = `Only ${remaining} items remaining in stock`;
+          toast(message);
+          notifyStockLimit(message, id, color, null);
+          return false;
+        }
         try {
           await validateCartOnServer(items, "PUT");
         } catch (err) {
-          toast(cartServerError(err));
+          const message = cartServerError(err);
+          toast(message);
+          if (err && err.data && ["out_of_stock", "insufficient_stock"].includes(err.data.code)) {
+            notifyStockLimit(message, id, color, err);
+          }
           return false;
         }
       }
@@ -1790,11 +1862,10 @@ const JA = (() => {
       label: "Product",
       onDone: (data) => { if (data && data.product) applyServerProduct(data.product); },
     }).then((d) => {
-      // A queued job is NOT a saved product: the server never confirmed it.
-      if (d && d.queued) {
-        toast("Server unreachable — the change is queued and will retry. It is not live yet.");
-        return { ok: false, queued: true, error: "Could not reach the server. The change is queued and will retry." };
-      }
+      // A queued job is not confirmed yet. Keep the editor open and let the
+      // durable outbox retry quietly; transient timeout warnings were noisy
+      // and routinely reported a failure for saves the server then completed.
+      if (d && d.queued) return { ok: false, queued: true, silent: true };
       if (d && d.ok === false) {
         toast((d && d.error) || "Could not save the product. No changes are live.");
         return { ok: false, error: d.error || "Could not save the product." };
@@ -2767,8 +2838,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=191";
-        const FLYER = "images/brand/logo-flyer.jpg?v=191";
+        const LOGO = "images/brand/logo.jpg?v=192";
+        const FLYER = "images/brand/logo-flyer.jpg?v=192";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2964,7 +3035,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=191" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=192" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3263,7 +3334,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=191" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=192" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3399,7 +3470,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=191", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=192", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3433,7 +3504,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=191";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=192";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3492,7 +3563,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=191");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=192");
     document.title = title;
     [
       ["name", "description", description],

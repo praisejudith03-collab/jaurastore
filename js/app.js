@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=191";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=191";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=192";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=192";
 }
 
 function renderCategories() {
@@ -910,6 +910,7 @@ function paintProduct(root, p) {
         <input type="number" min="1" step="1" value="1" data-qty />
         <button type="button" data-q="+">+</button>
       </div>
+      <p class="stock-line is-low" data-qty-stock-error role="alert" aria-live="assertive" hidden></p>
       <div class="pdp-actions">
         <button class="btn" data-buy ${p.stock <= 0 ? "disabled" : ""}>${p.stock <= 0 ? t("pdp.oos") : t("pdp.add")}</button>
         <a class="btn btn-line" href="checkout.html">${t("pdp.payIn", { cur: JA.currency() === "NGN" ? "₦" : "CFA" })}</a>
@@ -985,10 +986,12 @@ function paintProduct(root, p) {
   const chosen = {};
   const qty = root.querySelector("[data-qty]");
   const stockLine = root.querySelector("[data-stock-line]");
+  const qtyStockError = root.querySelector("[data-qty-stock-error]");
   const buyBtn = root.querySelector("[data-buy]");
   const variantFull = () => opts.map((opt, i) => opt.title.replace(/\s+/g, " ").trim() + ": " + chosen[i]).join(" · ");
   const variantPartial = () => opts.map((opt, i) => (chosen[i] ? opt.title.replace(/\s+/g, " ").trim() + ": " + chosen[i] : null)).filter(Boolean).join(" · ");
-  const updateStockUI = () => {
+  let qtyStockMessage = "";
+  const updateStockUI = (inspectQuantity = false) => {
     if (!stockLine || !JA.stockFor) return;
     let variant = "";
     let avail = 0;
@@ -1015,43 +1018,67 @@ function paintProduct(root, p) {
       inCart = 0;
     }
     const left = Math.max(0, avail - inCart);
-    if (avail <= 0) {
-      stockLine.textContent = "Out of Stock";
-      stockLine.classList.add("is-low", "is-out-of-stock");
-      stockLine.classList.remove("is-in-stock");
-    } else if (left <= 0) {
+    if (avail <= 0 || left <= 0) {
       stockLine.textContent = "Out of Stock";
       stockLine.classList.add("is-low", "is-out-of-stock");
       stockLine.classList.remove("is-in-stock");
     } else {
-      // Never expose the numerical shelf count; the variant's live state is
-      // enough for a shopper and is updated on every option selection.
       stockLine.textContent = "In Stock";
       stockLine.classList.remove("is-low", "is-out-of-stock");
       stockLine.classList.add("is-in-stock");
     }
     if (qty) {
-      // Owner rule (2026-10-05): the shelf number never caps what a shopper
-      // may ask for. The quantity a supplier mirror shows can lag a sale, so
-      // the selector allows any amount (999 is the server's own line limit);
-      // the reservation at checkout drains the real shelf. Only "Out of
-      // Stock" (nothing left at all) is a hard brake.
-      const MAX_QTY = 999;
-      const room = avail > 0 ? MAX_QTY : 1;
-      const cur = parseInt(qty.value, 10) || 1;
-      qty.value = Math.min(Math.max(1, cur), room);
-      qty.max = String(room);
+      const requested = Math.max(1, parseInt(qty.value, 10) || 1);
+      const room = Math.min(10 ** 7, left);
+      if (inspectQuantity) {
+        if (requested > room) {
+          qtyStockMessage = room > 0
+            ? `Only ${room} items remaining in stock`
+            : "Out of Stock";
+        } else {
+          qtyStockMessage = "";
+        }
+      }
+      const inputMax = Math.max(1, room);
+      qty.value = String(Math.min(requested, inputMax));
+      qty.max = String(inputMax);
+      qty.disabled = room <= 0;
       root.querySelectorAll("[data-q]").forEach((b) => {
-        if (b.dataset.q === "-") b.disabled = (parseInt(qty.value, 10) || 1) <= 1;
-        else b.disabled = avail <= 0 || (parseInt(qty.value, 10) || 1) >= room;
+        if (b.dataset.q === "-") b.disabled = room <= 0 || (parseInt(qty.value, 10) || 1) <= 1;
+        else b.disabled = room <= 0 || (parseInt(qty.value, 10) || 1) >= inputMax;
       });
     }
+    if (qtyStockError) {
+      qtyStockError.textContent = qtyStockMessage;
+      qtyStockError.hidden = !qtyStockMessage;
+    }
     if (buyBtn) {
-      const inStock = avail > 0;
+      const inStock = avail > 0 && left > 0;
       buyBtn.disabled = !inStock;
       buyBtn.textContent = inStock ? t("pdp.add") : t("pdp.oos");
     }
   };
+  window.addEventListener("ja:stock-limit", (event) => {
+    const detail = event && event.detail || {};
+    if (String(detail.id || "") !== String(p.id)) return;
+    const exactVariant = String(detail.variant || "");
+    const exactAvailable = Number(detail.available);
+    if (Number.isFinite(exactAvailable) && exactAvailable >= 0) {
+      if (exactVariant) {
+        p.optionStock = Object.assign({}, p.optionStock || {}, { [exactVariant]: exactAvailable });
+        p.optionStockStatus = Object.assign({}, p.optionStockStatus || {}, { [exactVariant]: exactAvailable });
+      } else {
+        p.stock = exactAvailable;
+        p.stock_status = exactAvailable > 0 ? "in" : "out";
+      }
+    }
+    qtyStockMessage = String(detail.message || "Out of Stock");
+    if (qtyStockError) {
+      qtyStockError.textContent = qtyStockMessage;
+      qtyStockError.hidden = false;
+    }
+    updateStockUI(false);
+  });
   root.querySelectorAll("[data-opt]").forEach((b) => {
     b.addEventListener("click", () => {
       const oi = b.dataset.opt;
@@ -1071,18 +1098,18 @@ function paintProduct(root, p) {
           ? `<s>${JA.money(was, cur)}</s><span class="now">${JA.money(now, cur)}</span>`
           : `<span class="now">${JA.money(now, cur)}</span>`;
       }
-      updateStockUI();
+      updateStockUI(true);
     });
   });
   root.querySelectorAll("[data-q]").forEach((b) => {
     b.addEventListener("click", () => {
       const n = parseInt(qty.value, 10) || 1;
       qty.value = Math.max(1, n + (b.dataset.q === "+" ? 1 : -1));
-      updateStockUI();
+      updateStockUI(true);
     });
   });
-  qty?.addEventListener("input", updateStockUI);
-  qty?.addEventListener("change", updateStockUI);
+  qty?.addEventListener("input", () => updateStockUI(true));
+  qty?.addEventListener("change", () => updateStockUI(false));
   updateStockUI();
   root.querySelector("[data-buy]")?.addEventListener("click", () => {
     for (let i = 0; i < opts.length; i += 1) {
@@ -1092,11 +1119,9 @@ function paintProduct(root, p) {
       }
     }
     const variant = variantFull();
-    // Owner rule (2026-10-05): no quantity gate at all. The shopper may ask
-    // for any amount of an in-stock item;
-    // the server drains the real shelf (never below zero) and only refuses a
-    // product that has nothing left at all. The button is already disabled
-    // for that out-of-stock case above.
+    // The selector's max comes from this exact product/variant's remaining
+    // count. addToCart repeats the guard before writing the local cart, and
+    // checkout atomically verifies/reserves the same boundary on the server.
     const want = Math.max(1, parseInt(qty.value, 10) || 1);
     const productNote = root.querySelector("[name=productNote]")?.value || "";
     JA.addToCart(p.id, want, variant, productNote);
@@ -1184,6 +1209,10 @@ function renderCart() {
   const rows = document.querySelector("[data-cart-rows]");
   const items = JA.cartDetailed();
   if (!rows) return;
+  const stockProblems = JA.stockProblems ? JA.stockProblems() : [];
+  const stockNotice = stockProblems.length
+    ? `<div class="stock-warn" role="alert">${JA.escape(JA.stockProblemLine(stockProblems))}</div>`
+    : "";
   if (!items.length) {
     rows.innerHTML = `<div class="empty splend-empty">
       <p>${t("cart.empty")}</p>
@@ -1191,11 +1220,14 @@ function renderCart() {
       <a class="btn" href="shop.html">${t("ck.return")}</a>
     </div>`;
   } else {
-    rows.innerHTML = `<table class="cart-table">
+    rows.innerHTML = `${stockNotice}<table class="cart-table">
       <thead><tr><th></th><th>${t("ck.product")}</th><th>Price</th><th>${t("pdp.qty")}</th><th>${t("ck.subtotal")}</th></tr></thead>
       <tbody>${items.map((i) => {
-        const avail = JA.stockFor ? JA.stockFor(i.product, i.color || "") : 999;
-        const atMax = Number(i.qty) >= avail;
+        const avail = JA.stockFor ? JA.stockFor(i.product, i.color || "") : 0;
+        const inCartForVariant = JA.cartQtyFor
+          ? JA.cartQtyFor(i.product.id, i.color || "")
+          : Number(i.qty);
+        const atMax = Number(inCartForVariant) >= avail;
         const atMin = Number(i.qty) <= 1;
         return `
       <tr class="cart-row-tr">
@@ -2544,13 +2576,33 @@ function renderCheckout() {
       resetButton();
       return;
     }
-    // Owner rule (2026-10-05): a cart whose quantity exceeds the mirrored
-    // shelf is NOT blocked here - the server accepts it and drains whatever
-    // is really left. Only a product with nothing left at all is refused (by
-    // the server, as Out of Stock). The old [data-ck-stock-warn] refusal is
-    // gone with the rest of the quantity guard.
+    // Give checkout the same exact inventory boundary as the product selector
+    // and cart. The server rechecks against live stock during reservation, so
+    // this is only an early inline guard; the server remains authoritative.
+    const stockProblems = JA.stockProblems ? JA.stockProblems() : [];
+    if (stockProblems.length) {
+      const stockMessage = JA.stockProblemLine
+        ? JA.stockProblemLine(stockProblems)
+        : (Number(stockProblems[0].available) > 0
+          ? `Only ${Number(stockProblems[0].available)} items remaining in stock`
+          : "Out of Stock");
+      try {
+        let warn = form.querySelector("[data-ck-stock-warn]");
+        if (!warn) {
+          warn = document.createElement("div");
+          warn.setAttribute("data-ck-stock-warn", "");
+          warn.className = "stock-warn";
+          form.insertBefore(warn, form.querySelector(".ck-place")?.parentElement || form.firstChild);
+        }
+        warn.textContent = stockMessage;
+        warn.hidden = false;
+      } catch (e) {}
+      JA.toast(stockMessage);
+      resetButton();
+      return;
+    }
     try {
-      const warn = document.querySelector("[data-ck-stock-warn]");
+      const warn = form.querySelector("[data-ck-stock-warn]");
       if (warn) warn.hidden = true;
     } catch (e) {}
     // Benin & Togo deliveries: the minimum order is an ADMIN SETTING

@@ -509,6 +509,79 @@ def upsert_products(products):
     return ok
 
 
+# Logical edit fields from the Admin form to the canonical products columns.
+# This powers the hot edit path: a description/stock/note save updates only
+# touched columns, preserving every concurrent value without a catalogue read.
+_PRODUCT_PATCH_COLUMNS = {
+    "name": {"name"}, "nameFr": {"nameFr"}, "description": {"description"},
+    "descriptionFr": {"descriptionFr"}, "sku": {"sku"}, "category": {"category"},
+    "online": {"online"}, "featured": {"featured"}, "badge": {"badge"},
+    "dimensions": {"dimensions"}, "enableCustomNote": {"enableCustomNote"},
+    "customNotePrompt": {"customNotePrompt"}, "priceNgn": {"priceNgn", "priceCfa"},
+    "priceCfa": {"priceCfa"}, "compareNgn": {"compareNgn", "compareCfa"},
+    "compareCfa": {"compareCfa"}, "stock": {"stock", "stock_quantity"},
+    "stock_quantity": {"stock", "stock_quantity"},
+    "stockStatus": {"stock", "stock_quantity", "optionStock"},
+    "optionStock": {"optionStock", "stock", "stock_quantity"},
+    "options": {"options"}, "colors": {"colors"},
+    "optionPrices": {"optionPrices"}, "optionCompareAt": {"optionCompareAt"},
+    "supplierSku": {"supplierSku"}, "supplierUrl": {"supplierSku"},
+    "supplier_url": {"supplierSku"}, "bulkQty": {"bulkQty"},
+    "bulkPercent": {"bulkPercent"}, "placeholderImage": {"placeholderImage"},
+    "usesPlaceholder": {"usesPlaceholder"}, "supplierId": {"supplierId"},
+    "optionSupplierSku": {"optionSupplierSku"},
+    "optionSupplierUrls": {"optionSupplierSku"},
+    "option_supplier_urls": {"optionSupplierSku"}, "optionSku": {"optionSku"},
+    "optionSkus": {"optionSku"}, "option_sku": {"optionSku"},
+    "variantSku": {"optionSku"}, "reviews": {"reviews"},
+}
+
+
+def update_product_fields(product, dirty_fields):
+    """Patch one existing product and return its saved row in one DB request.
+
+    The response is ``("updated", row)``, ``("missing", None)`` when a
+    seed-only row has not yet been materialized, ``("permanently-removed",
+    None)`` when the SQL tombstone guard wins, or ``("error", None)`` for a
+    real persistence/schema failure. Callers may full-upsert only the missing
+    seed-row case; other failures must remain visible to the Admin.
+    """
+    row = dict(product or {})
+    pid = str(row.get("id") or "").strip()
+    c = client()
+    if not pid or c is None:
+        return "error", None
+    columns = {"source", "updated_at"}
+    for field in dirty_fields or ():
+        columns.update(_PRODUCT_PATCH_COLUMNS.get(str(field), ()))
+    # Media never uses the fast path (it has a separate before/after cleanup
+    # contract), and an empty patch should not silently acknowledge a write.
+    patch = {key: row[key] for key in columns if key in row}
+    patch["source"] = "admin"
+    if not patch.get("updated_at"):
+        patch["updated_at"] = _now()
+    if len(patch) <= 2:
+        return "error", None
+    try:
+        result = (c.table("products").update(patch).eq("id", pid)
+                  .select("*").execute())
+        rows = _res_data(result)
+        if not rows:
+            return "missing", None
+        invalidate_read_cache()
+        return "updated", _canonicalize_product(rows[0], c)
+    except Exception as exc:
+        message = str(exc)
+        if "permanently deleted" in message.lower():
+            return "permanently-removed", None
+        missing_column = _MISSING_COLUMN_RE.search(message)
+        if missing_column:
+            _warn_missing_product_columns([missing_column.group(1)])
+        print(f"[supabase] product field update failed for {pid!r}: {exc}")
+        invalidate_read_cache()
+        return "error", None
+
+
 def delete_products(ids):
     """Soft-remove admin products in Supabase (via deleted flag)."""
     c = client()

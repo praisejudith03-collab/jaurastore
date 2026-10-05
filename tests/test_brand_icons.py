@@ -70,8 +70,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # HTML <head> points at the favicon ladder in the `public-assets` bucket.
 # Bumped to 150 for the stock-accuracy / bulk-discount release (owner
 # directive 2026-09-16): js/store.js ships numberless per-variant stock
-# states and per-product bulk pricing, js/app.js blocks over-orders with a
-# generic message and never fakes a completed order on a 409, js/admin.js
+# states and per-product bulk pricing, js/app.js enforces exact stock limits
+# and never fakes a completed order on a 409, js/admin.js
 # gains the per-product bulk discount fields, and js/i18n.js carries the
 # dynamic bulk-discount copy. A phone holding the v149 bundle from its
 # service-worker cache would keep leaking stock counts and stale prices, so
@@ -83,7 +83,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # v169 bundle could still post a payload whose stale image_url silently
 # restored the previous product photo, so every shared asset ships v170.
 # Bumped to v185 for the media autosave, session-race guard, and clean JSON-LD URL.
-SHARED_TOKEN = "191"
+SHARED_TOKEN = "192"
 
 
 def _image_size(path):

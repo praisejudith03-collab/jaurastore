@@ -162,6 +162,81 @@ def test_save_lands_in_supabase_and_returns_the_confirmed_row(client, iso_catalo
     assert served["online"] is not False
 
 
+
+def test_existing_stock_description_and_note_save_stays_under_100ms_without_catalog_scan(
+        client, iso_catalog, monkeypatch):
+    """The hot production edit path answers quickly and preserves concurrent fields."""
+    import copy
+    import time
+
+    fake = _live_supabase(monkeypatch)
+    tok = login(client)
+    base = catalog_mod.normalize({
+        "id": "jau-fast-save", "name": "Fast Save Product", "category": "beauty",
+        "priceNgn": 5000, "stock": 9, "stock_quantity": 9,
+        "description": "Original description", "enableCustomNote": True,
+        "customNotePrompt": "Original prompt", "online": True,
+    })
+    base["updated_at"] = "2026-10-01T00:00:00Z"
+    # Another admin's fields changed after this editor opened. The save below
+    # owns stock/description/note only and must not restore the old price/state.
+    concurrent = copy.deepcopy(base)
+    concurrent.update({"priceNgn": 7777, "priceCfa": 3420, "online": False})
+    fake.tables["products"] = [concurrent]
+    edited = copy.deepcopy(base)
+    edited.update({"stock": 4, "stock_quantity": 4,
+                   "description": "Updated description",
+                   "customNotePrompt": "Updated engraving prompt",
+                   "baseUpdatedAt": base["updated_at"],
+                   "mergeBase": copy.deepcopy(base),
+                   "mergeFields": ["stock", "stock_quantity", "stockStatus",
+                                   "description", "customNotePrompt"]})
+
+    def no_catalog_scan(*_args, **_kwargs):
+        raise AssertionError("product saves must not scan the full catalogue")
+
+    monkeypatch.setattr(catalog_mod, "product_index", no_catalog_scan)
+    monkeypatch.setattr(catalog_mod, "merged", no_catalog_scan)
+    started = time.perf_counter()
+    response = client.put("/api/products", json={"product": edited},
+                          headers={"X-CSRF-Token": tok})
+    wall_ms = (time.perf_counter() - started) * 1000
+    assert response.status_code == 200, response.get_json()
+    timing = re.search(r"product-save;dur=([0-9.]+)",
+                       response.headers.get("Server-Timing", ""))
+    assert timing, response.headers
+    assert float(timing.group(1)) < 100, response.headers["Server-Timing"]
+    # The warmed in-memory HTTP fixture also checks the route wall time; the
+    # Server-Timing assertion above is the less noisy CI performance contract.
+    assert wall_ms < 100, f"fake production save took {wall_ms:.2f}ms"
+    saved = _row_in(fake.tables["products"], "jau-fast-save")
+    assert saved["stock"] == saved["stock_quantity"] == 4
+    assert saved["description"] == "Updated description"
+    assert saved["customNotePrompt"] == "Updated engraving prompt"
+    assert saved["priceNgn"] == 7777 and saved["online"] is False
+
+    # The same optimized response surface is used by the Admin's POST route.
+    post_edit = copy.deepcopy(base)
+    post_edit.update({"stock": 3, "stock_quantity": 3,
+                      "baseUpdatedAt": base["updated_at"],
+                      "mergeBase": copy.deepcopy(base),
+                      "mergeFields": ["stock", "stock_quantity", "stockStatus"]})
+    started = time.perf_counter()
+    posted = client.post("/api/admin/products", json={"product": post_edit},
+                         headers={"X-CSRF-Token": tok})
+    post_wall_ms = (time.perf_counter() - started) * 1000
+    assert posted.status_code == 200, posted.get_json()
+    post_timing = re.search(r"product-save;dur=([0-9.]+)",
+                            posted.headers.get("Server-Timing", ""))
+    assert post_timing and float(post_timing.group(1)) < 100, posted.headers
+    assert post_wall_ms < 100, f"fake production POST save took {post_wall_ms:.2f}ms"
+    saved = _row_in(fake.tables["products"], "jau-fast-save")
+    assert saved["stock"] == saved["stock_quantity"] == 3
+    assert saved["description"] == "Updated description"
+    assert saved["customNotePrompt"] == "Updated engraving prompt"
+    assert saved["priceNgn"] == 7777 and saved["online"] is False
+
+
 def test_production_save_never_stops_at_the_local_catalog_file(client, iso_catalog,
                                                                monkeypatch):
     """In production runtime the local override file is a read-through mirror

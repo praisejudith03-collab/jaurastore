@@ -464,11 +464,11 @@ def test_ci_fails_the_build_on_any_regression():
     assert (ROOT / "tests" / "test_enterprise_hardening.py").exists()
 
 # ===========================================================================
-# f) The quantity refusal is gone for good + first paint is not blank
+# f) Exact inventory boundaries + first paint is not blank
 # ===========================================================================
-def test_the_quantity_refusal_is_gone_from_every_shipped_file():
-    """Owner rule (2026-10-05): a mirror can never refuse a sale. The sentence
-    must not exist in any file a customer's browser or the API can serve."""
+def test_generic_stock_refusal_copy_is_gone_from_every_shipped_file():
+    """The obsolete generic refusal must stay gone; exact remaining counts
+    are now shown in the storefront and enforced by the API."""
     banned = "cannot order more than the available stock"
     shipped = ([f for f in (ROOT / "js").glob("*.js")]
                + [f for f in (ROOT / "css").glob("*.css")]
@@ -479,9 +479,8 @@ def test_the_quantity_refusal_is_gone_from_every_shipped_file():
         assert banned not in text, f"{path.relative_to(ROOT)} still carries the refusal"
 
 
-def test_multi_unit_purchase_is_never_refused_on_the_number(tmp_path, monkeypatch):
-    """End to end: 3 units of a 5-unit row and 4 units of a 1-unit row both
-    check out; the 1-unit row simply drains to zero."""
+def test_exact_inventory_allows_stock_and_rejects_stock_plus_one(tmp_path, monkeypatch):
+    """End to end: stock is orderable exactly; stock plus one returns a 409."""
     import app as appmod
     import catalog as catalog_mod
 
@@ -506,11 +505,14 @@ def test_multi_unit_purchase_is_never_refused_on_the_number(tmp_path, monkeypatc
                              "zone": "Lagos Mainland", "address": "1 Test St"},
                 "items": [{"id": pid, "name": "X", "qty": qty, "price": 2000}],
             }, headers={"X-CSRF-Token": token})
-            assert response.status_code == 200, response.get_json()
+            expected_status = 200 if stock >= qty else 409
+            assert response.status_code == expected_status, response.get_json()
+            if stock < qty:
+                assert response.get_json()["error"] == f"Only {stock} items remaining in stock"
         left = {str(p.get("id")): max(0, int(p.get("stock") or 0))
                 for p in catalog_mod.merged(include_hidden=True)}
         assert left["jau-hard-shelf5"] == 2
-        assert left["jau-hard-shelf1"] == 0, "drained, never below"
+        assert left["jau-hard-shelf1"] == 1, "the rejected order did not reserve stock"
 
 
 def test_first_paint_markup_ships_with_the_html():

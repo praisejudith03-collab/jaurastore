@@ -313,10 +313,10 @@ def test_editor_derives_availability_from_stock_and_keeps_variant_map():
 
 
 def test_fresh_admin_login_refetches_the_stock_numbers():
-    """The boot fetch runs before the session exists, so a fresh admin would
-    land on the PUBLIC catalogue (stock stripped, 9999 sentinel) and an
-    editor save would commit those fake numbers. The login handler must
-    refetch the authenticated ?all=1 catalogue before painting the desk."""
+    """The boot fetch runs before the session exists, so a fresh admin first
+    sees the public projection, not the complete editable product rows. The
+    login handler must refetch the authenticated ?all=1 catalogue before
+    painting the desk."""
     js = _admin_js()
     handler = js[js.index('await JA.loginAdmin(loginEmail'):]
     handler = handler[:handler.index("});") + 3]
