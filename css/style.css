@@ -7780,6 +7780,7 @@ body.attention-drawer-open { overflow: hidden; }
    The phone layout is the baseline; wider dashboard columns are added only
    at min-width breakpoints. Keep these rules scoped to the admin page so the
    storefront's independent grids and controls are not affected. */
+body[data-page="admin"] #site-footer { display: none !important; }
 body[data-page="admin"] #admin-root,
 body[data-page="admin"] .adx,
 body[data-page="admin"] .adx-main,

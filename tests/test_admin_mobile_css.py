@@ -88,6 +88,13 @@ def test_admin_page_hides_the_shop_header():
         css), "the shop #site-header must be hidden on the admin page"
 
 
+def test_admin_page_hides_the_storefront_footer():
+    css = _css()
+    assert _prop(_rule(css, 'body[data-page="admin"] #site-footer'), "display") == "none", (
+        "admin pages must not render the storefront footer below the portal"
+    )
+
+
 def test_admin_dock_is_pinned_to_the_bottom_of_the_screen():
     """Owner directive 2026-09-12: the admin dock is position: fixed at the
     bottom of the screen — the storefront dock's thumb-friendly shape."""
