@@ -374,6 +374,9 @@ def test_boot_survives_supabase_being_unreachable(monkeypatch):
     monkeypatch.setattr(Config, "SUPABASE_URL", FAKE_ORIGIN)
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
     monkeypatch.setattr(supabase_store, "client", lambda: _DownClient())
+    # /healthz pings through the separate probe client, so "Supabase is down"
+    # has to be simulated on that seam too or the check escapes the stub.
+    monkeypatch.setattr(supabase_store, "probe_client", lambda: _DownClient())
 
     _wipe_analytics_tables()
     boot = appmod.create_app()

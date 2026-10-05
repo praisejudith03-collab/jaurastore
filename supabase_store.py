@@ -25,6 +25,30 @@ except ImportError:             # pragma: no cover
 
 _client = None
 _loaded = False
+_probe_client = None
+_probe_loaded = False
+
+# Every PostgREST request is bounded. The supabase package's own default is
+# 120 seconds, which is unusable twice over: gunicorn kills the worker at 45s
+# (Procfile --timeout 45), so a request still waiting at 120s can never
+# complete; and on /healthz it pinned the probe thread for up to two minutes,
+# during which the probe guard answered "previous database probe is still
+# pending" to every single request - one stalled read became a sustained
+# health-check outage instead of a single slow one.
+#
+# Two budgets, because the two consumers have very different deadlines:
+#
+#   HEALTH_PROBE_TIMEOUT_SECONDS - the /healthz ping, under the 3.75s health
+#       deadline (health_checks.DATABASE_PING_TIMEOUT_SECONDS, Render 5s).
+#   SUPABASE_HTTP_TIMEOUT_SECONDS - the shop's own reads, which legitimately
+#       take seconds on a cold free-tier database, so they get real headroom
+#       while still staying under the gunicorn worker timeout.
+#
+# Only the PostgREST timeout is set here. Storage uploads move multi-megabyte
+# photos and function calls have their own shorter bound, so both keep the
+# library defaults.
+HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
+SUPABASE_HTTP_TIMEOUT_SECONDS = 20.0
 
 
 # ---------------------------------------------------------------- read cache
@@ -112,7 +136,9 @@ def ping():
     if not enabled():
         return "not_configured"
     try:
-        c = client()
+        # The probe client, not the shop's: this read must stay inside the
+        # health-check deadline. See probe_client().
+        c = probe_client()
         if c is None:
             return "unreachable"
         c.table("products").select("id").limit(1).execute()
@@ -120,6 +146,40 @@ def ping():
     except Exception as exc:
         print(f"[supabase] ping failed: {exc}")
         return "unreachable"
+
+
+def _client_options(timeout):
+    """Client options bounding PostgREST HTTP calls to ``timeout``, or None.
+
+    Returns None when the installed supabase package does not expose the
+    options object this version expects, so an older or newer client still
+    builds with its own defaults instead of the shop losing its database
+    outright over a health-check hardening detail.
+    """
+    try:
+        from supabase.lib.client_options import SyncClientOptions
+    except Exception:
+        return None
+    try:
+        return SyncClientOptions(postgrest_client_timeout=timeout)
+    except Exception as exc:
+        print(f"[supabase] client options unavailable: {exc}")
+        return None
+
+
+def _build_client(timeout):
+    """Create a client whose PostgREST calls are bounded, or None."""
+    if not enabled():
+        return None
+    try:
+        from supabase import create_client
+        # options=None is the package's own default, so falling back to it
+        # keeps behaviour unchanged on a client whose options differ.
+        return create_client(Config.SUPABASE_URL, Config.SUPABASE_SERVICE_ROLE_KEY,
+                             _client_options(timeout))
+    except Exception as exc:                     # never crash the shop
+        print(f"[supabase] client unavailable: {exc}")
+        return None
 
 
 def client():
@@ -132,16 +192,26 @@ def client():
     if _loaded:
         return _client
     _loaded = True
-    if not enabled():
-        _client = None
-        return None
-    try:
-        from supabase import create_client
-        _client = create_client(Config.SUPABASE_URL, Config.SUPABASE_SERVICE_ROLE_KEY)
-    except Exception as exc:                     # never crash the shop
-        print(f"[supabase] client unavailable: {exc}")
-        _client = None
+    _client = _build_client(SUPABASE_HTTP_TIMEOUT_SECONDS)
     return _client
+
+
+def probe_client():
+    """A separate client for the /healthz ping, on the health-check budget.
+
+    Deliberately NOT the shop's own client. The ping has to answer inside the
+    3.75s health deadline while a cold free-tier catalogue read legitimately
+    takes seconds, so sharing one client would mean either the health check
+    inherits the shop's generous budget and pins the probe guard (the outage
+    this exists to prevent), or the shop's reads inherit 3s and start failing
+    on a cold start. Two cached clients, each on its own deadline.
+    """
+    global _probe_client, _probe_loaded
+    if _probe_loaded:
+        return _probe_client
+    _probe_loaded = True
+    _probe_client = _build_client(HEALTH_PROBE_TIMEOUT_SECONDS)
+    return _probe_client
 
 
 # ------------------------------------------------------------------ products
