@@ -1,7 +1,8 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
 import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, re, threading, time, gc
 from functools import wraps
-from flask import Blueprint, request, jsonify, session, current_app, make_response
+from flask import (Blueprint, request, jsonify, session, current_app, make_response,
+                   g, has_request_context)
 from config import Config
 from campaign_types import (CAMPAIGN_TYPES, BROADCAST_KINDS,
                             broadcast_kind_from, broadcast_kind_options,
@@ -713,6 +714,27 @@ def _legacy_variant_rows():
     return out
 
 
+def _merged_products_cached():
+    """`catalog.merged(include_hidden=True)` memoised for the current request.
+
+    The Admin dashboard asks for stock rows AND for the product names behind
+    them in the same request; each of those used to fetch (and normalise) the
+    whole catalogue, so a Supabase-backed shop paid for the same network read
+    twice on every 30-second refresh. Outside a request the plain call is
+    returned, unchanged.
+    """
+    if has_request_context():
+        cached = getattr(g, "_merged_products", None)
+        if cached is None:
+            cached = catalog_mod.merged(include_hidden=True)
+            try:
+                g._merged_products = cached
+            except Exception:
+                pass
+        return cached
+    return catalog_mod.merged(include_hidden=True)
+
+
 def _stock_rows_for_read():
     """One row per product-variant, derived from the catalogue rows.
 
@@ -734,7 +756,7 @@ def _stock_rows_for_read():
         if catalog_mod._supabase_products() is None:
             return None
     try:
-        products = catalog_mod.merged(include_hidden=True)
+        products = _merged_products_cached()
     except Exception:
         return None
     rows = []
@@ -2427,10 +2449,11 @@ def admin_needs_attention():
     if stock_rows is None:
         stock_rows = []
     try:
-        products = {str(p.get("id")): p for p in catalog_mod.merged(include_hidden=True)}
+        products = {str(p.get("id")): p for p in _merged_products_cached()}
     except Exception:
         products = {}
     low_stock = []
+    out_of_stock = []
     supplier_out_of_stock = []
     supplier_low_stock = []
     for row in stock_rows:
@@ -2441,6 +2464,12 @@ def admin_needs_attention():
         item["name"] = product.get("name") or row.get("variant_label") or row.get("product_id")
         if qty <= threshold:
             low_stock.append(item)
+        if qty <= 0:
+            # The plain "Out of stock" queue the dashboard shows as its own
+            # compact bar (owner request 2026-10-05). It is deliberately
+            # separate from the supplier-linked queue: a sold-out product
+            # without a supplier link still has to be visible somewhere.
+            out_of_stock.append(item)
         option_links = (product.get("optionSupplierSku")
                         or product.get("optionSupplierUrls")
                         or product.get("option_supplier_urls") or {})
@@ -2454,16 +2483,23 @@ def admin_needs_attention():
         elif has_supplier_link and qty <= threshold:
             supplier_low_stock.append(item)
     stock_sort = lambda row: (int(row.get("qty") or 0), str(row.get("name") or ""))
+    # Only the FIRST page of each queue is shipped: the dashboard renders the
+    # count on a summary line and pages the list on demand, so a 900-row
+    # queue must not turn one dashboard refresh into a 900-row payload.
+    queue_limit = 200
     low_stock.sort(key=stock_sort)
+    out_of_stock.sort(key=stock_sort)
     supplier_out_of_stock.sort(key=stock_sort)
     supplier_low_stock.sort(key=stock_sort)
     supplier_warnings = supabase_store.load_supplier_sync_warnings()
-    return jsonify(ok=True, pending=pending, stale=stale, lowStock=low_stock,
-                   supplierOutOfStock=supplier_out_of_stock,
-                   supplierLowStock=supplier_low_stock,
+    return jsonify(ok=True, pending=pending, stale=stale, lowStock=low_stock[:queue_limit],
+                   outOfStock=out_of_stock[:queue_limit],
+                   supplierOutOfStock=supplier_out_of_stock[:queue_limit],
+                   supplierLowStock=supplier_low_stock[:queue_limit],
                    supplierWarnings=supplier_warnings,
                    counts={"pending": len(pending), "stale": len(stale),
                            "lowStock": len(low_stock),
+                           "outOfStock": len(out_of_stock),
                            "supplierOutOfStock": len(supplier_out_of_stock),
                            "supplierLowStock": len(supplier_low_stock),
                            "supplierWarnings": len(supplier_warnings)})

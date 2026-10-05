@@ -80,6 +80,10 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_at ON orders(at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_user_id);
+-- Review gating looks an order up by the email the buyer typed, and the
+-- customer-facing order history filters the same column - without this index
+-- every review submit scanned the whole orders table.
+CREATE INDEX IF NOT EXISTS idx_orders_email ON orders(email);
 
 -- Carts with an email entered during checkout. A cart is eligible for one
 -- reminder after twenty quiet minutes; `reminder_sent` is intentionally explicit
@@ -357,6 +361,8 @@ CREATE TABLE IF NOT EXISTS coupon_uses (
   UNIQUE(code, order_id)
 );
 CREATE INDEX IF NOT EXISTS idx_coupon_uses_code ON coupon_uses(code, used_at);
+-- Reversing a redemption (order deleted / declined) deletes by order_id.
+CREATE INDEX IF NOT EXISTS idx_coupon_uses_order ON coupon_uses(order_id);
 --
 -- Growth module settings (referral / coupons), key-value.
 CREATE TABLE IF NOT EXISTS growth_settings (

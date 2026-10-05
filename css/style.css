@@ -5963,10 +5963,22 @@ body[data-page="admin"] { background: #f8f9fc !important; }
 .mk-campaign-form label { display: grid; gap: 5px; font-size: 13px; font-weight: 600; }
 .mk-campaign-form input, .mk-campaign-form select, .mk-campaign-form textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--line, #e2e2e2); background: #fff; font: inherit; font-weight: 400; }
 .mk-campaign-form textarea { resize: vertical; min-height: 130px; line-height: 1.5; }
-.mk-product-picker { border: 1px solid var(--line, #e2e2e2); padding: 12px; }
-.mk-product-picker legend { font-size: 13px; font-weight: 700; padding: 0 5px; }
-.mk-product-picker legend small { color: var(--muted); font-weight: 400; }
-#mk-product-options { display: grid; grid-template-columns: repeat(auto-fill,minmax(210px,1fr)); gap: 8px; max-height: 330px; overflow: auto; margin-top: 10px; }
+/* Compact, collapsible "Products to feature" dropdown (owner request
+   2026-10-05). The picker is CLOSED by default, opens into one scrollable
+   panel, and never paints every catalogue row at once - it pages the list. */
+.mk-product-picker { border: 1px solid var(--line, #e2e2e2); border-radius: 10px; background: #fff; }
+.mk-product-picker > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 12px; cursor: pointer; font-size: 13px; font-weight: 700; list-style: none; }
+.mk-product-picker > summary::-webkit-details-marker { display: none; }
+.mk-product-picker > summary::after { content: "▾"; margin-left: 2px; color: var(--muted); font-size: 12px; transition: transform .15s ease; }
+.mk-product-picker[open] > summary::after { transform: rotate(180deg); }
+.mk-product-picker > summary small { color: var(--muted); font-weight: 400; }
+.mk-picker-chip { margin-left: auto; font-style: normal; font-size: 11px; font-weight: 700; color: #7d47bd; white-space: nowrap; }
+.mk-picker-body { border-top: 1px solid var(--line, #e9daca); padding: 10px 12px 12px; }
+.mk-picker-body > input[type="search"] { width: 100%; min-height: 44px; border: 1px solid var(--line, #e9daca); border-radius: 10px; padding: 10px 12px; font: inherit; }
+#mk-product-options, #mk-hub-product-options, .mk-picker-list { display: grid; grid-template-columns: repeat(auto-fill,minmax(210px,1fr)); gap: 8px; max-height: 260px; overflow: auto; margin-top: 10px; }
+.mk-picker-more { grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 6px 0 2px; }
+.mk-picker-more span { color: var(--muted); font-size: 11px; }
+@media (max-width: 560px) { #mk-product-options, #mk-hub-product-options, .mk-picker-list { grid-template-columns: 1fr; max-height: 220px; } }
 .mk-product-option { display: flex !important; grid-template-columns: none !important; flex-direction: row; align-items: center; gap: 8px !important; border: 1px solid var(--line,#ddd); padding: 7px; cursor: pointer; }
 .mk-product-option input { width: auto !important; flex: 0 0 auto; }
 .mk-product-option img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; }
@@ -7438,6 +7450,47 @@ body.store-paused{overflow:hidden}
   min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word;
 }
 .attention-list, .attention-list li { min-width: 0; overflow-wrap: anywhere; }
+
+/* Compact stock-queue summary bars + drawer (owner request 2026-10-05).
+   Each queue is ONE line - "⚠️ 236 Low Stock Items - Tap to view" - and the
+   full list lives in a scrollable drawer, so the dashboard cannot be pushed
+   off-screen by hundreds of low-stock rows. */
+.needs-bars { display: grid; gap: 8px; margin-bottom: 10px; }
+.attention-bar { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 11px 14px; border: 1px solid #eee5df; border-radius: 10px; background: #fff; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.attention-bar:hover, .attention-bar:focus-visible { border-color: #9c63c3; background: #fcf9ff; outline: none; }
+.attention-bar.is-alert { border-color: #e4b9ae; background: #fff8f6; }
+.attention-bar i { font-style: normal; font-size: 16px; }
+.attention-bar span { flex: 1 1 auto; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attention-bar span b { font-weight: 800; }
+.attention-bar em { font-style: normal; color: #7d47bd; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.attention-drawer[hidden] { display: none; }
+.attention-drawer { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: end center; background: rgba(31, 22, 16, .5); }
+.attention-drawer-panel { width: min(560px, 100%); max-height: min(82vh, 720px); display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 16px 16px 0 0; background: #fff; box-shadow: 0 -18px 60px rgba(31, 22, 16, .3); }
+@media (min-width: 620px) {
+  .attention-drawer { place-items: center; padding: 20px; }
+  .attention-drawer-panel { border-radius: 16px; }
+}
+.attention-drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.attention-drawer-head h3 { margin: 0; font: 700 18px/1.2 var(--font-display, serif); }
+.attention-drawer-close { width: 44px; height: 44px; border: 1px solid var(--line, #e9daca); border-radius: 10px; background: #fff; font-size: 17px; cursor: pointer; }
+.attention-drawer-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 auto; }
+.attention-drawer-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: 48px; padding: 9px 6px; border-bottom: 1px solid #f1ebe7; color: inherit; text-decoration: none; }
+.attention-drawer-row:hover, .attention-drawer-row:focus-visible { background: #fcf9ff; outline: none; }
+.attention-drawer-row span { min-width: 0; }
+.attention-drawer-row strong, .attention-drawer-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attention-drawer-row small { color: var(--muted); font-size: 11px; margin-top: 2px; }
+.attention-drawer-row b { white-space: nowrap; font-size: 12px; }
+.attention-drawer-row b.is-out { color: #a82e22; }
+.attention-drawer-row b.is-low { color: #a1691b; }
+.attention-drawer-row em { font-style: normal; font-size: 11px; color: #7d47bd; white-space: nowrap; }
+.attention-drawer-empty { padding: 18px 0; }
+.attention-drawer-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.attention-drawer-foot .btn { min-height: 44px; }
+body.attention-drawer-open { overflow: hidden; }
+@media (max-width: 560px) {
+  .attention-drawer-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .attention-drawer-row em { display: none; }
+}
 .proof-upload-failed { margin: 10px 0; padding: 10px 12px; border-radius: 9px;
   background: #fff1b8; color: #6f2817; font-weight: 800; overflow-wrap: anywhere; }
 
@@ -7559,9 +7612,36 @@ body.store-paused{overflow:hidden}
   line-height: 1.25;
   letter-spacing: .01em !important;
   font-variant-numeric: tabular-nums;
+  /* Owner request 2026-10-05: digits never break onto a second line. Every
+     MONEY TOKEN is nowrap, so "₦12,500" can never render as "₦12,50" + "0".
+     The price block itself stays wrappable ONLY between two whole tokens
+     (the struck-through "was" and the "now" price), which is what keeps a
+     two-column 320px card inside the viewport. */
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+.price .now,
+.price s,
+.price .price-range .range-min,
+.price .price-range .range-max,
+[data-mv-price-for] {
+  white-space: nowrap !important;
 }
 .price .range-separator { padding: 0 .16em; font-weight: 800; color: var(--taupe); }
-.price .price-range { white-space: normal; }
+/* A range may break between its two amounts (never inside one).
+   Two flex items, neither of which shrinks: the only place a line can break
+   is between the two whole amounts. Before this, the en dash was its own
+   inline box and a 320px card split the label THREE ways (amount / dash /
+   amount), which is exactly the wrapping the owner reported. */
+.price .price-range {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  max-width: 100%;
+  white-space: normal;
+}
+.price .price-range .range-min,
+.price .price-range .range-max { flex: 0 0 auto; }
 .price .alt { font-size: .72em !important; font-weight: 700 !important; }
 .pdp .price,
 .pdp .price .now { font-size: clamp(22px, 6.4vw, 31px) !important; font-weight: 800 !important; }
@@ -7654,4 +7734,43 @@ body.store-paused{overflow:hidden}
 @media (max-width: 600px) {
   .mk-hub-preview iframe { height: 420px; }
   .mk-jobs-row { grid-template-columns: 1fr; }
+}
+
+/* ------------------------------------------- prices never wrap digits
+   Owner request 2026-10-05. Written LAST on purpose: on a 320-414px phone
+   the price line is the widest single element on a product card, so the
+   type has to shrink with the viewport instead of breaking a money token.
+   The budget is the LONGEST realistic label - "₦100,000.00 – ₦150,000.00" -
+   inside a two-column card (about 149px of text at 360px, 176px at 414px),
+   which is why the range label steps down again from the base size. */
+@media (max-width: 414px) {
+  .price,
+  .price .now,
+  .card .price,
+  .card .price .now,
+  [data-mv-price-for],
+  .modal .price,
+  .welcome-pop .price {
+    font-size: clamp(10.5px, 3.1vw, 13.5px) !important;
+    letter-spacing: 0 !important;
+  }
+  .price .price-range { font-size: .92em !important; }
+  .price s { font-size: .86em !important; }
+  .price .range-separator { padding: 0 .06em; }
+  /* The admin catalogue cards carry the same range label. */
+  .adx-card-price { font-size: 13px !important; }
+  .adx-card-price.adx-price-range { font-size: 11.5px !important; }
+}
+@media (max-width: 360px) {
+  .price,
+  .price .now,
+  .card .price,
+  .card .price .now,
+  [data-mv-price-for],
+  .modal .price,
+  .welcome-pop .price {
+    font-size: clamp(10px, 3vw, 12px) !important;
+  }
+  .price .price-range { font-size: .9em !important; }
+  .adx-card-price.adx-price-range { font-size: 11px !important; }
 }
