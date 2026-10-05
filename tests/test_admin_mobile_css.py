@@ -274,6 +274,7 @@ def test_admin_navigation_and_card_header_actions_never_wrap_labels():
     selector = (
         'body[data-page="admin"] .adx-head-actions .btn, '
         'body[data-page="admin"] .needs-attention-head .btn, '
+        'body[data-page="admin"] #needs-attention-refresh, '
         'body[data-page="admin"] .an-range #an-refresh'
     )
     actions = _rule(css, selector)

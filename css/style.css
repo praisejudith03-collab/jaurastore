@@ -7840,6 +7840,7 @@ body[data-page="admin"] .adx-head-actions {
 }
 body[data-page="admin"] .adx-head-actions .btn,
 body[data-page="admin"] .needs-attention-head .btn,
+body[data-page="admin"] #needs-attention-refresh,
 body[data-page="admin"] .an-range #an-refresh {
   box-sizing: border-box;
   width: auto;

@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 TOKEN = "194"
 ASSETS = {
-    "css/style.css": "e4f98c6b37d74af25e51e907f1e14c067785bac42ce3f89e309d84b4d2499ec6",
+    "css/style.css": "c7211f466893ed8445ee1b0a5bf373249e859f247202075968725bd30a6ef8c2",
     "css/fonts.css": "181965e26197b4fcd719543ee3d1f98fed5c9d7b9aaf509eb7c0d54bee8a02b7",
     "js/store.js": "8f7048dd96283bfddeb7c7d8d1300b5650456df5a02f2ea3541d42a0c53ce10c",
     "js/app.js": "c96182c1cfc5912cb34566587b34065d574d0cbdb5599baa78952510ad444764",

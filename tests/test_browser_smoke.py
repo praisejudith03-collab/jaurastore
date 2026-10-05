@@ -63,10 +63,24 @@ def mobile():
             pytest.skip(f"Playwright chromium not available: {exc}")
         context = browser.new_context(viewport={"width": 390, "height": 844},
                                       is_mobile=True, has_touch=True, service_workers="block")
-        context.add_init_script("sessionStorage.setItem('jaura_welcome_seen', '1')")
+        context.add_init_script(
+            "try { sessionStorage.setItem('jaura_welcome_seen', '1'); } catch (e) {}"
+        )
         page = context.new_page()
         errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+
+        def capture_page_error(error):
+            message = str(error)
+            # The marketing email preview is intentionally sandboxed without
+            # allow-same-origin. Browser access to storage/service workers from
+            # that opaque-origin frame is blocked by design, not an app error.
+            lower = message.lower()
+            if ("service worker is disabled because the context is sandboxed" in lower
+                    or "document is sandboxed and lacks the 'allow-same-origin' flag" in lower):
+                return
+            errors.append(message)
+
+        page.on("pageerror", capture_page_error)
         yield page
         browser.close()
         assert not errors, errors
