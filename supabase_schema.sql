@@ -161,6 +161,9 @@ alter table orders add column if not exists proof_upload_failed boolean default 
 create index if not exists idx_orders_at on orders (at desc);
 create index if not exists idx_orders_status on orders (status);
 create index if not exists idx_orders_customer on orders (customer_user_id);
+-- Review gating and the customer order history both look an order up by
+-- email; without this index each lookup scanned the whole orders table.
+create index if not exists idx_orders_email on orders (email);
 
 -- Carts that reached checkout with an email but were not completed. The
 -- scheduler sends at most one reminder after twenty minutes without activity.
@@ -624,6 +627,8 @@ alter table coupon_uses add column if not exists used_at  timestamptz default no
 -- (code, order_id) so a retry cannot insert the same order twice.
 create unique index if not exists coupon_uses_code_order on coupon_uses(code, order_id);
 create index if not exists coupon_uses_code on coupon_uses(code, used_at desc);
+-- Reversing a redemption (order deleted / declined) deletes by order_id.
+create index if not exists coupon_uses_order on coupon_uses(order_id);
 
 -- SECTION: product_reviews
 -- Product reviews. Mirrors the SQLite product_reviews table one-for-one so

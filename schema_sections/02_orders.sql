@@ -52,6 +52,9 @@ alter table orders add column if not exists proof_upload_failed boolean default 
 create index if not exists idx_orders_at on orders (at desc);
 create index if not exists idx_orders_status on orders (status);
 create index if not exists idx_orders_customer on orders (customer_user_id);
+-- Review gating and the customer order history both look an order up by
+-- email; without this index each lookup scanned the whole orders table.
+create index if not exists idx_orders_email on orders (email);
 
 -- Carts that reached checkout with an email but were not completed. The
 -- scheduler sends at most one reminder after twenty minutes without activity.

@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=192";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=192";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=193";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=193";
 }
 
 function renderCategories() {
@@ -216,7 +216,7 @@ function mountHeroVideo() {
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
   if (cached) apply(cached);
-  fetch("api/site", { cache: "no-store" })
+  timedFetch("api/site", { cache: "no-store" }, 5000)
     .then((r) => (r.ok ? r.json() : null))
     .then((d) => {
       const site = (d && d.site) || {};
@@ -224,6 +224,21 @@ function mountHeroVideo() {
       apply(site);
     })
     .catch(() => {});   // offline / static hosting: keep whatever is showing
+}
+
+/* A storefront read that can never hang the page.
+ *
+ * These calls decorate the shop (site settings, most-viewed rail). A plain
+ * fetch with no signal waits forever on a dropped mobile connection, so the
+ * page keeps its skeleton spinner and the request stacks up on the next
+ * navigation. JA_NET already gives this guarantee to every storefront API
+ * call; this is the same guard for the few direct reads. */
+function timedFetch(url, options = {}, ms = 8000) {
+  const opts = Object.assign({ credentials: "same-origin" }, options);
+  if (!opts.signal && typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    opts.signal = AbortSignal.timeout(ms);
+  }
+  return fetch(url, opts);
 }
 
 function renderHome() {
@@ -670,7 +685,7 @@ async function renderMostViewed() {
   host.dataset.loading = "1";
   let items = [];
   try {
-    const res = await fetch("api/most-viewed?limit=12", { credentials: "same-origin", cache: "no-store" });
+    const res = await timedFetch("api/most-viewed?limit=12", { cache: "no-store" }, 6000);
     const d = await res.json();
     if (d && d.ok) {
       items = (d.items || []).map((x) => ({ productId: x.productId }));

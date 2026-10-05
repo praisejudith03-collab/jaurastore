@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=192" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=193" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1417,9 +1417,11 @@ function productsStateFromUrl(raw) {
   const cat = (params.get("category") || params.get("cat") || "").trim();
   const page = parseInt(params.get("page"), 10);
   const q = (params.get("q") || params.get("search") || "").trim();
+  const id = (params.get("id") || params.get("product") || params.get("edit") || "").trim();
   if (cat) state.category = cat;
   if (Number.isFinite(page) && page >= 1) state.page = page;
   if (q) state.q = q;
+  if (id) state.id = id;
   return state;
 }
 
@@ -1693,6 +1695,22 @@ function applyProductFilter(e) {
 }
 
 function esc(v) { return JA.escape(String(v == null ? "" : v)); }
+
+/** A fetch that can never hang a dashboard poll.
+ *
+ *  The admin page refreshes live visitors, receipts, sales and settings on
+ *  timers. A plain fetch() with no signal can wait forever on a flaky mobile
+ *  connection, and the timers then stack request on request until the tab
+ *  feels dead ("Could not reach the server"). Every timer-driven call goes
+ *  through here, with the timeout dropped only on engines that have no
+ *  AbortSignal.timeout (where the old behaviour is the safe fallback). */
+function timedFetch(url, options = {}, ms = 8000) {
+  const opts = Object.assign({ credentials: "same-origin" }, options);
+  if (!opts.signal && typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    opts.signal = AbortSignal.timeout(ms);
+  }
+  return fetch(url, opts);
+}
 // One small product photo for an order line. Used by the order list and the
 // fulfillment view so the person packing the parcel can match the piece
 // without reading the whole line. A line whose product has no photo (or an
@@ -1715,6 +1733,7 @@ function analyticsPanel() {
       <div class="needs-attention-head"><div><h2>Needs attention</h2><p>Keep today’s most important work in one place.</p></div><button type="button" class="btn btn-line" id="needs-attention-refresh">Refresh</button></div>
       <div id="needs-attention-box"><p class="empty">Checking orders and stock…</p></div>
     </section>
+    ${attentionDrawerHTML()}
     <div class="an-top">
       <h3 class="admin-h" style="margin:0">Store insights</h3>
       <div class="an-range">
@@ -1805,12 +1824,198 @@ function renderLive(visitors, activity) {
 }
 async function fillLiveFeed() {
   try {
-    const res = await fetch("api/admin/live", { credentials: "same-origin", cache: "no-store" });
+    const res = await timedFetch("api/admin/live", { cache: "no-store" });
     if (!res.ok) return;
     const d = await res.json();
     renderLive(d.visitors || [], d.activity || []);
   } catch (e) {}
 }
+/* ========================================== compact stock queues + drawer
+ * Owner request 2026-10-05: the dashboard must never be crowded by long
+ * low-stock / supplier lists. Every stock queue is ONE compact summary line
+ * ("⚠️ 236 Low Stock Items — Tap to view"); tapping it opens a scrollable
+ * drawer, and tapping a row deep-links straight into that product's editor
+ * (/admin/products?id=<ID>) for instant editing.
+ *
+ * The queues are keyed by the API's field names so a row can never drift from
+ * the summary that opened it.
+ */
+const ATTENTION_QUEUES = {
+  lowStock: {
+    title: "Low stock",
+    icon: "⚠️",
+    noun: "Low Stock Item",
+    note: "Products at five or fewer units. Tap a row to edit that product straight away.",
+    emptyText: "No products at five or fewer units.",
+    alert: false,
+  },
+  outOfStock: {
+    title: "Out of stock",
+    icon: "⛔",
+    noun: "Out of Stock Item",
+    note: "Nothing left on the shelf. Tap a row to restock or hide the product.",
+    emptyText: "Nothing is sold out right now.",
+    alert: true,
+  },
+  supplierLow: {
+    title: "Supplier-linked · low stock",
+    icon: "🔗",
+    noun: "Supplier-linked Low Stock Item",
+    note: "Supplier-linked products running low. Tap a row to edit or reorder.",
+    emptyText: "No supplier-linked products are low.",
+    alert: false,
+  },
+  supplierOut: {
+    title: "Supplier-linked · out of stock",
+    icon: "🔗",
+    noun: "Supplier-linked Out of Stock Item",
+    note: "Supplier-linked products with nothing left. Tap a row to reorder.",
+    emptyText: "No supplier-linked products are out of stock.",
+    alert: true,
+  },
+};
+
+// Rows currently behind each summary bar, keyed like ATTENTION_QUEUES.
+let attentionQueues = {};
+// How many rows the open drawer is currently painting (paged, never all at
+// once) and which queue it belongs to.
+let attentionDrawerKey = "";
+let attentionDrawerShown = 0;
+const ATTENTION_DRAWER_PAGE = 60;
+
+function attentionDrawerHTML() {
+  return `<div class="attention-drawer" id="attention-drawer" hidden>
+    <section class="attention-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="attention-drawer-title">
+      <header class="attention-drawer-head">
+        <h3 id="attention-drawer-title">Low stock</h3>
+        <button type="button" class="attention-drawer-close" id="attention-drawer-close" aria-label="Close this list">✕</button>
+      </header>
+      <p class="admin-note" id="attention-drawer-note"></p>
+      <ul class="attention-drawer-list" id="attention-drawer-list"></ul>
+      <div class="attention-drawer-foot">
+        <button type="button" class="btn btn-line" id="attention-drawer-more" hidden>Show more</button>
+        <button type="button" class="btn btn-line" id="attention-drawer-manage">Manage products →</button>
+      </div>
+    </section>
+  </div>`;
+}
+
+/** The exact deep link the owner asked for: /admin/products?id=<ID>.
+ *
+ *  On an /admin/... URL (production, and the SPA route) the canonical
+ *  absolute path is used, so the link also works when the dashboard is
+ *  opened from a bookmark or shared. A file-based admin.html preview keeps
+ *  the same query parameters locally. */
+function attentionProductHref(productId) {
+  const id = String(productId == null ? "" : productId);
+  const query = "id=" + encodeURIComponent(id);
+  let onAdminPath = false;
+  try { onAdminPath = /^\/admin(\/|$)/.test(String(window.location.pathname || "")); } catch (e) { onAdminPath = false; }
+  return onAdminPath ? `/admin/products?${query}` : `admin.html?desk=products&${query}`;
+}
+
+function attentionStockRowHTML(row) {
+  const id = String((row && (row.product_id || row.productId || row.id)) || "");
+  const name = String((row && (row.name || row.variant_label)) || id || "Product");
+  const variant = String((row && (row.variant_label || row.variant_key)) || "");
+  const qty = Math.max(0, Number((row && row.qty) || 0));
+  const qtyLabel = qty <= 0 ? "Out of stock" : `${qty} left`;
+  return `<li><a class="attention-drawer-row" href="${esc(attentionProductHref(id))}" data-attention-product="${esc(id)}">`
+    + `<span><strong>${esc(name)}</strong>${variant && variant !== name ? `<small>${esc(variant)}</small>` : ""}</span>`
+    + `<b class="${qty <= 0 ? "is-out" : "is-low"}">${esc(qtyLabel)}</b><em>Edit →</em></a></li>`;
+}
+
+function attentionDrawerBodyHTML(key, shown) {
+  const queue = attentionQueues[key] || {};
+  const rows = queue.rows || [];
+  if (!rows.length) return `<li class="attention-drawer-empty"><p class="empty">${esc(queue.emptyText || "Nothing to show.")}</p></li>`;
+  const page = Math.max(1, Math.min(rows.length, Number(shown) || ATTENTION_DRAWER_PAGE));
+  return rows.slice(0, page).map(attentionStockRowHTML).join("");
+}
+
+function openAttentionDrawer(key) {
+  const queue = attentionQueues[key];
+  const drawer = document.getElementById("attention-drawer");
+  if (!queue || !drawer) return;
+  attentionDrawerKey = key;
+  attentionDrawerShown = ATTENTION_DRAWER_PAGE;
+  const title = document.getElementById("attention-drawer-title");
+  const note = document.getElementById("attention-drawer-note");
+  const list = document.getElementById("attention-drawer-list");
+  const total = (queue.rows || []).length;
+  if (title) title.textContent = queue.title || "Stock";
+  if (note) note.textContent = (queue.note || "") + (total > attentionDrawerShown ? ` Showing the first ${attentionDrawerShown} of ${total}.` : "");
+  if (list) list.innerHTML = attentionDrawerBodyHTML(key, attentionDrawerShown);
+  paintAttentionDrawerMore();
+  drawer.hidden = false;
+  paintAttentionBarState();
+  try { document.body.classList.add("attention-drawer-open"); } catch (e) {}
+  const close = document.getElementById("attention-drawer-close");
+  if (close) close.focus();
+}
+
+function paintAttentionDrawerMore() {
+  const btn = document.getElementById("attention-drawer-more");
+  const queue = attentionQueues[attentionDrawerKey] || {};
+  const total = (queue.rows || []).length;
+  if (!btn) return;
+  const remaining = Math.max(0, total - attentionDrawerShown);
+  btn.hidden = remaining <= 0;
+  if (remaining > 0) btn.textContent = `Show more (${remaining} left)`;
+  const note = document.getElementById("attention-drawer-note");
+  if (note && total > attentionDrawerShown) note.textContent = `${queue.note || ""} Showing the first ${attentionDrawerShown} of ${total}.`;
+}
+
+function paintAttentionBarState() {
+  const drawer = document.getElementById("attention-drawer");
+  const drawerOpen = !!drawer && !drawer.hidden;
+  document.querySelectorAll("[data-attention-bar]").forEach((bar) => {
+    const isOpen = drawerOpen && bar.dataset.attentionBar === attentionDrawerKey;
+    bar.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  });
+}
+
+function closeAttentionDrawer() {
+  const drawer = document.getElementById("attention-drawer");
+  if (drawer) drawer.hidden = true;
+  attentionDrawerKey = "";
+  attentionDrawerShown = 0;
+  paintAttentionBarState();
+  try { document.body.classList.remove("attention-drawer-open"); } catch (e) {}
+}
+
+/** One compact line per non-empty queue: "⚠️ 236 Low Stock Items — Tap to view". */
+function attentionSummaryBar(key, count) {
+  const queue = ATTENTION_QUEUES[key] || {};
+  const noun = `${queue.noun || "Item"}${Number(count) === 1 ? "" : "s"}`;
+  return `<button type="button" class="attention-bar${queue.alert ? " is-alert" : ""}" data-attention-bar="${esc(key)}" aria-expanded="false">`
+    + `<i aria-hidden="true">${queue.icon || "⚠️"}</i>`
+    + `<span><b>${Number(count).toLocaleString()}</b> ${esc(noun)}</span>`
+    + `<em>Tap to view</em></button>`;
+}
+
+function bindAttentionDrawer() {
+  const drawer = document.getElementById("attention-drawer");
+  if (!drawer || drawer.dataset.bound === "1") return;
+  drawer.dataset.bound = "1";
+  const close = document.getElementById("attention-drawer-close");
+  if (close) close.onclick = () => closeAttentionDrawer();
+  // A tap on the dimmed backdrop (but not inside the panel) closes it.
+  drawer.onclick = (event) => { if (event.target === drawer) closeAttentionDrawer(); };
+  drawer.addEventListener("keydown", (event) => { if (event.key === "Escape") closeAttentionDrawer(); });
+  const more = document.getElementById("attention-drawer-more");
+  if (more) more.onclick = () => {
+    const queue = attentionQueues[attentionDrawerKey] || {};
+    const list = document.getElementById("attention-drawer-list");
+    if (!list) return;
+    attentionDrawerShown = Math.min((queue.rows || []).length, attentionDrawerShown + ATTENTION_DRAWER_PAGE);
+    list.innerHTML = attentionDrawerBodyHTML(attentionDrawerKey, attentionDrawerShown);
+    paintAttentionDrawerMore();
+  };
+  const manage = document.getElementById("attention-drawer-manage");
+  if (manage) manage.onclick = () => { closeAttentionDrawer(); paintDesk("products"); };
+}
+
 function attentionOrderLine(o) {
   const customer = o.customer || {};
   return `<li><span><strong>${esc(o.id || "Order")}</strong><small>${esc(customer.name || customer.email || "Customer")} · ${esc(timeAgo(o.at) || "date unavailable")}</small></span><b>${esc(JA.money(o.total, o.currency))}</b></li>`;
@@ -1822,19 +2027,35 @@ async function fillNeedsAttention() {
     const d = await window.JA_NET.api("api/admin/needs-attention");
     const pending = d.pending || [], stale = d.stale || [], low = d.lowStock || [];
     const supplierOut = d.supplierOutOfStock || [], supplierLow = d.supplierLowStock || [];
+    const soldOut = d.outOfStock || [];
+    // The server ships the true totals on every response; fall back to the
+    // row count for an older payload that predates the counts block.
+    const total = (key, rows) => Math.max(Number((d.counts || {})[key] || 0), (rows || []).length);
+    attentionQueues = {
+      lowStock: { ...ATTENTION_QUEUES.lowStock, rows: low, total: total("lowStock", low) },
+      outOfStock: { ...ATTENTION_QUEUES.outOfStock, rows: soldOut, total: total("outOfStock", soldOut) },
+      supplierLow: { ...ATTENTION_QUEUES.supplierLow, rows: supplierLow, total: total("supplierLowStock", supplierLow) },
+      supplierOut: { ...ATTENTION_QUEUES.supplierOut, rows: supplierOut, total: total("supplierOutOfStock", supplierOut) },
+    };
     setOrderBadge(pending.length);
-    if (!pending.length && !low.length && !supplierOut.length && !supplierLow.length) {
+    const stockBars = ["lowStock", "outOfStock", "supplierLow", "supplierOut"]
+      .filter((key) => attentionQueues[key].total > 0)
+      .map((key) => attentionSummaryBar(key, attentionQueues[key].total))
+      .join("");
+    if (!pending.length && !stockBars && !stale.length) {
       box.innerHTML = `<div class="needs-clear"><strong>All clear for now.</strong><span>No pending orders or low-stock items need action.</span></div>`;
     } else {
       const pendingBlock = `<article class="attention-block"><div class="attention-title"><strong>Pending orders</strong><b>${pending.length}</b></div>${pending.length ? `<ul class="attention-list">${pending.slice(0, 5).map(attentionOrderLine).join("")}</ul>${pending.length > 5 ? `<small class="attention-more">+ ${pending.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Review orders →</button>` : `<p class="empty">No pending orders.</p>`}</article>`;
-      const stockItems = (rows) => rows.slice(0, 5).map((r) => `<li><span><strong>${esc(r.name || r.product_id || "Product")}</strong><small>${esc(r.variant_label || r.variant_key || "Product stock")}</small></span><b>${Number(r.qty || 0)} left</b></li>`).join("");
-      const stockBlock = (title, rows, emptyText, alert) => `<article class="attention-block ${alert && rows.length ? "is-alert" : ""}"><div class="attention-title"><strong>${title}</strong><b>${rows.length}</b></div>${rows.length ? `<ul class="attention-list">${stockItems(rows)}</ul>${rows.length > 5 ? `<small class="attention-more">+ ${rows.length - 5} more</small>` : ""}<button type="button" class="au-link-btn attention-action" data-attention-tab="products">Manage products →</button>` : `<p class="empty">${emptyText}</p>`}</article>`;
-      const lowBlock = stockBlock("Low stock", low, "No products at five or fewer units.", false);
-      const supplierOutBlock = stockBlock("Supplier-linked · out of stock", supplierOut, "No supplier-linked products are out of stock.", true);
-      const supplierLowBlock = stockBlock("Supplier-linked · low stock", supplierLow, "No supplier-linked products are low.", false);
       const staleBlock = `<article class="attention-block ${stale.length ? "is-alert" : ""}"><div class="attention-title"><strong>Waiting over 24 hours</strong><b>${stale.length}</b></div>${stale.length ? `<ul class="attention-list">${stale.slice(0, 3).map(attentionOrderLine).join("")}</ul><button type="button" class="au-link-btn attention-action" data-attention-tab="orders">Follow up →</button>` : `<p class="empty">No overdue pending orders.</p>`}</article>`;
-      box.innerHTML = `<div class="needs-grid">${pendingBlock}${lowBlock}${supplierOutBlock}${supplierLowBlock}${staleBlock}</div>`;
+      // Stock queues render as compact one-line summaries above the order
+      // blocks: the dashboard stays short no matter how low the shelves are,
+      // and the full list is one tap away in the drawer.
+      box.innerHTML = `<div class="needs-bars">${stockBars}</div><div class="needs-grid">${pendingBlock}${staleBlock}</div>`;
     }
+    bindAttentionDrawer();
+    box.querySelectorAll("[data-attention-bar]").forEach((bar) => {
+      bar.onclick = () => openAttentionDrawer(bar.dataset.attentionBar);
+    });
     box.querySelectorAll("[data-attention-tab]").forEach((button) => { button.onclick = () => paintDesk(button.dataset.attentionTab); });
   } catch (err) {
     box.innerHTML = `<p class="empty">Could not load this queue. Try Refresh.</p>`;
@@ -1901,7 +2122,7 @@ function openReceiptModal(url, label, name) {
   actions.innerHTML = `<a class="btn btn-line" href="${esc(url)}" target="_blank" rel="noopener">Open full size</a><a class="btn btn-line" href="${esc(url)}" download="${fname}">Download ${kind === "pdf" ? "PDF" : "file"}</a>`;
   if (kind === "image") { body.innerHTML = `<img class="proof-preview" src="${esc(url)}" alt="${esc(title)}" />`; return; }
   body.innerHTML = `<p class="empty">Opening the receipt…</p>`;
-  fetch(url, { credentials: "same-origin" }).then((r) => { if (!r.ok) throw new Error("bad"); return r.blob(); }).then((blob) => {
+  timedFetch(url, {}, 30000).then((r) => { if (!r.ok) throw new Error("bad"); return r.blob(); }).then((blob) => {
     const objectUrl = URL.createObjectURL(blob);
     body.innerHTML = `<iframe class="proof-frame receipt-modal-frame" src="${objectUrl}" title="${esc(title)}"></iframe>`;
   }).catch(() => { body.innerHTML = `<p class="empty">This file could not be opened here. Use the download link below.</p>`; });
@@ -1939,7 +2160,7 @@ async function refreshMailStatus() {
   const note = $("#mail-status"); if (!note) return;
   const btn = $("#mail-test");
   let d = null;
-  try { const res = await fetch("api/admin/mail/status", { credentials: "same-origin", cache: "no-store" }); if (res.ok) d = await res.json(); } catch (e) { d = null; }
+  try { const res = await timedFetch("api/admin/mail/status", { cache: "no-store" }); if (res.ok) d = await res.json(); } catch (e) { d = null; }
   if (!d || d.ok === false) { note.textContent = "Shop emails: status unavailable."; if (btn) btn.hidden = true; return; }
   if (d.enabled) {
     note.textContent = `Shop emails: on via ${d.provider} to ${d.to}`;
@@ -2066,7 +2287,7 @@ async function fillProofs() {
   const params = new URLSearchParams({ page: String(proofPage), perPage: String(ADMIN_PAGE_SIZE) });
   let data = null;
   try {
-    const res = await fetch("api/admin/payment-proofs?" + params, { credentials: "same-origin", cache: "no-store" });
+    const res = await timedFetch("api/admin/payment-proofs?" + params, { cache: "no-store" });
     if (res.ok) data = await res.json();
   } catch (e) { data = null; }
   if (!data || data.ok === false) {
@@ -2527,6 +2748,86 @@ function bindAccount() {
     return d.note || (d.committed ? "Committed locally, but not pushed to GitHub." : "Sync complete. No repository changes to push.");
   });
 }
+/* ==================================== compact "Products to feature" picker
+ * Owner request 2026-10-05: the picker stays inside a compact, scrollable
+ * dropdown instead of an expanded inline list, paints one page of matches at
+ * a time (a 300-product catalogue never renders 300 rows on the dashboard),
+ * and shows prices in the shop's CURRENT currency - Naira (₦) in an
+ * English/NGN context, CFA Franc in a French/XOF context - rather than a
+ * hardcoded one.
+ */
+const MK_PICKER_PAGE = 40;
+
+/** The currency the admin is browsing in right now (English => NGN,
+ *  French => CFA). Exported for the picker rows and asserted by tests. */
+function marketingCurrency() {
+  let raw = "NGN";
+  try { raw = String((JA.currency && JA.currency()) || "NGN").toUpperCase(); } catch (e) { raw = "NGN"; }
+  return (raw === "CFA" || raw === "XOF") ? "CFA" : "NGN";
+}
+
+/** One catalogue price, formatted for the active currency: ₦12,000 in NGN,
+ *  "6,000 CFA" in XOF/French (the same ceiling the storefront uses). */
+function marketingPickerPrice(p) {
+  const ngn = Number((p && p.priceNgn) || 0);
+  if (marketingCurrency() === "CFA") {
+    const cfa = JA.toCfa ? JA.toCfa(ngn) : Math.ceil((ngn * 0.44) / 50) * 50;
+    return JA.money(cfa, "CFA");
+  }
+  return JA.money(ngn, "NGN");
+}
+
+function marketingPickerRowHTML(p, name, checked) {
+  return `<label class="mk-product-option"><input type="checkbox" name="${esc(name)}" value="${esc(p.id)}"${checked ? " checked" : ""} />`
+    + `<img src="${esc(p.image_url || p.image || "images/products/_placeholder.jpg")}" alt="" loading="lazy" />`
+    + `<span><b>${esc(p.name || "Product")}</b><small>${esc(marketingPickerPrice(p))}${p.badge ? ` · ${esc(p.badge)}` : ""}</small></span></label>`;
+}
+
+/** The scrollable page of matches plus its "Show more" footer. */
+function marketingPickerListHTML(rows, name, selected, shown, moreAttr) {
+  if (!rows || !rows.length) return `<p class="empty">No matching products.</p>`;
+  const page = rows.slice(0, Math.max(1, Number(shown) || MK_PICKER_PAGE));
+  return page.map((p) => marketingPickerRowHTML(p, name, selected.has(String(p.id)))).join("")
+    + (rows.length > page.length
+      ? `<div class="mk-picker-more" ${moreAttr}><span>Showing ${page.length} of ${rows.length}</span><button type="button" class="btn btn-line" ${moreAttr}-btn>Show more</button></div>`
+      : "");
+}
+
+/** The compact dropdown shell: closed by default, one scrollable panel. */
+function marketingPickerHTML(idPrefix, legend) {
+  return `<details class="mk-product-picker" id="${idPrefix}-picker">
+    <summary><span>${legend}</span> <small>(optional, up to 12)</small><em class="mk-picker-chip" id="${idPrefix}-count">0 selected</em></summary>
+    <div class="mk-picker-body">
+      <input id="${idPrefix}-search" type="search" placeholder="Search catalog…" autocomplete="off" />
+      <div class="mk-picker-list" id="${idPrefix}-options"><p class="empty">Loading catalog…</p></div>
+    </div>
+  </details>`;
+}
+
+function marketingPickerCount(idPrefix, n) {
+  const chip = document.getElementById(`${idPrefix}-count`);
+  if (chip) chip.textContent = `${Number(n) || 0} selected`;
+}
+
+/** Repaint the pickers when the language (and so the currency) changes.
+
+ *  paintDesk() rebuilds the Marketing desk on every visit, so the listeners
+ *  are tracked and replaced instead of piling up - the old ones kept the
+ *  previous card's DOM and closures alive for the rest of the session. */
+const marketingCurrencyListeners = [];
+
+function bindMarketingCurrency(repaint) {
+  while (marketingCurrencyListeners.length) {
+    const [evt, fn] = marketingCurrencyListeners.pop();
+    try { document.removeEventListener(evt, fn); } catch (e) {}
+  }
+  ["ja:currency", "ja:lang"].forEach((evt) => {
+    const fn = () => { try { repaint(); } catch (e) {} };
+    document.addEventListener(evt, fn);
+    marketingCurrencyListeners.push([evt, fn]);
+  });
+}
+
 /* ============================================= email broadcast hub
  * The owner asked for the promotional hub at /admin/marketing/broadcast: see
  * who is on the list, compose, read the email before it goes out, then let the
@@ -2547,7 +2848,7 @@ function broadcastHubCard() {
       <label>Subject <input name="subject" id="mk-hub-subject" maxlength="180" required /></label>
       <label>Message <textarea name="content" id="mk-hub-content" rows="6" maxlength="10000" required></textarea></label>
       <label id="mk-hub-coupon-row" hidden>Coupon code to announce <input id="mk-hub-coupon" maxlength="40" placeholder="JAURA10" /></label>
-      <fieldset class="mk-product-picker"><legend>Products to feature <small>(optional, up to 12)</small></legend><input id="mk-hub-product-search" type="search" placeholder="Search catalog…" autocomplete="off" /><div id="mk-hub-product-options"><p class="empty">Loading catalog…</p></div></fieldset>
+      ${marketingPickerHTML("mk-hub-product", "Products to feature")}
       <div class="mk-campaign-foot">
         <button type="button" class="btn btn-line" id="mk-hub-preview">Preview</button>
         <button type="button" class="btn btn-line" id="mk-hub-refresh">Refresh audience</button>
@@ -2614,27 +2915,42 @@ async function fillBroadcastHub() {
   paintKinds();
   $("#mk-hub-refresh")?.addEventListener("click", loadAudience);
 
-  // Featured products: same list the campaign composer uses, one page at a time.
+  // Featured products: the same compact, scrollable dropdown the campaign
+  // composer uses - one page of matches at a time, prices in the active
+  // currency (₦ for NGN/English, CFA for XOF/French).
   const selected = new Set();
   const optionsBox = $("#mk-hub-product-options");
+  let hubMatches = [];
+  let hubShown = MK_PICKER_PAGE;
   const paintProducts = (rows) => {
     if (!optionsBox) return;
-    optionsBox.innerHTML = rows.length ? rows.map((p) => `<label class="mk-product-option"><input type="checkbox" name="hubProduct" value="${esc(p.id)}" ${selected.has(String(p.id)) ? "checked" : ""} /><img src="${esc(p.image_url || p.image || "images/products/_placeholder.jpg")}" alt="" /><span><b>${esc(p.name || "Product")}</b><small>${p.priceCfa ? `${Number(p.priceCfa).toLocaleString()} CFA` : `₦${Number(p.priceNgn || 0).toLocaleString()}`}</small></span></label>`).join("") : `<p class="empty">No matching products.</p>`;
+    hubMatches = rows || [];
+    optionsBox.innerHTML = marketingPickerListHTML(hubMatches, "hubProduct", selected, hubShown, "data-hub-picker-more");
+    marketingPickerCount("mk-hub-product", selected.size);
   };
   let catalog = [];
   try { catalog = (await api("api/catalog?all=1")).products || []; } catch (err) { if (optionsBox) optionsBox.innerHTML = `<p class="empty">Catalog unavailable.</p>`; }
   const filter = () => {
     const q = String($("#mk-hub-product-search")?.value || "").trim().toLowerCase();
+    hubShown = MK_PICKER_PAGE;
     paintProducts(catalog.filter((p) => !q || `${p.name || ""} ${p.sku || ""}`.toLowerCase().includes(q)));
   };
   filter();
+  optionsBox?.addEventListener("click", (e) => {
+    if (!e.target.closest("[data-hub-picker-more]")) return;
+    hubShown += MK_PICKER_PAGE;
+    paintProducts(hubMatches);
+  });
   optionsBox?.addEventListener("change", (e) => {
     const input = e.target.closest('input[name="hubProduct"]');
     if (!input) return;
     if (input.checked && selected.size >= 12) { input.checked = false; JA.toast("Choose no more than 12 products."); return; }
     input.checked ? selected.add(input.value) : selected.delete(input.value);
+    marketingPickerCount("mk-hub-product", selected.size);
   });
   $("#mk-hub-product-search")?.addEventListener("input", filter);
+  // Switching language/currency must repaint the ₦/CFA figures immediately.
+  bindMarketingCurrency(filter);
   $("#mk-hub-kind")?.addEventListener("change", () => {
     const row = $("#mk-hub-coupon-row");
     if (row) row.hidden = $("#mk-hub-kind")?.value !== "coupon";
@@ -2767,7 +3083,7 @@ function marketingPanel() {
       </label>
       <label>Subject <input name="subject" id="mk-campaign-subject" maxlength="180" required /></label>
       <label>Message <textarea name="content" id="mk-campaign-content" rows="6" maxlength="10000" required></textarea></label>
-      <fieldset class="mk-product-picker"><legend>Products to feature <small>(optional, up to 12)</small></legend><input id="mk-product-search" type="search" placeholder="Search catalog…" autocomplete="off" /><div id="mk-product-options"><p class="empty">Loading catalog…</p></div></fieldset>
+      ${marketingPickerHTML("mk-product", "Products to feature")}
       <div class="mk-campaign-foot"><strong id="mk-recipient-count">Checking recipients…</strong><button type="button" class="btn btn-line" id="mk-refresh-recipients">Refresh count</button><a class="btn btn-line" href="api/admin/customers.csv" download="jaura-customers.csv">Export contacts</a><button class="btn" type="submit" id="mk-send-campaign">Send campaign</button></div>
       <p class="admin-note" id="mk-campaign-status" role="status" aria-live="polite"></p>
     </form>
@@ -2974,7 +3290,7 @@ function broadcastPhotoUrl(p) {
 /** Fetch one product photo as a PNG-ready blob (null when unreachable). */
 async function broadcastPhotoBlob(p) {
   try {
-    const res = await fetch(broadcastPhotoUrl(p), { credentials: "same-origin" });
+    const res = await timedFetch(broadcastPhotoUrl(p), {}, 30000);
     if (!res.ok) return null;
     return await res.blob();
   } catch (e) { return null; }
@@ -3446,15 +3762,27 @@ async function fillMarketing() {
     const subject = $("#mk-campaign-subject");
     const content = $("#mk-campaign-content");
     let campaignProducts = []; const selectedProducts = new Set();
+    let campaignMatches = [];
+    let campaignShown = MK_PICKER_PAGE;
     const paintProducts = () => {
       const box = $("#mk-product-options"); const q = String($("#mk-product-search")?.value || "").trim().toLowerCase();
       if (!box) return;
-      const rows = campaignProducts.filter((p) => !q || `${p.name || ""} ${p.sku || ""}`.toLowerCase().includes(q));
-      box.innerHTML = rows.length ? rows.map((p) => `<label class="mk-product-option"><input type="checkbox" name="campaignProduct" value="${esc(p.id)}" ${selectedProducts.has(String(p.id)) ? "checked" : ""} /><img src="${esc(p.image_url || p.image || "images/products/_placeholder.jpg")}" alt="" /><span><b>${esc(p.name || "Product")}</b><small>${p.priceCfa ? `${Number(p.priceCfa).toLocaleString()} CFA` : `₦${Number(p.priceNgn || 0).toLocaleString()}`}${p.badge ? ` · ${esc(p.badge)}` : ""}</small></span></label>`).join("") : `<p class="empty">No matching products.</p>`;
+      campaignMatches = campaignProducts.filter((p) => !q || `${p.name || ""} ${p.sku || ""}`.toLowerCase().includes(q));
+      if (campaignShown < MK_PICKER_PAGE) campaignShown = MK_PICKER_PAGE;
+      box.innerHTML = marketingPickerListHTML(campaignMatches, "campaignProduct", selectedProducts, campaignShown, "data-campaign-picker-more");
+      marketingPickerCount("mk-product", selectedProducts.size);
     };
     try { const catalog = await api("api/catalog?all=1"); campaignProducts = catalog.products || []; paintProducts(); } catch (_err) { const box = $("#mk-product-options"); if (box) box.innerHTML = `<p class="empty">Catalog unavailable.</p>`; }
-    $("#mk-product-search")?.addEventListener("input", paintProducts);
-    $("#mk-product-options")?.addEventListener("change", (e) => { const input = e.target.closest('input[name="campaignProduct"]'); if (!input) return; if (input.checked && selectedProducts.size >= 12) { input.checked = false; JA.toast("Choose no more than 12 products."); return; } input.checked ? selectedProducts.add(input.value) : selectedProducts.delete(input.value); });
+    $("#mk-product-search")?.addEventListener("input", () => { campaignShown = MK_PICKER_PAGE; paintProducts(); });
+    $("#mk-product-options")?.addEventListener("click", (e) => {
+      if (!e.target.closest("[data-campaign-picker-more]")) return;
+      campaignShown += MK_PICKER_PAGE;
+      paintProducts();
+    });
+    $("#mk-product-options")?.addEventListener("change", (e) => { const input = e.target.closest('input[name="campaignProduct"]'); if (!input) return; if (input.checked && selectedProducts.size >= 12) { input.checked = false; JA.toast("Choose no more than 12 products."); return; } input.checked ? selectedProducts.add(input.value) : selectedProducts.delete(input.value); marketingPickerCount("mk-product", selectedProducts.size); });
+    // Prices are currency-dependent: repaint them the moment the shop's
+    // language or currency changes, so the picker can never show a stale ₦.
+    bindMarketingCurrency(paintProducts);
     const applyDefaults = () => {
       const preset = campaignDefaults[type?.value] || campaignDefaults.custom;
       if (subject) subject.value = preset.subject;
@@ -3585,7 +3913,7 @@ async function fillSales() {
   if (salesFrom) params.set("from", salesFrom);
   if (salesTo) params.set("to", salesTo);
   try {
-    const res = await fetch("api/admin/sales?" + params, { credentials: "same-origin", cache: "no-store" });
+    const res = await timedFetch("api/admin/sales?" + params, { cache: "no-store" });
     if (res.ok) d = await res.json();
   } catch (e) { d = null; }
   if (!d || d.ok === false) {
@@ -3724,7 +4052,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=192" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=193" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}</nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -3881,7 +4209,7 @@ function paintDesk(tab = "analytics") {
       // Nothing changed: re-read instead of writing an identical row (and
       // never write the empty fields the form happened to be showing).
       try {
-        const r = await fetch("api/site", { cache: "no-store" });
+        const r = await timedFetch("api/site", { cache: "no-store" }, 5000);
         const d = r.ok ? await r.json() : null;
         if (d && d.site) fillSiteForm(d.site);
       } catch (err) {}
@@ -4092,7 +4420,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=192", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=193", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -4801,7 +5129,7 @@ function bindCustomerCare() {
   };
   const initial = (JA.getSiteConfig && JA.getSiteConfig()) || {};
   repaint(initial.customer_care || {});
-  fetch("api/site", { cache: "no-store" }).then((r) => r.ok ? r.json() : null)
+  timedFetch("api/site", { cache: "no-store" }, 5000).then((r) => r.ok ? r.json() : null)
     .then((d) => repaint((d && d.site && d.site.customer_care) || current)).catch(() => {});
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -4863,7 +5191,7 @@ function bindWelcome() {
     const url = loadedRow.welcome_image_url || "";
     if (preview) preview.innerHTML = url ? `<img src="${JA.escape(url)}" alt="Welcome preview" style="max-width:96px;max-height:96px;margin-top:8px" />` : "";
   };
-  fetch("api/site", { cache: "no-store" }).then((r) => r.ok ? r.json() : null)
+  timedFetch("api/site", { cache: "no-store" }, 5000).then((r) => r.ok ? r.json() : null)
     .then((d) => repaint((d && d.site) || {})).catch(() => {});
   form.elements.namedItem("welcome_image_url")?.addEventListener("input", (e) => {
     if (preview) preview.innerHTML = e.target.value ? `<img src="${JA.escape(e.target.value)}" alt="Welcome preview" style="max-width:96px;max-height:96px;margin-top:8px" />` : "";
@@ -5237,6 +5565,7 @@ function adminPathDesk(pathname) {
 function applyAdminDeepLink() {
   let desk = "";
   let state = {};
+  let wantedId = "";
   // A real path wins over nothing, and loses to nothing: /admin/marketing/
   // broadcast is the URL the owner asked for, so it opens the Marketing desk.
   const pathDesk = adminPathDesk(window.location.pathname);
@@ -5256,6 +5585,10 @@ function applyAdminDeepLink() {
     if (target && !target.includes("q=") && search.get("q")) {
       target += "&q=" + search.get("q");
     }
+    // /admin/products?id=<ID> (the link the low-stock drawer uses) opens that
+    // product's editor directly. It may arrive on its own or inside a
+    // return_url, so both spellings are read.
+    wantedId = String(search.get("id") || search.get("product") || search.get("edit") || "").trim();
     // A ?desk=/?tab= in the URL still wins; the path is the fallback, so an
     // old bookmark keeps working exactly as it did.
     desk = search.get("desk") || search.get("tab") || desk;
@@ -5267,6 +5600,14 @@ function applyAdminDeepLink() {
     }
   } catch (e) { return ""; }
   if (Object.keys(state).length) applyProductsState(state);
+  if (state.id) wantedId = wantedId || String(state.id);
+  if (wantedId) {
+    // Never open an editor for a row that no longer exists: the admin would
+    // land on an empty "new product" form with no explanation.
+    if (JA.product && JA.product(wantedId)) editingId = wantedId;
+    else if (JA.toast) JA.toast("That product is no longer in the catalogue.");
+    desk = "products";
+  }
   return desk;
 }
 

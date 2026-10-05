@@ -32,4 +32,6 @@ alter table coupon_uses add column if not exists used_at  timestamptz default no
 -- (code, order_id) so a retry cannot insert the same order twice.
 create unique index if not exists coupon_uses_code_order on coupon_uses(code, order_id);
 create index if not exists coupon_uses_code on coupon_uses(code, used_at desc);
+-- Reversing a redemption (order deleted / declined) deletes by order_id.
+create index if not exists coupon_uses_order on coupon_uses(order_id);
 

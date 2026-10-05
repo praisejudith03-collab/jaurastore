@@ -1385,7 +1385,18 @@ const JA = (() => {
     if (range) {
       // "₦1,800.00 – ₦2,500.00": the exact, per-variant price span for a
       // multi-variant item (see moneyExact / moneyRange).
-      return `<span class="price" data-price-for="${p.id}" data-price-state="range"><span class="now price-range">${moneyExact(range.min, cur)}<span class="range-separator" aria-hidden="true">–</span>${moneyExact(range.max, cur)}</span></span>`;
+      //
+      // Each amount is its OWN nowrap token (owner request 2026-10-05): a
+      // money string can never be split across two lines, and if a range
+      // truly cannot fit its card the break may only fall BETWEEN the two
+      // whole amounts, never inside one ("₦1,800.00" + "–" + "₦2,500.00").
+      // The two amounts are the only break points, so the separator RIDES with
+      // the lower amount: rendered as a sibling it gave the line breaker a
+      // second chance to break ("₦100,000.00" / "–" / "₦150,000.00" on a 320px
+      // card). CSS puts each amount on its own flex item, and a flex line can
+      // only ever break BETWEEN items - so the worst case is two lines, each
+      // holding one whole amount (owner request 2026-10-05).
+      return `<span class="price" data-price-for="${p.id}" data-price-state="range"><span class="now price-range"><span class="range-min">${moneyExact(range.min, cur)}<span class="range-separator" aria-hidden="true">–</span></span><span class="range-max">${moneyExact(range.max, cur)}</span></span></span>`;
     }
     const now = priceOf(p, cur);
     const was = compareOf(p, cur);
@@ -2838,8 +2849,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=192";
-        const FLYER = "images/brand/logo-flyer.jpg?v=192";
+        const LOGO = "images/brand/logo.jpg?v=193";
+        const FLYER = "images/brand/logo-flyer.jpg?v=193";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -3035,7 +3046,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=192" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=193" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3334,7 +3345,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=192" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=193" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3470,7 +3481,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=192", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=193", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3504,7 +3515,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=192";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=193";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3563,7 +3574,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=192");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=193");
     document.title = title;
     [
       ["name", "description", description],
