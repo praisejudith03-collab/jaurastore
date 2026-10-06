@@ -59,6 +59,16 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      # Owner-authorized Google Drive accounting. Register this exact redirect
+      # URI in the Google OAuth Web application before connecting the owner.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        value: https://jaurastore.com.ng/api/admin/accounting/google/callback
+      - key: GOOGLE_SHEETS_TOKEN_KEY
+        sync: false
       # Free Render services have ephemeral disks; SQLite/JSON are boot caches
       # restored from Supabase and safe to keep under /tmp.
       - key: DB_PATH

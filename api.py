@@ -2,7 +2,7 @@
 import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, re, threading, time, gc
 from functools import wraps
 from flask import (Blueprint, request, jsonify, session, current_app, make_response,
-                   g, has_request_context)
+                   redirect, g, has_request_context)
 from config import Config
 from campaign_types import (CAMPAIGN_TYPES, BROADCAST_KINDS,
                             broadcast_kind_from, broadcast_kind_options,
@@ -140,6 +140,9 @@ _catalog_cache_lock = threading.RLock()
 _category_cache_lock = threading.RLock()
 _catalog_cache = {"expires": 0.0, "snapshot": None}
 _category_cache = {"expires": 0.0, "payload": None}
+_BEST_SELLER_CACHE_TTL = 300.0
+_best_seller_lock = threading.RLock()
+_best_seller_cache = {"expires": 0.0, "units": None}
 
 
 def _cache_enabled():
@@ -433,6 +436,102 @@ def _public_product(p):
     return out
 
 
+def _invalidate_confirmed_sales_cache():
+    """Forget confirmed item volumes after an order is confirmed/reopened."""
+    with _best_seller_lock:
+        _best_seller_cache["expires"] = 0.0
+        _best_seller_cache["units"] = None
+
+
+def _confirmed_sales_units():
+    """Lifetime item quantities from confirmed orders, keyed by product id."""
+    now = time.monotonic()
+    cache_allowed = Config.ENV != "testing"
+    if cache_allowed:
+        with _best_seller_lock:
+            if (_best_seller_cache.get("units") is not None
+                    and now < float(_best_seller_cache.get("expires") or 0)):
+                return dict(_best_seller_cache["units"])
+    try:
+        if catalog_mod._prod_source():
+            rows = supabase_store.load_confirmed_orders_for_accounting()
+            if rows is None:
+                return None
+        else:
+            rows = [dict(row) for row in query(
+                "SELECT id,payload,total,currency,status,at,updated_at,customer_name "
+                "FROM orders WHERE status='confirmed'")]
+    except Exception as exc:
+        print(f"[catalog] confirmed sales volume unavailable: {exc}")
+        return None
+    volumes = {}
+    for order in rows or []:
+        if not isinstance(order, dict) and not hasattr(order, "keys"):
+            continue
+        payload = accounting_mod.order_payload(order)
+        for item in payload.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            product_id = str(item.get("id") or item.get("productId") or
+                             item.get("product_id") or "").strip()
+            if not product_id:
+                continue
+            qty = accounting_mod.amount(item.get("qty"), 0)
+            if qty:
+                volumes[product_id] = volumes.get(product_id, 0) + qty
+    if cache_allowed:
+        with _best_seller_lock:
+            _best_seller_cache["units"] = dict(volumes)
+            _best_seller_cache["expires"] = time.monotonic() + _BEST_SELLER_CACHE_TTL
+    return volumes
+
+
+def _apply_confirmed_best_sellers(products, *, limit=8):
+    """Derive Bestseller badges from the top lifetime confirmed quantities.
+
+    No spreadsheet or manual badge entry is involved: Pending and declined
+    orders never count. A failed order-history read leaves the stored badges
+    unchanged rather than falsely clearing them.
+    """
+    rows = [dict(product) for product in (products or []) if isinstance(product, dict)]
+    volumes = _confirmed_sales_units()
+    if volumes is None:
+        return rows
+    aliases = {}
+    for product in rows:
+        pid = str(product.get("id") or "").strip()
+        if pid:
+            aliases[pid] = pid
+        legacy = str(product.get("legacyId") or "").strip()
+        if legacy:
+            aliases[legacy] = pid
+    canonical = {}
+    for product_id, units in volumes.items():
+        pid = aliases.get(str(product_id), str(product_id))
+        canonical[pid] = canonical.get(pid, 0) + int(units or 0)
+    eligible = [product for product in rows
+                if product.get("online") is not False
+                and canonical.get(str(product.get("id") or ""), 0) > 0]
+    eligible.sort(key=lambda product: (
+        -canonical.get(str(product.get("id") or ""), 0),
+        str(product.get("name") or "").casefold(),
+        str(product.get("id") or ""),
+    ))
+    chosen = {str(product.get("id") or "") for product in eligible[:max(0, int(limit))]}
+    for product in rows:
+        pid = str(product.get("id") or "")
+        best_seller = bool(pid and pid in chosen)
+        product["bestSeller"] = best_seller
+        # Bestseller is a live sales status. Clear old static seed/manual
+        # bestseller flags when a product falls out of the top eight, while
+        # leaving unrelated badges such as "new" and "sale" intact.
+        if best_seller:
+            product["badge"] = "bestseller"
+        elif str(product.get("badge") or "").strip().lower() == "bestseller":
+            product["badge"] = ""
+    return rows
+
+
 def _catalog_response_snapshot():
     """Return pre-serialized public and admin catalogue responses.
 
@@ -448,7 +547,8 @@ def _catalog_response_snapshot():
             if cached is not None and time.monotonic() < float(_catalog_cache.get("expires") or 0):
                 return cached
 
-            all_products = catalog_mod.merged(include_hidden=True)
+            all_products = _apply_confirmed_best_sellers(
+                catalog_mod.merged(include_hidden=True))
             public_products = [_public_product(p) for p in all_products if p.get("online") is not False]
             try:
                 local_meta = catalog_mod.overrides()
@@ -475,7 +575,8 @@ def _catalog_response_snapshot():
 
     # Isolated test/dev reads intentionally remain uncached, as they are often
     # backed by a scratch JSON file changed during the same process.
-    all_products = catalog_mod.merged(include_hidden=True)
+    all_products = _apply_confirmed_best_sellers(
+        catalog_mod.merged(include_hidden=True))
     public_products = [_public_product(p) for p in all_products if p.get("online") is not False]
     featured = catalog_mod.homepage_featured(all_products)
     meta = catalog_mod.meta()
@@ -2788,6 +2889,103 @@ def admin_accounting():
     return response
 
 
+def _accounting_summary_json(status=200, **payload):
+    response = jsonify(**payload)
+    response.status_code = status
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@api.get("/admin/accounting/summary")
+@authmod.require_admin
+def admin_accounting_summary():
+    """Four-card summary sourced from the connected owner's Google ledger."""
+    import google_sheets
+    currency = accounting_mod.normalize_currency(request.args.get("currency")) or "NGN"
+    period = sec.clean(request.args.get("period"), 16).lower()
+    if period not in ("week", "month", "year"):
+        period = "month"
+    batch = sec.clean(request.args.get("batch"), 100)
+    google = google_sheets.integration_status()
+    if google.get("connected"):
+        try:
+            ledger = google_sheets.read_ledger(currency)
+            summary = google_sheets.summarize(ledger, period=period, batch=batch)
+            return _accounting_summary_json(ok=True, google=google,
+                                            summary=summary, error="")
+        except google_sheets.GoogleSheetsError as exc:
+            # Keep the admin desk usable (and the Drive buttons live) while
+            # reporting that totals could not be refreshed from the source.
+            return _accounting_summary_json(ok=True, google=google, summary=None,
+                                            error=str(exc)[:240])
+
+    orders = _accounting_orders()
+    if orders is None:
+        return _accounting_summary_json(
+            status=503, ok=False, google=google,
+            error="Confirmed orders are temporarily unavailable.")
+    entries = [accounting_mod.entry_from_order(order) for order in orders
+               if isinstance(order, dict) or hasattr(order, "keys")]
+    summary = google_sheets.aggregate_fallback(
+        entries, currency, period=period, batch=batch)
+    return _accounting_summary_json(ok=True, google=google,
+                                    summary=summary, error="")
+
+
+@api.get("/admin/accounting/google/connect")
+@authmod.require_admin
+def admin_accounting_google_connect():
+    """Begin a session-bound OAuth flow for the store owner's Google Drive."""
+    import google_sheets
+    if not google_sheets.configured():
+        return redirect("/admin/accounting?google=not-configured")
+    state = secrets.token_urlsafe(32)
+    session["google_sheets_oauth_state"] = state
+    session["google_sheets_oauth_admin"] = authmod.current_admin()
+    session["google_sheets_oauth_at"] = time.time()
+    try:
+        return redirect(google_sheets.authorization_url(state, authmod.current_admin()))
+    except google_sheets.GoogleSheetsError:
+        session.pop("google_sheets_oauth_state", None)
+        session.pop("google_sheets_oauth_admin", None)
+        session.pop("google_sheets_oauth_at", None)
+        return redirect("/admin/accounting?google=not-configured")
+
+
+@api.get("/admin/accounting/google/callback")
+def admin_accounting_google_callback():
+    """Validate OAuth state, create both Drive sheets and queue historical sync."""
+    import google_sheets
+    admin = authmod.current_admin()
+    expected = str(session.pop("google_sheets_oauth_state", "") or "")
+    expected_admin = str(session.pop("google_sheets_oauth_admin", "") or "")
+    started = float(session.pop("google_sheets_oauth_at", 0) or 0)
+    supplied = str(request.args.get("state") or "")
+    if not admin:
+        return redirect("/admin/accounting?google=login")
+    if (not expected or not supplied
+            or not hmac.compare_digest(expected.encode("utf-8"), supplied.encode("utf-8"))
+            or expected_admin != admin or time.time() - started > 900):
+        return redirect("/admin/accounting?google=state-error")
+    if request.args.get("error"):
+        return redirect("/admin/accounting?google=cancelled")
+    code = str(request.args.get("code") or "")
+    if not code:
+        return redirect("/admin/accounting?google=failed")
+    try:
+        google_sheets.complete_authorization(code, admin)
+        orders = _accounting_orders()
+        if orders is not None:
+            google_sheets.start_backfill(orders)
+        return redirect("/admin/accounting?google=connected")
+    except google_sheets.GoogleSheetsError as exc:
+        print(f"[google-sheets] OAuth callback failed: {str(exc)[:180]}")
+        return redirect("/admin/accounting?google=failed")
+    except Exception as exc:
+        print(f"[google-sheets] OAuth callback failed: {type(exc).__name__}")
+        return redirect("/admin/accounting?google=failed")
+
+
 def _accounting_mutation_error(message, status=400):
     return jsonify(ok=False, error=message), status
 
@@ -3268,7 +3466,8 @@ def admin_order_update(oid):
     if action == "partial_payment" and status != "pending":
         return jsonify(ok=False, error="A partial payment must remain pending."), 400
 
-    row = one("SELECT id, payload, status, email, total, currency FROM orders WHERE id=?", (oid,))
+    row = one("SELECT id, payload, status, email, total, currency, at, customer_name "
+              "FROM orders WHERE id=?", (oid,))
     if not row:
         return jsonify(ok=False, error="Order not found."), 404
     try:
@@ -3368,6 +3567,8 @@ def admin_order_update(oid):
         _sync_order_stock(payload, old_status, status, actor=authmod.current_admin())
     execute("UPDATE orders SET status=?, payload=?, updated_at=? WHERE id=?",
             (status, json.dumps(payload, ensure_ascii=False), now, oid))
+    if old_status != status:
+        _invalidate_confirmed_sales_cache()
     detail = oid + (f" paid={paid_amount} balance={balance}" if paid_amount is not None else "")
     audit(authmod.current_admin(), f"order.{action or status}", detail, _ip())
 
@@ -3384,6 +3585,22 @@ def admin_order_update(oid):
                 "The order update could not be confirmed in Supabase. Refresh "
                 "and retry so the status, customer notice and payment review "
                 "do not silently revert.")), 503
+
+    # Every confirmed order is idempotently upserted to its matching owner
+    # ledger in Google Drive. This is deliberately asynchronous: Google is an
+    # extra accounting destination and must never delay/undo the order status.
+    if status == "confirmed":
+        try:
+            import google_sheets
+            sheet_order = {
+                "id": oid, "status": status, "payload": payload,
+                "total": row["total"], "currency": row["currency"],
+                "at": row["at"], "updated_at": now,
+                "customer_name": row["customer_name"],
+            }
+            google_sheets.sync_order_async(sheet_order)
+        except Exception as exc:
+            print(f"[google-sheets] confirmation hook skipped: {type(exc).__name__}")
 
     # Build one complete customer copy, with a fallback for legacy rows whose
     # payload predates the nested customer email field.

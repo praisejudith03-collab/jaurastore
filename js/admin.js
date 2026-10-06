@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=195" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=197" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -2518,7 +2518,8 @@ async function fillOrders() {
   const apply = () => { selectedOrderIds.clear(); orderSearch = String(search?.value || "").trim(); orderFrom = String(from?.value || ""); orderTo = String(to?.value || ""); orderPage = 1; fillOrders(); };
   if (search) search.oninput = (() => { let timer; return () => { clearTimeout(timer); timer = setTimeout(apply, 250); }; })();
   if (from) from.onchange = apply; if (to) to.onchange = apply;
-  $("#order-filter-clear").onclick = () => { orderSearch = ""; orderFrom = ""; orderTo = ""; fillOrders(); };
+  const orderFilterClear = $("#order-filter-clear");
+  if (orderFilterClear) orderFilterClear.onclick = () => { orderSearch = ""; orderFrom = ""; orderTo = ""; fillOrders(); };
   const csv = $("#orders-csv"); if (csv) { const p = new URLSearchParams(); if (orderSearch) p.set("q", orderSearch); if (orderFrom) p.set("from", orderFrom); if (orderTo) p.set("to", orderTo); csv.href = "api/admin/orders.csv" + (p.toString() ? "?" + p : ""); }
   renderOrderPage();
 }
@@ -3740,7 +3741,8 @@ async function fillMarketing() {
     const apply = () => { marketingSearch = String(search?.value || "").trim(); marketingFrom = String(from?.value || ""); marketingTo = String(to?.value || ""); loadCampaignLog(); };
     if (search) search.oninput = (() => { let timer; return () => { clearTimeout(timer); timer = setTimeout(apply, 250); }; })();
     if (from) from.onchange = apply; if (to) to.onchange = apply;
-    $("#marketing-filter-clear").onclick = () => { marketingSearch = ""; marketingFrom = ""; marketingTo = ""; loadCampaignLog(); };
+    const marketingFilterClear = $("#marketing-filter-clear");
+    if (marketingFilterClear) marketingFilterClear.onclick = () => { marketingSearch = ""; marketingFrom = ""; marketingTo = ""; loadCampaignLog(); };
   };
   bindCampaignFilters();
   const refreshCampaignRecipients = async () => {
@@ -3956,7 +3958,8 @@ async function fillSales() {
   const apply = () => { salesSearch = String(search?.value || "").trim(); salesFrom = String(from?.value || ""); salesTo = String(to?.value || ""); fillSales(); };
   if (search) search.oninput = (() => { let timer; return () => { clearTimeout(timer); timer = setTimeout(apply, 250); }; })();
   if (from) from.onchange = apply; if (to) to.onchange = apply;
-  $("#sales-filter-clear").onclick = () => { salesSearch = ""; salesFrom = ""; salesTo = ""; fillSales(); };
+  const salesFilterClear = $("#sales-filter-clear");
+  if (salesFilterClear) salesFilterClear.onclick = () => { salesSearch = ""; salesFrom = ""; salesTo = ""; fillSales(); };
   updateSalesCsv();
 }
 function updateSalesCsv() {
@@ -4054,7 +4057,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=195" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=197" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -4087,7 +4090,7 @@ function paintDesk(tab = "analytics") {
       <a class="admin-more-link" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a>
     </div>`;
   const signOut = async () => { await JA.logoutAdmin(); paintLogin("Signed out."); };
-  $("#logout").onclick = signOut;
+  const logout = $("#logout"); if (logout) logout.onclick = signOut;
   const logoutM = $("#logout-m"); if (logoutM) logoutM.onclick = signOut;
   document.querySelectorAll("[data-tab]").forEach((b) => { b.onclick = () => paintDesk(b.dataset.tab); });
   // "More" opens the secondary-sections sheet that sits just above the dock.
@@ -4423,7 +4426,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=195", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=197", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
