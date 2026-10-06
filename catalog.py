@@ -15,6 +15,7 @@ Two persistence backends are supported:
   so a momentarily unavailable Supabase never empties the shop.
 """
 import os, sys, json, re, secrets, datetime, contextlib, hashlib
+from functools import lru_cache
 from config import Config
 
 try:
@@ -647,16 +648,22 @@ def _free_slug(slug, pid, taken):
     return f"{slug}-jau-{suffix}"
 
 
+@lru_cache(maxsize=8192)
+def _generated_sku_for_identity(identity):
+    suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12].upper()
+    return "JAU-" + suffix
+
+
 def generated_product_sku(product_id):
     """Create a stable SKU when a saved product has no merchant code.
 
     Hashing the canonical product id keeps generated values deterministic on
     retries and re-saves; unlike a timestamp, a network retry cannot give one
-    product two codes. The owner-provided SKU always takes precedence.
+    product two codes. The small cache avoids repeating work while a catalogue
+    is normalized, and the owner-provided SKU always takes precedence.
     """
     identity = str(product_id or "").strip()
-    suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12].upper()
-    return "JAU-" + suffix
+    return _generated_sku_for_identity(identity)
 
 
 def normalize(product):
