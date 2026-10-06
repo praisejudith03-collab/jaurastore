@@ -25,6 +25,30 @@ except ImportError:             # pragma: no cover
 
 _client = None
 _loaded = False
+_probe_client = None
+_probe_loaded = False
+
+# Every PostgREST request is bounded. The supabase package's own default is
+# 120 seconds, which is unusable twice over: gunicorn kills the worker at 45s
+# (Procfile --timeout 45), so a request still waiting at 120s can never
+# complete; and on /healthz it pinned the probe thread for up to two minutes,
+# during which the probe guard answered "previous database probe is still
+# pending" to every single request - one stalled read became a sustained
+# health-check outage instead of a single slow one.
+#
+# Two budgets, because the two consumers have very different deadlines:
+#
+#   HEALTH_PROBE_TIMEOUT_SECONDS - the /healthz ping, under the 3.75s health
+#       deadline (health_checks.DATABASE_PING_TIMEOUT_SECONDS, Render 5s).
+#   SUPABASE_HTTP_TIMEOUT_SECONDS - the shop's own reads, which legitimately
+#       take seconds on a cold free-tier database, so they get real headroom
+#       while still staying under the gunicorn worker timeout.
+#
+# Only the PostgREST timeout is set here. Storage uploads move multi-megabyte
+# photos and function calls have their own shorter bound, so both keep the
+# library defaults.
+HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
+SUPABASE_HTTP_TIMEOUT_SECONDS = 20.0
 
 
 # ---------------------------------------------------------------- read cache
@@ -112,7 +136,9 @@ def ping():
     if not enabled():
         return "not_configured"
     try:
-        c = client()
+        # The probe client, not the shop's: this read must stay inside the
+        # health-check deadline. See probe_client().
+        c = probe_client()
         if c is None:
             return "unreachable"
         c.table("products").select("id").limit(1).execute()
@@ -120,6 +146,40 @@ def ping():
     except Exception as exc:
         print(f"[supabase] ping failed: {exc}")
         return "unreachable"
+
+
+def _client_options(timeout):
+    """Client options bounding PostgREST HTTP calls to ``timeout``, or None.
+
+    Returns None when the installed supabase package does not expose the
+    options object this version expects, so an older or newer client still
+    builds with its own defaults instead of the shop losing its database
+    outright over a health-check hardening detail.
+    """
+    try:
+        from supabase.lib.client_options import SyncClientOptions
+    except Exception:
+        return None
+    try:
+        return SyncClientOptions(postgrest_client_timeout=timeout)
+    except Exception as exc:
+        print(f"[supabase] client options unavailable: {exc}")
+        return None
+
+
+def _build_client(timeout):
+    """Create a client whose PostgREST calls are bounded, or None."""
+    if not enabled():
+        return None
+    try:
+        from supabase import create_client
+        # options=None is the package's own default, so falling back to it
+        # keeps behaviour unchanged on a client whose options differ.
+        return create_client(Config.SUPABASE_URL, Config.SUPABASE_SERVICE_ROLE_KEY,
+                             _client_options(timeout))
+    except Exception as exc:                     # never crash the shop
+        print(f"[supabase] client unavailable: {exc}")
+        return None
 
 
 def client():
@@ -132,16 +192,26 @@ def client():
     if _loaded:
         return _client
     _loaded = True
-    if not enabled():
-        _client = None
-        return None
-    try:
-        from supabase import create_client
-        _client = create_client(Config.SUPABASE_URL, Config.SUPABASE_SERVICE_ROLE_KEY)
-    except Exception as exc:                     # never crash the shop
-        print(f"[supabase] client unavailable: {exc}")
-        _client = None
+    _client = _build_client(SUPABASE_HTTP_TIMEOUT_SECONDS)
     return _client
+
+
+def probe_client():
+    """A separate client for the /healthz ping, on the health-check budget.
+
+    Deliberately NOT the shop's own client. The ping has to answer inside the
+    3.75s health deadline while a cold free-tier catalogue read legitimately
+    takes seconds, so sharing one client would mean either the health check
+    inherits the shop's generous budget and pins the probe guard (the outage
+    this exists to prevent), or the shop's reads inherit 3s and start failing
+    on a cold start. Two cached clients, each on its own deadline.
+    """
+    global _probe_client, _probe_loaded
+    if _probe_loaded:
+        return _probe_client
+    _probe_loaded = True
+    _probe_client = _build_client(HEALTH_PROBE_TIMEOUT_SECONDS)
+    return _probe_client
 
 
 # ------------------------------------------------------------------ products
@@ -1212,11 +1282,54 @@ def create_order_strict(order):
     return _upsert_order_resilient(row, strict=True)
 
 
+# ---------------------------------------------------------- abandoned_carts
+# `public.abandoned_carts` is OPTIONAL. Captured carts live in local SQLite and
+# the Supabase copy is only a supplement, so a project that never ran that
+# migration is healthy rather than broken. Supabase answers PGRST205 ("could
+# not find the table") when it is absent, and every helper below used to treat
+# that as a failure - so one missing table printed an error on every 5-minute
+# reminder tick, on every capture and on every purge, forever. Detect the
+# absent table once, skip the roundtrip that cannot succeed, and re-probe on an
+# interval so creating the table later heals itself without a restart.
+_ABANDONED_RECHECK_SECONDS = 900.0
+_abandoned_missing_until = 0.0
+_abandoned_missing_logged = False
+
+
+def _abandoned_table_missing(exc):
+    """True when Supabase reports abandoned_carts is absent from the schema."""
+    text = str(exc).lower()
+    return "pgrst205" in text or "could not find the table" in text
+
+
+def _abandoned_table_usable():
+    """Whether an abandoned_carts roundtrip is worth attempting right now."""
+    return _time.monotonic() >= _abandoned_missing_until
+
+
+def _abandoned_table_absent():
+    """Record the table as missing so the next calls skip it."""
+    global _abandoned_missing_until, _abandoned_missing_logged
+    _abandoned_missing_until = _time.monotonic() + _ABANDONED_RECHECK_SECONDS
+    if not _abandoned_missing_logged:
+        _abandoned_missing_logged = True
+        print("[supabase] abandoned_carts is absent from the Supabase schema "
+              "(PGRST205); remote abandoned-cart sync is skipped and local "
+              "carts keep working. Re-checked every 15 minutes.")
+
+
+def _abandoned_table_present():
+    """A roundtrip succeeded, so forget any earlier missing-table verdict."""
+    global _abandoned_missing_until, _abandoned_missing_logged
+    _abandoned_missing_until = 0.0
+    _abandoned_missing_logged = False
+
+
 def mirror_abandoned_cart(row):
     """Upsert one email-captured abandoned cart. Returns False if the
     configured Supabase table rejected the write, but never raises."""
     c = client()
-    if c is None or not row:
+    if c is None or not row or not _abandoned_table_usable():
         return False
     data = dict(row)
     items = data.get("items")
@@ -1229,8 +1342,12 @@ def mirror_abandoned_cart(row):
     data["reminder_sent"] = bool(data.get("reminder_sent"))
     try:
         c.table("abandoned_carts").upsert(data).execute()
+        _abandoned_table_present()
         return True
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return False
         print(f"[supabase] abandoned cart upsert failed: {exc}")
         return False
 
@@ -1242,6 +1359,8 @@ def load_due_abandoned_carts(cutoff, limit=500, offset=0):
     every due cart into memory at once. Returns [] when unconfigured or
     unavailable; the local cache remains the fallback.
     """
+    if not _abandoned_table_usable():
+        return []
     c = client()
     if c is None:
         return []
@@ -1253,8 +1372,12 @@ def load_due_abandoned_carts(cutoff, limit=500, offset=0):
                      .is_("converted_at", "null")
                      .lte("last_activity_at", cutoff)
                      .order("last_activity_at")), limit, offset).execute()
+        _abandoned_table_present()
         return _res_data(res) or []
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return []
         print(f"[supabase] abandoned carts load failed: {exc}")
         return []
 
@@ -1262,13 +1385,17 @@ def load_due_abandoned_carts(cutoff, limit=500, offset=0):
 def mark_abandoned_converted(token, at):
     """Mark a cart converted in Supabase; never raises."""
     c = client()
-    if c is None or not token:
+    if c is None or not token or not _abandoned_table_usable():
         return False
     try:
         c.table("abandoned_carts").update({"converted_at": at,
                                             "updated_at": at}).eq("token", token).execute()
+        _abandoned_table_present()
         return True
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return False
         print(f"[supabase] abandoned conversion mark failed: {exc}")
         return False
 
@@ -1276,14 +1403,18 @@ def mark_abandoned_converted(token, at):
 def mark_abandoned_reminder_sent(token, at):
     """Persist the one-shot reminder flag in Supabase; never raises."""
     c = client()
-    if c is None or not token:
+    if c is None or not token or not _abandoned_table_usable():
         return False
     try:
         c.table("abandoned_carts").update({"reminder_sent": True,
                                             "reminder_sent_at": at,
                                             "updated_at": at}).eq("token", token).execute()
+        _abandoned_table_present()
         return True
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return False
         print(f"[supabase] abandoned reminder mark failed: {exc}")
         return False
 
@@ -1294,12 +1425,16 @@ def delete_abandoned_carts_for_tokens(tokens):
     """Delete abandoned-cart rows by token. Best effort, never raises."""
     c = client()
     tokens = [str(t or "").strip() for t in (tokens or []) if str(t or "").strip()]
-    if c is None or not tokens:
+    if c is None or not tokens or not _abandoned_table_usable():
         return 0
     try:
         c.table("abandoned_carts").delete().in_("token", tokens).execute()
+        _abandoned_table_present()
         return len(tokens)
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return 0
         print(f"[supabase] abandoned cart token purge failed: {exc}")
         return 0
 
@@ -1308,15 +1443,19 @@ def delete_abandoned_carts_for_email(email, converted_only=True):
     """Delete abandoned carts tied to an order email. Best effort."""
     c = client()
     email = str(email or "").strip().lower()
-    if c is None or not email:
+    if c is None or not email or not _abandoned_table_usable():
         return 0
     try:
         q = c.table("abandoned_carts").delete().eq("email", email)
         if converted_only:
             q = q.not_.is_("converted_at", "null")
         q.execute()
+        _abandoned_table_present()
         return 1
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return 0
         print(f"[supabase] abandoned cart email purge failed: {exc}")
         return 0
 
@@ -1331,27 +1470,42 @@ def delete_abandoned_carts_for_product(product_id, product_name=""):
     c = client()
     pid = str(product_id or "").strip()
     name = str(product_name or "").strip()
-    if c is None or not (pid or name):
+    if c is None or not (pid or name) or not _abandoned_table_usable():
         return 0
     deleted = 0
+
+    def _absent(exc):
+        """True when this failure was just the missing table; stop trying."""
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return True
+        return False
+
     if pid:
         for shape in ({"id": pid}, {"productId": pid}, {"product_id": pid}):
             try:
                 c.table("abandoned_carts").delete().contains("items", [shape]).execute()
                 deleted += 1
             except Exception as exc:
+                if _absent(exc):
+                    return deleted
                 print(f"[supabase] abandoned cart product containment purge failed: {exc}")
         try:
             c.table("abandoned_carts").delete().ilike("items", f"%{pid}%").execute()
             deleted += 1
         except Exception as exc:
+            if _absent(exc):
+                return deleted
             print(f"[supabase] abandoned cart product-id purge failed: {exc}")
     try:
         if name:
             c.table("abandoned_carts").delete().ilike("items", f"%{name[:80]}%").execute()
             deleted += 1
     except Exception as exc:
-        print(f"[supabase] abandoned cart product-name purge failed: {exc}")
+        if not _absent(exc):
+            print(f"[supabase] abandoned cart product-name purge failed: {exc}")
+    if deleted:
+        _abandoned_table_present()
     return deleted
 
 

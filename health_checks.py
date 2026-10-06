@@ -5,7 +5,10 @@ shop's production source of truth is Supabase/PostgREST; SQLite is used as the
 local working database when Supabase is not configured. Remote checks run in a
 single daemon probe thread so a broken HTTP connection can never pin a Gunicorn
 request thread indefinitely. A timed-out probe stays marked in-flight until it
-really returns, preventing repeated health checks from leaking threads.
+really returns, so repeated health checks cannot pile up threads; that guard is
+itself bounded by PROBE_STALE_AFTER_SECONDS, because a probe that never returns
+must not be able to answer "previous database probe is still pending" forever
+and hold /healthz down long after the underlying blip has passed.
 
 Flask here is WSGI and has no persistent asyncio event loop. ``eventLoop`` in
 the response therefore measures whether the Python request runtime can
@@ -24,6 +27,19 @@ SQLITE_CONNECT_TIMEOUT_SECONDS = 0.25
 
 _remote_probe_lock = threading.Lock()
 _remote_probe_running = False
+# Generation id of the in-flight probe. A probe thread only clears the guard
+# when it is still the current one, so a probe that was given up on cannot
+# later clear the guard belonging to its replacement.
+_remote_probe_token = 0
+# Monotonic start of the in-flight probe, used by the staleness bound below.
+_remote_probe_started = 0.0
+
+# Upper bound on how long an in-flight probe may keep new health checks
+# waiting behind it. Well above DATABASE_PING_TIMEOUT_SECONDS - the underlying
+# HTTP request is itself bounded (supabase_store.SUPABASE_HTTP_TIMEOUT_SECONDS)
+# so a healthy-but-slow probe never reaches this - while still guaranteeing the
+# endpoint recovers on its own if something hangs outside that timeout's reach.
+PROBE_STALE_AFTER_SECONDS = 30.0
 
 
 def _event_loop_probe(timeout=EVENT_LOOP_TIMEOUT_SECONDS):
@@ -69,15 +85,25 @@ def _sqlite_ping():
 
 def _supabase_ping(timeout=None):
     """Ping PostgREST with a hard response deadline and bounded thread count."""
-    global _remote_probe_running
+    global _remote_probe_running, _remote_probe_token, _remote_probe_started
     if timeout is None:
         timeout = DATABASE_PING_TIMEOUT_SECONDS
     started = time.monotonic()
     with _remote_probe_lock:
         if _remote_probe_running:
-            return {"ok": False, "latencyMs": round((time.monotonic() - started) * 1000),
-                    "error": "previous database probe is still pending"}
+            age = time.monotonic() - _remote_probe_started
+            if age < max(0.0, float(PROBE_STALE_AFTER_SECONDS)):
+                return {"ok": False, "latencyMs": round((time.monotonic() - started) * 1000),
+                        "error": "previous database probe is still pending"}
+            # The in-flight probe has outlived every deadline it was ever
+            # given, so it is treated as abandoned rather than as a reason to
+            # keep failing. Python cannot kill the thread; it is simply
+            # disowned, and its own finally clause will not touch the guard
+            # any more because the token below has moved on.
         _remote_probe_running = True
+        _remote_probe_token += 1
+        token = _remote_probe_token
+        _remote_probe_started = time.monotonic()
 
     completed = threading.Event()
     outcome = {}
@@ -95,15 +121,20 @@ def _supabase_ping(timeout=None):
             outcome["ok"] = False
             outcome["error"] = str(exc)[:160]
         finally:
+            # Runs on every exit path - success, exception, or a slow return
+            # after the caller already gave up - so the guard cannot be left
+            # set by this probe. Only this probe's own generation is cleared.
             with _remote_probe_lock:
-                _remote_probe_running = False
+                if _remote_probe_token == token:
+                    _remote_probe_running = False
             completed.set()
 
     try:
         threading.Thread(target=probe, name="health-database-probe", daemon=True).start()
     except Exception as exc:
         with _remote_probe_lock:
-            _remote_probe_running = False
+            if _remote_probe_token == token:
+                _remote_probe_running = False
         return {"ok": False, "latencyMs": round((time.monotonic() - started) * 1000),
                 "error": ("could not start database probe: " + str(exc))[:160]}
 

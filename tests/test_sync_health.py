@@ -77,16 +77,17 @@ def test_ping_not_configured(monkeypatch):
 def test_ping_ok(monkeypatch):
     import supabase_store as sb
     monkeypatch.setattr(sb, "enabled", lambda: True)
-    monkeypatch.setattr(sb, "client", lambda: _PingClient())
+    # ping() reads through the dedicated probe client, so that is the seam.
+    monkeypatch.setattr(sb, "probe_client", lambda: _PingClient())
     assert sb.ping() == "ok"
 
 
 def test_ping_unreachable(monkeypatch):
     import supabase_store as sb
     monkeypatch.setattr(sb, "enabled", lambda: True)
-    monkeypatch.setattr(sb, "client", lambda: None)
+    monkeypatch.setattr(sb, "probe_client", lambda: None)
     assert sb.ping() == "unreachable"
-    monkeypatch.setattr(sb, "client", lambda: _PingClient(boom=True))
+    monkeypatch.setattr(sb, "probe_client", lambda: _PingClient(boom=True))
     assert sb.ping() == "unreachable"
 
 
