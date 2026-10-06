@@ -43,6 +43,9 @@ EMAIL = "jaurastore@gmail.com"
 # coverage here cannot silently rot.
 EXPECTED_ADMIN_ROUTES = {
 ("GET", "/api/admin/accounting"),
+    ("GET", "/api/admin/accounting/summary"),
+    ("GET", "/api/admin/accounting/google/connect"),
+    ("GET", "/api/admin/accounting/google/callback"),
     ("PATCH", "/api/admin/accounting/orders/<oid>"),
     ("DELETE", "/api/admin/accounting/orders/<oid>"),
     ("POST", "/api/admin/accounting/orders/<oid>/restore"),
