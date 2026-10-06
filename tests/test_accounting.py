@@ -286,3 +286,72 @@ def test_supabase_accounting_reader_reports_failure_without_partial_ledger(monke
 
     monkeypatch.setattr(supabase_store, "client", lambda: FakeClient())
     assert supabase_store.load_confirmed_orders_for_accounting(page_size=2) is None
+
+
+def test_admin_accounting_summary_uses_sheet_totals_or_confirmed_order_fallback(client, monkeypatch):
+    import datetime as dt
+    import google_sheets
+
+    add_pending_order(ORDER_IDS[0], "NGN", 15_000, "Naira Buyer")
+    csrf = login(client)
+    # Avoid any real asynchronous Google call during the offline test.
+    monkeypatch.setattr(google_sheets, "sync_order_async", lambda _order: None)
+    confirm(client, csrf, ORDER_IDS[0])
+    monkeypatch.setattr(google_sheets, "integration_status", lambda: {
+        "configured": False, "connected": False, "email": "", "ledgers": {},
+        "syncingExistingOrders": False,
+    })
+
+    fallback = client.get("/api/admin/accounting/summary?currency=NGN&period=month")
+    assert fallback.status_code == 200, fallback.get_json()
+    assert fallback.get_json()["summary"]["revenue"] == 15_000
+    assert fallback.get_json()["summary"]["netProfit"] == 15_000
+    assert fallback.get_json()["summary"]["orderCount"] == 1
+
+    today = dt.datetime.now(dt.timezone.utc).date()
+    sheet_row = [today.isoformat(), "JA-SHEET-01", "Customer", "Item", "NGN",
+                 80_000, 12_000, 3_000, "", "Batch A", ""]
+    monkeypatch.setattr(google_sheets, "integration_status", lambda: {
+        "configured": True, "connected": True, "email": "owner@example.com",
+        "ledgers": {"NGN": {"id": "ngn", "url": "https://docs.google.com/spreadsheets/d/ngn/edit"},
+                    "CFA": {"id": "cfa", "url": "https://docs.google.com/spreadsheets/d/cfa/edit"}},
+        "syncingExistingOrders": False,
+    })
+    monkeypatch.setattr(google_sheets, "read_ledger", lambda _currency: {
+        "currency": "NGN", "orders": [google_sheets._headers("NGN"), sheet_row],
+        "expenses": [["Date", "Batch", "Type", "Description", "Amount · NGN", "Notes"],
+                     [today.isoformat(), "Batch A", "Supplier Cost", "Unlinked", 5_000, ""]],
+    })
+    connected = client.get("/api/admin/accounting/summary?currency=NGN&period=year&batch=Batch%20A")
+    assert connected.status_code == 200, connected.get_json()
+    summary = connected.get_json()["summary"]
+    assert summary["revenue"] == 80_000
+    assert summary["supplierCosts"] == 17_000
+    assert summary["transport"] == 3_000
+    assert summary["netProfit"] == 60_000
+    assert summary["batch"] == "Batch A"
+
+
+def test_google_connect_is_admin_gated_and_callback_state_bound(client, monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://shop.example/api/admin/accounting/google/callback")
+    assert client.get("/api/admin/accounting/google/connect").status_code == 401
+
+    login(client)
+    start = client.get("/api/admin/accounting/google/connect")
+    assert start.status_code == 302
+    location = urlsplit(start.headers["Location"])
+    params = parse_qs(location.query)
+    assert location.netloc == "accounts.google.com"
+    assert params["response_type"] == ["code"]
+    assert params["state"]
+    assert "drive.file" in params["scope"][0]
+    assert "test-client-secret" not in start.headers["Location"]
+
+    callback = client.get(
+        "/api/admin/accounting/google/callback?state=attacker-controlled&code=not-used")
+    assert callback.status_code == 302
+    assert callback.headers["Location"].endswith("/admin/accounting?google=state-error")

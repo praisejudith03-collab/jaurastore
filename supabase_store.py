@@ -2475,6 +2475,42 @@ def load_orders(limit=500, offset=0, columns="*"):
         return []
 
 
+# The Google refresh token is Fernet-encrypted by google_sheets.py before it
+# reaches this existing durable key/value table. Never return it to a browser.
+ACCOUNTING_GOOGLE_CREDENTIALS_KEY = "accounting_google_sheets_credentials_v1"
+
+
+def load_accounting_google_credentials():
+    """Return the encrypted Google credential blob, or None on read failure."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        rows = _res_data(c.table("growth_settings").select("value")
+                         .eq("key", ACCOUNTING_GOOGLE_CREDENTIALS_KEY)
+                         .limit(1).execute()) or []
+        return str((rows[0] or {}).get("value") or "") if rows else ""
+    except Exception as exc:
+        print(f"[supabase] Google accounting credentials read failed: {exc}")
+        return None
+
+
+def save_accounting_google_credentials(encrypted_blob):
+    """Strictly persist an encrypted Google credential blob."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table("growth_settings").upsert({
+            "key": ACCOUNTING_GOOGLE_CREDENTIALS_KEY,
+            "value": str(encrypted_blob or ""),
+        }).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] Google accounting credentials save failed: {exc}")
+        return False
+
+
 ACCOUNTING_BATCHES_KEY = "accounting_batches_json"
 
 

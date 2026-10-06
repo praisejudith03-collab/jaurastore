@@ -75,6 +75,51 @@ data, storage, and the admin login. Do not delete the shop-email variables
 above, or receipts stop reaching the inbox. Removing obsolete variables does not
 mutate products, orders, customers, receipts, reviews, or catalogue data.
 
+## Google Drive accounting ledgers
+
+The standalone `/admin/accounting` desk can create two workbooks in the store
+owner's Google Drive: **Naira Ledger** and **CFA Ledger**. Confirming an order
+adds it to the matching workbook; connecting for the first time also queues a
+one-time import of existing confirmed orders. The app uses the least-privilege
+`drive.file` OAuth scope, so the grant is limited to spreadsheets it creates
+for this integration.
+
+Set these on the production service:
+
+- `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` — OAuth 2.0 **Web application**
+  client values from Google Cloud Console.
+- `GOOGLE_REDIRECT_URI` — must exactly match the OAuth client's authorized
+  redirect URI. The Render blueprint uses
+  `https://jaurastore.com.ng/api/admin/accounting/google/callback`.
+- `GOOGLE_SHEETS_TOKEN_KEY` — optional, recommended stable secret used to
+  encrypt the refresh token before storing it in Supabase. Generate one with
+  `python -c "import secrets; print(secrets.token_urlsafe(48))"`. If omitted,
+  the app derives the encryption key from the stable `SECRET_KEY`.
+
+Then enable the Google Sheets API in the same Cloud project, add the redirect
+URI to the OAuth client, and complete Google's OAuth consent-screen setup. If
+the consent screen is in External/testing mode, add the owner's Google email as
+a test user. Sign in as the store admin, open **Admin → Accounting**, and
+connect the Google account whose Drive should own the ledgers. The page shows
+the connected email and direct Open NGN / Open FCFA actions.
+
+Each currency workbook has:
+
+- **Orders** — confirmed orders arrive automatically. Supplier costs and
+  transport can be entered on the order row; the Net Profit column has a
+  dynamic array formula. The Batch column is a dropdown.
+- **Expenses** — record unlinked supplier purchases (for example Ankara or
+  perfume stock) and transport as dated rows. Select a type and optionally a
+  batch; these rows are included in the Admin totals.
+- **Lists** — edit the batch names in column A. Those names populate the Batch
+  dropdowns in both data tabs and the Selected Batch filter on the admin desk.
+
+A Sheets outage never rolls back an order confirmation; refresh the accounting
+desk to retry reading totals, and reconfirming the order safely retries its
+idempotent sheet upsert. OAuth refresh tokens are encrypted server-side and
+are never sent to the browser. Keep `SECRET_KEY` (or `GOOGLE_SHEETS_TOKEN_KEY`)
+stable across deploys so the stored grant remains decryptable.
+
 ## Schema auto-migration on boot
 
 `auto_migrate.py` runs once per process at startup (after `init_db`/`migrate`,
