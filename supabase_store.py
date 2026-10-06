@@ -1282,11 +1282,54 @@ def create_order_strict(order):
     return _upsert_order_resilient(row, strict=True)
 
 
+# ---------------------------------------------------------- abandoned_carts
+# `public.abandoned_carts` is OPTIONAL. Captured carts live in local SQLite and
+# the Supabase copy is only a supplement, so a project that never ran that
+# migration is healthy rather than broken. Supabase answers PGRST205 ("could
+# not find the table") when it is absent, and every helper below used to treat
+# that as a failure - so one missing table printed an error on every 5-minute
+# reminder tick, on every capture and on every purge, forever. Detect the
+# absent table once, skip the roundtrip that cannot succeed, and re-probe on an
+# interval so creating the table later heals itself without a restart.
+_ABANDONED_RECHECK_SECONDS = 900.0
+_abandoned_missing_until = 0.0
+_abandoned_missing_logged = False
+
+
+def _abandoned_table_missing(exc):
+    """True when Supabase reports abandoned_carts is absent from the schema."""
+    text = str(exc).lower()
+    return "pgrst205" in text or "could not find the table" in text
+
+
+def _abandoned_table_usable():
+    """Whether an abandoned_carts roundtrip is worth attempting right now."""
+    return _time.monotonic() >= _abandoned_missing_until
+
+
+def _abandoned_table_absent():
+    """Record the table as missing so the next calls skip it."""
+    global _abandoned_missing_until, _abandoned_missing_logged
+    _abandoned_missing_until = _time.monotonic() + _ABANDONED_RECHECK_SECONDS
+    if not _abandoned_missing_logged:
+        _abandoned_missing_logged = True
+        print("[supabase] abandoned_carts is absent from the Supabase schema "
+              "(PGRST205); remote abandoned-cart sync is skipped and local "
+              "carts keep working. Re-checked every 15 minutes.")
+
+
+def _abandoned_table_present():
+    """A roundtrip succeeded, so forget any earlier missing-table verdict."""
+    global _abandoned_missing_until, _abandoned_missing_logged
+    _abandoned_missing_until = 0.0
+    _abandoned_missing_logged = False
+
+
 def mirror_abandoned_cart(row):
     """Upsert one email-captured abandoned cart. Returns False if the
     configured Supabase table rejected the write, but never raises."""
     c = client()
-    if c is None or not row:
+    if c is None or not row or not _abandoned_table_usable():
         return False
     data = dict(row)
     items = data.get("items")
@@ -1299,8 +1342,12 @@ def mirror_abandoned_cart(row):
     data["reminder_sent"] = bool(data.get("reminder_sent"))
     try:
         c.table("abandoned_carts").upsert(data).execute()
+        _abandoned_table_present()
         return True
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return False
         print(f"[supabase] abandoned cart upsert failed: {exc}")
         return False
 
@@ -1312,6 +1359,8 @@ def load_due_abandoned_carts(cutoff, limit=500, offset=0):
     every due cart into memory at once. Returns [] when unconfigured or
     unavailable; the local cache remains the fallback.
     """
+    if not _abandoned_table_usable():
+        return []
     c = client()
     if c is None:
         return []
@@ -1323,8 +1372,12 @@ def load_due_abandoned_carts(cutoff, limit=500, offset=0):
                      .is_("converted_at", "null")
                      .lte("last_activity_at", cutoff)
                      .order("last_activity_at")), limit, offset).execute()
+        _abandoned_table_present()
         return _res_data(res) or []
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return []
         print(f"[supabase] abandoned carts load failed: {exc}")
         return []
 
@@ -1332,13 +1385,17 @@ def load_due_abandoned_carts(cutoff, limit=500, offset=0):
 def mark_abandoned_converted(token, at):
     """Mark a cart converted in Supabase; never raises."""
     c = client()
-    if c is None or not token:
+    if c is None or not token or not _abandoned_table_usable():
         return False
     try:
         c.table("abandoned_carts").update({"converted_at": at,
                                             "updated_at": at}).eq("token", token).execute()
+        _abandoned_table_present()
         return True
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return False
         print(f"[supabase] abandoned conversion mark failed: {exc}")
         return False
 
@@ -1346,14 +1403,18 @@ def mark_abandoned_converted(token, at):
 def mark_abandoned_reminder_sent(token, at):
     """Persist the one-shot reminder flag in Supabase; never raises."""
     c = client()
-    if c is None or not token:
+    if c is None or not token or not _abandoned_table_usable():
         return False
     try:
         c.table("abandoned_carts").update({"reminder_sent": True,
                                             "reminder_sent_at": at,
                                             "updated_at": at}).eq("token", token).execute()
+        _abandoned_table_present()
         return True
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return False
         print(f"[supabase] abandoned reminder mark failed: {exc}")
         return False
 
@@ -1364,12 +1425,16 @@ def delete_abandoned_carts_for_tokens(tokens):
     """Delete abandoned-cart rows by token. Best effort, never raises."""
     c = client()
     tokens = [str(t or "").strip() for t in (tokens or []) if str(t or "").strip()]
-    if c is None or not tokens:
+    if c is None or not tokens or not _abandoned_table_usable():
         return 0
     try:
         c.table("abandoned_carts").delete().in_("token", tokens).execute()
+        _abandoned_table_present()
         return len(tokens)
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return 0
         print(f"[supabase] abandoned cart token purge failed: {exc}")
         return 0
 
@@ -1378,15 +1443,19 @@ def delete_abandoned_carts_for_email(email, converted_only=True):
     """Delete abandoned carts tied to an order email. Best effort."""
     c = client()
     email = str(email or "").strip().lower()
-    if c is None or not email:
+    if c is None or not email or not _abandoned_table_usable():
         return 0
     try:
         q = c.table("abandoned_carts").delete().eq("email", email)
         if converted_only:
             q = q.not_.is_("converted_at", "null")
         q.execute()
+        _abandoned_table_present()
         return 1
     except Exception as exc:
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return 0
         print(f"[supabase] abandoned cart email purge failed: {exc}")
         return 0
 
@@ -1401,27 +1470,42 @@ def delete_abandoned_carts_for_product(product_id, product_name=""):
     c = client()
     pid = str(product_id or "").strip()
     name = str(product_name or "").strip()
-    if c is None or not (pid or name):
+    if c is None or not (pid or name) or not _abandoned_table_usable():
         return 0
     deleted = 0
+
+    def _absent(exc):
+        """True when this failure was just the missing table; stop trying."""
+        if _abandoned_table_missing(exc):
+            _abandoned_table_absent()
+            return True
+        return False
+
     if pid:
         for shape in ({"id": pid}, {"productId": pid}, {"product_id": pid}):
             try:
                 c.table("abandoned_carts").delete().contains("items", [shape]).execute()
                 deleted += 1
             except Exception as exc:
+                if _absent(exc):
+                    return deleted
                 print(f"[supabase] abandoned cart product containment purge failed: {exc}")
         try:
             c.table("abandoned_carts").delete().ilike("items", f"%{pid}%").execute()
             deleted += 1
         except Exception as exc:
+            if _absent(exc):
+                return deleted
             print(f"[supabase] abandoned cart product-id purge failed: {exc}")
     try:
         if name:
             c.table("abandoned_carts").delete().ilike("items", f"%{name[:80]}%").execute()
             deleted += 1
     except Exception as exc:
-        print(f"[supabase] abandoned cart product-name purge failed: {exc}")
+        if not _absent(exc):
+            print(f"[supabase] abandoned cart product-name purge failed: {exc}")
+    if deleted:
+        _abandoned_table_present()
     return deleted
 
 
