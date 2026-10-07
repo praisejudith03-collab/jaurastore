@@ -1,9 +1,10 @@
 """Owner-authorized Google Sheets ledgers for dual-currency accounting.
 
-The OAuth grant is restricted to files created by this app (drive.file). The
-refresh token and spreadsheet IDs are encrypted before they are kept in the
-existing durable growth_settings key/value store. No Google credential is ever
-sent to the browser.
+The OAuth grant now includes full Drive access so the app can also write to
+the owner's pre-existing ITEMFLOW reference workbook (NGN / FCFA tabs), not
+only the files this app created. The refresh token and spreadsheet IDs are
+encrypted before they are kept in the existing durable growth_settings
+key/value store. No Google credential is ever sent to the browser.
 """
 from __future__ import annotations
 
@@ -28,10 +29,17 @@ TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo"
 AUTHORIZE_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke"
-SCOPES = ("openid email https://www.googleapis.com/auth/drive.file")
+SCOPES = ("openid email https://www.googleapis.com/auth/drive")
 CURRENCIES = ("NGN", "CFA")
 DEFAULT_BATCH_OPTIONS = tuple(f"Batch {number:02d}" for number in range(1, 21))
 HTTP_TIMEOUT = 12
+
+# The owner's existing "ITEMFLOW" workbook. Itemized NGN orders are routed to
+# its NGN tab and FCFA orders to its FCFA tab when the owner pushes a batch.
+# The id is overridable from the accounting settings (and the environment) so
+# a different reference sheet can be swapped in without a redeploy.
+DEFAULT_REFERENCE_SPREADSHEET_ID = "1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu"
+REFERENCE_TABS = {"NGN": "NGN", "CFA": "FCFA"}
 
 _lock = threading.RLock()
 _refresh_lock = threading.Lock()
@@ -690,7 +698,14 @@ def summarize(ledger, period="month", batch="", today=None):
     }
 
 
-def _order_row(order):
+def _order_row(order, batch="", include_net=False):
+    """One itemized sheet row: date, order id, customer, items, money, batch.
+
+    ``include_net`` writes the computed net-profit value into column I. The
+    app-created ledgers leave it blank because their ARRAYFORMULA computes it
+    live; a freshly created reference tab has no formula, so the value is
+    written there instead.
+    """
     import accounting
     payload = accounting.order_payload(order)
     entry = accounting.entry_from_order(order)
@@ -701,30 +716,57 @@ def _order_row(order):
         qty = _number(item.get("qty")) or 1
         variant = str(item.get("color") or item.get("variant") or "").strip()
         lines.append(f"{qty}× {name}" + (f" · {variant}" if variant else ""))
+    revenue = _number(entry.get("saleAmount"))
+    supplier = _number(entry.get("supplierCostInCurrency"))
+    transport = _number(entry.get("deliveryExpense"))
     return [
         str(entry.get("date") or "")[:10],
         str(entry.get("id") or ""),
         str(entry.get("customer") or "Customer"),
         ", ".join(lines),
         _currency(entry.get("currency")),
-        _number(entry.get("saleAmount")),
-        _number(entry.get("supplierCostInCurrency")) or "",
-        _number(entry.get("deliveryExpense")) or "",
-        "", "", str(entry.get("notes") or ""),
+        revenue,
+        supplier or "",
+        transport or "",
+        (revenue - supplier - transport) if include_net else "",
+        str(batch or ""),
+        str(entry.get("notes") or ""),
     ]
-
 
 def _append_rows(spreadsheet_id, rows):
     if not rows:
         return
-    encoded_range = urllib.parse.quote("'Orders'!A:K", safe="!':")
+    _append_rows_to(spreadsheet_id, "Orders", rows)
+
+
+def _append_rows_to(spreadsheet_id, tab, rows):
+    """Append whole rows under a tab, below whatever is already there."""
+    if not rows:
+        return
+    range_name = f"'{tab}'!A:K"
+    encoded_range = urllib.parse.quote(range_name, safe="!':")
     url = (f"{SHEETS_API}/spreadsheets/{urllib.parse.quote(spreadsheet_id, safe='')}"
            f"/values/{encoded_range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS")
     _google_request("POST", url, {"majorDimension": "ROWS", "values": rows})
 
 
+def _update_row_range(spreadsheet_id, tab, position, row):
+    """Overwrite one existing row (A..K) in place."""
+    range_name = f"'{tab}'!A{position}:K{position}"
+    encoded_range = urllib.parse.quote(range_name, safe="!':")
+    url = (f"{SHEETS_API}/spreadsheets/{urllib.parse.quote(spreadsheet_id, safe='')}"
+           f"/values/{encoded_range}?valueInputOption=RAW")
+    _google_request("PUT", url, {"majorDimension": "ROWS", "values": [row]})
+
+
 def _existing_order_rows(spreadsheet_id):
-    values = _values_batch_get(spreadsheet_id, ["'Orders'!A1:K"])[0]
+    return _existing_order_rows_in(spreadsheet_id, "Orders")
+
+
+def _existing_order_rows_in(spreadsheet_id, tab):
+    """order id -> row position inside one tab, for idempotent upserts."""
+    range_name = f"'{tab}'!A:K"
+    values = _values_batch_get(spreadsheet_id, [range_name])[0]
     headers = _header_map(values)
     index = headers.get("order id", 1)
     result = {}
@@ -735,6 +777,110 @@ def _existing_order_rows(spreadsheet_id):
         if order_id:
             result[order_id] = position
     return result
+
+
+def _spreadsheet_tab_titles(spreadsheet_id):
+    """Every tab title in a workbook, or [] when the workbook is unreadable."""
+    url = (f"{SHEETS_API}/spreadsheets/"
+           f"{urllib.parse.quote(str(spreadsheet_id), safe='')}"
+           f"?fields=properties.title,sheets.properties")
+    meta = _google_request("GET", url)
+    titles = []
+    for sheet in meta.get("sheets") or []:
+        props = sheet.get("properties") or {}
+        title = str(props.get("title") or "").strip()
+        if title:
+            titles.append(title)
+    return titles
+
+
+def ensure_reference_tab(spreadsheet_id, currency):
+    """Resolve (or create) the NGN / FCFA tab on the reference workbook.
+
+    Returns the exact tab title. Matching is case- and space-insensitive so an
+    existing "ngn " tab is reused instead of duplicated. A missing tab is
+    created with the same headers the app ledgers use.
+    """
+    currency = _currency(currency)
+    wanted = REFERENCE_TABS[currency]
+    titles = _spreadsheet_tab_titles(spreadsheet_id)
+    for title in titles:
+        if title.strip().upper() == wanted.upper():
+            return title
+    batch_url = (f"{SHEETS_API}/spreadsheets/"
+                 f"{urllib.parse.quote(str(spreadsheet_id), safe='')}:batchUpdate")
+    _google_request("POST", batch_url, {"requests": [
+        {"addSheet": {"properties": {"title": wanted,
+                                     "gridProperties": {"frozenRowCount": 1,
+                                                        "columnCount": 11}}}},
+    ]})
+    encoded_range = urllib.parse.quote(f"'{wanted}'!A1:K1", safe="!':")
+    values_url = (f"{SHEETS_API}/spreadsheets/"
+                  f"{urllib.parse.quote(str(spreadsheet_id), safe='')}"
+                  f"/values/{encoded_range}?valueInputOption=USER_ENTERED")
+    _google_request("PUT", values_url, {"majorDimension": "ROWS",
+                                        "values": [_headers(currency)]})
+    return wanted
+
+
+def push_orders(orders, *, batch_name="", reference_id=""):
+    """Push staged orders to Google Sheets, routed by currency.
+
+    NGN orders land on the NGN tab and FCFA orders on the FCFA tab of the
+    reference workbook when one is configured; otherwise each currency goes to
+    its own app-created ledger. Rows are upserted by order id, so re-pushing
+    or a retry can never double-count an order in the same tab.
+
+    Returns {currency: {spreadsheetId, tab, url, count, updated}}.
+    """
+    grouped = {}
+    for order in orders or []:
+        if not isinstance(order, dict):
+            continue
+        if str(order.get("status") or "") != "confirmed":
+            continue
+        import accounting
+        snapshot = accounting.account_block(order)
+        currency = _currency(snapshot.get("currency") or order.get("currency"))
+        grouped.setdefault(currency, []).append(order)
+
+    report = {}
+    with _lock:
+        for currency in CURRENCIES:
+            group = grouped.get(currency) or []
+            if not group:
+                continue
+            include_net = True
+            if reference_id:
+                spreadsheet_id = str(reference_id)
+                tab = ensure_reference_tab(spreadsheet_id, currency)
+            else:
+                spreadsheet_id = _spreadsheet_id(currency)
+                tab = "Orders"
+                include_net = False
+            existing = _existing_order_rows_in(spreadsheet_id, tab)
+            fresh, updated = [], 0
+            for order in group:
+                row = _order_row(order, batch=batch_name, include_net=include_net)
+                position = existing.get(str(row[1]))
+                if position is None:
+                    fresh.append(row)
+                    existing[str(row[1])] = -1
+                else:
+                    if position > 0:
+                        _update_row_range(spreadsheet_id, tab, position, row)
+                        updated += 1
+            for offset in range(0, len(fresh), 250):
+                _append_rows_to(spreadsheet_id, tab, fresh[offset:offset + 250])
+            report[currency] = {
+                "spreadsheetId": spreadsheet_id,
+                "tab": tab,
+                "url": _spreadsheet_url(spreadsheet_id),
+                "count": len(group),
+                "appended": len(fresh),
+                "updated": updated,
+            }
+    return report
 
 
 def sync_order(order):

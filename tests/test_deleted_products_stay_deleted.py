@@ -363,7 +363,12 @@ def test_upsert_clears_durable_tombstone(monkeypatch, tmp_path):
 
 
 def test_admin_delete_records_durable_tombstone(monkeypatch):
-    """The production admin DELETE route must call add_deleted_id."""
+    """The production admin DELETE route must record the restorable tombstone.
+
+    The default DELETE now moves the product to the Trash / Recycler: the
+    durable deleted-ids list (the RESTORABLE tombstone, not the permanent SQL
+    ledger) is what keeps the id out of the shop.
+    """
     import app as appmod
     from db import execute, init_db
     from config import Config
@@ -385,6 +390,12 @@ def test_admin_delete_records_durable_tombstone(monkeypatch):
     monkeypatch.setattr(catmod, "_sync_repo_async", lambda: None)
     mem = _MemGrowth()
     _wire(monkeypatch, mem)
+    trash_rows = []
+    monkeypatch.setattr(supabase_store, "load_product_trash", lambda: list(trash_rows))
+    def _save_trash(rows):
+        trash_rows[:] = list(rows or [])
+        return True
+    monkeypatch.setattr(supabase_store, "save_product_trash", _save_trash)
     def _hard(ids):
         for pid in ids:
             mem.add(pid)
@@ -400,8 +411,13 @@ def test_admin_delete_records_durable_tombstone(monkeypatch):
         r = c.delete("/api/admin/products/jau-tomb-1",
                      headers={"X-CSRF-Token": tok})
         assert r.status_code == 200, r.data
-        assert r.get_json()["ok"] is True
+        body = r.get_json()
+        assert body["ok"] is True
+        assert body["deleteMode"] == "trash"
     assert "jau-tomb-1" in mem.ids
+    assert "jau-tomb-1" not in mem.adds, \
+        "a trash move must not write the PERMANENT SQL tombstone"
+    assert [row["id"] for row in trash_rows] == ["jau-tomb-1"]
 
 
 # ------------------------------------------- category-merge marker durability
@@ -587,6 +603,12 @@ def test_admin_delete_surfaces_a_tombstone_write_failure(monkeypatch):
     monkeypatch.setattr(catmod, "_sync_repo_async", lambda: None)
     mem = _MemGrowth(fail_save=True)
     _wire(monkeypatch, mem)
+    trash_rows = []
+    monkeypatch.setattr(supabase_store, "load_product_trash", lambda: list(trash_rows))
+    def _save_trash(rows):
+        trash_rows[:] = list(rows or [])
+        return True
+    monkeypatch.setattr(supabase_store, "save_product_trash", _save_trash)
     def _hard(ids):
         for pid in ids:
             mem.add(pid)
@@ -606,3 +628,4 @@ def test_admin_delete_surfaces_a_tombstone_write_failure(monkeypatch):
         assert body["ok"] is False
         assert "tombstone" in body["error"].lower(), body
     assert mem.saves >= 1, "the tombstone write must have been attempted"
+    assert trash_rows == [], "a failed tombstone must roll the trash entry back"

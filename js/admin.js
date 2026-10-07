@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=197" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=198" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1317,6 +1317,11 @@ let orderPage = 1;
 const ORDER_PAGE = 10;   // ADMIN_PAGE_SIZE - ten records per page, everywhere
 let dashRange = 30;
 let salesRange = "30";
+let salesProfitCurrency = "NGN";
+let salesProfitPeriod = "month";
+// The active NGN -> FCFA exchange rate shown in Store Settings (null = still
+// loading from /api/admin/growth/settings).
+let settingsFxRate = null;
 let orderSearch = "";
 let orderFrom = "";
 let orderTo = "";
@@ -1523,6 +1528,7 @@ function renderProdGrid() {
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
       <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
       <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong></div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price${rangeText ? " adx-price-range" : ""}">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn && !rangeText ? cfaNow : ""}</span>${pill}</div>
+      <button type="button" class="adx-card-vis${p.online === false ? " is-off" : ""}" data-vis="${JA.escape(p.id)}" aria-label="${(p.online === false ? "Show " : "Hide ") + JA.escape(p.name)}" title="${p.online === false ? "Show on website" : "Hide from website"}"><svg viewBox="0 0 24 24">${p.online === false ? '<path d="M3 3l18 18M10.5 10.7a2.5 2.5 0 003.4 3.4M7 12a7.5 7.5 0 0113.2-2.4M4.5 8.6A10.5 10.5 0 0012 17.5c1.2 0 2.4-.2 3.4-.6M9.9 5.2A10.5 10.5 0 0112 5c2.9 0 5.6 1.4 7.5 3.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>' : '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="#fff" stroke-width="1.6"/>'}</svg></button>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     </article>`;
   }).join("");
@@ -1624,21 +1630,45 @@ function bindProdGridEvents() {
     b.onclick = open;
     b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
   });
+  // Explicit Hide / Show toggle on every product card (owner request
+  // 2026-10-07). Hiding removes the piece from storefront categories and
+  // search without deleting it or resetting its inventory metrics.
+  document.querySelectorAll("#prod-grid [data-vis]").forEach((b) => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      const id = String(b.dataset.vis);
+      const product = JA.product(id);
+      if (!product) return;
+      const hiding = product.online !== false;
+      b.disabled = true;
+      const res = await JA.upsertProduct({ ...product, online: !hiding });
+      b.disabled = false;
+      if (!res || res.ok === false) {
+        JA.toast((res && res.error) || "Could not change the visibility. No changes were made.");
+      } else {
+        JA.toast(hiding ? "Hidden from the website — customers no longer see it." : "Back on the website.");
+      }
+      renderProdGrid(); bindProdGridEvents();
+    };
+  });
   document.querySelectorAll("#prod-grid [data-del]").forEach((b) => {
     b.onclick = async (e) => {
       e.stopPropagation();
-      if (confirm("Delete this product from the website? Customers will not see it.")) {
+      if (confirm("Delete this product from the website? It moves to the Trash — you can restore it or permanently delete it from there.")) {
         const res = await JA.removeProduct(b.dataset.del);
         if (!res || res.ok === false) {
           JA.toast((res && res.error) || "Could not delete the product. No changes were made.");
           renderProdGrid(); bindProdGridEvents();   // the server list is still the truth
           return;
         }
-        JA.toast(res.queued
-          ? "Deleted from the website — photos are purged in the background."
-          : "Deleted from the website.");
+        JA.toast(res.mode === "trash"
+          ? "Moved to the Trash — restore it any time from the Trash button."
+          : res.queued
+            ? "Deleted from the website — photos are purging in the background."
+            : "Deleted from the website.");
         editingId = null;
         renderProdGrid(); bindProdGridEvents();
+        refreshTrashCount();
       }
     };
   });
@@ -1653,11 +1683,13 @@ function productsTable() {
   const catOpts = cats.map((c) => `<option value="${JA.escape(c.id)}" ${activeCategory === c.id ? "selected" : ""}>${JA.escape(c.name)}</option>`).join("");
   const backBtn = dashCat ? `<button type="button" class="btn btn-line" id="back-all-products">← All products</button>` : "";
   const exportBtn = `<a class="btn btn-line" href="api/admin/products.csv" download="jaura-products.csv">Export CSV</a>`;
+  const trashBtn = `<button type="button" class="btn btn-line" id="open-trash" aria-controls="trash-drawer">🗑 Trash <span id="trash-count" class="adx-trash-count" hidden>0</span></button>`;
   const filteredNote = activeCategory ? ` · <strong>${JA.escape(catName(activeCategory))}</strong>` : "";
   const qVal = JA.escape(prodSearchQ);
   return `<div class="adx-list-head">
       <button type="button" class="btn adx-add-btn" id="add-product">+ New Product</button>
       ${backBtn}
+      ${trashBtn}
       ${exportBtn}
       <div class="adx-filters">
         <input id="prod-search" type="search" placeholder="Search products…" autocomplete="off" value="${qVal}" />
@@ -1667,9 +1699,106 @@ function productsTable() {
       <div class="adx-bulkbar" id="product-bulk" hidden><strong><span id="products-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-product-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-product-bulk="show">Show selected</button><button type="button" class="btn btn-line" data-product-bulk="hide">Hide selected</button><button type="button" class="btn btn-line btn-danger" data-product-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-product-bulk="clear">Clear selection</button></div>
       <p class="adx-count"><span id="prod-count">${all.length}</span> of <span id="prod-count-all">${all.length}</span> products${filteredNote} · <button type="button" class="au-cats-link" data-tab="categories">Manage categories</button></p>
     </div>
+    <div class="adx-trash-drawer" id="trash-drawer" hidden></div>
     <div class="adx-grid" id="prod-grid"></div>
     <p class="empty" id="prod-none" hidden>No products match that search.</p>
     <div id="prod-pager"></div>`;
+}
+
+/* ------------------------------------------------------------------ *
+ * The Trash / Recycler (owner request 2026-10-07). Deleted products move
+ * here instead of vanishing: they are excluded from every active listing
+ * (so counts never inflate), and each one can be restored intact or
+ * permanently purged by hand.
+ * ------------------------------------------------------------------ */
+async function refreshTrashCount() {
+  const badge = $("#trash-count");
+  if (!badge) return;
+  try {
+    const d = await timedFetch("api/admin/products/trash", { cache: "no-store" });
+    const data = d.ok ? await d.json() : null;
+    const count = Number((data || {}).count || 0);
+    badge.textContent = count;
+    badge.hidden = count === 0;
+  } catch (e) { /* the count is informational; never block the list */ }
+}
+
+async function toggleTrashDrawer() {
+  const drawer = $("#trash-drawer");
+  if (!drawer) return;
+  if (!drawer.hidden) { drawer.hidden = true; return; }
+  drawer.hidden = false;
+  await renderTrashDrawer();
+}
+
+async function renderTrashDrawer() {
+  const drawer = $("#trash-drawer");
+  if (!drawer) return;
+  drawer.innerHTML = `<p class="empty">Loading the Trash…</p>`;
+  let data = null;
+  try {
+    const res = await timedFetch("api/admin/products/trash", { cache: "no-store" });
+    if (res.ok) data = await res.json();
+  } catch (e) { data = null; }
+  if (!data || data.ok === false) {
+    drawer.innerHTML = `<p class="empty">Could not load the Trash. ${esc((data && data.error) || "")}</p>`;
+    return;
+  }
+  const rows = data.items || [];
+  if (!rows.length) {
+    drawer.innerHTML = `<p class="empty">The Trash is empty. Deleted products wait here — excluded from the shop and from the inventory counts — until you restore or permanently delete them.</p>`;
+    return;
+  }
+  drawer.innerHTML = `
+    <div class="adx-trash-head">
+      <strong>Trash / Recycler — ${rows.length} item${rows.length === 1 ? "" : "s"}</strong>
+      <span>Deleted products are excluded from the storefront, search and inventory counts. Restore brings a piece back exactly as it was; Permanently Delete purges it forever.</span>
+    </div>
+    <div class="adx-trash-grid">${rows.map((row) => `
+      <article class="adx-trash-card">
+        <div class="adx-trash-pic"><img src="${JA.asset(row.image)}" alt="" loading="lazy" onerror="fallbackImg(event)" /></div>
+        <div class="adx-trash-body">
+          <strong>${esc(row.name || row.id)}</strong>
+          <small>${esc(row.sku || "")}${row.sku ? " · " : ""}${esc(String(row.deletedAt || "").slice(0, 10))}${row.stock ? ` · ${Number(row.stock)} in stock` : ""}</small>
+        </div>
+        <div class="adx-trash-actions">
+          <button type="button" class="btn btn-line" data-trash-restore="${esc(row.id)}">Restore</button>
+          <button type="button" class="btn btn-line btn-danger" data-trash-purge="${esc(row.id)}">Permanently delete</button>
+        </div>
+      </article>`).join("")}</div>`;
+  drawer.querySelectorAll("[data-trash-restore]").forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const res = await window.JA_NET.api(`api/admin/products/trash/${encodeURIComponent(b.dataset.trashRestore)}/restore`, { method: "POST", json: {} });
+        if (res && res.ok === false) throw new Error(res.error || "Could not restore.");
+        JA.toast("Restored — the product is back on the website.");
+        await JA.reloadCatalog();
+        renderProdGrid(); bindProdGridEvents();
+        await renderTrashDrawer();
+        refreshTrashCount();
+      } catch (err) {
+        b.disabled = false;
+        JA.toast(err.message || "Could not restore that product.");
+      }
+    };
+  });
+  drawer.querySelectorAll("[data-trash-purge]").forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm("Permanently delete this product? The record, its photos and its inventory metrics are destroyed for good. This cannot be undone.")) return;
+      b.disabled = true;
+      try {
+        const res = await window.JA_NET.api(`api/admin/products/trash/${encodeURIComponent(b.dataset.trashPurge)}`, { method: "DELETE" });
+        if (res && res.ok === false) throw new Error(res.error || "Could not permanently delete.");
+        JA.toast("Permanently deleted.");
+        await renderTrashDrawer();
+        refreshTrashCount();
+      } catch (err) {
+        b.disabled = false;
+        JA.toast(err.message || "Could not permanently delete that product.");
+      }
+    };
+  });
 }
 function applyProductFilter(e) {
   const qEl = document.getElementById("prod-search");
@@ -3825,11 +3954,11 @@ async function fillMarketing() {
     const d = await api("api/admin/growth/settings"); const s = d.settings || {}; mkGrowthSettings = s; const card = $("#mk-settings-card");
     if (card) {
       const tierRows = (s.bulkDiscountTiers || []).map((tier) => `<div class="mk-tier-row" data-bulk-tier><label>Minimum quantity<input type="number" min="2" name="bulkMin" value="${num(tier.minQuantity)}" required /></label><label>Discount %<input type="number" min="1" max="90" name="bulkPercent" value="${num(tier.percent)}" required /></label><button type="button" class="btn btn-line" data-remove-tier>Remove</button></div>`).join("");
-      card.innerHTML = `<h3 class="admin-h">Discounts, promos & referral settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="promosEnabled" ${s.promosEnabled === 0 || s.promosEnabled === false ? "" : "checked"} /> Promotions ON — promo codes, coupons and volume discounts are live at checkout</label><p class="admin-note">Master switch for every discount: when it is OFF, the checkout promo box disappears, no coupon can be redeemed, and no bulk discount is applied — your coupons and tiers are kept intact and come back the moment you switch it back ON.</p><h4>Flexible bulk / volume discounts</h4><p class="admin-note">Create quantity tiers such as 10 units = 5%, 15 units = 10%, or 30 units = 20%. With no tiers, no automatic volume discount is applied.</p><div id="mk-bulk-tiers">${tierRows || `<p class="admin-note" data-no-tiers>No volume discount tiers configured.</p>`}</div><button class="btn btn-line" type="button" id="mk-add-tier">+ Add discount tier</button><hr /><h4>Minimum order rule — Benin &amp; Togo deliveries</h4><label class="mk-toggle"><input type="checkbox" name="minimumOrderEnabled" ${s.minimumOrderEnabled === 0 || s.minimumOrderEnabled === false ? "" : "checked"} /> Minimum order requirement ON</label><div class="admin-grid"><label>Minimum order (CFA)<input name="minOrderCfa" type="number" min="0" step="50" value="${num(s.minOrderCfa === undefined || s.minOrderCfa === null ? 5000 : s.minOrderCfa)}" /></label></div><p class="admin-note">Deliveries to Benin &amp; Togo must reach this basket total. Type <strong>0</strong> to switch the rule OFF completely. The naira floor follows automatically from the exchange rate below: <span id="mk-min-note"></span></p><hr /><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>NGN → CFA rate (1 ₦ = ? CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${num(s.cfaRate)}" /></label><label>Friend's promo discount %<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><button class="btn" type="submit">Save settings</button></form>`;
-      const cfaNote = () => { const f = $("#mk-set-form"); const note = $("#mk-cfa-note"); if (!f || !note) return; const spend = Number(f.minSpendNgn.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = rate > 0 ? `CFA shoppers qualify from ${Math.round(spend * rate).toLocaleString()} CFA (₦${spend.toLocaleString()} × ${rate}).` : ""; };
-      const minNote = () => { const f = $("#mk-set-form"); const note = $("#mk-min-note"); if (!f || !note) return; const minCfa = Number(f.minOrderCfa.value) || 0; const rate = Number(f.cfaRate.value) || 0; note.textContent = minCfa <= 0 ? "the rule is OFF — any basket total is accepted." : rate > 0 ? `${Math.round(minCfa).toLocaleString()} CFA ≈ ₦${Math.round(minCfa / rate).toLocaleString()}.` : ""; };
-      cfaNote(); minNote(); ["minSpendNgn", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", cfaNote); });
-      ["minOrderCfa", "cfaRate"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", minNote); });
+      card.innerHTML = `<h3 class="admin-h">Discounts, promos & referral settings</h3><form id="mk-set-form" class="admin-form"><label class="mk-toggle"><input type="checkbox" name="promosEnabled" ${s.promosEnabled === 0 || s.promosEnabled === false ? "" : "checked"} /> Promotions ON — promo codes, coupons and volume discounts are live at checkout</label><p class="admin-note">Master switch for every discount: when it is OFF, the checkout promo box disappears, no coupon can be redeemed, and no bulk discount is applied — your coupons and tiers are kept intact and come back the moment you switch it back ON.</p><h4>Flexible bulk / volume discounts</h4><p class="admin-note">Create quantity tiers such as 10 units = 5%, 15 units = 10%, or 30 units = 20%. With no tiers, no automatic volume discount is applied.</p><div id="mk-bulk-tiers">${tierRows || `<p class="admin-note" data-no-tiers>No volume discount tiers configured.</p>`}</div><button class="btn btn-line" type="button" id="mk-add-tier">+ Add discount tier</button><hr /><h4>Minimum order rule — Benin &amp; Togo deliveries</h4><label class="mk-toggle"><input type="checkbox" name="minimumOrderEnabled" ${s.minimumOrderEnabled === 0 || s.minimumOrderEnabled === false ? "" : "checked"} /> Minimum order requirement ON</label><div class="admin-grid"><label>Minimum order (CFA)<input name="minOrderCfa" type="number" min="0" step="50" value="${num(s.minOrderCfa === undefined || s.minOrderCfa === null ? 5000 : s.minOrderCfa)}" /></label></div><p class="admin-note">Deliveries to Benin &amp; Togo must reach this basket total. Type <strong>0</strong> to switch the rule OFF completely. The naira floor follows automatically from the live exchange rate (managed in <a href="/admin.html?tab=settings">Settings → Store settings</a>): <span id="mk-min-note"></span></p><hr /><label class="mk-toggle"><input type="checkbox" name="referralEnabled" ${s.referralEnabled ? "checked" : ""} /> Referral programme ON — qualifying orders get a shareable code</label><div class="admin-grid"><label>Minimum spend for a code (₦)<input name="minSpendNgn" type="number" min="0" value="${num(s.minSpendNgn)}" /></label><label>Friend's promo discount %<input name="buyerPercent" type="number" min="1" max="50" value="${num(s.buyerPercent)}" /></label><label>Referrer reward coupon % (max 10)<input name="referrerPercent" type="number" min="1" max="10" value="${num(s.referrerPercent)}" /></label><label>Orders needed for the reward<input name="milestone" type="number" min="1" max="100" value="${num(s.milestone)}" /></label></div><p class="admin-note" id="mk-cfa-note"></p><p class="admin-note">NGN → CFA exchange rate: <strong>1 ₦ = ${num(s.cfaRate)} CFA</strong> — edit it in <a href="/admin.html?tab=settings">Settings → Store settings</a>, next to the bank details. It drives storefront prices, the minimum-order floor and FCFA supplier-cost conversion; each confirmed order locks in the rate that was live at confirmation.</p><button class="btn" type="submit">Save settings</button></form>`;
+      const cfaNote = () => { const f = $("#mk-set-form"); const note = $("#mk-cfa-note"); if (!f || !note) return; const spend = Number(f.minSpendNgn.value) || 0; const rate = Number((mkGrowthSettings || {}).cfaRate) || 0; note.textContent = rate > 0 ? `CFA shoppers qualify from ${Math.round(spend * rate).toLocaleString()} CFA (₦${spend.toLocaleString()} × ${rate}).` : ""; };
+      const minNote = () => { const f = $("#mk-set-form"); const note = $("#mk-min-note"); if (!f || !note) return; const minCfa = Number(f.minOrderCfa.value) || 0; const rate = Number((mkGrowthSettings || {}).cfaRate) || 0; note.textContent = minCfa <= 0 ? "the rule is OFF — any basket total is accepted." : rate > 0 ? `${Math.round(minCfa).toLocaleString()} CFA ≈ ₦${Math.round(minCfa / rate).toLocaleString()}.` : ""; };
+      cfaNote(); minNote(); ["minSpendNgn"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", cfaNote); });
+      ["minOrderCfa"].forEach((n) => { const el = $("#mk-set-form") && $("#mk-set-form")[n]; if (el) el.addEventListener("input", minNote); });
       const tiersBox = $("#mk-bulk-tiers");
       const addTier = (min = "", percent = "") => {
         tiersBox?.querySelector("[data-no-tiers]")?.remove();
@@ -3840,7 +3969,7 @@ async function fillMarketing() {
       $("#mk-set-form").onsubmit = async (e) => {
         e.preventDefault(); const fd = new FormData(e.target);
         const bulkDiscountTiers = [...e.target.querySelectorAll("[data-bulk-tier]")].map((row) => ({ minQuantity: Number(row.querySelector('[name="bulkMin"]')?.value), percent: Number(row.querySelector('[name="bulkPercent"]')?.value) }));
-        const patch = { referralEnabled: e.target.referralEnabled.checked, promosEnabled: e.target.promosEnabled.checked, minimumOrderEnabled: e.target.minimumOrderEnabled.checked, minOrderCfa: Math.max(0, Math.round(Number(fd.get("minOrderCfa")) || 0)), minSpendNgn: Number(fd.get("minSpendNgn")), cfaRate: Number(fd.get("cfaRate")), buyerPercent: Number(fd.get("buyerPercent")), referrerPercent: Number(fd.get("referrerPercent")), milestone: Number(fd.get("milestone")), bulkDiscountTiers };
+        const patch = { referralEnabled: e.target.referralEnabled.checked, promosEnabled: e.target.promosEnabled.checked, minimumOrderEnabled: e.target.minimumOrderEnabled.checked, minOrderCfa: Math.max(0, Math.round(Number(fd.get("minOrderCfa")) || 0)), minSpendNgn: Number(fd.get("minSpendNgn")), buyerPercent: Number(fd.get("buyerPercent")), referrerPercent: Number(fd.get("referrerPercent")), milestone: Number(fd.get("milestone")), bulkDiscountTiers };
         try { await api("api/admin/growth/settings", { method: "POST", json: patch }); JA.toast("Marketing settings saved."); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not save."); }
       };
     }
@@ -3892,11 +4021,27 @@ async function fillMarketing() {
 }
 function salesPanel() {
   const opts = [["7", "7 days"], ["30", "30 days"], ["90", "90 days"], ["all", "All"]];
+  const periods = [["week", "Weekly"], ["month", "Monthly"], ["year", "Yearly"]];
   return `
+    <div class="an-top">
+      <h3 class="admin-h" style="margin:0">Profit analytics · pushed batches</h3>
+      <div class="an-range">
+        <div class="sales-cur-switch" role="group" aria-label="Profit currency">
+          <button type="button" class="an-rng${salesProfitCurrency === "NGN" ? " is-on" : ""}" data-sales-cur="NGN">₦ NGN</button>
+          <button type="button" class="an-rng${salesProfitCurrency === "CFA" ? " is-on" : ""}" data-sales-cur="CFA">FCFA</button>
+        </div>
+        ${periods.map(([v, label]) => `<button type="button" class="an-rng${salesProfitPeriod === v ? " is-on" : ""}" data-sales-period="${v}">${label}</button>`).join("")}
+        <a class="btn btn-line" href="/admin/accounting">Accounting queue</a>
+      </div>
+    </div>
+    <p class="admin-note">Revenue, supplier cost, transport and net profit for the batches you pushed off the accounting desk, organised by batch name and date. Batch snapshots are immutable, so history stays exactly as it was the day you pushed it.</p>
+    <div class="stats" id="sales-profit-kpis"><div class="stat"><span class="kicker">Loading</span><b>…</b></div></div>
+    <div class="sales-balance-strip" id="sales-balance-strip"></div>
+    <h3 class="admin-h">Pushed batches</h3><div id="sales-batches" class="empty">Loading…</div>
+    <hr class="admin-sep" />
     <div class="an-top">
       <h3 class="admin-h" style="margin:0">Confirmed sales</h3>
       <div class="an-range">
-        <a class="btn btn-line" href="/admin/accounting">Open accounting spreadsheet</a>
         ${opts.map(([v, label]) => `<button type="button" class="an-rng${String(salesRange) === v ? " is-on" : ""}" data-sales-range="${v}">${label}</button>`).join("")}
         <a class="an-rng" id="sales-csv" href="api/admin/sales.csv?days=${encodeURIComponent(salesRange)}">Export CSV</a>
       </div>
@@ -3908,6 +4053,7 @@ function salesPanel() {
     <h3 class="admin-h">Top products</h3><div id="sales-top" class="empty">Loading…</div>`;
 }
 async function fillSales() {
+  fillSalesInsights();
   const box = $("#sales-kpis");
   if (!box) return;
   let d = null;
@@ -3969,6 +4115,77 @@ function updateSalesCsv() {
   if (salesFrom) p.set("from", salesFrom);
   if (salesTo) p.set("to", salesTo);
   link.href = "api/admin/sales.csv?" + p;
+}
+
+/* ------------------------------------------------------------------ *
+ * Sales / History page: profit analytics over PUSHED accounting batches
+ * (owner request 2026-10-07 — moved off the accounting desk so staging and
+ * history stay cleanly separated). Reads /api/admin/sales/insights, which
+ * computes everything from the immutable batch snapshots.
+ * ------------------------------------------------------------------ */
+async function fillSalesInsights() {
+  const kpis = $("#sales-profit-kpis");
+  if (!kpis) return;
+  const params = new URLSearchParams({ currency: salesProfitCurrency, period: salesProfitPeriod });
+  let d = null;
+  try {
+    const res = await timedFetch("api/admin/sales/insights?" + params, { cache: "no-store" });
+    if (res.ok) d = await res.json();
+  } catch (e) { d = null; }
+  if (!d || d.ok === false) {
+    kpis.innerHTML = `<p class="empty">Could not load profit analytics.</p>`;
+    const batches = $("#sales-batches"); if (batches) batches.innerHTML = `<p class="empty">Could not load pushed batches.</p>`;
+    return;
+  }
+  const s = d.summary || {};
+  const cur = s.currency || salesProfitCurrency;
+  const money = (v) => JA.money(Number(v || 0), cur);
+  const coverage = s.periodStart && s.periodEnd ? `${s.periodStart} – ${s.periodEnd}` : "current period";
+  kpis.innerHTML = [
+    ["Revenue", money(s.revenue), "pushed batch sales"],
+    ["Supplier cost", money(s.supplierCosts), "order costs + unlinked purchases"],
+    ["Transport & charges", money(s.transport), "delivery + bank fees"],
+    ["Net profit", money(s.netProfit), `${s.batchCount || 0} batch${Number(s.batchCount) === 1 ? "" : "es"} · ${s.orderCount || 0} orders`],
+  ].map(([k, v, note], i) => `<div class="stat${i === 3 ? " sales-profit-card" : ""}"><span class="kicker">${esc(k)} · ${esc(coverage)}</span><b>${esc(String(v))}</b><i>${esc(note)}</i></div>`).join("");
+
+  const strip = $("#sales-balance-strip");
+  if (strip) {
+    const b = (d.balances || {})[cur] || {};
+    strip.innerHTML = `<span><strong>Live ${cur === "CFA" ? "FCFA" : "NGN"} bank balance: ${esc(money(b.balance))}</strong> — starting ${esc(money(b.startingBalance))} + pushed profit ${esc(money(b.salesNetProfit))} − expenses ${esc(money(b.manualExpenses))} − charges ${esc(money(b.bankCharges))}. Manage starting balances on the <a href="/admin/accounting">accounting desk</a>.</span>`;
+  }
+
+  const box = $("#sales-batches");
+  if (box) {
+    const rows = d.batches || [];
+    box.innerHTML = rows.length
+      ? tableHTML(["Batch", "Pushed", "Orders", "Revenue", "Supplier", "Transport", "Fee", "Net profit", "Sheet"],
+          rows.map((b) => `<tr>
+            <td><strong>${esc(b.name || b.id)}</strong><br /><small class="muted">${esc(b.currency)}${b.exchangeRate ? ` · rate ${Number(b.exchangeRate)}` : ""}</small></td>
+            <td>${esc(String(b.pushedAt || "").slice(0, 10))}</td>
+            <td>${Number(b.orderCount || 0)}</td>
+            <td>${esc(JA.money(Number(b.revenue || 0), b.currency))}</td>
+            <td>${esc(JA.money(Number(b.supplierCosts || 0), b.currency))}</td>
+            <td>${esc(JA.money(Number(b.transport || 0), b.currency))}</td>
+            <td>${esc(JA.money(Number(b.transferFee || 0), b.currency))}</td>
+            <td><strong>${esc(JA.money(Number(b.netProfit || 0), b.currency))}</strong></td>
+            <td>${b.sheet && b.sheet.url ? `<a href="${esc(b.sheet.url)}" target="_blank" rel="noopener">↗ ${esc(b.sheet.tab || "open")}</a>` : "—"}</td>
+          </tr>`).join(""))
+      : `<p class="empty">No batches pushed in this period yet. Push confirmed orders off the <a href="/admin/accounting">accounting queue</a> and their profit summary appears here.</p>`;
+  }
+  document.querySelectorAll("[data-sales-cur]").forEach((b) => {
+    b.onclick = () => {
+      salesProfitCurrency = b.dataset.salesCur;
+      document.querySelectorAll("[data-sales-cur]").forEach((x) => x.classList.toggle("is-on", x === b));
+      fillSalesInsights();
+    };
+  });
+  document.querySelectorAll("[data-sales-period]").forEach((b) => {
+    b.onclick = () => {
+      salesProfitPeriod = b.dataset.salesPeriod;
+      document.querySelectorAll("[data-sales-period]").forEach((x) => x.classList.toggle("is-on", x === b));
+      fillSalesInsights();
+    };
+  });
 }
 const TAB_TITLES = { analytics: "Dashboard", products: "Products", orders: "Orders", sales: "Sales", marketing: "Marketing", categories: "Categories", delivery: "Delivery", settings: "Settings", account: "Account", };
 // The pinned bottom dock carries the five primary sections (owner directive
@@ -4057,7 +4274,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=197" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=198" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -4112,7 +4329,7 @@ function paintDesk(tab = "analytics") {
   if (tab === "marketing") { fillMarketing(); bindBroadcastFeed(); }
   if (tab === "account") bindAccount();
   if (tab === "settings") {
-    bindHeroVideo(); bindHomepageFeatured(); bindBanner(); bindWelcome(); bindCustomerCare(); bindSocialLinks(); bindSiteBranding();
+    bindHeroVideo(); bindHomepageFeatured(); bindBanner(); bindWelcome(); bindCustomerCare(); bindSocialLinks(); bindSiteBranding(); bindExchangeRate();
     const statusToggle = $("#store-active-toggle");
     if (statusToggle) statusToggle.addEventListener("change", async () => {
       const wanted = statusToggle.checked; statusToggle.disabled = true;
@@ -4163,10 +4380,12 @@ function paintDesk(tab = "analytics") {
   }
   $("#cancel-edit")?.addEventListener("click", () => { restoreProductsReturn(); });
   $("#add-product")?.addEventListener("click", () => { rememberProductsReturn(); editingId = "new"; paintDesk("products"); });
+  $("#open-trash")?.addEventListener("click", () => { toggleTrashDrawer(); });
   bindMedia(); bindOptions(); bindCategories(); bindCfaPreview(); bindNotePrompt();
 
   if (tab === "products" && !editingId) {
     renderProdGrid(); bindProdGridEvents();
+    refreshTrashCount();
   }
 
   $("#prod-search")?.addEventListener("input", applyProductFilter);
@@ -4426,7 +4645,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=197", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=198", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -4565,10 +4784,66 @@ function bindHomepageFeatured() {
   });
 }
 
+/* ------------------------------------------------------------------ *
+ * Store Settings: the NGN -> FCFA exchange rate control (relocated here
+ * from Referral/Marketing settings on the owner's request, 2026-10-07).
+ * Saves through the growth-settings endpoint, which is the same durable
+ * row the server reads for every FCFA conversion and order snapshot.
+ * ------------------------------------------------------------------ */
+async function bindExchangeRate() {
+  const form = $("#fx-form");
+  if (!form || form.dataset.bound === "1") return;
+  form.dataset.bound = "1";
+  const input = form.elements && form.elements.cfaRate;
+  const preview = $("#fx-preview");
+  const paint = () => {
+    const rate = Number(input && input.value) || 0;
+    if (preview) {
+      preview.textContent = rate > 0
+        ? `₦10,000 ≈ FCFA ${(Math.round(10000 * rate)).toLocaleString()}`
+        : "Type a rate to see the preview.";
+    }
+  };
+  if (input) input.addEventListener("input", paint);
+  if (settingsFxRate == null) {
+    try {
+      const d = await api("api/admin/growth/settings");
+      settingsFxRate = Number((d.settings || {}).cfaRate) || 0.44;
+    } catch (e) { settingsFxRate = 0.44; }
+    if (input && !input.value) input.value = settingsFxRate;
+  }
+  paint();
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const errBox = $("#fx-form-error");
+    const btn = $("#fx-form-save");
+    const rate = Number(input && input.value);
+    if (errBox) { errBox.hidden = true; }
+    if (!(rate > 0) || rate > 100) {
+      if (errBox) { errBox.textContent = "Enter a rate between 0.01 and 100 (for example 0.45)."; errBox.hidden = false; }
+      return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    try {
+      await api("api/admin/growth/settings", { method: "POST", json: { cfaRate: rate } });
+      settingsFxRate = rate;
+      JA.toast(`Exchange rate saved: 1 ₦ = ${rate} FCFA.`);
+    } catch (err) {
+      if (errBox) { errBox.textContent = err.message || "Could not save the exchange rate."; errBox.hidden = false; }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "Save exchange rate"; }
+    }
+  };
+}
+
 function settingsForm() {
   // server row first (if already fetched), localStorage only as an offline
   // paint convenience - the live Supabase row is the source of truth
   const s = { ...JA.settings(), ...(JA.getSiteConfig ? (JA.getSiteConfig() || {}) : {}) };
+  // The NGN -> FCFA rate lives in the growth settings row; it is filled in
+  // by bindExchangeRate() the moment the tab opens (owner request 2026-10-07:
+  // the input moved OUT of Referral/Marketing and INTO Store Settings).
+  const fxRate = settingsFxRate == null ? "" : settingsFxRate;
   return `
   <details class="admin-settings-section" open>
     <summary>Homepage hero video</summary>
@@ -4660,6 +4935,13 @@ function settingsForm() {
     <div class="field"><label>Togo — account number</label><input name="togo_payment_account" maxlength="60" value="${JA.escape(s.togo_payment_account || "")}" /></div>
     <div class="field"><label>Togo — instructions</label><input name="togo_payment_instructions" maxlength="300" value="${JA.escape(s.togo_payment_instructions || "")}" /></div>
     <div class="field full"><p class="admin-err" id="set-form-error" hidden></p><button class="btn" id="set-form-save">Save settings</button></div>
+    </form>
+    <h3 class="admin-h full" style="margin-top:26px">Currency &amp; exchange rate</h3>
+    <form id="fx-form" class="form-grid admin-card" style="margin-top:14px">
+      <p class="admin-note full">The NGN → FCFA rate every part of the store uses: storefront prices, the Benin &amp; Togo minimum-order floor, and the FCFA supplier-cost conversion on the accounting desk (<strong>FCFA cost = NGN cost × this rate</strong>). Each confirmed order locks in the rate that was live at the moment of confirmation, so changing it never rewrites history.</p>
+      <div class="field"><label>NGN → FCFA rate (1 ₦ = ? CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${fxRate}" required /></label><p class="admin-note">Example: <strong>0.45</strong> means ₦10,000 ≈ FCFA 4,500.</p></div>
+      <div class="field"><label>Live preview<span id="fx-preview" class="admin-note" style="font-size:1rem;color:inherit"></span></label></div>
+      <div class="field full"><p class="admin-err" id="fx-form-error" hidden></p><button class="btn" id="fx-form-save">Save exchange rate</button></div>
     </form>
   </details>`;
 }

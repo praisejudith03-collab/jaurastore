@@ -84,7 +84,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # restored the previous product photo, so every shared asset ships v170.
 # Bumped to v185 for the media autosave, session-race guard, and clean JSON-LD URL.
 # Bumped to v197 to ship the new standalone accounting bundle and cache generation.
-SHARED_TOKEN = "197"
+SHARED_TOKEN = "198"
 
 
 def _image_size(path):

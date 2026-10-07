@@ -2850,6 +2850,107 @@ def _accounting_archived_ids(batches):
     return archived
 
 
+def _accounting_expenses():
+    """Manual expense records (purchases, payouts, bank fees)."""
+    if _accounting_uses_supabase():
+        return supabase_store.load_accounting_expenses()
+    row = one("SELECT value FROM growth_settings WHERE key=?",
+              (supabase_store.ACCOUNTING_EXPENSES_KEY,))
+    if not row or not row["value"]:
+        return []
+    try:
+        value = json.loads(row["value"])
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _accounting_save_expenses(expenses):
+    serialized = json.dumps(list(expenses or []), ensure_ascii=False,
+                            separators=(",", ":"))
+    if _accounting_uses_supabase():
+        if not supabase_store.save_accounting_expenses(expenses):
+            return False
+    try:
+        execute(
+            "INSERT INTO growth_settings (key,value) VALUES (?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (supabase_store.ACCOUNTING_EXPENSES_KEY, serialized))
+    except Exception as exc:
+        if not _accounting_uses_supabase():
+            print(f"[accounting] local expense write failed: {exc}")
+            return False
+    return True
+
+
+def _accounting_settings_defaults():
+    import google_sheets
+    return {
+        "startingBalanceNgn": 0,
+        "startingBalanceCfa": 0,
+        "referenceSpreadsheetId": google_sheets.DEFAULT_REFERENCE_SPREADSHEET_ID,
+    }
+
+
+def _accounting_settings():
+    """Accounting desk settings: starting balances + reference workbook."""
+    defaults = _accounting_settings_defaults()
+    if _accounting_uses_supabase():
+        stored = supabase_store.load_accounting_settings()
+        if stored is None:
+            return None
+    else:
+        row = one("SELECT value FROM growth_settings WHERE key=?",
+                  (supabase_store.ACCOUNTING_SETTINGS_KEY,))
+        stored = {}
+        if row and row["value"]:
+            try:
+                stored = json.loads(row["value"])
+            except (TypeError, ValueError):
+                stored = {}
+    merged = dict(defaults)
+    if isinstance(stored, dict):
+        for key in defaults:
+            if key in stored:
+                merged[key] = stored[key]
+    merged["startingBalanceNgn"] = accounting_mod.amount(merged.get("startingBalanceNgn"))
+    merged["startingBalanceCfa"] = accounting_mod.amount(merged.get("startingBalanceCfa"))
+    merged["referenceSpreadsheetId"] = sec.clean(
+        merged.get("referenceSpreadsheetId"), 120)
+    return merged
+
+
+def _accounting_save_settings(patch):
+    current = _accounting_settings() or _accounting_settings_defaults()
+    if "startingBalanceNgn" in patch:
+        value = accounting_mod.validated_amount(patch.get("startingBalanceNgn"))
+        if value is None:
+            return None, "Starting NGN balance must be a non-negative whole amount."
+        current["startingBalanceNgn"] = value
+    if "startingBalanceCfa" in patch:
+        value = accounting_mod.validated_amount(patch.get("startingBalanceCfa"))
+        if value is None:
+            return None, "Starting FCFA balance must be a non-negative whole amount."
+        current["startingBalanceCfa"] = value
+    if "referenceSpreadsheetId" in patch:
+        current["referenceSpreadsheetId"] = sec.clean(
+            patch.get("referenceSpreadsheetId"), 120)
+    serialized = json.dumps(current, ensure_ascii=False, separators=(",", ":"))
+    if _accounting_uses_supabase():
+        if not supabase_store.save_accounting_settings(current):
+            return None, "The accounting settings could not be saved to Supabase."
+    try:
+        execute(
+            "INSERT INTO growth_settings (key,value) VALUES (?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (supabase_store.ACCOUNTING_SETTINGS_KEY, serialized))
+    except Exception as exc:
+        if not _accounting_uses_supabase():
+            print(f"[accounting] local settings write failed: {exc}")
+            return None, "The accounting settings could not be saved."
+    return current, ""
+
+
 def _accounting_order_entry(order, archived_ids=None, payload=None):
     if payload is not None:
         order = dict(order or {})
@@ -2868,21 +2969,42 @@ def admin_accounting():
         return jsonify(ok=False, error="Archived batches could not be read from Supabase."), 503
     archived_ids = _accounting_archived_ids(batches)
     include_deleted = request.args.get("includeDeleted") == "true"
+    # The accounting desk is a STAGING queue: pushed (archived) orders are
+    # cleared off it the moment they are pushed, so the workspace stays clean
+    # and a sale can never be counted twice. ?includeArchived=true brings the
+    # archived rows back for auditing.
+    include_archived = request.args.get("includeArchived") == "true"
     entries = []
     for order in orders:
         if not isinstance(order, dict) and not hasattr(order, "keys"):
             continue
         entry = _accounting_order_entry(order, archived_ids)
+        if entry["archived"] and not include_archived:
+            continue
         if include_deleted or not entry["deleted"]:
             entries.append(entry)
+    expenses_raw = _accounting_expenses()
+    if expenses_raw is None:
+        return jsonify(ok=False, error="Manual expenses could not be read from Supabase."), 503
+    expenses = accounting_mod.clean_expenses(expenses_raw)
+    settings = _accounting_settings()
+    if settings is None:
+        return jsonify(ok=False, error="Accounting settings could not be read from Supabase."), 503
+    balances = accounting_mod.bank_balances(batches, expenses, settings)
+    import google_sheets
     response = jsonify(
         ok=True,
         entries=entries,
         batches=[batch for batch in batches if isinstance(batch, dict)],
         archivedOrderIds=sorted(archived_ids),
+        expenses=expenses,
+        settings=settings,
+        balances=balances,
         currentExchangeRate=float(accounting_mod.current_exchange_rate()),
         legacyRate=float(accounting_mod.LEGACY_RATE),
-        totals={"confirmedOrders": len(entries),
+        google=google_sheets.integration_status(),
+        totals={"stagedOrders": len(entries),
+                "archivedOrders": len(archived_ids),
                 "legacySnapshots": sum(1 for entry in entries if entry["legacySnapshot"])},
     )
     response.headers["Cache-Control"] = "private, no-store"
@@ -3159,6 +3281,267 @@ def admin_accounting_batch_create():
     audit(authmod.current_admin(), "accounting.batch.archive",
           f"{batch_id} {len(order_ids)} orders", _ip())
     return jsonify(ok=True, batch=batch, archivedOrderIds=order_ids)
+
+
+@api.post("/admin/accounting/push")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_push():
+    """Push staged orders to Google Sheets, then clear them off the queue.
+
+    The selected confirmed orders are routed automatically: NGN orders land on
+    the NGN tab and FCFA orders on the FCFA tab of the reference workbook (or
+    each currency's own app-created ledger when no reference workbook is set).
+    Only after every row is confirmed written is the batch archived - a failed
+    push leaves the orders staged so nothing can be lost or double-counted.
+    """
+    import google_sheets
+    d = request.get_json(silent=True) or {}
+    raw_ids = d.get("orderIds")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return _accounting_mutation_error("Select one or more confirmed orders to push.")
+    order_ids = list(dict.fromkeys(sec.clean(value, 24).upper()
+                                   for value in raw_ids if sec.clean(value, 24)))
+    if not order_ids or len(order_ids) > _ACCOUNTING_MAX_BATCH_ORDERS:
+        return _accounting_mutation_error(
+            f"A push must contain between 1 and {_ACCOUNTING_MAX_BATCH_ORDERS} orders.")
+    transfer_fee = accounting_mod.validated_amount(d.get("transferFee") or 0)
+    if transfer_fee is None:
+        return _accounting_mutation_error("Transfer fee must be a non-negative whole amount.")
+    fee_currency = accounting_mod.normalize_currency(d.get("feeCurrency"))
+    name = sec.clean(d.get("name"), 100)
+
+    with _ACCOUNTING_BATCH_LOCK:
+        orders = _accounting_orders()
+        if orders is None:
+            return jsonify(ok=False, error="Confirmed orders could not be read."), 503
+        batches = _accounting_batches()
+        if batches is None:
+            return jsonify(ok=False, error="Existing batches could not be read."), 503
+        archived_ids = _accounting_archived_ids(batches)
+        by_id = {str(accounting_mod.order_value(order, "id") or ""): order
+                 for order in orders}
+        missing = [oid for oid in order_ids if oid not in by_id]
+        if missing:
+            return jsonify(ok=False, error=(
+                "Some selected orders are no longer confirmed: " + ", ".join(missing[:10])),
+                code="orders_changed"), 409
+        entries = [accounting_mod.entry_from_order(by_id[oid], archived_ids)
+                   for oid in order_ids]
+        if any(entry["deleted"] for entry in entries):
+            return _accounting_mutation_error("Restore removed records before pushing them.", 409)
+        if any(entry["archived"] for entry in entries):
+            return _accounting_mutation_error("One or more selected orders were already pushed.", 409)
+
+        settings = _accounting_settings()
+        if settings is None:
+            return jsonify(ok=False, error="Accounting settings could not be read."), 503
+        reference_id = str(settings.get("referenceSpreadsheetId") or "").strip()
+
+        try:
+            report = google_sheets.push_orders(
+                [by_id[oid] for oid in order_ids],
+                batch_name=name or "", reference_id=reference_id)
+        except google_sheets.GoogleSheetsError as exc:
+            return jsonify(ok=False, error=(
+                "The push did not complete, so nothing was archived. " + str(exc)[:300])), 502
+        except Exception as exc:
+            print(f"[accounting] push failed: {type(exc).__name__}: {str(exc)[:180]}")
+            return jsonify(ok=False, error=(
+                "The push did not complete, so nothing was archived. "
+                "Check the Google Sheets connection and retry.")), 502
+
+        now = _utcnow()
+        actor = authmod.current_admin()
+        currencies_pushed = {entry["currency"] for entry in entries}
+        # The transfer fee applies once per push, in the currency the owner
+        # chose. Without an explicit choice it follows the batch's own
+        # currency (single-currency push) or the NGN base ledger (mixed push)
+        # - never both, so a mixed push can never double-count the fee.
+        fee_ledger = fee_currency or (
+            currencies_pushed.pop() if len(currencies_pushed) == 1 else "NGN")
+        pushed_batches = []
+        for currency, info in (report or {}).items():
+            currency_entries = [entry for entry in entries
+                                if entry["currency"] == currency]
+            fee_here = transfer_fee if currency == fee_ledger else 0
+            totals = accounting_mod.batch_totals(currency_entries, currency)
+            batch_id = "BATCH-" + secrets.token_hex(6).upper()
+            snapshot_rows = [{key: entry.get(key) for key in (
+                "id", "date", "customer", "itemsSummary", "currency", "saleAmount",
+                "supplierCostNgn", "supplierCostCfa", "supplierCostInCurrency",
+                "deliveryExpense", "netProfit", "netCashProfit", "exchangeRate", "notes",
+                "legacySnapshot")}
+                for entry in currency_entries]
+            pushed_batches.append({
+                "id": batch_id,
+                "name": name or f"{currency} delivery · {now[:10]}",
+                "createdAt": now,
+                "pushedAt": now,
+                "pushedBy": actor,
+                "currency": currency,
+                "orderIds": [entry["id"] for entry in currency_entries],
+                "orders": snapshot_rows,
+                "totals": totals,
+                "transferFee": fee_here,
+                "sheet": {"spreadsheetId": info.get("spreadsheetId"),
+                          "tab": info.get("tab"), "url": info.get("url")},
+                "source": "reference" if reference_id else "ledger",
+            })
+        if not pushed_batches:
+            return jsonify(ok=False, error=(
+                "The push did not complete, so nothing was archived.")), 502
+        updated_batches = list(batches) + pushed_batches
+        if not _accounting_save_batches(updated_batches):
+            # The rows reached Google Sheets but the archive failed. Tell the
+            # owner honestly: retrying would append the same rows again, so
+            # the runbook is to archive from the sheet view instead.
+            return jsonify(ok=False, error=(
+                "The orders reached Google Sheets, but the archive could not be "
+                "saved. Do NOT push the same orders again - contact support so "
+                "the batch is archived without duplicating the sheet.")), 503
+
+    audit(authmod.current_admin(), "accounting.push",
+          " ".join(f"{b['id']}:{len(b['orderIds'])}" for b in pushed_batches),
+          _ip())
+    expenses_raw = _accounting_expenses() or []
+    expenses = accounting_mod.clean_expenses(expenses_raw)
+    fresh_settings = _accounting_settings() or settings
+    return jsonify(ok=True,
+                   batches=pushed_batches,
+                   pushed=sorted(order_ids),
+                   report=report,
+                   balances=accounting_mod.bank_balances(
+                       updated_batches, expenses, fresh_settings))
+
+
+@api.get("/admin/accounting/expenses")
+@authmod.require_admin
+def admin_accounting_expenses():
+    rows = _accounting_expenses()
+    if rows is None:
+        return jsonify(ok=False, error="Manual expenses could not be read from Supabase."), 503
+    return jsonify(ok=True, expenses=accounting_mod.clean_expenses(rows))
+
+
+@api.post("/admin/accounting/expenses")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_expense_create():
+    """Manual Purchase / Payout Logger for the accounting desk.
+
+    Records bulk stock purchases bought ahead of sales, owner payouts and
+    bank transfer / withdrawal charges (e.g. the ₦100 fee per transfer). Every
+    record feeds the live running bank balance.
+    """
+    d = request.get_json(silent=True) or {}
+    record = accounting_mod.new_expense(
+        d.get("kind") or d.get("type"),
+        d.get("currency"),
+        d.get("amount"),
+        note=sec.clean(d.get("note"), 300),
+        at=_utcnow(),
+        actor=authmod.current_admin())
+    if not record:
+        return _accounting_mutation_error(
+            "Choose a type (purchase, payout or fee), a currency and a positive amount.")
+    rows = _accounting_expenses()
+    if rows is None:
+        return jsonify(ok=False, error="Manual expenses could not be read from Supabase."), 503
+    updated = [record] + accounting_mod.clean_expenses(rows)
+    if not _accounting_save_expenses(updated):
+        return jsonify(ok=False, error="The expense could not be saved to the accounting database."), 503
+    audit(authmod.current_admin(), "accounting.expense.add",
+          f"{record['kind']} {record['currency']} {record['amount']}", _ip())
+    batches = _accounting_batches() or []
+    settings = _accounting_settings() or {}
+    return jsonify(ok=True, expense=record,
+                   expenses=accounting_mod.clean_expenses(updated),
+                   balances=accounting_mod.bank_balances(batches, updated, settings))
+
+
+@api.delete("/admin/accounting/expenses/<eid>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_expense_delete(eid):
+    eid = sec.clean(eid, 24).upper()
+    rows = _accounting_expenses()
+    if rows is None:
+        return jsonify(ok=False, error="Manual expenses could not be read from Supabase."), 503
+    cleaned = accounting_mod.clean_expenses(rows)
+    remaining = [row for row in cleaned if row.get("id") != eid]
+    if len(remaining) == len(cleaned):
+        return _accounting_mutation_error("That expense record was not found.", 404)
+    if not _accounting_save_expenses(remaining):
+        return jsonify(ok=False, error="The expense could not be removed."), 503
+    audit(authmod.current_admin(), "accounting.expense.delete", eid, _ip())
+    batches = _accounting_batches() or []
+    settings = _accounting_settings() or {}
+    return jsonify(ok=True, id=eid, deleted=True,
+                   expenses=remaining,
+                   balances=accounting_mod.bank_balances(batches, remaining, settings))
+
+
+@api.put("/admin/accounting/settings")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_settings_save():
+    d = request.get_json(silent=True) or {}
+    saved, error = _accounting_save_settings(d)
+    if error:
+        return _accounting_mutation_error(error)
+    audit(authmod.current_admin(), "accounting.settings.update",
+          json.dumps({k: saved.get(k) for k in sorted(saved)})[:200], _ip())
+    batches = _accounting_batches() or []
+    expenses = accounting_mod.clean_expenses(_accounting_expenses() or [])
+    return jsonify(ok=True, settings=saved,
+                   balances=accounting_mod.bank_balances(batches, expenses, saved))
+
+
+@api.get("/admin/sales/insights")
+@authmod.require_admin
+def admin_sales_insights():
+    """Sales / History page analytics: period profit cards + pushed batches.
+
+    Reads the immutable pushed-batch snapshots (never the live order rows), so
+    historical performance stays separated from the active accounting staging
+    queue and can never be rewritten by a later order edit.
+    """
+    currency = accounting_mod.normalize_currency(request.args.get("currency")) or "NGN"
+    period = sec.clean(request.args.get("period"), 16).lower()
+    if period not in ("week", "month", "year", "all"):
+        period = "month"
+    batches = _accounting_batches()
+    if batches is None:
+        return jsonify(ok=False, error="Pushed batches could not be read from Supabase."), 503
+    expenses = _accounting_expenses()
+    if expenses is None:
+        return jsonify(ok=False, error="Manual expenses could not be read from Supabase."), 503
+    expenses = accounting_mod.clean_expenses(expenses)
+    summary = accounting_mod.sales_summary(batches, expenses, currency, period=period)
+    batch_cards = [{
+        "id": batch.get("id"),
+        "name": batch.get("name"),
+        "currency": batch.get("currency"),
+        "pushedAt": batch.get("pushedAt") or batch.get("createdAt"),
+        "orderCount": (batch.get("totals") or {}).get("orderCount"),
+        "revenue": (batch.get("totals") or {}).get("customerRevenue"),
+        "supplierCosts": (batch.get("totals") or {}).get("supplierCostInCurrency"),
+        "transport": (batch.get("totals") or {}).get("transportExpense"),
+        "transferFee": batch.get("transferFee"),
+        "netProfit": ((batch.get("totals") or {}).get("netCashProfit", 0)
+                      - accounting_mod.amount(batch.get("transferFee"))),
+        "exchangeRate": (batch.get("orders") or [{}])[0].get("exchangeRate")
+                        if (batch.get("orders") or [{}])[0] else None,
+        "sheet": batch.get("sheet") or {},
+    } for batch in summary.pop("batches")]
+    settings = _accounting_settings() or {}
+    balances = accounting_mod.bank_balances(batches, expenses, settings)
+    response = jsonify(ok=True, summary=summary, batches=batch_cards,
+                       balances=balances,
+                       currentExchangeRate=float(accounting_mod.current_exchange_rate()))
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 # ---------------------------------------------------------- admin: orders
@@ -4282,38 +4665,273 @@ def admin_product_variants_upsert_alias():
 @authmod.require_admin
 @sec.require_csrf
 def admin_product_delete(pid):
-    """Delete one product. Fast, durable and honest about what is still running.
+    """Delete one product — by default into the Trash / Recycler.
 
-    The portal used to wait for the whole Supabase half of a delete inside the
-    request: the atomic RPC, the child cascade and the Storage purge. For a
-    product with a gallery that is a multi-second call, and the browser gave up
-    with "Could not reach server" long before the server finished - so the
-    operator retried a delete that had already started. The default path now
-    is:
+    The default path MOVES the product to the dedicated trash store instead of
+    destroying it: a full snapshot is kept (so it can be restored with its
+    photos, prices and stock intact), the row is tombstoned out of every
+    active listing, and nothing is purged from Storage. The live catalogue
+    count can therefore never jump (283 -> 325) from deleted rows resurfacing:
+    a trashed id is excluded from the storefront, the admin list and search
+    until it is restored or permanently deleted.
 
-      1. write the durable tombstone (one small Supabase write) - this is what
-         stops the product selling, and it is the only part that must never be
-         lost if the process dies a second later;
-      2. hide it locally so the very next read in this process stops serving it;
-      3. queue the heavy half (RPC + cascade + media purge + abandoned carts)
-         on the background task queue, which chunks it and retries with backoff;
-      4. answer 200 immediately with ``deleteMode: "queued"`` and a ``jobId``.
-
-    ``deleteMode`` still tells the caller which backend did the work. The old
-    inline, fail-closed behaviour - 200 only when the RPC confirmed the row
-    removed, 503 with the RPC report otherwise - is kept verbatim behind
-    ``?sync=1`` for the runbook and for callers that must block on the outcome.
-    A tombstone that could not be written is still a 503, so a failed delete is
-    never reported as a successful one.
+    ``?permanent=1`` (or the legacy ``?sync=1``) skips the trash and runs the
+    original hard delete inline; ``?queued=1`` keeps the old queued hard
+    delete. The runbook behaviour — 200 only when the RPC confirmed the row
+    removed, 503 with the RPC report otherwise — is unchanged for those.
 
     Deleting the products-table row alone is not enough for a seed product:
     catalog.merged() unions the bundled seed rows on every read, so the durable
-    deleted-ids list must be written too (supabase_store.add_deleted_id).
+    deleted-ids list is written too (supabase_store.save_deleted_ids — the
+    restorable list, NOT the permanent SQL ledger).
     """
     pid = sec.clean(pid, 64)
-    if catalog_mod._prod_source() and not _wants_sync():
+    wants_permanent = _wants_sync() or str(
+        request.args.get("permanent") or "").strip().lower() in ("1", "true", "yes", "on")
+    wants_queued = str(request.args.get("queued") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+    if wants_permanent:
+        return _sync_product_delete(pid)
+    if wants_queued and catalog_mod._prod_source():
         return _queue_product_delete(pid)
-    return _sync_product_delete(pid)
+    return _trash_product(pid)
+
+
+def _product_trash_rows():
+    """Trashed product snapshots, or None when the store cannot be read."""
+    if catalog_mod._prod_source():
+        return supabase_store.load_product_trash()
+    row = one("SELECT value FROM growth_settings WHERE key=?",
+              (supabase_store.PRODUCT_TRASH_KEY,))
+    if not row or not row["value"]:
+        return []
+    try:
+        value = json.loads(row["value"])
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _product_trash_save(rows):
+    serialized = json.dumps(list(rows or []), ensure_ascii=False,
+                            separators=(",", ":"))
+    if catalog_mod._prod_source():
+        if not supabase_store.save_product_trash(rows):
+            return False
+    try:
+        execute(
+            "INSERT INTO growth_settings (key,value) VALUES (?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (supabase_store.PRODUCT_TRASH_KEY, serialized))
+    except Exception as exc:
+        if not catalog_mod._prod_source():
+            print(f"[trash] local write failed: {exc}")
+            return False
+    return True
+
+
+def _trash_record_for(product, actor, now):
+    """A compact, restorable snapshot of one product for the trash store."""
+    product = dict(product or {})
+    return {
+        "id": str(product.get("id") or ""),
+        "name": str(product.get("name") or "")[:200],
+        "sku": str(product.get("sku") or "")[:80],
+        "category": str(product.get("category") or "")[:40],
+        "image": catalog_mod.primary_image(product) if hasattr(
+            catalog_mod, "primary_image") else str(product.get("image") or ""),
+        "stock": product.get("stock_quantity", product.get("stock", 0)),
+        "payload": product,
+        "deletedAt": now,
+        "deletedBy": actor,
+    }
+
+
+def _trash_product(pid):
+    """Move one product to the Trash / Recycler (soft, restorable delete)."""
+    now = _utcnow()
+    actor = authmod.current_admin()
+    try:
+        existing = catalog_mod.product_index(include_hidden=True).get(pid) or {}
+    except Exception:
+        existing = {}
+    trash = _product_trash_rows()
+    if trash is None:
+        return jsonify(ok=False, error=(
+            "The Trash could not be read from the store, so the product was "
+            "not deleted. Nothing was removed - retry.")), 503
+    already = next((row for row in trash
+                    if isinstance(row, dict) and str(row.get("id")) == pid), None)
+    if not existing and already:
+        # A repeat delete of a product already sitting in the trash is a
+        # success, not an error (the operator's intent is already the truth).
+        return jsonify(ok=True, id=pid, deleted=True, trashed=True,
+                       alreadyTrashed=True, deleteMode="trash",
+                       meta=catalog_mod.meta())
+    if not existing:
+        # The id is not in the live catalogue (an already-removed row, or a
+        # stale mirror copy). The old contract still applies: tombstone the id
+        # so it can never resurface. The trash record is minimal - a restore
+        # will say honestly that no saved copy exists.
+        record = {"id": pid, "name": "", "sku": "", "category": "",
+                  "image": "", "stock": 0, "payload": None,
+                  "deletedAt": now, "deletedBy": actor}
+    else:
+        record = _trash_record_for(existing, actor, now)
+    updated_trash = ([row for row in trash
+                      if not (isinstance(row, dict) and str(row.get("id")) == pid)]
+                     + [record])
+    if not _product_trash_save(updated_trash):
+        return jsonify(ok=False, error=(
+            "The product could not be moved to the Trash. Nothing was "
+            "removed - retry.")), 503
+
+    # Restorable tombstone: the durable deleted-ids list (NOT the permanent
+    # SQL ledger), so a later restore can clear it again.
+    production = bool(catalog_mod._prod_source())
+    tombstone_ok = True
+    if production:
+        try:
+            from supabase_store import load_deleted_ids, save_deleted_ids
+            current = load_deleted_ids()
+            if current is None or pid not in current:
+                tombstone_ok = bool(save_deleted_ids(
+                    list(current or []) + [pid]))
+        except Exception as exc:
+            print(f"[trash] durable tombstone failed: {exc}")
+            tombstone_ok = False
+    hidden = catalog_mod.hide_now(pid, actor)
+    if not hidden and not production:
+        tombstone_ok = False
+    if not tombstone_ok:
+        # Roll the trash entry back so the store never claims a delete that
+        # did not take effect on the catalogue.
+        _product_trash_save([row for row in updated_trash
+                             if not (isinstance(row, dict) and str(row.get("id")) == pid)])
+        return jsonify(ok=False, error=(
+            "The durable tombstone could not be written, so the product was "
+            "not moved to the Trash. Nothing was removed - retry.")), 503
+
+    # Soft-tombstone the products-table row (source="deleted"). Media and the
+    # row itself are kept so Restore brings the piece back exactly as it was.
+    if production:
+        try:
+            from supabase_store import delete_products_strict
+            delete_products_strict([pid])
+        except Exception as exc:
+            print(f"[trash] products row tombstone skipped: {exc}")
+    abandoned = _purge_local_abandoned_carts_for_product(
+        pid, str(existing.get("name") or ""))
+    _invalidate_all_catalog_caches()
+    audit(actor, "product.trash", f"{pid} stock={record.get('stock')}", _ip())
+    return jsonify(ok=True, id=pid, deleted=True, trashed=True,
+                   deleteMode="trash", filesRemoved=0,
+                   abandonedCartsRemoved=abandoned,
+                   trashCount=len(updated_trash),
+                   meta=catalog_mod.meta())
+
+
+@api.get("/admin/products/trash")
+@authmod.require_admin
+def admin_product_trash_list():
+    """The Trash / Recycler: deleted products excluded from every listing."""
+    rows = _product_trash_rows()
+    if rows is None:
+        return jsonify(ok=False, error="The Trash could not be read from the store."), 503
+    items = [{
+        "id": row.get("id"),
+        "name": row.get("name"),
+        "sku": row.get("sku"),
+        "category": row.get("category"),
+        "image": row.get("image"),
+        "stock": row.get("stock"),
+        "deletedAt": row.get("deletedAt"),
+        "deletedBy": row.get("deletedBy"),
+    } for row in rows if isinstance(row, dict) and row.get("id")]
+    items.sort(key=lambda row: str(row.get("deletedAt") or ""), reverse=True)
+    response = jsonify(ok=True, count=len(items), items=items)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@api.post("/admin/products/trash/<pid>/restore")
+@authmod.require_admin
+@sec.require_csrf
+def admin_product_trash_restore(pid):
+    """Restore one product from the Trash back onto the store."""
+    pid = sec.clean(pid, 64)
+    rows = _product_trash_rows()
+    if rows is None:
+        return jsonify(ok=False, error="The Trash could not be read from the store."), 503
+    record = next((row for row in rows
+                   if isinstance(row, dict) and str(row.get("id")) == pid), None)
+    if not record:
+        return jsonify(ok=False, error="That product is not in the Trash."), 404
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    if not payload:
+        return jsonify(ok=False, error=(
+            "The saved copy of that product is incomplete, so it cannot be "
+            "restored. Permanently delete it and re-create the product instead.")), 409
+    restored, state, ok = catalog_mod.upsert(payload, authmod.current_admin())
+    if not ok or restored is None:
+        reason = {"permanently-removed": (
+                      "That product was permanently deleted earlier and cannot "
+                      "be restored. Re-create it as a new product."),
+                  "test-fixture": "Test fixture products cannot be restored.",
+                  "rejected": "The saved copy failed validation."}.get(state, state or "error")
+        return jsonify(ok=False, error=f"The product could not be restored. {reason}"), 409
+    remaining = [row for row in rows
+                 if not (isinstance(row, dict) and str(row.get("id")) == pid)]
+    if not _product_trash_save(remaining):
+        # The product IS live again; a leftover trash row only means the
+        # button stays visible. Report success with a warning note.
+        audit(authmod.current_admin(), "product.restore", f"{pid} trash-row-left", _ip())
+        return jsonify(ok=True, id=pid, restored=True, product=restored,
+                       warning="The product is restored, but it could not be removed from the Trash list. Delete it from the Trash manually.")
+    _invalidate_all_catalog_caches()
+    audit(authmod.current_admin(), "product.restore", pid, _ip())
+    return jsonify(ok=True, id=pid, restored=True, product=restored,
+                   trashCount=len(remaining), meta=catalog_mod.meta())
+
+
+@api.delete("/admin/products/trash/<pid>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_product_trash_purge(pid):
+    """Permanently delete one product from the Trash.
+
+    This is the manual purge: the products-table row, its media in Storage and
+    the trash snapshot are all destroyed, and the id is written to the
+    permanent SQL ledger so no mirror, import or redeploy can bring it back.
+    """
+    pid = sec.clean(pid, 64)
+    rows = _product_trash_rows()
+    if rows is None:
+        return jsonify(ok=False, error="The Trash could not be read from the store."), 503
+    record = next((row for row in rows
+                   if isinstance(row, dict) and str(row.get("id")) == pid), None)
+    if not record:
+        return jsonify(ok=False, error="That product is not in the Trash."), 404
+    # Remove the trash snapshot first: a half-completed purge must never leave
+    # a trash entry whose product data was already destroyed.
+    if not _product_trash_save([row for row in rows
+                                if not (isinstance(row, dict) and str(row.get("id")) == pid)]):
+        return jsonify(ok=False, error=(
+            "The product could not be removed from the Trash. Nothing was "
+            "permanently deleted - retry.")), 503
+    result = _sync_product_delete(pid)
+    # _sync_product_delete answers either a plain 200 Response or a
+    # (response, status) tuple for every failure path.
+    failed = isinstance(result, tuple) and result[1] != 200
+    if not isinstance(result, tuple) and getattr(result, "status_code", 200) >= 400:
+        failed = True
+    if failed:
+        # The permanent delete failed; keep the piece in the trash so the
+        # owner can retry instead of losing the record entirely.
+        _product_trash_save(rows)
+        return result
+    audit(authmod.current_admin(), "product.trash.purge", pid, _ip())
+    return result
 
 
 def _queue_product_delete(pid):

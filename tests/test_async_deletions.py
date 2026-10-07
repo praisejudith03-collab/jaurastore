@@ -271,7 +271,7 @@ def test_the_delete_request_never_waits_for_a_slow_hard_delete(
         tok = r.get_json()["csrf"]
 
         started = time.monotonic()
-        fast = c.delete("/api/admin/products/jau-fast",
+        fast = c.delete("/api/admin/products/jau-fast?queued=1",
                         headers={"X-CSRF-Token": tok})
         elapsed_fast = time.monotonic() - started
         assert fast.status_code == 200, fast.data
