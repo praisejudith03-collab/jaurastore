@@ -12,25 +12,25 @@
   <meta property="og:title" content="Checkout · Jaura Store" />
   <meta property="og:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
   <meta property="og:url" content="https://jaurastore.com.ng/checkout.html" />
-  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=198" />
+  <meta property="og:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=199" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Checkout · Jaura Store" />
   <meta name="twitter:description" content="Jaura Store checkout — pay by UBA Naira or MoMo CFA, then upload your receipt." />
-  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=198" />
+  <meta name="twitter:image" content="https://jaurastore.com.ng/images/brand/og-cover.jpg?v=199" />
   <!-- brand icons: Supabase public-assets bucket (tools/upload_brand_assets.py) -->
   <link rel="icon" type="image/png" sizes="32x32" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="48x48" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/favicon-48.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/apple-touch-180.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="https://rvkweyipqgsggcnimhxf.supabase.co/storage/v1/object/public/public-assets/brand/icon-192.png" />
   <!-- same-origin fallback: still a legible mark if the bucket is unreachable -->
-  <link rel="icon" type="image/png" sizes="16x16" href="/images/brand/favicon-16.png?v=198" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/brand/favicon-16.png?v=199" />
   <!-- /brand icons -->
-  <link rel="stylesheet" href="css/fonts.css?v=198" />
+  <link rel="stylesheet" href="css/fonts.css?v=199" />
   <!-- product photos live in the shop's Supabase storage bucket:
        open that connection while the HTML is still parsing so the
        first photo starts the moment the grid renders -->
   <link rel="preconnect" href="https://rvkweyipqgsggcnimhxf.supabase.co" />
-  <link rel="stylesheet" href="css/style.css?v=198" />
+  <link rel="stylesheet" href="css/style.css?v=199" />
 </head>
 <body data-page="checkout">
   <div id="site-header"></div>
@@ -80,7 +80,7 @@
             <select name="zone" id="ck-zone" class="ck-zone-select" required data-delivery-zones>
               <option value="" selected data-i18n="ck.zonePlaceholder">Choose a delivery zone</option>
               <optgroup label="Pickup / collection" data-i18n-label="ck.zoneGroupPickup">
-                <option value="Pickup in Cotonou is free for lighter products" data-zone-kind="pickup">📍 Cotonou Local Pickup (House Address) — FREE</option>
+                <option value="Pickup in Cotonou is free for lighter products" data-zone-kind="pickup" data-i18n="ck.fare.pickup">Pick up only</option>
               </optgroup>
               <optgroup label="Nigeria (₦ Naira)" data-i18n-label="ck.zoneGroupNaira">
                 <option value="Lagos Mainland" data-currency="NGN" data-i18n="ck.fare.mainland">🇳🇬 Lagos State (Express Delivery) — Lagos Mainland (₦2,000 – ₦5,000)</option>
@@ -233,11 +233,11 @@
   </div>
 
   <div id="site-footer"></div>
-  <script src="js/products-data.js?v=198"></script>
-  <script src="js/i18n-phrases.js?v=198"></script>
-  <script src="js/i18n.js?v=198"></script>
-  <script src="js/net.js?v=198"></script>
-  <script src="js/store.js?v=198"></script>
-  <script src="js/app.js?v=198"></script>
+  <script src="js/products-data.js?v=199"></script>
+  <script src="js/i18n-phrases.js?v=199"></script>
+  <script src="js/i18n.js?v=199"></script>
+  <script src="js/net.js?v=199"></script>
+  <script src="js/store.js?v=199"></script>
+  <script src="js/app.js?v=199"></script>
 </body>
 </html>

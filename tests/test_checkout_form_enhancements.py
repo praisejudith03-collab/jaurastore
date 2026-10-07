@@ -45,12 +45,12 @@ def test_css_has_spinner_and_validation_styles():
 def test_checkout_html_has_hierarchy_and_interstate_notice():
     html = _read("checkout.html")
     assert "data-interstate-notice" in html
-    assert "📍 Cotonou Local Pickup (House Address) — FREE" in html
+    assert "Pick up only" in html
     assert "🇳🇬 Lagos State (Express Delivery)" in html
     assert "🇳🇬 Other States in Nigeria (Inter-State Dispatch)" in html
     assert "Cotonou (1,000 – 3,000 CFA)" in html
     # Verify order in HTML
-    pickup_idx = html.index("📍 Cotonou Local Pickup (House Address) — FREE")
+    pickup_idx = html.index("Pick up only")
     ng_idx = html.index("🇳🇬 Lagos State (Express Delivery)")
     cfa_idx = html.index("Cotonou (1,000 – 3,000 CFA)")
     assert pickup_idx < ng_idx < cfa_idx, "Hierarchy must be Pickup -> Nigeria -> Benin & Togo"
@@ -58,7 +58,7 @@ def test_checkout_html_has_hierarchy_and_interstate_notice():
 
 def test_app_js_handles_zone_hierarchy_and_interstate_notice():
     app = _read("js", "app.js")
-    assert "📍 Cotonou Local Pickup (House Address) — FREE" in app
+    assert "Pick up only" in app
     assert "🇳🇬 Lagos State (Express Delivery)" in app
     assert "🇳🇬 Other States in Nigeria (Inter-State Dispatch)" in app
     assert "function updateInterStateNotice" in app
