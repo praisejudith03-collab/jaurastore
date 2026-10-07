@@ -181,12 +181,13 @@ async function main() {
   let zoneText = w2.document.querySelector("[data-delivery-zones]")?.textContent || "";
   // Fall back to raw if list re-rendered on cart
   if (!zoneText) zoneText = w2.document.querySelector(".fare-list")?.textContent || "";
-  // The shop deliberately keeps ONE pick-up option — "Pickup in Cotonou is
-  // free for lighter products" (added with the Benin/Togo shipping rules).
-  // Every other pick-up / self-collect wording must still be stripped out.
+  // The shop deliberately keeps ONE pick-up option, labelled with the
+  // location-neutral "Pick up only" (owner request 2026-10-07 — the option
+  // text never names Cotonou, Nigeria or any other place). Every other
+  // pick-up / self-collect wording must still be stripped out.
   const pickupLeft = (zoneText.match(/pick\s*-?\s*up[^.]*/gi) || []).join(" | ");
-  check("only the Cotonou free-pickup option survives in the delivery zone menu",
-        !pickupLeft || /pickup in cotonou is free for lighter products/i.test(pickupLeft),
+  check("the only pickup wording in the delivery zone menu is the neutral Pick up only",
+        !pickupLeft || /^pick\s*-?\s*up\s*only(\s*\|\s*pick\s*-?\s*up\s*only)*$/i.test(pickupLeft.trim()),
         pickupLeft.replace(/\s+/g, " ").trim().slice(0, 90));
   check("delivery includes Cotonou option", /Cotonou/i.test(zoneText), "zoneText=" + zoneText.replace(/\s+/g, " ").slice(0, 60));
   // Receipt input must let the customer pick from the gallery (image/*), send a

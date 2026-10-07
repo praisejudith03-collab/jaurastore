@@ -3,7 +3,7 @@
 Verifications:
 1. reCAPTCHA & Security Token Flow: silent auto-refresh, graceful mobile fallback, backend passthrough.
 2. Mandatory Field Soft-Validation: inline tooltips, red border highlight, direct smooth-scrolling to first missing field.
-3. Delivery Zone Selection & Hierarchy: 📍 Cotonou Local Pickup, Lagos State, Inter-State Nigeria, banner display, fee ranges.
+3. Delivery Zone Selection & Hierarchy: Pick up only, Lagos State, Inter-State Nigeria, banner display, fee ranges.
 4. Final Order Action Button: 'Place Your Order' text, single loading state & spinner on click.
 5. Minimum Order Notice Banner Removal: .ck-bj-min banner completely removed from checkout UI with zero leftover layout artifacts.
 """
@@ -122,11 +122,11 @@ def test_validation_red_border_and_tooltip_classes():
 def test_delivery_zone_dropdown_hierarchy_in_checkout_html():
     html = _read("checkout.html")
     assert "data-delivery-zones" in html
-    assert "📍 Cotonou Local Pickup (House Address) — FREE" in html
+    assert "Pick up only" in html
     assert "🇳🇬 Lagos State (Express Delivery)" in html
     assert "🇳🇬 Other States in Nigeria (Inter-State Dispatch)" in html
 
-    idx_pickup = html.index("📍 Cotonou Local Pickup (House Address) — FREE")
+    idx_pickup = html.index("Pick up only")
     idx_lagos = html.index("🇳🇬 Lagos State (Express Delivery)")
     idx_interstate = html.index("🇳🇬 Other States in Nigeria (Inter-State Dispatch)")
     idx_cfa = html.index("Cotonou (1,000 – 3,000 CFA)")

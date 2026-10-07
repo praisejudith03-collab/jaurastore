@@ -2600,6 +2600,104 @@ def save_accounting_batches(batches):
         return False
 
 
+# The owner's manual expense logger (bulk stock purchases, payouts and bank
+# transfer / withdrawal charges) plus the accounting desk settings (starting
+# bank balances, reference spreadsheet). Same durable key/value row pattern as
+# the batch archive: one JSON row, mirrored by the local SQLite cache.
+ACCOUNTING_EXPENSES_KEY = "accounting_manual_expenses_json"
+ACCOUNTING_SETTINGS_KEY = "accounting_settings_json"
+# The Trash / Recycler: full snapshots of products the owner deleted, kept out
+# of every active listing until restored or permanently purged.
+PRODUCT_TRASH_KEY = "product_trash_json"
+
+
+def _load_growth_json(key):
+    """Read one JSON row from growth_settings; None means the read failed."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        rows = _res_data(c.table("growth_settings").select("value")
+                         .eq("key", key).limit(1).execute()) or []
+        if not rows:
+            return []
+        raw = rows[0].get("value")
+        value = json.loads(raw) if isinstance(raw, str) and raw else raw
+        return value if isinstance(value, list) else []
+    except Exception as exc:
+        print(f"[supabase] growth json read failed ({key}): {exc}")
+        return None
+
+
+def _save_growth_json(key, value):
+    """Strictly persist one JSON row; True only after Supabase confirms."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table("growth_settings").upsert({
+            "key": key,
+            "value": json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+        }).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] growth json save failed ({key}): {exc}")
+        return False
+
+
+def load_accounting_expenses():
+    """Manual expense records, or None when the production read fails."""
+    return _load_growth_json(ACCOUNTING_EXPENSES_KEY)
+
+
+def save_accounting_expenses(expenses):
+    return _save_growth_json(ACCOUNTING_EXPENSES_KEY, list(expenses or []))
+
+
+def load_accounting_settings():
+    """The accounting desk settings row (dict), or None on a failed read."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        rows = _res_data(c.table("growth_settings").select("value")
+                         .eq("key", ACCOUNTING_SETTINGS_KEY).limit(1).execute()) or []
+        if not rows:
+            return {}
+        raw = rows[0].get("value")
+        value = json.loads(raw) if isinstance(raw, str) and raw else raw
+        return value if isinstance(value, dict) else {}
+    except Exception as exc:
+        print(f"[supabase] accounting settings read failed: {exc}")
+        return None
+
+
+def save_accounting_settings(settings):
+    """Strictly persist the accounting settings dict."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table("growth_settings").upsert({
+            "key": ACCOUNTING_SETTINGS_KEY,
+            "value": json.dumps(dict(settings or {}), ensure_ascii=False,
+                                separators=(",", ":")),
+        }).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] accounting settings save failed: {exc}")
+        return False
+
+
+def load_product_trash():
+    """Trashed product snapshots, or None when the production read fails."""
+    return _load_growth_json(PRODUCT_TRASH_KEY)
+
+
+def save_product_trash(rows):
+    return _save_growth_json(PRODUCT_TRASH_KEY, list(rows or []))
+
+
 def load_receipts(limit=500):
     """Return receipts from Supabase, or None when the production read fails."""
     c = client()

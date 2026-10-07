@@ -197,7 +197,7 @@ def test_product_hard_delete_removes_rows_and_files(client, admin, env):
     execute("INSERT INTO product_reviews (product_id, email, rating, body)"
             " VALUES ('jau-clean-4','a@b.c',5,'nice')",)
     token = _csrf(client)
-    r = client.delete("/api/admin/products/jau-clean-4",
+    r = client.delete("/api/admin/products/jau-clean-4?permanent=1",
                       headers={"X-CSRF-Token": token})
     assert r.status_code == 200 and r.get_json()["ok"] is True
     assert not (env["uploads"] / "products/2026/10/purge-me.jpg").exists()

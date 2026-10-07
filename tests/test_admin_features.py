@@ -50,6 +50,15 @@ EXPECTED_ADMIN_ROUTES = {
     ("DELETE", "/api/admin/accounting/orders/<oid>"),
     ("POST", "/api/admin/accounting/orders/<oid>/restore"),
     ("POST", "/api/admin/accounting/batches"),
+    ("POST", "/api/admin/accounting/push"),
+    ("GET", "/api/admin/accounting/expenses"),
+    ("POST", "/api/admin/accounting/expenses"),
+    ("DELETE", "/api/admin/accounting/expenses/<eid>"),
+    ("PUT", "/api/admin/accounting/settings"),
+    ("GET", "/api/admin/sales/insights"),
+    ("GET", "/api/admin/products/trash"),
+    ("POST", "/api/admin/products/trash/<pid>/restore"),
+    ("DELETE", "/api/admin/products/trash/<pid>"),
     ("GET", "/api/admin/analytics"),
     ("GET", "/api/admin/audit"), ("POST", "/api/admin/backup"),
     ("PUT", "/api/admin/categories"), ("GET", "/api/admin/coupons"),
@@ -694,6 +703,11 @@ def test_every_endpoint_the_portal_calls_is_a_real_route(app):
     called = set(re.findall(r'JA_NET\.api\(\s*"([^"`]+)"', admin_js))
     called |= set(re.findall(r'JA_NET\.api\(\s*`([^`]+)`', admin_js))
     live = {str(r) for r in app.url_map.iter_rules()}
+    # A rule segment like <pid> matches any concrete segment, so normalise
+    # both sides to "X" - that keeps typo detection while accepting a
+    # template expression ANYWHERE in the path (not only the last segment,
+    # e.g. .../trash/${id}/restore against .../trash/<pid>/restore).
+    live_x = {re.sub(r"/<[^>]+>", "/X", r) for r in live}
     missing = []
     for call in called:
         # strip a template expression or a trailing id
@@ -701,7 +715,7 @@ def test_every_endpoint_the_portal_calls_is_a_real_route(app):
         path = "/" + path.lstrip("/")
         if not path.startswith("/api/"):
             path = "/api/" + path
-        if path in live:
+        if path in live or path in live_x:
             continue
         # try collapsing the last segment to a converter
         head = path.rsplit("/", 1)[0]

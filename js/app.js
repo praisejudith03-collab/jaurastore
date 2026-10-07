@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=197";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=197";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=199";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=199";
 }
 
 function renderCategories() {
@@ -1653,7 +1653,11 @@ function zoneLabel(z) {
   const suf = z.currency === "CFA" ? " CFA" : "";
   const fmt = (n) => sym + Number(n || 0).toLocaleString("en-US") + suf;
   if (z.kind === "pickup" || /pickup|retrait/i.test(z.name)) {
-    return "📍 Cotonou Local Pickup (House Address) — FREE";
+    // Location-neutral by design (owner request 2026-10-07): every pickup
+    // zone - Cotonou house, Nigeria hub, anywhere else the owner adds -
+    // reads the same simple label, and the free fare comes from the zone's
+    // kind, never from this text.
+    return t("ck.fare.pickup") || "Pick up only";
   }
   const name = String(z.name || "");
   if (/lagos\s*mainland/i.test(name)) {
@@ -1670,7 +1674,7 @@ function zoneLabel(z) {
 }
 
 /** The zone list, split into the three groups with clean hierarchy:
- *  1. Top: Pickup / collection (📍 Cotonou Local Pickup)
+ *  1. Top: Pickup / collection ("Pick up only")
  *  2. Nigeria Options: Lagos (Express Delivery) & Other States (Inter-State Dispatch)
  *  3. Benin Republic & Togo options intact following Nigeria. */
 function zoneGroups(list) {

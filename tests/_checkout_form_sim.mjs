@@ -108,8 +108,8 @@ check("zoneGroups 3rd group is CFA (Benin & Togo)", groups[2].id === "cfa");
 
 // Test 2: Zone label formatting
 const pickupLabel = vm.runInContext("zoneLabel", sandbox)(mockZones[2]);
-check("pickup zone label is 📍 Cotonou Local Pickup (House Address) — FREE",
-  pickupLabel === "📍 Cotonou Local Pickup (House Address) — FREE", pickupLabel);
+check("pickup zone label is the neutral Pick up only",
+  pickupLabel === "Pick up only", pickupLabel);
 
 const lagosLabel = vm.runInContext("zoneLabel", sandbox)(mockZones[1]);
 check("Lagos Mainland label has Express Delivery prefix",

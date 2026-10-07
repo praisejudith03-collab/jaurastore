@@ -620,7 +620,11 @@ def test_admin_delete_answers_at_once_and_the_worker_hard_deletes(
     assert saved["image"] == url
     assert migrated.count("products", f"id = '{pid}'") == 1
 
-    r = client.delete(f"/api/admin/products/{pid}", headers={"X-CSRF-Token": tok})
+    # ``?queued=1`` keeps the queued hard-delete contract (the default DELETE
+    # now moves a product to the Trash instead — see test_product_trash.py).
+    r = client.delete(f"/api/admin/products/{pid}",
+                      headers={"X-CSRF-Token": tok},
+                      query_string={"queued": "1"})
 
     assert r.status_code == 200, r.data
     body = r.get_json()
@@ -703,7 +707,8 @@ def test_a_database_without_any_ledger_fails_closed_even_async(
     bare.sql(f"insert into public.products (id, name) "
              f"values ('{pid}', 'Live Six')")
 
-    r = client.delete(f"/api/admin/products/{pid}", headers={"X-CSRF-Token": tok})
+    r = client.delete(f"/api/admin/products/{pid}", headers={"X-CSRF-Token": tok},
+                      query_string={"queued": "1"})
 
     assert r.status_code == 503, r.data
     body = r.get_json()
@@ -733,7 +738,9 @@ def test_a_queued_delete_that_keeps_failing_is_reported_not_hidden(
         raise RuntimeError("storage: bucket unreachable")
 
     monkeypatch.setattr(supabase_store, "hard_delete_products", _boom)
-    r = client.delete(f"/api/admin/products/{pid}", headers={"X-CSRF-Token": tok})
+    r = client.delete(f"/api/admin/products/{pid}",
+                      headers={"X-CSRF-Token": tok},
+                      query_string={"queued": "1"})
     assert r.status_code == 200, r.data
     body = r.get_json()
     assert body["deleteMode"] == "queued"

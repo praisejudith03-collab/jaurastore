@@ -381,7 +381,7 @@ def test_admin_product_delete_503_when_the_durable_tombstone_fails(
     monkeypatch.setattr(supabase_store, "hard_delete_products",
                         lambda ids: {"deleted": [], "files": 0, "errors": ["down"]})
     tok = _login(client)
-    r = client.delete("/api/admin/products/jau-nope",
+    r = client.delete("/api/admin/products/jau-nope?queued=1",
                       headers={"X-CSRF-Token": tok})
     assert r.status_code == 503
     body = r.get_json()
@@ -416,7 +416,7 @@ def test_admin_product_delete_queues_the_hard_delete_and_answers_immediately(
     monkeypatch.setattr(supabase_store, "hard_delete_products", _hard)
     tok = _login(client)
     started = time.monotonic()
-    r = client.delete("/api/admin/products/jau-001",
+    r = client.delete("/api/admin/products/jau-001?queued=1",
                       headers={"X-CSRF-Token": tok})
     elapsed = time.monotonic() - started
     assert r.status_code == 200, r.data
@@ -464,7 +464,7 @@ def test_admin_product_delete_cleanup_failure_lands_in_the_job_panel(
 
     monkeypatch.setattr(supabase_store, "hard_delete_products", _hard)
     tok = _login(client)
-    r = client.delete("/api/admin/products/jau-cleanup",
+    r = client.delete("/api/admin/products/jau-cleanup?queued=1",
                       headers={"X-CSRF-Token": tok})
     assert r.status_code == 200, r.data
     body = r.get_json()
@@ -523,9 +523,10 @@ def test_admin_product_delete_sync_escape_hatch_keeps_the_strict_contract(
 def test_admin_product_delete_local_mode_is_labelled(client, monkeypatch):
     """Without Supabase as the source of truth the delete says so.
 
-    A local-only delete must never look like a Supabase delete to the caller:
-    the response carries deleteMode so the portal (and an operator reading a
-    log) can tell the two apart.
+    The default DELETE now moves the product to the Trash / Recycler; a
+    local-mode trash move must never look like a Supabase delete to the
+    caller: the response carries deleteMode so the portal (and an operator
+    reading a log) can tell the two apart.
     """
     import catalog as catalog_mod
     monkeypatch.setattr(catalog_mod, "_prod_source", lambda: False)
@@ -538,7 +539,8 @@ def test_admin_product_delete_local_mode_is_labelled(client, monkeypatch):
     assert r.status_code == 200, r.data
     body = r.get_json()
     assert body["ok"] is True
-    assert body["deleteMode"] == "local-only"
+    assert body["deleteMode"] == "trash"
+    assert body["trashed"] is True
 
 
 def _login(client):

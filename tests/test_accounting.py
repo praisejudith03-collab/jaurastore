@@ -71,8 +71,13 @@ def confirm(client, csrf, order_id):
     return response
 
 
-def get_entries(client, *, include_deleted=False):
-    suffix = "?includeDeleted=true" if include_deleted else ""
+def get_entries(client, *, include_deleted=False, include_archived=False):
+    params = []
+    if include_deleted:
+        params.append("includeDeleted=true")
+    if include_archived:
+        params.append("includeArchived=true")
+    suffix = ("?" + "&".join(params)) if params else ""
     response = client.get(f"/api/admin/accounting{suffix}")
     assert response.status_code == 200, response.get_json()
     return response.get_json()
@@ -187,8 +192,12 @@ def test_confirmation_edit_soft_delete_restore_and_delivery_archive(client, monk
     assert batch["orders"][0]["exchangeRate"] == 0.5
 
     archive_get = get_entries(client)
-    assert next(row for row in archive_get["entries"] if row["id"] == ORDER_IDS[1])["archived"] is True
-    assert archive_get["batches"][0]["id"] == batch["id"]
+    # Pushed/archived orders are CLEARED off the active staging queue; the
+    # audit view brings them back explicitly.
+    assert ORDER_IDS[1] not in {row["id"] for row in archive_get["entries"]}
+    audit_view = get_entries(client, include_archived=True)
+    assert next(row for row in audit_view["entries"] if row["id"] == ORDER_IDS[1])["archived"] is True
+    assert audit_view["batches"][0]["id"] == batch["id"]
     locked_edit = client.patch(
         f"/api/admin/accounting/orders/{ORDER_IDS[1]}", json={"saleAmount": 10_000},
         headers={"X-CSRF-Token": csrf},
@@ -348,7 +357,9 @@ def test_google_connect_is_admin_gated_and_callback_state_bound(client, monkeypa
     assert location.netloc == "accounts.google.com"
     assert params["response_type"] == ["code"]
     assert params["state"]
-    assert "drive.file" in params["scope"][0]
+    # Full Drive access: the push must be able to write to the owner's
+    # pre-existing ITEMFLOW reference workbook, not only app-created files.
+    assert "https://www.googleapis.com/auth/drive" in params["scope"][0]
     assert "test-client-secret" not in start.headers["Location"]
 
     callback = client.get(

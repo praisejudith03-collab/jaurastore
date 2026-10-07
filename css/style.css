@@ -8276,3 +8276,66 @@ body.ac-drawer-open .ac-batch-drawer { visibility: visible; transform: translate
 @media (prefers-reduced-motion: reduce) {
   body[data-page="accounting"] *, body[data-page="accounting"] *::before, body[data-page="accounting"] *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
+
+/* ================= Sales / History: pushed-batch profit analytics ========= */
+/* Owner request 2026-10-07: the Weekly / Monthly / Yearly profit cards and
+   the pushed batch summaries moved from the accounting desk to the Sales
+   page, so active staging and historical performance stay separated. */
+.sales-cur-switch { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid rgba(0,0,0,.08); border-radius: 10px; background: rgba(0,0,0,.03); }
+.admin-sep { margin: 30px 0 8px; border: 0; border-top: 1px solid rgba(0,0,0,.09); }
+.stat.sales-profit-card { border-color: #d9e2d3; background: linear-gradient(145deg,#fbfcf9,#f2f6ee); }
+.stat.sales-profit-card b { color: #3c5035; }
+.sales-balance-strip { margin: 2px 0 16px; padding: 11px 14px; border: 1px solid #d9e2d3; border-radius: 11px; background: #f4f7f1; color: #55604d; font-size: 12px; line-height: 1.6; }
+.sales-balance-strip a { color: #3c5035; font-weight: 650; }
+.sales-balance-strip strong { color: #2d3a28; }
+table .muted { color: #8a887e; font-size: 11px; }
+
+/* ---------- products: per-card hide / show + trash drawer (2026-10-07) ---------- */
+.adx-card-vis {
+  position: absolute; top: 10px; right: 48px;
+  width: 32px; height: 32px;
+  border: 0; border-radius: 50%;
+  background: rgba(255, 255, 255, .92); color: #1f6f43;
+  display: grid; place-items: center;
+  cursor: pointer;
+  opacity: 0; transition: opacity .15s ease, color .15s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .14);
+}
+.adx-card-vis svg { width: 17px; height: 17px; }
+.adx-card-vis.is-off { color: #9a7b1e; background: rgba(255, 244, 214, .96); }
+.adx-card:hover .adx-card-vis, .adx-card:focus-within .adx-card-vis { opacity: 1; }
+@media (hover: none) { .adx-card-vis { opacity: 1; } }
+
+.adx-trash-count {
+  display: inline-block; min-width: 20px; padding: 1px 6px 2px;
+  border-radius: 999px;
+  background: #7a1f18; color: #fff;
+  font-size: .78rem; font-weight: 700; line-height: 1.2;
+  text-align: center; vertical-align: 1px;
+}
+.adx-trash-drawer {
+  margin: 0 0 18px; padding: 16px 16px 18px;
+  border: 1px solid rgba(122, 31, 24, .28);
+  border-radius: 14px;
+  background: #fff8f7;
+}
+.adx-trash-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.adx-trash-head strong { color: #7a1f18; font-size: 1.02rem; }
+.adx-trash-head span { color: #5b4b49; font-size: .85rem; }
+.adx-trash-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.adx-trash-card {
+  display: grid; grid-template-columns: 52px 1fr auto; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  background: #fff; border: 1px solid rgba(0, 0, 0, .08); border-radius: 10px;
+}
+.adx-trash-pic { width: 52px; height: 52px; border-radius: 8px; overflow: hidden; background: #f3e9e8; display: grid; place-items: center; }
+.adx-trash-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.adx-trash-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.adx-trash-body strong { font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adx-trash-body small { color: #7c6a68; font-size: .78rem; }
+.adx-trash-actions { display: flex; flex-direction: column; gap: 6px; }
+.adx-trash-actions .btn { padding: 6px 10px; font-size: .8rem; white-space: nowrap; }
+@media (max-width: 640px) {
+  .adx-trash-actions { grid-column: 1 / -1; flex-direction: row; }
+  .adx-trash-actions .btn { flex: 1; }
+}
