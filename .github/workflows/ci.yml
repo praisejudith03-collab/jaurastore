@@ -56,12 +56,12 @@ jobs:
       - name: Install browser for mobile smoke tests
         run: python -m playwright install --with-deps chromium
 
-      - name: Install jsdom for the accounting desk DOM check
-        # The accounting desk's live-DOM test drives the shipped
-        # js/accounting.js in jsdom. CI refuses to let a test skip, so the
-        # dependency has to be here; npm installs it outside the checkout,
-        # which has no package.json on purpose.
-        run: npm install --no-save --prefix "$RUNNER_TEMP/ja-jsdom" jsdom
+      - name: Install jsdom and Acorn for browser-behaviour guards
+        # jsdom drives the shipped accounting desk in a DOM; Acorn powers the
+        # runtime helper-scope and exchange-rate harnesses. CI refuses skips,
+        # so install both outside the checkout, which has no package.json on
+        # purpose.
+        run: npm install --no-save --prefix "$RUNNER_TEMP/ja-jsdom" jsdom acorn
 
       - name: Run test suite
         # The exact command lives in tools/ci_check.sh, which is what a human
