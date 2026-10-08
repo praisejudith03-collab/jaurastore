@@ -897,6 +897,12 @@ const JA = (() => {
     if (!(rate > 0)) return 0;
     return roundCfa(Number(ngn || 0) * rate);
   }
+  function toNgn(cfa) {
+    // The reverse conversion, at the same live rate (mirrors currency.to_ngn).
+    const rate = currentRate();
+    if (!(rate > 0)) return 0;
+    return Math.max(0, Math.round(Number(cfa || 0) / rate));
+  }
 
   function products() {
     try {
@@ -1321,9 +1327,7 @@ const JA = (() => {
     }
     if (overridden || ngn > 0) return cur === "NGN" ? ngn : toCfa(ngn);
     const cfa = roundCfa(p && p.priceCfa);
-    return cur === "NGN"
-      ? Math.max(0, Math.round(cfa / NGN_TO_CFA))
-      : cfa;
+    return cur === "NGN" ? toNgn(cfa) : cfa;
   }
   function compareOf(p, cur = currency(), variant = "") {
     // Per-option "was" (strike-through) price wins when the chosen variant has
@@ -4162,7 +4166,7 @@ const JA = (() => {
     products, product, publicProductSlug, productUrl, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     homepageFeatured, homepageFeaturedProducts, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
-    currency, setCurrency, currencyLocked, money, moneyExact, moneyRange, priceOf, compareOf, priceRangeOf, priceHTML, toCfa, roundCfa, currentRate, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
+    currency, setCurrency, currencyLocked, money, moneyExact, moneyRange, priceOf, compareOf, priceRangeOf, priceHTML, toCfa, toNgn, roundCfa, currentRate, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
     referralEnabled, promosEnabled,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,

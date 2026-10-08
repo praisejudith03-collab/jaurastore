@@ -170,6 +170,22 @@ check("a CFA-only bulk product ceils the same way (2,150 @ -10% -> 1,950)",
     sweepOk);
 }
 
+// ------------------------------------- 3b. the CFA -> NGN reverse conversion
+// A CFA-only product priced for a Naira shopper divides by the rate. That
+// path used to read a module constant that no longer exists, which threw a
+// ReferenceError in a real browser (caught only by the chromium smoke tests);
+// exercise it here so a dangling identifier fails locally.
+check("a CFA-only product converts BACK to Naira at the live rate",
+  JA.priceOf(cfaOnly, "NGN") === Math.round(2150 / 0.44),
+  `got ${JA.priceOf(cfaOnly, "NGN")}`);
+{
+  JA.applySiteConfig({ cfaRate: 0.5 });
+  check("the reverse conversion follows a changed rate too",
+    JA.priceOf(cfaOnly, "NGN") === Math.round(2150 / 0.5),
+    `got ${JA.priceOf(cfaOnly, "NGN")}`);
+  JA.applySiteConfig({ cfaRate: 0.44 });
+}
+
 // ------------------------------- 4. the rate is LIVE, never a baked-in literal
 {
   JA.applySiteConfig({ cfaRate: 0.5 });
