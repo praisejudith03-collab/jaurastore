@@ -732,15 +732,23 @@ def test_the_accounting_desk_renders_and_autosaves_in_a_real_dom():
     answers: the opening-balance box, the supplier autosave, the hidden $0
     discount, the batch transport fallback and the Google verify call.
 
-    Skips (never fails) where jsdom is not installed, exactly like the browser
-    smoke tests skip without chromium."""
+    jsdom is a developer dependency (`npm install jsdom`, or ``JA_JSDOM_DIR``
+    pointing at an install), so a laptop without it skips - exactly like the
+    browser smoke tests skip without chromium. CI sets ``JA_REQUIRE_BROWSER=1``
+    and installs jsdom, so there a missing install is a FAILURE: a green CI run
+    must never mean "the desk was not exercised".
+    """
     import subprocess
 
     script = os.path.join(ROOT, "tests", "_accounting_desk_dom_check.mjs")
     result = subprocess.run(["node", script], cwd=ROOT, text=True,
-                            capture_output=True, timeout=120)
+                            capture_output=True, timeout=180)
     if result.returncode == 3:
-        pytest.skip("jsdom is not installed (npm install jsdom)")
+        message = ("jsdom is not installed (npm install jsdom, or set "
+                   "JA_JSDOM_DIR); the accounting desk DOM check did not run")
+        if os.environ.get("JA_REQUIRE_BROWSER") == "1":
+            pytest.fail(message + " - CI installs it, so this is a broken build")
+        pytest.skip(message)
     assert result.returncode == 0, (
         "accounting desk DOM check failed:\n" + result.stdout + "\n" + result.stderr)
     assert "ACCOUNTING DESK DOM CHECKS PASSED" in result.stdout

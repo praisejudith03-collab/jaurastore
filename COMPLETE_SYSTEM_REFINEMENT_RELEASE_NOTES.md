@@ -211,16 +211,24 @@ and a **Node VM run of the shipped `js/accounting.js`** (`entryFigures`,
 `tests/_accounting_desk_dom_check.mjs` additionally drives the **real shipped
 page** in jsdom (opening box, hidden-at-zero discount, live unit × qty
 recalc, debounced PATCH merge, batch-fee fallback, settings PUT, verify
-button). It is wrapped by
-`test_the_accounting_desk_renders_and_autosaves_in_a_real_dom`, which
-**skips** (never fails) where jsdom is not installed; run it locally with
+button), wrapped by
+`test_the_accounting_desk_renders_and_autosaves_in_a_real_dom`. jsdom is a
+developer dependency with no `package.json` in the repo, so the test **skips**
+on a laptop without it — but **fails** the moment `JA_REQUIRE_BROWSER=1` (CI)
+and jsdom is missing, which is why CI now installs it:
+
+```yaml
+- name: Install jsdom for the accounting desk DOM check
+  run: npm install --no-save --prefix "$RUNNER_TEMP/ja-jsdom" jsdom
+```
+
+Run it by hand with
 `JA_JSDOM_DIR=/tmp/uidom node tests/_accounting_desk_dom_check.mjs`.
 
-The 33 skips in the local gate are 32 Playwright browser-smoke tests plus the
-jsdom DOM check: neither chromium nor jsdom is installed in the build sandbox
-but CI installs chromium (so the browser suite runs there), and
-`JA_REQUIRE_BROWSER=1` turns browser skips into failures if a browser run is
-ever needed.
+The 33 skips in the local sandbox gate are 32 Playwright browser-smoke tests
+plus that jsdom check, because neither chromium nor jsdom is installed here.
+In CI both are installed, `JA_REQUIRE_BROWSER=1` turns any skip into a
+failure, and a green run therefore means every test executed.
 
 ## 7. What the owner has to do
 

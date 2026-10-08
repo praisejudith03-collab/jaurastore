@@ -56,6 +56,13 @@ jobs:
       - name: Install browser for mobile smoke tests
         run: python -m playwright install --with-deps chromium
 
+      - name: Install jsdom for the accounting desk DOM check
+        # The accounting desk's live-DOM test drives the shipped
+        # js/accounting.js in jsdom. CI refuses to let a test skip, so the
+        # dependency has to be here; npm installs it outside the checkout,
+        # which has no package.json on purpose.
+        run: npm install --no-save --prefix "$RUNNER_TEMP/ja-jsdom" jsdom
+
       - name: Run test suite
         # The exact command lives in tools/ci_check.sh, which is what a human
         # (or an agent) runs locally before pushing - tests/test_ci_pipeline.py
@@ -66,6 +73,8 @@ jobs:
           # tests skip silently and the run reports green while measuring
           # nothing - the exact "green but untested" trap we are closing.
           JA_REQUIRE_BROWSER: "1"
+          # Where the step above put jsdom; the DOM check reads it.
+          JA_JSDOM_DIR: ${{ runner.temp }}/ja-jsdom
         run: bash tools/ci_check.sh --ci
 
       - name: Upload pytest report
