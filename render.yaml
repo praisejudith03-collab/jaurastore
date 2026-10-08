@@ -61,6 +61,7 @@ services:
         sync: false
       # Owner-authorized Google Drive accounting. Register this exact redirect
       # URI in the Google OAuth Web application before connecting the owner.
+      # See GOOGLE_DRIVE_SYNC_SETUP.md for the step-by-step Cloud Console walk.
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
@@ -69,6 +70,11 @@ services:
         value: https://jaurastore.com.ng/api/admin/accounting/google/callback
       - key: GOOGLE_SHEETS_TOKEN_KEY
         sync: false
+      # The owner's ITEMFLOW reference workbook (NGN + FCFA tabs). Saved pushes
+      # on the accounting desk win over this value; it is the fallback used
+      # when the desk setting is empty.
+      - key: GOOGLE_SHEET_ID
+        value: 1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu
       # Free Render services have ephemeral disks; SQLite/JSON are boot caches
       # restored from Supabase and safe to keep under /tmp.
       - key: DB_PATH

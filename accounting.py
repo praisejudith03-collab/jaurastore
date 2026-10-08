@@ -14,6 +14,8 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 LEGACY_RATE = Decimal("0.44")
 RATE_MAX = Decimal("100")
 AMOUNT_MAX = Decimal("1000000000000")
+SUPPLIER_LINK_MAX = 500
+PERCENT_MAX = Decimal("100")
 
 
 def normalize_currency(value):
@@ -73,6 +75,201 @@ def supplier_cost_cfa(supplier_cost_ngn, rate):
         Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+# ------------------------------------------------- supplier price / discounts
+# The accounting desk accepts a UNIT supplier price and the ordered quantity
+# per order (Unit Supplier Price x Quantity = Total Supplier Cost). Both the
+# unit price and the supplier link may stay blank - a costless or unlinked
+# item simply contributes 0 to the batch until the owner fills it in, and
+# every figure recalculates the moment it is typed.
+
+
+def clean_supplier_link(value, limit=SUPPLIER_LINK_MAX):
+    """A supplier URL/reference; blank is valid (the link is optional)."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return re.sub(r"[\r\n\t]+", " ", text)[:max(1, int(limit or SUPPLIER_LINK_MAX))]
+
+
+def quantity(value, default=1):
+    """Parse a positive whole quantity; invalid or blank means ``default``."""
+    parsed = decimal_value(value, None)
+    if parsed is None or not parsed.is_finite() or parsed <= 0:
+        return max(1, int(default or 1))
+    if parsed > AMOUNT_MAX:
+        return max(1, int(default or 1))
+    return int(parsed.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def order_quantity(order):
+    """The ordered quantity of an order (sum of its item quantities).
+
+    This is the default multiplier for a unit supplier price: an order for
+    3 pieces x ₦2,000 costs ₦6,000 before any manual override.
+    """
+    payload = order_payload(order)
+    items = [item for item in (payload.get("items") or []) if isinstance(item, dict)]
+    total = 0
+    for item in items:
+        total += quantity(item.get("qty") or item.get("quantity"), 1)
+    return total or 1
+
+
+def percent_value(value):
+    """Parse a 0-100 discount percentage (``None`` when invalid/blank)."""
+    parsed = decimal_value(value, None)
+    if parsed is None or not parsed.is_finite() or parsed < 0 or parsed > PERCENT_MAX:
+        return None
+    return parsed.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def discount_from_percent(sale, percent):
+    """Whole-unit discount for a percentage of the selling price."""
+    pct = percent_value(percent)
+    if pct is None or pct <= 0:
+        return 0
+    base = Decimal(amount(sale))
+    return int((base * pct / Decimal(100)).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def percent_from_discount(sale, value):
+    """The percentage a whole-unit discount represents (0.00 when no sale)."""
+    base = Decimal(amount(sale))
+    if base <= 0:
+        return Decimal("0.00")
+    return (Decimal(amount(value)) * Decimal(100) / base).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def supplier_total(unit_price, qty):
+    """Unit Supplier Price x Quantity = Total Supplier Cost (NGN)."""
+    return amount(Decimal(amount(unit_price)) * Decimal(quantity(qty, 1)))
+
+
+def editable_amount(value):
+    """A whole-unit amount for an editable field; blank/absent means 0.
+
+    The accounting desk must accept an EMPTY supplier price, supplier link,
+    discount or transport box (a cost the owner has not looked up yet) without
+    breaking the calculation - an emptied box simply means 0. A value that is
+    present but not a valid non-negative amount still fails, so a typo is
+    never silently treated as zero.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return 0
+    return validated_amount(value)
+
+
+def apply_supplier_fields(snapshot, order, values, *, sale=None):
+    """Apply an accounting edit onto a snapshot and return ``(snapshot, error)``.
+
+    Accepts the editable supplier-shape fields:
+
+      * ``supplierLink``          - free text / URL, may be blank at any time
+      * ``supplierUnitPriceNgn``  - unit price; total = unit x quantity
+      * ``supplierQty``           - quantity override (defaults to the order's)
+      * ``supplierCostNgn``       - a directly typed total (unit price derived)
+      * ``discount``              - applied discount, whole units
+      * ``discountPercent``       - applied discount as a % of the sale
+
+    Blank input is always valid: an order can stage with no supplier price and
+    no supplier link, and simply contributes 0 until the owner fills them in.
+    """
+    values = values if isinstance(values, dict) else {}
+    snapshot = dict(snapshot or {})
+    sale_value = amount(snapshot.get("saleAmount") if sale is None else sale)
+
+    if "supplierLink" in values:
+        snapshot["supplierLink"] = clean_supplier_link(values.get("supplierLink"))
+
+    qty = quantity(values.get("supplierQty"), quantity(
+        snapshot.get("supplierQty"), order_quantity(order)))
+    unit_present = "supplierUnitPriceNgn" in values
+    qty_present = "supplierQty" in values
+    total_present = "supplierCostNgn" in values
+
+    if unit_present:
+        unit = editable_amount(values.get("supplierUnitPriceNgn"))
+        if unit is None:
+            return None, "Unit supplier price must be a non-negative whole amount."
+        snapshot["supplierUnitPriceNgn"] = unit
+        snapshot["supplierQty"] = qty
+        snapshot["supplierCostNgn"] = supplier_total(unit, qty)
+    elif total_present:
+        total = editable_amount(values.get("supplierCostNgn"))
+        if total is None:
+            return None, "supplierCostNgn must be a non-negative whole amount."
+        snapshot["supplierQty"] = qty
+        snapshot["supplierCostNgn"] = total
+        snapshot["supplierUnitPriceNgn"] = (
+            int((Decimal(total) / Decimal(qty)).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP)) if qty else 0)
+    elif qty_present:
+        # Quantity alone re-multiplies the stored unit price when there is one.
+        unit = amount(snapshot.get("supplierUnitPriceNgn"))
+        if unit:
+            snapshot["supplierQty"] = qty
+            snapshot["supplierCostNgn"] = supplier_total(unit, qty)
+        else:
+            snapshot["supplierQty"] = qty
+            snapshot["supplierUnitPriceNgn"] = 0
+
+    snapshot.setdefault("supplierUnitPriceNgn", 0)
+    snapshot.setdefault("supplierQty", quantity(snapshot.get("supplierQty"),
+                                                order_quantity(order)))
+    snapshot.setdefault("supplierLink", "")
+
+    if "discountPercent" in values:
+        raw_percent = values.get("discountPercent")
+        if raw_percent is None or (isinstance(raw_percent, str) and not raw_percent.strip()):
+            raw_percent = 0
+        pct = percent_value(raw_percent)
+        if pct is None:
+            return None, "Discount percent must be between 0 and 100."
+        snapshot["discountPercent"] = float(pct)
+        snapshot["discount"] = discount_from_percent(sale_value, pct)
+    elif "discount" in values:
+        discount = editable_amount(values.get("discount"))
+        if discount is None:
+            return None, "Discount must be a non-negative whole amount."
+        snapshot["discount"] = discount
+        snapshot["discountPercent"] = float(percent_from_discount(sale_value, discount))
+
+    snapshot.setdefault("discount", 0)
+    snapshot.setdefault("discountPercent", 0.0)
+    return snapshot, ""
+
+
+def entry_figures(snapshot, currency="NGN", rate=LEGACY_RATE):
+    """Net profit figures for one entry.
+
+    Net Profit = Selling Price - Applied Discounts - Total Supplier Cost
+    Net Cash Profit = Net Profit - Delivery / Transport Fee
+    (The Starting Profit / opening balance is added once at the batch ledger
+    level - ``bank_balances`` - never per row.)
+    """
+    currency = normalize_currency(currency) or "NGN"
+    rate = safe_rate(rate)
+    sale = amount(snapshot.get("saleAmount"))
+    discount = amount(snapshot.get("discount"))
+    supplier_ngn = amount(snapshot.get("supplierCostNgn"))
+    supplier_cfa = supplier_cost_cfa(supplier_ngn, rate)
+    supplier_in_currency = supplier_cfa if currency == "CFA" else supplier_ngn
+    transport = amount(snapshot.get("deliveryExpense"))
+    net_profit = sale - discount - supplier_in_currency
+    return {
+        "saleAmount": sale,
+        "discount": discount,
+        "supplierCostNgn": supplier_ngn,
+        "supplierCostCfa": supplier_cfa,
+        "supplierCostInCurrency": supplier_in_currency,
+        "deliveryExpense": transport,
+        "netProfit": net_profit,
+        "netCashProfit": net_profit - transport,
+    }
+
+
 def new_snapshot(total, currency, rate, confirmed_at, *, legacy=False):
     """Create a once-only order accounting snapshot.
 
@@ -89,7 +286,17 @@ def new_snapshot(total, currency, rate, confirmed_at, *, legacy=False):
         "saleAmount": amount(total),
         # Supplier costs and transport are intentionally editable on the
         # accounting sheet; checkout never accepts cost data from a customer.
+        # A blank supplier link / unit price is a valid starting state - the
+        # owner fills them in from the accounting desk and the net profit
+        # recalculates immediately (unit price x quantity).
         "supplierCostNgn": 0,
+        "supplierUnitPriceNgn": 0,
+        # 0 means "follow this order's own quantity"; the desk shows the
+        # effective multiplier (item quantity) and the owner may override it.
+        "supplierQty": 0,
+        "supplierLink": "",
+        "discount": 0,
+        "discountPercent": 0.0,
         "deliveryExpense": 0,
         "notes": "",
         "snapshotSource": "legacy-estimate" if legacy else "confirmation",
@@ -138,6 +345,11 @@ def account_block(order, *, current_rate=None):
         result.setdefault("saleAmount", amount(
             order_value(order, "total", payload.get("total", 0))))
         result.setdefault("supplierCostNgn", 0)
+        result.setdefault("supplierUnitPriceNgn", amount(result.get("supplierCostNgn")))
+        result.setdefault("supplierQty", order_quantity(order))
+        result.setdefault("supplierLink", "")
+        result.setdefault("discount", 0)
+        result.setdefault("discountPercent", 0.0)
         result.setdefault("deliveryExpense", 0)
         result.setdefault("notes", "")
         result.setdefault("snapshotSource", "legacy-estimate")
@@ -162,14 +374,15 @@ def entry_from_order(order, archived_ids=None):
                                  order_value(order, "currency") or
                                  payload.get("currency")) or "NGN"
     rate = safe_rate(snapshot.get("exchangeRate"))
+    figures = entry_figures(snapshot, currency, rate)
     sale = amount(snapshot.get("saleAmount", order_value(
         order, "total", payload.get("total", 0))))
-    supplier_ngn = amount(snapshot.get("supplierCostNgn", 0))
-    delivery_expense = amount(snapshot.get("deliveryExpense", 0))
-    supplier_cfa = supplier_cost_cfa(supplier_ngn, rate)
-    supplier_in_currency = supplier_cfa if currency == "CFA" else supplier_ngn
-    profit = sale - supplier_in_currency
-    cash_profit = profit - delivery_expense
+    supplier_ngn = figures["supplierCostNgn"]
+    delivery_expense = figures["deliveryExpense"]
+    supplier_cfa = figures["supplierCostCfa"]
+    supplier_in_currency = figures["supplierCostInCurrency"]
+    profit = figures["netProfit"]
+    cash_profit = figures["netCashProfit"]
     customer = payload.get("customer") or {}
     items = [item for item in (payload.get("items") or []) if isinstance(item, dict)]
     item_names = []
@@ -178,6 +391,7 @@ def entry_from_order(order, archived_ids=None):
         qty = amount(item.get("qty"), 1)
         if name:
             item_names.append(f"{qty}× {name}" if qty else name)
+    item_quantity = order_quantity(order)
     oid = str(order_value(order, "id") or payload.get("id") or "")
     archived = set(archived_ids or ())
     return {
@@ -187,9 +401,15 @@ def entry_from_order(order, archived_ids=None):
         "currency": currency,
         "customer": str(customer.get("name") or order_value(order, "customer_name") or "Customer"),
         "itemsSummary": ", ".join(item_names),
+        "itemQuantity": item_quantity,
         "saleAmount": sale,
+        "discount": figures["discount"],
+        "discountPercent": float(decimal_value(snapshot.get("discountPercent"), 0)),
         "supplierCostNgn": supplier_ngn,
         "supplierCostCfa": supplier_cfa,
+        "supplierUnitPriceNgn": amount(snapshot.get("supplierUnitPriceNgn")),
+        "supplierQty": quantity(snapshot.get("supplierQty"), item_quantity),
+        "supplierLink": clean_supplier_link(snapshot.get("supplierLink")),
         "deliveryExpense": delivery_expense,
         "supplierCostInCurrency": supplier_in_currency,
         "netProfit": profit,
@@ -203,23 +423,88 @@ def entry_from_order(order, archived_ids=None):
     }
 
 
-def batch_totals(entries, currency):
-    """Currency-safe calculator totals for a single-currency batch."""
+def allocate_transport(entries, fee):
+    """Spread one Batch Transportation Fee across a currency group's rows.
+
+    Used only for the Google Sheet write: the batch itself keeps the single
+    figure, and each sheet row carries its share so the sheet's own net-profit
+    column (a live formula in the app-created ledgers) agrees with the batch
+    total the app shows. Whole units, remainder on the first row, so the shares
+    always add back up to the fee exactly.
+    """
+    rows = [row for row in (entries or []) if isinstance(row, dict)]
+    if not rows:
+        return {}
+    total = amount(fee)
+    share, remainder = divmod(total, len(rows))
+    result = {}
+    for index, row in enumerate(rows):
+        oid = str(row.get("id") or "")
+        result[oid] = share + (remainder if index == 0 else 0)
+    return result
+
+
+def batch_transport_fee(batch):
+    """The batch-level transport fee, or ``None`` when it falls back per-order.
+
+    A blank Batch Transportation Fee box means "use the individual per-order
+    transport fees"; an explicit amount (including 0) is one single cost logged
+    for the whole batch.
+    """
+    if not isinstance(batch, dict):
+        return None
+    return batch.get("batchTransportFee")
+
+
+def batch_transport(batch):
+    """Return ``(amount, mode)`` for one batch's transport cost."""
+    totals = batch.get("totals") if isinstance(batch.get("totals"), dict) else {}
+    fee = batch_transport_fee(batch)
+    if fee is None:
+        return amount(totals.get("transportExpense")), "per-order"
+    return amount(fee), "batch"
+
+
+def batch_net_profit(batch):
+    """Batch net profit: revenue - discounts - supplier - transport."""
+    totals = batch.get("totals") if isinstance(batch.get("totals"), dict) else {}
+    transport, mode = batch_transport(batch)
+    if mode == "batch" and amount(totals.get("transportExpense")) != transport:
+        return (amount(totals.get("customerRevenue"))
+                - amount(totals.get("discountsTotal"))
+                - amount(totals.get("supplierCostInCurrency"))
+                - transport)
+    return amount(totals.get("netCashProfit"))
+
+
+def batch_totals(entries, currency, batch_transport_fee=None):
+    """Currency-safe calculator totals for a single-currency batch.
+
+    ``batch_transport_fee`` is the single Batch Transportation Fee for the
+    whole batch. When it is ``None`` (the box was left blank) the individual
+    per-order transport fees are summed instead.
+    """
     currency = normalize_currency(currency) or "NGN"
     rows = [row for row in (entries or [])
             if normalize_currency(row.get("currency")) == currency]
     revenue = sum(amount(row.get("saleAmount")) for row in rows)
+    discounts = sum(amount(row.get("discount")) for row in rows)
     supplier_ngn = sum(amount(row.get("supplierCostNgn")) for row in rows)
     supplier_currency = sum(amount(row.get("supplierCostInCurrency")) for row in rows)
-    transport = sum(amount(row.get("deliveryExpense")) for row in rows)
+    per_order_transport = sum(amount(row.get("deliveryExpense")) for row in rows)
+    if batch_transport_fee is None:
+        transport = per_order_transport
+    else:
+        transport = amount(batch_transport_fee)
     return {
         "currency": currency,
         "orderCount": len(rows),
         "customerRevenue": revenue,
+        "discountsTotal": discounts,
         "supplierPayableNgn": supplier_ngn,
         "supplierCostInCurrency": supplier_currency,
         "transportExpense": transport,
-        "netCashProfit": revenue - supplier_currency - transport,
+        "netCashProfit": revenue - discounts - supplier_currency - transport,
     }
 
 
@@ -288,28 +573,46 @@ def clean_expenses(rows, limit=1000):
     return out[:max(1, min(int(limit or 1000), 5000))]
 
 
+def starting_profit(settings, currency):
+    """The Starting Profit / Opening Balance the owner entered for a ledger.
+
+    ``startingBalanceNgn`` is the canonical key; the ``startingProfit*`` and
+    ``openingBalance*`` spellings are accepted aliases so the input box on the
+    accounting desk can call the figure what the owner calls it.
+    """
+    settings = settings if isinstance(settings, dict) else {}
+    suffix = "Ngn" if normalize_currency(currency) == "NGN" else "Cfa"
+    for key in (f"startingBalance{suffix}", f"startingProfit{suffix}",
+                f"openingBalance{suffix}"):
+        if settings.get(key) not in (None, ""):
+            return amount(settings.get(key))
+    return 0
+
+
 def bank_balances(batches, expenses, settings):
     """Live running bank balance for both currencies.
 
-    Current Bank Balance = Starting Balance + Cumulative Sales Net Profit
-    - Manual Expenses - Bank/Transfer Charges. Cumulative sales net profit is
-    the sum of every PUSHED batch snapshot (a batch only exists once the owner
-    pushed it off the accounting queue), so the balance never counts a sale
-    twice and never moves while an order is still staged.
+    Current Bank Balance = Starting Profit / Opening Balance + Cumulative
+    Sales Net Profit - Manual Expenses - Bank/Transfer Charges. Cumulative
+    sales net profit is the sum of every PUSHED batch snapshot (a batch only
+    exists once the owner pushed it off the accounting queue), so the balance
+    never counts a sale twice and never moves while an order is still staged,
+    and each new batch's net profit accumulates on top of the opening balance.
     """
     settings = settings if isinstance(settings, dict) else {}
     result = {}
     for currency in ("NGN", "CFA"):
-        starting = amount(settings.get(
-            "startingBalanceNgn" if currency == "NGN" else "startingBalanceCfa"))
+        starting = starting_profit(settings, currency)
         profit = 0
         for batch in batches or []:
             if not isinstance(batch, dict):
                 continue
             if normalize_currency(batch.get("currency")) != currency:
                 continue
-            totals = batch.get("totals") if isinstance(batch.get("totals"), dict) else {}
-            profit += amount(totals.get("netCashProfit"))
+            # The batch's own profit already honours its transport mode: the
+            # single Batch Transportation Fee when one was logged, otherwise
+            # the sum of the individual per-order transport fees.
+            profit += batch_net_profit(batch)
             # A transfer/withdrawal fee entered at push time is a charge on
             # the batch itself; it is not duplicated in the expense list.
             profit -= amount(batch.get("transferFee"))
@@ -326,6 +629,8 @@ def bank_balances(batches, expenses, settings):
         result[currency] = {
             "currency": currency,
             "startingBalance": starting,
+            "startingProfit": starting,
+            "openingBalance": starting,
             "salesNetProfit": profit,
             "manualExpenses": manual,
             "bankCharges": charges,
@@ -367,7 +672,7 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
     currency = normalize_currency(currency) or "NGN"
     today = today or _datetime.datetime.now(_datetime.timezone.utc).date()
     start, end = _sheets.period_bounds(period, today=today)
-    revenue = supplier = transport = fees = order_count = 0
+    revenue = discounts = supplier = transport = fees = order_count = 0
     matching = []
     for batch in batches or []:
         if not isinstance(batch, dict):
@@ -378,8 +683,12 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
             continue
         totals = batch.get("totals") if isinstance(batch.get("totals"), dict) else {}
         revenue += amount(totals.get("customerRevenue"))
+        discounts += amount(totals.get("discountsTotal"))
         supplier += amount(totals.get("supplierCostInCurrency"))
-        transport += amount(totals.get("transportExpense"))
+        # A batch logged with a single Batch Transportation Fee contributes
+        # that one figure; a batch without one contributes the sum of its
+        # individual per-order transport fees.
+        transport += batch_transport(batch)[0]
         fees += amount(batch.get("transferFee"))
         order_count += amount(totals.get("orderCount"))
         matching.append(batch)
@@ -403,10 +712,11 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
         "periodStart": start.isoformat() if start else "",
         "periodEnd": end.isoformat() if end else "",
         "revenue": revenue,
+        "discounts": discounts,
         "supplierCosts": supplier,
         "transport": transport,
         "transferFees": fees,
-        "netProfit": revenue - supplier - transport - fees,
+        "netProfit": revenue - discounts - supplier - transport - fees,
         "orderCount": order_count,
         "batchCount": len(matching),
         "batches": matching,

@@ -80,9 +80,10 @@ mutate products, orders, customers, receipts, reviews, or catalogue data.
 The standalone `/admin/accounting` desk can create two workbooks in the store
 owner's Google Drive: **Naira Ledger** and **CFA Ledger**. Confirming an order
 adds it to the matching workbook; connecting for the first time also queues a
-one-time import of existing confirmed orders. The app uses the least-privilege
-`drive.file` OAuth scope, so the grant is limited to spreadsheets it creates
-for this integration.
+one-time import of existing confirmed orders. The OAuth grant requests
+`openid email https://www.googleapis.com/auth/drive`, which is what lets a push
+write to the owner's own pre-existing ITEMFLOW workbook as well as the ledgers
+the app creates.
 
 Set these on the production service:
 
@@ -95,6 +96,18 @@ Set these on the production service:
   encrypt the refresh token before storing it in Supabase. Generate one with
   `python -c "import secrets; print(secrets.token_urlsafe(48))"`. If omitted,
   the app derives the encryption key from the stable `SECRET_KEY`.
+- `GOOGLE_SHEET_ID` — the owner's ITEMFLOW reference workbook whose **NGN** and
+  **FCFA** tabs receive pushed batches
+  (`1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu`). A reference id saved on the accounting
+  desk wins over this value; when both are empty the built-in id is used, so a
+  push never silently goes nowhere.
+
+The full walkthrough — Cloud Console project, OAuth client, redirect URIs,
+Render variables and the five-step live test — is in
+**[GOOGLE_DRIVE_SYNC_SETUP.md](GOOGLE_DRIVE_SYNC_SETUP.md)**. The accounting
+desk's **✓ Test Google sync** button calls
+`GET /api/admin/accounting/google/verify`, which reports `verification.ok`
+plus a per-step breakdown without writing anything.
 
 Then enable the Google Sheets API in the same Cloud project, add the redirect
 URI to the OAuth client, and complete Google's OAuth consent-screen setup. If

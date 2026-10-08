@@ -63,9 +63,29 @@ def test_the_broadcast_card_is_mounted_in_the_marketing_panel():
 
 
 def test_only_active_in_stock_products_are_eligible_for_the_feed():
+    """The automatic feed excludes sold-out items AND deleted/archived rows."""
     body = _func(ADMIN_JS, "broadcastEligibleProducts")
-    assert 'p.online !== false' in body
-    assert 'broadcastInStock(p)' in body
+    assert "productIsBroadcastable(p)" in body
+    assert "broadcastInStock(p)" in body
+    gate = _func(ADMIN_JS, "productIsBroadcastable")
+    assert "productIsDeleted(p)" in gate
+    assert "p.online !== false" in gate
+
+
+def test_deleted_and_archived_products_never_reach_the_marketing_pickers():
+    """Owner request: the Marketing Broadcast tab must strictly exclude every
+    soft-deleted / archived / inactive product, whatever the row spells."""
+    body = _func(ADMIN_JS, "productIsDeleted")
+    for marker in ("p.is_deleted", "p.isDeleted", "p.deletedAt", "p.archived",
+                   "p.is_archived", "p.active === false", "p.enabled === false",
+                   "source === \"deleted\"", "status === \"archived\""):
+        assert marker in body, f"{marker} is not treated as deleted"
+    # The WhatsApp picker and both feature pickers apply the gate.
+    assert "productIsDeleted(p)" in _func(ADMIN_JS, "broadcastPickerMatches")
+    hub = ADMIN_JS[ADMIN_JS.index("async function fillBroadcastHub("):]
+    assert "filter(productIsBroadcastable)" in hub[:6000]
+    composer = ADMIN_JS[ADMIN_JS.index("const paintProducts = () => {"):]
+    assert "filter(productIsBroadcastable)" in composer[:1200]
 
 
 def test_the_rotation_depends_on_the_day_and_the_slot_not_just_the_name():
@@ -411,6 +431,15 @@ PRODUCTS.push({ id: "oos1", name: "Sold Out Clutch", sku: "SKU-OOS", category: "
                 priceNgn: 5000, stock: 0, online: true });
 PRODUCTS.push({ id: "hid1", name: "Hidden Wallet", sku: "SKU-HID", category: "accessories",
                 priceNgn: 300, stock: 5, online: false });
+// Retired pieces: none of these may EVER appear in a broadcast picker.
+PRODUCTS.push({ id: "del1", name: "Deleted Bag", sku: "SKU-DEL", category: "bags",
+                priceNgn: 900, stock: 4, online: true, is_deleted: true });
+PRODUCTS.push({ id: "arc1", name: "Archived Bag", sku: "SKU-ARC", category: "bags",
+                priceNgn: 900, stock: 4, online: true, archived: true });
+PRODUCTS.push({ id: "off1", name: "Inactive Bag", sku: "SKU-OFF", category: "bags",
+                priceNgn: 900, stock: 4, online: true, active: false });
+PRODUCTS.push({ id: "src1", name: "Tombstoned Bag", sku: "SKU-SRC", category: "bags",
+                priceNgn: 900, stock: 4, online: true, source: "deleted" });
 PRODUCTS.push({ id: "acc1", name: "Gold ChainAccessory", sku: "ACC-9", category: "accessories",
                 priceNgn: 700, stock: 2, online: true });
 sandbox.JA = {
@@ -435,7 +464,8 @@ const pieces = [
   "const BC_PICKER_PAGE_SIZE = 24; let bcPickerMatches = []; let bcPickerShown = 0;",
   "function paintBroadcastFeed() {}",
 ];
-for (const fn of ["broadcastInStock", "broadcastEligibleProducts", "broadcastDaySeed",
+for (const fn of ["productIsDeleted", "productIsBroadcastable",
+                  "broadcastInStock", "broadcastEligibleProducts", "broadcastDaySeed",
                   "broadcastFeedFor", "broadcastScheduledFeedFor",
                   "broadcastOverrideForProduct", "broadcastProductUrl",
                   "broadcastPriceLine", "broadcastDisplayName", "broadcastOptionsLine",
@@ -456,7 +486,13 @@ $("#mk-bc-picker-search").value = "";
 $("#mk-bc-picker-category").value = "";
 run("broadcastPickerRefresh(true)");
 assert(run("bcPickerMatches.length") === TOTAL,
-       "whole catalogue matched (" + TOTAL + ")");
+       "whole catalogue matched, less the retired rows (" + TOTAL + ")");
+assert(run('bcPickerMatches.some(p => ["del1","arc1","off1","src1"].includes(p.id))') === false,
+       "deleted / archived / inactive rows are excluded from the picker");
+assert(run('broadcastEligibleProducts().some(p => ["del1","arc1","off1","src1"].includes(p.id))') === false,
+       "deleted rows are excluded from the automatic feed too");
+assert(run('broadcastEligibleProducts().some(p => p.id === "hid1")') === false,
+       "hidden rows are excluded from the feed");
 assert(run("bcPickerShown") === 24, "only the first page (24) is shown");
 assert(run("bcPickerMatches.slice(0, 61).every(p => p.online !== false && Number(p.stock) > 0)"),
        "all ready-to-post items ranked before sold-out/hidden ones");

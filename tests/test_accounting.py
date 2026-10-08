@@ -108,8 +108,17 @@ def test_accounting_math_keeps_currency_ledgers_and_locked_rates_isolated():
     assert cfa_entry["netCashProfit"] == 4_500
     assert accounting_mod.batch_totals([ngn_entry, cfa_entry], "CFA") == {
         "currency": "CFA", "orderCount": 1, "customerRevenue": 9_800,
-        "supplierPayableNgn": 10_000, "supplierCostInCurrency": 5_000,
+        "discountsTotal": 0, "supplierPayableNgn": 10_000,
+        "supplierCostInCurrency": 5_000,
         "transportExpense": 300, "netCashProfit": 4_500,
+    }
+    # A single Batch Transportation Fee replaces the per-order transport sum.
+    assert accounting_mod.batch_totals([ngn_entry, cfa_entry], "CFA",
+                                       batch_transport_fee=1_200) == {
+        "currency": "CFA", "orderCount": 1, "customerRevenue": 9_800,
+        "discountsTotal": 0, "supplierPayableNgn": 10_000,
+        "supplierCostInCurrency": 5_000,
+        "transportExpense": 1_200, "netCashProfit": 3_600,
     }
 
 
@@ -186,9 +195,13 @@ def test_confirmation_edit_soft_delete_restore_and_delivery_archive(client, monk
     batch = archived.get_json()["batch"]
     assert batch["totals"] == {
         "currency": "CFA", "orderCount": 1, "customerRevenue": 9_800,
-        "supplierPayableNgn": 10_000, "supplierCostInCurrency": 5_000,
+        "discountsTotal": 0, "supplierPayableNgn": 10_000,
+        "supplierCostInCurrency": 5_000,
         "transportExpense": 300, "netCashProfit": 4_500,
     }
+    # No Batch Transportation Fee was sent, so the per-order fees are used.
+    assert batch["transportSource"] == "per-order"
+    assert "batchTransportFee" not in batch
     assert batch["orders"][0]["exchangeRate"] == 0.5
 
     archive_get = get_entries(client)

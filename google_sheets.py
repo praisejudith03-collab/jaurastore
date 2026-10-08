@@ -36,10 +36,40 @@ HTTP_TIMEOUT = 12
 
 # The owner's existing "ITEMFLOW" workbook. Itemized NGN orders are routed to
 # its NGN tab and FCFA orders to its FCFA tab when the owner pushes a batch.
-# The id is overridable from the accounting settings (and the environment) so
-# a different reference sheet can be swapped in without a redeploy.
+# The id is overridable from the accounting settings (save it in Admin ->
+# Accounting) and from the environment (GOOGLE_SHEET_ID on Render) so a
+# different reference sheet can be swapped in without a redeploy.
 DEFAULT_REFERENCE_SPREADSHEET_ID = "1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu"
 REFERENCE_TABS = {"NGN": "NGN", "CFA": "FCFA"}
+
+
+def environment_reference_spreadsheet_id():
+    """The workbook id from ``GOOGLE_SHEET_ID`` ('' when unset)."""
+    return (os.environ.get("GOOGLE_SHEET_ID") or "").strip()
+
+
+def extract_spreadsheet_id(value):
+    """Accept a full Google Sheets URL or a bare id and return the id."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", text)
+    return match.group(1) if match else text
+
+
+def reference_spreadsheet_id(settings=None):
+    """Resolve the reference workbook: saved setting, then env, then default.
+
+    Precedence is deliberate: what the owner saved on the accounting desk
+    wins, then ``GOOGLE_SHEET_ID`` (the Render environment variable), and
+    finally the built-in ITEMFLOW id. Clearing the saved setting therefore
+    falls back to the environment value instead of pushing to nowhere.
+    """
+    settings = settings if isinstance(settings, dict) else {}
+    saved = extract_spreadsheet_id(settings.get("referenceSpreadsheetId"))
+    if saved:
+        return saved
+    return environment_reference_spreadsheet_id() or DEFAULT_REFERENCE_SPREADSHEET_ID
 
 _lock = threading.RLock()
 _refresh_lock = threading.Lock()
@@ -530,6 +560,105 @@ def integration_status():
     return base
 
 
+def verify_sync(reference_id="", *, settings=None):
+    """Prove end-to-end Drive access for the Accounting desk's Sheets sync.
+
+    Checked, in order: the OAuth client is configured, a non-expired token
+    (with automatic refresh) exists for the owner's account, both app-created
+    ledgers are named and readable, and - when a reference workbook is
+    configured - that workbook and its NGN / FCFA tabs can be read. Returns a
+    JSON-safe report; it never raises and never writes to the owner's files.
+    """
+    report = {"ok": False, "configured": configured(), "connected": False,
+              "email": "", "reference": {"id": "", "title": "", "tabs": [],
+                                         "readable": False},
+              "ledgers": {}, "steps": [], "message": ""}
+    target = str(reference_id or "").strip()
+    if not target:
+        try:
+            target = reference_spreadsheet_id(settings)
+        except Exception:
+            target = DEFAULT_REFERENCE_SPREADSHEET_ID
+
+    def step(name, ok, detail=""):
+        report["steps"].append({"step": name, "ok": bool(ok), "detail": str(detail)[:240]})
+
+    if not report["configured"]:
+        report["message"] = ("GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not set on "
+                             "the server yet. Add them in Render and redeploy.")
+        step("oauth-client", False, "missing GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET")
+        return report
+    step("oauth-client", True, "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are set")
+
+    try:
+        credentials = _valid_credentials(_load_credentials())
+    except GoogleSheetsError as exc:
+        report["message"] = str(exc)
+        step("owner-token", False, str(exc))
+        return report
+    if not credentials:
+        report["message"] = ("No Google account is connected yet. Open Admin -> "
+                             "Accounting and use Connect Google Sheets.")
+        step("owner-token", False, "no stored refresh token")
+        return report
+    report["connected"] = True
+    report["email"] = str(credentials.get("email") or "")
+    step("owner-token", True, report["email"] or "connected")
+
+    for currency in CURRENCIES:
+        item = (credentials.get("sheets") or {}).get(currency) or {}
+        spreadsheet_id = str(item.get("id") or "")
+        entry = {"id": spreadsheet_id, "tab": "Orders", "readable": False,
+                 "url": _spreadsheet_url(spreadsheet_id), "title": ""}
+        report["ledgers"][currency] = entry
+        if not spreadsheet_id:
+            step(f"{currency}-ledger", False, "not created yet")
+            continue
+        try:
+            titles = _spreadsheet_tab_titles(spreadsheet_id)
+            entry["readable"] = "Orders" in [t for t in titles] or bool(titles)
+            step(f"{currency}-ledger", entry["readable"],
+                 "tabs: " + ", ".join(titles[:6]) if titles else "no tabs visible")
+        except GoogleSheetsError as exc:
+            step(f"{currency}-ledger", False, str(exc))
+
+    if target:
+        report["reference"]["id"] = target
+        try:
+            url = (f"{SHEETS_API}/spreadsheets/"
+                   f"{urllib.parse.quote(str(target), safe='')}"
+                   f"?fields=properties.title,sheets.properties")
+            meta = _google_request("GET", url)
+            report["reference"]["title"] = str(
+                (meta.get("properties") or {}).get("title") or "")
+            titles = []
+            for sheet in meta.get("sheets") or []:
+                title = str((sheet.get("properties") or {}).get("title") or "").strip()
+                if title:
+                    titles.append(title)
+            report["reference"]["tabs"] = titles
+            missing = [want for want in REFERENCE_TABS.values()
+                       if want.upper() not in [t.upper() for t in titles]]
+            report["reference"]["readable"] = True
+            step("reference-sheet", True,
+                 (report["reference"]["title"] or target)
+                 + (f" (missing tabs: {', '.join(missing)} - created automatically on push)"
+                    if missing else " (NGN + FCFA tabs present)"))
+        except GoogleSheetsError as exc:
+            step("reference-sheet", False, str(exc))
+
+    report["ok"] = bool(report["connected"]
+                        and all((report["ledgers"].get(c) or {}).get("readable")
+                                for c in CURRENCIES)
+                        and (not target or report["reference"]["readable"]))
+    if report["ok"]:
+        report["message"] = ("Google Drive sync is working. Ledgers and the "
+                             "reference workbook are readable.")
+    elif not report["message"]:
+        report["message"] = "Some Google checks failed - see the steps above."
+    return report
+
+
 def _spreadsheet_id(currency):
     credentials = _valid_credentials(_load_credentials())
     sheet = (credentials.get("sheets") or {}).get(_currency(currency)) or {}
@@ -705,6 +834,10 @@ def _order_row(order, batch="", include_net=False):
     app-created ledgers leave it blank because their ARRAYFORMULA computes it
     live; a freshly created reference tab has no formula, so the value is
     written there instead.
+
+    An applied discount is deducted from the Revenue cell (and recorded in
+    Notes with its percentage), so ``Revenue - Supplier - Transport`` is the
+    true Net Profit on every sheet, formula-driven or written.
     """
     import accounting
     payload = accounting.order_payload(order)
@@ -716,9 +849,26 @@ def _order_row(order, batch="", include_net=False):
         qty = _number(item.get("qty")) or 1
         variant = str(item.get("color") or item.get("variant") or "").strip()
         lines.append(f"{qty}× {name}" + (f" · {variant}" if variant else ""))
-    revenue = _number(entry.get("saleAmount"))
+    sale = _number(entry.get("saleAmount"))
+    discount = _number(entry.get("discount"))
+    revenue = max(0, sale - discount)
     supplier = _number(entry.get("supplierCostInCurrency"))
     transport = _number(entry.get("deliveryExpense"))
+    notes = str(entry.get("notes") or "")
+    extras = []
+    if discount:
+        percent = _number(entry.get("discountPercent"))
+        label = f"{percent:g}% " if percent else ""
+        extras.append(f"Selling {sale:,} less {label}discount {discount:,}")
+    unit = _number(entry.get("supplierUnitPriceNgn"))
+    qty = _number(entry.get("supplierQty"))
+    if unit and qty:
+        extras.append(f"Supplier {unit:,} x {qty:g}")
+    link = str(entry.get("supplierLink") or "").strip()
+    if link:
+        extras.append(f"Supplier link: {link}")
+    if extras:
+        notes = (notes + " · " if notes else "") + " · ".join(extras)
     return [
         str(entry.get("date") or "")[:10],
         str(entry.get("id") or ""),
@@ -730,7 +880,7 @@ def _order_row(order, batch="", include_net=False):
         transport or "",
         (revenue - supplier - transport) if include_net else "",
         str(batch or ""),
-        str(entry.get("notes") or ""),
+        notes[:900],
     ]
 
 def _append_rows(spreadsheet_id, rows):
