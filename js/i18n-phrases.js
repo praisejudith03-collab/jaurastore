@@ -156,9 +156,9 @@ window.I18N_PHRASES = {
     "Saisissez le prix en ₦. Le CFA est converti sur le site.",
   "Naira is the only price you enter on products. The website converts CFA at":
     "Le Naira est le seul prix que vous saisissez pour les produits. Le site convertit le CFA à",
-  "Enter Naira only — CFA is converted at 1 ₦ = 0.44.":
-    "Saisissez uniquement le Naira — le CFA est converti à 1 ₦ = 0,44.",
-  "1 ₦ = 0.44 CFA": "1 ₦ = 0,44 CFA",
+  "Enter Naira only — CFA is converted at 1 ₦ = {rate}.":
+    "Saisissez uniquement le Naira — le CFA est converti à 1 ₦ = {rate}.",
+  "1 ₦ = {rate} CFA": "1 ₦ = {rate} CFA",
 
   // ----------------------------------------------------------- admin: orders
   "Orders": "Commandes",

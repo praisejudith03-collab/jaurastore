@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=201";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=201";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=202";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=202";
 }
 
 function renderCategories() {
@@ -302,12 +302,13 @@ function renderHome() {
 /* The shop's filter state.
  *
  * `min` / `max` are PRICE BOUNDS IN THE ACTIVE CURRENCY, which is why `cur`
- * is part of the state. 1 ₦ is 0.44 CFA, so a bound captured in Naira is
- * roughly double the same product's CFA price: leaving it in place across a
- * currency switch silently filtered out every product that fell under the
- * old Naira floor, and the grid came back short (the "27 products in ₦, 17
- * in CFA" report). renderShop() re-derives the bounds from the catalogue
- * whenever `cur` no longer matches JA.currency(). */
+ * is part of the state. 1 ₦ converts to a fraction of a CFA at the live
+ * admin rate, so a bound captured in Naira is roughly double the same
+ * product's CFA price: leaving it in place across a currency switch silently
+ * filtered out every product that fell under the old Naira floor, and the
+ * grid came back short (the "27 products in ₦, 17 in CFA" report).
+ * renderShop() re-derives the bounds from the catalogue whenever `cur` no
+ * longer matches JA.currency(). */
 const shopFilter = { min: 0, max: 0, color: "", size: "", inited: false, cat: "", cur: "" };
 
 /** Forget price bounds captured in a currency that is no longer active. */
@@ -1719,7 +1720,10 @@ function minOrderFigures() {
   const _minRaw = siteRow.minOrderCfa;
   const minOrderCfa = (_minRaw === undefined || _minRaw === null || _minRaw === "")
     ? 5000 : (Number(_minRaw) || 0);
-  const minOrderNgn = Number(siteRow.minOrderNgn) || (minOrderCfa ? Math.round(minOrderCfa / 0.44) : 0);
+  // The live admin rate (/api/site cfaRate) - never a hardcoded literal.
+  const liveRate = Number(siteRow.cfaRate) || (JA.settings && Number(JA.settings().rate)) || 0;
+  const minOrderNgn = Number(siteRow.minOrderNgn)
+    || (minOrderCfa && liveRate > 0 ? Math.round(minOrderCfa / liveRate) : 0);
   const fr = (window.I18N && I18N.lang && I18N.lang() || "en").toLowerCase().indexOf("fr") === 0;
   const grp = (n) => String(Math.max(0, Math.round(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return { minOrderCfa, minOrderNgn, fr, grp };

@@ -33,6 +33,24 @@ SCOPES = ("openid email https://www.googleapis.com/auth/drive")
 CURRENCIES = ("NGN", "CFA")
 DEFAULT_BATCH_OPTIONS = tuple(f"Batch {number:02d}" for number in range(1, 21))
 HTTP_TIMEOUT = 12
+# Hard cap on any single Google API response (SSRF/size safeguard; a Sheets
+# values answer is a few hundred KB at most).
+MAX_RESPONSE_BYTES = 2_000_000
+
+
+def _guarded_read(req, *, timeout=HTTP_TIMEOUT):
+    """Open one request under the SSRF safeguards and return its body bytes.
+
+    https-only, every resolved IP must be public, every redirect hop is
+    re-validated, and the body is read in chunks capped at
+    MAX_RESPONSE_BYTES (security.guarded_open).
+    """
+    import security
+    try:
+        return security.guarded_open(req, timeout=timeout,
+                                     max_bytes=MAX_RESPONSE_BYTES)
+    except security.UnsafeURLError as exc:
+        raise GoogleSheetsError(f"Blocked Google request: {exc}") from exc
 
 # The owner's existing "ITEMFLOW" workbook. Itemized NGN orders are routed to
 # its NGN tab and FCFA orders to its FCFA tab when the owner pushes a batch.
@@ -229,8 +247,7 @@ def _json_request(url, *, method="GET", body=None, headers=None, timeout=HTTP_TI
         request_headers.setdefault("Content-Type", "application/json; charset=utf-8")
     req = urllib.request.Request(url, data=data, headers=request_headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            raw = response.read()
+        raw = _guarded_read(req, timeout=timeout)
     except urllib.error.HTTPError as exc:
         raw = exc.read()
         message = "Google Sheets request failed."
@@ -262,8 +279,7 @@ def _token_request(values):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as response:
-            raw = response.read()
+        raw = _guarded_read(req, timeout=HTTP_TIMEOUT)
     except urllib.error.HTTPError as exc:
         detail = "Google could not authorize the accounting connection."
         try:
@@ -399,7 +415,7 @@ def _headers(currency):
     return [
         "Confirmed date", "Order ID", "Customer", "Items", "Currency",
         f"Revenue · {unit}", f"Supplier costs · {unit}", f"Transport · {unit}",
-        f"Net Profit · {unit}", "Batch", "Notes",
+        f"Net Profit · {unit}", "Batch", "Notes", "Location / Destination",
     ]
 
 
@@ -410,7 +426,7 @@ def _create_ledger(currency):
                      "timeZone": "Africa/Lagos"},
         "sheets": [
             {"properties": {"title": "Orders", "gridProperties": {
-                "frozenRowCount": 1, "rowCount": 10000, "columnCount": 11}}},
+                "frozenRowCount": 1, "rowCount": 10000, "columnCount": 12}}},
             {"properties": {"title": "Expenses", "gridProperties": {
                 "frozenRowCount": 1, "rowCount": 10000, "columnCount": 6}}},
             {"properties": {"title": "Lists", "gridProperties": {
@@ -441,7 +457,7 @@ def _configure_ledger(spreadsheet_id, currency, sheet_ids):
     _google_request("POST", values_url + "?valueInputOption=USER_ENTERED", {
         "valueInputOption": "USER_ENTERED",
         "data": [
-            {"range": "'Orders'!A1:K1", "values": [headers]},
+            {"range": "'Orders'!A1:L1", "values": [headers]},
             {"range": "'Orders'!I2", "values": [[formula]]},
             {"range": "'Expenses'!A1:F1", "values": [expense_headers]},
             {"range": "'Lists'!A1:A21", "values": list_rows},
@@ -881,6 +897,10 @@ def _order_row(order, batch="", include_net=False):
         (revenue - supplier - transport) if include_net else "",
         str(batch or ""),
         notes[:900],
+        # Column L: the customer's destination, mapped from the staging queue
+        # (order country, falling back to city / zone). Blank for old orders
+        # that predate the checkout country field.
+        str(entry.get("location") or "")[:80],
     ]
 
 def _append_rows(spreadsheet_id, rows):
@@ -962,9 +982,9 @@ def ensure_reference_tab(spreadsheet_id, currency):
     _google_request("POST", batch_url, {"requests": [
         {"addSheet": {"properties": {"title": wanted,
                                      "gridProperties": {"frozenRowCount": 1,
-                                                        "columnCount": 11}}}},
+                                                        "columnCount": 12}}}},
     ]})
-    encoded_range = urllib.parse.quote(f"'{wanted}'!A1:K1", safe="!':")
+    encoded_range = urllib.parse.quote(f"'{wanted}'!A1:L1", safe="!':")
     values_url = (f"{SHEETS_API}/spreadsheets/"
                   f"{urllib.parse.quote(str(spreadsheet_id), safe='')}"
                   f"/values/{encoded_range}?valueInputOption=USER_ENTERED")
@@ -1181,8 +1201,7 @@ def revoke_and_disconnect():
         req = urllib.request.Request(REVOKE_ENDPOINT, data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT):
-                pass
+            _guarded_read(req, timeout=HTTP_TIMEOUT)
         except Exception as exc:
             # A revoked/expired token is already safe to remove locally.
             print(f"[google-sheets] Google revoke skipped: {type(exc).__name__}")

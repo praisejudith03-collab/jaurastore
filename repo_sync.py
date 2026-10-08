@@ -293,13 +293,15 @@ def _github_contents_sha(api, repo, rel, branch, headers):
       ("", None, None)           — 404, the file is new
       (None, None, error)        — GET failed; caller must NOT PUT without sha
     """
-    import urllib.request, urllib.error, urllib.parse
+    import urllib.error, urllib.parse
+    import security
     url = (f"{api}/repos/{repo}/contents/{urllib.parse.quote(rel)}"
            f"?ref={urllib.parse.quote(branch)}")
     try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as r:
-            cur = json.loads(r.read().decode("utf-8", "replace"))
+        # SSRF-guarded GET (https only, public IPs, size/time caps).
+        raw = security.safe_fetch(url, timeout=20, max_bytes=2_000_000,
+                                  headers=headers)
+        cur = json.loads(raw.decode("utf-8", "replace"))
         sha = cur.get("sha") or ""
         remote = None
         raw = cur.get("content")

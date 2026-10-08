@@ -57,6 +57,116 @@ def is_public_ip(value):
     return True
 
 
+# --------------------------------------------------------- guarded fetching
+# SSRF safeguards for every backend fetch of a URL the app does not fully
+# control (supplier pages, link previews, webhooks, third-party APIs). Three
+# rules, enforced on the INITIAL url and on EVERY redirect hop:
+#   1. https only - no http/file/ftp/gopher targets;
+#   2. the hostname must resolve, and EVERY resolved address must be public
+#      (no loopback / private / link-local / reserved / CGNAT ranges), which
+#      blocks 127.0.0.1, 169.254.169.254 (cloud metadata), 10/8, ::1, ...;
+#   3. a hard timeout and a hard response-size cap, so a hostile or broken
+#      target can never hang a worker or exhaust memory.
+
+class UnsafeURLError(ValueError):
+    """Raised when a URL fails the SSRF safeguards."""
+
+
+DEFAULT_FETCH_TIMEOUT = 10
+DEFAULT_FETCH_MAX_BYTES = 700_000
+
+
+def check_public_url(url):
+    """Validate `url` against the SSRF rules. Returns the parsed URL.
+
+    Raises UnsafeURLError for non-https schemes, missing hosts, unresolvable
+    hosts and any resolved address that is not public.
+    """
+    import urllib.parse
+    try:
+        parsed = urllib.parse.urlsplit(str(url or "").strip())
+    except ValueError as exc:
+        raise UnsafeURLError(f"invalid url: {exc}") from exc
+    if parsed.scheme.lower() != "https":
+        raise UnsafeURLError("only https URLs may be fetched")
+    host = (parsed.hostname or "").strip().rstrip(".").lower()
+    if not host:
+        raise UnsafeURLError("url has no host")
+    # A literal IP host must itself be public.
+    ip = _parse_ip(host)
+    if ip is not None:
+        if not is_public_ip(ip):
+            raise UnsafeURLError(f"blocked non-public address {host}")
+        return parsed
+    import socket
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError, ValueError) as exc:
+        raise UnsafeURLError(f"host does not resolve: {host}") from exc
+    addresses = {info[4][0] for info in infos}
+    if not addresses:
+        raise UnsafeURLError(f"host does not resolve: {host}")
+    for address in addresses:
+        if not is_public_ip(address):
+            raise UnsafeURLError(
+                f"host resolves to a non-public address: {host}")
+    return parsed
+
+
+def _guarded_opener():
+    """A urllib opener whose redirect handler re-validates every hop."""
+    import urllib.request
+
+    class _GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+            import urllib.parse
+            check_public_url(urllib.parse.urljoin(req.full_url, newurl))
+            return super().redirect_request(req, fp, code, msg, hdrs, newurl)
+
+    return urllib.request.build_opener(_GuardedRedirectHandler)
+
+
+def guarded_open(req, *, timeout=DEFAULT_FETCH_TIMEOUT,
+                 max_bytes=DEFAULT_FETCH_MAX_BYTES):
+    """Open one urllib Request under the SSRF safeguards; return its bytes.
+
+    The response body is read in chunks and aborted past `max_bytes`, and the
+    whole call is capped by `timeout`. Raises UnsafeURLError for blocked
+    targets; network failures surface as OSError / urllib.error.URLError.
+    """
+    check_public_url(req.full_url)
+    with _guarded_opener().open(req, timeout=timeout) as resp:
+        chunks = []
+        size = 0
+        while True:
+            chunk = resp.read(64 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > max_bytes:
+                raise UnsafeURLError("response exceeds the size limit")
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def safe_fetch(url, *, data=None, method=None, timeout=DEFAULT_FETCH_TIMEOUT,
+               max_bytes=DEFAULT_FETCH_MAX_BYTES, headers=None):
+    """Fetch `url` under the SSRF safeguards and return the body bytes."""
+    import urllib.request
+    final_headers = {"User-Agent": "JauraStore-Fetch/1.0", "Accept": "*/*"}
+    final_headers.update(headers or {})
+    req = urllib.request.Request(
+        str(url).strip(), data=data,
+        method=method or ("POST" if data is not None else "GET"),
+        headers=final_headers)
+    return guarded_open(req, timeout=timeout, max_bytes=max_bytes)
+
+
+def safe_fetch_text(url, **kwargs):
+    """safe_fetch decoded as UTF-8 (replacement chars), for HTML/JSON reads."""
+    return safe_fetch(url, **kwargs).decode("utf-8", "replace")
+
+
 def forwarded_chain():
     """Every address in X-Forwarded-For / Forwarded, left to right."""
     chain = []

@@ -74,7 +74,7 @@ def test_every_rounded_amount_is_a_multiple_of_the_step():
 
 def test_conversion_only_ever_rounds_up():
     for naira in range(1, 3000, 13):
-        exact = naira * currency.NGN_TO_CFA
+        exact = naira * currency.live_rate()
         assert currency.to_cfa(naira) >= exact
         assert currency.to_cfa(naira) - exact < currency.CFA_STEP
 

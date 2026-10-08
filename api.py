@@ -1581,7 +1581,10 @@ def benin_togo_min_ngn(rate=None, min_cfa=None):
     except (TypeError, ValueError):
         rate = 0.0
     if rate <= 0:
-        rate = currency_mod.NGN_TO_CFA
+        # The admin setting's own configured default - configuration data,
+        # not a hardcoded literal in a calculation path.
+        import growth
+        rate = float(growth.DEFAULTS["cfaRate"])
     # to_cfa(n) = ceil(n * rate / STEP) * STEP, so to_cfa(n) >= FLOOR exactly
     # when n * rate > FLOOR - STEP.
     step = currency_mod.CFA_STEP
@@ -4148,10 +4151,20 @@ def admin_order_update(oid):
         # Existing confirmed records without a snapshot are handled as clearly
         # labelled legacy estimates by the accounting view.
         if not isinstance(payload.get("accounting"), dict):
+            # Pre-fill the desk with the saved product supplier defaults (base
+            # item cost in NGN + optional supplier link); the owner can edit
+            # every field afterwards. The FCFA ledger converts this NGN cost at
+            # push time with the rate locked here - the rate live at the moment
+            # of confirmation.
+            supplier_defaults = accounting_mod.saved_supplier_defaults(
+                payload.get("items"))
             payload["accounting"] = accounting_mod.new_snapshot(
                 row["total"] if row["total"] is not None else payload.get("total"),
                 row["currency"] or payload.get("currency"),
-                accounting_mod.current_exchange_rate(), now)
+                accounting_mod.current_exchange_rate(), now,
+                supplier_cost_ngn=supplier_defaults["costNgn"],
+                supplier_qty=supplier_defaults["qty"],
+                supplier_link=supplier_defaults["link"])
     elif status == "pending" and old_status == "declined":
         # A deliberate reopen clears the old decline banner. A partial-payment
         # action is handled above and installs its own current notice instead.
@@ -5778,6 +5791,9 @@ def site_config():
         site["minOrderCfa"] = min_cfa
         site["minOrderNgn"] = (benin_togo_min_ngn(_growth.get("cfaRate"), min_cfa)
                                if min_cfa > 0 else 0)
+        # The live admin exchange rate. The storefront converts every CFA
+        # figure from this value - never from a rate baked into the JS bundle.
+        site["cfaRate"] = float(_growth.get("cfaRate") or 0)
         resp = jsonify(ok=True, site=site)
         # Never cacheable: the bank details on the checkout come from this
         # answer, and a CDN (or a bfcache) holding yesterday's row after an

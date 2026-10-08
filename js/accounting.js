@@ -34,7 +34,9 @@
     balances: { NGN: null, CFA: null },
     batches: [],
     google: { configured: false, connected: false, ledgers: {} },
-    currentExchangeRate: 0.44,
+    // The live admin rate arrives from the server (never a hardcoded literal);
+    // null until the first /api/admin/accounting answer lands.
+    currentExchangeRate: null,
     batchTransportFee: "",
     verify: null,
     error: "",
@@ -67,6 +69,12 @@
     // A CFA order shows its supplier cost converted at the ledger's rate.
     return Number(entry.currency === "CFA" ? (entry.supplierCostCfa || 0)
                                             : (entry.supplierCostNgn || 0));
+  }
+
+  // The active admin rate as display text; "…" until the server row lands.
+  function rateText() {
+    return state.currentExchangeRate == null
+      ? "…" : String(Number(state.currentExchangeRate));
   }
 
   function entryFigures(entry) {
@@ -307,6 +315,7 @@
         <td class="aa-stage-check"><input type="checkbox" data-stage-select="${html(id)}"${checked} aria-label="Select order ${html(id)}" /></td>
         <td class="aa-stage-date"><span>${html(String(entry.date || "").slice(0, 10))}</span><small>${html(id)}</small></td>
         <td class="aa-stage-customer">${html(entry.customer || "Customer")}</td>
+        <td class="aa-stage-location" title="Destination mapped from the order">${html(entry.location || "—")}</td>
         <td class="aa-stage-items">${html(entry.itemsSummary || "—")}<small class="aa-stage-cfa">qty ${qty}</small></td>
         <td class="aa-stage-sale">
           <input type="number" min="0" step="1" inputmode="numeric" value="${Number(entry.saleAmount || 0)}"
@@ -376,7 +385,7 @@
           <table class="aa-stage-table">
             <thead>
               <tr>
-                <th></th><th>Date / Order</th><th>Customer</th><th>Items &amp; quantities</th>
+                <th></th><th>Date / Order</th><th>Customer</th><th>Location</th><th>Items &amp; quantities</th>
                 <th>Selling price</th><th>Supplier link · unit ₦ × qty</th><th>Discount</th>
                 <th>Transport</th><th>Net profit</th><th></th>
               </tr>
@@ -385,7 +394,7 @@
           </table>
         </div>
         ${all.length > state.shown ? `<button type="button" class="aa-button aa-button-more" data-action="more">Show ${Math.min(STAGE_PAGE_SIZE, all.length - state.shown)} more (${all.length - state.shown} hidden)</button>` : ""}
-        <p class="aa-sheet-hint">Everything here saves itself: paste the supplier link, type the unit price and quantity (Unit Price × Quantity = Total Supplier Cost), add a discount, and the Net Profit recalculates instantly — Selling Price − Discounts − Supplier Cost − Transport. For FCFA orders the NGN supplier cost is converted with the active NGN → FCFA rate. Pushed orders leave this queue and land in your ${html(state.currency === "NGN" ? "NGN" : "FCFA")} tab; history and profit analytics live on the <a href="/admin.html?tab=sales">Sales page</a>.</p>`
+        <p class="aa-sheet-hint">Everything here saves itself: when a product has a saved supplier price, the cost arrives pre-filled from those saved defaults — paste the supplier link or type the unit price and quantity to override (Unit Price × Quantity = Total Supplier Cost), add a discount, and the Net Profit recalculates instantly — Selling Price − Discounts − Supplier Cost − Transport. For FCFA orders the NGN supplier cost is converted with the active NGN → FCFA rate. Each row's Location column maps the customer's destination. Pushed orders leave this queue and land in your ${html(state.currency === "NGN" ? "NGN" : "FCFA")} tab; history and profit analytics live on the <a href="/admin.html?tab=sales">Sales page</a>.</p>`
         : `<p class="aa-stage-empty">The ${html(state.currency === "NGN" ? "naira" : "FCFA")} queue is clean — every confirmed order has been pushed. New confirmations will appear here.</p>`}
       </section>`;
   }
@@ -463,7 +472,7 @@
           </label>
           <button class="aa-button aa-button-primary" type="submit">Save settings</button>
         </form>
-        <p class="aa-sheet-hint">Active NGN → FCFA exchange rate: <strong>${Number(state.currentExchangeRate || 0)}</strong> — manage it in <a href="/admin.html?tab=settings">Admin → Settings</a> (Store Settings, next to the bank details). Each confirmed order locks in the rate that was active when it was confirmed, so history never reprices.</p>
+        <p class="aa-sheet-hint">Active NGN → FCFA exchange rate: <strong>${rateText()}</strong> — manage it in <a href="/admin.html?tab=settings">Admin → Settings</a> (Store Settings, next to the bank details). Each confirmed order locks in the rate that was active when it was confirmed, so history never reprices.</p>
       </details>`;
   }
 
@@ -595,7 +604,7 @@
               <button type="button" data-currency="CFA" class="${state.currency === "CFA" ? "is-active" : ""}" aria-pressed="${state.currency === "CFA"}">C <span>FCFA</span></button>
             </div>
             <div class="aa-filter-divider" aria-hidden="true"></div>
-            <span class="aa-rate-pill" title="Active NGN → FCFA rate from Store Settings">1 ₦ = ${Number(state.currentExchangeRate || 0)} FCFA</span>
+            <span class="aa-rate-pill" title="Active NGN → FCFA rate from Store Settings">1 ₦ = ${rateText()} FCFA</span>
           </section>
 
           ${openingSection()}
@@ -647,7 +656,9 @@
       state.settings = data.settings || state.settings;
       state.balances = data.balances || { NGN: null, CFA: null };
       state.google = data.google || state.google;
-      state.currentExchangeRate = Number(data.currentExchangeRate || state.currentExchangeRate);
+      if (data.currentExchangeRate != null && Number.isFinite(Number(data.currentExchangeRate))) {
+        state.currentExchangeRate = Number(data.currentExchangeRate);
+      }
       // Selections that no longer match a staged order are dropped quietly.
       const staged = new Set(state.entries.map((entry) => String(entry.id)));
       [...state.selected].forEach((id) => { if (!staged.has(id)) state.selected.delete(id); });

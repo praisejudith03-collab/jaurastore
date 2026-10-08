@@ -103,7 +103,10 @@ const sandbox = {
     if (u.includes("api/realtime-config")) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ enabled: false }) });
     }
-    return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, site: {} }) });
+    // GET /api/site carries the live admin rate (growth setting cfaRate);
+    // without it the storefront has no rate at all and every CFA figure
+    // would render as 0.
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, site: { cfaRate: 0.44 } }) });
   },
   alert() {}, confirm() { return true; }, prompt() { return ""; },
 };
@@ -173,6 +176,11 @@ vm.runInContext(`
 `, sandbox);
 sandbox.__toasts = toasts;
 sandbox.__lookups = productLookups;
+
+// GET /api/site carries the live admin rate (cfaRate) and the real page
+// applies it on boot; drive the same seam here so the picker's CFA
+// conversion has a rate to work from instead of a literal.
+vm.runInContext("JA.applySiteConfig({ cfaRate: 0.44 })", sandbox);
 
 // ------------------------------------------------- 1. compact summary bars
 await vm.runInContext("fillNeedsAttention()", sandbox);

@@ -131,7 +131,7 @@ window.I18N = (() => {
     "footer.waHelp": "Our team is ready to assist you on WhatsApp for a smooth shopping experience.",
     "footer.contactUs": "Contact Us",
     "footer.copy": "© {year} J Aura Store. All rights reserved.",
-    "footer.pay": "Pay in CFA or ₦ · 1 ₦ = 0.44 CFA",
+    "footer.pay": "Pay in CFA or ₦ · 1 ₦ = {rate} CFA",
     "shop.kicker": "The collection",
     "shop.all": "All Products",
     "shop.categories": "Categories",
@@ -406,9 +406,9 @@ window.I18N = (() => {
     "faq.q1": "How do I order?",
     "faq.a1": "01 Select your items. 02 Review your bag. 03 Complete checkout. 04 Send payment in CFA or ₦. 05 Upload your payment receipt on checkout. 06 JauraStore will confirm your payment and your receipt is saved. Transport fare is discussed on WhatsApp.",
     "faq.q2": "Can I pay in CFA and Naira?",
-    "faq.a2": "Yes. Naira is the price. CFA on the website is converted at 1 ₦ = 0.44. Tap ₦ or CFA in the menu to choose how you pay. At checkout choose Direct bank transfer — CFA or Direct bank transfer — ₦ Naira.",
+    "faq.a2": "Yes. Naira is the price. CFA on the website is converted at 1 ₦ = {rate}. Tap ₦ or CFA in the menu to choose how you pay. At checkout choose Direct bank transfer — CFA or Direct bank transfer — ₦ Naira.",
     "faq.q3": "What is the exchange rate?",
-    "faq.a3": "Naira is the main price. House rate: 1 ₦ = 0.44 CFA. If a piece has no Naira price yet, it stays in CFA.",
+    "faq.a3": "Naira is the main price. House rate: 1 ₦ = {rate} CFA. If a piece has no Naira price yet, it stays in CFA.",
     "faq.q4": "Where do you deliver?",
     "faq.a4": "Lagos (Mainland & Island): within 24 to 72 hours. Other Nigerian states & hubs (Ogun, Abuja, Rivers, Edo, Delta, Ekiti, Osun, Oyo, Kwara, Abia, Anambra and more): within 3 to 7 business days. Benin Republic (Cotonou, Abomey-Calavi, Porto-Novo): within 4 to 12 business days. Togo (Lomé): within 4 to 12 business days. Shipment rates are confirmed at checkout by city.",
     "faq.q5": "How do I send payment?",
@@ -645,7 +645,7 @@ window.I18N = (() => {
     "footer.waHelp": "Notre équipe est prête à vous aider sur WhatsApp pour un achat simple.",
     "footer.contactUs": "Nous contacter",
     "footer.copy": "© {year} J Aura Store. Tous droits réservés.",
-    "footer.pay": "Payez en CFA ou ₦ · 1 ₦ = 0,44 CFA",
+    "footer.pay": "Payez en CFA ou ₦ · 1 ₦ = {rate} CFA",
     "shop.kicker": "La collection",
     "shop.all": "Tous les produits",
     "shop.categories": "Catégories",
@@ -917,9 +917,9 @@ window.I18N = (() => {
     "faq.q1": "Comment commander ?",
     "faq.a1": "01 Choisissez vos articles. 02 Vérifiez le panier. 03 Validez la commande. 04 Payez en CFA ou ₦. 05 Envoyez-nous la capture du paiement sur WhatsApp. 06 JauraStore confirmera votre paiement.",
     "faq.q2": "Puis-je payer en CFA et en naira ?",
-    "faq.a2": "Oui. Le naira est le prix. Le CFA sur le site est converti à 1 ₦ = 0,44. Touchez ₦ ou CFA dans le menu pour choisir comment payer. À la caisse, choisissez virement CFA ou virement ₦ naira.",
+    "faq.a2": "Oui. Le naira est le prix. Le CFA sur le site est converti à 1 ₦ = {rate}. Touchez ₦ ou CFA dans le menu pour choisir comment payer. À la caisse, choisissez virement CFA ou virement ₦ naira.",
     "faq.q3": "Quel est le taux ?",
-    "faq.a3": "Le naira est le prix principal. Taux : 1 ₦ = 0,44 CFA. Sans prix en naira, l’article reste en CFA.",
+    "faq.a3": "Le naira est le prix principal. Taux : 1 ₦ = {rate} CFA. Sans prix en naira, l’article reste en CFA.",
     "faq.q4": "Où livrez-vous ?",
     "faq.a4": "Lagos (Mainland et Island) : sous 24 à 72 heures. Autres États et pôles du Nigéria (Ogun, Abuja, Rivers, Edo, Delta, Ekiti, Osun, Oyo, Kwara, Abia, Anambra, etc.) : sous 3 à 7 jours ouvrés. République du Bénin (Cotonou, Abomey-Calavi, Porto-Novo) : sous 4 à 12 jours ouvrés. Togo (Lomé) : sous 4 à 12 jours ouvrés. Les frais sont confirmés selon la ville.",
     "faq.q5": "Comment payer ?",
@@ -1166,6 +1166,51 @@ window.I18N = (() => {
       .trim();
   }
 
+  /* The live admin exchange rate as display text (French uses a comma), so
+   * rate copy never shows a stale hardcoded figure. null when no rate has
+   * been confirmed yet - the {rate} token is then left in place rather than
+   * filled with an invented number. */
+  function rateToken() {
+    try {
+      const JA = window.JA;
+      const live = JA && (
+        (JA.getSiteConfig && Number((JA.getSiteConfig() || {}).cfaRate)) ||
+        (JA.settings && Number(JA.settings().rate)));
+      if (live > 0) {
+        const text = String(live);
+        return lang() === "fr" ? text.replace(".", ",") : text;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  // Shown while the live rate is still in flight. Boot paints before
+  // GET /api/site can answer, so copy that quotes the rate needs a value
+  // that is neither a raw "{rate}" token nor a hardcoded number that could
+  // contradict what the owner actually set.
+  const RATE_PENDING = "\u2026";
+
+  function expandRate(text) {
+    const rate = rateToken();
+    const value = rate == null ? RATE_PENDING : rate;
+    return String(text).split("{rate}").join(value);
+  }
+
+  /* I18N_PHRASES with {rate} expanded, so the French sweep can match DOM text
+   * that was rendered with the live rate. Cached per rate token. */
+  let expandedPhrasesCache = null;
+  let expandedPhrasesRate;
+  function phrases() {
+    const rate = rateToken();
+    if (expandedPhrasesCache && expandedPhrasesRate === rate) return expandedPhrasesCache;
+    const table = window.I18N_PHRASES || {};
+    const out = {};
+    Object.keys(table).forEach((k) => { out[expandRate(k)] = expandRate(table[k]); });
+    expandedPhrasesCache = out;
+    expandedPhrasesRate = rate;
+    return out;
+  }
+
   function t(key, vars) {
     const table = dict[lang()] || en;
     let s = table[key];
@@ -1176,6 +1221,7 @@ window.I18N = (() => {
         s = s.split("{" + k + "}").join(String(vars[k]));
       });
     }
+    if (s.indexOf("{rate}") >= 0) s = expandRate(s);
     return s;
   }
 
@@ -1193,7 +1239,8 @@ window.I18N = (() => {
     const table = dict.fr || {};
     const out = new Set();
     Object.keys(table).forEach((k) => out.add(table[k]));
-    Object.keys(window.I18N_PHRASES || {}).forEach((k) => out.add(window.I18N_PHRASES[k]));
+    const phraseTable = phrases();
+    Object.keys(phraseTable).forEach((k) => out.add(phraseTable[k]));
     return out;
   }
   let french = null;
@@ -1203,7 +1250,7 @@ window.I18N = (() => {
   let subKeys = null;
   function subKeysSorted() {
     if (subKeys) return subKeys;
-    const table = window.I18N_PHRASES || {};
+    const table = phrases();
     subKeys = Object.keys(table)
       .filter((k) => k.length >= 12 && !/[{}]$/.test(k))
       .sort((a, b) => b.length - a.length);
@@ -1214,7 +1261,7 @@ window.I18N = (() => {
     if (!s || !/[A-Za-z]/.test(s)) return null;
     const flat = s.replace(/\s+/g, " ").trim();
     if (lang() !== "fr") return null;
-    const table = window.I18N_PHRASES || {};
+    const table = phrases();
     if (table[flat]) return table[flat];
     const rules = window.I18N_RULES || [];
     for (let i = 0; i < rules.length; i += 1) {
@@ -1313,7 +1360,11 @@ window.I18N = (() => {
     });
   }
 
-  function apply(root = document) {
+  // The rate the current copy was rendered with, so a repaint after the live
+  // row lands is the ONLY extra work - and a repeat event costs nothing.
+  let appliedRate;
+
+  function applyKeys(root = document) {
     document.documentElement.lang = lang();
     root.querySelectorAll("[data-i18n]").forEach((el) => {
       el.textContent = t(el.dataset.i18n);
@@ -1329,8 +1380,24 @@ window.I18N = (() => {
     });
     const titleEl = root.querySelector("[data-i18n-title]");
     if (titleEl) document.title = t(titleEl.dataset.i18nTitle);
+    appliedRate = rateToken();
+  }
+
+  function apply(root = document) {
+    applyKeys(root);
     sweep(document.body);
     watch();
+  }
+
+  /* Rate copy is painted before GET /api/site can answer (boot draws the page
+   * first so a slow network never shows a blank screen), so the moment the
+   * live row lands the copy is re-rendered with the real figure. Without this
+   * a first-time visitor would keep reading the pending marker. */
+  if (typeof document !== "undefined" && document.addEventListener) {
+    document.addEventListener("ja:site", () => {
+      if (rateToken() === appliedRate) return;
+      try { applyKeys(document); sweep(document.body); } catch (e) {}
+    });
   }
 
   if (document.documentElement) document.documentElement.lang = lang();

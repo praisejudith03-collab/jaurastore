@@ -7,7 +7,10 @@ import datetime, json, secrets, string
 from db import execute, one, query, audit
 from config import Config
 
-NGN_TO_CFA = 0.44          # the storefront's fixed display rate
+# NOTE: there is intentionally NO module-level exchange-rate constant here.
+# The live, admin-controlled rate is the `cfaRate` growth setting below; every
+# calculation reads it through settings() (see currency.live_rate), so no code
+# path can fall back to a hardcoded literal.
 
 DEFAULTS = {
     "referralEnabled": 1,
@@ -78,11 +81,11 @@ def _cap(s):
     # set 0 to switch the Benin & Togo minimum-order rule off completely.
     s["minOrderCfa"] = max(0, min(int(s.get("minOrderCfa", 5000)), 10**9))
     try:
-        s["cfaRate"] = round(float(s.get("cfaRate", NGN_TO_CFA)), 4)
+        s["cfaRate"] = round(float(s.get("cfaRate", DEFAULTS["cfaRate"])), 4)
     except (TypeError, ValueError):
-        s["cfaRate"] = NGN_TO_CFA
+        s["cfaRate"] = DEFAULTS["cfaRate"]
     if not (0.01 <= s["cfaRate"] <= 100):
-        s["cfaRate"] = NGN_TO_CFA
+        s["cfaRate"] = DEFAULTS["cfaRate"]
     tiers = {}
     for item in (s.get("bulkDiscountTiers") or [])[:20]:
         if not isinstance(item, dict):
@@ -152,8 +155,8 @@ def save_settings(patch, actor=""):
 
 # ------------------------------------------------------------------ helpers
 def total_in_ngn(total, currency, rate=None):
-    """Convert an order total to NGN using the admin-adjustable rate
-    (growth setting `cfaRate`, default 0.44 F CFA per ₦)."""
+    """Convert an order total to NGN using the live admin-adjustable rate
+    (growth setting `cfaRate`)."""
     try:
         total = float(total or 0)
     except (TypeError, ValueError):
@@ -161,7 +164,7 @@ def total_in_ngn(total, currency, rate=None):
     if (currency or "").upper() in ("CFA", "XOF", "FCFA"):
         if rate is None:
             rate = settings()["cfaRate"]
-        rate = rate or NGN_TO_CFA
+        rate = rate or DEFAULTS["cfaRate"]
         return int(round(total / rate))
     return int(round(total))
 

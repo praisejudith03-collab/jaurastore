@@ -80,11 +80,13 @@ def check(label, ok, detail=""):
 def product_names():
     """Names in the live catalogue - these must never be translated."""
     import json
-    import urllib.request
+    import security
     names = set()
     try:
-        with urllib.request.urlopen(BASE + "api/products", timeout=20) as r:
-            data = json.loads(r.read().decode("utf-8", "replace"))
+        # SSRF-guarded GET (https only, public IPs, size/time caps).
+        raw = security.safe_fetch(BASE + "api/products", timeout=20,
+                                  max_bytes=2_000_000)
+        data = json.loads(raw.decode("utf-8", "replace"))
         items = data if isinstance(data, list) else data.get("products", data.get("items", []))
         for it in items:
             if isinstance(it, dict):

@@ -194,19 +194,18 @@ def _report_github(record):
     payload = json.dumps({"event_type": "jaura-crash",
                           "client_payload": client_payload}).encode("utf-8")
     try:
-        import urllib.request
-        req = urllib.request.Request(
+        import security
+        # SSRF-guarded POST (https only, public IPs, size/time caps).
+        security.safe_fetch(
             f"https://api.github.com/repos/{repo}/dispatches",
-            data=payload,
+            data=payload, method="POST", timeout=8, max_bytes=4096,
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
                 "Content-Type": "application/json",
                 "User-Agent": "jaura-crash-reporter/1.0",
-            },
-            method="POST")
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            return 200 <= resp.status < 300
+            })
+        return True
     except Exception as exc:
         try:
             print(f"[crash] GitHub dispatch skipped: {exc}", flush=True)

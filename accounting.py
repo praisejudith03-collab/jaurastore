@@ -60,12 +60,17 @@ def safe_rate(value, default=LEGACY_RATE):
 
 
 def current_exchange_rate():
-    """Read the currently configured NGN -> CFA Admin Portal rate."""
+    """Read the live, admin-controlled NGN -> CFA rate (growth setting cfaRate).
+
+    Never falls back to a hardcoded literal: the only fallback is the admin
+    setting's own configured default (growth.DEFAULTS). LEGACY_RATE is reserved
+    for historical snapshots whose rate was never captured.
+    """
+    import growth
     try:
-        import growth
         return safe_rate(growth.settings().get("cfaRate"))
     except Exception:
-        return LEGACY_RATE
+        return safe_rate(growth.DEFAULTS["cfaRate"])
 
 
 def supplier_cost_cfa(supplier_cost_ngn, rate):
@@ -73,6 +78,101 @@ def supplier_cost_cfa(supplier_cost_ngn, rate):
     ngn = Decimal(amount(supplier_cost_ngn))
     return int((ngn * safe_rate(rate)).quantize(
         Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def saved_supplier_defaults(items):
+    """Saved per-product supplier defaults for one order's items.
+
+    The supplier watchdog persists the last supplier price seen per product /
+    variant (growth_settings ``supplier_price_watch_json``); those saved
+    product defaults are the base item supplier cost in NGN. The owner can
+    still override everything by hand on the accounting desk (unit price,
+    total or supplier link) - this only pre-fills what is already known.
+
+    Returns ``{"costNgn": int, "qty": int, "link": str}`` - all zero/blank when
+    nothing is saved. Never raises.
+    """
+    result = {"costNgn": 0, "qty": 0, "link": ""}
+    try:
+        import supplier_watchdog
+        book = supplier_watchdog.saved_price_book()
+        fold = getattr(supplier_watchdog, "fold", None) \
+            or (lambda s: str(s or "").strip().casefold())
+    except Exception:
+        book, fold = {}, (lambda s: str(s or "").strip().casefold())
+    items = [i for i in (items or []) if isinstance(i, dict)]
+    if not items:
+        return result
+    total = 0
+    qty = 0
+    for item in items:
+        pid = str(item.get("id") or item.get("productId") or "").strip()
+        line_qty = quantity(item.get("qty") or item.get("quantity"), 1)
+        qty += line_qty
+        if not pid:
+            continue
+        entry = book.get(pid)
+        prices = entry.get("prices") if isinstance(entry, dict) \
+            and isinstance(entry.get("prices"), dict) else {}
+        if not prices:
+            continue
+        folded = {fold(k): v for k, v in prices.items()}
+        price = None
+        for raw in (item.get("variant"), item.get("color"), item.get("option")):
+            key = fold(raw)
+            if key and key in folded:
+                price = folded[key]
+                break
+        if price is None and fold("product") in folded:
+            price = folded[fold("product")]
+        if price is None and len(folded) == 1:
+            price = next(iter(folded.values()))
+        try:
+            price = float(price)
+        except (TypeError, ValueError):
+            price = 0.0
+        if price > 0:
+            total += int(round(price * line_qty))
+    result["costNgn"] = int(total)
+    result["qty"] = int(qty)
+    # Optional supplier link: the first item whose product has a saved
+    # supplier URL contributes it, so the desk opens with the link attached.
+    try:
+        import catalog as catalog_mod
+        index = catalog_mod.product_index()
+        for item in items:
+            pid = str(item.get("id") or item.get("productId") or "").strip()
+            product = index.get(pid) if pid else None
+            if not isinstance(product, dict):
+                continue
+            link = clean_supplier_link(
+                product.get("supplierSku") or product.get("supplierUrl")
+                or product.get("supplier_url"))
+            if link:
+                result["link"] = link
+                break
+    except Exception:
+        pass
+    return result
+
+
+def order_location(order):
+    """The customer's destination for the ledger's Location column.
+
+    Country first (the ledger's destination granularity: Nigeria, Benin
+    Republic, Togo, ...), falling back to city then delivery zone. Never
+    raises; blank when the order carries no location at all.
+    """
+    payload = order_payload(order)
+    customer = payload.get("customer")
+    customer = customer if isinstance(customer, dict) else {}
+    for value in (order_value(order, "country"), customer.get("country"),
+                  order_value(order, "city"), customer.get("city"),
+                  order_value(order, "zone"), customer.get("zone")):
+        text = str(value or "").strip()
+        if text:
+            return text[:80]
+    return ""
 
 
 # ------------------------------------------------- supplier price / discounts
@@ -270,14 +370,27 @@ def entry_figures(snapshot, currency="NGN", rate=LEGACY_RATE):
     }
 
 
-def new_snapshot(total, currency, rate, confirmed_at, *, legacy=False):
+def new_snapshot(total, currency, rate, confirmed_at, *, legacy=False,
+                 supplier_cost_ngn=0, supplier_qty=0, supplier_link=""):
     """Create a once-only order accounting snapshot.
 
     New confirmations use the active admin rate. Pre-feature confirmed orders
     use the explicitly marked 0.44 baseline because their historical rate was
     never captured; subsequent rate changes cannot move that baseline.
+
+    ``supplier_cost_ngn`` / ``supplier_qty`` / ``supplier_link`` pre-fill the
+    desk from the saved product supplier defaults (see
+    :func:`saved_supplier_defaults`); the owner can edit every field on the
+    accounting desk afterwards - checkout never accepts cost data from a
+    customer.
     """
     currency = normalize_currency(currency) or "NGN"
+    cost = amount(supplier_cost_ngn)
+    qty = quantity(supplier_qty, 0) if supplier_qty else 0
+    unit = 0
+    if cost and qty:
+        unit = int((Decimal(cost) / Decimal(qty)).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP))
     return {
         "version": 1,
         "currency": currency,
@@ -285,16 +398,16 @@ def new_snapshot(total, currency, rate, confirmed_at, *, legacy=False):
         "exchangeRate": float(safe_rate(rate)),
         "saleAmount": amount(total),
         # Supplier costs and transport are intentionally editable on the
-        # accounting sheet; checkout never accepts cost data from a customer.
-        # A blank supplier link / unit price is a valid starting state - the
-        # owner fills them in from the accounting desk and the net profit
-        # recalculates immediately (unit price x quantity).
-        "supplierCostNgn": 0,
-        "supplierUnitPriceNgn": 0,
+        # accounting sheet. When saved product defaults are known they arrive
+        # pre-filled; otherwise a blank supplier link / unit price is a valid
+        # starting state - the owner fills them in from the accounting desk
+        # and the net profit recalculates immediately (unit x quantity).
+        "supplierCostNgn": cost,
+        "supplierUnitPriceNgn": unit,
         # 0 means "follow this order's own quantity"; the desk shows the
         # effective multiplier (item quantity) and the owner may override it.
-        "supplierQty": 0,
-        "supplierLink": "",
+        "supplierQty": qty,
+        "supplierLink": clean_supplier_link(supplier_link),
         "discount": 0,
         "discountPercent": 0.0,
         "deliveryExpense": 0,
@@ -400,6 +513,7 @@ def entry_from_order(order, archived_ids=None):
             order, "updated_at") or order_value(order, "at") or payload.get("at") or ""),
         "currency": currency,
         "customer": str(customer.get("name") or order_value(order, "customer_name") or "Customer"),
+        "location": order_location(order),
         "itemsSummary": ", ".join(item_names),
         "itemQuantity": item_quantity,
         "saleAmount": sale,
