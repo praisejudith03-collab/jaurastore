@@ -226,7 +226,30 @@ body[data-page="accounting"] button:disabled { cursor: not-allowed; opacity: .5;
 .aa-push-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .aa-push-error { margin-top: 12px; padding: 9px 11px; border: 1px solid #ead2cb; border-radius: 9px; background: #fff8f5; color: var(--aa-error); font-size: 11px; line-height: 1.5; }
 .aa-push-buttons { display: flex; justify-content: flex-end; gap: 9px; margin-top: 18px; }
+/* --- Starting Profit / Opening Balance + supplier/discount/transport edits --- */
+.aa-opening { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.2fr); gap: 18px; margin-top: 26px; padding: 18px 20px; border: 1px solid #d9e2d3; border-radius: 15px; background: linear-gradient(145deg,#fbfcf9,#f2f6ee); }
+.aa-opening-copy strong { display: block; margin-top: 6px; color: var(--aa-accent-dark); font: 500 clamp(22px,2.6vw,30px)/1.1 var(--serif,Georgia,serif); letter-spacing: -.02em; }
+.aa-opening-copy > span:last-child { display: block; margin-top: 5px; color: var(--aa-muted); font-size: 11px; line-height: 1.55; }
+.aa-opening-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; align-items: end; }
+.aa-opening-form label { display: flex; flex-direction: column; gap: 4px; color: var(--aa-muted); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.aa-opening-form input { min-height: 38px; padding: 8px 10px; border: 1px solid var(--aa-line); border-radius: 8px; background: #fff; color: var(--aa-ink); font-size: 12px; }
+.aa-opening-form input:focus { border-color: #aebca3; box-shadow: 0 0 0 3px #5266471a; outline: 0; }
+.aa-opening-form button { grid-column: 1 / -1; justify-self: start; }
+.aa-batch-transport { display: flex; flex-direction: column; gap: 3px; color: var(--aa-muted); font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.aa-batch-transport input { min-height: 34px; width: 190px; padding: 6px 9px; border: 1px solid var(--aa-line); border-radius: 8px; background: #fff; color: var(--aa-ink); font-size: 11.5px; text-transform: none; letter-spacing: 0; }
+.aa-batch-transport small { font-weight: 400; letter-spacing: 0; text-transform: none; }
+.aa-stage-cost .aa-stage-link { width: 100%; min-width: 170px; margin-bottom: 5px; text-align: left; }
+.aa-cost-line { display: flex; align-items: center; gap: 5px; }
+.aa-cost-line span { color: var(--aa-muted); font-size: 11px; }
+.aa-cost-line input[data-cost-unit] { width: 88px; }
+.aa-cost-line input[data-cost-qty] { width: 52px; }
+.aa-stage-discount input { width: 84px; min-height: 30px; padding: 5px 7px; border: 1px solid var(--aa-line); border-radius: 7px; background: #fff; font-size: 11.5px; text-align: right; }
+.aa-discount-add { color: var(--aa-accent); font-size: 10.5px; white-space: nowrap; }
+.aa-button-line { background: #fff; color: var(--aa-accent-dark); border: 1px solid var(--aa-line); }
+.aa-stage-table { min-width: 1040px; }
 @media (max-width: 720px) {
+  .aa-opening { grid-template-columns: 1fr; }
+  .aa-opening-form { grid-template-columns: 1fr; }
   .aa-balance-strip { grid-template-columns: 1fr; }
   .aa-balance-cards { grid-template-columns: 1fr; }
   .aa-settings-form { grid-template-columns: 1fr; }

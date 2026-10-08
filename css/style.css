@@ -8339,3 +8339,7 @@ table .muted { color: #8a887e; font-size: 11px; }
   .adx-trash-actions { grid-column: 1 / -1; flex-direction: row; }
   .adx-trash-actions .btn { flex: 1; }
 }
+
+/* Sales → Pushed batches: the Batch Transportation Fee input (blank = the
+   individual per-order transport fees are added up instead). */
+.sales-batch-transport { width: 96px; max-width: 100%; padding: 5px 7px; border: 1px solid var(--line, #e8e7df); border-radius: 7px; font-size: 12px; text-align: right; background: #fff; }

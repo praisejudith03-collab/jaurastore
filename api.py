@@ -2888,12 +2888,15 @@ def _accounting_settings_defaults():
     return {
         "startingBalanceNgn": 0,
         "startingBalanceCfa": 0,
-        "referenceSpreadsheetId": google_sheets.DEFAULT_REFERENCE_SPREADSHEET_ID,
+        # GOOGLE_SHEET_ID (Render) beats the built-in ITEMFLOW default; a value
+        # saved on the accounting desk beats both.
+        "referenceSpreadsheetId": google_sheets.reference_spreadsheet_id(),
     }
 
 
 def _accounting_settings():
     """Accounting desk settings: starting balances + reference workbook."""
+    import google_sheets
     defaults = _accounting_settings_defaults()
     if _accounting_uses_supabase():
         stored = supabase_store.load_accounting_settings()
@@ -2913,25 +2916,41 @@ def _accounting_settings():
         for key in defaults:
             if key in stored:
                 merged[key] = stored[key]
-    merged["startingBalanceNgn"] = accounting_mod.amount(merged.get("startingBalanceNgn"))
-    merged["startingBalanceCfa"] = accounting_mod.amount(merged.get("startingBalanceCfa"))
+    # Starting Profit / Opening Balance: the canonical keys plus the aliases
+    # the accounting desk input box may post (startingProfit* / openingBalance*).
+    merged["startingBalanceNgn"] = accounting_mod.starting_profit(merged, "NGN")
+    merged["startingBalanceCfa"] = accounting_mod.starting_profit(merged, "CFA")
+    merged["startingProfitNgn"] = merged["startingBalanceNgn"]
+    merged["startingProfitCfa"] = merged["startingBalanceCfa"]
     merged["referenceSpreadsheetId"] = sec.clean(
-        merged.get("referenceSpreadsheetId"), 120)
+        merged.get("referenceSpreadsheetId"), 120) or \
+        google_sheets.reference_spreadsheet_id()
     return merged
 
 
 def _accounting_save_settings(patch):
+    """Save Accounting settings, including the Starting Profit / Opening Balance.
+
+    Accepts the canonical ``startingBalanceNgn`` / ``startingBalanceCfa`` keys
+    and the ``startingProfit*`` / ``openingBalance*`` aliases, so the input box
+    at the top of the accounting desk can name the figure the way the owner
+    does. The balance itself is never mutated by a save here - only the
+    starting point the new batches accumulate onto.
+    """
+    patch = patch if isinstance(patch, dict) else {}
     current = _accounting_settings() or _accounting_settings_defaults()
-    if "startingBalanceNgn" in patch:
-        value = accounting_mod.validated_amount(patch.get("startingBalanceNgn"))
-        if value is None:
-            return None, "Starting NGN balance must be a non-negative whole amount."
-        current["startingBalanceNgn"] = value
-    if "startingBalanceCfa" in patch:
-        value = accounting_mod.validated_amount(patch.get("startingBalanceCfa"))
-        if value is None:
-            return None, "Starting FCFA balance must be a non-negative whole amount."
-        current["startingBalanceCfa"] = value
+    for currency, suffix, label in (("NGN", "Ngn", "Starting profit / opening NGN balance"),
+                                    ("CFA", "Cfa", "Starting profit / opening FCFA balance")):
+        for key in (f"startingBalance{suffix}", f"startingProfit{suffix}",
+                    f"openingBalance{suffix}"):
+            if key in patch:
+                value = accounting_mod.editable_amount(patch.get(key))
+                if value is None:
+                    return None, f"{label} must be a non-negative whole amount."
+                current[f"startingBalance{suffix}"] = value
+                break
+    current["startingProfitNgn"] = current.get("startingBalanceNgn", 0)
+    current["startingProfitCfa"] = current.get("startingBalanceCfa", 0)
     if "referenceSpreadsheetId" in patch:
         current["referenceSpreadsheetId"] = sec.clean(
             patch.get("referenceSpreadsheetId"), 120)
@@ -2956,6 +2975,59 @@ def _accounting_order_entry(order, archived_ids=None, payload=None):
         order = dict(order or {})
         order["payload"] = payload
     return accounting_mod.entry_from_order(order, archived_ids)
+
+
+# Every field a batch snapshot keeps, so a batch's own profit can be
+# recalculated later (e.g. after a Batch Transportation Fee is logged) without
+# touching the live order rows again.
+_ACCOUNTING_BATCH_SNAPSHOT_FIELDS = (
+    "id", "date", "customer", "itemsSummary", "currency", "saleAmount",
+    "discount", "discountPercent", "supplierCostNgn", "supplierCostCfa",
+    "supplierUnitPriceNgn", "supplierQty", "supplierLink",
+    "supplierCostInCurrency", "deliveryExpense", "netProfit", "netCashProfit",
+    "exchangeRate", "notes", "legacySnapshot")
+
+
+def _accounting_batch_snapshot(entry):
+    return {key: entry.get(key) for key in _ACCOUNTING_BATCH_SNAPSHOT_FIELDS}
+
+
+def _accounting_batch_transport_fee(raw):
+    """Parse the optional single Batch Transportation Fee box.
+
+    Returns ``(fee, error)``. A blank/missing box means ``None`` - the batch
+    falls back to the individual per-order transport fees. Any present value
+    (including an explicit 0) is logged as the ONE transport cost for the
+    whole batch.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, ""
+    value = accounting_mod.validated_amount(raw)
+    if value is None:
+        return None, "Batch transportation fee must be a non-negative whole amount."
+    return value, ""
+
+
+def _accounting_batch_document(batch_id, name, now, currency, order_ids,
+                               snapshot_rows, *, batch_transport_fee=None,
+                               **extra):
+    """Build one batch record with its transport mode made explicit."""
+    totals = accounting_mod.batch_totals(snapshot_rows, currency,
+                                         batch_transport_fee)
+    batch = {
+        "id": batch_id,
+        "name": name,
+        "createdAt": now,
+        "currency": currency,
+        "orderIds": list(order_ids),
+        "orders": snapshot_rows,
+        "totals": totals,
+        "transportSource": "batch" if batch_transport_fee is not None else "per-order",
+    }
+    if batch_transport_fee is not None:
+        batch["batchTransportFee"] = batch_transport_fee
+    batch.update(extra)
+    return batch
 
 
 @api.get("/admin/accounting")
@@ -3003,6 +3075,10 @@ def admin_accounting():
         currentExchangeRate=float(accounting_mod.current_exchange_rate()),
         legacyRate=float(accounting_mod.LEGACY_RATE),
         google=google_sheets.integration_status(),
+        googleSheetId=google_sheets.reference_spreadsheet_id(settings),
+        transportFeeHint=("Fill Batch Transportation Fee once for the whole "
+                          "batch, or leave it blank to add up the per-order "
+                          "transport fees."),
         totals={"stagedOrders": len(entries),
                 "archivedOrders": len(archived_ids),
                 "legacySnapshots": sum(1 for entry in entries if entry["legacySnapshot"])},
@@ -3052,6 +3128,33 @@ def admin_accounting_summary():
         entries, currency, period=period, batch=batch)
     return _accounting_summary_json(ok=True, google=google,
                                     summary=summary, error="")
+
+
+@api.get("/admin/accounting/google/verify")
+@authmod.require_admin
+def admin_accounting_google_verify():
+    """Prove the Google Drive sync path end to end, without writing anything.
+
+    The accounting desk's "Test Google sync" button calls this once the app is
+    redeployed with real credentials: it reports whether the OAuth client is
+    configured, whether the owner's token is still valid (refreshing it when
+    needed), and whether the NGN / FCFA ledgers and the reference workbook can
+    be read.
+    """
+    import google_sheets
+    settings = _accounting_settings() or {}
+    try:
+        report = google_sheets.verify_sync(
+            google_sheets.reference_spreadsheet_id(settings), settings=settings)
+    except Exception as exc:                     # never 500 the admin desk
+        report = {"ok": False, "configured": google_sheets.configured(),
+                  "connected": False, "email": "", "steps": [],
+                  "ledgers": {}, "reference": {"id": "", "title": "", "tabs": []},
+                  "message": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    response = jsonify(ok=True, google=google_sheets.integration_status(),
+                       verification=report)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @api.get("/admin/accounting/google/connect")
@@ -3143,9 +3246,20 @@ def _accounting_entry_reply(order, payload, archived_ids):
 @authmod.require_admin
 @sec.require_csrf
 def admin_accounting_order_update(oid):
+    """Auto-saving edit for one staged order's accounting fields.
+
+    Every supplier field is optional and may be blank: a supplier link and a
+    unit supplier price are usually unknown the moment an order is confirmed,
+    so the order stages with nothing filled in and simply contributes 0 until
+    the owner types them here. Each edit recalculates the Net Profit on the
+    spot (Unit Supplier Price x Quantity = Total Supplier Cost; discounts are
+    deducted; FCFA orders convert the NGN cost at the ledger's exchange rate).
+    """
     oid = sec.clean(oid, 24).upper()
     d = request.get_json(silent=True) or {}
-    fields = {"saleAmount", "supplierCostNgn", "deliveryExpense", "notes"}
+    fields = {"saleAmount", "supplierCostNgn", "supplierUnitPriceNgn",
+              "supplierQty", "supplierLink", "discount", "discountPercent",
+              "deliveryExpense", "notes", "exchangeRate", "applyActiveRate"}
     changed = fields.intersection(d)
     if not changed:
         return _accounting_mutation_error("Provide at least one accounting field to update.")
@@ -3155,11 +3269,36 @@ def admin_accounting_order_update(oid):
     payload, snapshot, archived_ids = context
     if snapshot.get("deletedAt"):
         return _accounting_mutation_error("Restore this accounting record before editing it.", 409)
-    for field in changed - {"notes"}:
-        value = accounting_mod.validated_amount(d.get(field))
+    if "saleAmount" in changed:
+        value = accounting_mod.editable_amount(d.get("saleAmount"))
         if value is None:
-            return _accounting_mutation_error(f"{field} must be a non-negative whole amount.")
-        snapshot[field] = value
+            return _accounting_mutation_error("saleAmount must be a non-negative whole amount.")
+        snapshot["saleAmount"] = value
+    if "deliveryExpense" in changed:
+        value = accounting_mod.editable_amount(d.get("deliveryExpense"))
+        if value is None:
+            return _accounting_mutation_error("deliveryExpense must be a non-negative whole amount.")
+        snapshot["deliveryExpense"] = value
+    supplier_fields = {"supplierCostNgn", "supplierUnitPriceNgn", "supplierQty",
+                       "supplierLink", "discount", "discountPercent"}
+    if supplier_fields.intersection(d):
+        snapshot, supplier_error = accounting_mod.apply_supplier_fields(snapshot, order, d)
+        if supplier_error:
+            return _accounting_mutation_error(supplier_error)
+    # FCFA orders convert the NGN supplier cost at the ledger's exchange rate.
+    # A stale or legacy snapshot reprices to the ACTIVE Store Settings rate
+    # only when the owner explicitly asks for it (applyActiveRate, or typing a
+    # supplier price in the FCFA ledger); untouched history keeps its locked
+    # rate, so a rate change never rewrites past profit.
+    reprice = bool(d.get("applyActiveRate")) or ("exchangeRate" in d)
+    if reprice:
+        if "exchangeRate" in d and str(d.get("exchangeRate") or "").strip():
+            rate = accounting_mod.safe_rate(d.get("exchangeRate"),
+                                            accounting_mod.current_exchange_rate())
+        else:
+            rate = accounting_mod.current_exchange_rate()
+        snapshot["exchangeRate"] = float(rate)
+        snapshot["repricedAt"] = _utcnow()
     if "notes" in changed:
         snapshot["notes"] = sec.clean(d.get("notes"), 500)
     snapshot["updatedAt"] = _utcnow()
@@ -3255,31 +3394,23 @@ def admin_accounting_batch_create():
 
         now = _utcnow()
         name = sec.clean(d.get("name"), 100) or f"{currency} delivery · {now[:10]}"
-        totals = accounting_mod.batch_totals(entries, currency)
         batch_id = "BATCH-" + secrets.token_hex(6).upper()
+        batch_fee, fee_error = _accounting_batch_transport_fee(d.get("batchTransportFee"))
+        if fee_error:
+            return _accounting_mutation_error(fee_error)
         # Store an immutable snapshot, so later edits to live order records
         # cannot rewrite what was fulfilled or what the bank batch contained.
-        snapshot_rows = [{key: entry.get(key) for key in (
-            "id", "date", "customer", "itemsSummary", "currency", "saleAmount",
-            "supplierCostNgn", "supplierCostCfa", "supplierCostInCurrency",
-            "deliveryExpense", "netProfit", "netCashProfit", "exchangeRate", "notes",
-            "legacySnapshot")}
-            for entry in entries]
-        batch = {
-            "id": batch_id,
-            "name": name,
-            "createdAt": now,
-            "currency": currency,
-            "orderIds": order_ids,
-            "orders": snapshot_rows,
-            "totals": totals,
-        }
+        snapshot_rows = [_accounting_batch_snapshot(entry) for entry in entries]
+        batch = _accounting_batch_document(
+            batch_id, name, now, currency, order_ids, snapshot_rows,
+            batch_transport_fee=batch_fee, createdBy=authmod.current_admin())
         updated_batches = list(batches) + [batch]
         if not _accounting_save_batches(updated_batches):
             return jsonify(ok=False, error="The batch could not be saved to the accounting database."), 503
 
     audit(authmod.current_admin(), "accounting.batch.archive",
-          f"{batch_id} {len(order_ids)} orders", _ip())
+          f"{batch_id} {len(order_ids)} orders transport={batch.get('transportSource')}",
+          _ip())
     return jsonify(ok=True, batch=batch, archivedOrderIds=order_ids)
 
 
@@ -3309,6 +3440,15 @@ def admin_accounting_push():
     if transfer_fee is None:
         return _accounting_mutation_error("Transfer fee must be a non-negative whole amount.")
     fee_currency = accounting_mod.normalize_currency(d.get("feeCurrency"))
+    # One optional Batch Transportation Fee covers the WHOLE batch. Blank
+    # falls back to the individual per-order transport fees already logged on
+    # the staged rows.
+    batch_fee, batch_fee_error = _accounting_batch_transport_fee(
+        d.get("batchTransportFee"))
+    if batch_fee_error:
+        return _accounting_mutation_error(batch_fee_error)
+    batch_fee_currency = accounting_mod.normalize_currency(
+        d.get("batchTransportFeeCurrency"))
     name = sec.clean(d.get("name"), 100)
 
     with _ACCOUNTING_BATCH_LOCK:
@@ -3338,9 +3478,38 @@ def admin_accounting_push():
             return jsonify(ok=False, error="Accounting settings could not be read."), 503
         reference_id = str(settings.get("referenceSpreadsheetId") or "").strip()
 
+        # A single Batch Transportation Fee is ALLOCATED across the rows of
+        # the ledger it belongs to for the Sheet write only, so the sheet's
+        # transport column and its net-profit formula agree with the batch
+        # total. The batch record itself keeps the one figure.
+        sheet_orders = [by_id[oid] for oid in order_ids]
+        transport_ledger_currency = None
+        if batch_fee is not None:
+            currencies_here = {entry["currency"] for entry in entries}
+            transport_ledger_currency = batch_fee_currency or (
+                next(iter(currencies_here)) if len(currencies_here) == 1 else "NGN")
+            group = [entry for entry in entries
+                     if entry["currency"] == transport_ledger_currency]
+            shares = accounting_mod.allocate_transport(group, batch_fee)
+            if shares:
+                adjusted = []
+                for order in sheet_orders:
+                    oid = str(accounting_mod.order_value(order, "id") or "")
+                    share = shares.get(oid)
+                    if share is None:
+                        adjusted.append(order)
+                        continue
+                    copy = dict(order)
+                    payload = accounting_mod.order_payload(order)
+                    snapshot = accounting_mod.account_block(order)
+                    snapshot["deliveryExpense"] = share
+                    payload["accounting"] = snapshot
+                    copy["payload"] = payload
+                    adjusted.append(copy)
+                sheet_orders = adjusted
         try:
             report = google_sheets.push_orders(
-                [by_id[oid] for oid in order_ids],
+                sheet_orders,
                 batch_name=name or "", reference_id=reference_id)
         except google_sheets.GoogleSheetsError as exc:
             return jsonify(ok=False, error=(
@@ -3360,34 +3529,31 @@ def admin_accounting_push():
         # - never both, so a mixed push can never double-count the fee.
         fee_ledger = fee_currency or (
             currencies_pushed.pop() if len(currencies_pushed) == 1 else "NGN")
+        # A Batch Transportation Fee is logged once, on one ledger (the
+        # currency the owner chose, else the single pushed currency, else the
+        # NGN base), never once per currency - so a mixed push cannot
+        # double-count the journey.
+        transport_ledger = batch_fee_currency or (
+            fee_ledger if batch_fee is not None else None)
         pushed_batches = []
         for currency, info in (report or {}).items():
             currency_entries = [entry for entry in entries
                                 if entry["currency"] == currency]
             fee_here = transfer_fee if currency == fee_ledger else 0
-            totals = accounting_mod.batch_totals(currency_entries, currency)
+            batch_fee_here = (batch_fee
+                              if batch_fee is not None and currency == transport_ledger
+                              else None)
             batch_id = "BATCH-" + secrets.token_hex(6).upper()
-            snapshot_rows = [{key: entry.get(key) for key in (
-                "id", "date", "customer", "itemsSummary", "currency", "saleAmount",
-                "supplierCostNgn", "supplierCostCfa", "supplierCostInCurrency",
-                "deliveryExpense", "netProfit", "netCashProfit", "exchangeRate", "notes",
-                "legacySnapshot")}
-                for entry in currency_entries]
-            pushed_batches.append({
-                "id": batch_id,
-                "name": name or f"{currency} delivery · {now[:10]}",
-                "createdAt": now,
-                "pushedAt": now,
-                "pushedBy": actor,
-                "currency": currency,
-                "orderIds": [entry["id"] for entry in currency_entries],
-                "orders": snapshot_rows,
-                "totals": totals,
-                "transferFee": fee_here,
-                "sheet": {"spreadsheetId": info.get("spreadsheetId"),
-                          "tab": info.get("tab"), "url": info.get("url")},
-                "source": "reference" if reference_id else "ledger",
-            })
+            snapshot_rows = [_accounting_batch_snapshot(entry)
+                             for entry in currency_entries]
+            pushed_batches.append(_accounting_batch_document(
+                batch_id, name or f"{currency} delivery · {now[:10]}", now,
+                currency, [entry["id"] for entry in currency_entries],
+                snapshot_rows, batch_transport_fee=batch_fee_here,
+                pushedAt=now, pushedBy=actor, transferFee=fee_here,
+                sheet={"spreadsheetId": info.get("spreadsheetId"),
+                       "tab": info.get("tab"), "url": info.get("url")},
+                source="reference" if reference_id else "ledger"))
         if not pushed_batches:
             return jsonify(ok=False, error=(
                 "The push did not complete, so nothing was archived.")), 502
@@ -3413,6 +3579,60 @@ def admin_accounting_push():
                    report=report,
                    balances=accounting_mod.bank_balances(
                        updated_batches, expenses, fresh_settings))
+
+
+@api.put("/admin/accounting/batches/<bid>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_batch_update(bid):
+    """Edit one archived batch: a single Batch Transportation Fee, or a name.
+
+    ``batchTransportFee`` may be a whole amount (log ONE transport cost for
+    the entire batch) or blank/null (clear it and fall back to the individual
+    per-order transport fees). The batch's own snapshot rows are recalculated,
+    so the live running balance and the Sales page follow immediately.
+    """
+    bid = sec.clean(bid, 40).upper()
+    d = request.get_json(silent=True) or {}
+    with _ACCOUNTING_BATCH_LOCK:
+        batches = _accounting_batches()
+        if batches is None:
+            return jsonify(ok=False, error="Archived batches could not be read."), 503
+        index = next((i for i, row in enumerate(batches)
+                      if isinstance(row, dict) and str(row.get("id")) == bid), None)
+        if index is None:
+            return _accounting_mutation_error("That delivery batch was not found.", 404)
+        batch = dict(batches[index])
+        if "batchTransportFee" in d:
+            fee, error = _accounting_batch_transport_fee(d.get("batchTransportFee"))
+            if error:
+                return _accounting_mutation_error(error)
+            if fee is None:
+                batch.pop("batchTransportFee", None)
+                batch["transportSource"] = "per-order"
+            else:
+                batch["batchTransportFee"] = fee
+                batch["transportSource"] = "batch"
+        if "name" in d:
+            batch["name"] = sec.clean(d.get("name"), 100) or batch.get("name") or bid
+        rows = [row for row in (batch.get("orders") or []) if isinstance(row, dict)]
+        batch["totals"] = accounting_mod.batch_totals(
+            rows, batch.get("currency"),
+            accounting_mod.batch_transport_fee(batch))
+        batch["updatedAt"] = _utcnow()
+        batch["updatedBy"] = authmod.current_admin()
+        updated = list(batches)
+        updated[index] = batch
+        if not _accounting_save_batches(updated):
+            return jsonify(ok=False, error=(
+                "The batch edit could not be saved to the accounting database.")), 503
+    audit(authmod.current_admin(), "accounting.batch.update",
+          f"{bid} transport={batch.get('transportSource')} "
+          f"fee={batch.get('batchTransportFee')}", _ip())
+    expenses = accounting_mod.clean_expenses(_accounting_expenses() or [])
+    settings = _accounting_settings() or {}
+    return jsonify(ok=True, batch=batch,
+                   balances=accounting_mod.bank_balances(updated, expenses, settings))
 
 
 @api.get("/admin/accounting/expenses")
@@ -3527,9 +3747,15 @@ def admin_sales_insights():
         "orderCount": (batch.get("totals") or {}).get("orderCount"),
         "revenue": (batch.get("totals") or {}).get("customerRevenue"),
         "supplierCosts": (batch.get("totals") or {}).get("supplierCostInCurrency"),
-        "transport": (batch.get("totals") or {}).get("transportExpense"),
+        "transport": accounting_mod.batch_transport(batch)[0],
+        "transportSource": accounting_mod.batch_transport(batch)[1],
+        "batchTransportFee": accounting_mod.batch_transport_fee(batch),
+        "perOrderTransport": sum(
+            accounting_mod.amount(row.get("deliveryExpense"))
+            for row in (batch.get("orders") or []) if isinstance(row, dict)),
+        "discounts": (batch.get("totals") or {}).get("discountsTotal"),
         "transferFee": batch.get("transferFee"),
-        "netProfit": ((batch.get("totals") or {}).get("netCashProfit", 0)
+        "netProfit": (accounting_mod.batch_net_profit(batch)
                       - accounting_mod.amount(batch.get("transferFee"))),
         "exchangeRate": (batch.get("orders") or [{}])[0].get("exchangeRate")
                         if (batch.get("orders") or [{}])[0] else None,
@@ -3537,6 +3763,8 @@ def admin_sales_insights():
     } for batch in summary.pop("batches")]
     settings = _accounting_settings() or {}
     balances = accounting_mod.bank_balances(batches, expenses, settings)
+    summary["startingProfit"] = accounting_mod.starting_profit(settings, currency)
+    summary["discounts"] = accounting_mod.amount(summary.get("discounts"))
     response = jsonify(ok=True, summary=summary, batches=batch_cards,
                        balances=balances,
                        currentExchangeRate=float(accounting_mod.current_exchange_rate()))
@@ -6900,8 +7128,12 @@ def _broadcast_products(raw_ids):
         return None, (jsonify(ok=False,
                               error="Choose no more than 12 products."), 400)
     wanted = {sec.clean(pid, 80) for pid in selected if sec.clean(pid, 80)}
+    # Only LIVE products may be featured: a soft-deleted / archived / hidden
+    # piece is treated exactly like an unknown id and the broadcast is refused,
+    # so a removed product can never be re-advertised by a stale admin tab.
     products = [p for p in catalog_mod.merged()
-                if str((p or {}).get("id") or "") in wanted]
+                if str((p or {}).get("id") or "") in wanted
+                and catalog_mod.is_live_product(p)]
     if len(products) != len(wanted):
         return None, (jsonify(ok=False,
                               error="One or more selected products are unavailable."), 400)

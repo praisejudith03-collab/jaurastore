@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=199" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=200" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -3060,6 +3060,10 @@ async function fillBroadcastHub() {
   };
   let catalog = [];
   try { catalog = (await api("api/catalog?all=1")).products || []; } catch (err) { if (optionsBox) optionsBox.innerHTML = `<p class="empty">Catalog unavailable.</p>`; }
+  // Deleted/archived rows are dropped from the catalog BEFORE the search, so
+  // the broadcast builder can never feature a retired piece (and the server
+  // would reject it anyway - it only resolves live products).
+  catalog = (catalog || []).filter(productIsBroadcastable);
   const filter = () => {
     const q = String($("#mk-hub-product-search")?.value || "").trim().toLowerCase();
     hubShown = MK_PICKER_PAGE;
@@ -3271,6 +3275,37 @@ function saveBroadcastOverrides() {
   try { sessionStorage.setItem(broadcastOverrideStorageKey(), JSON.stringify(bcOverrides)); } catch (e) {}
 }
 
+/** True when a catalogue row is soft-deleted / archived / inactive.
+ *
+ * The admin basket must never offer a piece the shop has retired. The server
+ * already drops tombstoned ids from api/catalog, but a stale mirror row or an
+ * older bundle can still carry a marker, so every marketing picker asks here
+ * first and skips the row outright:
+ *   deleted / is_deleted / isDeleted / deletedAt / trashed / in_trash
+ *   archived / is_archived / isArchived
+ *   active === false / enabled === false
+ *   source in ("deleted", "replaced") / status in ("deleted", "archived")
+ */
+function productIsDeleted(p) {
+  if (!p || typeof p !== "object") return true;
+  if (!p.id) return true;
+  if (p.deleted === true || p.deletedAt || p.is_deleted === true
+      || p.isDeleted === true || p.trashed === true || p.in_trash === true
+      || p.archived === true || p.is_archived === true || p.isArchived === true) return true;
+  if (p.active === false || p.enabled === false) return true;
+  const source = String(p.source || "").toLowerCase();
+  if (source === "deleted" || source === "replaced") return true;
+  const status = String(p.status || "").toLowerCase();
+  return status === "deleted" || status === "archived";
+}
+
+/** A product the marketing screens may offer: not deleted and on the site.
+ *  Hidden (online === false) rows are excluded from broadcasts, because a
+ *  message that links to a hidden product cannot sell it. */
+function productIsBroadcastable(p) {
+  return !productIsDeleted(p) && p.online !== false;
+}
+
 function broadcastInStock(p) {
   // Availability gate for WhatsApp sharing (owner rule: only available items
   // may be posted). A variant product is in stock when ANY option still has
@@ -3282,8 +3317,10 @@ function broadcastInStock(p) {
   return Number(p.stock) > 0;
 }
 function broadcastEligibleProducts() {
+  // Deleted / archived pieces are excluded strictly - they must never reach a
+  // WhatsApp broadcast batch or the email feed.
   const all = JA.products ? JA.products() : [];
-  return all.filter((p) => p && p.id && p.online !== false && broadcastInStock(p));
+  return all.filter((p) => productIsBroadcastable(p) && broadcastInStock(p));
 }
 
 function broadcastDaySeed() {
@@ -3321,7 +3358,9 @@ function broadcastScheduledFeedFor(slot) {
   // Overrides may point at ANY catalogue row (an out-of-stock or hidden
   // piece the owner deliberately chose), so resolve them against the full
   // catalogue - only the AUTOMATIC rotation stays inside the eligible pool.
-  const catalogue = JA.products ? JA.products() : [];
+  // A pinned pick whose product was deleted or archived afterwards drops out
+  // here too, so a retired piece can never be copied into a WhatsApp batch.
+  const catalogue = (JA.products ? JA.products() : []).filter((p) => !productIsDeleted(p));
   const byId = new Map(catalogue.map((p) => [String(p && p.id), p]));
   const overrides = (bcOverrides[slot] || []).filter((row) => byId.has(String(row.id)));
   const manualIds = new Set(overrides.map((row) => String(row.id)));
@@ -3514,14 +3553,16 @@ function broadcastPickerStatus(p) {
 
 function broadcastPickerMatches() {
   // The picker searches the WHOLE catalogue (owner request 2026-10-01:
-  // "selecting ANY custom product"), not just today's rotation pool.
+  // "selecting ANY custom product"), not just today's rotation pool - but
+  // soft-deleted / archived rows are filtered out strictly, so a retired
+  // piece can never be picked, copied or posted.
   // Matches are ranked ready-to-post first (online + in stock), everything
   // else after, so the top of the list is still the safest to post.
   const term = String($("#mk-bc-picker-search")?.value || "").trim().toLowerCase();
   const category = String($("#mk-bc-picker-category")?.value || "");
   const all = JA.products ? JA.products() : [];
   const matches = all.filter((p) => {
-    if (!p || !p.id) return false;
+    if (productIsDeleted(p)) return false;
     if (category && String(p.category || "") !== category) return false;
     if (!term) return true;
     const haystack = [p.name, p.nameFr, p.sku, p.category,
@@ -3898,6 +3939,8 @@ async function fillMarketing() {
     const paintProducts = () => {
       const box = $("#mk-product-options"); const q = String($("#mk-product-search")?.value || "").trim().toLowerCase();
       if (!box) return;
+      // Deleted / archived / hidden products never appear in the feature list.
+      campaignProducts = (campaignProducts || []).filter(productIsBroadcastable);
       campaignMatches = campaignProducts.filter((p) => !q || `${p.name || ""} ${p.sku || ""}`.toLowerCase().includes(q));
       if (campaignShown < MK_PICKER_PAGE) campaignShown = MK_PICKER_PAGE;
       box.innerHTML = marketingPickerListHTML(campaignMatches, "campaignProduct", selectedProducts, campaignShown, "data-campaign-picker-more");
@@ -4108,6 +4151,24 @@ async function fillSales() {
   if (salesFilterClear) salesFilterClear.onclick = () => { salesSearch = ""; salesFrom = ""; salesTo = ""; fillSales(); };
   updateSalesCsv();
 }
+/** Save one batch's Batch Transportation Fee from the Sales table.
+ *  Blank clears it and the batch falls back to its per-order transport fees. */
+async function saveBatchTransportFee(batchId, rawValue) {
+  const value = String(rawValue ?? "").trim();
+  try {
+    const d = await window.JA_NET.api("api/admin/accounting/batches/" + encodeURIComponent(batchId), {
+      method: "PUT",
+      json: { batchTransportFee: value === "" ? null : Number(value) },
+    });
+    if (d && d.ok === false) throw new Error(d.error || "Could not save the transport fee.");
+    JA.toast("Batch transportation fee saved.");
+    if (typeof fillSalesInsights === "function") fillSalesInsights();
+  } catch (err) {
+    JA.toast(err.message || "Could not save the transport fee.");
+    if (typeof fillSalesInsights === "function") fillSalesInsights();
+  }
+}
+
 function updateSalesCsv() {
   const link = $("#sales-csv"); if (!link) return;
   const p = new URLSearchParams({ days: salesRange });
@@ -4151,27 +4212,37 @@ async function fillSalesInsights() {
   const strip = $("#sales-balance-strip");
   if (strip) {
     const b = (d.balances || {})[cur] || {};
-    strip.innerHTML = `<span><strong>Live ${cur === "CFA" ? "FCFA" : "NGN"} bank balance: ${esc(money(b.balance))}</strong> — starting ${esc(money(b.startingBalance))} + pushed profit ${esc(money(b.salesNetProfit))} − expenses ${esc(money(b.manualExpenses))} − charges ${esc(money(b.bankCharges))}. Manage starting balances on the <a href="/admin/accounting">accounting desk</a>.</span>`;
+    strip.innerHTML = `<span><strong>Live ${cur === "CFA" ? "FCFA" : "NGN"} bank balance: ${esc(money(b.balance))}</strong> — starting profit / opening balance ${esc(money(b.startingBalance))} + batch net profit ${esc(money(b.salesNetProfit))} − expenses ${esc(money(b.manualExpenses))} − charges ${esc(money(b.bankCharges))}. Set the opening balance on the <a href="/admin/accounting">accounting desk</a>.</span>`;
   }
 
   const box = $("#sales-batches");
   if (box) {
     const rows = d.batches || [];
     box.innerHTML = rows.length
-      ? tableHTML(["Batch", "Pushed", "Orders", "Revenue", "Supplier", "Transport", "Fee", "Net profit", "Sheet"],
+      ? tableHTML(["Batch", "Pushed", "Orders", "Revenue", "Discounts", "Supplier", "Transport", "Fee", "Net profit", "Sheet"],
           rows.map((b) => `<tr>
             <td><strong>${esc(b.name || b.id)}</strong><br /><small class="muted">${esc(b.currency)}${b.exchangeRate ? ` · rate ${Number(b.exchangeRate)}` : ""}</small></td>
             <td>${esc(String(b.pushedAt || "").slice(0, 10))}</td>
             <td>${Number(b.orderCount || 0)}</td>
             <td>${esc(JA.money(Number(b.revenue || 0), b.currency))}</td>
+            <td>${b.discounts ? esc(JA.money(Number(b.discounts), b.currency)) : "—"}</td>
             <td>${esc(JA.money(Number(b.supplierCosts || 0), b.currency))}</td>
-            <td>${esc(JA.money(Number(b.transport || 0), b.currency))}</td>
+            <td>
+              <input type="number" min="0" step="1" inputmode="numeric" class="sales-batch-transport"
+                     data-batch-transport="${esc(b.id)}"
+                     value="${b.batchTransportFee === null || b.batchTransportFee === undefined ? "" : Number(b.batchTransportFee)}"
+                     placeholder="${Number(b.perOrderTransport || 0)}" title="Batch transportation fee — blank uses the per-order fees (${esc(JA.money(Number(b.perOrderTransport || 0), b.currency))})" />
+              <br /><small class="muted">${b.transportSource === "batch" ? "single batch cost" : "per-order fees"}</small>
+            </td>
             <td>${esc(JA.money(Number(b.transferFee || 0), b.currency))}</td>
             <td><strong>${esc(JA.money(Number(b.netProfit || 0), b.currency))}</strong></td>
             <td>${b.sheet && b.sheet.url ? `<a href="${esc(b.sheet.url)}" target="_blank" rel="noopener">↗ ${esc(b.sheet.tab || "open")}</a>` : "—"}</td>
           </tr>`).join(""))
       : `<p class="empty">No batches pushed in this period yet. Push confirmed orders off the <a href="/admin/accounting">accounting queue</a> and their profit summary appears here.</p>`;
   }
+  box?.querySelectorAll("[data-batch-transport]").forEach((input) => {
+    input.onchange = () => saveBatchTransportFee(input.dataset.batchTransport, input.value);
+  });
   document.querySelectorAll("[data-sales-cur]").forEach((b) => {
     b.onclick = () => {
       salesProfitCurrency = b.dataset.salesCur;
@@ -4274,7 +4345,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=199" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=200" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -4645,7 +4716,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=199", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=200", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

@@ -1624,6 +1624,52 @@ def _supabase_dead_ids():
     return {str(x).strip() for x in ids if str(x or "").strip()}
 
 
+# A product row can be retired in more than one way. Deleted ids are dropped
+# earlier (the durable tombstone lists), but a mirror row, an older bundle or a
+# bulk import can still carry one of these markers - and a soft-deleted or
+# archived product must never reach a storefront listing, the admin catalogue
+# or a marketing broadcast picker. The spellings are all recognised here so the
+# same rule holds on the server and in js/admin.js.
+_DELETED_TRUTHY_FIELDS = ("is_deleted", "isDeleted", "archived", "isArchived",
+                          "is_archived", "trashed", "in_trash")
+_DELETED_VALUE_FIELDS = ("deletedAt", "deleted_at", "archivedAt", "archived_at")
+_DEAD_SOURCES = ("deleted", "replaced")
+_DEAD_STATUSES = ("deleted", "archived")
+
+
+def is_deleted_product(product):
+    """True when a product row is soft-deleted, archived or switched off.
+
+    ``active = false`` is treated as retired exactly like ``online = false``
+    hides a piece from the storefront; either way the row is not sellable and
+    must not be offered to a broadcast.
+    """
+    if not isinstance(product, dict):
+        return True
+    for field in _DELETED_TRUTHY_FIELDS:
+        if product.get(field) is True:
+            return True
+    for field in _DELETED_VALUE_FIELDS:
+        if str(product.get(field) or "").strip():
+            return True
+    if product.get("deleted") is True:
+        return True
+    if product.get("active") is False or product.get("enabled") is False:
+        return True
+    if str(product.get("source") or "").strip().lower() in _DEAD_SOURCES:
+        return True
+    return str(product.get("status") or "").strip().lower() in _DEAD_STATUSES
+
+
+def is_live_product(product):
+    """A product the shop may sell: not deleted/archived and not hidden."""
+    if not isinstance(product, dict):
+        return False
+    if not str(product.get("id") or "").strip():
+        return False
+    return not is_deleted_product(product) and product.get("online") is not False
+
+
 def merged(include_hidden=False):
     """Seed products + every admin edit, minus what was deleted.
 
@@ -1677,6 +1723,11 @@ def merged(include_hidden=False):
     # Permanently removed products never come back - not from a stale mirror,
     # not from a restored backup, not from a bulk re-import.
     products = [p for p in products if not is_permanently_removed(p)]
+
+    # Soft-deleted / archived / inactive rows are gone from EVERY listing,
+    # admin and public alike: a retired piece must not be selectable in the
+    # admin, the marketing broadcast builder or a WhatsApp broadcast.
+    products = [p for p in products if not is_deleted_product(p)]
 
     if not include_hidden:
         products = [p for p in products if p.get("online") is not False]
