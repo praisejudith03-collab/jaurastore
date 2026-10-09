@@ -34,11 +34,12 @@ Rules the import never breaks
   whose id is already known are skipped, so re-running changes nothing.
 * No invented data. A location, cost or date that is not in the source stays
   blank and is reported; only values the source actually holds are mapped.
-* No hardcoded exchange rate. Historical rows have no captured rate, so they
-  use ``accounting.LEGACY_RATE`` - the same baseline the accounting desk uses
-  for pre-feature orders - and ``--rate`` overrides it. The live admin rate is
-  deliberately NOT used, because repricing old orders with today's rate would
-  make historical profit totals drift.
+* No hardcoded exchange rate. The default is the ACTIVE admin-controlled
+  rate (``accounting.current_exchange_rate``), so a sheet imported today is
+  priced the way the shop is priced today. ``--legacy-rate`` pins
+  ``accounting.LEGACY_RATE`` instead - the right choice for orders whose rate
+  was never captured, because repricing them with whatever the rate is later
+  would make historical profit totals drift. ``--rate`` overrides both.
 """
 from __future__ import annotations
 
@@ -770,6 +771,23 @@ def build_order(row, headers, mapping, *, rate, default_currency="NGN",
 
 
 # ----------------------------------------------------------------------- import
+def resolve_rate(explicit="", legacy=False):
+    """The NGN -> CFA rate an import converts with.
+
+    The default is the ACTIVE admin-controlled rate, so a sheet imported today
+    is priced the way the shop is priced today. Pass ``legacy=True`` (or
+    ``--legacy-rate``) to pin ``accounting.LEGACY_RATE`` instead: that is the
+    right choice for orders whose rate was never captured, because repricing
+    them with whatever the rate happens to be later would make historical
+    profit totals drift. An explicit ``rate`` always wins over both.
+    """
+    if str(explicit or "").strip():
+        return accounting.safe_rate(explicit)
+    if legacy:
+        return accounting.LEGACY_RATE
+    return accounting.current_exchange_rate()
+
+
 def _now():
     return datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
@@ -960,6 +978,10 @@ def main(argv=None):
     parser.add_argument("--rate", default="",
                         help="NGN->CFA rate for historical rows (default: the "
                              "accounting legacy baseline).")
+    parser.add_argument("--legacy-rate", action="store_true",
+                        help="Convert with the accounting legacy baseline "
+                             "instead of the live admin rate, so historical "
+                             "profit totals cannot drift.")
     parser.add_argument("--default-currency", default="NGN",
                         choices=("NGN", "CFA"),
                         help="Ledger for rows with no currency marker.")
@@ -973,8 +995,7 @@ def main(argv=None):
                         help="Actually write. Without it nothing is written.")
     args = parser.parse_args(argv)
 
-    rate = (accounting.safe_rate(args.rate) if str(args.rate).strip()
-            else accounting.LEGACY_RATE)
+    rate = resolve_rate(args.rate, legacy=args.legacy_rate)
 
     if args.csv:
         path = args.csv

@@ -21,6 +21,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import threading
 import urllib.error
@@ -237,14 +238,51 @@ def test_a_small_retirement_does_not_trip_the_shrink_guard():
     assert failures == [], failures
 
 
+WRITE_VERBS = ('"PATCH"', '"POST"', '"PUT"', '"DELETE"')
+
+
+def _functions_that_write(source):
+    """Top-level function bodies that issue a non-read request."""
+    return [block for block in re.split(r"\ndef ", source)
+            if any(verb in block for verb in WRITE_VERBS)]
+
+
 def test_the_watchdog_never_writes_to_production():
     """A monitor that repairs its own subject cannot be trusted to report on
-    it - and this one was overruling the owner. Only GET/HEAD may appear."""
+    it - and this one was overruling the owner.
+
+    The watchdog used to PATCH sold-out products back online, overriding the
+    owner's own catalogue decisions. So: it may read anything, and it may
+    persist its OWN measurements, but it must never touch the catalogue -
+    no repairing, no un-hiding, no re-pricing, no write to /rest/v1/products.
+
+    The one write it is allowed is the stock-state upsert, which targets
+    growth_settings (the same key/value map the app reads) so the broadcast
+    out-of-stock guard has yesterday's reading to work from.
+    """
     source = open(os.path.join(ROOT, "tools", "catalog_watchdog.py"),
                   encoding="utf-8").read()
     assert "activate_complete_products" not in source
-    for verb in ('"PATCH"', '"POST"', '"PUT"', '"DELETE"'):
-        assert verb not in source, f"watchdog issues a {verb} request"
+
+    writers = _functions_that_write(source)
+    for block in writers:
+        name = block.split("(", 1)[0].strip()
+        assert "/rest/v1/products" not in block, (
+            f"{name}() writes to the products table - the watchdog measures "
+            f"the catalogue, it never repairs it")
+        assert "growth_settings" in block, (
+            f"{name}() issues a write that is not aimed at growth_settings; "
+            f"the watchdog may only persist its own state")
+        assert "STOCK_STATE_KEY" in block, (
+            f"{name}() writes a growth_settings key that is not the watchdog's "
+            f"own stock state")
+
+    # The permission is not open-ended: exactly one writer exists today, and
+    # it is the documented stock-state upsert. Adding a second one has to be a
+    # deliberate act that re-reads this test.
+    assert len(writers) == 1, (
+        f"expected exactly one writing function, found "
+        f"{[b.split('(', 1)[0].strip() for b in writers]}")
 
 
 def test_watchdog_fails_on_a_duplicated_product_id():

@@ -53,6 +53,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("POST", "/api/admin/accounting/batches"),
     ("PUT", "/api/admin/accounting/batches/<bid>"),
     ("POST", "/api/admin/accounting/push"),
+    ("POST", "/api/admin/accounting/import-historical"),
     ("GET", "/api/admin/accounting/expenses"),
     ("POST", "/api/admin/accounting/expenses"),
     ("DELETE", "/api/admin/accounting/expenses/<eid>"),
@@ -94,6 +95,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("GET", "/api/admin/marketing/broadcast/audience"),
     ("POST", "/api/admin/marketing/broadcast/preview"),
     ("POST", "/api/admin/marketing/broadcast"),
+    ("POST", "/api/admin/broadcast/evening-post"),
     ("GET", "/api/admin/marketing/broadcast/<cid>"),
     ("POST", "/api/admin/marketing/broadcast/<cid>/cancel"),
     # The background task queue (async deletions + broadcasts): list, poll one

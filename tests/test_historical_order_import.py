@@ -20,6 +20,7 @@ behaviour that matters:
 Run with:  python3 -m pytest tests/test_historical_order_import.py -q
 """
 import csv
+from decimal import Decimal
 import json
 import os
 import sys
@@ -264,6 +265,22 @@ def test_location_is_truncated_to_the_ledger_width():
 
 
 # ------------------------------------------------------------------ items/dates
+def test_the_rate_defaults_to_the_active_admin_rate():
+    """The shop's live rate, read from the admin setting - never a literal."""
+    assert imp.resolve_rate() == accounting.current_exchange_rate()
+    assert imp.resolve_rate("") == accounting.current_exchange_rate()
+
+
+def test_legacy_rate_pins_the_historical_baseline_on_request():
+    """For orders whose rate was never captured, so profit cannot drift."""
+    assert imp.resolve_rate(legacy=True) == accounting.LEGACY_RATE
+
+
+def test_an_explicit_rate_beats_both_defaults():
+    assert imp.resolve_rate("0.5") == Decimal("0.5000")
+    assert imp.resolve_rate("0.5", legacy=True) == Decimal("0.5000")
+
+
 def test_items_are_split_and_quantities_parsed():
     items = imp.parse_items("2x Ankara Gown, 1x Head Wrap, 3 bags")
     assert [i["qty"] for i in items] == [2, 1, 3]

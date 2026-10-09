@@ -5971,6 +5971,17 @@ body[data-page="admin"] { background: #f8f9fc !important; }
 .mk-campaign-form label { display: grid; gap: 5px; font-size: 13px; font-weight: 600; }
 .mk-campaign-form input, .mk-campaign-form select, .mk-campaign-form textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--line, #e2e2e2); background: #fff; font: inherit; font-weight: 400; }
 .mk-campaign-form textarea { resize: vertical; min-height: 130px; line-height: 1.5; }
+
+/* Evening broadcast builder: one click to generate the in-stock post, one
+   click to copy it. The textarea is monospace and pre-wrapped so the owner
+   can eyeball exactly what Telegram / WhatsApp will receive. */
+.mk-evening-form { display: grid; gap: 12px; }
+.mk-evening-form label { display: grid; gap: 5px; font-size: 13px; font-weight: 600; }
+.mk-evening-form input { width: 100%; padding: 9px 10px; border: 1px solid var(--line, #e2e2e2); background: #fff; font: inherit; font-weight: 400; }
+.mk-evening-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.mk-evening-actions .btn { min-height: 44px; }
+.mk-evening-out { width: 100%; margin-top: 10px; padding: 12px; border: 1px solid var(--line, #e2e2e2); border-radius: 10px; background: #fbfaf8; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.55; resize: vertical; white-space: pre-wrap; }
+@media (max-width: 640px) { .mk-evening-actions .btn { flex: 1 1 100%; } }
 /* Compact, collapsible "Products to feature" dropdown (owner request
    2026-10-05). The picker is CLOSED by default, opens into one scrollable
    panel, and never paints every catalogue row at once - it pages the list. */

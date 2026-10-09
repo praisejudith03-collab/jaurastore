@@ -88,6 +88,10 @@ MISSING_STREAK_RUNS = 2
 # growth_settings. Keep in step with supabase_store.DELETED_IDS_KEY: an id on
 # this list is an intentional deletion, never a "missing product" defect.
 DELETED_IDS_KEY = "deleted_product_ids_json"
+# The watchdog's durable stock reading. Broadcasts read this so a variant the
+# watchdog watched hit zero is never posted, even from stale frontend state.
+STOCK_STATE_KEY = "watchdog_stock_state_json"
+STOCK_STATE_PATH = os.environ.get("WATCHDOG_STOCK_STATE", ".watchdog-stock.json")
 
 # Rows whose `source` marks a tombstone (a soft delete or a superseded bulk
 # import) are not live products - the app filters them too (supabase_store).
@@ -306,8 +310,12 @@ def fetch_db_rows(supabase_url, service_key):
     Independent of the app's supabase_store client on purpose: if the app's
     read path ever loses rows, this measurement still sees the whole table.
     """
+    # slug / stock_quantity / "optionStock" are what the stock guard measures;
+    # camelCase must be quoted or Postgres folds it to lowercase (PGRST204).
     url = (supabase_url.rstrip("/") +
-           "/rest/v1/products?select=id,online,source,sku,name,category,priceCfa,priceNgn,image,image_url,images&order=id.asc")
+           "/rest/v1/products?select=id,online,source,sku,name,category,slug,"
+           "priceCfa,priceNgn,image,image_url,images,stock_quantity,"
+           '"optionStock"&order=id.asc')
     base_headers = {
         "apikey": service_key,
         "Authorization": "Bearer " + service_key,
@@ -387,6 +395,222 @@ def fetch_deleted_ids(supabase_url, service_key):
         return {str(x).strip() for x in data if str(x or "").strip()}
     except Exception:                              # noqa: BLE001 - tolerated
         return None
+
+
+def option_map(row):
+    """``{option label: quantity}`` from one products row, or ``{}``.
+
+    Tolerates both the jsonb object PostgREST returns and the legacy JSON
+    string some rows still carry. Unreadable quantities read as 0, which is the
+    safe direction: an unreadable number must never be advertised as stock.
+    """
+    raw = None
+    if isinstance(row, dict):
+        raw = row.get("optionStock")
+        if raw is None:
+            raw = row.get("option_stock")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for label, qty in raw.items():
+        label = str(label or "").strip()
+        if not label:
+            continue
+        try:
+            number = max(0, int(float(qty)))
+        except (TypeError, ValueError):
+            number = 0
+        out[label] = number
+    return out
+
+
+def row_quantity(row):
+    """A row's own quantity (used when it has no variants)."""
+    if not isinstance(row, dict):
+        return 0
+    for key in ("stock_quantity", "stockQuantity", "stock"):
+        raw = row.get(key)
+        if raw is not None and str(raw).strip() != "":
+            try:
+                return max(0, int(float(raw)))
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
+def stock_snapshot(db_rows):
+    """The watchdog's own reading of stock, per product and per variant.
+
+    Independent of the app's cache by design - this is the measurement the
+    broadcast guard trusts over any frontend state.
+    """
+    snapshot = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "products": {}, "outOfStock": []}
+    for row in db_rows or []:
+        if not isinstance(row, dict):
+            continue
+        pid = str(row.get("id") or "").strip()
+        if not pid:
+            continue
+        options = option_map(row)
+        if options:
+            total = sum(options.values())
+        else:
+            total = row_quantity(row)
+        snapshot["products"][pid] = {
+            "sku": str(row.get("sku") or "").strip(),
+            "name": str(row.get("name") or "").strip(),
+            "total": total,
+            "options": options,
+        }
+        # A zero-stock product has no variants to name: block the whole thing.
+        if total <= 0:
+            snapshot["outOfStock"].append(pid + "::")
+            continue
+        for label, qty in options.items():
+            if qty <= 0:
+                snapshot["outOfStock"].append(
+                    pid + "::" + str(label).strip().casefold())
+    return snapshot
+
+
+def diff_stock(previous, current):
+    """In-Stock -> Out-of-Stock (and back) transitions between two snapshots.
+
+    Returns a list of ``{"id", "sku", "name", "option", "kind", "from",
+    "to"}`` dicts, newest first is not guaranteed - callers sort if they care.
+    A brand-new product is not a transition; only a change from a positive
+    quantity to zero (or zero to positive) is reported, so the owner hears
+    about the moment a colour died rather than about every quiet restock.
+    """
+    before = ((previous or {}).get("products") or {})
+    after = ((current or {}).get("products") or {})
+    if not isinstance(before, dict):
+        before = {}
+    if not isinstance(after, dict):
+        after = {}
+    transitions = []
+    for pid, now in after.items():
+        then = before.get(pid) or {}
+        now_options = (now or {}).get("options") or {}
+        then_options = (then or {}).get("options") or {}
+        meta = {"id": pid, "sku": (now or {}).get("sku") or "",
+                "name": (now or {}).get("name") or ""}
+        if now_options:
+            for label, qty in now_options.items():
+                was = then_options.get(label)
+                if was is None:
+                    continue          # a new option is not a transition
+                if int(was or 0) > 0 and int(qty or 0) <= 0:
+                    transitions.append(dict(meta, option=label,
+                                            kind="out_of_stock",
+                                            **{"from": int(was or 0),
+                                               "to": int(qty or 0)}))
+                elif int(was or 0) <= 0 and int(qty or 0) > 0:
+                    transitions.append(dict(meta, option=label,
+                                            kind="restocked",
+                                            **{"from": int(was or 0),
+                                               "to": int(qty or 0)}))
+            continue
+        was = then.get("total")
+        if was is None:
+            continue
+        if int(was or 0) > 0 and int(now.get("total") or 0) <= 0:
+            transitions.append(dict(meta, option="", kind="out_of_stock",
+                                    **{"from": int(was or 0), "to": 0}))
+        elif int(was or 0) <= 0 and int(now.get("total") or 0) > 0:
+            transitions.append(dict(meta, option="", kind="restocked",
+                                    **{"from": int(was or 0),
+                                       "to": int(now.get("total") or 0)}))
+    for pid, then in before.items():
+        # A product that vanished from the table entirely is the DB check's
+        # job (MISSING); disappearing stock is not a stock transition.
+        if pid not in after:
+            continue
+    return transitions
+
+
+def stock_state_path(path=None):
+    return path or STOCK_STATE_PATH
+
+
+def load_stock_state(path=None):
+    """Last run's stock reading. Absent or corrupt state is not an error."""
+    try:
+        with open(stock_state_path(path), encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_stock_state(snapshot, path=None):
+    """Persist the stock snapshot. Never raises."""
+    try:
+        with open(stock_state_path(path), "w", encoding="utf-8") as fh:
+            json.dump(snapshot, fh)
+        return True
+    except OSError:                                   # pragma: no cover
+        return False
+
+
+def fetch_stock_state(supabase_url, service_key):
+    """The durable stock reading from growth_settings, or ``{}``.
+
+    ``{}`` means "nothing measured yet", which the broadcast guard treats as
+    "block nothing" - it fails open to the database rather than to a guess.
+    """
+    if not supabase_url or not service_key:
+        return {}
+    url = (supabase_url.rstrip("/") + "/rest/v1/growth_settings"
+           "?select=value&key=eq." + urllib.parse.quote(STOCK_STATE_KEY))
+    try:
+        _status, _hdrs, body = _get_with_retries(url, headers={
+            "apikey": service_key,
+            "Authorization": "Bearer " + service_key,
+        })
+        rows = json.loads(body.decode("utf-8"))
+        if not isinstance(rows, list) or not rows:
+            return {}
+        raw = (rows[0] or {}).get("value")
+        if raw is None or raw == "":
+            return {}
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        return data if isinstance(data, dict) else {}
+    except Exception:                                  # noqa: BLE001
+        return {}
+
+
+def save_stock_state_remote(snapshot, supabase_url, service_key):
+    """Upsert the stock snapshot into growth_settings. Never raises.
+
+    This mirrors how the deleted-ids list is stored, so the app and the
+    watchdog read the same key/value map and "out of stock" means one thing.
+    """
+    if not supabase_url or not service_key:
+        return False
+    url = supabase_url.rstrip("/") + "/rest/v1/growth_settings"
+    payload = json.dumps({"key": STOCK_STATE_KEY,
+                          "value": json.dumps(snapshot, ensure_ascii=False)})
+    try:
+        _status, _hdrs, _body = _request(
+            url, method="POST",
+            headers={
+                "apikey": service_key,
+                "Authorization": "Bearer " + service_key,
+                "Content-Type": "application/json",
+                # Upsert on conflict so a re-run replaces rather than errors.
+                "Prefer": "resolution=merge-duplicates",
+            },
+            data=payload.encode("utf-8"))
+        return True
+    except Exception:                                  # noqa: BLE001
+        return False
 
 
 def load_state(path=None):
@@ -648,6 +872,29 @@ def main():
                    not in TOMBSTONE_SOURCES
                    and (row or {}).get("online") is not False)
     save_state(live_now, run_state.get("missingStreaks"))
+
+    # --- stock guard -------------------------------------------------------
+    # Measured every run so the broadcast blocklist is never older than one
+    # watchdog cycle. A stock outage is reported but does not fail the run:
+    # the catalogue comparison above is still the watchdog's reason to exist.
+    try:
+        snapshot = stock_snapshot(db_rows)
+        previous_stock = (fetch_stock_state(supabase_url, service_key)
+                          or load_stock_state())
+        save_stock_state(snapshot)
+        save_stock_state_remote(snapshot, supabase_url, service_key)
+        transitions = [t for t in diff_stock(previous_stock, snapshot)
+                       if t.get("kind") == "out_of_stock"]
+        if transitions:
+            print(f"STOCK  {len(transitions)} item(s) went out of stock:")
+            for item in transitions[:25]:
+                label = item.get("option") or "(whole product)"
+                print(f"STOCK  out: {item.get('name') or item.get('id')} "
+                      f"[{label}] {item.get('sku') or item.get('id')}")
+        else:
+            print("STOCK  no new out-of-stock transitions")
+    except Exception as exc:                          # noqa: BLE001
+        print(f"WARN  stock guard could not run: {exc}")
 
     if failures:
         for line in failures:

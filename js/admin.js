@@ -3224,6 +3224,103 @@ async function fillBackgroundJobs() {
   await load();
 }
 
+/* ------------------------------------------------- evening broadcast post
+ *
+ * Builds the daily Telegram / WhatsApp drop from LIVE database stock rather
+ * than from whatever this browser happens to have cached: the server groups
+ * in-stock products by category, lists only verified-available colours, prices
+ * them in Naira and F CFA, and appends the deep link to each product.
+ *
+ * The inventory watchdog has the last word. A colour it watched sell out is
+ * excluded here even if this tab still shows it as available, because the
+ * server cross-checks its own rows against the watchdog's durable stock
+ * reading before replying. One click to build, one click to copy.
+ */
+let eveningPost = "";
+
+function eveningPostCard() {
+  return `<div class="admin-card" id="mk-evening-card">
+    <h3 class="admin-h">Generate evening broadcast</h3>
+    <p class="admin-note">Builds a Telegram / WhatsApp post from live database stock — grouped by category, only verified in-stock colours, prices in Naira and F CFA, with a direct link to every product. The inventory watchdog has the last word: a colour it watched sell out is left out even if this page still shows it as available.</p>
+    <div class="mk-evening-form">
+      <label>Title <input id="mk-evening-title" maxlength="120" value="Jaura Store — Evening Drop" /></label>
+      <label>Footer <input id="mk-evening-footer" maxlength="300" value="Tap a link to order. Prices shown in Naira and F CFA." /></label>
+      <div class="mk-evening-actions">
+        <button type="button" class="btn" id="mk-evening-generate">Generate evening broadcast</button>
+        <button type="button" class="btn btn-line" id="mk-evening-copy" disabled>Copy to clipboard</button>
+      </div>
+    </div>
+    <p class="admin-note" id="mk-evening-status" role="status" aria-live="polite"></p>
+    <p class="admin-note" id="mk-evening-meta" hidden></p>
+    <textarea id="mk-evening-out" class="mk-evening-out" rows="14" readonly hidden></textarea>
+  </div>`;
+}
+
+async function generateEveningPost() {
+  const api = (path, opts) => window.JA_NET.api(path, opts);
+  const btn = $("#mk-evening-generate");
+  const status = $("#mk-evening-status");
+  const meta = $("#mk-evening-meta");
+  const out = $("#mk-evening-out");
+  const copyBtn = $("#mk-evening-copy");
+  if (btn) { btn.disabled = true; btn.textContent = "Generating…"; }
+  if (status) status.textContent = "Reading live stock…";
+  try {
+    const d = await api("api/admin/broadcast/evening-post", {
+      method: "POST",
+      json: {
+        title: ($("#mk-evening-title")?.value || "").trim(),
+        footer: ($("#mk-evening-footer")?.value || "").trim(),
+      },
+    });
+    if (!d || d.ok === false) throw new Error((d && d.error) || "Could not generate the post.");
+    eveningPost = String(d.text || d.plain || "");
+    if (out) { out.value = eveningPost; out.hidden = !eveningPost; }
+    if (copyBtn) copyBtn.disabled = !eveningPost;
+    const count = Number(d.productCount || 0);
+    const options = Number(d.optionCount || 0);
+    if (meta) {
+      meta.textContent = `${count} product${count === 1 ? "" : "s"} · ${options} in-stock option${options === 1 ? "" : "s"} · ${(d.categories || []).length} categor${(d.categories || []).length === 1 ? "y" : "ies"} · rate ${d.rate}${d.skippedCount ? ` · ${d.skippedCount} skipped as out of stock or hidden` : ""}`;
+      meta.hidden = false;
+    }
+    if (status) {
+      status.textContent = count
+        ? "Ready. Review it, then copy and paste into your channel."
+        : "Everything is out of stock right now — there is nothing safe to post.";
+    }
+  } catch (err) {
+    if (status) status.textContent = err.message || "Could not generate the post.";
+    JA.toast(err.message || "Could not generate the post.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Generate evening broadcast"; }
+  }
+}
+
+async function copyEveningPost() {
+  if (!eveningPost) { JA.toast("Generate the post first."); return; }
+  try {
+    await navigator.clipboard.writeText(eveningPost);
+    JA.toast("Evening broadcast copied.");
+    return;
+  } catch (e) { /* fall through to the manual selection below */ }
+  // http:// or a denied permission: select the text so Ctrl+C still works.
+  const out = $("#mk-evening-out");
+  if (out) {
+    out.hidden = false;
+    out.focus();
+    out.select();
+    try {
+      if (document.execCommand("copy")) { JA.toast("Evening broadcast copied."); return; }
+    } catch (e) { /* nothing else to try */ }
+  }
+  JA.toast("Copy it manually — the post is selected below.");
+}
+
+function wireEveningPost() {
+  $("#mk-evening-generate")?.addEventListener("click", generateEveningPost);
+  $("#mk-evening-copy")?.addEventListener("click", copyEveningPost);
+}
+
 function marketingPanel() {
   return `<div class="admin-card mk-campaign-card" id="mk-campaign-card">
     <h3 class="admin-h">Send campaign</h3>
@@ -3245,6 +3342,7 @@ function marketingPanel() {
     </form>
     <h4 class="mk-campaign-log-title">Past campaigns</h4><div class="adx-filter-bar mk-campaign-filters" aria-label="Filter campaigns"><input id="marketing-search" type="search" placeholder="Search campaigns…" autocomplete="off" value="${esc(marketingSearch)}" /><label>From <input id="marketing-from" type="date" value="${esc(marketingFrom)}" /></label><label>To <input id="marketing-to" type="date" value="${esc(marketingTo)}" /></label><button type="button" class="btn btn-line" id="marketing-filter-clear">Clear</button></div><div id="mk-campaign-log"><p class="empty">Loading…</p></div>
   </div>
+  ${eveningPostCard()}
   ${broadcastHubCard()}
   ${backgroundJobsCard()}
   ${broadcastFeedCardHTML()}
@@ -3905,6 +4003,7 @@ function bindBroadcastFeed() {
 }
 async function fillMarketing() {
   const api = (path, opts) => window.JA_NET.api(path, opts);
+  try { wireEveningPost(); } catch (err) {}
   try { await fillBroadcastHub(); } catch (err) {}
   try { await fillBackgroundJobs(); } catch (err) {}
   const num = (v) => esc(String(v == null ? "" : v));

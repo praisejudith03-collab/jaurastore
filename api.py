@@ -1,5 +1,6 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
-import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, re, threading, time, gc
+import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, \
+       re, threading, time, gc, tempfile, uuid
 from functools import wraps
 from flask import (Blueprint, request, jsonify, session, current_app, make_response,
                    redirect, g, has_request_context)
@@ -3647,6 +3648,155 @@ def admin_accounting_expenses():
     return jsonify(ok=True, expenses=accounting_mod.clean_expenses(rows))
 
 
+# A historical sheet is small; refuse anything huge rather than parse it and
+# half-import it. 8 MB is far above any real export of past orders.
+_HISTORICAL_IMPORT_MAX_BYTES = 8 * 1024 * 1024
+
+
+@api.post("/admin/accounting/import-historical")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_import_historical():
+    """Dry-run (or stage) a historical orders CSV / XLSX upload.
+
+    Rows are mapped onto the canonical ledger layout - currency separation,
+    Location / Destination, item unit costs and the active conversion rate -
+    and land in the staging queue, never in the live ledgers. Dry run unless
+    ``confirm`` is true, so the owner reads the report before anything writes.
+    """
+    import import_historical_orders as importer
+
+    upload = request.files.get("file") if request.files else None
+    text = ""
+    name = ""
+    if upload is not None:
+        name = str(upload.filename or "").strip()
+        data = upload.read()
+        # An oversized sheet is refused outright rather than parsed and
+        # half-imported.
+        if len(data) > _HISTORICAL_IMPORT_MAX_BYTES:
+            return jsonify(ok=False, error=(
+                f"That file is too large (limit "
+                f"{_HISTORICAL_IMPORT_MAX_BYTES // (1024 * 1024)} MB).")), 400
+        ext = os.path.splitext(name)[1].casefold()
+        if ext in (".xlsx", ".xlsm"):
+            path = os.path.join(tempfile.gettempdir(),
+                                "jaura-import-" + str(uuid.uuid4().hex) + ext)
+            with open(path, "wb") as handle:
+                handle.write(data)
+            try:
+                headers, rows = importer.read_table(path)
+            finally:
+                try:
+                    os.unlink(path)
+                except OSError:                          # pragma: no cover
+                    pass
+        else:
+            try:
+                text = data.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                return jsonify(ok=False,
+                               error="That file is not UTF-8 encoded CSV."), 400
+            headers, rows = importer._split_table(
+                list(csv.reader(io.StringIO(text))))
+    else:
+        d = request.get_json(silent=True) or {}
+        if not isinstance(d, dict):
+            d = {}
+        text = str(d.get("csv") or "")
+        if not text.strip():
+            return jsonify(ok=False,
+                           error="Attach a CSV/XLSX file or send CSV text."), 400
+        headers, rows = importer._split_table(
+            list(csv.reader(io.StringIO(text))))
+        confirm = bool(d.get("confirm"))
+
+    if upload is not None:
+        d = request.form if request.form else {}
+        confirm = str((d.get("confirm") or "")).strip().casefold() in (
+            "1", "true", "yes", "on")
+
+    if not rows:
+        return jsonify(ok=False, error="No data rows found in that file."), 400
+
+    rate = None
+    raw_rate = (d.get("rate") if isinstance(d, dict) else None) or ""
+    if str(raw_rate).strip():
+        rate = accounting_mod.safe_rate(raw_rate)
+    elif str((d.get("legacyRate") if isinstance(d, dict) else None)
+             or "").strip().casefold() in ("1", "true", "yes", "on"):
+        rate = accounting_mod.LEGACY_RATE
+    if rate is None:
+        rate = accounting_mod.current_exchange_rate()
+
+    default_currency = accounting_mod.normalize_currency(
+        (d.get("defaultCurrency") if isinstance(d, dict) else None)) or "NGN"
+
+    result = importer.import_rows(headers, rows, rate=rate,
+                                  default_currency=default_currency)
+    payload = {
+        "ok": True,
+        "dryRun": not confirm,
+        "rate": float(rate),
+        "rows": len(result["ngn"]) + len(result["cfa"]),
+        "ngnCount": len(result["ngn"]),
+        "cfaCount": len(result["cfa"]),
+        "skipped": [{"row": pos, "reason": reason}
+                    for pos, reason in result["skipped"]],
+        "warnings": [{"id": oid, "warning": warning}
+                     for oid, warning in result["warnings"]][:50],
+        "mapping": {field: str((result["headers"] or [""])[index:index + 1] or [""])[1:-1]
+                    for field, index in (result["mapping"] or {}).items()},
+        "preview": [_preview_row(order, info) for order, info
+                    in (result["ngn"] + result["cfa"])[:12]],
+    }
+
+    if not confirm:
+        payload["message"] = (
+            f"Dry run: {payload['rows']} order(s) would be staged. "
+            f"Review, then run again with confirm to write.")
+        return jsonify(**payload)
+
+    from config import Config
+    if not (Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY):
+        return jsonify(ok=False, error=("Supabase is not configured, so "
+                                        "nothing can be staged.")), 503
+    wanted = [order for group in (result["ngn"], result["cfa"])
+              for order, _ in group]
+    try:
+        already = importer.existing_ids([order["id"] for order in wanted])
+    except Exception:
+        return jsonify(ok=False,
+                       error="Could not read existing orders."), 503
+    fresh = [order for order in wanted if order["id"] not in already]
+    try:
+        staged = importer.stage_orders(fresh)
+    except Exception:
+        return jsonify(ok=False, error="Staging failed; nothing was written."), 503
+    payload["staged"] = staged
+    payload["skippedExisting"] = len(already)
+    payload["message"] = (
+        f"Staged {staged} historical order(s) in the queue. "
+        f"Review them on the accounting desk before pushing.")
+    return jsonify(**payload)
+
+
+def _preview_row(order, info):
+    """One compact, human-readable row for the import report."""
+    return {
+        "id": order.get("id"),
+        "date": str(info.get("date") or "")[:10],
+        "customer": info.get("customer") or "",
+        "currency": info.get("currency") or "",
+        "currencyHow": info.get("currencyHow") or "",
+        "location": info.get("location") or "",
+        "revenue": info.get("revenue") or 0,
+        "supplierCostNgn": info.get("supplierCostNgn") or 0,
+        "supplierCostCfa": info.get("supplierCostCfa") or 0,
+        "transport": info.get("transport") or 0,
+    }
+
+
 @api.post("/admin/accounting/expenses")
 @authmod.require_admin
 @sec.require_csrf
@@ -7135,6 +7285,48 @@ def admin_broadcast_preview():
     return jsonify(ok=True, subject=subject, html=html,
                    recipients=_marketing_recipient_count(),
                    preview=True, dryRun=True)
+
+
+@api.post("/admin/broadcast/evening-post")
+@authmod.require_admin
+@sec.require_csrf
+def admin_broadcast_evening_post():
+    """Generate the evening in-stock post for Telegram / WhatsApp.
+
+    Reads live database rows (never a browser's cached catalogue) and cross-
+    checks them against the watchdog's own durable stock reading, so a colour
+    the watchdog watched sell out is left out even when a stale admin tab or
+    CDN copy still shows it as available.
+
+    Nothing is sent and nothing is written: the endpoint only returns copy the
+    owner can read, edit and paste into a channel.
+    """
+    import broadcast_posts
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        d = {}
+    title = sec.clean(d.get("title"), 120, allow_newlines=False) \
+        or broadcast_posts.DEFAULT_TITLE
+    footer = sec.clean(d.get("footer"), 300, allow_newlines=False)
+    if not str(footer or "").strip():
+        footer = broadcast_posts.DEFAULT_FOOTER
+    try:
+        limit = int(d.get("limit") or 0)
+    except (TypeError, ValueError):
+        limit = 0
+    if limit <= 0 or limit > broadcast_posts.MAX_PRODUCTS:
+        limit = broadcast_posts.MAX_PRODUCTS
+
+    # The watchdog's measurement wins over any cached frontend state.
+    out_of_stock = broadcast_posts.watchdog_out_of_stock()
+    # include_hidden so the report can say *why* a product was left out
+    # ("hidden") instead of silently dropping it.
+    products = catalog_mod.merged(include_hidden=True)
+    post = broadcast_posts.build_post(products, oos=out_of_stock, title=title,
+                                      footer=footer, max_products=limit)
+    return jsonify(ok=True, **post,
+                   watchdogBlocked=len(out_of_stock),
+                   watchdogMeasured=bool(out_of_stock))
 
 
 def _broadcast_products(raw_ids):
