@@ -913,7 +913,7 @@ def _append_rows_to(spreadsheet_id, tab, rows):
     """Append whole rows under a tab, below whatever is already there."""
     if not rows:
         return
-    range_name = f"'{tab}'!A:K"
+    range_name = f"'{tab}'!A:L"
     encoded_range = urllib.parse.quote(range_name, safe="!':")
     url = (f"{SHEETS_API}/spreadsheets/{urllib.parse.quote(spreadsheet_id, safe='')}"
            f"/values/{encoded_range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS")
@@ -921,8 +921,8 @@ def _append_rows_to(spreadsheet_id, tab, rows):
 
 
 def _update_row_range(spreadsheet_id, tab, position, row):
-    """Overwrite one existing row (A..K) in place."""
-    range_name = f"'{tab}'!A{position}:K{position}"
+    """Overwrite one existing row (A..L) in place."""
+    range_name = f"'{tab}'!A{position}:L{position}"
     encoded_range = urllib.parse.quote(range_name, safe="!':")
     url = (f"{SHEETS_API}/spreadsheets/{urllib.parse.quote(spreadsheet_id, safe='')}"
            f"/values/{encoded_range}?valueInputOption=RAW")
@@ -935,7 +935,7 @@ def _existing_order_rows(spreadsheet_id):
 
 def _existing_order_rows_in(spreadsheet_id, tab):
     """order id -> row position inside one tab, for idempotent upserts."""
-    range_name = f"'{tab}'!A:K"
+    range_name = f"'{tab}'!A:L"
     values = _values_batch_get(spreadsheet_id, [range_name])[0]
     headers = _header_map(values)
     index = headers.get("order id", 1)
