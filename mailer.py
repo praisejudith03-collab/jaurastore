@@ -133,21 +133,25 @@ def _split_address(value):
 
 def _http_post_json(url, headers, payload):
     """POST JSON, return (ok, detail). Never raises."""
-    import urllib.request, urllib.error
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode("utf-8"), method="POST",
-        headers={**headers, "Content-Type": "application/json",
-                 "User-Agent": "jaurastore-mailer"})
+    import urllib.error
+    import security
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            body = (r.read() or b"").decode("utf-8", "replace")[:300]
-            return 200 <= r.status < 300, body or f"HTTP {r.status}"
+        # SSRF-guarded POST (https only, public IPs, size/time caps).
+        raw = security.safe_fetch(
+            url, data=json.dumps(payload).encode("utf-8"), method="POST",
+            timeout=TIMEOUT, max_bytes=4096,
+            headers={**headers, "Content-Type": "application/json",
+                     "User-Agent": "jaurastore-mailer"})
+        body = raw.decode("utf-8", "replace")[:300]
+        return True, body
     except urllib.error.HTTPError as exc:
         try:
             body = (exc.read() or b"").decode("utf-8", "replace")[:300]
         except Exception:
             body = ""
         return False, f"HTTP {exc.code}: {body}".strip()
+    except Exception as exc:
+        return False, str(exc)[:300]
     except Exception as exc:
         return False, str(exc)[:300]
 

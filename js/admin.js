@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=201" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=202" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -921,14 +921,36 @@ function syncOptionStockTotals() {
  * currency.py, mirrored by JA.toCfa). Printing the derivation next to the
  * field means "the card shows 800 and I typed 1 800" is answered on the spot
  * instead of looking like a rounding bug. */
+/* The one live exchange rate the admin desk converts with: the admin-set
+ * growth setting, served by GET /api/site (cfaRate) and the admin
+ * growth-settings endpoint. Never a hardcoded literal - a stale bundle must
+ * still convert at the rate the owner actually set. */
+function liveFxRate() {
+  const fromSite = Number(((JA.getSiteConfig && JA.getSiteConfig()) || {}).cfaRate);
+  if (fromSite > 0) return fromSite;
+  const fromSettings = Number(JA.settings && JA.settings().rate);
+  if (fromSettings > 0) return fromSettings;
+  // `settingsFxRate` is a module-level binding (declared next to
+  // bindExchangeRate); typeof keeps this safe when the function is extracted
+  // on its own (the editor test harness) where that binding is absent.
+  const saved = typeof settingsFxRate === "undefined" ? 0 : Number(settingsFxRate);
+  return saved > 0 ? saved : 0;
+}
+function toCfaLive(ngn) {
+  const rate = liveFxRate();
+  if (!(rate > 0)) return 0;
+  return Math.ceil((Number(ngn || 0) * rate) / 50) * 50;
+}
+
 function cfaProof(ngn) {
   const amount = Number(ngn) || 0;
   if (!(amount > 0)) return "CFA price will be calculated from the Naira price.";
-  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
+  const rate = liveFxRate();
+  const toCfa = JA.toCfa || toCfaLive;
   const cfa = toCfa(amount);
-  const converted = Math.ceil(amount * 0.44);
+  const converted = Math.ceil(amount * rate);
   const money = JA.money ? JA.money(cfa, "CFA") : `${cfa} F CFA`;
-  return `CFA price: ${money}. ${amount} NGN x 0.44 = ${converted} F CFA, rounded up to the nearest 50.`;
+  return `CFA price: ${money}. ${amount} NGN × ${rate} = ${converted} F CFA, rounded up to the nearest 50.`;
 }
 /* What the buyer reads where the custom note is asked for. Shown under the
  * field while the owner types, so the prompt can be read the way a customer
@@ -1186,7 +1208,7 @@ async function handleProductSubmit(e, existing) {
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
   const priceNgn = Math.max(0, num("priceNgn") || 0);
   if (!(priceNgn > 0)) { JA.toast("Enter the Naira price."); return; }
-  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
+  const toCfa = JA.toCfa || toCfaLive;
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
   // Never let a save blank a category the row already has. The select is
   // populated from the category table, and that table can be empty or
@@ -1518,7 +1540,7 @@ function renderProdGrid() {
     const rangeText = range && JA.moneyRange ? JA.moneyRange(range, "NGN") : "";
     const ngn = rangeText ? rangeText : (ngnNow > 0 ? JA.money(ngnNow, "NGN") : "");
     const ngnStrike = !rangeText && ngnWas > ngnNow ? JA.money(ngnWas, "NGN") : "";
-    const cfaNowN = ngnNow > 0 ? (JA.toCfa ? JA.toCfa(ngnNow) : Math.ceil((ngnNow * 0.44) / 50) * 50) : (Number(p.priceCfa) || 0);
+    const cfaNowN = ngnNow > 0 ? (JA.toCfa ? JA.toCfa(ngnNow) : toCfaLive(ngnNow)) : (Number(p.priceCfa) || 0);
     const cfaNow = JA.money(cfaNowN, "CFA");
     const stockN = Number(p.stock) || 0;
     const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN<= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;
@@ -2901,7 +2923,7 @@ function marketingCurrency() {
 function marketingPickerPrice(p) {
   const ngn = Number((p && p.priceNgn) || 0);
   if (marketingCurrency() === "CFA") {
-    const cfa = JA.toCfa ? JA.toCfa(ngn) : Math.ceil((ngn * 0.44) / 50) * 50;
+    const cfa = JA.toCfa ? JA.toCfa(ngn) : toCfaLive(ngn);
     return JA.money(cfa, "CFA");
   }
   return JA.money(ngn, "NGN");
@@ -3202,6 +3224,103 @@ async function fillBackgroundJobs() {
   await load();
 }
 
+/* ------------------------------------------------- evening broadcast post
+ *
+ * Builds the daily Telegram / WhatsApp drop from LIVE database stock rather
+ * than from whatever this browser happens to have cached: the server groups
+ * in-stock products by category, lists only verified-available colours, prices
+ * them in Naira and F CFA, and appends the deep link to each product.
+ *
+ * The inventory watchdog has the last word. A colour it watched sell out is
+ * excluded here even if this tab still shows it as available, because the
+ * server cross-checks its own rows against the watchdog's durable stock
+ * reading before replying. One click to build, one click to copy.
+ */
+let eveningPost = "";
+
+function eveningPostCard() {
+  return `<div class="admin-card" id="mk-evening-card">
+    <h3 class="admin-h">Generate evening broadcast</h3>
+    <p class="admin-note">Builds a Telegram / WhatsApp post from live database stock — grouped by category, only verified in-stock colours, prices in Naira and F CFA, with a direct link to every product. The inventory watchdog has the last word: a colour it watched sell out is left out even if this page still shows it as available.</p>
+    <div class="mk-evening-form">
+      <label>Title <input id="mk-evening-title" maxlength="120" value="Jaura Store — Evening Drop" /></label>
+      <label>Footer <input id="mk-evening-footer" maxlength="300" value="Tap a link to order. Prices shown in Naira and F CFA." /></label>
+      <div class="mk-evening-actions">
+        <button type="button" class="btn" id="mk-evening-generate">Generate evening broadcast</button>
+        <button type="button" class="btn btn-line" id="mk-evening-copy" disabled>Copy to clipboard</button>
+      </div>
+    </div>
+    <p class="admin-note" id="mk-evening-status" role="status" aria-live="polite"></p>
+    <p class="admin-note" id="mk-evening-meta" hidden></p>
+    <textarea id="mk-evening-out" class="mk-evening-out" rows="14" readonly hidden></textarea>
+  </div>`;
+}
+
+async function generateEveningPost() {
+  const api = (path, opts) => window.JA_NET.api(path, opts);
+  const btn = $("#mk-evening-generate");
+  const status = $("#mk-evening-status");
+  const meta = $("#mk-evening-meta");
+  const out = $("#mk-evening-out");
+  const copyBtn = $("#mk-evening-copy");
+  if (btn) { btn.disabled = true; btn.textContent = "Generating…"; }
+  if (status) status.textContent = "Reading live stock…";
+  try {
+    const d = await api("api/admin/broadcast/evening-post", {
+      method: "POST",
+      json: {
+        title: ($("#mk-evening-title")?.value || "").trim(),
+        footer: ($("#mk-evening-footer")?.value || "").trim(),
+      },
+    });
+    if (!d || d.ok === false) throw new Error((d && d.error) || "Could not generate the post.");
+    eveningPost = String(d.text || d.plain || "");
+    if (out) { out.value = eveningPost; out.hidden = !eveningPost; }
+    if (copyBtn) copyBtn.disabled = !eveningPost;
+    const count = Number(d.productCount || 0);
+    const options = Number(d.optionCount || 0);
+    if (meta) {
+      meta.textContent = `${count} product${count === 1 ? "" : "s"} · ${options} in-stock option${options === 1 ? "" : "s"} · ${(d.categories || []).length} categor${(d.categories || []).length === 1 ? "y" : "ies"} · rate ${d.rate}${d.skippedCount ? ` · ${d.skippedCount} skipped as out of stock or hidden` : ""}`;
+      meta.hidden = false;
+    }
+    if (status) {
+      status.textContent = count
+        ? "Ready. Review it, then copy and paste into your channel."
+        : "Everything is out of stock right now — there is nothing safe to post.";
+    }
+  } catch (err) {
+    if (status) status.textContent = err.message || "Could not generate the post.";
+    JA.toast(err.message || "Could not generate the post.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Generate evening broadcast"; }
+  }
+}
+
+async function copyEveningPost() {
+  if (!eveningPost) { JA.toast("Generate the post first."); return; }
+  try {
+    await navigator.clipboard.writeText(eveningPost);
+    JA.toast("Evening broadcast copied.");
+    return;
+  } catch (e) { /* fall through to the manual selection below */ }
+  // http:// or a denied permission: select the text so Ctrl+C still works.
+  const out = $("#mk-evening-out");
+  if (out) {
+    out.hidden = false;
+    out.focus();
+    out.select();
+    try {
+      if (document.execCommand("copy")) { JA.toast("Evening broadcast copied."); return; }
+    } catch (e) { /* nothing else to try */ }
+  }
+  JA.toast("Copy it manually — the post is selected below.");
+}
+
+function wireEveningPost() {
+  $("#mk-evening-generate")?.addEventListener("click", generateEveningPost);
+  $("#mk-evening-copy")?.addEventListener("click", copyEveningPost);
+}
+
 function marketingPanel() {
   return `<div class="admin-card mk-campaign-card" id="mk-campaign-card">
     <h3 class="admin-h">Send campaign</h3>
@@ -3223,6 +3342,7 @@ function marketingPanel() {
     </form>
     <h4 class="mk-campaign-log-title">Past campaigns</h4><div class="adx-filter-bar mk-campaign-filters" aria-label="Filter campaigns"><input id="marketing-search" type="search" placeholder="Search campaigns…" autocomplete="off" value="${esc(marketingSearch)}" /><label>From <input id="marketing-from" type="date" value="${esc(marketingFrom)}" /></label><label>To <input id="marketing-to" type="date" value="${esc(marketingTo)}" /></label><button type="button" class="btn btn-line" id="marketing-filter-clear">Clear</button></div><div id="mk-campaign-log"><p class="empty">Loading…</p></div>
   </div>
+  ${eveningPostCard()}
   ${broadcastHubCard()}
   ${backgroundJobsCard()}
   ${broadcastFeedCardHTML()}
@@ -3397,7 +3517,7 @@ function broadcastProductUrl(p) {
 function broadcastPriceLine(p) {
   // Active selling price only, in both currencies - never priceCompare /
   // compareNgn, the struck-through "was" price shown elsewhere in admin.
-  const toCfa = JA.toCfa || ((n) => Math.ceil((Number(n || 0) * 0.44) / 50) * 50);
+  const toCfa = JA.toCfa || toCfaLive;
   return `${JA.money(p.priceNgn || 0, "NGN")} • ${JA.money(toCfa(p.priceNgn), "CFA")}`;
 }
 function broadcastDisplayName(p) {
@@ -3883,6 +4003,7 @@ function bindBroadcastFeed() {
 }
 async function fillMarketing() {
   const api = (path, opts) => window.JA_NET.api(path, opts);
+  try { wireEveningPost(); } catch (err) {}
   try { await fillBroadcastHub(); } catch (err) {}
   try { await fillBackgroundJobs(); } catch (err) {}
   const num = (v) => esc(String(v == null ? "" : v));
@@ -4345,7 +4466,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=201" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=202" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -4716,7 +4837,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=201", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=202", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -4882,9 +5003,11 @@ async function bindExchangeRate() {
   if (settingsFxRate == null) {
     try {
       const d = await api("api/admin/growth/settings");
-      settingsFxRate = Number((d.settings || {}).cfaRate) || 0.44;
-    } catch (e) { settingsFxRate = 0.44; }
-    if (input && !input.value) input.value = settingsFxRate;
+      // No hardcoded fallback: an unreadable answer leaves the input blank
+      // ("type a rate to see the preview") instead of inventing a rate.
+      settingsFxRate = Number((d.settings || {}).cfaRate) || 0;
+    } catch (e) { settingsFxRate = 0; }
+    if (input && !input.value && settingsFxRate > 0) input.value = settingsFxRate;
   }
   paint();
   form.onsubmit = async (e) => {
@@ -5013,8 +5136,8 @@ function settingsForm() {
     <h3 class="admin-h full" style="margin-top:26px">Currency &amp; exchange rate</h3>
     <form id="fx-form" class="form-grid admin-card" style="margin-top:14px">
       <p class="admin-note full">The NGN → FCFA rate every part of the store uses: storefront prices, the Benin &amp; Togo minimum-order floor, and the FCFA supplier-cost conversion on the accounting desk (<strong>FCFA cost = NGN cost × this rate</strong>). Each confirmed order locks in the rate that was live at the moment of confirmation, so changing it never rewrites history.</p>
-      <div class="field"><label>NGN → FCFA rate (1 ₦ = ? CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${fxRate}" required /></label><p class="admin-note">Example: <strong>0.45</strong> means ₦10,000 ≈ FCFA 4,500.</p></div>
-      <div class="field"><label>Live preview<span id="fx-preview" class="admin-note" style="font-size:1rem;color:inherit"></span></label></div>
+      <div class="field"><label>NGN → FCFA rate (1 ₦ = ? CFA)<input name="cfaRate" type="number" min="0.01" max="100" step="0.0001" value="${fxRate}" required /></label><p class="admin-note admin-note-spaced">The live preview below shows what ₦10,000 becomes at the rate you type.</p></div>
+      <div class="field"><label>Live preview<span id="fx-preview" class="admin-note admin-fx-preview"></span></label></div>
       <div class="field full"><p class="admin-err" id="fx-form-error" hidden></p><button class="btn" id="fx-form-save">Save exchange rate</button></div>
     </form>
   </details>`;

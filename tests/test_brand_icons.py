@@ -88,7 +88,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # (starting profit / opening balance, itemized supplier autosave, applied
 # discount, single Batch Transportation Fee, Google verify), the
 # deleted/archived-proof broadcast pickers, and the refreshed accounting CSS.
-SHARED_TOKEN = "201"
+SHARED_TOKEN = "202"
 
 
 def _image_size(path):

@@ -18,11 +18,33 @@ The same function is mirrored in js/store.js (``toCfa``) so the browser, the
 admin preview and the server always agree on the displayed amount.
 """
 
-# House display rate: 1 NGN = 0.44 F CFA.
-NGN_TO_CFA = 0.44
-
 # CFA amounts are always a multiple of this step.
 CFA_STEP = 50
+
+
+def live_rate():
+    """The live, admin-controlled NGN -> F CFA exchange rate.
+
+    The single source of truth is the growth setting ``cfaRate`` (Admin ->
+    Settings -> Currency & exchange rate), persisted in ``growth_settings``
+    and mirrored to Supabase; ``growth._cap`` guarantees the stored value is
+    always a sane positive number. There is NO hardcoded literal in this
+    module: if the settings store is entirely unreachable (e.g. a bare import
+    in a test process with no database), the admin setting's own configured
+    default (``growth.DEFAULTS``) is used - the same value the admin sees in
+    the UI before saving anything.
+    """
+    import growth
+    try:
+        rate = float(growth.settings()["cfaRate"])
+    except Exception:
+        return float(growth.DEFAULTS["cfaRate"])
+    # growth._cap already enforces these bounds on the stored value; the check
+    # here keeps a rate read straight from the row (or from a restored mirror)
+    # from pricing the whole catalogue at zero.
+    if not (0.01 <= rate <= 100):
+        return float(growth.DEFAULTS["cfaRate"])
+    return rate
 
 
 def round_cfa(amount):
@@ -56,7 +78,12 @@ def floor_cfa(amount):
 
 
 def to_cfa(ngn, rate=None):
-    """Convert a Naira amount to a clean, rounded-up F CFA amount."""
+    """Convert a Naira amount to a clean, rounded-up F CFA amount.
+
+    ``rate=None`` (the default) always uses the live admin-controlled rate
+    from :func:`live_rate`; an explicit ``rate`` wins so historical snapshots
+    can be repriced exactly as they were locked.
+    """
     try:
         naira = float(ngn or 0)
     except (TypeError, ValueError):
@@ -64,16 +91,20 @@ def to_cfa(ngn, rate=None):
     if naira <= 0:
         return 0
     try:
-        rate = float(rate) if rate else NGN_TO_CFA
+        rate = float(rate) if rate else live_rate()
     except (TypeError, ValueError):
-        rate = NGN_TO_CFA
+        rate = live_rate()
     if rate <= 0:
-        rate = NGN_TO_CFA
+        rate = live_rate()
     return round_cfa(naira * rate)
 
 
 def to_ngn(cfa, rate=None):
-    """Convert an F CFA amount back to Naira. Naira is never rounded."""
+    """Convert an F CFA amount back to Naira. Naira is never rounded.
+
+    ``rate=None`` (the default) always uses the live admin-controlled rate
+    from :func:`live_rate`.
+    """
     try:
         value = float(cfa or 0)
     except (TypeError, ValueError):
@@ -81,9 +112,9 @@ def to_ngn(cfa, rate=None):
     if value <= 0:
         return 0
     try:
-        rate = float(rate) if rate else NGN_TO_CFA
+        rate = float(rate) if rate else live_rate()
     except (TypeError, ValueError):
-        rate = NGN_TO_CFA
+        rate = live_rate()
     if rate <= 0:
-        rate = NGN_TO_CFA
+        rate = live_rate()
     return max(0, int(round(value / rate)))

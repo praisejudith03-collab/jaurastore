@@ -85,7 +85,7 @@ FIXTURE_NAME_PREFIX = "stock test"
 # Prices the shop shows are entered in Naira and converted at the house rate.
 # Naira is the exact base currency; the CFA figure is rounded UP to a clean
 # 50/100 step by currency.to_cfa so no odd amount ever reaches a shopper.
-from currency import NGN_TO_CFA, round_cfa, to_cfa  # noqa: F401
+from currency import round_cfa, to_cfa  # noqa: F401
 
 # Every field an admin-edited product may carry (with sensible defaults).
 BASE_FIELDS = (

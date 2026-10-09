@@ -95,7 +95,9 @@ const sandbox = {
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, items: PRODUCTS.map((p, i) => ({ productId: p.id, views: 99 - i, carts: i })) }) });
     }
     if (u.includes("api/site")) {
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, site: {} }) });
+      // The live admin rate (growth setting cfaRate) the deployed endpoint
+      // serves; the storefront converts from it, never a baked-in literal.
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, site: { cfaRate: 0.44 } }) });
     }
     if (u.includes("api/homepage-featured")) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, featured: FEATURED, groups: [] }) });
@@ -141,6 +143,10 @@ vm.runInContext(storeSrc, sandbox, { filename: "js/store.js" });
 vm.runInContext(appSrc, sandbox, { filename: "js/app.js" });
 const JA = vm.runInContext("JA", sandbox);
 await JA.ready;
+// GET /api/site lands on boot and carries the live admin rate (cfaRate);
+// this sim binds the redraw contract directly instead of mounting the page
+// chrome, so apply the row through the same public seam the real page uses.
+JA.applySiteConfig({ cfaRate: 0.44 });
 
 // Bind the same redraw contract app boot uses, without mounting the whole page chrome.
 vm.runInContext(`

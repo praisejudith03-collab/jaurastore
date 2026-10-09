@@ -7,6 +7,7 @@ os.environ.setdefault("FLASK_ENV", "testing")
 os.environ.setdefault("DB_PATH", "/tmp/jaura_test.db")
 os.environ.setdefault("CATALOG_PATH", "/tmp/jaura_test_catalog.json")
 
+import security  # noqa: E402
 import supplier_watchdog  # noqa: E402
 
 
@@ -33,25 +34,19 @@ def test_tick_fetches_at_most_two_unique_urls_and_cools_each_url(monkeypatch):
             b'{"@type":"Product","name":"Example item","quantity":5}'
             b'</script>')
 
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self, _limit):
-            return page
-
-    def fake_urlopen(request, timeout):
+    # Supplier pages are fetched through the SSRF-guarded opener
+    # (security.guarded_open), so that is the network seam this test counts.
+    # Patching here keeps the budget assertion honest while leaving the real
+    # URL validation in place for tests/test_ssrf_guards.py.
+    def fake_guarded_open(request, **_kwargs):
         opened.append(request.full_url)
-        return Response()
+        return page
 
     monkeypatch.setattr(supplier_watchdog.catalog_mod, "merged",
                         lambda include_hidden=True: rows)
     monkeypatch.setattr(supplier_watchdog.catalog_mod, "deleted_product_ids",
                         lambda: set())
-    monkeypatch.setattr(supplier_watchdog.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(security, "guarded_open", fake_guarded_open)
     monkeypatch.setattr(supplier_watchdog, "_save_warnings", lambda _warnings: None)
     supplier_watchdog._last_checked.clear()
     supplier_watchdog._url_cache.clear()

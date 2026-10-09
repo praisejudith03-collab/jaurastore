@@ -159,7 +159,6 @@ const JA = (() => {
   // has been removed (bank_name/account_number/account_name drive checkout).
   const DEFAULT_SETTINGS = {
     storeName: "J Aura Store",
-    rate: 0.44,
     whatsapp: "22968953110",
     // Canonical shop lines. They are pinned here as an offline-safe fallback
     // and pinned again by /api/site so a stale saved setting cannot break chat.
@@ -207,8 +206,11 @@ const JA = (() => {
 
   let seed = [];
   let ready = null;
-  const NGN_TO_CFA = 0.44;
-  let fx = { ngnToXof: NGN_TO_CFA, at: "house 1 ₦ = 0.44 CFA", day: "" };
+  // NO exchange-rate literal lives in this bundle. The live, admin-set rate
+  // arrives on GET /api/site (cfaRate) and is cached under KEYS.fx, so an
+  // offline repaint reuses the last rate the server confirmed - never a
+  // number baked into the code.
+  let fx = null;
 
   const read = (k, fallback) => {
     try {
@@ -302,7 +304,9 @@ const JA = (() => {
   // painting, never something a second device or a redeploy can depend on.
   const settings = () => {
     const s = { ...DEFAULT_SETTINGS, ...read(KEYS.settings, {}), ..._siteConfig };
-    s.rate = NGN_TO_CFA;
+    // Always the live admin rate (or the last server-confirmed cached one) -
+    // a stale `rate` saved in the offline cache is never trusted.
+    s.rate = currentRate();
     return s;
   };
   const saveSettings = (s) => write(KEYS.settings, { ...settings(), ...s });
@@ -847,15 +851,30 @@ const JA = (() => {
 
   function applyFx(rate, at) {
     const n = Number(rate);
-    if (!(n > 0) || n > 5) return false;
+    // Same bounds the server enforces on the admin setting (0.01 .. 100).
+    if (!(n >= 0.01 && n <= 100)) return false;
     fx = { ngnToXof: n, at: at || "", day: todayStamp() };
     try { write(KEYS.fx, fx); } catch (e) {}
     return true;
   }
 
   async function loadFx() {
-    fx = { ngnToXof: NGN_TO_CFA, at: "house 1 ₦ = 0.44 CFA", day: todayStamp() };
+    // Restore the last server-confirmed rate; the live row re-applies on top
+    // via applySiteConfig() as soon as GET /api/site answers.
+    try { fx = read(KEYS.fx, null) || null; } catch (e) { fx = null; }
+    if (!fx || !(Number(fx.ngnToXof) > 0)) fx = null;
     return fx;
+  }
+
+  /** The live admin exchange rate: the /api/site row first, then the cached
+   *  last-confirmed rate. 0 when no rate has been confirmed yet - callers
+   *  must never invent one. */
+  function currentRate() {
+    const live = Number((_siteConfig || {}).cfaRate);
+    if (live > 0) return live;
+    if (!fx) { try { fx = read(KEYS.fx, null); } catch (e) { fx = null; } }
+    const cached = fx ? Number(fx.ngnToXof) : 0;
+    return cached > 0 ? cached : 0;
   }
 
   function hasNgn(p) {
@@ -872,7 +891,17 @@ const JA = (() => {
     return Math.ceil(v / CFA_STEP) * CFA_STEP;
   }
   function toCfa(ngn) {
-    return roundCfa(Number(ngn || 0) * NGN_TO_CFA);
+    // Converts at the LIVE admin rate (see currentRate). With no confirmed
+    // rate yet, 0 is returned - a conversion never runs on a hardcoded rate.
+    const rate = currentRate();
+    if (!(rate > 0)) return 0;
+    return roundCfa(Number(ngn || 0) * rate);
+  }
+  function toNgn(cfa) {
+    // The reverse conversion, at the same live rate (mirrors currency.to_ngn).
+    const rate = currentRate();
+    if (!(rate > 0)) return 0;
+    return Math.max(0, Math.round(Number(cfa || 0) / rate));
   }
 
   function products() {
@@ -1298,9 +1327,7 @@ const JA = (() => {
     }
     if (overridden || ngn > 0) return cur === "NGN" ? ngn : toCfa(ngn);
     const cfa = roundCfa(p && p.priceCfa);
-    return cur === "NGN"
-      ? Math.max(0, Math.round(cfa / NGN_TO_CFA))
-      : cfa;
+    return cur === "NGN" ? toNgn(cfa) : cfa;
   }
   function compareOf(p, cur = currency(), variant = "") {
     // Per-option "was" (strike-through) price wins when the chosen variant has
@@ -2780,7 +2807,10 @@ const JA = (() => {
     }
     const cfa = Number(site.minOrderCfa) || 0;
     if (cfa <= 0) return "";
-    const ngn = Number(site.minOrderNgn) || Math.round(cfa / 0.44);
+    // Same live-rate rule as js/app.js minOrderFigures(): derive the Naira
+    // equivalent from the admin rate, never a literal.
+    const rate = Number(site.cfaRate) || currentRate();
+    const ngn = Number(site.minOrderNgn) || (rate > 0 ? Math.round(cfa / rate) : 0);
     return fr
       ? `Livraisons au Bénin : commande minimum de ${fmt(cfa)} CFA (environ ${fmt(ngn)} nairas).`
       : `Benin deliveries: minimum order ${fmt(cfa)} CFA (about ${fmt(ngn)} naira).`;
@@ -2850,8 +2880,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=201";
-        const FLYER = "images/brand/logo-flyer.jpg?v=201";
+        const LOGO = "images/brand/logo.jpg?v=202";
+        const FLYER = "images/brand/logo-flyer.jpg?v=202";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2928,6 +2958,10 @@ const JA = (() => {
     // Server row (Supabase site_settings) is the truth; the copy used by
     // settings() and the checkout keeps ALL canonical fields live.
     _siteConfig = site;
+    // The live admin exchange rate (growth setting cfaRate) drives every
+    // storefront conversion; cache it so an offline repaint keeps the last
+    // server-confirmed figure instead of a hardcoded one.
+    if (Number(site.cfaRate) > 0) applyFx(site.cfaRate, "live /api/site");
     // A live settings refresh can arrive while a previous page's dialog is
     // open. Remove it immediately when the master toggle is OFF; this makes
     // the OFF state authoritative even without a reload.
@@ -3047,7 +3081,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=201" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=202" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3346,7 +3380,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=201" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=202" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3482,7 +3516,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=201", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=202", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3516,7 +3550,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=201";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=202";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3575,7 +3609,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=201");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=202");
     document.title = title;
     [
       ["name", "description", description],
@@ -4132,7 +4166,7 @@ const JA = (() => {
     products, product, publicProductSlug, productUrl, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     homepageFeatured, homepageFeaturedProducts, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
-    currency, setCurrency, currencyLocked, money, moneyExact, moneyRange, priceOf, compareOf, priceRangeOf, priceHTML, toCfa, roundCfa, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
+    currency, setCurrency, currencyLocked, money, moneyExact, moneyRange, priceOf, compareOf, priceRangeOf, priceHTML, toCfa, toNgn, roundCfa, currentRate, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
     referralEnabled, promosEnabled,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,

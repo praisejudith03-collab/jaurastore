@@ -55,7 +55,13 @@ const inputs = {
 };
 const sandbox = {
   JA: { categories: () => [{ id: "bags", name: "Bags" }], CATEGORIES: [], escape,
-        money: (n, cur) => `${cur} ${n}` },
+        money: (n, cur) => `${cur} ${n}`,
+        // The live admin rate the real page gets from GET /api/site. It is
+        // injected from the server's own setting so this test proves the
+        // editor converts at whatever rate is actually configured, instead
+        // of pinning a number that can drift.
+        getSiteConfig: () => ({ cfaRate: Number(process.env.JA_RATE) }),
+        settings: () => ({ rate: Number(process.env.JA_RATE) }) },
   window: {},
   document: {
     querySelectorAll: (sel) => inputs[sel] || [],
@@ -167,11 +173,18 @@ console.log(JSON.stringify({ ok: true, proof: cfa }));
 """
 
 
+def _live_rate():
+    """The server's live admin rate (growth setting cfaRate)."""
+    import currency
+    return currency.live_rate()
+
+
 def _run_editor():
     result = subprocess.run(
         ["node", "-e", _NODE_CHECK], cwd=ROOT, capture_output=True, text=True,
         timeout=60, env={"PATH": "/usr/local/bin:/usr/bin:/bin",
-                         "CFA_PRICES": json.dumps(list(CFA_PRICES))})
+                         "CFA_PRICES": json.dumps(list(CFA_PRICES)),
+                         "JA_RATE": str(_live_rate())})
     assert result.returncode == 0, f"editor VM failed:\n{result.stdout}\n{result.stderr}"
     return json.loads(result.stdout)
 

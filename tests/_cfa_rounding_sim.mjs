@@ -44,14 +44,42 @@ function makeSandbox() {
     console,
     setTimeout, clearTimeout, setInterval, clearInterval, AbortSignal,
     Date, Math, JSON, Number, String, Array, Object, Boolean, Set, Map, Promise,
-    fetch: () => Promise.resolve({
+    fetch: (url) => Promise.resolve({
       ok: true,
-      json: () => Promise.resolve({ ok: true, products: [], meta: { count: 0 } }),
+      json: () => Promise.resolve(
+        String(url).indexOf("api/site") >= 0
+          // The live admin rate, served by GET /api/site.
+          ? { ok: true, site: { cfaRate: 0.44 } }
+          : { ok: true, products: [], meta: { count: 0 } }),
     }),
     localStorage,
     sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-    document: { body: { dataset: { page: "" } }, addEventListener: () => {},
-                createElement: () => ({ style: {}, setAttribute: () => {}, appendChild: () => {} }) },
+    // Enough of the DOM for applySiteConfig() (the live-site-row painter that
+    // carries cfaRate) to run: the test drives the rate through the same code
+    // path a real page uses rather than reaching into module internals.
+    document: {
+      body: {
+        dataset: { page: "" },
+        classList: { toggle: () => {}, add: () => {}, remove: () => {},
+                     contains: () => false },
+        appendChild: () => {},
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      documentElement: { lang: "en", classList: { toggle: () => {}, add: () => {},
+                                                 remove: () => {}, contains: () => false } },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => true,
+      getElementById: () => null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      createElement: () => ({ style: {}, dataset: {}, classList: {
+                              toggle: () => {}, add: () => {}, remove: () => {},
+                              contains: () => false },
+                              setAttribute: () => {}, appendChild: () => {},
+                              remove: () => {}, addEventListener: () => {} }),
+    },
     navigator: { onLine: true, language: "en" },
     location: { href: "https://jaurastore.com.ng/shop.html", origin: "https://jaurastore.com.ng",
                 protocol: "https:", host: "jaurastore.com.ng", pathname: "/shop.html", search: "" },
@@ -66,11 +94,16 @@ function makeSandbox() {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(storeSrc, sandbox, { filename: "js/store.js" });
-  return vm.runInContext("JA", sandbox);
+  const JA = vm.runInContext("JA", sandbox);
+  JA.__storage = storage;   // test hook: read the offline fx cache (a Map)
+  return JA;
 }
 
 const JA = makeSandbox();
 await JA.ready.catch(() => {});
+// Apply the live site row deterministically (boot's own fetch is a microtask
+// race): the storefront must convert at the admin rate, never a baked-in one.
+JA.applySiteConfig({ cfaRate: 0.44 });
 
 // ------------------------------------------------- 1. the ceiling itself
 check("roundCfa ceilings to the next 50 (the reported cases)",
@@ -82,7 +115,7 @@ check("roundCfa ceilings to the next 50 (the reported cases)",
 check("roundCfa keeps clean steps and clamps bad input",
   JA.roundCfa(50) === 50 && JA.roundCfa(4400) === 4400 &&
   JA.roundCfa(0) === 0 && JA.roundCfa(-5) === 0 && JA.roundCfa("x") === 0);
-check("toCfa derives at the house rate and ceilings",
+check("toCfa derives at the LIVE admin rate and ceilings",
   JA.toCfa(2100) === 950 && JA.toCfa(4800) === 2150 && JA.toCfa(26000) === 11450,
   `got ${JA.toCfa(2100)}, ${JA.toCfa(4800)}, ${JA.toCfa(26000)}`);
 
@@ -135,6 +168,38 @@ check("a CFA-only bulk product ceils the same way (2,150 @ -10% -> 1,950)",
   }
   check("every bulk percentage lands on a clean CFA step, never below the maths",
     sweepOk);
+}
+
+// ------------------------------------- 3b. the CFA -> NGN reverse conversion
+// A CFA-only product priced for a Naira shopper divides by the rate. That
+// path used to read a module constant that no longer exists, which threw a
+// ReferenceError in a real browser (caught only by the chromium smoke tests);
+// exercise it here so a dangling identifier fails locally.
+check("a CFA-only product converts BACK to Naira at the live rate",
+  JA.priceOf(cfaOnly, "NGN") === Math.round(2150 / 0.44),
+  `got ${JA.priceOf(cfaOnly, "NGN")}`);
+{
+  JA.applySiteConfig({ cfaRate: 0.5 });
+  check("the reverse conversion follows a changed rate too",
+    JA.priceOf(cfaOnly, "NGN") === Math.round(2150 / 0.5),
+    `got ${JA.priceOf(cfaOnly, "NGN")}`);
+  JA.applySiteConfig({ cfaRate: 0.44 });
+}
+
+// ------------------------------- 4. the rate is LIVE, never a baked-in literal
+{
+  JA.applySiteConfig({ cfaRate: 0.5 });
+  check("a changed admin rate re-prices the conversion at once",
+    JA.currentRate() === 0.5 && JA.toCfa(2100) === 1050 && JA.toCfa(4800) === 2400,
+    `rate=${JA.currentRate()} toCfa(2100)=${JA.toCfa(2100)} toCfa(4800)=${JA.toCfa(4800)}`);
+  check("settings().rate follows the live admin rate",
+    JA.settings().rate === 0.5, `got ${JA.settings().rate}`);
+  const cached = JSON.parse(JA.__storage.get("jaura_fx") || "null");
+  check("the confirmed rate is cached for offline repaints",
+    cached && cached.ngnToXof === 0.5, `got ${JSON.stringify(cached)}`);
+  JA.applySiteConfig({ cfaRate: 0.44 });
+  check("restoring the rate restores the conversion",
+    JA.toCfa(4800) === 2150, `got ${JA.toCfa(4800)}`);
 }
 
 if (failures) {

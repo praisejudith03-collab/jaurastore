@@ -159,13 +159,15 @@ def _product_price_line(p):
     parts = []
     if ngn > 0:
         parts.append("₦{:,}".format(ngn))
+        # The live admin-controlled rate (growth setting cfaRate) - never a
+        # hardcoded literal, so a shared post always quotes today's rate.
         try:
             import growth
-            rate = float(growth.settings().get("cfaRate") or 0.44)
+            rate = float(growth.settings().get("cfaRate") or 0)
         except Exception:
-            rate = 0.44
+            rate = 0.0
         import math
-        cfa = int(math.ceil((ngn * rate) / 50) * 50)
+        cfa = int(math.ceil((ngn * rate) / 50) * 50) if rate > 0 else 0
         if cfa > 0:
             parts.append("{:,} CFA".format(cfa))
     elif p.get("priceCfa"):

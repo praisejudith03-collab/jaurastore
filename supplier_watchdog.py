@@ -682,10 +682,17 @@ def fetch_url(url: str) -> str:
     cached = _url_cache.get(url)
     if cached and cached[0] > time.time():
         return cached[1]
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/json;q=0.9,*/*;q=0.8"})
-    with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
-        data = resp.read(MAX_BYTES + 1)
-    text = data[:MAX_BYTES].decode("utf-8", "replace")
+    # SSRF safeguards (security.safe_fetch_text): https only, every resolved
+    # IP must be public (no loopback/private/link-local/metadata targets - a
+    # supplier URL is owner-entered, so it is never fully trusted), with the
+    # hard timeout and size cap below. A blocked or oversized target raises
+    # UnsafeURLError (a ValueError), which callers already treat as a fetch
+    # failure and report as a warning.
+    import security
+    text = security.safe_fetch_text(
+        url, timeout=FETCH_TIMEOUT, max_bytes=MAX_BYTES,
+        headers={"User-Agent": USER_AGENT,
+                 "Accept": "text/html,application/json;q=0.9,*/*;q=0.8"})
     if len(_url_cache) > 128:
         _url_cache.clear()
     _url_cache[url] = (time.time() + CACHE_TTL_SECONDS, text)
@@ -1142,6 +1149,18 @@ def _save_price_map() -> None:
         c.table("growth_settings").upsert([{"key": PRICE_WATCH_KEY, "value": payload}]).execute()
     except Exception:
         pass
+
+
+def saved_price_book() -> Dict[str, Dict[str, Any]]:
+    """The persisted last-seen supplier price book, as a plain dict.
+
+    Returns ``{product_id: {"prices": {key: price}, "at": ...}}`` merged from
+    the durable growth_settings row and the in-process map. Never raises: a
+    read outage yields whatever this process last saw (possibly empty).
+    Prices are treated as NGN-denominated - the shop's suppliers quote Naira.
+    """
+    _load_price_map()
+    return {str(k): dict(v) for k, v in _price_map.items() if isinstance(v, dict)}
 
 
 def _fmt_price(n: Optional[float]) -> str:
