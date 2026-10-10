@@ -41,6 +41,9 @@
     verify: null,
     error: "",
     loading: false,
+    syncing: false,
+    csvImporting: false,
+    search: "",
     requestSeq: 0,
     selected: new Set(),
     shown: STAGE_PAGE_SIZE,
@@ -355,15 +358,19 @@
 
   function stageSection() {
     const all = stagedEntries();
-    const visible = all.slice(0, state.shown);
+    const filtered = filteredEntries();
+    const displayList = state.search ? filtered : all;
+    const visible = displayList.slice(0, state.shown);
     const totals = stageTotals();
     const allSelected = all.length > 0 && all.every((entry) => state.selected.has(String(entry.id)));
+    const filterNote = state.search
+      ? `<small class="aa-filter-note">Showing ${filtered.length} of ${all.length} matching “${html(state.search)}”</small>` : "";
     return `
       <section class="aa-stage" aria-label="Staged confirmed orders">
         <header class="aa-stage-head">
           <div>
             <span class="aa-eyebrow">CONFIRMED ORDERS WAITING TO BE PUSHED</span>
-            <h2>Staging queue · ${html(state.currency === "NGN" ? "Naira" : "FCFA")}</h2>
+            <h2>Staging queue · ${html(state.currency === "NGN" ? "Naira" : "FCFA")}${filterNote}</h2>
             <p data-stage-summary>${stageSummaryHTML()}</p>
           </div>
           <div class="aa-stage-actionsbar">
@@ -380,7 +387,7 @@
             </button>
           </div>
         </header>
-        ${all.length ? `
+        ${displayList.length ? `
         <div class="aa-table-wrap">
           <table class="aa-stage-table">
             <thead>
@@ -393,9 +400,10 @@
             <tbody>${visible.map(entryRow).join("")}</tbody>
           </table>
         </div>
-        ${all.length > state.shown ? `<button type="button" class="aa-button aa-button-more" data-action="more">Show ${Math.min(STAGE_PAGE_SIZE, all.length - state.shown)} more (${all.length - state.shown} hidden)</button>` : ""}
-        <p class="aa-sheet-hint">Everything here saves itself: when a product has a saved supplier price, the cost arrives pre-filled from those saved defaults — paste the supplier link or type the unit price and quantity to override (Unit Price × Quantity = Total Supplier Cost), add a discount, and the Net Profit recalculates instantly — Selling Price − Discounts − Supplier Cost − Transport. For FCFA orders the NGN supplier cost is converted with the active NGN → FCFA rate. Each row's Location column maps the customer's destination. Pushed orders leave this queue and land in your ${html(state.currency === "NGN" ? "NGN" : "FCFA")} tab; history and profit analytics live on the <a href="/admin.html?tab=sales">Sales page</a>.</p>`
-        : `<p class="aa-stage-empty">The ${html(state.currency === "NGN" ? "naira" : "FCFA")} queue is clean — every confirmed order has been pushed. New confirmations will appear here.</p>`}
+        ${displayList.length > state.shown ? `<button type="button" class="aa-button aa-button-more" data-action="more">Show ${Math.min(STAGE_PAGE_SIZE, displayList.length - state.shown)} more (${displayList.length - state.shown} hidden)</button>` : ""}
+        <p class="aa-sheet-hint">Everything here saves itself: when a product has a saved supplier price, the cost arrives pre-filled from those saved defaults — paste the supplier link or type the unit price and quantity to override (Unit Price × Quantity = Total Supplier Cost), add a discount, and the Net Profit recalculates instantly — Selling Price − Discounts − Supplier Cost − Transport. For FCFA orders the NGN supplier cost is converted with the active NGN → FCFA rate. Each row's Location column maps the customer's destination. Blank supplier costs auto-fill from the catalogue default. Pushed orders leave this queue and land in your ${html(state.currency === "NGN" ? "NGN" : "FCFA")} tab; history and profit analytics live on the <a href="/admin.html?tab=sales">Sales page</a>.</p>`
+        : (state.search ? `<p class="aa-stage-empty">No rows match “${html(state.search)}” in the ${html(currencyName)} queue.</p>`
+           : `<p class="aa-stage-empty">The ${html(state.currency === "NGN" ? "naira" : "FCFA")} queue is clean — every confirmed order has been pushed. New confirmations will appear here.</p>`)}
       </section>`;
   }
 
@@ -554,17 +562,160 @@
       toast(`Pushed ${data.pushed.length} order${data.pushed.length === 1 ? "" : "s"} — cleared off the queue.`, "ok");
       await loadAll();
     } catch (error) {
+      const msg = error.message || "The push did not complete.";
       if (errorBox) {
-        errorBox.textContent = error.message || "The push did not complete.";
+        errorBox.innerHTML = formatSheetError(msg);
         errorBox.hidden = false;
       }
-      toast(error.message || "The push did not complete.", "error");
+      toast(msg, "error");
     } finally {
       state.pushing = false;
       const box = root.querySelector("[data-push-dialog]");
       if (box) box.hidden = true;
       render();
     }
+  }
+
+  /* Format a Google Sheets error, highlighting the XLSX "Save as Google
+   * Sheets" hint when present so the remediation stands out. */
+  function formatSheetError(msg) {
+    const text = html(msg || "");
+    const marker = "Save as Google Sheets";
+    if (text.indexOf(marker) >= 0) {
+      return text.replace(
+        "File → Save as Google Sheets",
+        "<strong>File → Save as Google Sheets</strong>"
+      ) + '<p class="aa-sheet-hint" style="margin-top:8px">The Google Sheets API cannot write to uploaded .xlsx files. Open the file in Google Drive, use <strong>File → Save as Google Sheets</strong>, then push again.</p>';
+    }
+    return text;
+  }
+
+  /* --------------------------------------------------------- CSV import */
+  const XLSX_HINT_TEXT = "Please open your spreadsheet in Google Drive and click File → Save as Google Sheets to enable syncing.";
+
+  function importCsvDialog() {
+    return `
+      <div class="aa-push-dialog" data-csv-dialog hidden>
+        <div class="aa-push-card" role="dialog" aria-modal="true" aria-label="Import historical CSV">
+          <h3>Import historical CSV / XLSX</h3>
+          <p>Upload a CSV, TSV or .xlsx export of past orders. Rows are auto-routed by currency (FCFA ↔ NGN), destination country is mapped, blank supplier costs fall back to the catalogue default, and everything lands in the staging queue for review — nothing is pushed live until you approve it.</p>
+          <label class="aa-csv-drop" data-csv-drop>
+            <input type="file" accept=".csv,.tsv,.xlsx,.xlsm,text/csv" data-csv-file hidden />
+            <strong>Tap to choose a file</strong>
+            <span>CSV, TSV or XLSX · mobile &amp; desktop · max 8 MB</span>
+            <em data-csv-name>No file chosen</em>
+          </label>
+          <div class="aa-push-row">
+            <label>Default currency <span>for rows with no marker</span>
+              <select data-csv-currency>
+                <option value="NGN">₦ NGN</option>
+                <option value="CFA">FCFA</option>
+              </select>
+            </label>
+            <label>Exchange rate
+              <select data-csv-rate-mode>
+                <option value="live">Use today's live rate</option>
+                <option value="legacy">Use historical pre-feature baseline</option>
+              </select>
+            </label>
+          </div>
+          <p class="aa-csv-status" data-csv-status role="status" aria-live="polite"></p>
+          <div class="aa-csv-preview" data-csv-preview hidden></div>
+          <div class="aa-push-buttons">
+            <button type="button" class="aa-button" data-csv-cancel>Cancel</button>
+            <button type="button" class="aa-button aa-button-line" data-csv-dryrun disabled>Dry run (preview)</button>
+            <button type="button" class="aa-button aa-button-primary" data-csv-confirm disabled>Stage into queue</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  let csvState = { file: null, dryRun: null };
+
+  function updateCsvButtons() {
+    const dialog = root.querySelector("[data-csv-dialog]");
+    if (!dialog) return;
+    const dry = dialog.querySelector("[data-csv-dryrun]");
+    const go = dialog.querySelector("[data-csv-confirm]");
+    const hasFile = !!csvState.file;
+    if (dry) dry.disabled = !hasFile;
+    if (go) go.disabled = !hasFile || state.csvImporting;
+  }
+
+  function setCsvStatus(text, kind) {
+    const box = root.querySelector("[data-csv-status]");
+    if (!box) return;
+    box.textContent = text || "";
+    box.dataset.kind = kind || "";
+    box.classList.toggle("is-error", kind === "error");
+  }
+
+  async function runCsvImport(confirm) {
+    if (!csvState.file) return;
+    const dialog = root.querySelector("[data-csv-dialog]");
+    if (!dialog) return;
+    const currencySel = dialog.querySelector("[data-csv-currency]");
+    const rateMode = dialog.querySelector("[data-csv-rate-mode]");
+    const preview = dialog.querySelector("[data-csv-preview]");
+    setCsvStatus(confirm ? "Staging…" : "Dry-running…");
+    state.csvImporting = true;
+    updateCsvButtons();
+    try {
+      const fd = new FormData();
+      fd.append("file", csvState.file);
+      if (confirm) fd.append("confirm", "1");
+      if (currencySel) fd.append("defaultCurrency", currencySel.value);
+      if (rateMode && rateMode.value === "legacy") fd.append("legacyRate", "1");
+      const res = await fetch("/api/admin/accounting/import-historical", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: state.csrf ? { "X-CSRF-Token": state.csrf } : {},
+        body: fd,
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (!res.ok || data.ok === false) {
+        const err = data.error || `Import failed (${res.status}).`;
+        setCsvStatus(err, "error");
+        if (confirm) toast(err, "error");
+        state.csvImporting = false;
+        updateCsvButtons();
+        return;
+      }
+      if (!confirm) {
+        csvState.dryRun = data;
+        let html2 = `<p><strong>${data.rows} row(s)</strong> parsed · <span style="color:#0a7f2b">${data.ngnCount} NGN</span> · <span style="color:#7d47bd">${data.cfaCount} FCFA</span>`;
+        if ((data.skipped || []).length) html2 += ` · ${data.skipped.length} skipped`;
+        html2 += `</p>`;
+        if ((data.preview || []).length) {
+          html2 += "<table class=\"aa-csv-prev-table\"><thead><tr><th>Date</th><th>Customer</th><th>Cur</th><th>Location</th><th>Revenue</th></tr></thead><tbody>";
+          for (const row of data.preview.slice(0, 8)) {
+            html2 += `<tr><td>${html(String(row.date || "").slice(0,10))}</td><td>${html(row.customer || "")}</td><td>${html(row.currency || "")}</td><td>${html(row.location || "")}</td><td>${html(String(row.revenue || 0))}</td></tr>`;
+          }
+          html2 += "</tbody></table>";
+        }
+        if (preview) { preview.innerHTML = html2; preview.hidden = false; }
+        setCsvStatus(data.message || `Dry run OK: ${data.rows} row(s) ready to stage.`);
+        updateCsvButtons();
+        state.csvImporting = false;
+        return;
+      }
+      toast(data.message || `Staged ${data.staged || 0} order(s).`);
+      await loadAll();
+      closeCsvDialog();
+    } catch (err) {
+      setCsvStatus(err.message || "Import failed.", "error");
+      toast(err.message || "Import failed.", "error");
+    } finally {
+      state.csvImporting = false;
+      updateCsvButtons();
+    }
+  }
+
+  function closeCsvDialog() {
+    const box = root.querySelector("[data-csv-dialog]");
+    if (box) box.hidden = true;
+    csvState = { file: null, dryRun: null };
   }
 
   /* --------------------------------------------------------------- render */
@@ -575,7 +726,7 @@
     const connectedMessage = google.connected && google.syncingExistingOrders
       ? `<p class="aa-sync-note" role="status">Existing confirmed orders are syncing into your ledgers.</p>` : "";
     const readError = state.error
-      ? `<p class="aa-error aa-sheet-error" role="alert">${html(state.error)}${google.connected ? " You can still open the Google Sheet directly." : ""}</p>`
+      ? `<p class="aa-error aa-sheet-error" role="alert">${formatSheetError(state.error)}${state.error.indexOf("Save as Google Sheets") < 0 && google.connected ? " You can still open the Google Sheet directly." : ""}</p>`
       : "";
     root.innerHTML = `
       <div class="aa-app">
@@ -584,6 +735,8 @@
           <nav class="aa-top-actions" aria-label="Admin actions">
             <span class="aa-signed-in">${html(state.email || "Admin")}</span>
             <a class="aa-back-button" href="/admin">← Admin</a>
+            <button class="aa-button aa-button-line" type="button" data-action="import-csv">📥 Import CSV</button>
+            <button class="aa-button aa-button-line" type="button" data-action="sync"${state.syncing ? " disabled" : ""}>${state.syncing ? "Syncing…" : "↻ Sync"}</button>
             <button class="aa-link-button" type="button" data-action="refresh"${state.loading ? " disabled" : ""}>Refresh</button>
             <button class="aa-link-button" type="button" data-action="logout">Sign out</button>
           </nav>
@@ -595,7 +748,9 @@
               <h1>Accounting</h1>
               <p>Confirmed orders stage here with their items, quantities and editable costs. Push them to Google Sheets in named batches — the queue clears the moment they land, so nothing is ever counted twice.</p>
             </div>
-            <div class="aa-current-ledger"><span>Ledger</span><strong>${html(currencyName)}</strong></div>
+            <div class="aa-heading-actions">
+              <div class="aa-current-ledger"><span>Ledger</span><strong>${html(currencyName)}</strong></div>
+            </div>
           </section>
 
           <section class="aa-filter-panel" aria-label="Accounting filters">
@@ -605,6 +760,11 @@
             </div>
             <div class="aa-filter-divider" aria-hidden="true"></div>
             <span class="aa-rate-pill" title="Active NGN → FCFA rate from Store Settings">1 ₦ = ${rateText()} FCFA</span>
+            <div class="aa-filter-divider" aria-hidden="true"></div>
+            <label class="aa-stage-search">
+              <input type="search" data-stage-search placeholder="Filter by customer, order, items…" value="${html(state.search || "")}" aria-label="Filter staged orders" />
+            </label>
+            ${state.search ? `<button type="button" class="aa-link-button" data-action="clear-search">Clear</button>` : ""}
           </section>
 
           ${openingSection()}
@@ -622,9 +782,21 @@
           ${expenseSection()}
           ${settingsSection()}
           ${pushDialog()}
+          ${importCsvDialog()}
           <footer class="aa-footer">Jaura Store · Private accounting desk · Amounts shown in whole ${html(state.currency)} units</footer>
         </main>
       </div>`;
+  }
+
+  function filteredEntries() {
+    const rows = stagedEntries();
+    const q = String(state.search || "").trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((e) => {
+      const hay = [e.id, e.customer, e.itemsSummary, e.location, e.notes]
+        .filter(Boolean).join(" ").toLowerCase();
+      return hay.indexOf(q) >= 0;
+    });
   }
 
   function oauthNotice() {
@@ -674,7 +846,19 @@
     } finally {
       if (requestId === state.requestSeq) state.loading = false;
     }
-    if (requestId === state.requestSeq) render();
+    if (requestId === state.requestSeq) {
+      render();
+      // If the page was opened with #import (e.g. the Admin dashboard's
+      // "Import historical CSV" link), auto-open the CSV import dialog.
+      if (window.location.hash === "#import") {
+        setTimeout(() => {
+          const btn = root.querySelector('[data-action="import-csv"]');
+          if (btn) btn.click();
+          // Clear the hash so a refresh doesn't re-open the dialog.
+          try { history.replaceState(null, "", window.location.pathname); } catch (_) {}
+        }, 50);
+      }
+    }
   }
 
   async function start() {
@@ -1026,8 +1210,104 @@
       render();
     } else if (action === "refresh") {
       loadAll().then(() => toast("Queue refreshed.")).catch((error) => toast(error.message, "error"));
+    } else if (action === "sync") {
+      doSync();
+    } else if (action === "import-csv") {
+      const dlg = root.querySelector("[data-csv-dialog]");
+      if (dlg) {
+        dlg.hidden = false;
+        setCsvStatus("");
+        const pv = dlg.querySelector("[data-csv-preview]");
+        if (pv) { pv.hidden = true; pv.innerHTML = ""; }
+        csvState = { file: null, dryRun: null };
+        const nameEl = dlg.querySelector("[data-csv-name]");
+        if (nameEl) nameEl.textContent = "No file chosen";
+        updateCsvButtons();
+      }
+    } else if (action === "clear-search") {
+      state.search = "";
+      state.shown = STAGE_PAGE_SIZE;
+      render();
     } else if (action === "logout") {
       logout();
+    }
+    const csvCancel = event.target.closest("[data-csv-cancel]");
+    if (csvCancel) { closeCsvDialog(); return; }
+    const csvDry = event.target.closest("[data-csv-dryrun]");
+    if (csvDry) { runCsvImport(false); return; }
+    const csvConfirm = event.target.closest("[data-csv-confirm]");
+    if (csvConfirm) { runCsvImport(true); return; }
+  });
+
+  async function doSync() {
+    if (state.syncing) return;
+    state.syncing = true;
+    render();
+    try {
+      await verifyGoogleSync();
+      await loadAll();
+      toast("Ledgers synced.");
+    } catch (err) {
+      toast(err.message || "Sync failed.", "error");
+    } finally {
+      state.syncing = false;
+      render();
+    }
+  }
+
+  // CSV file input / drop handling
+  root.addEventListener("change", (event) => {
+    const fileInput = event.target.closest("[data-csv-file]");
+    if (fileInput && fileInput.files && fileInput.files[0]) {
+      csvState.file = fileInput.files[0];
+      csvState.dryRun = null;
+      const name = fileInput.files[0].name;
+      const nameEl = root.querySelector("[data-csv-name]");
+      if (nameEl) nameEl.textContent = name;
+      const preview = root.querySelector("[data-csv-preview]");
+      if (preview) { preview.hidden = true; preview.innerHTML = ""; }
+      setCsvStatus(`Selected: ${name} — tap Dry run to preview.`);
+      updateCsvButtons();
+      // Auto-run dry run
+      runCsvImport(false);
+      return;
+    }
+  });
+
+  root.addEventListener("dragover", (event) => {
+    const drop = event.target.closest("[data-csv-drop]");
+    if (drop) { event.preventDefault(); drop.classList.add("is-dragover"); }
+  });
+  root.addEventListener("dragleave", (event) => {
+    const drop = event.target.closest("[data-csv-drop]");
+    if (drop) drop.classList.remove("is-dragover");
+  });
+  root.addEventListener("drop", (event) => {
+    const drop = event.target.closest("[data-csv-drop]");
+    if (drop) {
+      event.preventDefault();
+      drop.classList.remove("is-dragover");
+      const dt = event.dataTransfer;
+      if (dt && dt.files && dt.files[0]) {
+        const input = drop.querySelector("[data-csv-file]");
+        if (input) {
+          try {
+            const dt2 = new DataTransfer();
+            dt2.items.add(dt.files[0]);
+            input.files = dt2.files;
+          } catch (_) {
+            // iOS Safari can't set .files; fall back to manual use
+            csvState.file = dt.files[0];
+            const nameEl = root.querySelector("[data-csv-name]");
+            if (nameEl) nameEl.textContent = dt.files[0].name;
+            setCsvStatus(`Selected: ${dt.files[0].name} — tap Dry run to preview.`);
+            updateCsvButtons();
+            runCsvImport(false);
+            return;
+          }
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
     }
   });
 
@@ -1061,6 +1341,19 @@
 
   // Typing recalculates on the spot and queues the save a moment later.
   root.addEventListener("input", (event) => {
+    const searchInput = event.target.closest("[data-stage-search]");
+    if (searchInput) {
+      state.search = String(searchInput.value || "");
+      state.shown = STAGE_PAGE_SIZE;
+      render();
+      // Keep focus & caret position after re-render
+      const next = root.querySelector("[data-stage-search]");
+      if (next) {
+        next.focus();
+        try { next.setSelectionRange(state.search.length, state.search.length); } catch (_) {}
+      }
+      return;
+    }
     const edit = event.target.closest("[data-stage-edit]");
     if (!edit) return;
     const row = edit.closest(".aa-stage-row");

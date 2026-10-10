@@ -80,17 +80,85 @@ def supplier_cost_cfa(supplier_cost_ngn, rate):
         Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+# Default supplier cost ratio used as a catalog-fallback when neither the
+# watchdog price book nor an explicit unit price has been recorded yet.
+# Estimated as retail price × DEFAULT_SUPPLIER_COST_RATIO; the owner is still
+# expected to correct this on the accounting desk.
+DEFAULT_SUPPLIER_COST_RATIO = Decimal("0.55")
+
+
+def _catalog_supplier_cost_ratio():
+    """Read the admin-tunable supplier cost ratio from growth settings."""
+    try:
+        import growth
+        settings = growth.settings()
+        raw = settings.get("supplierCostRatio")
+        if raw is not None:
+            ratio = Decimal(str(raw))
+            if Decimal("0.1") <= ratio <= Decimal("0.95"):
+                return ratio
+    except Exception:
+        pass
+    return DEFAULT_SUPPLIER_COST_RATIO
+
+
+def _catalog_default_unit_cost(product, variant_label=""):
+    """Estimate a unit supplier cost for one catalog product.
+
+    Returns (unit_cost_ngn, link) tuple; (0, "") when there is no usable
+    catalog data. Used only as a fallback when the supplier watchdog has no
+    recorded price for the product yet.
+    """
+    if not isinstance(product, dict):
+        return 0, ""
+    # Owner-entered explicit supplier unit cost if the catalog grows one.
+    for key in ("supplierCostNgn", "supplierUnitCost", "supplierUnitPrice"):
+        raw = product.get(key)
+        try:
+            val = int(Decimal(str(raw or 0)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        except (InvalidOperation, ValueError, TypeError):
+            val = 0
+        if val > 0:
+            link = clean_supplier_link(
+                product.get("supplierSku") or product.get("supplierUrl")
+                or product.get("supplier_url"))
+            return val, link
+    # Fallback: ratio of the NGN retail price.
+    retail = 0
+    for key in ("priceNgn",):
+        try:
+            retail = int(Decimal(str(product.get(key) or 0)).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP))
+        except (InvalidOperation, ValueError, TypeError):
+            retail = 0
+        if retail > 0:
+            break
+    link = clean_supplier_link(
+        product.get("supplierSku") or product.get("supplierUrl")
+        or product.get("supplier_url"))
+    if retail > 0:
+        ratio = _catalog_supplier_cost_ratio()
+        return int((Decimal(retail) * ratio).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP)), link
+    return 0, link
+
+
 def saved_supplier_defaults(items):
     """Saved per-product supplier defaults for one order's items.
 
-    The supplier watchdog persists the last supplier price seen per product /
-    variant (growth_settings ``supplier_price_watch_json``); those saved
-    product defaults are the base item supplier cost in NGN. The owner can
-    still override everything by hand on the accounting desk (unit price,
-    total or supplier link) - this only pre-fills what is already known.
+    Lookup order:
+      1. Supplier watchdog's persisted last-seen price book
+         (``growth_settings.supplier_price_watch_json``) - most accurate.
+      2. Catalog's explicit supplier cost field (``supplierCostNgn``)
+         if the product has one set.
+      3. Catalog retail price × admin-tunable supplier cost ratio
+         (default 55%) - a reasonable estimate so Column G is never blank
+         for products the catalogue knows about.
 
-    Returns ``{"costNgn": int, "qty": int, "link": str}`` - all zero/blank when
-    nothing is saved. Never raises.
+    The owner can still override every field by hand on the accounting desk;
+    this only pre-fills what is already known. Returns
+    ``{"costNgn": int, "qty": int, "link": str}`` - zero/blank when nothing
+    is known. Never raises.
     """
     result = {"costNgn": 0, "qty": 0, "link": ""}
     try:
@@ -103,57 +171,119 @@ def saved_supplier_defaults(items):
     items = [i for i in (items or []) if isinstance(i, dict)]
     if not items:
         return result
+    # Catalog index is fetched lazily (once per call) and only when needed
+    # for fallback.
+    catalog_index = None
+    catalog_link = ""
+
+    def _catalog():
+        nonlocal catalog_index
+        if catalog_index is None:
+            try:
+                import catalog as catalog_mod
+                catalog_index = catalog_mod.product_index()
+            except Exception:
+                catalog_index = {}
+        return catalog_index or {}
+
     total = 0
     qty = 0
     for item in items:
         pid = str(item.get("id") or item.get("productId") or "").strip()
         line_qty = quantity(item.get("qty") or item.get("quantity"), 1)
         qty += line_qty
-        if not pid:
-            continue
-        entry = book.get(pid)
-        prices = entry.get("prices") if isinstance(entry, dict) \
-            and isinstance(entry.get("prices"), dict) else {}
-        if not prices:
-            continue
-        folded = {fold(k): v for k, v in prices.items()}
-        price = None
-        for raw in (item.get("variant"), item.get("color"), item.get("option")):
-            key = fold(raw)
-            if key and key in folded:
-                price = folded[key]
-                break
-        if price is None and fold("product") in folded:
-            price = folded[fold("product")]
-        if price is None and len(folded) == 1:
-            price = next(iter(folded.values()))
-        try:
-            price = float(price)
-        except (TypeError, ValueError):
-            price = 0.0
-        if price > 0:
+        price = 0.0
+        link = ""
+        if pid:
+            entry = book.get(pid)
+            prices = entry.get("prices") if isinstance(entry, dict) \
+                and isinstance(entry.get("prices"), dict) else {}
+            if prices:
+                folded = {fold(k): v for k, v in prices.items()}
+                found = None
+                for raw in (item.get("variant"), item.get("color"),
+                            item.get("option")):
+                    key = fold(raw)
+                    if key and key in folded:
+                        found = folded[key]
+                        break
+                if found is None and fold("product") in folded:
+                    found = folded[fold("product")]
+                if found is None and len(folded) == 1:
+                    found = next(iter(folded.values()))
+                try:
+                    price = float(found) if found is not None else 0.0
+                except (TypeError, ValueError):
+                    price = 0.0
+            # Fallback to catalog defaults when watchdog has no price.
+            if not (price and price > 0):
+                product = _catalog().get(pid)
+                variant_label = ""
+                for raw in (item.get("variant"), item.get("color"),
+                            item.get("option")):
+                    if raw:
+                        variant_label = str(raw)
+                        break
+                unit, link = _catalog_default_unit_cost(product, variant_label)
+                if unit > 0:
+                    price = float(unit)
+        if price and price > 0:
             total += int(round(price * line_qty))
+        if link and not catalog_link:
+            catalog_link = link
     result["costNgn"] = int(total)
     result["qty"] = int(qty)
-    # Optional supplier link: the first item whose product has a saved
-    # supplier URL contributes it, so the desk opens with the link attached.
-    try:
-        import catalog as catalog_mod
-        index = catalog_mod.product_index()
-        for item in items:
-            pid = str(item.get("id") or item.get("productId") or "").strip()
-            product = index.get(pid) if pid else None
-            if not isinstance(product, dict):
-                continue
-            link = clean_supplier_link(
-                product.get("supplierSku") or product.get("supplierUrl")
-                or product.get("supplier_url"))
-            if link:
-                result["link"] = link
-                break
-    except Exception:
-        pass
+    result["link"] = catalog_link
+    # If we still have no link, scan the catalog index to pick up any saved
+    # supplier URL from the ordered items.
+    if not result["link"]:
+        try:
+            idx = _catalog()
+            for item in items:
+                pid = str(item.get("id") or item.get("productId") or "").strip()
+                product = idx.get(pid) if pid else None
+                if not isinstance(product, dict):
+                    continue
+                link = clean_supplier_link(
+                    product.get("supplierSku") or product.get("supplierUrl")
+                    or product.get("supplier_url"))
+                if link:
+                    result["link"] = link
+                    break
+        except Exception:
+            pass
     return result
+
+
+def apply_supplier_defaults_to_snapshot(snapshot, order):
+    """Fill in supplier cost defaults when the snapshot has a blank/zero cost.
+
+    Ensures Column G ("Supplier costs · NGN / FCFA") is populated from the
+    catalog / watchdog price book whenever the supplier cost was left blank
+    or zero at staging or processing time. Mutates and returns the snapshot.
+    """
+    if not isinstance(snapshot, dict):
+        return snapshot
+    snapshot = dict(snapshot)
+    payload = order_payload(order)
+    items = payload.get("items") or []
+    existing_cost = amount(snapshot.get("supplierCostNgn"))
+    existing_unit = amount(snapshot.get("supplierUnitPriceNgn"))
+    if existing_cost > 0 or existing_unit > 0:
+        return snapshot
+    defaults = saved_supplier_defaults(items)
+    if defaults.get("costNgn", 0) > 0:
+        qty = quantity(snapshot.get("supplierQty"),
+                       quantity(None, order_quantity(order)))
+        cost = int(defaults["costNgn"])
+        unit = int((Decimal(cost) / Decimal(max(1, qty))).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP))
+        snapshot["supplierCostNgn"] = cost
+        snapshot["supplierUnitPriceNgn"] = unit
+        snapshot["supplierQty"] = qty
+    if defaults.get("link") and not snapshot.get("supplierLink"):
+        snapshot["supplierLink"] = clean_supplier_link(defaults["link"])
+    return snapshot
 
 
 def order_location(order):
@@ -444,8 +574,14 @@ def order_value(order, key, default=None):
         return default
 
 
-def account_block(order, *, current_rate=None):
-    """Return a copy of a stored snapshot, or a stable legacy estimate."""
+def account_block(order, *, current_rate=None, apply_defaults=True):
+    """Return a copy of a stored snapshot, or a stable legacy estimate.
+
+    When ``apply_defaults`` is true (the default), blank/zero supplier costs
+    are auto-filled from the catalog / watchdog default so Column G is never
+    empty for known products. This applies at staging, processing and
+    push-time.
+    """
     payload = order_payload(order)
     stored = payload.get("accounting")
     if isinstance(stored, dict):
@@ -466,6 +602,8 @@ def account_block(order, *, current_rate=None):
         result.setdefault("deliveryExpense", 0)
         result.setdefault("notes", "")
         result.setdefault("snapshotSource", "legacy-estimate")
+        if apply_defaults:
+            result = apply_supplier_defaults_to_snapshot(result, order)
         return result
 
     # Before accounting shipped, no rate was recorded on an order. Use a
@@ -476,7 +614,12 @@ def account_block(order, *, current_rate=None):
     total = order_value(order, "total", payload.get("total", 0))
     at = (order_value(order, "updated_at") or order_value(order, "at")
           or payload.get("at") or "")
-    return new_snapshot(total, currency, LEGACY_RATE, at, legacy=True)
+    defaults = saved_supplier_defaults(payload.get("items") or [])
+    snap = new_snapshot(total, currency, LEGACY_RATE, at, legacy=True,
+                        supplier_cost_ngn=defaults.get("costNgn", 0),
+                        supplier_qty=defaults.get("qty", 0),
+                        supplier_link=defaults.get("link", ""))
+    return snap
 
 
 def entry_from_order(order, archived_ids=None):

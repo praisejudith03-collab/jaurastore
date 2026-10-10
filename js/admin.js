@@ -4196,6 +4196,7 @@ function salesPanel() {
         </div>
         ${periods.map(([v, label]) => `<button type="button" class="an-rng${salesProfitPeriod === v ? " is-on" : ""}" data-sales-period="${v}">${label}</button>`).join("")}
         <a class="btn btn-line" href="/admin/accounting">Accounting queue</a>
+        <a class="btn btn-line" href="/admin/accounting#import">📥 Import historical CSV</a>
       </div>
     </div>
     <p class="admin-note">Revenue, supplier cost, transport and net profit for the batches you pushed off the accounting desk, organised by batch name and date. Batch snapshots are immutable, so history stays exactly as it was the day you pushed it.</p>
