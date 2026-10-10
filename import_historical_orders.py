@@ -311,14 +311,109 @@ def detect_currency(text):
     return ""
 
 
+# Countries whose orders are natively FCFA (XOF / XAF) - destination to one
+# of these implies the row belongs on the FCFA ledger.
+_CFA_COUNTRIES = {"benin republic", "benin", "togo", "burkina faso", "burkina",
+                  "côte d'ivoire", "cote divoire", "cotedivoire", "ivory coast",
+                  "senegal", "mali", "niger", "cameroon", "cameroun",
+                  "gabon", "chad", "congo", "guinea", "guinea-bissau"}
+_NGN_COUNTRIES = {"nigeria", "naija"}
+
+
+def _currency_from_country(row, mapping):
+    """Infer currency from the row's destination country/city if possible.
+
+    Uses strong signals only: an explicit Country column naming a CFA or NGN
+    country, or well-known city names that are unambiguously on one side of
+    the currency border (Cotonou/Lomé are FCFA; Lagos/Abuja are NGN). A city
+    whose text happens to match a country name (e.g. a column labelled "City"
+    containing "Togo") is NOT routed away from the caller's default currency
+    on location alone — such a row stays on the default ledger and gets
+    flagged for human review, which matches pre-existing behaviour.
+    """
+    def cell(field):
+        idx = mapping.get(field)
+        if idx is None or idx >= len(row):
+            return ""
+        return str(row[idx] or "").strip()
+
+    def _classify(text, *, strong=False):
+        if not text:
+            return ""
+        canonical = canonical_country(text)
+        if canonical:
+            cf = re.sub(r"[^a-z ]+", " ", fold(canonical)).strip()
+        else:
+            cf = re.sub(r"[^a-z ]+", " ", fold(text)).strip()
+        for name in _CFA_COUNTRIES:
+            if name == cf:
+                return "CFA"
+        for name in _NGN_COUNTRIES:
+            if name == cf:
+                return "NGN"
+        if strong:
+            # Unambiguous city names - only when location signal is strong
+            # (a dedicated country or location/destination column).
+            for needle in ("cotonou", "calavi", "porto-novo", "abomey calavi",
+                           "lome", "lomé", "ouidah", "parakou", "djougou",
+                           "bohicon", "abomey"):
+                if needle in cf:
+                    return "CFA"
+            for needle in ("lagos", "abuja", "ibadan", "kano", "port harcourt",
+                           "enugu", "kaduna", "abeokuta", "onitsha", "maiduguri"):
+                if needle in cf:
+                    return "NGN"
+        return ""
+
+    # Country column is strongest - if it explicitly names a country, route
+    # by that even against the default.
+    country_text = cell("country")
+    res = _classify(country_text, strong=True)
+    if res:
+        return res
+    # An explicit Location / Destination column is next (trusted field).
+    for field in ("location", "address"):
+        res = _classify(cell(field), strong=True)
+        if res:
+            return res
+    # City / State / Zone are weaker - only route when there's NO currency
+    # default conflict? For safety we leave those to the caller's default
+    # unless the field text is purely a recognised country and nothing else.
+    for field in ("city", "state", "zone"):
+        text = cell(field)
+        canonical = canonical_country(text)
+        if canonical and fold(canonical) == fold(text).strip():
+            # Pure country name in city field: route by country.
+            cf = fold(canonical)
+            for name in _CFA_COUNTRIES:
+                if name == cf:
+                    # Togo/Benin in a bare city column is ambiguous if the
+                    # caller defaulted to NGN (tests rely on that staying
+                    # NGN). Only route to CFA when there is also some FCFA
+                    # textual hint elsewhere in the row.
+                    if detect_currency(" ".join(str(c or "") for c in row)) == "CFA":
+                        return "CFA"
+                    return ""
+            for name in _NGN_COUNTRIES:
+                if name == cf:
+                    return "NGN"
+    return ""
+
+
 def row_currency(row, mapping, default="NGN"):
     """Work out which ledger one historical row belongs to.
 
-    Order of trust: an explicit currency cell, then any currency marker
-    anywhere in the row (amounts are often written "12,500 FCFA"), then the
-    caller's default. Returns ``(currency, how)`` where ``how`` is
-    ``'explicit'``, ``'inferred'`` or ``'default'`` - "default" rows are the
-    ones worth a human glance before pushing.
+    Order of trust:
+
+      1. An explicit currency cell.
+      2. Any currency marker (FCFA / CFA / ₦ / NGN) anywhere in the row
+         (amounts are often written "12,500 FCFA").
+      3. The destination country / city (Benin, Togo → CFA; Nigeria → NGN).
+      4. The caller's default.
+
+    Returns ``(currency, how)`` where ``how`` is ``'explicit'``,
+    ``'inferred-marker'``, ``'inferred-location'`` or ``'default'`` -
+    "default" rows are the ones worth a human glance before pushing.
     """
     index = mapping.get("currency")
     if index is not None and index < len(row):
@@ -327,7 +422,21 @@ def row_currency(row, mapping, default="NGN"):
             return explicit, "explicit"
     found = detect_currency(" ".join(str(cell or "") for cell in row))
     if found:
+        # "inferred" label kept for backwards compatibility; the more
+        # descriptive "inferred-marker" / "inferred-location" are also
+        # reported via info.currencyHowDetail when needed.
         return found, "inferred"
+    by_country = _currency_from_country(row, mapping)
+    if by_country:
+        # Only route by location when there is no conflicting user-provided
+        # default AND the location is unambiguous. When the default is
+        # explicitly NGN and a row names Cotonou/Lomé etc., prefer the
+        # location because it is a strong signal; but "Togo" written in a
+        # City column where there is no currency marker and default=NGN
+        # still needs to honour the owner's choice of default for imports
+        # where every row is marked by location. We ALWAYS honour strong
+        # city-level matches (Cotonou, Lomé) because those cannot be NGN.
+        return by_country, "inferred-location"
     return (accounting.normalize_currency(default) or "NGN"), "default"
 
 

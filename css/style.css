@@ -8640,3 +8640,29 @@ body[data-page="accounting"] button:disabled { cursor: not-allowed; opacity: .5;
   .aa-settings-form { grid-template-columns: 1fr; }
   .aa-stage-head { align-items: stretch; flex-direction: column; }
 }
+
+/* --- CSV Importer dialog --- */
+.aa-csv-drop { display: flex; flex-direction: column; gap: 4px; align-items: center; justify-content: center; margin-top: 13px; padding: 22px 16px; border: 2px dashed var(--aa-line); border-radius: 12px; background: #fbfbf8; cursor: pointer; transition: background .15s, border-color .15s; text-align: center; }
+.aa-csv-drop:hover, .aa-csv-drop.is-dragover { border-color: var(--aa-accent); background: #f2f6ee; }
+.aa-csv-drop strong { font: 500 15px/1.2 var(--serif,Georgia,serif); color: var(--aa-accent-dark); }
+.aa-csv-drop span { color: var(--aa-muted); font-size: 10.5px; margin-top: 2px; }
+.aa-csv-drop em { display: block; margin-top: 6px; color: var(--aa-ink); font-size: 11px; font-style: normal; word-break: break-all; }
+.aa-csv-status { margin-top: 12px; padding: 8px 10px; border-radius: 8px; background: #f4f5f0; color: #55534b; font-size: 11px; min-height: 16px; }
+.aa-csv-status.is-error { background: #fff8f5; border: 1px solid #ead2cb; color: var(--aa-error); }
+.aa-csv-preview { margin-top: 10px; max-height: 220px; overflow: auto; border: 1px solid var(--aa-line); border-radius: 9px; }
+.aa-csv-prev-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+.aa-csv-prev-table th { padding: 7px 8px; background: #f4f5f0; color: var(--aa-muted); font-size: 9px; font-weight: 700; text-transform: uppercase; text-align: left; }
+.aa-csv-prev-table td { padding: 6px 8px; border-top: 1px solid #f0efe9; }
+
+/* --- Stage queue search / filter --- */
+.aa-stage-search { flex: 1; min-width: 200px; max-width: 320px; }
+.aa-stage-search input { width: 100%; min-height: 32px; padding: 6px 10px; border: 1px solid var(--aa-line); border-radius: 8px; background: #fff; color: var(--aa-ink); font-size: 11.5px; }
+.aa-stage-search input:focus { border-color: #aebca3; box-shadow: 0 0 0 3px #5266471a; outline: 0; }
+.aa-filter-note { color: var(--aa-muted); font-size: 11px; font-weight: 400; margin-left: 8px; letter-spacing: 0; text-transform: none; }
+.aa-heading-actions { display: flex; gap: 8px; align-items: center; }
+.aa-sheet-error strong { color: var(--aa-error); }
+@media (max-width: 680px) {
+  .aa-top-actions .aa-back-button { display: none; }
+  .aa-top-actions { gap: 6px; }
+  .aa-currency-switch button span { display: none; }
+}

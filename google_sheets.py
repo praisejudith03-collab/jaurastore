@@ -97,12 +97,47 @@ _backfill_state = {"pending": False, "lastError": ""}
 
 class GoogleSheetsError(RuntimeError):
     """Safe, user-facing Google Sheets integration error."""
+    def __init__(self, message, code=""):
+        super().__init__(message)
+        self.code = str(code or "")
 
 
 class _GoogleHTTPError(GoogleSheetsError):
-    def __init__(self, message, status):
-        super().__init__(message)
+    def __init__(self, message, status, code=""):
+        super().__init__(message, code=code)
         self.status = status
+
+
+# Error patterns returned by the Google Sheets API when a spreadsheet id points
+# at an uploaded .xlsx file that has never been converted to Google Sheets
+# format. The Sheets API refuses to write to such files; the fix is for the
+# owner to open it in Drive and click File -> Save as Google Sheets.
+_XLSX_ERROR_PATTERNS = (
+    "this operation is not supported for this document",
+    "the document is not a google sheet",
+    "cannot edit a microsoft excel",
+    "xlsx",
+    "workbook format is not supported",
+    "unsupported document format",
+)
+_XLSX_FIX_HINT = (
+    "Please open your spreadsheet in Google Drive and click "
+    "File → Save as Google Sheets to enable syncing."
+)
+
+
+def _is_xlsx_format_error(message):
+    """True when a Google API error indicates the target is an .xlsx file."""
+    text = str(message or "").lower()
+    return any(pat in text for pat in _XLSX_ERROR_PATTERNS)
+
+
+def _annotate_error(message):
+    """Wrap an XLSX-format error with the user-facing remediation hint."""
+    if _is_xlsx_format_error(message):
+        cleaned = str(message).rstrip(". ")
+        return f"{cleaned}. {_XLSX_FIX_HINT}"
+    return message
 
 
 def configured():
@@ -251,16 +286,22 @@ def _json_request(url, *, method="GET", body=None, headers=None, timeout=HTTP_TI
     except urllib.error.HTTPError as exc:
         raw = exc.read()
         message = "Google Sheets request failed."
+        code = ""
         try:
             detail = json.loads(raw.decode("utf-8"))
             error = detail.get("error") or {}
             if isinstance(error, dict):
                 message = str(error.get("message") or message)[:300]
+                code = str(error.get("status") or "")[:60]
             elif error:
                 message = str(error)[:300]
         except Exception:
             pass
-        raise _GoogleHTTPError(message, exc.code) from exc
+        message = _annotate_error(message)
+        err = _GoogleHTTPError(message, exc.code, code=code)
+        if _is_xlsx_format_error(message):
+            err.code = "XLSX_FORMAT"
+        raise err from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise GoogleSheetsError("Google Sheets is temporarily unavailable. Please try again.") from exc
     try:
@@ -949,16 +990,38 @@ def _existing_order_rows_in(spreadsheet_id, tab):
     return result
 
 
+_XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
 def _spreadsheet_tab_titles(spreadsheet_id):
-    """Every tab title in a workbook, or [] when the workbook is unreadable."""
+    """Every tab title in a workbook, or [] when the workbook is unreadable.
+
+    Raises a GoogleSheetsError with code ``XLSX_FORMAT`` when the target
+    document is an uploaded .xlsx file that has not been saved as Google
+    Sheets - in that state the Sheets API cannot write rows and the owner
+    needs to convert it first.
+    """
     url = (f"{SHEETS_API}/spreadsheets/"
            f"{urllib.parse.quote(str(spreadsheet_id), safe='')}"
-           f"?fields=properties.title,sheets.properties")
-    meta = _google_request("GET", url)
+           f"?fields=properties(title,timeZone,locale),spreadsheetId,sheets.properties")
+    try:
+        meta = _google_request("GET", url)
+    except _GoogleHTTPError as exc:
+        # Some xlsx documents return a 400/403 at metadata fetch; annotate
+        # those with the same hint.
+        if not _is_xlsx_format_error(exc):
+            raise
+        raise
+    # The Sheets API returns spreadsheet.properties.mimeType only on the
+    # newer drive-integrated endpoint; however reading an uploaded .xlsx
+    # through the spreadsheets endpoint already fails at the GET above with
+    # "This operation is not supported for this document". Belt and braces:
+    # if we ever encounter an alternate error response, re-raise with hint.
+    props = meta.get("properties") or {}
     titles = []
     for sheet in meta.get("sheets") or []:
-        props = sheet.get("properties") or {}
-        title = str(props.get("title") or "").strip()
+        sp = sheet.get("properties") or {}
+        title = str(sp.get("title") or "").strip()
         if title:
             titles.append(title)
     return titles

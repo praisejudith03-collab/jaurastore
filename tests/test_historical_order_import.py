@@ -239,20 +239,30 @@ def test_a_city_that_names_a_country_is_promoted_to_country():
 def test_a_bare_destination_column_reaches_the_ledger_location():
     """Regression: a "Town"/"Destination" column resolved fine but was never
     written onto the order, so accounting's order_location() saw no country,
-    city or zone and the ledger's Location cell arrived empty."""
+    city or zone and the ledger's Location cell arrived empty.
+
+    Smart routing: Cotonou is unambiguously Benin (FCFA), so this row
+    auto-routes to the CFA ledger.
+    """
     headers = ["Date", "Selling Price", "Town"]
     result = _import(headers, [["2024-03-14", "45,000", "Cotonou"]])
-    order, info = _first(result["ngn"])
+    order, info = _first(result["cfa"])
     assert info["location"] == "Cotonou"
+    assert info["currency"] == "CFA"
+    assert info["currencyHow"] == "inferred-location"
     assert order["city"] == "Cotonou"
     assert accounting.entry_from_order(order)["location"] == "Cotonou"
 
 
 def test_a_destination_that_names_a_country_is_not_also_used_as_the_city():
+    """Smart routing: "Togo" in a Destination column is a FCFA country and
+    auto-routes to the CFA ledger; the country is captured but not duplicated
+    into the city field."""
     headers = ["Date", "Selling Price", "Destination"]
     result = _import(headers, [["2024-03-14", "45,000", "Togo"]])
-    order, info = _first(result["ngn"])
+    order, info = _first(result["cfa"])
     assert info["location"] == "Togo"
+    assert info["currency"] == "CFA"
     assert order["country"] == "Togo"
     assert order["city"] == ""
 
