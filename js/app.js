@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=202";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=202";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=203";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=203";
 }
 
 function renderCategories() {
@@ -1106,7 +1106,10 @@ function paintProduct(root, p) {
       if (priceEl) {
         // A selection is an exact purchasable variant (or a configured option
         // override), so replace the initial product range with its own price.
-        const cur = Number(p.priceNgn) > 0 ? JA.currency() : "CFA";
+        // displayCur keeps a variant-priced product (base price optional) in
+        // the shopper's currency with exact Naira maths, instead of forcing
+        // a zero-priced CFA conversion.
+        const cur = JA.displayCur ? JA.displayCur(p) : (Number(p.priceNgn) > 0 ? JA.currency() : "CFA");
         const now = JA.priceOf(p, cur, selectedVariant);
         const was = JA.compareOf ? JA.compareOf(p, cur, selectedVariant) : 0;
         priceEl.dataset.priceState = "exact";

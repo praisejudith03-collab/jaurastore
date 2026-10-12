@@ -53,20 +53,16 @@ select table_name
 
 Creates `public.products` (canonical `id text` primary key) and repairs any older hand-built table add-only.
 
-Copy the **whole block** into one new query (108 lines). Raw link once this is merged: https://github.com/praisejudith03-collab/jaurastore/raw/main/schema_sections/01_products.sql
+Copy the **whole block** into one new query (109 lines). Raw link once this is merged: https://github.com/praisejudith03-collab/jaurastore/raw/main/schema_sections/01_products.sql
 
 ```sql
--- Jaura Store — Supabase schema. Run once in the Supabase SQL editor.
--- Idempotent: re-running is safe. PostgreSQL is the production source of
--- truth; SQLite on Render is only a boot cache restored from these tables.
--- Required env vars: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.
+-- Jaura Store Supabase schema (run once in the SQL editor; idempotent).
+-- PostgreSQL is the source of truth; SQLite is only a boot cache.
 
 -- SECTION: products
 -- ------------------------------------------------------------ products
--- Canonical columns are the source of truth (priceNgn, priceCfa, image_url,
--- stock_quantity, ...); legacy camelCase aliases (image, stock, ...) are kept
--- and production writes both. camelCase MUST be quoted or Postgres folds it to
--- lowercase (PGRST204).
+-- Canonical columns first; legacy aliases (image, stock) ride along.
+-- camelCase MUST be quoted or Postgres folds it to lowercase (PGRST204).
 create table if not exists products (
   id               text primary key,
   "legacyId"       text,
@@ -107,6 +103,9 @@ create table if not exists products (
   source           text default 'admin',
   "supplierId" text not null default '',
   "supplierSku" text not null default '',
+  "supplierCost" numeric,
+  "optionSupplierCost" jsonb,
+  is_deleted boolean not null default false,
   updated_at       timestamptz default now(),
   constraint products_price_positive check ("priceCfa" >= 0 and "priceNgn" >= 0
     and "compareCfa" is null or "compareCfa" >= 0
@@ -115,9 +114,7 @@ create table if not exists products (
     and stock is null or stock >= 0)
 );
 
--- Repair an EXISTING hand-built table: add-only, never drops data. Covers
--- every column in supabase_store._CRITICAL_PRODUCT_COLUMNS (a product cannot
--- be sold without them); "id" is the primary key and cannot be added.
+-- Repair an older table: add-only (covers _CRITICAL_PRODUCT_COLUMNS).
 alter table products add column if not exists name               text;
 alter table products add column if not exists "nameFr"           text;
 alter table products add column if not exists "descriptionFr"    text;
@@ -160,6 +157,10 @@ alter table products add column if not exists description      text;
 alter table products add column if not exists stock_quantity   integer not null default 0;
 alter table products add column if not exists "supplierId" text not null default '';
 alter table products add column if not exists "supplierSku" text not null default '';
+-- Variant supplier costing + the Trash Bin soft-delete flag.
+alter table products add column if not exists "supplierCost" numeric;
+alter table products add column if not exists "optionSupplierCost" jsonb;
+alter table products add column if not exists is_deleted boolean not null default false;
 
 -- Dead leftovers (price_cfa, price_ngn, name_fr, compare_cfa, compare_ngn,
 -- option_stock) are harmless legacy junk. Never drop them and never rename

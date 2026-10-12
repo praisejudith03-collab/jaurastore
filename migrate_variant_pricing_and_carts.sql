@@ -26,6 +26,16 @@ alter table if exists products
 -- stock sync mirrors availability per variant option, not per product.
 alter table if exists products
   add column if not exists "optionSupplierSku" jsonb;
+-- Variant-level supplier costing: what ONE unit of each option costs the
+-- owner, in Naira. Written by the admin product editor and the single-run
+-- scripts/backfill_variant_prices.py; never shown to shoppers.
+alter table if exists products
+  add column if not exists "supplierCost"      numeric;
+alter table if exists products
+  add column if not exists "optionSupplierCost" jsonb;
+-- Explicit soft-delete flag for the Trash Bin (alongside source='deleted').
+alter table if exists products
+  add column if not exists is_deleted boolean not null default false;
 -- Kept alongside for completeness (older tables sometimes lack these too):
 alter table if exists products
   add column if not exists "optionStock"     jsonb;

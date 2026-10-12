@@ -846,6 +846,13 @@ def normalize(product):
             product.get("supplierSku") or product.get("supplier_sku")
             or product.get("supplierUrl") or product.get("supplier_url")
             or product.get("supplierURL"), 500),
+        # Product-level supplier cost (what ONE unit costs the owner, in
+        # Naira). A dedicated admin field - never the shopper's price, never
+        # derived from it, and never rendered on the storefront. Optional:
+        # blank/zero stays None so "not set" is distinguishable from "free".
+        "supplierCost": _clean_supplier_cost(
+            product.get("supplierCost") or product.get("supplier_cost")
+            or product.get("supplierPrice") or product.get("supplier_price")),
         # Per-option supplier reference links (component -> URL). The
         # in-process supplier watchdog may use them to augment product-level
         # variant matching; blank entries are left alone.
@@ -858,6 +865,16 @@ def normalize(product):
             or product.get("optionSkus") or product.get("option_skus")
             or product.get("variantSku") or product.get("variant_sku")
             or product.get("variantSkus") or product.get("variant_skus")),
+        # Per-option supplier COSTS (what the owner pays the supplier for one
+        # variant, in Naira) - e.g. {"Small: pink": 1200, "Big: pink": 2100}.
+        # Distinct from optionPrices (what the SHOPPER pays) and never shown
+        # publicly; the admin desk and the single-run backfill script write
+        # and read them. Blank/zero entries are dropped like optionPrices.
+        "optionSupplierCost": _clean_option_prices(
+            product.get("optionSupplierCost") or product.get("option_supplier_cost")
+            or product.get("optionSupplierCosts") or product.get("option_supplier_costs")
+            or product.get("variantSupplierCosts") or product.get("variant_supplier_costs")
+            or product.get("optionCosts") or product.get("option_costs")),
         "reviews": _clean_admin_reviews(product.get("reviews") or product.get("customerReviews") or product.get("customer_reviews")),
         "updated_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
@@ -1254,6 +1271,25 @@ def bulk_discount_for(product, quantity):
     except Exception:
         return 0
 
+
+
+def _clean_supplier_cost(raw):
+    """A single supplier cost in Naira: a non-negative int, or None.
+
+    Supplier costs are owner/reference data: the value is kept exact (no CFA
+    derivation), a negative or nonsense input means "not set" rather than an
+    error, and zero is dropped so a blank field never pretends the piece is
+    free to source.
+    """
+    import security as sec
+    if isinstance(raw, str):
+        # "1,800" and "1 800" are ordinary human spellings of a cost figure.
+        cleaned_text = raw.replace(",", "").replace(" ", "").strip()
+        if not cleaned_text:
+            return None
+        raw = cleaned_text
+    cleaned = sec.clean_int(raw, None, 0, 10**9)
+    return cleaned if cleaned else None
 
 
 def _clean_option_prices(raw):

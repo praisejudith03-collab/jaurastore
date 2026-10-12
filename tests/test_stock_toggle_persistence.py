@@ -268,7 +268,9 @@ def test_clean_editor_has_only_the_approved_product_controls():
     them again, at BOTH levels (one code for the product, one per variant);
     import, discount, translation, visibility, rating and review-entry
     controls are still not part of the editor, and verified reviews remain in
-    their separate flow."""
+    their separate flow. The dedicated supplier-cost field joined the
+    approved set (owner spec 2026-10: per-variant pricing + cost controls);
+    per-option prices/costs ride on data attributes, not names."""
     import re
 
     js = _admin_js()
@@ -276,11 +278,12 @@ def test_clean_editor_has_only_the_approved_product_controls():
     names = set(re.findall(r'name="([^"]+)"', form))
     assert names == {
         "id", "name", "sku", "description", "category", "priceNgn", "supplierSku",
+        "supplierCost",
         "stock", "enableCustomNote", "customNotePrompt",
     }
     for required in (
         "Product title", "SKU (your code for this product)", "Description",
-        "Category", "Price (Naira ₦)",
+        "Category", "Price (Naira ₦)", "Supplier cost (Naira ₦)",
         "Main supplier URL", "Stock quantity", "Enable a note for this product",
         "Customer prompt", "id=\"media-box\"", "id=\"add-opt\"",
     ):
