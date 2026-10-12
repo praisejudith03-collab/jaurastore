@@ -64,6 +64,8 @@ FULL_PRODUCT_COLUMNS = {
     "reviews", "dimensions", "bulkQty", "bulkPercent", "placeholderImage",
     "usesPlaceholder", "source", "supplierId", "supplierSku", "updated_at",
     "enableCustomNote", "customNotePrompt",
+    # Variant-level supplier costing + the Trash Bin soft-delete flag.
+    "supplierCost", "optionSupplierCost", "is_deleted",
 }
 
 

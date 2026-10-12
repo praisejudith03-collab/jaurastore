@@ -43,15 +43,25 @@ def test_abandoned_cart_threshold_is_twenty_minutes():
 
 
 def test_product_editor_excludes_redundant_discount_and_merchandising_fields():
+    """Discount, merchandising and translation controls stay out of the
+    product editor. Per-option SELLING PRICE and SUPPLIER COST inputs
+    (data-opt-price / data-opt-cost) are approved editor controls since the
+    variant-pricing spec (2026-10): they are pricing essentials, not
+    merchandising extras — the old "Option price overrides" panel they
+    replaced is still banned."""
     source = (ROOT / "js/admin.js").read_text(encoding="utf-8")
     form = source[source.index("function productForm(p = {})"):source.index("async function handleProductSubmit")]
     for removed in ("Option price overrides", "Promo Discount", "Best Seller",
                     "New Product Arrival", "Price reduction / strikethrough",
-                    "bulkQty", "bulkPercent", "data-opt-price"):
+                    "bulkQty", "bulkPercent"):
         assert removed not in form, removed
     # Shop-wide volume tiers remain available outside the product editor.
     assert "bulkDiscountTiers" in source
-    assert "data-opt-price" not in source
+    # The approved per-option pricing inputs exist (spec 2026-10) and the
+    # deprecated overrides panel is still gone everywhere in the file.
+    assert "data-opt-price" in source
+    assert "data-opt-cost" in source
+    assert "Option price overrides" not in source
 
 
 def test_watchdog_runs_hourly_and_audits_service_health():

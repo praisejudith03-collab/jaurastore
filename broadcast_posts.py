@@ -281,6 +281,13 @@ def is_postable(product, *, oos=None):
         return False
     if product.get("deleted") or product.get("deletedAt"):
         return False
+    # The Trash Bin tombstones rows with an explicit is_deleted boolean (and
+    # catalog.merged() already drops trashed ids earlier, so this is defence
+    # in depth): a trashed product must never be offered to a broadcast.
+    if product.get("is_deleted") or product.get("isDeleted"):
+        return False
+    if str(product.get("source") or "").strip().casefold() == "deleted":
+        return False
     return bool(available_options(product, oos=oos))
 
 

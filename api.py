@@ -378,9 +378,15 @@ _FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock",
                          "variantStock", "inventory",
                          # Supplier and per-option sourcing/SKU notes are
                          # internal admin reference data, never a shopper's
-                         # business.
+                         # business. The same holds for supplier COSTS (what
+                         # one unit costs the owner, product-level and
+                         # per-option) - they must never reach a public row.
                          "supplierId", "supplier_id", "supplierSku", "supplier_sku",
                          "supplierUrl", "supplier_url", "supplierURL",
+                         "supplierCost", "supplier_cost",
+                         "optionSupplierCost", "option_supplier_cost",
+                         "optionSupplierCosts", "option_supplier_costs",
+                         "optionCosts", "option_costs",
                          "optionSupplierSku", "option_supplier_sku",
                          "optionSupplierUrls", "option_supplier_urls",
                          "variantSupplierUrls", "variant_supplier_urls",
@@ -1242,6 +1248,16 @@ def _server_unit_price(product, currency, variant=""):
                 ngn = _price_int(folded[_fold(candidate)])
                 cfa = currency_mod.to_cfa(ngn)
                 break
+    if not ngn and not cfa and isinstance(overrides, dict) and overrides:
+        # The base price is OPTIONAL for a fully variant-priced product. A
+        # line that somehow reaches checkout without its variant string (an
+        # old cart, a legacy client) must never total ₦0: price it "from"
+        # the cheapest variant, exactly like the storefront card does.
+        values = [_price_int(v) for v in overrides.values()]
+        values = [v for v in values if v > 0]
+        if values:
+            ngn = min(values)
+            cfa = currency_mod.to_cfa(ngn)
     if currency == "CFA":
         # CFA is a converted/display currency: whether the amount is stored
         # explicitly or derived from the Naira base, it is always a clean

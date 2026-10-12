@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=202" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=203" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -514,23 +514,32 @@ function refreshOptionChips() {
   const typedStock = keepActiveOptionMap(currentOptionStock(), options);
   const typedSupplier = keepActiveOptionMap(currentOptionSupplierSku(), options);
   const typedSku = keepActiveOptionMap(currentOptionSku(), options);
+  // Typed variant prices/costs must be gathered BEFORE the repaint below -
+  // they live in the same repainted box, so re-reading after innerHTML is
+  // set would lose every figure the admin has typed this session.
+  const typedPrices = keepActiveOptionMap(currentOptionPrices(), options);
+  const typedCosts = keepActiveOptionMap(currentOptionSupplierCosts(), options);
   const optionStock = options.length
     ? { ...keepActiveOptionMap(existing.optionStock, options), ...typedStock } : {};
   const optionSupplierSku = options.length
     ? { ...keepActiveOptionMap(existing.optionSupplierSku, options), ...typedSupplier } : {};
   const optionSku = options.length
     ? { ...keepActiveOptionMap(existing.optionSku || existing.optionSkus, options), ...typedSku } : {};
-  const optionPrices = keepActiveOptionMap(existing.optionPrices, options);
+  const optionPrices = options.length
+    ? { ...keepActiveOptionMap(existing.optionPrices, options), ...typedPrices } : {};
   const optionCompareAt = keepActiveOptionMap(existing.optionCompareAt, options);
+  const optionSupplierCost = options.length
+    ? { ...keepActiveOptionMap(existing.optionSupplierCost || existing.optionSupplierCosts, options), ...typedCosts } : {};
   const qty = Math.max(0, Number(document.getElementById("stock-qty")?.value) || 0);
   const stock = options.length
     ? Object.values(optionStockValues(options, optionStock)).reduce((n, value) => n + value, 0)
     : qty;
   const fake = { ...existing, options, stock, optionStock, optionPrices,
-    optionCompareAt, optionSupplierSku, optionSku };
+    optionCompareAt, optionSupplierSku, optionSku, optionSupplierCost };
   const varBox = document.getElementById("var-box");
-  if (varBox) varBox.innerHTML = optionStockHTML(fake) + optionSupplierLinksHTML(fake) + optionSkuHTML(fake);
+  if (varBox) varBox.innerHTML = optionPricesHTML(fake) + optionStockHTML(fake) + optionSupplierLinksHTML(fake) + optionSkuHTML(fake) + optionSupplierCostsHTML(fake);
   syncOptionStockTotals();
+  refreshPriceOptionality();
 }
 function addOptionRow(title, values) {
   const box = document.getElementById("opt-box");
@@ -765,6 +774,7 @@ function bindOptions() {
     varBox.dataset.bound = "1";
     varBox.addEventListener("input", (e) => {
       if (e.target && e.target.matches && e.target.matches("[data-opt-stock]")) syncOptionStockTotals();
+      if (e.target && e.target.matches && e.target.matches("[data-opt-price]")) refreshPriceOptionality();
     });
   }
   document.getElementById("add-opt")?.addEventListener("click", () => addOptionRow("", ""));
@@ -870,6 +880,67 @@ function currentOptionSku() {
   });
   return map;
 }
+function optionPricesHTML(p) {
+  // Per-variant SELLING PRICE (what the shopper pays, in Naira). This is the
+  // admin entry point for "Small pink = ₦2,500 vs Big pink = ₦3,200": each
+  // option value gets its own price box, saved into the optionPrices map
+  // keyed exactly like the stock maps ("Colour: Red"). A row left blank
+  // simply keeps the product's base price - and when every row is filled
+  // the storefront shows the price RANGE instead of the base figure.
+  const options = p.options || [];
+  const prices = p.optionPrices || {};
+  const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
+    const key = `${opt.title}: ${value}`;
+    const raw = prices[key] != null ? prices[key] : (prices[value] != null ? prices[value] : "");
+    return `<label class="adx-var" data-optprice-row>
+      <span class="adx-var-name"><strong>${JA.escape(key)}</strong></span>
+      <span class="adx-var-qty au-price"><input type="number" min="0" inputmode="numeric" aria-label="Selling price for ${JA.escape(key)}" data-opt-price="${JA.escape(key)}" placeholder="Base price" value="${JA.escape(String(raw || ""))}" /><i>₦</i></span>
+    </label>`;
+  })).join("");
+  return rows ? `<div class="variant-stock-section"><h4>Selling price per option</h4>
+    <p class="admin-note">Optional. A blank row sells at the base PRICE (NAIRA ₦) above; fill every row and the shop shows the range (₦2,500 – ₦3,200) instead.</p>
+    <div class="adx-vars">${rows}</div></div>` : "";
+}
+function currentOptionPrices() {
+  const map = {};
+  document.querySelectorAll("[data-opt-price]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-price");
+    const value = String(inp.value || "").trim();
+    const n = parseInt(value, 10);
+    if (key && Number.isFinite(n) && n >= 0) map[key] = n;
+  });
+  return map;
+}
+function optionSupplierCostsHTML(p) {
+  // Per-variant SUPPLIER COST (what the owner pays the supplier for ONE unit
+  // of that option, in Naira). Purely internal costing data: the storefront
+  // never sees it. Blank means "not recorded yet" - the single-run supplier
+  // backfill (scripts/backfill_variant_prices.py) can fill it from the
+  // supplier link, but the owner's typed value always wins once present.
+  const options = p.options || [];
+  const costs = p.optionSupplierCost || {};
+  const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
+    const key = `${opt.title}: ${value}`;
+    const raw = costs[key] != null ? costs[key] : (costs[value] != null ? costs[value] : "");
+    return `<label class="adx-var" data-optcost-row>
+      <span class="adx-var-name"><strong>${JA.escape(key)}</strong></span>
+      <span class="adx-var-qty au-price"><input type="number" min="0" inputmode="numeric" aria-label="Supplier cost for ${JA.escape(key)}" data-opt-cost="${JA.escape(key)}" placeholder="Supplier cost (optional)" value="${JA.escape(String(raw || ""))}" /><i>₦</i></span>
+    </label>`;
+  })).join("");
+  return rows ? `<div class="variant-stock-section"><h4>Supplier cost per option</h4>
+    <p class="admin-note">What you pay your supplier for ONE piece of that option, in Naira. Internal only - shoppers never see it. Leave blank if not recorded.</p>
+    <div class="adx-vars">${rows}</div></div>` : "";
+}
+function currentOptionSupplierCosts() {
+  const map = {};
+  document.querySelectorAll("[data-opt-cost]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-cost");
+    const value = String(inp.value || "").trim();
+    const n = parseInt(value, 10);
+    if (key && Number.isFinite(n) && n >= 0) map[key] = n;
+  });
+  return map;
+}
 function optionStockHTML(p) {
   const opt = (p.options || [])[0];
   const vals = (opt && opt.values) || p.colors || [];
@@ -914,6 +985,20 @@ function syncOptionStockTotals() {
   const totalEl = document.getElementById("opt-stock-total");
   if (totalEl) totalEl.innerHTML = `<strong>Total: ${total}</strong> piece(s).`;
   if (qty) { qty.value = total; qty.readOnly = true; }
+}
+/** Show the base-price hint the moment every option row carries a price:
+ * the base PRICE (NAIRA ₦) then becomes optional and the storefront shows
+ * the range. Runs on option edits and while price/cost rows are typed. */
+function refreshPriceOptionality() {
+  const note = document.getElementById("price-optional-note");
+  if (!note) return;
+  const priceInputs = [...document.querySelectorAll("[data-opt-price]")];
+  const anyVariants = priceInputs.length > 0;
+  const allPriced = anyVariants && priceInputs.every((inp) => {
+    const n = parseInt(String(inp.value || "").trim(), 10);
+    return Number.isFinite(n) && n > 0;
+  });
+  note.hidden = !allPriced;
 }
 /* The CFA figure the shop will show, with its arithmetic spelled out.
  * Naira is the BASE currency and is stored exactly as typed; every CFA amount
@@ -1003,6 +1088,7 @@ const EDIT_FIELD_MAP = {
   customNotePrompt: ["customNotePrompt"],
   category: ["category"],
   supplierSku: ["supplierSku", "supplierUrl", "supplier_url"],
+  supplierCost: ["supplierCost"],
   // CFA is derived from the entered Naira price.
   priceNgn: ["priceNgn", "priceCfa"],
   stock: ["stock", "stock_quantity", "stockStatus"],
@@ -1012,10 +1098,13 @@ const EDIT_DATA_PREFIXES = [
   ["data-img-i", ["image", "image_url", "imageUrl", "images"]],
   ["data-opt-row", ["options", "optionStock", "optionPrices", "optionCompareAt",
                      "optionSupplierSku", "optionSupplierUrls", "option_supplier_urls",
+                     "optionSupplierCost", "optionSupplierCosts", "option_supplier_cost",
                      "stock", "stock_quantity", "stockStatus"]],
   ["data-opt-stock", ["optionStock", "stock", "stock_quantity", "stockStatus"]],
   ["data-opt-supplier", ["optionSupplierSku", "optionSupplierUrls", "option_supplier_urls"]],
   ["data-opt-sku", ["optionSku", "optionSkus", "option_sku", "variantSku"]],
+  ["data-opt-price", ["optionPrices"]],
+  ["data-opt-cost", ["optionSupplierCost", "optionSupplierCosts", "option_supplier_cost"]],
   ["data-var-row", ["stock", "stock_quantity"]],
   ["data-var-state", ["stock", "stock_quantity"]],
 ];
@@ -1098,8 +1187,12 @@ function productForm(p = {}) {
     </div>
     <div class="field"><label>Description</label><textarea name="description" rows="3" maxlength="2000">${JA.escape(p.description || "")}</textarea></div>
     <div class="field"><label>Category</label><select name="category" required>${cats}</select></div>
-    <div class="field"><label>Price (Naira ₦)</label><div class="au-price"><input name="priceNgn" type="number" min="0" inputmode="numeric" required value="${p.priceNgn || ""}" /><i>₦</i></div>
+    <div class="field"><label>Price (Naira ₦)</label><div class="au-price"><input name="priceNgn" type="number" min="0" inputmode="numeric" value="${p.priceNgn || ""}" /><i>₦</i></div>
       <p class="admin-note" id="cfa-preview">${JA.escape(cfaProof(p.priceNgn))}</p>
+      <p class="admin-note" id="price-optional-note" hidden>Optional for this product: every option below has its own selling price, so the shop shows the price range. Fill this only if one option should sell at it.</p>
+    </div>
+    <div class="field"><label>Supplier cost (Naira ₦)</label><div class="au-price"><input name="supplierCost" type="number" min="0" inputmode="numeric" value="${p.supplierCost || ""}" /><i>₦</i></div>
+      <p class="admin-note">What YOU pay your supplier for one piece, before your profit. Internal only - shoppers never see this figure.</p>
     </div>
     <div class="field"><label>Main supplier URL</label>
       <input name="supplierSku" type="url" inputmode="url" autocomplete="url" value="${JA.escape(p.supplierSku || p.supplierUrl || p.supplier_url || "")}" placeholder="https://…" />
@@ -1108,7 +1201,7 @@ function productForm(p = {}) {
       <h3 id="product-options-title">Options and variant supplier URLs <small id="opt-count">${opts.length}/20</small></h3>
       <div id="opt-box">${optionBlockHTML(opts)}</div>
       <button type="button" class="au-link-btn" id="add-opt">+ Add option</button>
-      <div id="var-box">${optionStockHTML({ ...p, options: opts, optionStock: savedOptionStock }) + optionSupplierLinksHTML({ ...p, options: opts }) + optionSkuHTML({ ...p, options: opts })}</div>
+      <div id="var-box">${optionPricesHTML({ ...p, options: opts }) + optionStockHTML({ ...p, options: opts, optionStock: savedOptionStock }) + optionSupplierLinksHTML({ ...p, options: opts }) + optionSkuHTML({ ...p, options: opts }) + optionSupplierCostsHTML({ ...p, options: opts })}</div>
     </section>
     <div class="field"><label>Stock quantity</label>
       <input name="stock" id="stock-qty" type="number" min="0" inputmode="numeric" value="${initialStock}" ${quantityReadonly} />
@@ -1198,16 +1291,53 @@ async function handleProductSubmit(e, existing) {
     ? Object.values(payloadOptionStock).reduce((total, quantity) => total + quantity, 0)
     : Math.max(0, parseInt(num("stock"), 10) || 0);
   const isOnline = existing ? existing.online !== false : true;
-  const optionPrices = keepActiveOptionMap(existing?.optionPrices, options);
+  // Typed variant prices/costs win over the saved maps row for row, so the
+  // owner can price one option without re-entering the others.
+  const optionPrices = {
+    ...keepActiveOptionMap(existing?.optionPrices, options),
+    ...keepActiveOptionMap(currentOptionPrices(), options),
+  };
   const optionCompareAt = keepActiveOptionMap(existing?.optionCompareAt, options);
+  const optionSupplierCost = {
+    ...keepActiveOptionMap(existing?.optionSupplierCost || existing?.optionSupplierCosts, options),
+    ...keepActiveOptionMap(currentOptionSupplierCosts(), options),
+  };
   const optionSupplierSku = keepActiveOptionMap(currentOptionSupplierSku(), options);
   const optionSku = keepActiveOptionMap(currentOptionSku(), options);
   // The product's own code: typed, else the row's saved one, else generated.
   const sku = productSku(fd.get("sku"), existing);
   const supplierRef = String(fd.get("supplierSku") || "").trim();
+  const supplierCostTyped = num("supplierCost");
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
-  const priceNgn = Math.max(0, num("priceNgn") || 0);
-  if (!(priceNgn > 0)) { JA.toast("Enter the Naira price."); return; }
+  // The base PRICE (NAIRA ₦) is optional for a fully variant-priced product
+  // ("Small pink ₦2,500 / Big pink ₦3,200"): the storefront then shows the
+  // range. Every variant still needs a price, and a product without options
+  // still needs the base figure - a product with no price anywhere can never
+  // be sold, checked out or broadcast.
+  const priceTyped = num("priceNgn");
+  const variantsAllPriced = (() => {
+    const values = (options[0] && options[0].values) || [];
+    if (!values.length) return false;
+    const priced = (key) => {
+      const direct = optionPrices[key];
+      const raw = direct != null ? direct
+        : optionPrices[String(key).split(":").pop().trim()];
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0;
+    };
+    return values.every((value) => priced(`${options[0].title}: ${value}`));
+  })();
+  let priceNgn = Math.max(0, priceTyped || 0);
+  if (!(priceNgn > 0)) {
+    if (variantsAllPriced) {
+      // Optional base: keep the saved base price (if any) instead of wiping
+      // it to zero just because the box was left empty.
+      priceNgn = Math.max(0, Number(existing?.priceNgn) || 0);
+    } else {
+      JA.toast(variantValues.length ? "Enter a price for every option, or the base Naira price." : "Enter the Naira price.");
+      return;
+    }
+  }
   const toCfa = JA.toCfa || toCfaLive;
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
   // Never let a save blank a category the row already has. The select is
@@ -1267,6 +1397,18 @@ async function handleProductSubmit(e, existing) {
       optionSupplierSku,
       optionSupplierUrls: optionSupplierSku,
       option_supplier_urls: optionSupplierSku,
+      // Per-variant supplier costing (owner reference data, never public):
+      // the product-level figure plus the per-option map, keyed like stock.
+      // A figure the admin typed always wins; an EMPTY box they touched is a
+      // deliberate clear (saved as "not set"); an untouched empty box keeps
+      // the stored figure so opening + saving never silently blanks costs.
+      supplierCost: (Number.isFinite(supplierCostTyped) && supplierCostTyped > 0)
+        ? supplierCostTyped
+        : ((window.__editDirty && window.__editDirty.has("supplierCost"))
+          ? null : (existing?.supplierCost ?? null)),
+      optionSupplierCost,
+      optionSupplierCosts: optionSupplierCost,
+      option_supplier_cost: optionSupplierCost,
       // Per-variant SKUs, keyed exactly like the stock and supplier maps
       // ("Colour: Red"), so the server's alias handling stores them together.
       optionSku,
@@ -2919,9 +3061,12 @@ function marketingCurrency() {
 }
 
 /** One catalogue price, formatted for the active currency: ₦12,000 in NGN,
- *  "6,000 CFA" in XOF/French (the same ceiling the storefront uses). */
+ *  "6,000 CFA" in XOF/French (the same ceiling the storefront uses).
+ *  A variant-priced product (base price optional) reads "from ₦2,500". */
 function marketingPickerPrice(p) {
-  const ngn = Number((p && p.priceNgn) || 0);
+  const range = JA.priceRangeOf ? JA.priceRangeOf(p, "NGN") : null;
+  const ngn = (Number((p && p.priceNgn) || 0) > 0) ? Number(p.priceNgn)
+    : (range ? range.min : 0);
   if (marketingCurrency() === "CFA") {
     const cfa = JA.toCfa ? JA.toCfa(ngn) : toCfaLive(ngn);
     return JA.money(cfa, "CFA");
@@ -3517,8 +3662,20 @@ function broadcastProductUrl(p) {
 function broadcastPriceLine(p) {
   // Active selling price only, in both currencies - never priceCompare /
   // compareNgn, the struck-through "was" price shown elsewhere in admin.
+  // A fully variant-priced product (base price optional) shows its NGN/CFA
+  // range instead of a meaningless ₦0.
   const toCfa = JA.toCfa || toCfaLive;
-  return `${JA.money(p.priceNgn || 0, "NGN")} • ${JA.money(toCfa(p.priceNgn), "CFA")}`;
+  const range = JA.priceRangeOf ? JA.priceRangeOf(p, "NGN") : null;
+  if (range && range.max > range.min) {
+    return `${JA.money(range.min, "NGN")} – ${JA.money(range.max, "NGN")} • ${JA.money(toCfa(range.min), "CFA")} – ${JA.money(toCfa(range.max), "CFA")}`;
+  }
+  if (Number(p.priceNgn) > 0) {
+    return `${JA.money(p.priceNgn, "NGN")} • ${JA.money(toCfa(p.priceNgn), "CFA")}`;
+  }
+  // A variant-priced row whose base box was left blank: price the post
+  // "from" its cheapest option.
+  const from = range ? range.min : 0;
+  return `${JA.money(from, "NGN")} • ${JA.money(toCfa(from), "CFA")}`;
 }
 function broadcastDisplayName(p) {
   // Owner request 2026-09-28: the post's headline must read in English AND
@@ -4467,7 +4624,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=202" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=203" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -4682,7 +4839,7 @@ function categoryManager() {
   const cats = JA.categories();
   const rows = cats.map((c, i) => {
     const n = JA.products().filter((p) => p.category === c.id).length;
-    return `<article class="au-cat-card" data-cat-i="${i}" data-cat-id="${JA.escape(c.id)}">
+    return `<article class="au-cat-card" data-cat-i="${i}" data-cat-id="${JA.escape(c.id)}" data-cat-stored="${JA.escape(c.image || "")}">
       <div class="au-cat-pic">${_catAssetHTML(c.image)}
         <label class="au-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx" data-cat-img="${i}" hidden /></label>
       </div><div class="au-cat-moves">
@@ -4715,9 +4872,25 @@ function _catAssetHTML(image) {
     const label = /\.docx?$/i.test(u) ? "DOC" : "PDF";
     return `<a class="media-doc-chip cat-doc-chip" href="${JA.asset(u)}" target="_blank" rel="noopener">${label}<span>View / Download</span></a>`;
   }
-  return `<img src="${JA.asset(u)}" alt="" />`;
+  // The shop's own onerror handler: a transient failure (deploy, cache
+  // purge, offline tab) swaps in the branded placeholder instead of the
+  // broken-image icon. The STORED url is never touched by that repaint -
+  // collectCats() keeps saving the original (see the data-cat-stored
+  // anchor), so a network hiccup can never permanently blank a category
+  // image the way it used to.
+  const onErr = typeof window.fallbackImg === "function" ? ' onerror="fallbackImg(event)"' : "";
+  return `<img src="${JA.asset(u)}" alt="" loading="lazy" decoding="async" data-cat-original="${JA.escape(u)}"${onErr} />`;
 }
 function collectCats() {
+  // A category cover whose <img> failed to load is repainted by fallbackImg
+  // with the branded placeholder. That repaint is DISPLAY ONLY: reading the
+  // live src back into the save would permanently overwrite the stored
+  // image_url with a placeholder - the exact way category covers used to
+  // disappear. The persisted value is therefore resolved as: this session's
+  // fresh upload, then the STORED url the row was rendered with (anchored in
+  // data-cat-stored), then a live non-placeholder src, then the doc chip.
+  const PLACEHOLDER_RE = /(?:^|\/)(?:_placeholder|placeholder)\.(?:jpe?g|png|webp)(?:$|\?)|images\/brand\/logo/i;
+  const isPlaceholder = (u) => !u || PLACEHOLDER_RE.test(u);
   const out = [];
   document.querySelectorAll("[data-cat-i]").forEach((row, position) => {
     const i = row.getAttribute("data-cat-i");
@@ -4727,7 +4900,14 @@ function collectCats() {
     // The uploaded Storage URL (dataset.catUrl) wins: it is the complete
     // HTTPS URL the server must store; the DOM img is only the preview.
     const uploadUrl = row.querySelector("[data-cat-img]")?.dataset.catUrl || "";
-    const asset = uploadUrl || row.querySelector(".au-cat-pic img")?.getAttribute("src") || row.querySelector(".au-cat-pic a.media-doc-chip")?.getAttribute("href") || "";
+    const stored = row.getAttribute("data-cat-stored") || "";
+    const liveSrc = row.querySelector(".au-cat-pic img")?.getAttribute("src") || "";
+    const docHref = row.querySelector(".au-cat-pic a.media-doc-chip")?.getAttribute("href") || "";
+    const asset = uploadUrl
+      || (!isPlaceholder(liveSrc) ? liveSrc : "")
+      || stored
+      || docHref
+      || "";
     out.push({ id, name, nameFr: (row.querySelector(`[name="cat-fr-${i}"]`)?.value || "").trim(), image: asset, hidden: !row.querySelector(`[name="cat-on-${i}"]`)?.checked, order: position, });
   });
   return out;
@@ -4838,7 +5018,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=202", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=203", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

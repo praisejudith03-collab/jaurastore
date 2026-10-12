@@ -878,7 +878,17 @@ const JA = (() => {
   }
 
   function hasNgn(p) {
-    return Number(p && p.priceNgn) > 0;
+    // A product whose OPTIONS each carry a Naira price is NGN-anchored too:
+    // the base PRICE (NAIRA ₦) is optional when every variant is priced
+    // ("Small pink ₦2,500 / Big pink ₦3,200"), and such a row must keep
+    // exact Naira maths (and the shopper's chosen currency) instead of being
+    // mis-read as a CFA-native product with a zero price.
+    if (Number(p && p.priceNgn) > 0) return true;
+    const overrides = optionMap(p && (p.optionPrices ?? p.option_prices));
+    return Object.values(overrides || {}).some((v) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0;
+    });
   }
   // CFA is a CONVERTED currency: Naira is the exact base, and every CFA
   // figure derived from it is rounded UP to a clean 50 / 100 step (24 -> 50,
@@ -1326,6 +1336,17 @@ const JA = (() => {
       if (match != null) { ngn = match; overridden = true; }
     }
     if (overridden || ngn > 0) return cur === "NGN" ? ngn : toCfa(ngn);
+    // No base price, but the variants are priced: sell "from" the cheapest
+    // option. A variant-priced row with the base box left blank must never
+    // read as ₦0 in sort/filter/cart maths.
+    if (Object.keys(overrides).length) {
+      const values = Object.values(overrides).map(Number)
+        .filter((n) => Number.isFinite(n) && n > 0);
+      if (values.length) {
+        ngn = Math.min(...values);
+        return cur === "NGN" ? ngn : toCfa(ngn);
+      }
+    }
     const cfa = roundCfa(p && p.priceCfa);
     return cur === "NGN" ? toNgn(cfa) : cfa;
   }
@@ -2880,8 +2901,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=202";
-        const FLYER = "images/brand/logo-flyer.jpg?v=202";
+        const LOGO = "images/brand/logo.jpg?v=203";
+        const FLYER = "images/brand/logo-flyer.jpg?v=203";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -3081,7 +3102,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=202" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=203" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3380,7 +3401,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=202" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=203" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3516,7 +3537,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=202", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=203", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3550,7 +3571,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=202";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=203";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3609,7 +3630,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=202");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=203");
     document.title = title;
     [
       ["name", "description", description],
@@ -4166,7 +4187,7 @@ const JA = (() => {
     products, product, publicProductSlug, productUrl, searchProducts, categoryName, displayName,
     displayDescription, displayOptionValue, displayOptionRaw, inFrench,
     homepageFeatured, homepageFeaturedProducts, homepageFeaturedGroups, loadHomepageFeatured, saveHomepageFeatured,
-    currency, setCurrency, currencyLocked, money, moneyExact, moneyRange, priceOf, compareOf, priceRangeOf, priceHTML, toCfa, toNgn, roundCfa, currentRate, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers,
+    currency, setCurrency, currencyLocked, money, moneyExact, moneyRange, priceOf, compareOf, priceRangeOf, priceHTML, toCfa, toNgn, roundCfa, currentRate, bulkUnit, bulkPercent, bulkPercentFor, bulkDiscountTiers, displayCur,
     referralEnabled, promosEnabled,
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,

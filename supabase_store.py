@@ -489,6 +489,17 @@ def _canonicalize_product(row, _c=None):
                                p.get("optionSupplierUrls") or p.get("option_supplier_urls") or {})
     p["optionSku"] = (p.get("optionSku") or p.get("option_sku") or
                        p.get("optionSkus") or p.get("option_skus") or {})
+    # Supplier costs (owner/reference data): product-level Naira figure plus
+    # the per-option map. Read through the same aliases the writers use so a
+    # mirror row or an import never silently loses them.
+    p["supplierCost"] = (p.get("supplierCost") if p.get("supplierCost") is not None
+                         else p.get("supplier_cost") if p.get("supplier_cost") is not None
+                         else p.get("supplierPrice") if p.get("supplierPrice") is not None
+                         else p.get("supplier_price"))
+    p["optionSupplierCost"] = (p.get("optionSupplierCost") or p.get("option_supplier_cost") or
+                                p.get("optionSupplierCosts") or p.get("option_supplier_costs") or
+                                p.get("variantSupplierCosts") or p.get("variant_supplier_costs") or
+                                p.get("optionCosts") or p.get("option_costs") or {})
     p["bulkQty"] = (p.get("bulkQty") if p.get("bulkQty") is not None else
                     p.get("bulk_qty") if p.get("bulk_qty") is not None else
                     p.get("bulkQuantity") if p.get("bulkQuantity") is not None else
@@ -520,6 +531,10 @@ _CRITICAL_PRODUCT_COLUMNS = frozenset({
     "optionSku", "reviews", "dimensions", "bulkQty", "bulkPercent",
     "placeholderImage", "usesPlaceholder", "source", "supplierId",
     "supplierSku", "updated_at", "enableCustomNote", "customNotePrompt",
+    # Variant-level supplier costs: the owner's per-unit sourcing figures.
+    # Losing them on a save would silently blank the costing desk, so a
+    # missing column blocks the save exactly like a lost price.
+    "supplierCost", "optionSupplierCost",
 })
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
 
@@ -568,6 +583,16 @@ def upsert_products(products):
         r = resolve_image(dict(p))
         r.setdefault("source", "admin")
         r.setdefault("updated_at", _now())
+        # A save through the live catalogue IS a live product. Restoring a
+        # trashed piece runs through here, so the soft-delete markers its old
+        # row carried (source='deleted', is_deleted=true) must be cleared in
+        # the same write - otherwise the revived row stays hidden from every
+        # reader that honours the flag. catalog.upsert has already refused
+        # permanently-removed ids before this point, so clearing the SOFT
+        # markers can never resurrect a hard delete.
+        r["is_deleted"] = False
+        if str(r.get("source") or "").strip().lower() in ("deleted", "replaced"):
+            r["source"] = "admin"
         rows.append(r)
     if not rows:
         return True
@@ -604,6 +629,15 @@ _PRODUCT_PATCH_COLUMNS = {
     "option_supplier_urls": {"optionSupplierSku"}, "optionSku": {"optionSku"},
     "optionSkus": {"optionSku"}, "option_sku": {"optionSku"},
     "variantSku": {"optionSku"}, "reviews": {"reviews"},
+    "supplierCost": {"supplierCost"}, "supplier_cost": {"supplierCost"},
+    "supplierPrice": {"supplierCost"}, "supplier_price": {"supplierCost"},
+    "optionSupplierCost": {"optionSupplierCost"},
+    "option_supplier_cost": {"optionSupplierCost"},
+    "optionSupplierCosts": {"optionSupplierCost"},
+    "option_supplier_costs": {"optionSupplierCost"},
+    "variantSupplierCosts": {"optionSupplierCost"},
+    "variant_supplier_costs": {"optionSupplierCost"},
+    "optionCosts": {"optionSupplierCost"}, "option_costs": {"optionSupplierCost"},
 }
 
 
@@ -670,15 +704,36 @@ def delete_products_strict(ids):
     The admin Delete button needs to know whether the deletion actually
     reached PostgreSQL - a best-effort mirror must never let the portal
     report "deleted" while Supabase still serves the product.
+
+    The tombstone is TWO markers on the row: the legacy ``source='deleted'``
+    flag every reader already understood, and an explicit ``is_deleted=true``
+    boolean. ``catalog.is_deleted_product`` treats both the same way, so a
+    trashed row is hidden from the storefront, search, sitemaps and broadcast
+    pickers even if a mirror or an older reader only looks at one spelling.
+    Media and the row itself are kept so Restore can bring the piece back.
     """
     c = client()
     if c is None or not ids:
         return False
     try:
-        c.table("products").update({"source": "deleted"}).in_("id", list(ids)).execute()
+        c.table("products").update({"source": "deleted",
+                                    "is_deleted": True}).in_("id", list(ids)).execute()
         invalidate_read_cache()
         return True
     except Exception as exc:
+        # A legacy products table may not have the is_deleted column yet
+        # (auto_migrate adds it at boot). The source='deleted' marker alone
+        # still hides the row from every reader, so the trash must not fail.
+        match = _MISSING_COLUMN_RE.search(str(exc))
+        if match and match.group(1) == "is_deleted":
+            try:
+                c.table("products").update({"source": "deleted"}).in_(
+                    "id", list(ids)).execute()
+                invalidate_read_cache()
+                return True
+            except Exception as exc2:
+                print(f"[supabase] products delete failed: {exc2}")
+                return False
         print(f"[supabase] products delete failed: {exc}")
         return False
 
