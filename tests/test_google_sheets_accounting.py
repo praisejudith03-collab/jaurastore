@@ -84,6 +84,47 @@ def test_sheet_order_row_keeps_order_facts_and_manual_cost_fields():
     assert row[6:11] == ["", "", "", "", ""]
 
 
+def test_order_line_sheet_preserves_each_product_price_cost_and_supplier_url():
+    snapshot = accounting.new_snapshot(24_000, "CFA", 0.45,
+                                       "2026-10-06T09:15:00Z", discount=1_000)
+    snapshot.update({
+        "supplierCostNgn": 9_450,
+        "deliveryExpenseNgn": 3_150,
+        "lineItems": [
+            {"lineId": "line-01", "productId": "p-a", "name": "Ankara gown",
+             "variant": "Blue", "qty": 2, "saleAmount": 6_000,
+             "supplierCostNgn": 3_150, "supplierLink": "https://vendor.example/a"},
+            {"lineId": "line-02", "productId": "p-b", "name": "Silk bag",
+             "variant": "", "qty": 1, "saleAmount": 18_000,
+             "supplierCostNgn": 6_300, "supplierLink": "https://vendor.example/b"},
+        ],
+    })
+    order = {
+        "id": "JA-SHEET-LINES", "status": "confirmed", "total": 23_000,
+        "currency": "CFA", "at": "2026-10-06T09:15:00Z",
+        "payload": {
+            "customer": {"name": "Amina Buyer"},
+            "items": [
+                {"id": "p-a", "name": "Ankara gown", "qty": 2,
+                 "price": 6_000, "color": "Blue"},
+                {"id": "p-b", "name": "Silk bag", "qty": 1, "price": 18_000},
+            ],
+            "accounting": snapshot,
+        },
+    }
+    rows = google_sheets._line_item_rows([order], batch="October batch")
+    assert len(rows) == 2
+    assert [row[2] for row in rows] == ["line-01", "line-02"]
+    assert [(row[4], row[6], row[7], row[8], row[9], row[10])
+            for row in rows] == [
+        ("Ankara gown", 2, "CFA", 6_000, 3_150, "https://vendor.example/a"),
+        ("Silk bag", 1, "CFA", 18_000, 6_300, "https://vendor.example/b"),
+    ]
+    assert all(row[11] == 0.45 and row[12] == "October batch" for row in rows)
+    order_row = google_sheets._order_row(order, include_net=True)
+    assert order_row[5:9] == [23_000, 21_000, 7_000, -5_000]
+
+
 def test_reconfirm_sync_updates_facts_without_overwriting_sheet_costs(monkeypatch):
     order = {
         "id": "JA-SHEET-002", "status": "confirmed", "total": 12_000,

@@ -191,7 +191,7 @@ def test_import_maps_currency_location_and_costs(client, monkeypatch):
     assert preview["ORD-2"]["location"] == "Benin Republic"
     # 24,000 read as CFA (the row's own currency) -> stored in NGN, shown CFA.
     assert preview["ORD-2"]["supplierCostCfa"] == 24000
-    assert preview["ORD-2"]["supplierCostNgn"] == 54545
+    assert preview["ORD-2"]["supplierCostNgn"] == 10560
 
 
 def test_import_accepts_an_uploaded_file(client, monkeypatch):

@@ -52,17 +52,20 @@ def _guarded_read(req, *, timeout=HTTP_TIMEOUT):
     except security.UnsafeURLError as exc:
         raise GoogleSheetsError(f"Blocked Google request: {exc}") from exc
 
-# The owner's existing "ITEMFLOW" workbook. Itemized NGN orders are routed to
-# its NGN tab and FCFA orders to its FCFA tab when the owner pushes a batch.
-# The id is overridable from the accounting settings (save it in Admin ->
-# Accounting) and from the environment (GOOGLE_SHEET_ID on Render) so a
-# different reference sheet can be swapped in without a redeploy.
+# Batch pushes resolve the exact active, native Google Sheet by Drive metadata.
+# Saved / environment IDs are only tie-break preferences if they identify one
+# of the exact-title native Sheets files; they can never select an .xlsx or a
+# differently named legacy workbook.
+REFERENCE_SPREADSHEET_TITLE = "Jaurastore Sales & Accounting Ledger (NGN & CFA)"
+GOOGLE_SHEETS_MIME_TYPE = "application/vnd.google-apps.spreadsheet"
+_XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+# Retained for migration compatibility only. Never used as a batch-push target.
 DEFAULT_REFERENCE_SPREADSHEET_ID = "1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu"
 REFERENCE_TABS = {"NGN": "NGN", "CFA": "FCFA"}
 
 
 def environment_reference_spreadsheet_id():
-    """The workbook id from ``GOOGLE_SHEET_ID`` ('' when unset)."""
+    """Optional preferred Drive ID from ``GOOGLE_SHEET_ID`` (not a target)."""
     return (os.environ.get("GOOGLE_SHEET_ID") or "").strip()
 
 
@@ -76,18 +79,16 @@ def extract_spreadsheet_id(value):
 
 
 def reference_spreadsheet_id(settings=None):
-    """Resolve the reference workbook: saved setting, then env, then default.
+    """Return the optional preferred ID, never an assumed push destination.
 
-    Precedence is deliberate: what the owner saved on the accounting desk
-    wins, then ``GOOGLE_SHEET_ID`` (the Render environment variable), and
-    finally the built-in ITEMFLOW id. Clearing the saved setting therefore
-    falls back to the environment value instead of pushing to nowhere.
+    The actual batch target is resolved from the connected Drive and must
+    match both :data:`REFERENCE_SPREADSHEET_TITLE` and the native Google Sheets
+    MIME type. A saved ID or ``GOOGLE_SHEET_ID`` can only disambiguate multiple
+    exact native matches; clearing either does not fall back to a legacy file.
     """
     settings = settings if isinstance(settings, dict) else {}
     saved = extract_spreadsheet_id(settings.get("referenceSpreadsheetId"))
-    if saved:
-        return saved
-    return environment_reference_spreadsheet_id() or DEFAULT_REFERENCE_SPREADSHEET_ID
+    return saved or extract_spreadsheet_id(environment_reference_spreadsheet_id())
 
 _lock = threading.RLock()
 _refresh_lock = threading.Lock()
@@ -442,6 +443,86 @@ def _google_request(method, url, body=None):
     return _json_request(url, method=method, body=body, headers=headers)
 
 
+def _drive_reference_files():
+    """List only exact-title native Sheets files from the connected Drive.
+
+    Uploaded .xlsx files and legacy Office backups have different MIME types,
+    so they are excluded by the server-side query and checked again locally.
+    Pagination is bounded to protect the admin request from a malformed or
+    unexpectedly huge Drive response.
+    """
+    escaped_title = REFERENCE_SPREADSHEET_TITLE.replace("\\", "\\\\").replace("'", "\\'")
+    query = (f"name = '{escaped_title}' and "
+             f"mimeType = '{GOOGLE_SHEETS_MIME_TYPE}' and trashed = false")
+    page_token = ""
+    matches = []
+    for _ in range(20):
+        params = [
+            ("q", query),
+            ("fields", "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)"),
+            ("pageSize", "100"),
+            ("orderBy", "modifiedTime desc"),
+            ("spaces", "drive"),
+            ("supportsAllDrives", "true"),
+            ("includeItemsFromAllDrives", "true"),
+        ]
+        if page_token:
+            params.append(("pageToken", page_token))
+        url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode(params)
+        result = _google_request("GET", url)
+        for item in result.get("files") or []:
+            if not isinstance(item, dict):
+                continue
+            if (str(item.get("name") or "") == REFERENCE_SPREADSHEET_TITLE
+                    and str(item.get("mimeType") or "") == GOOGLE_SHEETS_MIME_TYPE
+                    and str(item.get("id") or "").strip()):
+                matches.append(item)
+        page_token = str(result.get("nextPageToken") or "")
+        if not page_token:
+            break
+    return matches
+
+
+def resolve_native_reference_spreadsheet(settings=None, preferred_id=""):
+    """Resolve the active exact-name native Google Sheet from Drive.
+
+    A saved setting, environment ID, or legacy hard-coded ID is never accepted
+    on its own: the file must appear in Drive with the exact target title and
+    ``application/vnd.google-apps.spreadsheet`` MIME type. When Drive contains
+    duplicate exact-title native sheets, an ID preference wins only if it is
+    among those matches; otherwise Drive's most recently modified match wins.
+    """
+    try:
+        candidates = _drive_reference_files()
+    except GoogleSheetsError:
+        raise
+    except Exception as exc:
+        raise GoogleSheetsError("The Google Drive spreadsheet search failed.") from exc
+    if not candidates:
+        raise GoogleSheetsError(
+            f'No native Google Sheets file named "{REFERENCE_SPREADSHEET_TITLE}" '
+            "was found in the connected Drive. Uploaded .xlsx files and legacy "
+            "Office backups are ignored; save or create the active file as a "
+            "native Google Sheet, then retry.",
+            code="REFERENCE_SHEET_NOT_FOUND")
+    preference = (extract_spreadsheet_id(preferred_id)
+                  or reference_spreadsheet_id(settings))
+    selected = next((item for item in candidates
+                     if str(item.get("id") or "") == preference), None)
+    if selected is None:
+        # Drive returned the newest first. Keep the explicit sort as a guard
+        # against test doubles or future API changes that omit orderBy.
+        selected = max(candidates, key=lambda item: str(item.get("modifiedTime") or ""))
+    return {
+        "id": str(selected.get("id") or ""),
+        "title": str(selected.get("name") or REFERENCE_SPREADSHEET_TITLE),
+        "mimeType": str(selected.get("mimeType") or ""),
+        "modifiedTime": str(selected.get("modifiedTime") or ""),
+        "url": str(selected.get("webViewLink") or _spreadsheet_url(selected.get("id"))),
+        "matchCount": len(candidates),
+    }
+
+
 def _currency(value):
     value = str(value or "").strip().upper()
     return "CFA" if value in ("CFA", "XOF", "FCFA") else "NGN"
@@ -627,15 +708,13 @@ def verify_sync(reference_id="", *, settings=None):
     JSON-safe report; it never raises and never writes to the owner's files.
     """
     report = {"ok": False, "configured": configured(), "connected": False,
-              "email": "", "reference": {"id": "", "title": "", "tabs": [],
+              "email": "", "reference": {"id": "",
+                                         "title": REFERENCE_SPREADSHEET_TITLE,
+                                         "mimeType": "", "tabs": [],
                                          "readable": False},
               "ledgers": {}, "steps": [], "message": ""}
-    target = str(reference_id or "").strip()
-    if not target:
-        try:
-            target = reference_spreadsheet_id(settings)
-        except Exception:
-            target = DEFAULT_REFERENCE_SPREADSHEET_ID
+    preference = (str(reference_id or "").strip()
+                  or reference_spreadsheet_id(settings))
 
     def step(name, ok, detail=""):
         report["steps"].append({"step": name, "ok": bool(ok), "detail": str(detail)[:240]})
@@ -679,38 +758,57 @@ def verify_sync(reference_id="", *, settings=None):
         except GoogleSheetsError as exc:
             step(f"{currency}-ledger", False, str(exc))
 
+    try:
+        native = resolve_native_reference_spreadsheet(
+            settings=settings, preferred_id=preference)
+        target = native["id"]
+        report["reference"].update(native)
+        step("native-reference-sheet", True,
+             f'{native["title"]} · native Google Sheets'
+             + (f' · {native["matchCount"]} exact-title match(es)'
+                if native.get("matchCount", 1) > 1 else ""))
+    except GoogleSheetsError as exc:
+        target = ""
+        report["message"] = str(exc)
+        step("native-reference-sheet", False, str(exc))
+
     if target:
-        report["reference"]["id"] = target
         try:
             url = (f"{SHEETS_API}/spreadsheets/"
                    f"{urllib.parse.quote(str(target), safe='')}"
                    f"?fields=properties.title,sheets.properties")
             meta = _google_request("GET", url)
-            report["reference"]["title"] = str(
-                (meta.get("properties") or {}).get("title") or "")
+            title = str((meta.get("properties") or {}).get("title") or "")
             titles = []
             for sheet in meta.get("sheets") or []:
-                title = str((sheet.get("properties") or {}).get("title") or "").strip()
-                if title:
-                    titles.append(title)
+                tab_title = str((sheet.get("properties") or {}).get("title") or "").strip()
+                if tab_title:
+                    titles.append(tab_title)
+            report["reference"]["title"] = title
             report["reference"]["tabs"] = titles
+            if title != REFERENCE_SPREADSHEET_TITLE:
+                raise GoogleSheetsError(
+                    "The Drive target title changed during verification; no batch push is allowed.",
+                    code="REFERENCE_SHEET_CHANGED")
             missing = [want for want in REFERENCE_TABS.values()
                        if want.upper() not in [t.upper() for t in titles]]
             report["reference"]["readable"] = True
             step("reference-sheet", True,
-                 (report["reference"]["title"] or target)
+                 (title or target)
                  + (f" (missing tabs: {', '.join(missing)} - created automatically on push)"
                     if missing else " (NGN + FCFA tabs present)"))
         except GoogleSheetsError as exc:
+            report["reference"]["readable"] = False
+            report["message"] = report["message"] or str(exc)
             step("reference-sheet", False, str(exc))
 
     report["ok"] = bool(report["connected"]
                         and all((report["ledgers"].get(c) or {}).get("readable")
                                 for c in CURRENCIES)
-                        and (not target or report["reference"]["readable"]))
+                        and report["reference"]["readable"])
     if report["ok"]:
-        report["message"] = ("Google Drive sync is working. Ledgers and the "
-                             "reference workbook are readable.")
+        report["message"] = ("Google Drive sync is working. The active native "
+                             "reference spreadsheet and ledgers are readable.")
     elif not report["message"]:
         report["message"] = "Some Google checks failed - see the steps above."
     return report
@@ -944,6 +1042,122 @@ def _order_row(order, batch="", include_net=False):
         str(entry.get("location") or "")[:80],
     ]
 
+ORDER_LINES_TAB = "Order Lines"
+ORDER_LINE_HEADERS = [
+    "Confirmed date", "Order ID", "Line ID", "Customer", "Product",
+    "Variant", "Quantity", "Currency", "Selling price", "Supplier cost · NGN",
+    "Supplier URL", "NGN → FCFA rate", "Batch",
+]
+
+
+def _line_item_rows(orders, batch=""):
+    """One spreadsheet row per distinct ordered product line."""
+    import accounting
+    rows = []
+    for order in orders or []:
+        if not isinstance(order, dict) or str(order.get("status") or "") != "confirmed":
+            continue
+        entry = accounting.entry_from_order(order)
+        for line in entry.get("lineItems") or []:
+            if not isinstance(line, dict):
+                continue
+            rows.append([
+                str(entry.get("date") or "")[:10],
+                str(entry.get("id") or ""),
+                str(line.get("lineId") or ""),
+                str(entry.get("customer") or "Customer"),
+                str(line.get("name") or "Item"),
+                str(line.get("variant") or ""),
+                _number(line.get("qty")) or 1,
+                _currency(entry.get("currency")),
+                _number(line.get("saleAmount")),
+                _number(line.get("supplierCostNgn")),
+                str(line.get("supplierLink") or ""),
+                float(accounting.safe_rate(entry.get("exchangeRate"))),
+                str(batch or ""),
+            ])
+    return rows
+
+
+def ensure_order_lines_tab(spreadsheet_id):
+    """Find or create the native spreadsheet's per-product detail tab."""
+    titles = _spreadsheet_tab_titles(spreadsheet_id)
+    for title in titles:
+        if title.strip().casefold() == ORDER_LINES_TAB.casefold():
+            return title
+    batch_url = (f"{SHEETS_API}/spreadsheets/"
+                 f"{urllib.parse.quote(str(spreadsheet_id), safe='')}:batchUpdate")
+    _google_request("POST", batch_url, {"requests": [{"addSheet": {
+        "properties": {"title": ORDER_LINES_TAB,
+                      "gridProperties": {"frozenRowCount": 1,
+                                         "columnCount": len(ORDER_LINE_HEADERS)}}
+    }}]})
+    encoded_range = urllib.parse.quote(
+        f"'{ORDER_LINES_TAB}'!A1:M1", safe="!':")
+    values_url = (f"{SHEETS_API}/spreadsheets/"
+                  f"{urllib.parse.quote(str(spreadsheet_id), safe='')}"
+                  f"/values/{encoded_range}?valueInputOption=USER_ENTERED")
+    _google_request("PUT", values_url, {"majorDimension": "ROWS",
+                                        "values": [ORDER_LINE_HEADERS]})
+    return ORDER_LINES_TAB
+
+
+def _existing_order_line_rows(spreadsheet_id, tab=ORDER_LINES_TAB):
+    encoded_range = urllib.parse.quote(f"'{tab}'!A:M", safe="!':")
+    url = (f"{SHEETS_API}/spreadsheets/"
+           f"{urllib.parse.quote(str(spreadsheet_id), safe='')}"
+           f"/values/{encoded_range}?valueRenderOption=UNFORMATTED_VALUE")
+    values = (_google_request("GET", url).get("values") or [])
+    result = {}
+    for position, row in enumerate(values[1:], start=2):
+        if not isinstance(row, list) or len(row) < 3:
+            continue
+        order_id, line_id = str(row[1] or "").strip(), str(row[2] or "").strip()
+        if order_id and line_id:
+            result[f"{order_id}|{line_id}"] = position
+    return result
+
+
+def _append_order_line_rows(spreadsheet_id, tab, rows):
+    if not rows:
+        return
+    encoded_range = urllib.parse.quote(f"'{tab}'!A:M", safe="!':")
+    url = (f"{SHEETS_API}/spreadsheets/"
+           f"{urllib.parse.quote(str(spreadsheet_id), safe='')}"
+           f"/values/{encoded_range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS")
+    _google_request("POST", url, {"majorDimension": "ROWS", "values": rows})
+
+
+def _update_order_line_row(spreadsheet_id, tab, position, row):
+    encoded_range = urllib.parse.quote(
+        f"'{tab}'!A{position}:M{position}", safe="!':")
+    url = (f"{SHEETS_API}/spreadsheets/"
+           f"{urllib.parse.quote(str(spreadsheet_id), safe='')}"
+           f"/values/{encoded_range}?valueInputOption=RAW")
+    _google_request("PUT", url, {"majorDimension": "ROWS", "values": [row]})
+
+
+def _upsert_order_line_rows(spreadsheet_id, tab, rows):
+    existing = _existing_order_line_rows(spreadsheet_id, tab)
+    fresh = []
+    updated = 0
+    seen = set()
+    for row in rows or []:
+        key = f"{str(row[1]).strip()}|{str(row[2]).strip()}"
+        position = existing.get(key)
+        if position is None:
+            if key not in seen:
+                fresh.append(row)
+                seen.add(key)
+        else:
+            _update_order_line_row(spreadsheet_id, tab, position, row)
+            updated += 1
+    for offset in range(0, len(fresh), 250):
+        _append_order_line_rows(spreadsheet_id, tab, fresh[offset:offset + 250])
+    return {"count": len(rows or []), "appended": len(fresh),
+            "updated": updated}
+
+
 def _append_rows(spreadsheet_id, rows):
     if not rows:
         return
@@ -988,9 +1202,6 @@ def _existing_order_rows_in(spreadsheet_id, tab):
         if order_id:
             result[order_id] = position
     return result
-
-
-_XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _spreadsheet_tab_titles(spreadsheet_id):
@@ -1057,12 +1268,13 @@ def ensure_reference_tab(spreadsheet_id, currency):
 
 
 def push_orders(orders, *, batch_name="", reference_id=""):
-    """Push staged orders to Google Sheets, routed by currency.
+    """Push staged orders only to the active native reference spreadsheet.
 
-    NGN orders land on the NGN tab and FCFA orders on the FCFA tab of the
-    reference workbook when one is configured; otherwise each currency goes to
-    its own app-created ledger. Rows are upserted by order id, so re-pushing
-    or a retry can never double-count an order in the same tab.
+    Drive resolution is strict: both the exact requested title and native
+    Google Sheets MIME type must match. Uploaded .xlsx documents and legacy
+    Office backups are never fallbacks. NGN and FCFA orders land on their
+    currency tabs; item details are upserted separately in ``Order Lines``.
+    Rows are idempotently upserted by order/line ID.
 
     Returns {currency: {spreadsheetId, tab, url, count, updated}}.
     """
@@ -1077,42 +1289,47 @@ def push_orders(orders, *, batch_name="", reference_id=""):
         currency = _currency(snapshot.get("currency") or order.get("currency"))
         grouped.setdefault(currency, []).append(order)
 
+    native = resolve_native_reference_spreadsheet(preferred_id=reference_id)
+    spreadsheet_id = native["id"]
     report = {}
     with _lock:
         for currency in CURRENCIES:
             group = grouped.get(currency) or []
             if not group:
                 continue
-            include_net = True
-            if reference_id:
-                spreadsheet_id = str(reference_id)
-                tab = ensure_reference_tab(spreadsheet_id, currency)
-            else:
-                spreadsheet_id = _spreadsheet_id(currency)
-                tab = "Orders"
-                include_net = False
+            tab = ensure_reference_tab(spreadsheet_id, currency)
             existing = _existing_order_rows_in(spreadsheet_id, tab)
             fresh, updated = [], 0
             for order in group:
-                row = _order_row(order, batch=batch_name, include_net=include_net)
-                position = existing.get(str(row[1]))
+                row = _order_row(order, batch=batch_name, include_net=True)
+                order_id = str(row[1])
+                position = existing.get(order_id)
                 if position is None:
                     fresh.append(row)
-                    existing[str(row[1])] = -1
-                else:
-                    if position > 0:
-                        _update_row_range(spreadsheet_id, tab, position, row)
-                        updated += 1
+                    existing[order_id] = -1
+                elif position > 0:
+                    _update_row_range(spreadsheet_id, tab, position, row)
+                    updated += 1
             for offset in range(0, len(fresh), 250):
                 _append_rows_to(spreadsheet_id, tab, fresh[offset:offset + 250])
             report[currency] = {
                 "spreadsheetId": spreadsheet_id,
                 "tab": tab,
-                "url": _spreadsheet_url(spreadsheet_id),
+                "url": native.get("url") or _spreadsheet_url(spreadsheet_id),
                 "count": len(group),
                 "appended": len(fresh),
                 "updated": updated,
             }
+
+        line_rows = _line_item_rows(orders, batch=batch_name)
+        if line_rows:
+            line_tab = ensure_order_lines_tab(spreadsheet_id)
+            line_result = _upsert_order_line_rows(spreadsheet_id, line_tab, line_rows)
+            for details in report.values():
+                details["lineTab"] = line_tab
+                details["lineCount"] = line_result["count"]
+                details["lineAppended"] = line_result["appended"]
+                details["lineUpdated"] = line_result["updated"]
     return report
 
 

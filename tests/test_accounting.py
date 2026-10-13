@@ -100,25 +100,25 @@ def test_accounting_math_keeps_currency_ledgers_and_locked_rates_isolated():
     })
 
     assert ngn_entry["supplierCostInCurrency"] == 7_000
-    assert ngn_entry["supplierCostCfa"] == 5_110
-    assert ngn_entry["netProfit"] == 8_000
+    assert ngn_entry["supplierCostCfa"] == 9_589
+    assert ngn_entry["netProfit"] == 7_400
     assert ngn_entry["netCashProfit"] == 7_400
-    assert cfa_entry["supplierCostCfa"] == cfa_entry["supplierCostInCurrency"] == 5_000
-    assert cfa_entry["netProfit"] == 4_800
-    assert cfa_entry["netCashProfit"] == 4_500
+    assert cfa_entry["supplierCostCfa"] == cfa_entry["supplierCostInCurrency"] == 20_000
+    assert cfa_entry["netProfit"] == -10_500
+    assert cfa_entry["netCashProfit"] == -10_500
     assert accounting_mod.batch_totals([ngn_entry, cfa_entry], "CFA") == {
         "currency": "CFA", "orderCount": 1, "customerRevenue": 9_800,
         "discountsTotal": 0, "supplierPayableNgn": 10_000,
-        "supplierCostInCurrency": 5_000,
-        "transportExpense": 300, "netCashProfit": 4_500,
+        "supplierCostInCurrency": 20_000,
+        "transportExpense": 300, "netCashProfit": -10_500,
     }
     # A single Batch Transportation Fee replaces the per-order transport sum.
     assert accounting_mod.batch_totals([ngn_entry, cfa_entry], "CFA",
                                        batch_transport_fee=1_200) == {
         "currency": "CFA", "orderCount": 1, "customerRevenue": 9_800,
         "discountsTotal": 0, "supplierPayableNgn": 10_000,
-        "supplierCostInCurrency": 5_000,
-        "transportExpense": 1_200, "netCashProfit": 3_600,
+        "supplierCostInCurrency": 20_000,
+        "transportExpense": 1_200, "netCashProfit": -11_400,
     }
 
 
@@ -152,9 +152,10 @@ def test_confirmation_edit_soft_delete_restore_and_delivery_archive(client, monk
         headers={"X-CSRF-Token": csrf},
     )
     assert cfa_edit.status_code == 200, cfa_edit.get_json()
-    assert cfa_edit.get_json()["entry"]["supplierCostCfa"] == 5_000
-    assert cfa_edit.get_json()["entry"]["netProfit"] == 4_800
-    assert cfa_edit.get_json()["entry"]["netCashProfit"] == 4_500
+    assert cfa_edit.get_json()["entry"]["supplierCostCfa"] == 20_000
+    assert cfa_edit.get_json()["entry"]["deliveryExpenseCfa"] == 600
+    assert cfa_edit.get_json()["entry"]["netProfit"] == -10_800
+    assert cfa_edit.get_json()["entry"]["netCashProfit"] == -10_800
 
     ngn_edit = client.patch(
         f"/api/admin/accounting/orders/{ORDER_IDS[0]}",
@@ -164,7 +165,7 @@ def test_confirmation_edit_soft_delete_restore_and_delivery_archive(client, monk
     assert ngn_edit.status_code == 200, ngn_edit.get_json()
     ngn_entry = ngn_edit.get_json()["entry"]
     assert ngn_entry["supplierCostInCurrency"] == 7_000
-    assert ngn_entry["netProfit"] == 8_000
+    assert ngn_entry["netProfit"] == 7_400
     assert ngn_entry["netCashProfit"] == 7_400
 
     bad_edit = client.patch(
@@ -196,8 +197,8 @@ def test_confirmation_edit_soft_delete_restore_and_delivery_archive(client, monk
     assert batch["totals"] == {
         "currency": "CFA", "orderCount": 1, "customerRevenue": 9_800,
         "discountsTotal": 0, "supplierPayableNgn": 10_000,
-        "supplierCostInCurrency": 5_000,
-        "transportExpense": 300, "netCashProfit": 4_500,
+        "supplierCostInCurrency": 20_000,
+        "transportExpense": 600, "netCashProfit": -10_800,
     }
     # No Batch Transportation Fee was sent, so the per-order fees are used.
     assert batch["transportSource"] == "per-order"

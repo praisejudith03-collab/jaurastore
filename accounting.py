@@ -15,6 +15,7 @@ LEGACY_RATE = Decimal("0.44")
 RATE_MAX = Decimal("100")
 AMOUNT_MAX = Decimal("1000000000000")
 SUPPLIER_LINK_MAX = 500
+LINE_ITEMS_MAX = 60
 PERCENT_MAX = Decimal("100")
 
 
@@ -74,9 +75,22 @@ def current_exchange_rate():
 
 
 def supplier_cost_cfa(supplier_cost_ngn, rate):
-    """Convert NGN supplier spend into whole CFA using NGN * rate."""
+    """Convert NGN supplier spend into whole FCFA using the accounting FX rate.
+
+    The accounting rate is the NGN value of one FCFA, so costs move from
+    Naira to FCFA by division (not by the storefront's NGN-to-FCFA price
+    multiplier): ``FCFA = NGN / rate``. Keep this separate from customer
+    price conversion in :mod:`currency`.
+    """
     ngn = Decimal(amount(supplier_cost_ngn))
-    return int((ngn * safe_rate(rate)).quantize(
+    return int((ngn / safe_rate(rate)).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def supplier_cost_ngn_from_cfa(supplier_cost_cfa, rate):
+    """Convert an accounting FCFA cost back to its NGN base amount."""
+    cfa = Decimal(amount(supplier_cost_cfa))
+    return int((cfa * safe_rate(rate)).quantize(
         Decimal("1"), rounding=ROUND_HALF_UP))
 
 
@@ -472,22 +486,46 @@ def apply_supplier_fields(snapshot, order, values, *, sale=None):
 
 
 def entry_figures(snapshot, currency="NGN", rate=LEGACY_RATE):
-    """Net profit figures for one entry.
+    """Net profit figures for one entry, in its own ledger currency.
 
-    Net Profit = Selling Price - Applied Discounts - Total Supplier Cost
-    Net Cash Profit = Net Profit - Delivery / Transport Fee
-    (The Starting Profit / opening balance is added once at the batch ledger
-    level - ``bank_balances`` - never per row.)
+    Historical snapshots keep the legacy ``deliveryExpense`` amount in the
+    order currency. New accounting edits store the NGN source in
+    ``deliveryExpenseNgn``; it is converted to FCFA with the same exact
+    division as supplier costs. The optional CFA override is used only while a
+    batch-level fee is being spread across sheet rows (rounding the share back
+    through NGN could otherwise move a CFA by one unit).
     """
     currency = normalize_currency(currency) or "NGN"
     rate = safe_rate(rate)
-    sale = amount(snapshot.get("saleAmount"))
+    lines = [line for line in (snapshot.get("lineItems") or [])
+             if isinstance(line, dict)]
+    sale = (sum(amount(line.get("saleAmount")) for line in lines)
+            if lines else amount(snapshot.get("saleAmount")))
     discount = amount(snapshot.get("discount"))
-    supplier_ngn = amount(snapshot.get("supplierCostNgn"))
+    supplier_ngn = (sum(amount(line.get("supplierCostNgn")) for line in lines)
+                    if lines else amount(snapshot.get("supplierCostNgn")))
     supplier_cfa = supplier_cost_cfa(supplier_ngn, rate)
     supplier_in_currency = supplier_cfa if currency == "CFA" else supplier_ngn
-    transport = amount(snapshot.get("deliveryExpense"))
-    net_profit = sale - discount - supplier_in_currency
+
+    if currency == "CFA" and snapshot.get("deliveryExpenseCfaOverride") is not None:
+        transport_cfa = amount(snapshot.get("deliveryExpenseCfaOverride"))
+        transport_ngn = supplier_cost_ngn_from_cfa(transport_cfa, rate)
+        transport = transport_cfa
+    elif "deliveryExpenseNgn" in snapshot:
+        transport_ngn = amount(snapshot.get("deliveryExpenseNgn"))
+        transport_cfa = supplier_cost_cfa(transport_ngn, rate)
+        transport = transport_cfa if currency == "CFA" else transport_ngn
+    else:
+        # Old snapshots recorded transport directly in their order currency.
+        transport = amount(snapshot.get("deliveryExpense"))
+        if currency == "CFA":
+            transport_cfa = transport
+            transport_ngn = supplier_cost_ngn_from_cfa(transport_cfa, rate)
+        else:
+            transport_ngn = transport
+            transport_cfa = supplier_cost_cfa(transport_ngn, rate)
+
+    net_profit = sale - discount - supplier_in_currency - transport
     return {
         "saleAmount": sale,
         "discount": discount,
@@ -495,13 +533,16 @@ def entry_figures(snapshot, currency="NGN", rate=LEGACY_RATE):
         "supplierCostCfa": supplier_cfa,
         "supplierCostInCurrency": supplier_in_currency,
         "deliveryExpense": transport,
+        "deliveryExpenseNgn": transport_ngn,
+        "deliveryExpenseCfa": transport_cfa,
         "netProfit": net_profit,
-        "netCashProfit": net_profit - transport,
+        "netCashProfit": net_profit,
     }
 
 
 def new_snapshot(total, currency, rate, confirmed_at, *, legacy=False,
-                 supplier_cost_ngn=0, supplier_qty=0, supplier_link=""):
+                 supplier_cost_ngn=0, supplier_qty=0, supplier_link="",
+                 discount=0):
     """Create a once-only order accounting snapshot.
 
     New confirmations use the active admin rate. Pre-feature confirmed orders
@@ -528,18 +569,17 @@ def new_snapshot(total, currency, rate, confirmed_at, *, legacy=False,
         "exchangeRate": float(safe_rate(rate)),
         "saleAmount": amount(total),
         # Supplier costs and transport are intentionally editable on the
-        # accounting sheet. When saved product defaults are known they arrive
-        # pre-filled; otherwise a blank supplier link / unit price is a valid
-        # starting state - the owner fills them in from the accounting desk
-        # and the net profit recalculates immediately (unit x quantity).
+        # accounting sheet. New multi-product orders materialize one supplier
+        # cost and link per item; these aggregate fields remain for compatibility
+        # with older records and API clients.
         "supplierCostNgn": cost,
         "supplierUnitPriceNgn": unit,
-        # 0 means "follow this order's own quantity"; the desk shows the
-        # effective multiplier (item quantity) and the owner may override it.
         "supplierQty": qty,
         "supplierLink": clean_supplier_link(supplier_link),
-        "discount": 0,
-        "discountPercent": 0.0,
+        "discount": amount(discount),
+        "discountPercent": float(percent_from_discount(total, discount)),
+        # Absent means a legacy deliveryExpense is in the order's currency.
+        # New edits add this explicit NGN base field before any CFA conversion.
         "deliveryExpense": 0,
         "notes": "",
         "snapshotSource": "legacy-estimate" if legacy else "confirmation",
@@ -574,6 +614,206 @@ def order_value(order, key, default=None):
         return default
 
 
+def _allocate_amount(total, weights):
+    """Split a whole amount across lines without losing a unit to rounding."""
+    total = amount(total)
+    raw = [max(Decimal(0), decimal_value(value, Decimal(0)))
+           for value in (weights or [])]
+    if not raw:
+        return []
+    if sum(raw) <= 0:
+        raw = [Decimal(1)] * len(raw)
+    denominator = sum(raw)
+    exact = [Decimal(total) * weight / denominator for weight in raw]
+    shares = [int(value) for value in exact]
+    remainder = total - sum(shares)
+    order = sorted(range(len(exact)),
+                   key=lambda index: (exact[index] - shares[index], -index),
+                   reverse=True)
+    for index in order[:remainder]:
+        shares[index] += 1
+    return shares
+
+
+def _order_line_sources(order):
+    """Canonical, bounded item list used by the staging/accounting ledger."""
+    payload = order_payload(order)
+    items = [dict(item) for item in (payload.get("items") or [])
+             if isinstance(item, dict)][:LINE_ITEMS_MAX]
+    if not items:
+        items = [{"name": "Order items", "qty": order_quantity(order)}]
+    return items
+
+
+def _upgrade_discount_snapshot(snapshot, order, payload):
+    """Recover the gross sale + discount split on older confirmed orders."""
+    try:
+        subtotal = amount(payload.get("subtotal"))
+        order_total = amount(order_value(order, "total", payload.get("total", 0)))
+        source_discount = amount(payload.get("discount"))
+    except Exception:
+        return snapshot
+    if (subtotal > 0 and source_discount > 0
+            and amount(snapshot.get("saleAmount")) == order_total
+            and amount(snapshot.get("discount")) == 0):
+        snapshot["saleAmount"] = subtotal
+        snapshot["discount"] = source_discount
+        snapshot["discountPercent"] = float(
+            percent_from_discount(subtotal, source_discount))
+    return snapshot
+
+
+def line_items_for_order(order, snapshot=None):
+    """Return one independently editable accounting line per ordered product.
+
+    Checkout orders already carry a line total in ``items[].price``. Historical
+    imports often have only one order total, so that amount is allocated across
+    their parsed products by quantity, with the remainder distributed
+    deterministically. A legacy aggregate supplier cost is similarly split by
+    known per-product supplier defaults when possible, otherwise by quantity.
+    """
+    snapshot = dict(snapshot or {})
+    payload = order_payload(order)
+    sources = _order_line_sources(order)
+    saved = [line for line in (snapshot.get("lineItems") or [])
+             if isinstance(line, dict)]
+    saved_by_id = {str(line.get("lineId") or ""): line for line in saved
+                   if line.get("lineId")}
+    sale_total = amount(snapshot.get("saleAmount", order_value(
+        order, "total", payload.get("total", 0))))
+    quantities = [quantity(item.get("qty") or item.get("quantity"), 1)
+                  for item in sources]
+
+    if saved:
+        source_sales = [amount(item.get("price") or item.get("saleAmount")
+                               or item.get("lineTotal")) for item in sources]
+        sale_weights = source_sales if sum(source_sales) else quantities
+        default_sales = (_allocate_amount(sale_total, sale_weights)
+                         if sale_total else source_sales)
+        default_costs = [saved_supplier_defaults([item]).get("costNgn", 0)
+                         for item in sources]
+        result = []
+        for index, (item, qty) in enumerate(zip(sources, quantities)):
+            line_id = f"line-{index + 1:02d}"
+            stored = saved_by_id.get(line_id)
+            if stored is None and index < len(saved):
+                stored = saved[index]
+            stored = stored if isinstance(stored, dict) else {}
+            sale = amount(stored.get("saleAmount"), default_sales[index])
+            cost = amount(stored.get("supplierCostNgn"), default_costs[index])
+            if "supplierCostNgn" not in stored and stored.get("supplierUnitPriceNgn") is not None:
+                cost = supplier_total(stored.get("supplierUnitPriceNgn"),
+                                      stored.get("supplierQty") or qty)
+            link = clean_supplier_link(
+                stored.get("supplierLink") or
+                ("" if index else snapshot.get("supplierLink")))
+            result.append({
+                "lineId": line_id,
+                "productId": str(item.get("id") or item.get("productId") or ""),
+                "name": str(item.get("name") or item.get("id") or "Item")[:200],
+                "variant": str(item.get("color") or item.get("variant") or "")[:120],
+                "qty": qty,
+                "saleAmount": sale,
+                "supplierCostNgn": cost,
+                "supplierUnitPriceNgn": (int((Decimal(cost) / Decimal(qty)).quantize(
+                    Decimal("1"), rounding=ROUND_HALF_UP)) if qty else 0),
+                "supplierQty": qty,
+                "supplierLink": link,
+            })
+        return result
+
+    source_sales = [amount(item.get("price") or item.get("saleAmount")
+                           or item.get("lineTotal")) for item in sources]
+    if sum(source_sales):
+        line_sales = (_allocate_amount(sale_total, source_sales)
+                      if sale_total else source_sales)
+    else:
+        line_sales = _allocate_amount(sale_total, quantities)
+
+    defaults = [saved_supplier_defaults([item]) for item in sources]
+    default_costs = [amount(row.get("costNgn")) for row in defaults]
+    stored_cost = amount(snapshot.get("supplierCostNgn"))
+    if stored_cost > 0 and sum(default_costs) != stored_cost:
+        cost_weights = default_costs if sum(default_costs) else quantities
+        line_costs = _allocate_amount(stored_cost, cost_weights)
+    else:
+        line_costs = default_costs
+
+    legacy_link = clean_supplier_link(snapshot.get("supplierLink"))
+    result = []
+    for index, (item, qty) in enumerate(zip(sources, quantities)):
+        cost = line_costs[index] if index < len(line_costs) else 0
+        link = clean_supplier_link((defaults[index] or {}).get("link"))
+        if not link and index == 0:
+            link = legacy_link
+        result.append({
+            "lineId": f"line-{index + 1:02d}",
+            "productId": str(item.get("id") or item.get("productId") or ""),
+            "name": str(item.get("name") or item.get("id") or "Item")[:200],
+            "variant": str(item.get("color") or item.get("variant") or "")[:120],
+            "qty": qty,
+            "saleAmount": line_sales[index] if index < len(line_sales) else 0,
+            "supplierCostNgn": cost,
+            "supplierUnitPriceNgn": (int((Decimal(cost) / Decimal(qty)).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP)) if qty else 0),
+            "supplierQty": qty,
+            "supplierLink": link,
+        })
+    return result
+
+
+def apply_line_items(snapshot, order, values):
+    """Validate and apply item-by-item sales, supplier costs and links."""
+    if not isinstance(values, list) or len(values) > LINE_ITEMS_MAX:
+        return None, f"lineItems must contain at most {LINE_ITEMS_MAX} product rows."
+    snapshot = dict(snapshot or {})
+    baseline = line_items_for_order(order, snapshot)
+    by_id = {line["lineId"]: line for line in baseline}
+    updated = {line_id: dict(line) for line_id, line in by_id.items()}
+    seen = set()
+    for raw in values:
+        if not isinstance(raw, dict):
+            return None, "Each lineItems value must be an object."
+        line_id = str(raw.get("lineId") or "").strip()[:40]
+        if line_id not in by_id:
+            return None, "A product line no longer matches this order. Refresh and retry."
+        if line_id in seen:
+            return None, "A product line was sent more than once."
+        seen.add(line_id)
+        line = updated[line_id]
+        if "saleAmount" in raw:
+            sale = editable_amount(raw.get("saleAmount"))
+            if sale is None:
+                return None, "Each product selling price must be a non-negative whole amount."
+            line["saleAmount"] = sale
+        if "supplierCostNgn" in raw:
+            cost = editable_amount(raw.get("supplierCostNgn"))
+            if cost is None:
+                return None, "Each product supplier cost must be a non-negative whole amount."
+            line["supplierCostNgn"] = cost
+            qty = quantity(line.get("qty"), 1)
+            line["supplierUnitPriceNgn"] = int((Decimal(cost) / Decimal(qty)).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP))
+        if "supplierLink" in raw:
+            line["supplierLink"] = clean_supplier_link(raw.get("supplierLink"))
+
+    lines = [updated[line["lineId"]] for line in baseline]
+    snapshot["lineItems"] = lines
+    snapshot["saleAmount"] = sum(amount(line.get("saleAmount")) for line in lines)
+    snapshot["supplierCostNgn"] = sum(
+        amount(line.get("supplierCostNgn")) for line in lines)
+    snapshot["supplierQty"] = sum(quantity(line.get("qty"), 1) for line in lines)
+    snapshot["supplierUnitPriceNgn"] = (
+        int((Decimal(snapshot["supplierCostNgn"]) /
+             Decimal(max(1, snapshot["supplierQty"]))).quantize(
+                 Decimal("1"), rounding=ROUND_HALF_UP)))
+    snapshot["supplierLink"] = next(
+        (line.get("supplierLink") for line in lines if line.get("supplierLink")), "")
+    snapshot["discountPercent"] = float(percent_from_discount(
+        snapshot["saleAmount"], snapshot.get("discount")))
+    return snapshot, ""
+
+
 def account_block(order, *, current_rate=None, apply_defaults=True):
     """Return a copy of a stored snapshot, or a stable legacy estimate.
 
@@ -604,7 +844,7 @@ def account_block(order, *, current_rate=None, apply_defaults=True):
         result.setdefault("snapshotSource", "legacy-estimate")
         if apply_defaults:
             result = apply_supplier_defaults_to_snapshot(result, order)
-        return result
+        return _upgrade_discount_snapshot(result, order, payload)
 
     # Before accounting shipped, no rate was recorded on an order. Use a
     # fixed, clearly-labelled baseline instead of re-reading today's setting
@@ -619,35 +859,39 @@ def account_block(order, *, current_rate=None, apply_defaults=True):
                         supplier_cost_ngn=defaults.get("costNgn", 0),
                         supplier_qty=defaults.get("qty", 0),
                         supplier_link=defaults.get("link", ""))
-    return snap
+    return _upgrade_discount_snapshot(snap, order, payload)
 
 
 def entry_from_order(order, archived_ids=None):
-    """Translate one confirmed order into its isolated ledger row."""
+    """Translate one confirmed order into an order row with itemized costs."""
     payload = order_payload(order)
     snapshot = account_block(order)
     currency = normalize_currency(snapshot.get("currency") or
                                  order_value(order, "currency") or
                                  payload.get("currency")) or "NGN"
     rate = safe_rate(snapshot.get("exchangeRate"))
+    lines = line_items_for_order(order, snapshot)
+    snapshot["lineItems"] = lines
     figures = entry_figures(snapshot, currency, rate)
-    sale = amount(snapshot.get("saleAmount", order_value(
-        order, "total", payload.get("total", 0))))
     supplier_ngn = figures["supplierCostNgn"]
-    delivery_expense = figures["deliveryExpense"]
     supplier_cfa = figures["supplierCostCfa"]
     supplier_in_currency = figures["supplierCostInCurrency"]
-    profit = figures["netProfit"]
-    cash_profit = figures["netCashProfit"]
+    line_qty = sum(quantity(line.get("qty"), 1) for line in lines)
+    supplier_qty = sum(quantity(line.get("supplierQty"),
+                                quantity(line.get("qty"), 1)) for line in lines)
+    supplier_unit = (int((Decimal(supplier_ngn) / Decimal(max(1, supplier_qty))).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP)))
+    supplier_link = next((clean_supplier_link(line.get("supplierLink"))
+                          for line in lines if line.get("supplierLink")), "")
     customer = payload.get("customer") or {}
     items = [item for item in (payload.get("items") or []) if isinstance(item, dict)]
     item_names = []
     for item in items[:12]:
         name = str(item.get("name") or item.get("id") or "Item").strip()
-        qty = amount(item.get("qty"), 1)
+        qty = quantity(item.get("qty") or item.get("quantity"), 1)
         if name:
             item_names.append(f"{qty}× {name}" if qty else name)
-    item_quantity = order_quantity(order)
+    item_quantity = line_qty or order_quantity(order)
     oid = str(order_value(order, "id") or payload.get("id") or "")
     archived = set(archived_ids or ())
     return {
@@ -659,18 +903,21 @@ def entry_from_order(order, archived_ids=None):
         "location": order_location(order),
         "itemsSummary": ", ".join(item_names),
         "itemQuantity": item_quantity,
-        "saleAmount": sale,
+        "lineItems": lines,
+        "saleAmount": figures["saleAmount"],
         "discount": figures["discount"],
         "discountPercent": float(decimal_value(snapshot.get("discountPercent"), 0)),
         "supplierCostNgn": supplier_ngn,
         "supplierCostCfa": supplier_cfa,
-        "supplierUnitPriceNgn": amount(snapshot.get("supplierUnitPriceNgn")),
-        "supplierQty": quantity(snapshot.get("supplierQty"), item_quantity),
-        "supplierLink": clean_supplier_link(snapshot.get("supplierLink")),
-        "deliveryExpense": delivery_expense,
+        "supplierUnitPriceNgn": supplier_unit,
+        "supplierQty": supplier_qty,
+        "supplierLink": supplier_link,
+        "deliveryExpense": figures["deliveryExpense"],
+        "deliveryExpenseNgn": figures["deliveryExpenseNgn"],
+        "deliveryExpenseCfa": figures["deliveryExpenseCfa"],
         "supplierCostInCurrency": supplier_in_currency,
-        "netProfit": profit,
-        "netCashProfit": cash_profit,
+        "netProfit": figures["netProfit"],
+        "netCashProfit": figures["netCashProfit"],
         "exchangeRate": float(rate),
         "notes": str(snapshot.get("notes") or ""),
         "legacySnapshot": snapshot.get("snapshotSource") == "legacy-estimate",
