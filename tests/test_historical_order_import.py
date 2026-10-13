@@ -153,10 +153,70 @@ def test_mixed_sheet_routes_each_row_to_its_own_ledger():
     assert [o["id"] for o, _ in result["cfa"]] == ["A-2"]
 
 
+# ---------------------------------------------------------------- flexible table imports
+def test_flexible_headers_delimiter_preamble_and_multi_item_rows():
+    source = (
+        "Historical Jaura Store orders export\n"
+        " Order No ; Customer Name ; Products ; Currency ; Total Price ; "
+        "Supplier Cost (NGN) ; Destination \n"
+        "HIST-MULTI-1 ; Ada ; 2× Ankara gown, 1 bag ; CFA ; "
+        "31,500 FCFA ; 3,150 ; Cotonou \n"
+    )
+    headers, rows = imp.read_csv_text(source)
+    result = imp.import_rows(headers, rows, rate=Decimal("0.45"))
+    order, info = _first(result["cfa"])
+    assert order["id"] == "HIST-MULTI-1"
+    assert info["location"] == "Cotonou"
+    assert info["supplierCostNgn"] == 3_150
+    entry = accounting.entry_from_order(order)
+    assert [(line["name"], line["qty"]) for line in entry["lineItems"]] == [
+        ("Ankara gown", 2), ("bag", 1)]
+    assert [line["saleAmount"] for line in entry["lineItems"]] == [21_000, 10_500]
+    assert sum(line["supplierCostNgn"] for line in entry["lineItems"]) == 3_150
+    assert entry["supplierCostCfa"] == 7_000
+    assert entry["saleAmount"] == 31_500
+
+
+def test_resilient_staging_keeps_good_rows_when_one_row_fails(monkeypatch):
+    import supabase_store
+
+    class RowError(Exception):
+        status_code = 400
+
+    written = []
+
+    class Builder:
+        def __init__(self):
+            self.rows = []
+
+        def upsert(self, rows):
+            self.rows = rows
+            if len(rows) > 1:
+                raise RowError("batch contains one invalid row")
+            return self
+
+        def execute(self):
+            row = self.rows[0]
+            if row["id"] == "BAD-1":
+                raise RowError("invalid historical row")
+            written.append(row["id"])
+
+    class FakeClient:
+        def table(self, _name):
+            return Builder()
+
+    monkeypatch.setattr(supabase_store, "client", lambda: FakeClient())
+    result = imp.stage_orders_resilient([
+        {"id": "GOOD-1"}, {"id": "BAD-1"}, {"id": "GOOD-2"}])
+    assert result["staged"] == 2
+    assert result["failures"] == [{"id": "BAD-1", "error": "invalid historical row"}]
+    assert written == ["GOOD-1", "GOOD-2"]
+
+
 # ------------------------------------------------------------------- conversion
 def test_conversion_moves_both_ways_at_the_given_rate():
-    assert imp.convert(10000, "NGN", "CFA", RATE) == 4400
-    assert imp.convert(4400, "CFA", "NGN", RATE) == 10000
+    assert imp.convert(3150, "NGN", "CFA", Decimal("0.45")) == 7000
+    assert imp.convert(7000, "CFA", "NGN", Decimal("0.45")) == 3150
     assert imp.convert(10000, "NGN", "NGN", RATE) == 10000
 
 
@@ -165,10 +225,10 @@ def test_cfa_supplier_cost_is_stored_in_ngn_and_displayed_in_cfa():
     headers = ["Date", "Currency", "Selling Price", "Supplier costs · FCFA"]
     result = _import(headers, [["2024-03-16", "CFA", "62,000", "24,000 FCFA"]])
     order, info = _first(result["cfa"])
-    # 24,000 FCFA at 0.44 -> 54,545 NGN, and back to 24,000 FCFA for display.
-    assert info["supplierCostNgn"] == 54545
+    # 24,000 FCFA at 0.44 -> 10,560 NGN, and back to 24,000 FCFA for display.
+    assert info["supplierCostNgn"] == 10560
     assert info["supplierCostCfa"] == 24000
-    assert _payload(order)["accounting"]["supplierCostNgn"] == 54545
+    assert _payload(order)["accounting"]["supplierCostNgn"] == 10560
 
 
 def test_a_cell_marker_beats_a_header_that_names_another_currency():
@@ -188,7 +248,7 @@ def test_ngn_supplier_cost_stays_in_ngn_on_the_ngn_ledger():
     result = _import(headers, [["2024-03-14", "NGN", "45,000", "28,000"]])
     _, info = _first(result["ngn"])
     assert info["supplierCostNgn"] == 28000
-    assert info["supplierCostCfa"] == 12320       # shown converted on CFA view
+    assert info["supplierCostCfa"] == 63636       # shown converted on CFA view
 
 
 def test_revenue_and_transport_land_in_the_rows_own_currency():
@@ -332,7 +392,7 @@ def test_built_order_is_a_confirmed_order_the_desk_can_read():
     assert entry["saleAmount"] == 45000
     assert entry["supplierCostNgn"] == 28000
     assert entry["deliveryExpense"] == 2500
-    assert entry["netProfit"] == 45000 - 28000
+    assert entry["netProfit"] == 45000 - 28000 - 2500
     assert entry["archived"] is False
     assert entry["deleted"] is False
 
@@ -472,10 +532,10 @@ def test_end_to_end_reads_a_real_export_file(tmp_path):
     assert ngn_info["location"] == "Lagos"
     cfa_order, cfa_info = _first(result["cfa"])
     assert cfa_info["revenue"] == 62000
-    # A silent "Cost" header on a CFA row means the figure is already CFA, so
-    # it round-trips: 35,000 FCFA -> 79,545 NGN stored -> 35,000 FCFA shown.
+    # A silent "Cost" header on a CFA row means the figure is already CFA;
+    # 35,000 FCFA -> 15,400 NGN stored -> 35,000 FCFA shown.
     assert cfa_info["supplierCostCfa"] == 35000
-    assert cfa_info["supplierCostNgn"] == 79545
+    assert cfa_info["supplierCostNgn"] == 15400
     assert accounting.entry_from_order(cfa_order)["location"] == "Cotonou"
 
 
@@ -485,4 +545,4 @@ def test_a_header_naming_the_currency_overrides_the_round_trip():
     result = _import(headers, [["15/03/2024", "CFA", "62,000", "35 000"]])
     _, info = _first(result["cfa"])
     assert info["supplierCostNgn"] == 35000
-    assert info["supplierCostCfa"] == 15400          # 35,000 NGN @ 0.44
+    assert info["supplierCostCfa"] == 79545          # 35,000 NGN / 0.44

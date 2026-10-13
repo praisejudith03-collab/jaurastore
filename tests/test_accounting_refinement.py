@@ -173,10 +173,10 @@ def test_discount_and_net_profit_formula_with_currency_conversion():
         {"supplierUnitPriceNgn": 10_000, "supplierQty": 3, "supplierLink": "https://sup.example/x"})
     assert error == ""
     assert priced["supplierCostNgn"] == 30_000
-    # FCFA order: 30,000 NGN x 0.5 = 15,000 FCFA of supplier cost.
+    # FCFA order: 30,000 NGN / 0.5 = 60,000 FCFA of supplier cost.
     figures = accounting_mod.entry_figures(priced, "CFA", 0.5)
-    assert figures["supplierCostInCurrency"] == 15_000
-    assert figures["netProfit"] == 30_000            # 45,000 - 0 - 15,000
+    assert figures["supplierCostInCurrency"] == 60_000
+    assert figures["netProfit"] == -15_000           # 45,000 - 0 - 60,000
 
     # 10% discount off the selling price, deducted from the net profit.
     discounted, error = accounting_mod.apply_supplier_fields(
@@ -184,7 +184,7 @@ def test_discount_and_net_profit_formula_with_currency_conversion():
     assert error == ""
     assert discounted["discount"] == 4_500
     figures = accounting_mod.entry_figures(discounted, "CFA", 0.5)
-    assert figures["netProfit"] == 45_000 - 4_500 - 15_000
+    assert figures["netProfit"] == 45_000 - 4_500 - 60_000
     assert figures["netCashProfit"] == figures["netProfit"]   # transport still 0
 
     # An absolute discount reports the percentage it equals, and 0 clears it.
@@ -233,7 +233,7 @@ def test_patch_autosaves_supplier_fields_discounts_and_recalculates(client):
     shipped = patch_order(client, csrf, ORDER_IDS[0],
                           {"deliveryExpense": 1_200, "notes": "Batch 41"})
     entry = shipped.get_json()["entry"]
-    assert entry["netProfit"] == 39_000
+    assert entry["netProfit"] == 37_800
     assert entry["netCashProfit"] == 37_800
 
     # Invalid values are refused (never silently zeroed).
@@ -248,7 +248,58 @@ def test_patch_autosaves_supplier_fields_discounts_and_recalculates(client):
     assert entry["supplierCostNgn"] == 0
     assert entry["supplierLink"].endswith("/order/9")
     assert entry["discount"] == 5_000
-    assert entry["netProfit"] == 50_000 - 5_000
+    assert entry["netProfit"] == 50_000 - 5_000 - 1_200
+
+
+def test_multi_product_order_keeps_individual_sales_costs_links_and_fx(client, monkeypatch):
+    csrf = csrf_of(client)
+    order_id = ORDER_IDS[2]
+    snapshot = accounting_mod.new_snapshot(
+        24_000, "CFA", 0.44, "2026-10-04T09:00:00Z", discount=1_000)
+    payload = {
+        "customer": {"name": "Multi-item Buyer"},
+        "subtotal": 24_000,
+        "items": [
+            {"id": "ref-item-a", "name": "Ankara gown", "qty": 2,
+             "price": 6_000, "color": "Blue"},
+            {"id": "ref-item-b", "name": "Silk bag", "qty": 1,
+             "price": 18_000},
+        ],
+        "accounting": snapshot,
+    }
+    execute(
+        "INSERT INTO orders (id,payload,total,currency,status,customer_name,"
+        "items_count,at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (order_id, json.dumps(payload), 23_000, "CFA", "confirmed",
+         "Multi-item Buyer", 3, "2026-10-04T09:00:00Z", "2026-10-04T09:00:00Z"))
+    monkeypatch.setattr(accounting_mod, "current_exchange_rate", lambda: 0.45)
+
+    edited = patch_order(client, csrf, order_id, {
+        "lineItems": [
+            {"lineId": "line-01", "saleAmount": 6_000,
+             "supplierCostNgn": 3_150,
+             "supplierLink": "https://vendor.example/ankara"},
+            {"lineId": "line-02", "saleAmount": 18_000,
+             "supplierCostNgn": 6_300,
+             "supplierLink": "https://vendor.example/silk"},
+        ],
+        "discount": 1_000,
+        "deliveryExpense": 3_150,
+        "applyActiveRate": True,
+        "exchangeRate": 0.45,
+    })
+    assert edited.status_code == 200, edited.get_json()
+    entry = edited.get_json()["entry"]
+    assert [(line["name"], line["saleAmount"], line["supplierCostNgn"],
+             line["supplierLink"]) for line in entry["lineItems"]] == [
+        ("Ankara gown", 6_000, 3_150, "https://vendor.example/ankara"),
+        ("Silk bag", 18_000, 6_300, "https://vendor.example/silk"),
+    ]
+    assert entry["saleAmount"] == 24_000
+    assert entry["supplierCostNgn"] == 9_450
+    assert entry["supplierCostCfa"] == 21_000  # 9,450 / 0.45
+    assert entry["deliveryExpenseCfa"] == 7_000  # 3,150 / 0.45
+    assert entry["netProfit"] == 24_000 - 1_000 - 21_000 - 7_000
 
 
 def test_cfa_supplier_cost_converts_with_the_active_rate(client, monkeypatch):
@@ -265,9 +316,9 @@ def test_cfa_supplier_cost_converts_with_the_active_rate(client, monkeypatch):
     entry = priced.get_json()["entry"]
     assert entry["supplierCostNgn"] == 8_000
     assert entry["exchangeRate"] == 0.75
-    assert entry["supplierCostCfa"] == 6_000          # 8,000 x 0.75
-    assert entry["supplierCostInCurrency"] == 6_000
-    assert entry["netProfit"] == 24_000
+    assert entry["supplierCostCfa"] == 10_667         # 8,000 / 0.75
+    assert entry["supplierCostInCurrency"] == 10_667
+    assert entry["netProfit"] == 30_000 - 10_667
 
     # Untouched history keeps the rate locked in at confirmation.
     add_order(ORDER_IDS[0], "NGN", 12_000, qty=1, rate=0.44)
@@ -516,20 +567,19 @@ def test_broadcast_products_resolution_refuses_retired_rows(client, monkeypatch)
 
 
 # ------------------------------------------------------------ Google wiring
-def test_google_sheet_id_env_feeds_the_reference_workbook(monkeypatch):
+def test_google_sheet_id_is_only_a_preference_for_native_drive_resolution(monkeypatch):
     monkeypatch.delenv("GOOGLE_SHEET_ID", raising=False)
-    assert (google_sheets.reference_spreadsheet_id()
-            == google_sheets.DEFAULT_REFERENCE_SPREADSHEET_ID)
+    assert google_sheets.reference_spreadsheet_id() == ""
     monkeypatch.setenv("GOOGLE_SHEET_ID", "env-sheet-123")
     assert google_sheets.reference_spreadsheet_id() == "env-sheet-123"
-    # A value saved on the accounting desk wins over the environment.
+    # A saved preference wins but does not itself become the batch target.
     assert google_sheets.reference_spreadsheet_id(
         {"referenceSpreadsheetId": "desk-sheet-9"}) == "desk-sheet-9"
     # A full URL is accepted and reduced to the id.
     assert google_sheets.reference_spreadsheet_id(
         {"referenceSpreadsheetId": "https://docs.google.com/spreadsheets/d/abc_123/edit"}
     ) == "abc_123"
-    # A cleared desk setting falls back to the environment, never to nowhere.
+    # Clearing the saved preference leaves no assumed / legacy file target.
     assert google_sheets.reference_spreadsheet_id(
         {"referenceSpreadsheetId": ""}) == "env-sheet-123"
 
@@ -539,7 +589,8 @@ def test_accounting_page_exposes_the_effective_reference_sheet(client, monkeypat
     csrf_of(client)
     page = client.get("/api/admin/accounting").get_json()
     assert page["settings"]["referenceSpreadsheetId"] == "env-sheet-123"
-    assert page["googleSheetId"] == "env-sheet-123"
+    assert page["googleSheetId"] == ""
+    assert page["googleSheetTitle"] == google_sheets.REFERENCE_SPREADSHEET_TITLE
 
 
 def test_google_verify_reports_every_step_without_writing(client, monkeypatch):
@@ -605,16 +656,17 @@ def test_the_desk_has_the_opening_balance_input_at_the_top():
     assert "/api/admin/accounting/settings" in ACCOUNTING_JS
 
 
-def test_the_desk_autosaves_supplier_fields_and_hides_a_zero_discount():
+def test_the_desk_autosaves_per_item_supplier_fields_and_hides_zero_discount():
     assert 'data-stage-edit="supplierLink"' in ACCOUNTING_JS
-    assert 'data-stage-edit="supplierUnitPriceNgn"' in ACCOUNTING_JS
-    assert 'data-stage-edit="supplierQty"' in ACCOUNTING_JS
+    assert 'data-stage-edit="supplierCostNgn"' in ACCOUNTING_JS
+    assert 'data-stage-edit="saleAmount"' in ACCOUNTING_JS
+    assert "function lineItemsFromRow(" in ACCOUNTING_JS
     assert "function scheduleEntrySave(" in ACCOUNTING_JS
     assert "function rowFigures(" in ACCOUNTING_JS
     assert "productIsDeleted" not in ACCOUNTING_JS  # marketing lives in admin.js
     # The discount cell renders the input only when a discount exists.
     assert 'const discountCell = discount > 0' in ACCOUNTING_JS
-    # FCFA rows reprice at the active Store Settings rate on edit.
+    # Only explicit CFA supplier-cost/transport edits use the active rate.
     assert "applyActiveRate" in ACCOUNTING_JS
 
 
@@ -649,58 +701,75 @@ const sandbox = { Math, Number, String, Object, Array, console };
 sandbox.__entries = [];
 sandbox.state = {
   currency: "NGN", currentExchangeRate: 0.75, entries: [], batchTransportFee: "",
-  money: (n) => n,
+  selected: new Set(), money: (n) => n,
 };
 vm.createContext(sandbox);
 const pieces = [];
-for (const fn of ["entrySupplierTotal", "entryFigures", "rowFigures",
-                  "entryQuantity", "batchTransportFee", "stagedEntries",
+for (const fn of ["entrySupplierTotal", "ngnCostToCfa", "entryFigures",
+                  "rowFigures", "entryQuantity", "batchTransportFee",
+                  "stagedEntries", "batchFeePreviewInLedgerCurrency",
                   "stageTotals"]) {
   pieces.push(grab(fn));
 }
 vm.runInContext(pieces.join("\n"), sandbox);
 sandbox.state = {
   currency: "NGN", currentExchangeRate: 0.75,
-  batchTransportFee: "",
+  batchTransportFee: "", selected: new Set(),
   entries: [
     { id: "n1", currency: "NGN", saleAmount: 50000, discount: 5000,
-      supplierCostNgn: 6000, supplierCostCfa: 3000, supplierUnitPriceNgn: 2000,
-      supplierQty: 3, itemQuantity: 3, deliveryExpense: 1200, exchangeRate: 0.75 },
+      supplierCostNgn: 6000, supplierCostCfa: 8000,
+      itemQuantity: 3, deliveryExpense: 1200, deliveryExpenseNgn: 1200,
+      exchangeRate: 0.75,
+      lineItems: [
+        { lineId: "line-01", saleAmount: 30000, supplierCostNgn: 4000, qty: 2 },
+        { lineId: "line-02", saleAmount: 20000, supplierCostNgn: 2000, qty: 1 },
+      ] },
     { id: "c1", currency: "CFA", saleAmount: 30000, discount: 0,
-      supplierCostNgn: 8000, supplierCostCfa: 6000, supplierUnitPriceNgn: 4000,
-      supplierQty: 2, itemQuantity: 2, deliveryExpense: 0, exchangeRate: 0.75 },
+      supplierCostNgn: 3150, supplierCostCfa: 7000,
+      itemQuantity: 1, deliveryExpense: 7000, deliveryExpenseNgn: 3150,
+      exchangeRate: 0.45,
+      lineItems: [
+        { lineId: "line-01", saleAmount: 30000, supplierCostNgn: 3150, qty: 1 },
+      ] },
   ],
 };
 const run = (code) => vm.runInContext(code, sandbox);
 const assert = (cond, msg) => { if (!cond) { console.error("FAIL: " + msg); process.exit(1); } };
 
-// The entry figures match the server formula exactly.
+// The entry figures match the server formula, including transport.
 const ngn = run("entryFigures(state.entries[0])");
-assert(ngn.netProfit === 50000 - 5000 - 6000, "net profit = sale - discount - supplier");
-assert(ngn.netCashProfit === ngn.netProfit - 1200, "cash profit also removes transport");
+assert(ngn.netProfit === 50000 - 5000 - 6000 - 1200,
+       "net profit = sale - discount - supplier - transport");
+assert(ngn.netCashProfit === ngn.netProfit, "cash profit matches net profit");
 const cfa = run("entryFigures(state.entries[1])");
-assert(cfa.supplier === 6000, "CFA entries show their converted FCFA cost");
-assert(run("entryQuantity(state.entries[1])") === 2, "quantity follows the order");
+assert(cfa.supplier === 7000, "FCFA cost divides NGN by the locked rate");
+assert(cfa.netProfit === 30000 - 7000 - 7000, "FCFA transport divides by the same rate");
+assert(run("entryQuantity(state.entries[1])") === 1, "quantity follows the order");
 
-// Live edit: typing a unit price and quantity recalculates before the save.
+// Live edit: each product line has independent sale and supplier values.
 const fakeRow = (values) => ({ querySelector: (sel) => {
   const name = (sel.match(/data-stage-edit="([^"]+)"/) || [])[1];
-  if (!(name in values)) return null;
-  return { value: String(values[name]) };
+  const line = (sel.match(/data-line-index="([^"]+)"/) || [])[1];
+  const key = line === undefined ? name : `${name}:${line}`;
+  if (!(key in values)) return null;
+  return { value: String(values[key]) };
 } });
-sandbox.__row = fakeRow({ supplierUnitPriceNgn: "2500", supplierQty: "4",
-                          saleAmount: "50000", discount: "0", deliveryExpense: "800" });
+sandbox.__row = fakeRow({ "supplierCostNgn:0": "2500", "supplierCostNgn:1": "3000",
+                          "saleAmount:0": "30000", "saleAmount:1": "20000",
+                          discount: "5000", deliveryExpense: "800" });
 const live = run("rowFigures(__row, state.entries[0])");
-assert(live.totalNgn === 10000, "unit price x quantity = total supplier cost");
-assert(live.netProfit === 50000 - 10000, "live net profit recalculates");
-assert(live.netCashProfit === 40000 - 800, "live cash profit removes transport");
-sandbox.__row = fakeRow({ supplierUnitPriceNgn: "4000", supplierQty: "2",
-                          saleAmount: "30000", discount: "3000", deliveryExpense: "0" });
+assert(live.totalNgn === 5500, "line supplier costs sum before profit calculation");
+assert(live.netProfit === 50000 - 5000 - 5500 - 800,
+       "live net profit recalculates per item and transport");
+sandbox.__row = fakeRow({ "supplierCostNgn:0": "6300", "saleAmount:0": "30000",
+                          discount: "3000", deliveryExpense: "3150" });
 const liveCfa = run("rowFigures(__row, state.entries[1])");
-assert(liveCfa.supplier === 6000, "FCFA conversion uses the ledger rate (8000 x 0.75)");
-assert(liveCfa.netProfit === 30000 - 3000 - 6000, "discounts are deducted live");
+assert(liveCfa.supplier === 8400, "edited FCFA cost uses active rate: 6,300 / 0.75");
+assert(liveCfa.transport === 4200, "FCFA transport uses active rate: 3,150 / 0.75");
+assert(liveCfa.netProfit === 30000 - 3000 - 8400 - 4200,
+       "discount, supplier costs and transport are deducted live");
 
-// Batch Transportation Fee: filled wins; blank falls back to per-order fees.
+// Batch Transportation Fee is an NGN base and previews by each row rate.
 run('state.currency = "NGN"');
 assert(run("stageTotals().transport") === 1200, "blank batch fee -> per-order transport");
 assert(run('stageTotals().transportSource') === "per-order", "blank means per-order mode");
@@ -708,6 +777,9 @@ run('state.batchTransportFee = "2000"');
 assert(run("stageTotals().transport") === 2000, "batch fee wins over per-order fees");
 assert(run('stageTotals().transportSource') === "batch", "batch mode is reported");
 assert(run("stageTotals().supplier") === 6000, "supplier total stays currency-scoped");
+run('state.currency = "CFA"; state.batchTransportFee = "3150"');
+assert(run("stageTotals().batchFee") === 7000,
+       "FCFA batch transport divides its NGN base at the locked rate");
 console.log("ALL ACCOUNTING RECALC CHECKS PASSED");
 """
 

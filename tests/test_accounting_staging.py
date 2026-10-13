@@ -122,8 +122,7 @@ def test_push_routes_by_currency_clears_the_queue_and_keeps_history(client, monk
     # The staged queue holds every confirmed, un-pushed order.
     staged = client.get("/api/admin/accounting").get_json()
     assert {row["id"] for row in staged["entries"]} == set(ORDER_IDS)
-    assert staged["settings"]["referenceSpreadsheetId"] == \
-        google_sheets.DEFAULT_REFERENCE_SPREADSHEET_ID
+    assert staged["settings"]["referenceSpreadsheetId"] == ""
 
     pushed = client.post("/api/admin/accounting/push", headers={"X-CSRF-Token": csrf},
                          json={"orderIds": list(ORDER_IDS),
@@ -133,8 +132,9 @@ def test_push_routes_by_currency_clears_the_queue_and_keeps_history(client, monk
     body = pushed.get_json()
 
     # Mixed-currency pushes are routed automatically in one request.
-    assert fake.calls and fake.calls[0]["referenceId"] == \
-        google_sheets.DEFAULT_REFERENCE_SPREADSHEET_ID
+    # The endpoint passes only an optional preference; the pusher performs
+    # strict native Drive resolution instead of selecting a default ID.
+    assert fake.calls and fake.calls[0]["referenceId"] == ""
     assert fake.calls[0]["orderIds"] == sorted(ORDER_IDS)
 
     by_currency = {batch["currency"]: batch for batch in body["batches"]}
@@ -325,13 +325,32 @@ def test_push_orders_upsert_by_order_id_never_duplicates(monkeypatch):
     seen = {}
 
     def fake_request(method, url, body=None):
-        seen.setdefault("calls", []).append((method, url))
+        seen.setdefault("calls", []).append((method, url, body))
+        if method == "GET" and "/drive/v3/files?" in url:
+            return {"files": [
+                {"id": "xlsx-backup", "name": google_sheets.REFERENCE_SPREADSHEET_TITLE,
+                 "mimeType": google_sheets._XLSX_MIME_TYPE,
+                 "modifiedTime": "2027-01-01T00:00:00Z"},
+                {"id": "native-old", "name": google_sheets.REFERENCE_SPREADSHEET_TITLE,
+                 "mimeType": google_sheets.GOOGLE_SHEETS_MIME_TYPE,
+                 "modifiedTime": "2025-01-01T00:00:00Z"},
+                {"id": "native-active", "name": google_sheets.REFERENCE_SPREADSHEET_TITLE,
+                 "mimeType": google_sheets.GOOGLE_SHEETS_MIME_TYPE,
+                 "modifiedTime": "2026-10-01T00:00:00Z"},
+            ]}
+        if method == "GET" and "fields=properties(title" in url:
+            return {"properties": {"title": google_sheets.REFERENCE_SPREADSHEET_TITLE},
+                    "sheets": [{"properties": {"title": "NGN"}},
+                               {"properties": {"title": "FCFA"}},
+                               {"properties": {"title": "Order Lines"}}]}
         if method == "GET" and "/values:batchGet" in url:
             return {"valueRanges": [{"values": [
                 google_sheets._headers("NGN"),
                 ["2026-10-01", "JA-DUP-1", "Old Customer", "1× Old", "NGN",
-                 1, "", "", "", "", ""],
+                 1, "", "", "", "", "", ""],
             ]}]}
+        if method == "GET" and "/values/" in url and "Order%20Lines" in url:
+            return {"values": [google_sheets.ORDER_LINE_HEADERS]}
         return {}
 
     monkeypatch.setattr(google_sheets, "_google_request", fake_request)
@@ -343,9 +362,12 @@ def test_push_orders_upsert_by_order_id_never_duplicates(monkeypatch):
                  "accounting": accounting_mod.new_snapshot(
                      4_000, "NGN", 0.44, "2026-10-05T10:00:00Z")})}
     report = google_sheets.push_orders([order], batch_name="Batch 9",
-                                       reference_id="sb-ref")
+                                       reference_id="xlsx-backup")
+    assert report["NGN"]["spreadsheetId"] == "native-active"
     assert report["NGN"]["updated"] == 1
     assert report["NGN"]["appended"] == 0
+    assert report["NGN"]["lineCount"] == 1
+    assert report["NGN"]["lineTab"] == "Order Lines"
     put_calls = [c for c in seen["calls"] if c[0] == "PUT" and "/values/" in c[1]
                  and ":append" not in c[1]]
     assert put_calls, "an existing order id must be updated in place"

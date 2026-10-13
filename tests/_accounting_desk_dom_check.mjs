@@ -2,10 +2,10 @@
 
    Runs the shipped bundle inside jsdom against recorded API answers and
    asserts the operator-visible behaviour the pytest source pins describe:
-   the Starting Profit / opening balance box, the supplier link + unit price x
-   quantity autosave with instant net-profit recalculation, the discount field
-   hidden at zero, the Batch Transportation Fee fallback, the settings PUT and
-   the Google verify call.
+   the Starting Profit / opening balance box, per-product supplier link/cost
+   autosave with instant net-profit recalculation, the discount field hidden at
+   zero, the Batch Transportation Fee fallback, the settings PUT and the
+   Google verify call.
 
    Needs jsdom (`npm install jsdom`); the pytest wrapper skips without it.
    Run directly:  node tests/_accounting_desk_dom_check.mjs
@@ -42,26 +42,34 @@ const dom = new JSDOM(html, { runScripts: "outside-only", url: "https://jaurasto
 const { window } = dom;
 
 const settings = { startingBalanceNgn: 250000, startingBalanceCfa: 40000,
-  startingProfitNgn: 250000, referenceSpreadsheetId: "1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu" };
+  startingProfitNgn: 250000, referenceSpreadsheetId: "" };
 const entries = [
   { id: "ORD-1", date: "2026-10-05T09:00:00Z", currency: "NGN", customer: "Ada Ngo",
     itemsSummary: "3× Silk scarf", itemQuantity: 3, saleAmount: 50000, discount: 0,
     discountPercent: 0, supplierCostNgn: 0, supplierCostCfa: 0,
     supplierUnitPriceNgn: 0, supplierQty: 3, supplierLink: "", supplierCostInCurrency: 0,
-    deliveryExpense: 0, netProfit: 50000, netCashProfit: 50000, exchangeRate: 0.44,
+    deliveryExpense: 0, deliveryExpenseNgn: 0, deliveryExpenseCfa: 0,
+    netProfit: 50000, netCashProfit: 50000, exchangeRate: 0.44,
+    lineItems: [{ lineId: "line-01", name: "Silk scarf", qty: 3, saleAmount: 50000,
+      supplierCostNgn: 0, supplierLink: "" }],
     notes: "", legacySnapshot: false, deleted: false, archived: false },
   { id: "ORD-2", date: "2026-10-05T10:00:00Z", currency: "NGN", customer: "Bola Ade",
     itemsSummary: "1× Handbag", itemQuantity: 1, saleAmount: 40000, discount: 4000,
-    discountPercent: 10, supplierCostNgn: 12000, supplierCostCfa: 5280,
+    discountPercent: 10, supplierCostNgn: 12000, supplierCostCfa: 27273,
     supplierUnitPriceNgn: 12000, supplierQty: 1, supplierLink: "https://sup.example/handbag",
-    supplierCostInCurrency: 12000, deliveryExpense: 500, netProfit: 24000,
-    netCashProfit: 23500, exchangeRate: 0.44, notes: "", legacySnapshot: false,
-    deleted: false, archived: false },
+    supplierCostInCurrency: 12000, deliveryExpense: 500, deliveryExpenseNgn: 500,
+    deliveryExpenseCfa: 1136, netProfit: 23500, netCashProfit: 23500, exchangeRate: 0.44,
+    lineItems: [{ lineId: "line-01", name: "Handbag", qty: 1, saleAmount: 40000,
+      supplierCostNgn: 12000, supplierLink: "https://sup.example/handbag" }],
+    notes: "", legacySnapshot: false, deleted: false, archived: false },
   { id: "ORD-3", date: "2026-10-05T11:00:00Z", currency: "CFA", customer: "Koffi",
     itemsSummary: "2× Parfum", itemQuantity: 2, saleAmount: 20000, discount: 0,
-    discountPercent: 0, supplierCostNgn: 8000, supplierCostCfa: 3520,
-    supplierUnitPriceNgn: 4000, supplierQty: 2, supplierLink: "", supplierCostInCurrency: 3520,
-    deliveryExpense: 0, netProfit: 16480, netCashProfit: 16480, exchangeRate: 0.44,
+    discountPercent: 0, supplierCostNgn: 8000, supplierCostCfa: 18182,
+    supplierUnitPriceNgn: 4000, supplierQty: 2, supplierLink: "", supplierCostInCurrency: 18182,
+    deliveryExpense: 0, deliveryExpenseNgn: 0, deliveryExpenseCfa: 0,
+    netProfit: 1818, netCashProfit: 1818, exchangeRate: 0.44,
+    lineItems: [{ lineId: "line-01", name: "Parfum", qty: 2, saleAmount: 20000,
+      supplierCostNgn: 8000, supplierLink: "" }],
     notes: "", legacySnapshot: false, deleted: false, archived: false },
 ];
 const payload = {
@@ -71,7 +79,7 @@ const payload = {
            manualExpenses: 0, bankCharges: 0, balance: 250000 },
     CFA: { currency: "CFA", startingBalance: 40000, startingProfit: 40000, salesNetProfit: 0,
            manualExpenses: 0, bankCharges: 0, balance: 40000 } },
-  currentExchangeRate: 0.44, legacyRate: 0.44, googleSheetId: "1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu",
+  currentExchangeRate: 0.44, legacyRate: 0.44, googleSheetId: "",
   google: { configured: true, connected: true, email: "owner@example.com",
             ledgers: { NGN: { id: "ngn", url: "https://sheets/ngn" },
                        CFA: { id: "cfa", url: "https://sheets/cfa" } } },
@@ -103,9 +111,9 @@ ok(/name="startingBalanceNgn"[^>]*value="250000"/.test(text), "opening NGN input
 ok(text.indexOf("STARTING PROFIT / OPENING BALANCE") < text.indexOf("aa-balance-strip"), "opening box is above the balance strip");
 ok(text.includes("aa-batch-transport"), "batch transportation fee box");
 ok(text.includes("blank = per-order fees"), "blank fallback hint");
-ok(text.includes('data-stage-edit="supplierLink"'), "supplier link input");
-ok(text.includes('data-stage-edit="supplierUnitPriceNgn"'), "unit supplier price input");
-ok(text.includes('data-stage-edit="supplierQty"'), "quantity input");
+ok(text.includes('data-stage-edit="supplierLink"'), "per-item supplier link input");
+ok(text.includes('data-stage-edit="supplierCostNgn"'), "per-item supplier cost input");
+ok(text.includes('data-stage-edit="saleAmount"'), "per-item selling price input");
 ok(text.includes("＋ discount"), "zero-discount row shows the add button only");
 const discountInputs = [...root.querySelectorAll('[data-stage-edit="discount"]')];
 ok(discountInputs.length === 1, "only the discounted row renders a discount field");
@@ -114,21 +122,19 @@ ok(discountInputs[0].closest(".aa-stage-row").dataset.id === "ORD-2", "on the ri
 ok(text.includes("10% off"), "the discount percentage is shown");
 ok((text.match(/＋ discount/g) || []).length === 1, "the two undiscounted rows keep the clean add button");
 ok(text.includes("Test Google sync"), "verify button");
-ok(text.includes("Supplier link · unit ₦ × qty"), "supplier column header explains the formula");
+ok(text.includes("Supplier cost &amp; link · per item"), "supplier column header explains itemized costs");
 
-// Live recalculation: type a unit price + qty, the row's net profit moves now.
+// Live recalculation: type a line supplier cost, the row's net profit moves now.
 const row = root.querySelector('.aa-stage-row[data-id="ORD-1"]');
 ok(!!row, "the staged row rendered");
-const unit = row.querySelector('[data-stage-edit="supplierUnitPriceNgn"]');
-const qty = row.querySelector('[data-stage-edit="supplierQty"]');
-unit.value = "2000"; qty.value = "3";
-unit.dispatchEvent(new window.Event("input", { bubbles: true }));
-qty.dispatchEvent(new window.Event("input", { bubbles: true }));
+const cost = row.querySelector('[data-stage-edit="supplierCostNgn"][data-line-index="0"]');
+cost.value = "6000";
+cost.dispatchEvent(new window.Event("input", { bubbles: true }));
 await new Promise((r) => setTimeout(r, 30));
 const profitText = row.querySelector("[data-row-profit]").textContent;
 ok(profitText.includes("44,000"), "net profit recalculated live (50,000 - 6,000): " + profitText);
 const totalText = row.querySelector("[data-cost-total]").textContent;
-ok(totalText.includes("6,000"), "unit × qty total shown live: " + totalText);
+ok(totalText.includes("6,000"), "per-line supplier cost total shown live: " + totalText);
 
 // The batch fee recalculates the section totals as one cost for the batch.
 const batchFee = root.querySelector("[data-batch-transport]");
@@ -138,12 +144,12 @@ await new Promise((r) => setTimeout(r, 30));
 const summary = root.querySelector("[data-stage-summary]").textContent;
 ok(summary.includes("transport") && summary.includes("1,500"), "batch transport replaces per-order sum: " + summary);
 
-// Debounced autosave fires a PATCH with the typed unit price.
+// Debounced autosave fires a PATCH with the typed per-item supplier amount.
 await new Promise((r) => setTimeout(r, 1100));
 const patch = calls.find((c) => c.method === "PATCH");
 ok(!!patch, "the edit auto-saved");
-ok(patch.body.supplierUnitPriceNgn === 2000 && patch.body.supplierQty === 3,
-   "the debounced PATCH merged both typed fields: " + JSON.stringify(patch.body));
+ok(patch.body.lineItems[0].supplierCostNgn === 6000,
+   "the debounced PATCH preserves the per-item cost: " + JSON.stringify(patch.body));
 
 // Saving the opening balance PUTs the settings route.
 const openingForm = root.querySelector("[data-opening-form]");

@@ -34,6 +34,7 @@
     balances: { NGN: null, CFA: null },
     batches: [],
     google: { configured: false, connected: false, ledgers: {} },
+    activeReferenceId: "",
     // The live admin rate arrives from the server (never a hardcoded literal);
     // null until the first /api/admin/accounting answer lands.
     currentExchangeRate: null,
@@ -63,15 +64,19 @@
     return currency === "CFA" ? `${negative}FCFA ${amount}` : `${negative}₦${amount}`;
   }
 
-  /* The live formula the server also applies, so a row recalculates the
-   * instant a figure is typed - before the (debounced) save lands:
-   *   Total Supplier Cost = Unit Supplier Price x Quantity
-   *   Net Profit = Selling Price - Discounts - Total Supplier Cost - Transport
-   */
+  /* Accounting supplier and transport costs are NGN-base amounts. For an
+   * FCFA ledger they convert with exact division: FCFA = NGN / FX rate. This
+   * is deliberately separate from the storefront selling-price conversion. */
   function entrySupplierTotal(entry) {
-    // A CFA order shows its supplier cost converted at the ledger's rate.
     return Number(entry.currency === "CFA" ? (entry.supplierCostCfa || 0)
                                             : (entry.supplierCostNgn || 0));
+  }
+
+  function ngnCostToCfa(value, rate = state.currentExchangeRate) {
+    const amount = Number(value || 0);
+    const divisor = Number(rate || 0);
+    if (!Number.isFinite(amount) || !Number.isFinite(divisor) || divisor <= 0) return 0;
+    return Math.round(amount / divisor);
   }
 
   // The active admin rate as display text; "…" until the server row lands.
@@ -85,35 +90,70 @@
     const discount = Number(entry.discount || 0);
     const supplier = entrySupplierTotal(entry);
     const transport = Number(entry.deliveryExpense || 0);
-    const netProfit = sale - discount - supplier;
+    const netProfit = sale - discount - supplier - transport;
     return { sale, discount, supplier, transport, netProfit,
-             netCashProfit: netProfit - transport };
+             netCashProfit: netProfit };
   }
 
   function rowFigures(row, entry) {
-    // Read what is on screen right now; fall back to the saved entry.
-    const field = (name, fallback) => {
-      const input = row && row.querySelector(`[data-stage-edit="${name}"]`);
+    const currency = entry.currency || state.currency;
+    const lockedRate = Number(entry.exchangeRate || state.currentExchangeRate || 0);
+    const field = (name, fallback, lineIndex = null) => {
+      const selector = lineIndex == null
+        ? `[data-stage-edit="${name}"]`
+        : `[data-stage-edit="${name}"][data-line-index="${lineIndex}"]`;
+      const input = row && row.querySelector(selector);
       if (!input || input.value === "") return Number(fallback || 0);
       const value = Number(input.value);
       return Number.isFinite(value) ? value : Number(fallback || 0);
     };
-    const currency = entry.currency || state.currency;
-    const unit = field("supplierUnitPriceNgn", entry.supplierUnitPriceNgn);
-    const qty = field("supplierQty", entry.supplierQty || entry.itemQuantity) || 1;
-    const totalNgn = Math.round(unit * qty);
-    const rate = Number(entry.exchangeRate || state.currentExchangeRate || 0);
-    const supplier = currency === "CFA" ? Math.round(totalNgn * rate) : totalNgn;
-    const sale = field("saleAmount", entry.saleAmount);
+
+    const lines = Array.isArray(entry.lineItems) ? entry.lineItems : [];
+    const costChanged = lines.some((line, index) => {
+      const input = row && row.querySelector(
+        `[data-stage-edit="supplierCostNgn"][data-line-index="${index}"]`);
+      return input && input.value !== ""
+        && Number(input.value) !== Number(line.supplierCostNgn || 0);
+    });
+    const transportInput = row && row.querySelector(
+      '[data-stage-edit="deliveryExpense"]');
+    const transportChanged = transportInput && transportInput.value !== ""
+      && Number(transportInput.value) !== Number(entry.deliveryExpenseNgn || 0);
+    const rate = currency === "CFA" && (costChanged || transportChanged)
+      ? Number(state.currentExchangeRate || lockedRate) : lockedRate;
+    let sale = 0;
+    let totalNgn = 0;
+    const lineFigures = lines.map((line, index) => {
+      const lineSale = field("saleAmount", line.saleAmount, index);
+      const lineCost = field("supplierCostNgn", line.supplierCostNgn, index);
+      sale += lineSale;
+      totalNgn += lineCost;
+      return { sale: lineSale, supplierNgn: lineCost,
+               supplier: currency === "CFA" ? ngnCostToCfa(lineCost, rate) : lineCost };
+    });
+
+    // Older DOM fixtures and legacy snapshots can still have a single
+    // order-level cost control until the queue refreshes into itemized rows.
+    if (!lines.length) {
+      const unit = field("supplierUnitPriceNgn", entry.supplierUnitPriceNgn);
+      const qty = field("supplierQty", entry.supplierQty || entry.itemQuantity) || 1;
+      totalNgn = Math.round(unit * qty);
+      sale = field("saleAmount", entry.saleAmount);
+    }
+    const supplier = currency === "CFA" ? ngnCostToCfa(totalNgn, rate) : totalNgn;
     const discount = field("discount", entry.discount);
-    const transport = field("deliveryExpense", entry.deliveryExpense);
-    const netProfit = sale - discount - supplier;
-    return { currency, unit, qty, totalNgn, supplier, sale, discount, transport,
-             netProfit, netCashProfit: netProfit - transport };
+    const transportNgn = field("deliveryExpense", entry.deliveryExpenseNgn,
+                               null);
+    const transport = currency === "CFA"
+      ? ngnCostToCfa(transportNgn, rate) : transportNgn;
+    const netProfit = sale - discount - supplier - transport;
+    return { currency, totalNgn, supplierNgn: totalNgn, supplier, sale,
+             discount, transport, transportNgn, lineFigures, netProfit,
+             netCashProfit: netProfit };
   }
 
   function entryQuantity(entry) {
-    return Number(entry.supplierQty || 0) || Number(entry.itemQuantity || 0) || 1;
+    return Number(entry.itemQuantity || 0) || Number(entry.supplierQty || 0) || 1;
   }
 
   async function request(path, options = {}) {
@@ -260,7 +300,10 @@
   }
 
   function referenceSheetUrl() {
-    const id = String((state.settings || {}).referenceSpreadsheetId || "").trim();
+    // Never turn an unverified saved ID into a browser link: the server resolves
+    // the exact native Google Sheet and publishes its ID after verification or
+    // a successful push.
+    const id = String(state.activeReferenceId || "").trim();
     return id ? `https://docs.google.com/spreadsheets/d/${encodeURIComponent(id)}/edit` : "";
   }
 
@@ -270,23 +313,51 @@
     return state.entries.filter((entry) => entry.currency === state.currency);
   }
 
+  function batchFeePreviewInLedgerCurrency(feeNgn, entries) {
+    if (!entries.length) {
+      return state.currency === "CFA"
+        ? ngnCostToCfa(feeNgn, state.currentExchangeRate) : feeNgn;
+    }
+    if (state.currency !== "CFA") return feeNgn;
+    const share = Math.floor(feeNgn / entries.length);
+    const remainder = feeNgn - share * entries.length;
+    return entries.reduce((sum, entry, index) => sum + ngnCostToCfa(
+      share + (index === 0 ? remainder : 0),
+      entry.exchangeRate || state.currentExchangeRate), 0);
+  }
+
   function stageTotals() {
     const rows = stagedEntries();
-    const revenue = rows.reduce((sum, row) => sum + Number(row.saleAmount || 0), 0);
-    const discounts = rows.reduce((sum, row) => sum + Number(row.discount || 0), 0);
-    const supplier = rows.reduce((sum, row) => sum + entrySupplierTotal(row), 0);
-    const perOrder = rows.reduce((sum, row) => sum + Number(row.deliveryExpense || 0), 0);
-    // The Batch Transportation Fee wins when it is filled in; blank falls back
-    // to the individual per-order transport fees.
-    const batchFee = batchTransportFee();
-    const transport = batchFee === null ? perOrder : batchFee;
+    const domRows = typeof root !== "undefined" && root && root.querySelectorAll
+      ? [...root.querySelectorAll(".aa-stage-row")] : [];
+    const visible = rows.map((entry) => {
+      const domRow = domRows.find((row) => String(row.dataset.id) === String(entry.id));
+      return domRow ? rowFigures(domRow, entry) : entryFigures(entry);
+    });
+    const revenue = visible.reduce((sum, row) => sum + row.sale, 0);
+    const discounts = visible.reduce((sum, row) => sum + row.discount, 0);
+    const supplier = visible.reduce((sum, row) => sum + row.supplier, 0);
+    const perOrder = visible.reduce((sum, row) => sum + row.transport, 0);
+    const batchFeeNgn = batchTransportFee();
+    const selected = state.selected && typeof state.selected.has === "function"
+      ? state.selected : null;
+    const selectedRows = selected
+      ? rows.filter((entry) => selected.has(String(entry.id))) : [];
+    const feeRows = selectedRows.length ? selectedRows : rows;
+    const batchFee = batchFeeNgn === null ? null
+      : batchFeePreviewInLedgerCurrency(batchFeeNgn, feeRows);
+    const unselectedTransport = selectedRows.length
+      ? visible.reduce((sum, row, index) => sum
+        + (selected.has(String(rows[index].id)) ? 0 : row.transport), 0)
+      : 0;
+    const transport = batchFee === null ? perOrder : batchFee + unselectedTransport;
     const profit = revenue - discounts - supplier - transport;
     return { count: rows.length, revenue, discounts, supplier, perOrder,
              transport, transportSource: batchFee === null ? "per-order" : "batch",
-             profit, batchFee };
+             profit, batchFee, batchFeeNgn };
   }
 
-  /** The Batch Transportation Fee box: null means "left blank". */
+  /** The Batch Transportation Fee box: NGN base; null means "left blank". */
   function batchTransportFee() {
     const raw = String(state.batchTransportFee ?? "").trim();
     if (raw === "") return null;
@@ -298,14 +369,42 @@
     const id = String(entry.id || "");
     const checked = state.selected.has(id) ? " checked" : "";
     const figures = entryFigures(entry);
-    const qty = entryQuantity(entry);
-    const rate = Number(entry.exchangeRate || 0);
+    const lines = Array.isArray(entry.lineItems) ? entry.lineItems : [];
+    const rate = Number(entry.exchangeRate || state.currentExchangeRate || 0);
     const discount = Number(entry.discount || 0);
-    const cfaNote = entry.currency === "CFA"
-      ? `<small class="aa-stage-cfa">≈ FCFA ${Number(entry.supplierCostCfa || 0).toLocaleString("en")} @ ${rate}</small>`
-      : `<small class="aa-stage-cfa">rate ${rate}</small>`;
-    // The discount field stays HIDDEN at ₦0/FCFA 0 (a clean view); the small
-    // "+ discount" button opens it when the owner applies one.
+    const lineNames = lines.map((line) => `${Number(line.qty || 1)}× ${line.name || "Item"}`);
+    const saleLines = lines.map((line, index) => `
+      <div class="aa-item-edit" data-line-index="${index}">
+        <strong>${html(Number(line.qty || 1))}× ${html(line.name || "Item")}${line.variant ? ` · ${html(line.variant)}` : ""}</strong>
+        <label>Selling price · line total
+          <input type="number" min="0" step="1" inputmode="numeric"
+                 value="${Number(line.saleAmount || 0)}" data-stage-edit="saleAmount"
+                 data-line-index="${index}" data-id="${html(id)}"
+                 aria-label="Selling price for ${html(line.name || "item")}" />
+        </label>
+      </div>`).join("");
+    const costLines = lines.map((line, index) => `
+      <div class="aa-item-edit aa-item-cost" data-line-index="${index}">
+        <strong>${html(Number(line.qty || 1))}× ${html(line.name || "Item")}${line.variant ? ` · ${html(line.variant)}` : ""}</strong>
+        <input type="text" class="aa-stage-link" maxlength="500"
+               placeholder="Supplier URL for ${html(line.name || "this item")}"
+               value="${html(line.supplierLink || "")}" data-stage-edit="supplierLink"
+               data-line-index="${index}" data-id="${html(id)}"
+               aria-label="Supplier link for ${html(line.name || "item")}" />
+        <label>Supplier cost · NGN total
+          <input type="number" min="0" step="1" inputmode="numeric"
+                 value="${Number(line.supplierCostNgn || 0)}" data-stage-edit="supplierCostNgn"
+                 data-line-index="${index}" data-id="${html(id)}"
+                 aria-label="Supplier cost in Naira for ${html(line.name || "item")}" />
+        </label>
+        <small class="aa-stage-cfa">line total <b data-line-cost-total>${html(money(
+          entry.currency === "CFA" ? ngnCostToCfa(line.supplierCostNgn, rate)
+                                    : line.supplierCostNgn,
+          entry.currency))}</b>${entry.currency === "CFA"
+            ? ` · ₦${Number(line.supplierCostNgn || 0).toLocaleString("en")} ÷ ${rate}` : ""}</small>
+      </div>`).join("");
+    // The discount field stays HIDDEN at 0 (a clean view); the small button
+    // opens it when the owner applies one.
     const discountCell = discount > 0
       ? `<input type="number" min="0" step="1" inputmode="numeric" value="${discount}"
                 data-stage-edit="discount" data-id="${html(id)}"
@@ -319,34 +418,19 @@
         <td class="aa-stage-date"><span>${html(String(entry.date || "").slice(0, 10))}</span><small>${html(id)}</small></td>
         <td class="aa-stage-customer">${html(entry.customer || "Customer")}</td>
         <td class="aa-stage-location" title="Destination mapped from the order">${html(entry.location || "—")}</td>
-        <td class="aa-stage-items">${html(entry.itemsSummary || "—")}<small class="aa-stage-cfa">qty ${qty}</small></td>
-        <td class="aa-stage-sale">
-          <input type="number" min="0" step="1" inputmode="numeric" value="${Number(entry.saleAmount || 0)}"
-                 data-stage-edit="saleAmount" data-id="${html(id)}"
-                 aria-label="Selling price for ${html(entry.customer)}" />
-        </td>
-        <td class="aa-stage-cost">
-          <input type="text" class="aa-stage-link" maxlength="500" placeholder="Supplier link (optional)"
-                 value="${html(entry.supplierLink || "")}"
-                 data-stage-edit="supplierLink" data-id="${html(id)}"
-                 aria-label="Supplier link for ${html(entry.customer)}" />
-          <div class="aa-cost-line">
-            <input type="number" min="0" step="1" inputmode="numeric" value="${Number(entry.supplierUnitPriceNgn || 0)}"
-                   data-stage-edit="supplierUnitPriceNgn" data-id="${html(id)}" data-cost-unit
-                   aria-label="Unit supplier price (NGN) for ${html(entry.customer)}" />
-            <span aria-hidden="true">×</span>
-            <input type="number" min="1" step="1" inputmode="numeric" value="${qty}"
-                   data-stage-edit="supplierQty" data-id="${html(id)}" data-cost-qty
-                   aria-label="Supplier quantity for ${html(entry.customer)}" />
-          </div>
-          <small class="aa-stage-cfa">total <b data-cost-total>${html(money(figures.supplier, entry.currency))}</b></small>
-          ${cfaNote}
+        <td class="aa-stage-items">${html(lineNames.join(", ") || entry.itemsSummary || "—")}</td>
+        <td class="aa-stage-sale">${saleLines || `<input type="number" min="0" step="1" inputmode="numeric" value="${Number(entry.saleAmount || 0)}" data-stage-edit="saleAmount" data-id="${html(id)}" aria-label="Selling price for ${html(entry.customer)}" />`}</td>
+        <td class="aa-stage-cost">${costLines || `<small class="aa-stage-cfa">No product lines found</small>`}
+          <small class="aa-stage-cfa aa-order-cost-total">Order supplier total <b data-cost-total>${html(money(figures.supplier, entry.currency))}</b></small>
         </td>
         <td class="aa-stage-discount" data-discount-cell>${discountCell}</td>
         <td class="aa-stage-transport">
-          <input type="number" min="0" step="1" inputmode="numeric" value="${Number(entry.deliveryExpense || 0)}"
-                 data-stage-edit="deliveryExpense" data-id="${html(id)}"
-                 aria-label="Transport for ${html(entry.customer)}" />
+          <label>NGN base
+            <input type="number" min="0" step="1" inputmode="numeric" value="${Number(entry.deliveryExpenseNgn || 0)}"
+                   data-stage-edit="deliveryExpense" data-id="${html(id)}"
+                   aria-label="Transport cost in Naira for ${html(entry.customer)}" />
+          </label>
+          <small class="aa-stage-cfa">ledger: <span data-transport-local>${html(money(entry.deliveryExpense || 0, entry.currency))}</span></small>
         </td>
         <td class="aa-stage-profit${figures.netProfit < 0 ? " is-negative" : ""}" data-row-profit>${html(money(figures.netProfit, entry.currency))}</td>
         <td class="aa-stage-actions">
@@ -375,11 +459,11 @@
           </div>
           <div class="aa-stage-actionsbar">
             <label class="aa-stage-all"><input type="checkbox" data-stage-all ${allSelected ? "checked" : ""} /> Select all</label>
-            <label class="aa-batch-transport">Batch transportation fee (whole batch)
+            <label class="aa-batch-transport">Batch transportation fee · NGN base (whole batch)
               <input type="number" min="0" step="1" inputmode="numeric" data-batch-transport
                      value="${html(state.batchTransportFee)}" placeholder="blank = per-order fees" />
               <small>${totals.transportSource === "batch"
-                ? `One ${html(state.currency)} cost for the whole batch · per-order fees ignored`
+                ? `₦${Number(totals.batchFeeNgn || 0).toLocaleString("en")} NGN base · ${html(money(totals.batchFee, state.currency))} at each order's locked rate · selected-row per-order fees replaced`
                 : `Per-order transport fees are being added up (${html(money(totals.perOrder, state.currency))})`}</small>
             </label>
             <button class="aa-button aa-button-primary" type="button" data-action="push" ${state.selected.size ? "" : "disabled"}${state.pushing ? " disabled" : ""}>
@@ -393,15 +477,15 @@
             <thead>
               <tr>
                 <th></th><th>Date / Order</th><th>Customer</th><th>Location</th><th>Items &amp; quantities</th>
-                <th>Selling price</th><th>Supplier link · unit ₦ × qty</th><th>Discount</th>
-                <th>Transport</th><th>Net profit</th><th></th>
+                <th>Selling price · per item</th><th>Supplier cost &amp; link · per item</th><th>Discount</th>
+                <th>Transport · NGN base</th><th>Net profit</th><th></th>
               </tr>
             </thead>
             <tbody>${visible.map(entryRow).join("")}</tbody>
           </table>
         </div>
         ${displayList.length > state.shown ? `<button type="button" class="aa-button aa-button-more" data-action="more">Show ${Math.min(STAGE_PAGE_SIZE, displayList.length - state.shown)} more (${displayList.length - state.shown} hidden)</button>` : ""}
-        <p class="aa-sheet-hint">Everything here saves itself: when a product has a saved supplier price, the cost arrives pre-filled from those saved defaults — paste the supplier link or type the unit price and quantity to override (Unit Price × Quantity = Total Supplier Cost), add a discount, and the Net Profit recalculates instantly — Selling Price − Discounts − Supplier Cost − Transport. For FCFA orders the NGN supplier cost is converted with the active NGN → FCFA rate. Each row's Location column maps the customer's destination. Blank supplier costs auto-fill from the catalogue default. Pushed orders leave this queue and land in your ${html(state.currency === "NGN" ? "NGN" : "FCFA")} tab; history and profit analytics live on the <a href="/admin.html?tab=sales">Sales page</a>.</p>`
+        <p class="aa-sheet-hint">Each product has its own selling price, supplier cost and supplier URL; order totals sum all item lines before discounts, transport and Net Profit are calculated. Supplier and transport costs are entered in NGN. For FCFA rows the exact conversion is NGN ÷ the locked FX rate (for example ₦3,150 ÷ 0.45 = FCFA 7,000). Every edit saves itself. Each row's Location maps the customer's destination. Pushed orders leave this queue and land in the ${html(state.currency === "NGN" ? "NGN" : "FCFA")} tab; history and profit analytics live on the <a href="/admin.html?tab=sales">Sales page</a>.</p>`
         : (state.search ? `<p class="aa-stage-empty">No rows match “${html(state.search)}” in the ${html(currencyName)} queue.</p>`
            : `<p class="aa-stage-empty">The ${html(state.currency === "NGN" ? "naira" : "FCFA")} queue is clean — every confirmed order has been pushed. New confirmations will appear here.</p>`)}
       </section>`;
@@ -466,7 +550,7 @@
     const s = state.settings || {};
     return `
       <details class="aa-settings">
-        <summary>Accounting settings · starting profit, opening balance &amp; reference sheet</summary>
+        <summary>Accounting settings · starting profit, opening balance &amp; Google Sheets target</summary>
         <form class="aa-settings-form" data-settings-form>
           <label>Starting profit / opening NGN balance (₦)
             <input name="startingBalanceNgn" type="number" min="0" step="1" inputmode="numeric" value="${Number(s.startingBalanceNgn || 0)}" />
@@ -474,13 +558,13 @@
           <label>Starting profit / opening FCFA balance
             <input name="startingBalanceCfa" type="number" min="0" step="1" inputmode="numeric" value="${Number(s.startingBalanceCfa || 0)}" />
           </label>
-          <label class="aa-settings-ref">Reference spreadsheet (ITEMFLOW) URL or ID — NGN / FCFA tabs
-            <input name="referenceSpreadsheetId" maxlength="200" value="${html(s.referenceSpreadsheetId || "")}" placeholder="https://docs.google.com/spreadsheets/d/…" />
-            <small>Leave as the default to route pushes to its NGN and FCFA tabs. Clear it to push to the app-created ledgers instead.</small>
+          <label class="aa-settings-ref">Preferred spreadsheet ID (the active target is resolved by Drive)
+            <input name="referenceSpreadsheetId" maxlength="200" value="${html(s.referenceSpreadsheetId || "")}" placeholder="Optional Google Sheets URL or ID" />
+            <small>Pushes resolve the native Google Sheet named <strong>Jaurastore Sales &amp; Accounting Ledger (NGN &amp; CFA)</strong> by Drive MIME type. Uploaded Excel files and legacy Office backups are ignored.</small>
           </label>
           <button class="aa-button aa-button-primary" type="submit">Save settings</button>
         </form>
-        <p class="aa-sheet-hint">Active NGN → FCFA exchange rate: <strong>${rateText()}</strong> — manage it in <a href="/admin.html?tab=settings">Admin → Settings</a> (Store Settings, next to the bank details). Each confirmed order locks in the rate that was active when it was confirmed, so history never reprices.</p>
+        <p class="aa-sheet-hint">Accounting FX rate: <strong>${rateText()}</strong> — supplier and transport costs in NGN become FCFA by division (NGN ÷ rate). Manage the rate in <a href="/admin.html?tab=settings">Admin → Settings</a>. Each confirmed order locks in its rate, so history never reprices unless you explicitly edit a CFA cost.</p>
       </details>`;
   }
 
@@ -496,20 +580,17 @@
       <div class="aa-push-dialog" data-push-dialog hidden>
         <div class="aa-push-card" role="dialog" aria-modal="true" aria-label="Push to Google Sheet">
           <h3>Push ${count} order${count === 1 ? "" : "s"} to Google Sheet</h3>
-          <p>NGN rows are routed to the <strong>NGN</strong> tab and FCFA rows to the <strong>FCFA</strong> tab${referenceSheetUrl() ? " of your reference sheet" : " of your ledgers"}. Pushed orders are archived into the batch below and cleared off this queue.</p>
+          <p>Orders are routed to the native <strong>Jaurastore Sales &amp; Accounting Ledger (NGN &amp; CFA)</strong> spreadsheet; Drive excludes Excel and legacy Office backups. Pushed orders are archived into the batch below and cleared off this queue.</p>
           <label>Batch / delivery name
             <input name="name" maxlength="100" placeholder="${html(state.currency === "NGN" ? "NGN" : "FCFA")} delivery · ${new Date().toISOString().slice(0, 10)}" />
           </label>
           <div class="aa-push-row">
-            <label>Batch transportation fee <span>whole batch · optional</span>
+            <label>Batch transport fee · NGN base <span>whole batch · optional</span>
               <input name="batchTransportFee" type="number" min="0" step="1" inputmode="numeric"
                      value="${html(state.batchTransportFee)}" placeholder="blank = per-order fees" />
-            </label>
-            <label>Transport currency
-              <select name="batchTransportFeeCurrency">
-                <option value="NGN"${defaultFeeCurrency === "NGN" ? " selected" : ""}>₦ NGN</option>
-                <option value="CFA"${defaultFeeCurrency === "CFA" ? " selected" : ""}>FCFA</option>
-              </select>
+              <small>${state.currency === "CFA"
+                ? `The FCFA ledger converts by division at FX rate ${rateText()}.`
+                : "Stored and pushed in Naira."}</small>
             </label>
           </div>
           <div class="aa-push-row">
@@ -540,7 +621,6 @@
     const feeInput = dialog && dialog.querySelector('[name="transferFee"]');
     const feeCurrency = dialog && dialog.querySelector('[name="feeCurrency"]');
     const batchFeeInput = dialog && dialog.querySelector('[name="batchTransportFee"]');
-    const batchFeeCurrency = dialog && dialog.querySelector('[name="batchTransportFeeCurrency"]');
     if (errorBox) errorBox.hidden = true;
     state.pushing = true;
     if (batchFeeInput) state.batchTransportFee = String(batchFeeInput.value || "");
@@ -553,12 +633,13 @@
           name: (nameInput && nameInput.value) || "",
           transferFee: Number((feeInput && feeInput.value) || 0),
           feeCurrency: feeCurrency ? feeCurrency.value : "",
-          // Blank stays blank: the server then falls back to per-order transport.
-          batchTransportFee: (batchFeeInput && String(batchFeeInput.value || "").trim()) || null,
-          batchTransportFeeCurrency: batchFeeCurrency ? batchFeeCurrency.value : "",
+          // Blank stays blank: the server falls back to per-order transport.
+          batchTransportFeeNgn: (batchFeeInput && String(batchFeeInput.value || "").trim()) || null,
         }),
       });
       state.selected.clear();
+      const firstReport = Object.values(data.report || {})[0] || {};
+      if (firstReport.spreadsheetId) state.activeReferenceId = String(firstReport.spreadsheetId);
       toast(`Pushed ${data.pushed.length} order${data.pushed.length === 1 ? "" : "s"} — cleared off the queue.`, "ok");
       await loadAll();
     } catch (error) {
@@ -920,8 +1001,17 @@
     // Settings rate the moment the owner prices the item; NGN rows are
     // untouched, and a row nobody edits keeps the rate it was confirmed at.
     if (entry.currency === "CFA" || state.currency === "CFA") {
-      if ("supplierUnitPriceNgn" in body || "supplierCostNgn" in body
-          || "supplierQty" in body || "applyActiveRate" in body) {
+      const oldLines = Array.isArray(entry.lineItems) ? entry.lineItems : [];
+      const nextLines = Array.isArray(body.lineItems) ? body.lineItems : [];
+      const lineCostChanged = nextLines.some((line, index) => {
+        const previous = oldLines.find((item) => item.lineId === line.lineId)
+          || oldLines[index];
+        return previous
+          && Number(previous.supplierCostNgn || 0) !== Number(line.supplierCostNgn || 0);
+      });
+      const costChanged = lineCostChanged || "supplierUnitPriceNgn" in body
+        || "supplierCostNgn" in body || "supplierQty" in body;
+      if (costChanged || "deliveryExpense" in body || "applyActiveRate" in body) {
         body.applyActiveRate = true;
         body.exchangeRate = Number(state.currentExchangeRate || 0);
       }
@@ -936,7 +1026,13 @@
         const index = state.entries.findIndex((row) => String(row.id) === String(id));
         if (index >= 0) state.entries[index] = saved;
       }
-      if (!options.quiet) render();
+      if (!options.quiet) {
+        render();
+      } else if (saved && root && root.querySelectorAll) {
+        const row = [...root.querySelectorAll(".aa-stage-row")]
+          .find((node) => String(node.dataset.id) === String(id));
+        if (row) recalcRow(row);
+      }
       return saved;
     } catch (error) {
       toast(error.message || "Could not save that edit.", "error");
@@ -961,6 +1057,24 @@
     }, 900);
   }
 
+  function lineItemsFromRow(row, entry) {
+    const lines = Array.isArray(entry && entry.lineItems) ? entry.lineItems : [];
+    return lines.map((line, index) => {
+      const read = (field, fallback, text = false) => {
+        const input = row && row.querySelector(
+          `[data-stage-edit="${field}"][data-line-index="${index}"]`);
+        if (!input) return fallback;
+        return text ? String(input.value || "") : Number(input.value || 0);
+      };
+      return {
+        lineId: line.lineId,
+        saleAmount: read("saleAmount", line.saleAmount),
+        supplierCostNgn: read("supplierCostNgn", line.supplierCostNgn),
+        supplierLink: read("supplierLink", line.supplierLink || "", true),
+      };
+    });
+  }
+
   /* Live recalculation while typing: the row's net profit, the cost total and
    * the section totals move before the save round-trips. */
   function recalcRow(row) {
@@ -971,6 +1085,12 @@
     const figures = rowFigures(row, entry);
     const total = row.querySelector("[data-cost-total]");
     if (total) total.textContent = money(figures.supplier, entry.currency);
+    row.querySelectorAll("[data-line-cost-total]").forEach((node, index) => {
+      const line = figures.lineFigures[index];
+      if (line) node.textContent = money(line.supplier, entry.currency);
+    });
+    const transportLocal = row.querySelector("[data-transport-local]");
+    if (transportLocal) transportLocal.textContent = money(figures.transport, entry.currency);
     const profitCell = row.querySelector("[data-row-profit]");
     if (profitCell) {
       profitCell.textContent = money(figures.netProfit, entry.currency);
@@ -1011,6 +1131,11 @@
       const data = await request("/api/admin/accounting/google/verify");
       const report = (data && data.verification) || {};
       state.verify = report;
+      const reference = report.reference || {};
+      state.activeReferenceId = reference.readable
+        && reference.title === "Jaurastore Sales & Accounting Ledger (NGN & CFA)"
+        && reference.mimeType === "application/vnd.google-apps.spreadsheet"
+        ? String(reference.id || "") : "";
       const steps = (report.steps || []).map((step) => `${step.ok ? "✓" : "✕"} ${step.step}${step.detail ? ` — ${step.detail}` : ""}`);
       toast(report.ok ? "Google Drive sync is working." : (report.message || "Google sync check failed."),
             report.ok ? "ok" : "error");
@@ -1316,6 +1441,14 @@
     const edit = event.target.closest("[data-stage-edit]");
     if (edit) {
       const field = edit.dataset.stageEdit;
+      if (edit.dataset.lineIndex !== undefined) {
+        const entry = state.entries.find((row) => String(row.id) === String(edit.dataset.id));
+        const row = edit.closest(".aa-stage-row");
+        if (entry && row) saveEntryFields(edit.dataset.id, {
+          lineItems: lineItemsFromRow(row, entry),
+        });
+        return;
+      }
       const value = field === "supplierLink"
         ? String(edit.value || "")
         : Number(edit.value || 0);
@@ -1359,6 +1492,13 @@
     const row = edit.closest(".aa-stage-row");
     recalcRow(row);
     const field = edit.dataset.stageEdit;
+    if (edit.dataset.lineIndex !== undefined) {
+      const entry = state.entries.find((item) => String(item.id) === String(edit.dataset.id));
+      if (entry && row) scheduleEntrySave(edit.dataset.id, {
+        lineItems: lineItemsFromRow(row, entry),
+      });
+      return;
+    }
     const value = field === "supplierLink"
       ? String(edit.value || "")
       : Number(edit.value || 0);

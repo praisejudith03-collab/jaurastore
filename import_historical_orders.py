@@ -460,17 +460,18 @@ def column_currency(headers, mapping, field, row_currency_value, cell_text=""):
 
 
 def convert(value, source, target, rate):
-    """Move a whole amount between NGN and CFA. Same currency is a no-op."""
+    """Convert a whole amount with the accounting FX direction.
+
+    One FCFA is worth ``rate`` NGN, so NGN-to-FCFA is division and the
+    reverse is multiplication. Storefront price conversion remains separate.
+    """
     source = accounting.normalize_currency(source) or "NGN"
     target = accounting.normalize_currency(target) or "NGN"
     if source == target or not value:
-        return value
-    number = Decimal(value)
-    if target == "CFA":        # NGN -> CFA
-        return int((number * Decimal(rate)).quantize(
-            Decimal("1"), rounding=ROUND_HALF_UP))
-    return int((number / Decimal(rate)).quantize(      # CFA -> NGN
-        Decimal("1"), rounding=ROUND_HALF_UP))
+        return int(value or 0)
+    if target == "CFA":
+        return accounting.supplier_cost_cfa(value, rate)
+    return accounting.supplier_cost_ngn_from_cfa(value, rate)
 
 
 # --------------------------------------------------------------------- locations
@@ -597,26 +598,71 @@ def total_quantity(items, fallback=1):
 
 
 # --------------------------------------------------------------- source readers
+def read_csv_text(text):
+    """Read pasted/uploaded delimited text with common CSV dialects.
+
+    Sniffer alone is unreliable for exports with preamble rows and unquoted
+    thousands/item commas. Evaluate each common delimiter against the best
+    recognized header, distinct mapped columns, and row-width consistency so a
+    semicolon-delimited file is not mistaken for comma-separated data just
+    because its amounts contain commas.
+    """
+    body = str(text or "").lstrip("\ufeff")
+    if not body.strip():
+        return [], []
+    preferred = ","
+    try:
+        preferred = csv.Sniffer().sniff(
+            body[:65536], delimiters=",;\t|").delimiter
+    except csv.Error:
+        pass
+
+    choices = []
+    for order, delimiter in enumerate((preferred, ",", ";", "\t", "|")):
+        if any(item[1] == delimiter for item in choices):
+            continue
+        try:
+            table = list(csv.reader(io.StringIO(body), delimiter=delimiter))
+        except csv.Error:
+            continue
+        headers, rows = _split_table(table)
+        mapping = map_headers(headers)
+        meaningful_rows = [row for row in rows
+                           if any(str(cell or "").strip() for cell in row)]
+        aligned = sum(1 for row in meaningful_rows if len(row) == len(headers))
+        width_error = sum(abs(len(row) - len(headers)) for row in meaningful_rows)
+        # Distinct mapped columns stop a single concatenated header cell from
+        # appearing to match every alias when the wrong delimiter is used.
+        score = (len(mapping), len(set(mapping.values())), aligned,
+                 len(headers), -width_error, -order)
+        choices.append((score, delimiter, (headers, rows)))
+    if not choices:
+        return _split_table(list(csv.reader(io.StringIO(body))))
+    return max(choices, key=lambda choice: choice[0])[2]
+
+
 def read_csv(path):
     """Read a CSV/TSV export into ``(headers, rows)`` of strings."""
     with io.open(path, "r", encoding="utf-8-sig", newline="") as handle:
-        sample = handle.read(65536)
-        handle.seek(0)
-        delimiter = ","
-        try:
-            delimiter = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
-        except csv.Error:
-            pass
-        reader = csv.reader(handle, delimiter=delimiter)
-        return _split_table([list(row) for row in reader])
+        return read_csv_text(handle.read())
 
 
 def _split_table(table):
-    """First non-empty row is the header; everything after is data."""
-    rows = [r for r in (table or []) if any(str(c or "").strip() for c in r)]
+    """Find a likely header near the top, tolerating title/preamble rows."""
+    rows = [[str(cell or "").strip() for cell in row]
+            for row in (table or [])
+            if any(str(cell or "").strip() for cell in row)]
     if not rows:
         return [], []
-    return [str(c or "").strip() for c in rows[0]], rows[1:]
+    # A pasted spreadsheet may have a title or blank notes row above its real
+    # headers. Pick the strongest recognized header from the first 20 rows;
+    # ties go to the first candidate so ordinary CSVs retain their layout.
+    scores = [(len(map_headers(row)), index)
+              for index, row in enumerate(rows[:20])]
+    best_score = max(score for score, _ in scores)
+    header_index = next((index for score, index in scores
+                         if score == best_score), 0)
+    return rows[header_index], rows[header_index + 1:]
 
 
 def _column_index(reference):
@@ -762,12 +808,23 @@ def build_order(row, headers, mapping, *, rate, default_currency="NGN",
 
     revenue = convert(parse_amount(revenue_text), revenue_source, currency,
                       rate)
-    transport = convert(parse_amount(transport_text), transport_source,
-                        currency, rate)
-    # The snapshot invariant is that supplier cost is stored in NGN and the
-    # desk converts to CFA for display, so a CFA figure is converted back.
+    transport_source_amount = parse_amount(transport_text)
+    # Supplier and transport costs use the accounting convention (NGN / rate
+    # = FCFA), which is intentionally separate from storefront sales pricing.
+    if transport_source == "CFA":
+        transport_ngn = accounting.supplier_cost_ngn_from_cfa(
+            transport_source_amount, rate)
+        transport_cfa = accounting.supplier_cost_cfa(transport_ngn, rate)
+    else:
+        transport_ngn = accounting.amount(transport_source_amount)
+        transport_cfa = accounting.supplier_cost_cfa(transport_ngn, rate)
+    transport = transport_cfa if currency == "CFA" else transport_ngn
+    # The snapshot invariant is that supplier costs and the NGN base of
+    # transport are stored in Naira, then FCFA-ledger values use exact division.
     cost_in_source = parse_amount(cost_text)
-    supplier_cost_ngn = convert(cost_in_source, cost_source, "NGN", rate)
+    supplier_cost_ngn = (
+        accounting.supplier_cost_ngn_from_cfa(cost_in_source, rate)
+        if cost_source == "CFA" else accounting.amount(cost_in_source))
 
     # --- people and place --------------------------------------------------
     location, country, city = resolve_location(row, mapping)
@@ -828,6 +885,7 @@ def build_order(row, headers, mapping, *, rate, default_currency="NGN",
         supplier_cost_ngn=supplier_cost_ngn, supplier_qty=0,
         supplier_link=supplier_link)
     snapshot["deliveryExpense"] = accounting.amount(transport)
+    snapshot["deliveryExpenseNgn"] = accounting.amount(transport_ngn)
     snapshot["notes"] = notes[:NOTE_MAX]
 
     payload = {
@@ -901,6 +959,26 @@ def _now():
     return datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
 
+def _positional_mapping(header_count):
+    """Conservative fallback for familiar exports with unrecognized labels."""
+    if header_count >= 12:
+        layout = {"date": 0, "order_id": 1, "customer": 2, "items": 3,
+                  "currency": 4, "revenue": 5, "supplier_cost": 6,
+                  "transport": 7, "net_profit": 8, "batch": 9,
+                  "notes": 10, "location": 11}
+    elif header_count >= 7:
+        layout = {"date": 0, "order_id": 1, "customer": 2, "items": 3,
+                  "revenue": 4, "supplier_cost": 5, "transport": 6,
+                  "location": 7, "notes": 8}
+    elif header_count >= 4:
+        layout = {"date": 0, "customer": 1, "items": 2, "revenue": 3,
+                  "supplier_cost": 4, "location": 5}
+    else:
+        layout = {"customer": 0, "items": 1, "revenue": 2}
+    return {field: index for field, index in layout.items()
+            if index < header_count}
+
+
 def import_rows(headers, rows, *, rate, default_currency="NGN", id_prefix=ID_PREFIX):
     """Map every source row. Pure - touches nothing outside this call.
 
@@ -911,9 +989,11 @@ def import_rows(headers, rows, *, rate, default_currency="NGN", id_prefix=ID_PRE
     result = {"ngn": [], "cfa": [], "skipped": [], "warnings": [],
               "mapping": mapping, "headers": list(headers or [])}
     if not mapping:
+        mapping = _positional_mapping(len(headers or []))
+        result["mapping"] = mapping
         result["warnings"].append(
-            "No recognisable columns were found - the row layout will be "
-            "guessed from position. Check the output before confirming.")
+            "No recognisable column headers were found; a standard ledger "
+            "column order was assumed. Review every staged value before pushing.")
     seen = set()
     skipped = 0
     for position, row in enumerate(rows or [], start=2):   # row 1 is the header
@@ -1002,18 +1082,80 @@ def existing_ids(order_ids):
     return found
 
 
-def stage_orders(orders):
-    """Upsert staged order rows. Idempotent upsert - never deletes."""
-    if not orders:
-        return 0
+def _stage_error_text(error):
+    text = re.sub(r"\s+", " ", str(error or "")).strip()
+    # Supabase errors can echo submitted content. Keep the actionable code or
+    # message without returning a payload, token, or URL to the browser.
+    return text[:220] or type(error).__name__
+
+
+def stage_orders_resilient(orders):
+    """Idempotently stage valid rows; isolate a bad row instead of aborting.
+
+    A chunk-level validation error is retried one order at a time so unrelated
+    historical rows still reach the review queue. Network/auth failures are
+    not fanned out into hundreds of retries; the remaining order IDs are
+    returned to the API for an honest partial/failure report.
+    """
+    rows = list(orders or [])
+    if not rows:
+        return {"staged": 0, "failures": []}
     from supabase_store import client
     sb = client()
     if sb is None:
-        raise RuntimeError("Supabase client could not be initialised.")
-    rows = list(orders)
+        return {"staged": 0, "failures": [
+            {"id": str(row.get("id") or ""),
+             "error": "Supabase client could not be initialised."}
+            for row in rows]}
+
+    staged = 0
+    failures = []
+    stop = False
     for start in range(0, len(rows), 200):
-        sb.table("orders").upsert(rows[start:start + 200]).execute()
-    return len(rows)
+        chunk = rows[start:start + 200]
+        if stop:
+            failures.extend({"id": str(row.get("id") or ""),
+                             "error": "Not attempted after a database connection failure."}
+                            for row in chunk)
+            continue
+        try:
+            sb.table("orders").upsert(chunk).execute()
+            staged += len(chunk)
+            continue
+        except Exception as chunk_error:
+            status = getattr(chunk_error, "status_code", None)
+            if status is None:
+                status = getattr(chunk_error, "status", None)
+            # Data validation / constraint errors may be isolated to one row.
+            # Authentication, network, and service errors are systemic.
+            try:
+                code = int(status)
+            except (TypeError, ValueError):
+                code = 0
+            recoverable = 400 <= code < 500 and code not in (401, 403, 408, 429)
+            if not recoverable:
+                message = _stage_error_text(chunk_error)
+                failures.extend({"id": str(row.get("id") or ""),
+                                 "error": message} for row in chunk)
+                stop = True
+                continue
+        for row in chunk:
+            try:
+                sb.table("orders").upsert([row]).execute()
+                staged += 1
+            except Exception as row_error:
+                failures.append({"id": str(row.get("id") or ""),
+                                 "error": _stage_error_text(row_error)})
+    return {"staged": staged, "failures": failures}
+
+
+def stage_orders(orders):
+    """Upsert staged order rows. Idempotent upsert - never deletes."""
+    result = stage_orders_resilient(orders)
+    if result["failures"]:
+        sample = result["failures"][0]
+        raise RuntimeError(f"{sample.get('id') or 'A row'}: {sample.get('error')}")
+    return result["staged"]
 
 
 # ------------------------------------------------------------------------ report

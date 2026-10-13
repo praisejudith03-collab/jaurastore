@@ -108,12 +108,13 @@ def test_a_snapshot_without_defaults_starts_at_zero():
 
 
 # -------------------------------- FCFA conversion at the ACTIVE push-time rate
-def test_the_fcfa_ledger_converts_the_ngn_cost_at_the_active_rate():
-    """FCFA cost = NGN cost x the ACTIVE rate. No hardcoded number:
-    moving the rate moves the converted figure."""
-    assert accounting_mod.supplier_cost_cfa(12_000, 0.44) == 5_280
-    assert accounting_mod.supplier_cost_cfa(12_000, 0.50) == 6_000
-    assert accounting_mod.supplier_cost_cfa(12_000, 2.0) == 24_000
+def test_the_fcfa_ledger_divides_the_ngn_cost_by_the_active_rate():
+    """The NGN value of one FCFA is the divisor for accounting costs."""
+    assert accounting_mod.supplier_cost_cfa(3_150, 0.45) == 7_000
+    assert accounting_mod.supplier_cost_ngn_from_cfa(7_000, 0.45) == 3_150
+    assert accounting_mod.supplier_cost_cfa(12_000, 0.44) == 27_273
+    assert accounting_mod.supplier_cost_cfa(12_000, 0.50) == 24_000
+    assert accounting_mod.supplier_cost_cfa(12_000, 2.0) == 6_000
 
 
 def test_an_ngn_entry_keeps_the_naira_original():
@@ -122,15 +123,15 @@ def test_an_ngn_entry_keeps_the_naira_original():
     figures = accounting_mod.entry_figures(snap, "NGN", 0.44)
     assert figures["supplierCostNgn"] == 12_000
     assert figures["supplierCostInCurrency"] == 12_000     # Naira, unconverted
-    assert figures["supplierCostCfa"] == 5_280             # shown for reference
+    assert figures["supplierCostCfa"] == 27_273            # shown for reference
 
 
 def test_a_cfa_entry_bills_the_converted_cost():
     snap = {"saleAmount": 20_000, "supplierCostNgn": 12_000,
             "deliveryExpense": 0, "discount": 0}
     figures = accounting_mod.entry_figures(snap, "CFA", 0.44)
-    assert figures["supplierCostInCurrency"] == 5_280
-    assert figures["netProfit"] == 20_000 - 5_280
+    assert figures["supplierCostInCurrency"] == 27_273
+    assert figures["netProfit"] == 20_000 - 27_273
 
 
 def test_the_sheet_row_writes_the_converted_fcfa_supplier_cost(monkeypatch):
@@ -147,8 +148,8 @@ def test_the_sheet_row_writes_the_converted_fcfa_supplier_cost(monkeypatch):
             supplier_cost_ngn=12_000, supplier_qty=2),
     })
     row = google_sheets._order_row(order, batch="Batch 1")
-    # 12,000 NGN x 0.50 = 6,000 F CFA in the Supplier costs column.
-    assert row[6] == 6_000
+    # 12,000 NGN / 0.50 = 24,000 FCFA in the Supplier costs column.
+    assert row[6] == 24_000
 
 
 # -------------------------------------------------- Location / Destination
