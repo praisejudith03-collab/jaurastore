@@ -132,7 +132,13 @@ def test_catalog_and_category_read_through_caches_eliminate_repeat_queries(monke
             second = client.get("/api/categories")
         assert first.status_code == second.status_code == 200
         assert categories.call_count == 1
-        assert "max-age=60" in first.headers["Cache-Control"]
+        # The read-through cache is what makes the second request free — it
+        # never needed a browser/edge cache window to do it. `public,
+        # max-age=60, stale-while-revalidate=120` (removed 2026-10-19) only
+        # meant a phone could be shown a menu three minutes old, which is how a
+        # newly uploaded category image looked broken.
+        from security import NO_STORE
+        assert first.headers["Cache-Control"] == NO_STORE
 
     api._invalidate_catalog_cache()
     api._invalidate_category_cache()

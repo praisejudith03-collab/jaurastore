@@ -301,6 +301,33 @@ def test_currency_pill_hides_when_french_locks_fcfa():
         "the admin page keeps the floating pill hidden like the WhatsApp bubble")
 
 
+def test_no_language_selector_was_bolted_onto_the_floating_column():
+    """The floating column is currency + WhatsApp, and nothing else.
+
+    A floating EN|FR pill was added and removed on 2026-10-19 (owner: no
+    visible language selector; the device locale decides). Deleting it is only
+    half the job — its CSS hooks and its `bottom` restatements have to go with
+    it, or the currency pill inherits a phantom neighbour and the next person
+    "fixes" an overlap that no longer exists. This is also the layout-side
+    twin of the locale rule in tests/test_auto_locale_rules.py: the header and
+    menu were already switch-free, so after this the storefront has NO language
+    control anywhere.
+    """
+    rules = _all_rules()
+    lang_rules = [sel for media, sel, props in rules if "lang-float" in sel]
+    assert not lang_rules, f"language-pill CSS survived: {lang_rules}"
+    store = open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8").read()
+    assert "lang-float" not in store, "js/store.js must not mount a language pill"
+    # …and nothing in the storefront markup renders the older switch either. The
+    # shared `.lang-switch, .currency-switch` CSS block is not a control: it is
+    # the currency pill's styling (both switched with identical geometry), and
+    # tests/test_browser_smoke.py separately proves no `.lang-switch` element
+    # exists in the rendered header. What must NOT come back is a `.cur-float`
+    # with a second class bolted on, which is how the floating pill was mounted.
+    html = "".join(open(os.path.join(ROOT, f), encoding="utf-8").read()
+                   for f in ("index.html", "shop.html", "product.html", "checkout.html"))
+    assert "lang-switch" not in html and 'class="lang-float' not in html, (
+        "a language selector returned to the storefront markup")
 def test_whatsapp_bubble_position_is_pinned_under_the_pill():
     """WhatsApp stays fixed at bottom:20px right:20px z-index:9998 - directly
     under the currency pill and nowhere else."""

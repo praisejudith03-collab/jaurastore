@@ -114,7 +114,10 @@ def product_names():
 
 def collect(page_url, lang, browser, admin=False):
     ctx = browser.new_context(viewport={"width": 1366, "height": 950})
-    ctx.add_init_script(f"localStorage.setItem('jaura_lang', '{lang}');")
+    # Session scope, not localStorage: the storefront has no language switch
+    # and reads only a per-session choice above the device locale (owner
+    # directive 2026-10-19), so this is the one that still takes effect.
+    ctx.add_init_script(f"sessionStorage.setItem('jaura_lang', '{lang}');")
     pg = ctx.new_page()
     try:
         pg.goto(BASE + page_url, wait_until="networkidle", timeout=60000)

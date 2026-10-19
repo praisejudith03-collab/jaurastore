@@ -2319,6 +2319,117 @@ def clear_deleted_id(pid):
     return save_deleted_ids([x for x in current if x != pid])
 
 
+# ------------------------------------------------- manual out-of-stock locks
+# The owner switching a product to "Out of stock" is a decision, not a
+# quantity. It used to survive only as `stock_quantity = 0`, which the supplier
+# watchdog is explicitly allowed to raise again the moment a supplier page
+# printed "In stock" - so a hand-sold-out product quietly came back to
+# "In Stock" (the reported lock failure). The products table has no column for
+# a lock and adding one would need a schema section on a phone, so the locks
+# live in one growth_settings JSON row, exactly like the deleted-id tombstones:
+# durable across deploys, no DDL, and never rewritten by a catalogue upsert.
+#
+# Shape: {"<product id>": {"at": "<iso>", "by": "<admin email>", "why": str}}
+MANUAL_STOCK_LOCKS_KEY = "manual_stock_locks_json"
+MANUAL_STOCK_LOCK_MAX = 5000
+
+
+def _clean_stock_locks(rows):
+    """Normalise an arbitrary mapping/list into the storable lock dict."""
+    out = {}
+    items = rows.items() if isinstance(rows, dict) else [
+        (r, {}) for r in (rows or []) if isinstance(r, str)
+    ]
+    for pid, meta in list(items)[:MANUAL_STOCK_LOCK_MAX]:
+        key = str(pid or "").strip()[:64]
+        if not key:
+            continue
+        meta = meta if isinstance(meta, dict) else {}
+        entry = {"at": str(meta.get("at") or "")[:40],
+                 "by": str(meta.get("by") or "")[:120],
+                 "why": str(meta.get("why") or "")[:200]}
+        out[key] = entry
+    return out
+
+
+def load_manual_stock_locks():
+    """The durable manual out-of-stock locks, ``{}`` when none, ``None`` on failure.
+
+    ``None`` (an unreadable table) is distinct from ``{}`` (read it, there are
+    none): callers must never treat a network blip as "nothing is locked".
+    """
+    def _fetch():
+        c = client()
+        if c is None:
+            return None
+        try:
+            res = (c.table("growth_settings")
+                   .select("value")
+                   .eq("key", MANUAL_STOCK_LOCKS_KEY)
+                   .limit(1)
+                   .execute())
+            rows = _res_data(res)
+            if not rows:
+                return {}
+            raw = (rows[0] or {}).get("value")
+            if raw is None or raw == "":
+                return {}
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(data, dict) and isinstance(data.get("locks"), dict):
+                data = data["locks"]
+            return _clean_stock_locks(data if isinstance(data, dict) else [])
+        except Exception as exc:                       # pragma: no cover
+            print(f"[supabase] manual stock lock load failed: {exc}")
+            return None
+
+    return cached_read("manual_stock_locks", _fetch)
+
+
+def save_manual_stock_locks(rows):
+    """Persist the whole lock map. True only when Supabase confirmed the write."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        payload = json.dumps(_clean_stock_locks(rows), ensure_ascii=False)
+        c.table("growth_settings").upsert(
+            [{"key": MANUAL_STOCK_LOCKS_KEY, "value": payload}]
+        ).execute()
+        invalidate_read_cache("manual_stock_locks")
+        return True
+    except Exception as exc:                       # pragma: no cover
+        print(f"[supabase] manual stock lock save failed: {exc}")
+        return False
+
+
+def add_manual_stock_lock(pid, actor="", why=""):
+    """Lock one product out of sale until the owner puts stock back."""
+    pid = str(pid or "").strip()
+    if not pid:
+        return False
+    current = load_manual_stock_locks()
+    locks = dict(current) if isinstance(current, dict) else {}
+    if pid in locks:
+        return True
+    import datetime as _datetime
+    locks[pid] = {"at": _datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                  "by": str(actor or "")[:120], "why": str(why or "")[:200]}
+    return save_manual_stock_locks(locks)
+
+
+def clear_manual_stock_lock(pid):
+    """Remove one lock. True when it is gone (or was never there)."""
+    pid = str(pid or "").strip()
+    if not pid:
+        return False
+    current = load_manual_stock_locks()
+    if not isinstance(current, dict):
+        return False
+    if pid not in current:
+        return True
+    return save_manual_stock_locks({k: v for k, v in current.items() if k != pid})
+
+
 # The category table lives in data/categories.json on disk. A Render redeploy
 # wipes that file, so we also keep a JSON copy in growth_settings (no new
 # schema). CATEGORIES_KEY / save_categories / load_categories are the only

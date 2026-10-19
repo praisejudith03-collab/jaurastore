@@ -315,7 +315,22 @@
 
   /* ------------------------------------------------------------ google bar */
 
-  const REFERENCE_SPREADSHEET_ID = "1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE";
+  /* One ledger button. The server always resolves a real link for both
+   * currencies - the app's own workbook when Drive is connected, otherwise the
+   * owner's active native sheet (NGN Ledger / CFA Ledger tabs) - so the button
+   * is a link whenever a URL exists and only degrades to a disabled button when
+   * the desk could not read the server at all. An href of "#" was the old
+   * behaviour and it is what "the ledger button does nothing" described. */
+  function ledgerButton(currency, label) {
+    const item = (state.google || {}).ledgers || {};
+    const entry = item[currency] || {};
+    const url = String(entry.url || "").trim();
+    if (!/^https:\/\/docs\.google\.com\//.test(url)) {
+      return `<button class="aa-button aa-button-sheet" type="button" disabled>${html(label)}</button>`;
+    }
+    const tab = String(entry.tab || "").trim();
+    return `<a class="aa-button aa-button-sheet" href="${html(url)}" target="_blank" rel="noopener noreferrer"${tab ? ` title="${html(label.replace(/^↗\s*/, "") + " — " + tab)} tab"` : ""}>${html(label)}</a>`;
+  }
 
   function googleActions() {
     const google = state.google || {};
@@ -328,8 +343,9 @@
     const workbookLink = `<a class="aa-button aa-button-sheet" href="${html(reference)}" target="_blank" rel="noopener noreferrer">↗ Open workbook</a>`;
     if (google.connected) {
       return `
-        ${workbookLink}
-        ${ledgerLinks}
+        ${reference ? `<a class="aa-button aa-button-sheet" href="${html(reference)}" target="_blank" rel="noopener noreferrer">↗ Open reference sheet</a>` : ""}
+        ${ledgerButton("NGN", "↗ NGN ledger")}
+        ${ledgerButton("CFA", "↗ FCFA ledger")}
         <button class="aa-button aa-button-line" type="button" data-action="verify-google">✓ Test Google sync</button>
         ${state.error && google.configured ? `<a class="aa-button aa-button-primary" href="/api/admin/accounting/google/connect">Reconnect Google Sheets</a>` : ""}
         <span class="aa-drive-status is-connected"><i aria-hidden="true"></i> Drive connected · ${html(google.email || "Google account")}</span>`;
@@ -338,8 +354,9 @@
       ? `<a class="aa-button aa-button-primary" href="/api/admin/accounting/google/connect">Connect Google Sheets</a>`
       : `<span class="aa-setup-hint">Google Sheets setup is required on the server.</span>`;
     return `
-      ${workbookLink}
-      ${ledgerLinks}
+      <button class="aa-button aa-button-sheet" type="button" disabled>↗ Reference sheet</button>
+      ${ledgerButton("NGN", "↗ NGN ledger")}
+      ${ledgerButton("CFA", "↗ FCFA ledger")}
       ${google.configured ? `<button class="aa-button aa-button-line" type="button" data-action="verify-google">✓ Test Google sync</button>` : ""}
       ${connect}
       <span class="aa-drive-status"><i aria-hidden="true"></i> ${html(google.message || "Google Drive is not connected")}</span>`;

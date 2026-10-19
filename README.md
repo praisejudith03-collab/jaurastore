@@ -45,18 +45,27 @@ the test suite run with no credentials.
 
 On Render's free tier the disk is wiped on every deploy, so uploaded images
 must live in Supabase Storage. Set `UPLOAD_MODE=supabase` (`.env` or the
-dashboard) together with the Supabase pair above. The bucket defaults to
-`uploads` (must be a **public** bucket; override with `SUPABASE_BUCKET`):
+dashboard) together with the Supabase pair above. The app writes to exactly
+**one** bucket, `uploads`, which must be **public**. `SUPABASE_BUCKET` is not
+an application override — it is only read by the standalone migration/cleanup
+tools; `supabase_store._bucket()` deliberately ignores it so no environment
+mistake can point an upload at a private or unrelated bucket.
 
 * product photos, category assets, hero video/banner/logo → public URL
-  (`…/storage/v1/object/public/uploads/<key>`)
+  (`…/storage/v1/object/public/uploads/<key>`), stored permanently in the
+  bucket, never on the container's disk
 * payment receipts and proofs → **signed URL** (admin-only, never publicly
   guessable); the admin receipts view refreshes them on the fly, and the
   upload still works even after the 7-day Supabase signed-URL cap
-* production uploads fail closed if cloud storage is unavailable; they never
-  report success for a file written only to an ephemeral instance disk. In
-  tests/development only, the local backend remains available as a compatibility
-  path. Retry a failed production upload after Storage recovers.
+* **production never falls back to the local disk.** If the bucket cannot be
+  reached the upload fails with a clear error and nothing is saved, because a
+  file written to `/tmp/uploads` would 404 the next time the service deploys.
+  `/uploads/…` keeps *serving* legacy on-disk files (and re-points at the
+  bucket when the object is there); it is not a write target outside testing.
+* an image whose bytes a browser cannot paint (a HEIC photo from an iPhone,
+  for instance) is converted to JPEG on upload, or refused with the reason —
+  so a successful upload can never leave a broken-image icon on a category
+  card or a product page
 
 `/sitemap.xml` is generated on every request from the live category table and
 product catalogue (the old committed `sitemap.xml` was deleted — a snapshot
@@ -132,13 +141,68 @@ python3 tests/responsive.py
 | `catalog.py` | catalogue: `data/seed.json` + `data/catalog.json` overrides (Supabase when configured) |
 | `supabase_store.py` | server-side Supabase gateway for catalogue, orders, receipts, stock and storage |
 | `migrate_supabase.py` | one-time import of `data/seed.json` + `data/catalog.json` into Supabase |
-| `storage.py` | uploads: local disk or S3/R2 (`UPLOAD_MODE`) |
+| `storage.py` | uploads: Supabase Storage in production (never the disk); local files only off production |
 | `css/`, `js/` | stylesheet and client JS (store, admin, i18n, offline net, service worker) |
 | `images/` | product, category and brand assets |
 | `data/` | `seed.json`, `catalog.json`, SQLite DB, uploaded proofs |
 | `js/net.js` | fetch wrapper + offline outbox |
 | `sw.js` | offline caching |
 | `tests/` | pytest API tests, Playwright end-to-end and layout audits |
+
+## Caching, asset versioning and language
+
+Two contracts, both pinned by `tests/test_zero_cache_policy.py`, both added on
+owner directive 2026-10-19 after "the mobile page is stale — I have to clear the
+cache or add `?v=live`" and "French visitors must see French without hunting for a
+toggle".
+
+**A shopper's tap is never answered from a cache.** Every HTML document, the
+service worker, every payment proof and every dynamic `/api/*` answer carries
+`Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0`,
+spelled once as `security.NO_STORE` (and `NO_STORE_PRIVATE` where the response also
+depends on the admin session). The two deliberate exceptions are the price of
+keeping a 3G phone usable, and both revalidate instead of stale-serving:
+
+| Response | Policy | Why it is safe |
+| --- | --- | --- |
+| `GET /api/catalog` | `private, no-cache, must-revalidate` + ETag | the body is only reused after a 304 says nothing changed; an admin save also clears the server snapshot |
+| `?v=<digits>` static assets | `public, max-age=31536000, immutable` | the URL is good for exactly one build — see below |
+
+Anything that used to look clever here (`s-maxage=3600`, `stale-if-error=604800`
+on the homepage; `max-age=60, stale-while-revalidate=120` on `/api/categories`) is
+gone, and a test fails the build if it returns: an edge cache that may answer for
+an hour, or a page that may be served a week after the origin failed, is precisely
+how a saved price or a newly uploaded category image goes invisible on phones.
+
+**Versioning is automated, so a release cannot be shipped half-cached.** A
+returning phone holds `js/store.js?v=206` for a year, so a JS change that does not
+bump the token is invisible to exactly the customers who complained. Run:
+
+```bash
+python3 tools/asset_version.py --check   # CI: fails if a shipped asset changed without a bump
+python3 tools/asset_version.py --write   # bumps ?v= everywhere + re-records the hashes
+```
+
+`--write` is a no-op when no shipped asset changed, so it belongs in a pre-deploy
+step: a build that touched no frontend does not throw away a year of phone caching.
+`tests/test_asset_cache_token.py` keeps the fingerprint list honest, and `sw.js`'s
+`const VERSION = "jaura-v<N>"` is the token's source of truth.
+
+**Language: the visitor's device, on every entry.** `js/i18n.js` reads
+`navigator.languages` — `fr`, `fr-FR`, `fr-BJ`, `fr-CI`, … give the French
+storefront and F CFA prices at the live exchange rate; `en`, any other language
+and a missing signal give English, the authored language. **There is no language
+switch in the storefront** (owner directive 2026-10-19): not in the header, not
+in the menu, not floating. The only override is a `?lang=fr|en` link — the
+WhatsApp broadcasts and support links — which is remembered for that browsing
+session and then dropped. Nothing about the device is ever written to storage,
+and the retired permanent `jaura_lang` key in `localStorage` is purged on load,
+so a visitor can never be latched into a language they cannot leave: that
+latching is what made the 2026-09-27 attempt unacceptable, and a session-scoped
+decision is what makes this one safe. `app.py` mirrors the same precedence from
+the session `jaura_lang` cookie and `Accept-Language` so the very first paint
+already carries `<html lang="fr">`, and those documents
+`Vary: Accept-Language, Cookie`. Geography and IP are never consulted.
 
 ## Environments
 
@@ -147,9 +211,10 @@ needs each Render service's deploy hook in `RENDER_DEPLOY_HOOK_STAGING` /
 `RENDER_DEPLOY_HOOK_PRODUCTION`). CI runs the tests and a broken-link check on
 every push and pull request.
 
-The database is restored from Supabase; uploaded product/category/site media
-and payment proofs live in the configured cloud Storage bucket. For production
-on an ephemeral host, set `UPLOAD_MODE=supabase` (Render does this in
-`render.yaml`) or configure a durable S3-compatible backend. Production cloud
-write failures are surfaced to the Admin UI rather than falling back to a disk
-that will disappear on deploy.
+The SQLite database and payment proofs are files on disk **in development only**.
+On a host with an ephemeral filesystem, mount a persistent disk at `data/` (see
+`render.yaml`) — otherwise they reset on each deploy. In production both halves
+are Supabase: catalogue rows through the PostgREST gateway, and every uploaded
+image, video or document in the public `uploads` bucket (see
+`#### Uploads (Supabase Storage)` above); the app never writes a customer-visible
+file to the container.

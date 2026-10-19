@@ -12,9 +12,11 @@
 //      prices in F CFA before they had asked for anything.
 //   2. A manual tap on the compact pill is honoured for the rest of the
 //      visit: page to page, product to checkout, the shop stays in F CFA.
-//   3. French is opt-in only (an explicit stored choice, never the device
-//      language) — once active it still locks FCFA, still cannot be talked
-//      out of it, and never counts as the shopper's manual currency choice.
+//   3. French follows the DEVICE (owner directive 2026-10-19) or an explicit
+//      `?lang=` link, which is remembered for the session — and here the device
+//      is English on purpose, so every load below is an English one. Once
+//      French IS active it still locks FCFA, still cannot be talked out of it,
+//      and never counts as the shopper's manual currency choice.
 //   4. Opening the slide-out bag pushes the floating currency pill and the
 //      WhatsApp bubble behind it (class + aria-hidden + inert), so neither
 //      can sit on top of "View bag" / "Checkout"; closing it restores them.
@@ -81,13 +83,13 @@ function makeEl(tag) {
 
 /** One page load. `local` / `session` are Maps shared between loads.
  *
- * `lang` is NOT a device/browser locale hint (the fix under test makes sure
- * navigator.languages is never consulted) — it seeds localStorage with an
- * EXPLICIT prior choice, exactly like a shopper who tapped a French link on
- * an earlier visit. The device itself always reports English below, to
- * prove the interface language never comes from it. */
+ * `lang` seeds the SESSION language choice — what a `?lang=fr` support or
+ * WhatsApp link leaves behind for the rest of that visit. localStorage is no
+ * longer a language store at all (owner directive 2026-10-19: the device
+ * decides on every entry, and nothing visible overrides it), so seeding it
+ * would prove nothing. The device below always reports English. */
 function loadPage({ local, session, lang = "", search = "" }) {
-  if (lang && !search && !local.has("jaura_lang")) local.set("jaura_lang", lang);
+  if (lang && !search && !session.has("jaura_lang")) session.set("jaura_lang", lang);
   const listeners = new Map();
   const pill = makeEl("div");
   const wa = makeEl("a");
@@ -198,12 +200,10 @@ const session = new Map();
 
 // ------------------------------------------------- 2. the French lock is safe
 {
-  // A brand-new visit: nothing chosen yet. Seed an EXPLICIT prior French
-  // choice (never the device, which is English above) and prove it still
-  // locks F CFA.
+  // A brand-new visit on an English device, arriving through a French link:
+  // the session carries the French choice and must still lock F CFA.
   const frLocal = new Map(local);
-  frLocal.set("jaura_lang", "fr");
-  const frSession = new Map();
+  const frSession = new Map([["jaura_lang", "fr"]]);
   const { JA } = loadPage({ local: frLocal, session: frSession });
   check("an explicit French choice still locks F CFA", JA.currencyLocked() === true && JA.currency() === "CFA");
   JA.setCurrency("NGN");
@@ -214,30 +214,43 @@ const session = new Map();
   const en = loadPage({ local: frLocal, session: frSession, search: "?lang=en" });
   check("switching that session to English opens in ₦ Naira",
     en.JA.currency() === "NGN", en.JA.currency());
-  check("the explicit English switch is persisted for later loads",
-    frLocal.get("jaura_lang") === "en");
+  check("the explicit English switch is held for the rest of the session",
+    frSession.get("jaura_lang") === "en");
+  check("…and is never promoted into the retired permanent store",
+    !frLocal.has("jaura_lang"));
 }
 
-// ------------------------------------- 2b. stale/garbage storage is purged
+// ------------------------------------- 2b. stale/legacy storage is purged
 {
-  const staleLocal = new Map(local);
-  staleLocal.set("jaura_lang", "fr-old-and-invalid");
-  const { JA, sandbox } = loadPage({ local: staleLocal, session: new Map() });
-  check("garbage under jaura_lang cannot force French",
-    sandbox.I18N.lang() === "en" && JA.currencyLocked() === false);
-  check("garbage under jaura_lang is purged from storage",
-    !staleLocal.has("jaura_lang"));
+  // Garbage in the session store must not force French…
+  const staleSession = new Map([["jaura_lang", "fr-old-and-invalid"]]);
+  const bad = loadPage({ local: new Map(local), session: staleSession });
+  check("garbage under the session key cannot force French",
+    bad.sandbox.I18N.lang() === "en" && bad.JA.currencyLocked() === false);
+  check("garbage under the session key is purged from storage",
+    !staleSession.has("jaura_lang"));
+  // …and neither may a LEGACY permanent value from the stored-choice era.
+  const legacyLocal = new Map([["jaura_lang", "fr"]]);
+  const legacy = loadPage({ local: legacyLocal, session: new Map() });
+  check("a legacy localStorage French choice cannot outvote the device",
+    legacy.sandbox.I18N.lang() === "en" && legacy.JA.currency() === "NGN");
+  check("a legacy localStorage choice is cleared outright",
+    !legacyLocal.has("jaura_lang"));
 }
 
-// --------------------------------- 2c. reopening the tab keeps the choice
+// --------------------------- 2c. the next page keeps it, a new visit does not
 {
-  const reLocal = new Map();
-  const { sandbox: s1 } = loadPage({ local: reLocal, session: new Map(), search: "?lang=fr" });
-  check("explicit ?lang=fr is written to localStorage", reLocal.get("jaura_lang") === "fr");
-  // "Reopening the tab": a brand new session Map, same localStorage.
-  const { sandbox: s2, JA: JA2 } = loadPage({ local: reLocal, session: new Map() });
-  check("reopening after an explicit French choice stays French", s2.I18N.lang() === "fr");
-  check("reopening after an explicit French choice stays on F CFA", JA2.currency() === "CFA");
+  const reSession = new Map();
+  const { sandbox: s1 } = loadPage({ local: new Map(), session: reSession, search: "?lang=fr" });
+  check("explicit ?lang=fr is written to the session store", reSession.get("jaura_lang") === "fr");
+  // Next page of the same visit: same session Map, no query string.
+  const { sandbox: s2, JA: JA2 } = loadPage({ local: new Map(), session: reSession });
+  check("the next page of the visit stays French", s2.I18N.lang() === "fr");
+  check("the next page of the visit stays on F CFA", JA2.currency() === "CFA");
+  // A NEW visit (empty session) on an English device: English, Naira, done.
+  const { sandbox: s3, JA: JA3 } = loadPage({ local: new Map(), session: new Map() });
+  check("a new visit re-follows the device instead of the last session",
+    s3.I18N.lang() === "en" && JA3.currency() === "NGN");
 }
 
 // ------------------------------------- 3. the bag never hides its own buttons

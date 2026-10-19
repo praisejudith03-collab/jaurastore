@@ -504,7 +504,11 @@ def test_receipts_are_private_to_the_admin(client):
     assert client.get("/api/admin/payment-proofs").status_code in (401, 403)
     login(client)
     response = client.get("/api/admin/payment-proofs")
-    assert response.headers["Cache-Control"] == "private, no-store"
+    # Owner directive 2026-10-19: every dynamic answer spells the FULL strict
+    # set, so an admin route can never end up with a weaker policy than a public
+    # one. `private` stays in front — a shared cache may not even keep an entry.
+    from security import NO_STORE_PRIVATE
+    assert response.headers["Cache-Control"] == NO_STORE_PRIVATE
     body = response.get_json()
     assert any(p.get("order_id") == "JA-TEST01" for p in body["proofs"])
 

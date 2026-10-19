@@ -533,8 +533,71 @@ CSP = (
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 )
 
+# ------------------------------------------------------------- cache policy
+#
+# Owner directive 2026-10-19 ("zero-cache mobile link taps, no query-string
+# hacks"): every document a shopper can tap has to come from THIS process, on
+# this request. Before this rule the storefront HTML was served with Flask's
+# default ``no-cache`` and the homepage additionally with a shared-cache window
+# (``s-maxage=3600``, ``stale-if-error=604800``): a phone — or Render's edge —
+# could therefore hand back last week's layout, yesterday's price or, after a
+# failed origin, a page up to seven days old, and no amount of re-tapping
+# changed it. That is the "stale mobile page / try incognito / add ?v=live"
+# report this constant exists to end.
+#
+# ``no-store`` forbids the browser and any proxy from keeping a body at all.
+# ``no-cache`` and ``must-revalidate`` repeat the instruction for caches that
+# implement HTTP/1.0 only, ``proxy-revalidate`` covers the ones that honour it
+# for shared caches but not for private ones, and ``max-age=0`` makes even a
+# cache that reads only freshness lifetime ask before every reuse. Each
+# directive is redundant in the strictest reading of the others and deliberate
+# anyway: the point is that no intermediate on the path to a Nigerian or
+# Beninese phone gets to answer a navigation from its own store.
+#
+# Long-lived caching stays — but only for URLs whose ``?v=<digits>`` token was
+# bumped when the bytes changed (see ``tools/asset_version.py``, and the
+# fingerprint guard in tests/test_asset_cache_token.py). That IS the build
+# fingerprinting: one content-addressed URL per build, cached for a year, and a
+# fresh URL the moment anything ships. Live data never uses it.
+NO_STORE = "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+IMMUTABLE_VERSIONED = "public, max-age=31536000, immutable"
+# Same contract, with ``private`` in front, for an answer that carries admin or
+# customer data: no-store already forbids any cache from keeping a body, and
+# ``private`` additionally tells a SHARED cache that it may not even keep a
+# metadata entry for another visitor. Both halves are deliberate — the routes
+# that use it are the ones reading a live session (audit rows, accounting
+# documents, uploaded proofs), and the strict set is spelled once here so an
+# admin endpoint can never be left with a weaker policy than a public one.
+NO_STORE_PRIVATE = "private, no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+
+# A document that gets its language chosen per visitor must never be served to
+# the wrong one from a shared cache. Vary is what makes the Accept-Language
+# rewrite in app.py safe.
+HTML_VARY = "Accept-Language, Cookie"
+
+
+def is_html_document(resp) -> bool:
+    """True for a response carrying a page the shopper navigates to."""
+    return (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower() == "text/html"
+
+
+def force_no_store(resp, *, vary=False):
+    """Pin a response to the strictest no-cache contract."""
+    resp.headers["Cache-Control"] = NO_STORE
+    resp.headers.pop("Expires", None)
+    resp.headers.pop("Pragma", None)
+    if vary:
+        resp.headers.add("Vary", HTML_VARY)
+    return resp
+
+
 def apply_headers(resp):
     prod = current_app.config.get("ENV") == "production"
+    # Any HTML document — the pages, the 404/413/500 shells, anything a route
+    # renders itself — is forced to NO_STORE here, so a handler that forgets to
+    # set a policy can never re-open a cache window on a page.
+    if is_html_document(resp) and "no-store" not in (resp.headers.get("Cache-Control") or ""):
+        force_no_store(resp, vary=True)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"

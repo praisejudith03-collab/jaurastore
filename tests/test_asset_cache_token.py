@@ -5,16 +5,16 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
-TOKEN = "205"
+TOKEN = "209"
 ASSETS = {
-    "css/style.css": "af945dc734236a9534c539e2f6fd489d94ea7e1fa968fd5102ab0589ff2fb9aa",
-    "css/fonts.css": "f2c4d6248b2aca7573505ee2bdf629e831fde68c5e1a3fb048aba29eab78e0a6",
-    "js/store.js": "7b00f3f90ebd9111e8cb5b13cfee475b80d335209334a4ec2508f6111d38b349",
-    "js/app.js": "2840e18f4571ad83620c242a275896cd0862c08db18c99ffca69a975bb2b2857",
-    "js/admin.js": "dcce3186e89edb308a9ad09ab7b502259b596b6d7118e0ebb6ecf90d55f46d54",
-    "js/i18n.js": "082065a70f0350a6ab6fd1a07d3b66666b68b333947b344c49946cecf5edee06",
+    "css/style.css": "49b9c8888b8ab90beff4a9d3b21574e734788839e6190051007f77566561adae",
+    "css/fonts.css": "ddbe065ca0432535c283609570c1cf52eb88037426099d28494b9f0f146e2d7d",
+    "js/store.js": "42c9cb1528c0462d1ca14b5d26198bac032ce29d2ee44ee0469c0f3081c5c6e9",
+    "js/app.js": "dc24eb7babb231104820e424b71144953cb255a7e7c4457c872e807a86fd20af",
+    "js/admin.js": "efc76940009cfbe5fa8f84abe5fafee719e7d87516afd39ef4138b6c325e95e8",
+    "js/i18n.js": "1c009c70f37b2be91e14360ecde97d7a70997a85140e8ee770d62e92d8ebbc62",
     "js/net.js": "972876c0f8dadf54702dec9925a28f990fe48a907b99c22553e381fafe6eab90",
-    "sw.js": "d290ac6b949647c59011e12a96133dc4f66f79144a2ac20dacca05174283eb5c",
+    "sw.js": "cfcaa458899ccaa5c4a59bbf4a5e912ac8f5da580c78f38ee28a50440ac19271",
 }
 
 def _refs(text):
@@ -40,7 +40,11 @@ def test_favicon_sync_token_matches():
 def test_shared_asset_fingerprints():
     for name, expected in ASSETS.items():
         actual = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-        assert actual == expected, f"{name} changed: bump the token everywhere and refresh the hashes"
+        assert actual == expected, (
+            f"{name} changed without a token bump - every returning phone keeps "
+            f"the previous build of it for a year (immutable URL). Fix with: "
+            f"python3 tools/asset_version.py --write"
+        )
 
 def _bump():
     path = Path(__file__)

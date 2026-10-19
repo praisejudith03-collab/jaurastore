@@ -1335,7 +1335,18 @@ const JA = (() => {
       const match = candidates.map((x) => indexed[fold(x)]).find((v) => Number.isFinite(v) && v >= 0);
       if (match != null) { ngn = match; overridden = true; }
     }
-    if (overridden || ngn > 0) return cur === "NGN" ? ngn : toCfa(ngn);
+    // A CFA view falls back to the CFA price the DATABASE holds for this row
+    // whenever the live conversion cannot run. toCfa() deliberately returns 0
+    // instead of inventing a rate, and 0 was then painted as the price: a
+    // French-locale visitor — whose currency is LOCKED to F CFA by
+    // currencyLocked(), so there is no ₦ to fall back to — saw "0 F CFA" on
+    // every card until /api/site answered, and kept seeing it for the whole
+    // visit if the FX upstream was down. The owner sets both figures per
+    // product, so the stored price is a real number from the active catalogue
+    // record, not a guess. (Owner directive 2026-10-19: French views must
+    // "pull live real-time database prices in FCFA and sync accurately with
+    // active catalog records".)
+    if (overridden || ngn > 0) return cur === "NGN" ? ngn : (toCfa(ngn) || roundCfa(p && p.priceCfa));
     // No base price, but the variants are priced: sell "from" the cheapest
     // option. A variant-priced row with the base box left blank must never
     // read as ₦0 in sort/filter/cart maths.
@@ -1344,7 +1355,7 @@ const JA = (() => {
         .filter((n) => Number.isFinite(n) && n > 0);
       if (values.length) {
         ngn = Math.min(...values);
-        return cur === "NGN" ? ngn : toCfa(ngn);
+        return cur === "NGN" ? ngn : (toCfa(ngn) || roundCfa(p && p.priceCfa));
       }
     }
     const cfa = roundCfa(p && p.priceCfa);
@@ -2901,8 +2912,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=205";
-        const FLYER = "images/brand/logo-flyer.jpg?v=205";
+        const LOGO = "images/brand/logo.jpg?v=209";
+        const FLYER = "images/brand/logo-flyer.jpg?v=209";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2982,7 +2993,22 @@ const JA = (() => {
     // The live admin exchange rate (growth setting cfaRate) drives every
     // storefront conversion; cache it so an offline repaint keeps the last
     // server-confirmed figure instead of a hardcoded one.
-    if (Number(site.cfaRate) > 0) applyFx(site.cfaRate, "live /api/site");
+    //
+    // When the figure differs from what the page already priced with, repaint
+    // it. A francophone visitor sees a CONVERTED price on every card (owner
+    // rule: French = F CFA at the live rate), and on a slow connection the grid
+    // can paint before this row arrives — without the repaint they would keep
+    // the catalogue's own F CFA figure until they reloaded. Deliberately
+    // `ja:rerender` and not `ja:currency`: that event also refetches the whole
+    // catalogue past every cache, which a rate landing on a normal page load
+    // has not earned. In-memory draw only, same as the site/category repaint.
+    if (Number(site.cfaRate) > 0) {
+      const before = fx ? Number(fx.ngnToXof) : null;
+      const after = Number(site.cfaRate);
+      if (applyFx(after, "live /api/site") && before !== after) {
+        try { document.dispatchEvent(new CustomEvent("ja:rerender")); } catch (e) {}
+      }
+    }
     // A live settings refresh can arrive while a previous page's dialog is
     // open. Remove it immediately when the master toggle is OFF; this makes
     // the OFF state authoritative even without a reload.
@@ -3102,7 +3128,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=205" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=209" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3401,7 +3427,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=205" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=209" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3537,7 +3563,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=205", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=209", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3571,7 +3597,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=205";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=209";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3630,7 +3656,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=205");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=209");
     document.title = title;
     [
       ["name", "description", description],
@@ -3882,10 +3908,6 @@ const JA = (() => {
     document.querySelectorAll("[data-cur]").forEach((btn) => {
       btn.classList.toggle("is-on", btn.dataset.cur === currency());
     });
-    const currentLang = window.I18N ? window.I18N.lang() : "en";
-    document.querySelectorAll("[data-lang]").forEach((btn) => {
-      btn.classList.toggle("is-on", btn.dataset.lang === currentLang);
-    });
     // The floating currency pill only exists for the English storefront: a
     // French interface means CFA is locked in, so the pill is hidden (and
     // the body class lets CSS hide it as a backstop).
@@ -3903,22 +3925,6 @@ const JA = (() => {
       btn.addEventListener("click", () => {
         setCurrency(btn.dataset.cur);
         toast(btn.dataset.cur === "NGN" ? tx("toast.ngn") : tx("toast.cfa"));
-      });
-    });
-    document.querySelectorAll("[data-lang]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const next = btn.getAttribute("data-lang") === "fr" ? "fr" : "en";
-        try { localStorage.setItem("jaura_lang", next); } catch (err) {}
-        try { sessionStorage.setItem("jaura_lang", next); } catch (err) {}
-        try { document.cookie = "jaura_lang=" + next + ";path=/;max-age=31536000;SameSite=Lax"; } catch (err) {}
-        if (window.I18N) window.I18N.setLang(next);
-        // The owner's banner is language-aware (English + French fields):
-        // repaint it at once so the moving line switches the moment the
-        // button is tapped, no reload needed.
-        try { paintConvBanner(); } catch (e) {}
-        toast(next === "fr" ? tx("toast.langFr") : tx("toast.langEn"));
       });
     });
     const overlay = document.querySelector("[data-search]");

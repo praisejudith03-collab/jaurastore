@@ -65,6 +65,133 @@ DEFAULT_REFERENCE_SPREADSHEET_ID = REFERENCE_SPREADSHEET_ID
 REFERENCE_TABS = {"NGN": "NGN Ledger", "CFA": "CFA Ledger"}
 
 
+# ---------------------------------------------------------------- live ledgers
+# The owner's ACTIVE native Google Sheet, with one tab per currency. The
+# accounting desk's "↗ NGN ledger" / "↗ FCFA ledger" buttons link straight here,
+# so they open the real workbook even when Drive is connected but the app has
+# not created its own per-currency files (and they never link to "#").
+# Batch pushes keep resolving their target through Drive metadata by exact
+# title; this ID is the read link plus the tab names the owner's sheet uses.
+ACTIVE_LEDGER_SPREADSHEET_ID = "1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE"
+ACTIVE_LEDGER_TABS = {"NGN": ("NGN Ledger", "NGN"),
+                      "CFA": ("CFA Ledger", "FCFA", "CFA")}
+def active_ledger_spreadsheet_id():
+    """The workbook the ledger buttons point at.
+
+    ``GOOGLE_LEDGER_SPREADSHEET_ID`` (a bare id or a full /spreadsheets/d/… URL)
+    overrides the pinned active sheet, so the owner can move the ledger without
+    a code change. A blank/garbage override falls back to the pinned id — the
+    buttons must never end up pointing at nothing.
+    """
+    raw = (os.environ.get("GOOGLE_LEDGER_SPREADSHEET_ID") or "").strip()
+    return extract_spreadsheet_id(raw) or ACTIVE_LEDGER_SPREADSHEET_ID
+
+
+def ledger_tab_names(currency):
+    """The tab titles this app looks for on the active ledger, in preference
+    order. The first one the workbook actually has wins; a link with no tab
+    simply opens the sheet, which is never an error."""
+    return ACTIVE_LEDGER_TABS.get(_currency(currency), ACTIVE_LEDGER_TABS["NGN"])
+
+
+def ledger_tab_url(spreadsheet_id, tab=""):
+    """A docs.google.com link for one tab of one workbook.
+
+    Google only deep-links a tab by its numeric ``gid``, so the gid is resolved
+    from the workbook's own metadata when a Drive token is available and
+    cached; without it the link still opens the sheet (never an error, never a
+    guessed anchor).
+    """
+    spreadsheet_id = str(spreadsheet_id or "").strip()
+    if not spreadsheet_id:
+        return ""
+    url = _spreadsheet_url(spreadsheet_id)
+    tab = str(tab or "").strip()
+    if not tab:
+        return url
+    gid = _tab_gid(spreadsheet_id, tab)
+    return f"{url}#gid={gid}" if gid else url
+
+
+# spreadsheet id -> {tab title (casefolded): gid}. A metadata read is one HTTP
+# round-trip per workbook, so it is resolved once per process and reused.
+_tab_gid_cache = {}
+
+
+def ledger_link(currency, spreadsheet_id="", tab=""):
+    """``{spreadsheetId, tab, url}`` for one currency's ledger.
+
+    The connected Drive workbook wins when it exists (it is where this app
+    WRITES); otherwise the link points at the owner's active native sheet so
+    the button always opens something real.
+    """
+    currency = _currency(currency)
+    spreadsheet_id = str(spreadsheet_id or "").strip()
+    if spreadsheet_id:
+        # The connected workbook is the one this app writes to; its tab is
+        # whatever it is actually named, so an unknown tab is left off the link
+        # rather than guessed (a wrong #gid anchor lands on the wrong sheet).
+        return {"spreadsheetId": spreadsheet_id, "tab": str(tab or ""),
+                "url": ledger_tab_url(spreadsheet_id, tab),
+                "source": "connected"}
+    active = active_ledger_spreadsheet_id()
+    wanted = ledger_tab_names(currency)
+    resolved = _first_existing_tab(active, wanted) or wanted[0]
+    return {"spreadsheetId": active, "tab": resolved,
+            "url": ledger_tab_url(active, resolved), "source": "active-sheet"}
+
+
+def _sheet_metadata(spreadsheet_id):
+    """``{title: gid}`` for one workbook, or {} when it cannot be read."""
+    spreadsheet_id = str(spreadsheet_id or "").strip()
+    if not spreadsheet_id or spreadsheet_id in _tab_gid_cache:
+        return dict(_tab_gid_cache.get(spreadsheet_id) or {})
+    tabs = {}
+    if configured():
+        try:
+            credentials = _valid_credentials(_load_credentials())
+        except GoogleSheetsError:
+            credentials = {}
+        if credentials:
+            try:
+                url = (f"{SHEETS_API}/spreadsheets/"
+                       f"{urllib.parse.quote(spreadsheet_id, safe='')}"
+                       f"?fields=sheets.properties(title,sheetId)")
+                meta = _google_request("GET", url)
+                for sheet in meta.get("sheets") or []:
+                    props = sheet.get("properties") or {}
+                    title = str(props.get("title") or "").strip()
+                    gid = props.get("sheetId")
+                    if title and gid is not None:
+                        tabs[title.casefold()] = str(gid)
+            except (GoogleSheetsError, _GoogleHTTPError):
+                tabs = {}
+    if len(_tab_gid_cache) > 64:
+        _tab_gid_cache.clear()
+    _tab_gid_cache[spreadsheet_id] = tabs
+    return tabs
+
+
+def _tab_gid(spreadsheet_id, tab):
+    return str((_sheet_metadata(spreadsheet_id) or {}).get(
+        str(tab or "").strip().casefold(), "") or "")
+
+
+def _first_existing_tab(spreadsheet_id, candidates):
+    """The first candidate tab the workbook really has ("" when unknown).
+
+    An unreadable workbook (no Drive token) returns "" so the caller uses the
+    preferred name without claiming it exists.
+    """
+    meta = _sheet_metadata(spreadsheet_id)
+    if not meta:
+        return ""
+    for name in candidates:
+        if str(name).strip().casefold() in meta:
+            return str(name).strip()
+    return ""
+
+
 def environment_reference_spreadsheet_id():
     """Read the deployment hint; the fixed owner-selected ID remains authoritative."""
     return (os.environ.get("GOOGLE_SHEET_ID") or "").strip()
@@ -653,9 +780,27 @@ def ensure_ledgers():
 
 
 def integration_status():
+    """What the accounting desk renders from: connection + the two ledger links.
+
+    ``ledgers[currency].url`` is ALWAYS a real, openable link: the app's own
+    workbook when the owner connected Drive and it exists, otherwise the owner's
+    active native ledger sheet (see :data:`ACTIVE_LEDGER_SPREADSHEET_ID`). The
+    desk used to render ``href="#"`` for a currency whose file had not been
+    created yet, which is what "the ↗ NGN ledger button does nothing" means.
+    ``connected`` still reports the TRUTH about Drive - only a connected
+    workbook can be written to - so a fallback link never pretends to be a sync.
+    """
     base = {"configured": configured(), "connected": False, "email": "",
             "ledgers": {}, "syncingExistingOrders": bool(_backfill_state.get("pending")),
-            "needsReconnect": False}
+            "needsReconnect": False,
+            "activeSheet": {
+                "spreadsheetId": active_ledger_spreadsheet_id(),
+                "url": _spreadsheet_url(active_ledger_spreadsheet_id()),
+                "tabs": {"NGN": ledger_tab_names("NGN")[0],
+                         "CFA": ledger_tab_names("CFA")[0]}}}
+    for currency in CURRENCIES:
+        link = ledger_link(currency)
+        base["ledgers"][currency] = {"id": link["spreadsheetId"], **link}
     if not base["configured"]:
         base["message"] = "Add Google OAuth client settings on the server to connect Sheets."
         return base
@@ -669,14 +814,23 @@ def integration_status():
         base["message"] = "Connect the store owner's Google Drive to create both ledgers."
         return base
     base["email"] = str(credentials.get("email") or "")
+    workbooks = {}
     for currency in CURRENCIES:
         item = (credentials.get("sheets") or {}).get(currency) or {}
+        own_id = str(item.get("id") or "")
+        workbooks[currency] = own_id
+        # `id` stays the APP's own workbook (the push target); `spreadsheetId`
+        # / `url` are what the button links to, which may be the active sheet.
+        link = ledger_link(currency, own_id, str(item.get("tab") or ""))
         base["ledgers"][currency] = {
-            "id": str(item.get("id") or ""),
-            "url": str(item.get("url") or _spreadsheet_url(item.get("id"))),
+            "id": own_id,
+            "spreadsheetId": link["spreadsheetId"],
+            "url": str(item.get("url") or "") or link["url"],
+            "tab": link["tab"],
+            "source": link["source"],
         }
     base["connected"] = bool(base["email"] and all(
-        base["ledgers"].get(currency, {}).get("id") for currency in CURRENCIES))
+        workbooks.get(currency) for currency in CURRENCIES))
     if not base["connected"]:
         base["message"] = "Finish setting up the NGN and FCFA spreadsheets by reconnecting Google Sheets."
     return base

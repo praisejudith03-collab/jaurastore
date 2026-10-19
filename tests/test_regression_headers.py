@@ -65,9 +65,11 @@ def test_household_and_explicit_category_order_in_real_store():
     # cheap 304, and no browser disk-cache window can hide a fresh save.
     ("/api/catalog", ("private", "no-cache", "must-revalidate")),
     ("/api/products", ("no-store",)),
-    # Categories are anonymous public navigation content and can use a small
-    # shared cache window; category writes clear the server snapshot.
-    ("/api/categories", ("public", "max-age=60")),
+    # Categories are the shop's navigation: a name or cover image the owner
+    # just saved must be visible on the next tap, so the 60-second shared-cache
+    # window (plus stale-while-revalidate, i.e. up to three minutes of a
+    # knowingly stale menu) is gone. Owner directive 2026-10-19.
+    ("/api/categories", ("no-store", "must-revalidate")),
     ("/api/config", ("no-store",)),
     ("/api/csrf", ("no-store",)),
     ("/api/stock", ("no-store",)),
@@ -149,12 +151,19 @@ def test_tokened_static_assets_are_immutable_untokened_ones_revalidate(client):
             "are immutable for the life of the token"
         assert "no-cache" not in cache_control
 
+    # The homepage used to be the ONE page allowed a shared-cache window. It is
+    # now held to the same contract as every other document: a shopper tapping
+    # jaurastore.com.ng gets the current build, and a cold dyno is answered by
+    # the 404/500 shells rather than by an edge holding a week-old page.
+    from security import NO_STORE
     home = client.get("/")
     home_cache = home.headers.get("Cache-Control", "")
-    for directive in ("public", "max-age=300", "s-maxage=3600",
-                      "stale-while-revalidate=86400", "stale-if-error=604800"):
-        assert directive in home_cache, \
-            f"homepage serves Cache-Control={home_cache!r}; missing {directive}"
+    assert home_cache == NO_STORE, \
+        f"homepage serves Cache-Control={home_cache!r}; expected exactly {NO_STORE!r}"
+    for forbidden in ("s-maxage", "stale-while-revalidate", "stale-if-error", "public"):
+        assert forbidden not in home_cache, \
+            f"homepage cache policy still carries {forbidden!r} - a shared cache " \
+            "may hold a page a phone then renders with yesterday's prices"
 
     untokened = ("/shop.html", "/sw.js", "/css/style.css")
     for path in untokened:

@@ -704,9 +704,10 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     mobile.context.clear_cookies()
     mobile.goto(live_shop + '/shop.html?cat=perfume')
     expect(mobile.locator('[data-shop-grid]')).to_contain_text('Perfume browser sample')
-    # Language follows the device since 2026-09-27 (the header EN|FR buttons
-    # are gone); I18N.setLang is the in-session override, and the ?lang= URL
-    # parameter carries a language onto the next page load.
+    # Language follows the device (the header EN|FR buttons are gone, and the
+    # floating pill added and removed on 2026-10-19 never came back);
+    # I18N.setLang is the in-session override, and the ?lang= URL parameter
+    # carries a language onto the rest of that browsing session.
     mobile.evaluate("I18N.setLang('fr')")
     mobile.wait_for_timeout(500)
     # A product created through the streamlined editor has one canonical title;

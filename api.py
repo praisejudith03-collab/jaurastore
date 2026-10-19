@@ -82,11 +82,13 @@ def _read_upload_buffer(file_storage, max_bytes):
 # none of them may be served from a shared cache: a CDN holding a stale copy
 # after an admin save is exactly the "saved product not visible on my phone"
 # complaint. Routes that want their own policy set it explicitly; everything
-# else lands here with no-store.
+# else lands here with the strict contract (owner directive 2026-10-19: the
+# full directive set, so even an HTTP/1.0-only proxy on the path is told to
+# ask before reusing).
 @api.after_request
 def _api_no_store(resp):
     if "Cache-Control" not in resp.headers:
-        resp.headers["Cache-Control"] = "no-store"
+        resp.headers["Cache-Control"] = sec.NO_STORE
     return resp
 
 
@@ -392,7 +394,7 @@ def products():
     body, _etag = _catalog_response_snapshot()["public"]
     response = make_response(body, 200)
     response.headers["Content-Type"] = "application/json; charset=utf-8"
-    response.headers["Cache-Control"] = "no-store"
+    response.headers["Cache-Control"] = sec.NO_STORE
     return response
 
 # ============================================================ public: catalog
@@ -673,7 +675,7 @@ def catalog():
             "hasMore": next_offset < total,
         }
         response = jsonify(payload)
-        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
         response.headers.add("Vary", "Cookie")
         return response
 
@@ -743,11 +745,17 @@ def categories_public():
                    "categories": _ordered_categories(_categories_data().get("categories") or [])}
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         etag = 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:28] + '"'
-        # Categories carry no private data, so the browser can reuse a menu
-        # while the in-process read-through cache eliminates repeat database
-        # work.  Admin saves call _invalidate_category_cache() immediately.
-        return _etag_response(body, etag,
-                              "public, max-age=60, s-maxage=60, stale-while-revalidate=120")
+        # Categories used to ship "public, max-age=60, s-maxage=60,
+        # stale-while-revalidate=120": a phone (or Render's edge) could be
+        # handed a menu up to THREE MINUTES old without asking the origin, which
+        # is why a freshly uploaded category image looked like it had vanished
+        # and a renamed category came back later on its own. The category list
+        # is small, so it is cheaper to always fetch it than to explain the
+        # staleness: no-store, with the ETag kept so a proxy that ignores
+        # no-store still gets a 304 instead of a re-download. The in-process
+        # read-through cache below is what protects the database, and an admin
+        # save clears it immediately (_invalidate_category_cache).
+        return _etag_response(body, etag, sec.NO_STORE)
     except Exception as exc:
         print(f"[supabase] categories serve failed: {exc}")
         return jsonify(ok=False, error="Categories are temporarily unavailable. Please refresh in a moment."), 503
@@ -3080,12 +3088,45 @@ def _accounting_batch_transport_fee(raw):
     return value, ""
 
 
+def _accounting_batch_custom_cost(raw):
+    """Parse the optional "other costs for this batch" box. (amount, error).
+
+    Blank/missing means 0 - no extra cost line. Like every other ledger amount
+    it is a non-negative whole figure in the batch's own currency; a correction
+    that ADDS money belongs in the net-profit override instead.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return 0, ""
+    value = accounting_mod.validated_amount(raw)
+    if value is None:
+        return 0, "Custom batch cost must be a non-negative whole amount."
+    return value, ""
+
+
+def _accounting_net_profit_override(raw):
+    """Parse the owner's hand-set net profit. (value, error).
+
+    ``None`` means "no override - use the calculator". Any whole number is
+    accepted, negatives included, because a batch can genuinely have lost money
+    and the ledger has to be able to say so.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, ""
+    parsed = accounting_mod.decimal_value(raw, None)
+    if parsed is None or not parsed.is_finite():
+        return None, "Net profit override must be a whole number."
+    from decimal import Decimal as _Decimal, ROUND_HALF_UP as _HALF_UP
+    if abs(parsed) > _Decimal("1000000000000"):
+        return None, "Net profit override is too large to record."
+    return int(parsed.quantize(_Decimal("1"), rounding=_HALF_UP)), ""
+
+
 def _accounting_batch_document(batch_id, name, now, currency, order_ids,
                                snapshot_rows, *, batch_transport_fee=None,
-                               **extra):
+                               custom_cost=None, **extra):
     """Build one batch record with its transport mode made explicit."""
     totals = accounting_mod.batch_totals(snapshot_rows, currency,
-                                         batch_transport_fee)
+                                         batch_transport_fee, custom_cost)
     batch = {
         "id": batch_id,
         "name": name,
@@ -3098,6 +3139,8 @@ def _accounting_batch_document(batch_id, name, now, currency, order_ids,
     }
     if batch_transport_fee is not None:
         batch["batchTransportFee"] = batch_transport_fee
+    if custom_cost:
+        batch["customCost"] = custom_cost
     batch.update(extra)
     return batch
 
@@ -3164,14 +3207,14 @@ def admin_accounting():
                 "archivedOrders": len(archived_ids),
                 "legacySnapshots": sum(1 for entry in entries if entry["legacySnapshot"])},
     )
-    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
     return response
 
 
 def _accounting_summary_json(status=200, **payload):
     response = jsonify(**payload)
     response.status_code = status
-    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
     return response
 
 
@@ -3246,7 +3289,7 @@ def admin_accounting_google_verify():
                   "message": f"{type(exc).__name__}: {str(exc)[:200]}"}
     response = jsonify(ok=True, google=google_sheets.integration_status(),
                        verification=report)
-    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
     return response
 
 
@@ -3605,15 +3648,14 @@ def admin_accounting_push():
         return _accounting_mutation_error(batch_fee_error)
     # The current UI always sends the fee as an NGN base. Keep the old
     # currency field readable for legacy clients that explicitly entered CFA.
-    batch_fee_currency_raw = sec.clean(d.get("batchTransportFeeCurrency"), 8).upper()
-    if "batchTransportFeeNgn" in d or not batch_fee_currency_raw:
-        batch_fee_input_currency = "NGN"
-    else:
-        batch_fee_input_currency = accounting_mod.normalize_currency(batch_fee_currency_raw)
-    if ("batchTransportFeeNgn" not in d and batch_fee_currency_raw
-            and not batch_fee_input_currency):
-        return _accounting_mutation_error(
-            "Batch transportation fee currency must be NGN or CFA / XOF.")
+    batch_fee_input_currency = (
+        "NGN" if "batchTransportFeeNgn" in d
+        else accounting_mod.normalize_currency(d.get("batchTransportFeeCurrency"))
+        or "NGN")
+    custom_cost, custom_cost_error = _accounting_batch_custom_cost(
+        d.get("customCost", d.get("otherCost")))
+    if custom_cost_error:
+        return _accounting_mutation_error(custom_cost_error)
     name = sec.clean(d.get("name"), 100)
 
     with _ACCOUNTING_BATCH_LOCK:
@@ -3706,6 +3748,11 @@ def admin_accounting_push():
             currency_entries = [entry for entry in entries
                                 if entry["currency"] == currency]
             fee_here = transfer_fee if currency == fee_ledger else 0
+            # A custom batch cost follows the same one-ledger rule as the
+            # transfer fee: it is logged ONCE, against the currency the push is
+            # charged in, so a mixed NGN + CFA push can never count the same
+            # customs payment twice. In the batch's own currency.
+            custom_here = custom_cost if currency == fee_ledger else 0
             batch_fee_here_ngn = (sum(transport_shares_ngn.get(entry["id"], 0)
                                       for entry in currency_entries)
                                   if batch_fee is not None else None)
@@ -3729,6 +3776,7 @@ def admin_accounting_push():
                 batch_id, name or f"{currency} delivery · {now[:10]}", now,
                 currency, [entry["id"] for entry in currency_entries],
                 snapshot_rows, batch_transport_fee=batch_fee_here,
+                custom_cost=(custom_here or None),
                 pushedAt=now, pushedBy=actor, transferFee=fee_here,
                 batchTransportFeeNgn=batch_fee_here_ngn,
                 sheet={"spreadsheetId": info.get("spreadsheetId"),
@@ -3765,12 +3813,17 @@ def admin_accounting_push():
 @authmod.require_admin
 @sec.require_csrf
 def admin_accounting_batch_update(bid):
-    """Edit one archived batch: a single Batch Transportation Fee, or a name.
+    """Edit one archived batch: its transport fee, a custom cost, its net
+    profit, or its name.
 
     ``batchTransportFee`` may be a whole amount (log ONE transport cost for
     the entire batch) or blank/null (clear it and fall back to the individual
-    per-order transport fees). The batch's own snapshot rows are recalculated,
-    so the live running balance and the Sales page follow immediately.
+    per-order transport fees). ``customCost`` is a second, itemised batch cost
+    (customs, packaging, a buying trip) in the batch's own currency.
+    ``netProfitOverride`` replaces the calculated net profit with the owner's
+    figure - any whole number, negatives included - until it is cleared with a
+    blank/null. The batch's own snapshot rows are recalculated, so the live
+    running balance and the Sales page follow immediately.
     """
     bid = sec.clean(bid, 40).upper()
     d = request.get_json(silent=True) or {}
@@ -3806,12 +3859,42 @@ def admin_accounting_batch_update(bid):
                     accounting_mod.supplier_cost_ngn_from_cfa(fee, rate)
                     if currency == "CFA" else fee)
                 batch["transportSource"] = "batch"
+        # A second, itemised cost for the whole batch (customs, packaging, the
+        # buying trip). Recomputed into the totals below, so the running bank
+        # balance and the Sales page follow the edit immediately.
+        if "customCost" in d or "otherCost" in d:
+            cost, cost_error = _accounting_batch_custom_cost(
+                d.get("customCost", d.get("otherCost")))
+            if cost_error:
+                return _accounting_mutation_error(cost_error)
+            if cost:
+                batch["customCost"] = cost
+            else:
+                batch.pop("customCost", None)
+        # The owner's own net-profit figure. While it is set it wins over the
+        # calculator everywhere the batch is read - balances, Sales cards, the
+        # ledger export - and the batch is labelled "manual" so nobody mistakes
+        # it for an arithmetic result.
+        if "netProfitOverride" in d:
+            override, override_error = _accounting_net_profit_override(
+                d.get("netProfitOverride"))
+            if override_error:
+                return _accounting_mutation_error(override_error)
+            if override is None:
+                batch.pop("netProfitOverride", None)
+                batch.pop("netProfitOverrideAt", None)
+                batch.pop("netProfitOverrideBy", None)
+            else:
+                batch["netProfitOverride"] = override
+                batch["netProfitOverrideAt"] = _utcnow()
+                batch["netProfitOverrideBy"] = authmod.current_admin()
         if "name" in d:
             batch["name"] = sec.clean(d.get("name"), 100) or batch.get("name") or bid
         rows = [row for row in (batch.get("orders") or []) if isinstance(row, dict)]
         batch["totals"] = accounting_mod.batch_totals(
             rows, batch.get("currency"),
-            accounting_mod.batch_transport_fee(batch))
+            accounting_mod.batch_transport_fee(batch),
+            accounting_mod.batch_custom_cost(batch))
         batch["updatedAt"] = _utcnow()
         batch["updatedBy"] = authmod.current_admin()
         updated = list(batches)
@@ -3821,7 +3904,10 @@ def admin_accounting_batch_update(bid):
                 "The batch edit could not be saved to the accounting database.")), 503
     audit(authmod.current_admin(), "accounting.batch.update",
           f"{bid} transport={batch.get('transportSource')} "
-          f"fee={batch.get('batchTransportFee')}", _ip())
+          f"fee={batch.get('batchTransportFee')} "
+          f"custom={batch.get('customCost') or 0} "
+          f"netOverride={batch.get('netProfitOverride') if 'netProfitOverride' in batch else ''}",
+          _ip())
     expenses = accounting_mod.clean_expenses(_accounting_expenses() or [])
     settings = _accounting_settings() or {}
     return jsonify(ok=True, batch=batch,
@@ -4132,6 +4218,9 @@ def admin_sales_insights():
             for row in (batch.get("orders") or []) if isinstance(row, dict)),
         "discounts": (batch.get("totals") or {}).get("discountsTotal"),
         "transferFee": batch.get("transferFee"),
+        "customCost": accounting_mod.batch_custom_cost(batch),
+        "netProfitOverride": accounting_mod.batch_net_profit_override(batch),
+        "profitSource": accounting_mod.batch_profit_source(batch),
         "netProfit": (accounting_mod.batch_net_profit(batch)
                       - accounting_mod.amount(batch.get("transferFee"))),
         "exchangeRate": (batch.get("orders") or [{}])[0].get("exchangeRate")
@@ -4145,7 +4234,7 @@ def admin_sales_insights():
     response = jsonify(ok=True, summary=summary, batches=batch_cards,
                        balances=balances,
                        currentExchangeRate=float(accounting_mod.current_exchange_rate()))
-    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
     return response
 
 
@@ -4365,7 +4454,7 @@ def admin_payment_proofs():
     if paginated:
         payload.update({"page": page, "pages": pages, "perPage": per_page})
     response = jsonify(**payload)
-    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
     return response
 
 
@@ -5492,7 +5581,7 @@ def admin_product_trash_list():
     } for row in rows if isinstance(row, dict) and row.get("id")]
     items.sort(key=lambda row: str(row.get("deletedAt") or ""), reverse=True)
     response = jsonify(ok=True, count=len(items), items=items)
-    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
     return response
 
 
@@ -5795,6 +5884,79 @@ def admin_sync_status():
                    gitRepo=repo, gitBranch=Config.GITHUB_BRANCH,
                    onWrite=bool(Config.REPO_SYNC_ON_WRITE),
                    syncBlockedReason=blocked_reason)
+
+
+@api.get("/admin/stock-locks")
+@authmod.require_admin
+def admin_stock_locks():
+    """Products the owner switched to "Out of stock" by hand, and why.
+
+    A hand-set OUT is a decision, so the supplier watchdog is not allowed to
+    mirror a supplier's "In stock" back onto it - this list is the durable
+    record of those locks (growth_settings, mirrored in the catalogue file), so
+    it survives a redeploy exactly like the lock decision itself.
+    """
+    try:
+        locks = catalog_mod.manual_stock_locks()
+    except Exception as exc:
+        return jsonify(ok=False, error=f"Stock locks could not be read: {exc}"), 503
+    live = {}
+    try:
+        for row in catalog_mod.merged(include_hidden=True) or []:
+            pid = str((row or {}).get("id") or "").strip()
+            if pid:
+                live[pid] = row
+    except Exception:
+        live = {}
+    items = []
+    for pid, meta in sorted(locks.items()):
+        row = live.get(pid) or {}
+        meta = meta if isinstance(meta, dict) else {}
+        items.append({"id": pid, "name": row.get("name") or pid,
+                      "stock": catalog_mod.stock_of(row) if row else 0,
+                      "supplierUrl": str(row.get("supplierSku") or "")[:500],
+                      "at": meta.get("at") or "", "by": meta.get("by") or "",
+                      "why": meta.get("why") or "",
+                      "stillInCatalogue": bool(row)})
+    summary = {}
+    try:
+        import supplier_watchdog
+        summary = supplier_watchdog.summary()
+    except Exception:
+        summary = {}
+    return jsonify(ok=True, count=len(items), locks=items,
+                   watchdog={"enabled": summary.get("at") is not None,
+                             "checked": summary.get("checked", 0),
+                             "links": summary.get("links", 0),
+                             "updated": summary.get("updated", 0),
+                             "locked": summary.get("locked", 0),
+                             "warnings": summary.get("warnings", 0),
+                             "at": summary.get("at") or "",
+                             "lastError": summary.get("lastError") or ""})
+
+
+@api.post("/admin/stock-locks/<pid>/release")
+@authmod.require_admin
+@sec.require_csrf
+def admin_stock_lock_release(pid):
+    """Release one manual out-of-stock lock so supplier sync may restock again.
+
+    This is the ONLY automated-side release: clearing the lock does not put any
+    quantity on the shelf, so the storefront stays "Out of stock" until the next
+    supplier tick (or the owner typing a quantity) says otherwise.
+    """
+    pid = sec.clean(pid, 64).strip()
+    if not pid:
+        return jsonify(ok=False, error="Product id required."), 400
+    if not catalog_mod.is_stock_locked(pid):
+        return jsonify(ok=True, released=False, reason="That product is not locked out.")
+    ok = catalog_mod.forget_manual_stock_lock(pid, actor=authmod.current_admin())
+    if not ok:
+        return jsonify(ok=False, error=(
+            "The lock could not be cleared everywhere it is stored. Nothing was "
+            "released; try again.")), 503
+    audit(authmod.current_admin(), "product.stock_lock.release", pid, _ip())
+    return jsonify(ok=True, released=True, id=pid)
 
 
 @api.post("/admin/sync/repo")
@@ -6206,7 +6368,7 @@ def site_config():
         # Never cacheable: the bank details on the checkout come from this
         # answer, and a CDN (or a bfcache) holding yesterday's row after an
         # Admin edit is indistinguishable from "my edit disappeared".
-        resp.headers["Cache-Control"] = "private, no-store"
+        resp.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
         return resp
     except Exception:
         return jsonify(ok=False, error="Site settings are temporarily unavailable."), 503
