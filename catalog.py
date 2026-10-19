@@ -91,7 +91,7 @@ from currency import round_cfa, to_cfa  # noqa: F401
 BASE_FIELDS = (
     "id", "sku", "slug", "name", "nameFr", "category", "priceCfa", "compareCfa",
     "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
-    "stock", "manualStockLock", "badge", "featured", "online", "colors", "options", "optionPrices",
+    "stock", "badge", "featured", "online", "colors", "options", "optionPrices",
     "optionCompareAt", "dimensions", "supplierId", "supplierSku",
     "optionSupplierSku", "optionSku", "reviews", "enableCustomNote",
     "customNotePrompt",
@@ -811,9 +811,6 @@ def normalize(product):
             product.get("customNotePrompt") or product.get("custom_note_prompt"), 160),
         "stock": stock_qty,
         "stock_quantity": stock_qty,
-        # Durable owner override: supplier refreshes may never restock this row
-        # until a later admin save explicitly marks it available again.
-        "manualStockLock": manual_stock_lock,
         "badge": sec.clean(product.get("badge"), 20),
         "featured": bool(product.get("featured", False)),
         "online": product.get("online", True) is not False,
@@ -941,9 +938,7 @@ def derived_stock_status(product):
     restock left in its quantity columns.
     """
     p = product if isinstance(product, dict) else {}
-    if _manual_stock_lock(p):
-        return "out"
-    if is_stock_locked(p.get("id")):
+    if _manual_stock_lock(p) or is_stock_locked(p.get("id")):
         return "out"
     os_map = p.get("optionStock")
     if isinstance(os_map, dict) and os_map:
@@ -1011,7 +1006,7 @@ def stock_guardrail_fix(product):
     # An owner lock is already authoritative for availability. Never rewrite
     # quantities during a maintenance sweep: they may be the inventory the
     # owner wants restored when manually re-enabling the product.
-    if _manual_stock_lock(p):
+    if _manual_stock_lock(p) or is_stock_locked(p.get("id")):
         return p, changed
 
     os_raw = p.get("optionStock")
@@ -2230,6 +2225,8 @@ def apply_stock_delta(pid, qty_delta, option_key=None, actor=None):
         return None
     if not pid or qty_delta == 0:
         return None
+    if qty_delta < 0 and is_stock_locked(pid):
+        return None
 
     if _prod_source():
         from supabase_store import reserve_product_stock, release_product_stock
@@ -2335,6 +2332,8 @@ def reserve_stock(pid, qty, option_key=None, actor=None):
         return None
     if not pid or qty <= 0:
         return None
+    if is_stock_locked(pid):
+        return None
 
     if _prod_source():
         # Production guards in PostgreSQL (single guarded UPDATE); the local
@@ -2356,7 +2355,7 @@ def reserve_stock(pid, qty, option_key=None, actor=None):
         if found is None:
             return None
         rec = dict(found)
-        if _manual_stock_lock(rec):
+        if _manual_stock_lock(rec) or is_stock_locked(pid):
             return None
         stock = stock_of(rec)
         if rec.get("online") is False or stock < qty:

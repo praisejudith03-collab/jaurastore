@@ -1089,7 +1089,8 @@ def batch_totals(entries, currency, batch_transport_fee=None, custom_cost=None):
 
     ``batch_transport_fee`` is the single Batch Transportation Fee for the
     whole batch. When it is ``None`` (the box was left blank) the individual
-    per-order transport fees are summed instead.
+    per-order transport fees are summed instead. A per-order final-profit
+    override supersedes that order's calculated transport share.
 
     ``custom_cost`` is the owner's extra itemised cost for the batch (customs,
     packaging, a buying trip). It is subtracted from the net exactly like a
@@ -1097,7 +1098,7 @@ def batch_totals(entries, currency, batch_transport_fee=None, custom_cost=None):
     """
     currency = normalize_currency(currency) or "NGN"
     rows = [row for row in (entries or [])
-            if normalize_currency(row.get("currency")) == currency]
+            if isinstance(row, dict) and normalize_currency(row.get("currency")) == currency]
     revenue = sum(amount(row.get("saleAmount")) for row in rows)
     discounts = sum(amount(row.get("discount")) for row in rows)
     supplier_ngn = sum(amount(row.get("supplierCostNgn")) for row in rows)
@@ -1105,12 +1106,31 @@ def batch_totals(entries, currency, batch_transport_fee=None, custom_cost=None):
     per_order_transport = sum(amount(row.get("deliveryExpense")) for row in rows)
     if batch_transport_fee is None:
         transport = per_order_transport
-        shares = [amount(row.get("deliveryExpense")) for row in rows]
+        transport_shares = [amount(row.get("deliveryExpense")) for row in rows]
     else:
         transport = amount(batch_transport_fee)
-    custom = 0
-    if custom_cost is not None:
-        custom = amount(custom_cost)
+        share, remainder = divmod(transport, max(1, len(rows)))
+        transport_shares = [share + (remainder if index == 0 else 0)
+                            for index in range(len(rows))]
+    custom = amount(custom_cost) if custom_cost is not None else 0
+
+    net_profit = 0
+    for index, row in enumerate(rows):
+        raw_override = row.get("profitOverride")
+        override = (None if raw_override is None
+                    or (isinstance(raw_override, str) and not raw_override.strip())
+                    else validated_signed_amount(raw_override))
+        if override is not None:
+            # This is a final owner-entered profit for the order; changing the
+            # shared transport arrangement does not change that figure.
+            net_profit += override
+        else:
+            net_profit += (amount(row.get("saleAmount"))
+                           - amount(row.get("discount"))
+                           - amount(row.get("supplierCostInCurrency"))
+                           - transport_shares[index])
+    net_profit -= custom
+
     totals = {
         "currency": currency,
         "orderCount": len(rows),
@@ -1119,7 +1139,7 @@ def batch_totals(entries, currency, batch_transport_fee=None, custom_cost=None):
         "supplierPayableNgn": supplier_ngn,
         "supplierCostInCurrency": supplier_currency,
         "transportExpense": transport,
-        "netCashProfit": revenue - discounts - supplier_currency - transport - custom,
+        "netCashProfit": net_profit,
     }
     if custom:
         # Only present when the owner logged one, exactly like the batch
@@ -1295,7 +1315,7 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
     today = today or _datetime.datetime.now(_datetime.timezone.utc).date()
     start, end = _sheets.period_bounds(period, today=today)
     revenue = discounts = supplier = transport = fees = order_count = 0
-    custom = 0
+    custom = pushed_profit = manual_expenses = manual_fees = 0
     # The difference a hand-set net profit makes against what the calculator
     # would have said. Summing it keeps the period card honest about an
     # override without re-deriving every batch's figures a second way.
@@ -1356,8 +1376,10 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
         "customCosts": custom,
         "transferFees": fees,
         "manualAdjustment": manual_delta,
-        "netProfit": (revenue - discounts - supplier - transport - fees
-                      - custom + manual_delta),
+        # Sum the immutable batch figures so both per-order and batch-level
+        # manual profit overrides survive display edits; external purchases,
+        # bank fees, and transfer fees are deducted separately.
+        "netProfit": pushed_profit - manual_expenses - manual_fees - fees,
         "orderCount": order_count,
         "batchCount": len(matching),
         "batches": matching,

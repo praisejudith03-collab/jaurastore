@@ -219,39 +219,6 @@ def test_supplier_rpc_increases_only_when_explicitly_allowed(pg):
     assert _row(pg, "rpc-last", "stock_quantity") == "4"
 
 
-def test_manual_lock_blocks_reservation_and_preserves_stock(pg):
-    pg["run"]('''
-      update products set "manualStockLock"=true, stock=3, stock_quantity=3
-      where id='rpc-last';
-    ''')
-    out = pg["run"]("select reserve_product_stock('rpc-last',1,null)::text;")
-    assert out.stdout.strip() == "false"
-    assert _row(pg, "rpc-last", "stock_quantity") == "3"
-    assert _row(pg, "rpc-last", "stock") == "3"
-
-
-def test_supplier_rpc_cannot_override_durable_manual_out_of_stock(pg):
-    pg["run"]('''
-      update products set "manualStockLock"=true, stock=5, stock_quantity=5
-      where id='rpc-last';
-    ''')
-    out = pg["run"]("select sync_supplier_stock('rpc-last',12,null,true,null)::text;")
-    assert out.stdout.strip() == "true"  # intentional no-op, not a failed RPC
-    lock = pg["run"]('select "manualStockLock"::text from products where id=\'rpc-last\';')
-    assert lock.stdout.strip() == "true"
-    assert _row(pg, "rpc-last", "stock_quantity") == "5"
-
-
-def test_supplier_rpc_resumes_after_admin_clears_manual_lock(pg):
-    pg["run"]('''
-      update products set "manualStockLock"=false, stock=0, stock_quantity=0
-      where id='rpc-last';
-    ''')
-    out = pg["run"]("select sync_supplier_stock('rpc-last',7,null,true,null)::text;")
-    assert out.stdout.strip() == "true"
-    assert _row(pg, "rpc-last", "stock_quantity") == "7"
-
-
 def test_supplier_rpc_cannot_recreate_an_option_removed_after_snapshot(pg):
     # The supplier fetch began while both variants existed. Before the patch
     # lands, an admin removes Red from both the option list and stock map.

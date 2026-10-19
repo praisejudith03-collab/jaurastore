@@ -450,7 +450,8 @@ def _supplier_tracked(product):
 def _public_product(p):
     out = {k: v for k, v in dict(p or {}).items() if k not in _FORBIDDEN_PUBLIC_KEYS}
     out["supplierTracked"] = _supplier_tracked(p)
-    manual_lock = catalog_mod._manual_stock_lock(p)
+    manual_lock = (catalog_mod._manual_stock_lock(p)
+                   or catalog_mod.is_stock_locked(p.get("id")))
     qty = catalog_mod.stock_of(p)
     os_map = p.get("optionStock") if isinstance(p, dict) else None
     if isinstance(os_map, dict) and os_map:
@@ -941,7 +942,8 @@ def _stock_rows_for_read():
         pid = str(p.get("id") or "")
         if not pid:
             continue
-        manual_out = catalog_mod._manual_stock_lock(p)
+        manual_out = (catalog_mod._manual_stock_lock(p)
+                      or catalog_mod.is_stock_locked(pid))
         os_map = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else None
         if os_map:
             for key, val in (os_map or {}).items():
@@ -1105,7 +1107,8 @@ def _stock_available(product, variant="__default__"):
     """Integer availability; a selected but unassigned variant is zero stock."""
     if not isinstance(product, dict):
         return 0
-    if catalog_mod._manual_stock_lock(product):
+    if (catalog_mod._manual_stock_lock(product)
+            or catalog_mod.is_stock_locked(product.get("id"))):
         return 0
     base = catalog_mod.stock_of(product)
     selected = str(variant or "").strip()

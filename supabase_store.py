@@ -526,7 +526,7 @@ _CRITICAL_PRODUCT_COLUMNS = frozenset({
     "id", "legacyId", "sku", "slug", "name", "nameFr", "descriptionFr",
     "category", "priceCfa", "compareCfa", "priceNgn", "compareNgn",
     "image", "image_url", "images", "description", "stock",
-    "stock_quantity", "manualStockLock", "badge", "featured", "online", "colors", "options",
+    "stock_quantity", "badge", "featured", "online", "colors", "options",
     "optionStock", "optionPrices", "optionCompareAt", "optionSupplierSku",
     "optionSku", "reviews", "dimensions", "bulkQty", "bulkPercent",
     "placeholderImage", "usesPlaceholder", "source", "supplierId",

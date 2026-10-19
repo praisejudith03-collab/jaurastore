@@ -11,8 +11,6 @@ create unique index if not exists products_legacy_id_key
 
 alter table products add column if not exists image_url text;
 alter table products add column if not exists stock_quantity integer not null default 0;
--- Persist the owner-controlled availability override; supplier RPCs honor it.
-alter table products add column if not exists "manualStockLock" boolean not null default false;
 do $$ begin
   alter table products add constraint products_stock_nonnegative check (stock_quantity >= 0) not valid;
 exception when duplicate_object then null;
@@ -23,7 +21,7 @@ create or replace function sync_supplier_stock(p_id text,p_stock integer,
  p_option_snapshot_keys jsonb)
 returns boolean language plpgsql security definer set search_path=public,pg_temp as $$
 declare current_options jsonb; product_options jsonb; merged_options jsonb; safe_changes jsonb;
- total_stock numeric; manual_stock_locked boolean;
+ total_stock numeric;
 begin
  if p_id is null or btrim(p_id)='' or p_stock is null or p_stock<0 or p_stock>10000000 then
   return false;
@@ -32,14 +30,9 @@ begin
   return false;
  end if;
  perform pg_advisory_xact_lock(hashtextextended(p_id,0));
- select coalesce("optionStock",'{}'::jsonb),coalesce(options,'null'::jsonb),
-  coalesce("manualStockLock",false)
-  into current_options,product_options,manual_stock_locked
-  from products where id=p_id for update;
+ select coalesce("optionStock",'{}'::jsonb),coalesce(options,'null'::jsonb)
+  into current_options,product_options from products where id=p_id for update;
  if not found then return false; end if;
- -- An admin's durable out-of-stock override always wins over a supplier
- -- observation, including restocks. Return success for this intentional no-op.
- if manual_stock_locked then return true; end if;
  if p_option_stock_changes is null then
   if current_options<>'{}'::jsonb or
     product_options not in ('null'::jsonb,'[]'::jsonb,'{}'::jsonb)

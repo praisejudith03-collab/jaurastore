@@ -153,17 +153,20 @@ def test_supplier_out_of_stock_zeroes_the_matched_variant(monkeypatch, saved):
     assert saved["stock"] == 4
 
 
-def test_manual_admin_out_of_stock_lock_blocks_supplier_fetch_and_restock(monkeypatch, saved):
+def test_manual_admin_out_of_stock_lock_blocks_supplier_fetch_and_restock(
+        monkeypatch, saved):
     calls = []
+    product = _product(stock=0, stock_quantity=0,
+                       optionStock={"Serum": 0, "Cream": 0})
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "is_stock_locked",
+                        lambda pid: pid == product["id"])
     monkeypatch.setattr(supplier_watchdog, "fetch_url", lambda url: calls.append(url) or
                         _variants_html(("Serum", True, 25), ("Cream", True, 40)))
-    product = _product(manualStockLock=True, stock=0, stock_quantity=0,
-                       optionStock={"Serum": 0, "Cream": 0})
 
     changed, warnings = supplier_watchdog.sync_product(product)
 
     assert changed is False
-    assert warnings == []
+    assert [warning["code"] for warning in warnings] == ["manual_stock_lock"]
     assert calls == []
     assert not saved
 

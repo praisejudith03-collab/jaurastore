@@ -120,47 +120,31 @@ def test_api_spellings_of_the_availability_switch_are_recognised():
         assert set(clean["optionStock"].values()) == {0}, spelling
 
 
-def test_manual_stock_lock_survives_reads_until_admin_explicitly_restocks():
+def test_availability_switch_uses_durable_external_stock_lock():
+    """An explicit OFF zeros stock; durability lives in the lock store, not a
+    products-table column that would require a separate schema deployment."""
     locked = catalog_mod.normalize({
         **VARIANT_PRODUCT,
         "stock": 5,
         "optionStock": {"Noir": 2, "Rouge": 3},
         "stockStatus": "out",
     })
-    assert locked["manualStockLock"] is True
+    assert "manualStockLock" not in locked
     assert locked["stock"] == locked["stock_quantity"] == 0
     assert locked["optionStock"] == {"Noir": 0, "Rouge": 0}
-
-    refreshed = catalog_mod.normalize({
-        **locked,
-        "stock": 9,
-        "stock_quantity": 9,
-        "optionStock": {"Noir": 4, "Rouge": 5},
-    })
-    assert refreshed["manualStockLock"] is True
-    assert refreshed["stock"] == refreshed["stock_quantity"] == 0
-    assert refreshed["optionStock"] == {"Noir": 0, "Rouge": 0}
-
-    restocked = catalog_mod.normalize({
-        **refreshed,
-        "stock": 4,
-        "stock_quantity": 4,
-        "optionStock": {"Noir": 4, "Rouge": 0},
-        "stockStatus": "in",
-    })
-    assert restocked["manualStockLock"] is False
-    assert restocked["stock"] == restocked["stock_quantity"] == 4
-    assert restocked["optionStock"] == {"Noir": 4, "Rouge": 0}
 
 
 def test_a_stale_positive_quantity_cannot_bypass_a_manual_lock(
         _scratch_catalog, monkeypatch):
-    """Older mirrors may keep quantities beside the durable lock; neither the
-    storefront nor local checkout may treat those quantities as sellable."""
+    """The durable lock store wins over stale supplier quantities on every
+    public and local-checkout read."""
     monkeypatch.setattr(catalog_mod, "_prod_source", lambda: False)
+    pid = "jau-oos-toggle"
+    monkeypatch.setattr(catalog_mod, "manual_stock_locks",
+                        lambda refresh=False: {pid: {"by": "admin"}})
     raw = {
         **VARIANT_PRODUCT,
-        "manualStockLock": True,
+        "id": pid,
         "stock": 5,
         "stock_quantity": 5,
         "optionStock": {"Noir": 2, "Rouge": 3},
@@ -172,7 +156,7 @@ def test_a_stale_positive_quantity_cannot_bypass_a_manual_lock(
     assert public["stock_available"] == 0
     assert public["option_stock_available"] == {"Noir": 0, "Rouge": 0}
     assert api_mod._stock_available(raw, "Noir") == 0
-    assert catalog_mod.reserve_stock("jau-oos-toggle", 1, "Noir") is None
+    assert catalog_mod.reserve_stock(pid, 1, "Noir") is None
 
 
 def test_no_switch_means_no_opinion():
@@ -218,7 +202,7 @@ def test_variants_endpoint_stock_zero_switches_the_whole_product_off(
     assert r.status_code == 200, r.get_data(as_text=True)
     row = r.get_json()["product"]
     assert row["stock"] == 0 and row["stock_quantity"] == 0
-    assert row["manualStockLock"] is True
+    assert catalog_mod.is_stock_locked("jau-oos-toggle") is True
     assert set(row["optionStock"].values()) == {0}
 
     # the public row flips to out (badge + buy button), instantly
@@ -265,7 +249,7 @@ def test_variants_endpoint_positive_stock_restores_an_all_sold_out_product(
     assert r.status_code == 200, r.get_data(as_text=True)
     row = r.get_json()["product"]
     assert row["stock"] == 8
-    assert row["manualStockLock"] is False
+    assert catalog_mod.is_stock_locked("jau-oos-toggle") is False
     assert _public(client, "jau-oos-toggle")["stock_status"] == "in"
 
 

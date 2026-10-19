@@ -3,7 +3,7 @@
 
 -- SECTION: products
 -- ------------------------------------------------------------ products
--- Canonical columns with legacy image/stock aliases.
+-- Canonical columns first; legacy aliases (image, stock) ride along.
 -- camelCase MUST be quoted or Postgres folds it to lowercase (PGRST204).
 create table if not exists products (
   id               text primary key,
@@ -24,7 +24,6 @@ create table if not exists products (
   description      text,
   stock            integer default 0,
   stock_quantity   integer not null default 0,
-  "manualStockLock" boolean not null default false,
   badge            text,
   featured         boolean default false,
   online           boolean default true,
@@ -98,7 +97,6 @@ alter table products add column if not exists image            text;
 alter table products add column if not exists image_url        text;
 alter table products add column if not exists description      text;
 alter table products add column if not exists stock_quantity   integer not null default 0;
-alter table products add column if not exists "manualStockLock" boolean not null default false;
 alter table products add column if not exists "supplierId" text not null default '';
 alter table products add column if not exists "supplierSku" text not null default '';
 -- Variant supplier costing + the Trash Bin soft-delete flag.
