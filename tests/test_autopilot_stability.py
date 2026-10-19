@@ -86,6 +86,22 @@ def client(app):
         yield c
 
 
+@pytest.fixture()
+def _isolated_speed_catalog(tmp_path, monkeypatch):
+    """Keep the 100 ms write measurement independent of earlier test rows.
+
+    A full-suite run shares the normal /tmp catalogue between tests; hundreds
+    of unrelated fixtures can turn that read/merge into a misleading speed
+    failure. The benchmark measures steady-state product saves, not fixture
+    accumulation, so give each endpoint its own tiny catalogue.
+    """
+    import api as api_mod
+    monkeypatch.setattr(catalog_mod, "CATALOG_FILE", str(tmp_path / "catalog.json"))
+    api_mod._invalidate_catalog_cache()
+    yield
+    api_mod._invalidate_catalog_cache()
+
+
 def csrf(client):
     return client.get("/api/config").get_json()["csrf"]
 
@@ -107,7 +123,8 @@ SAVE_ENDPOINTS = [
 
 
 @pytest.mark.parametrize("method,url", SAVE_ENDPOINTS)
-def test_admin_product_save_answers_200_under_100ms(client, method, url):
+def test_admin_product_save_answers_200_under_100ms(
+        client, _isolated_speed_catalog, method, url):
     """The editor's save button hits one of these. On a 512MB single dyno
     every one of them must stay well under the 100ms interaction budget -
     a save that waits on a sleeping database is how "Could not reach the
