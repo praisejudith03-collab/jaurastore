@@ -603,10 +603,14 @@ def create_app():
     def _document_lang():
         """The language this visitor's own code will resolve to, server-side.
 
-        Same precedence as js/i18n.js: an explicit stored choice (the cookie it
-        writes) wins over the device locale, and the device locale only speaks
-        for a visitor who has never chosen. Kept in step deliberately - if the
-        two ever disagree, the page flashes from one language to the other.
+        Same precedence as js/i18n.js readStored(): a `?lang=` link writes a
+        SESSION cookie (no max-age), and that wins for the rest of the visit;
+        otherwise the Accept-Language header decides, which is what "listen to
+        the device on entry" means on the server. There is no language switch
+        in the storefront and no permanent stored choice, so nothing older than
+        this tab can outvote the device. Kept in step with the client
+        deliberately - if the two ever disagree, the page flashes from one
+        language to the other.
         """
         stored = (request.cookies.get("jaura_lang") or "").strip().lower()
         if stored in ("en", "fr"):

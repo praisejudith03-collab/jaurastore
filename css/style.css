@@ -7091,19 +7091,6 @@ body.au-shop .shop-banner img,
   overflow: hidden;
   transition: opacity .22s ease, transform .22s ease, visibility .22s ease;
 }
-/* ---------- LANGUAGE PILL (owner directive 2026-10-19)
-   The EN|FR control deliberately CARRIES .cur-float, so it inherits the shell,
-   the palette, the hide-on-admin rule and the cart-drawer fade instead of
-   growing a second copy of all of it. The one thing it restates is `bottom`, in
-   every stacking context, one pill-height (26px + 8px gap) above the currency
-   pill, so the two float as a column and can never overlap:
-     base 170 → 204 · dock-less homepage 106 → 140 · phones ≤640 162 → 196
-   tests/test_header_layout_lock.py recomputes all three pairs and fails the
-   build if a future move of the currency pill forgets to move this with it. */
-.cur-float.lang-float {
-  bottom: calc(204px + env(safe-area-inset-bottom, 0px)) !important;
-}
-.cur-float.lang-float button { min-width: 34px; }
 .cur-float button {
   border: 0;
   margin: 0;
@@ -7134,16 +7121,6 @@ body.au-shop .shop-banner img,
 .cur-float[hidden],
 body.ja-fr .cur-float,
 body[data-page="admin"] .cur-float { display: none !important; }
-/* …except the LANGUAGE pill. French mode is precisely when it has to stay
-   reachable: the device put the shop into French, and one tap on EN is the
-   way out (and the choice is then stored, so it sticks). Only the CURRENCY
-   control disappears, because there FCFA is locked in by design. The selector
-   below outranks body.ja-fr .cur-float by carrying the second class. */
-body.ja-fr .cur-float.lang-float { display: flex !important; }
-/* …but an explicit [hidden] still wins over that, in either mode: JS stays the
-   only thing that can put this control away. */
-.cur-float.lang-float[hidden],
-body.ja-fr .cur-float.lang-float[hidden] { display: none !important; }
 
 /* ---------- 4b. CART DRAWER COLLISION (owner request)
    The slide-out bag (.mini-cart, z-index 5000) parks "View bag" and
@@ -7204,7 +7181,6 @@ body[data-page="home"] .wa-float { bottom: calc(20px + env(safe-area-inset-botto
    of the whole animation envelope, so the two floating controls can never
    touch, overlap or hide one another. */
 body[data-page="home"] .cur-float { bottom: calc(106px + env(safe-area-inset-bottom, 0px)) !important; }
-body[data-page="home"] .cur-float.lang-float { bottom: calc(140px + env(safe-area-inset-bottom, 0px)) !important; }
 
 @media (max-width: 640px) {
   .wa-float,
@@ -7224,14 +7200,6 @@ body[data-page="home"] .cur-float.lang-float { bottom: calc(140px + env(safe-are
   .cur-float,
   body[data-page="home"] .cur-float {
     bottom: calc(162px + env(safe-area-inset-bottom, 0px)) !important;
-    right: 20px !important;
-  }
-  /* Same restatement for the language pill, one height above (bubble envelope
-     on phones reaches 157.3px, the currency pill sits at 162px, so 196px is the
-     first offset that clears both). */
-  .cur-float.lang-float,
-  body[data-page="home"] .cur-float.lang-float {
-    bottom: calc(196px + env(safe-area-inset-bottom, 0px)) !important;
     right: 20px !important;
   }
 }

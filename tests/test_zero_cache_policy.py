@@ -25,6 +25,7 @@ the strict directive set; versioned static assets stay immutable and are the
 only thing allowed to be cached; and the token is now derived from the shipped
 bytes by `tools/asset_version.py`, so a stale build cannot be shipped at all.
 """
+import glob
 import os
 import re
 import subprocess
@@ -216,6 +217,19 @@ def test_asset_version_tool_passes_on_this_tree():
     assert "ok" in proc.stdout
 
 
+def _copy_build_tree(dst):
+    """Only the files the tool may read or rewrite, in a throwaway tree."""
+    import shutil
+    for pattern in ("*.html", "sw.js", "js/*.js", "css/*.css",
+                    "tools/sync_favicon_head.py", "tests/test_asset_cache_token.py",
+                    "tests/test_brand_icons.py"):
+        for src in sorted(glob.glob(os.path.join(ROOT, pattern))):
+            dst_path = dst / os.path.relpath(src, ROOT)
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst_path)
+    return dst
+
+
 def test_asset_version_tool_is_idempotent(tmp_path):
     """`--write` with no byte change must not bump the token.
 
@@ -223,14 +237,57 @@ def test_asset_version_tool_is_idempotent(tmp_path):
     year of phone caching on releases that touched no frontend at all — the
     opposite of the fix — and it would make the first visit after every deploy
     cost the whole stylesheet again.
+
+    It runs against a COPY (``--root``) because ``--write`` rewrites files: the
+    first version of this test ran it on the live tree, and a normal test run
+    bumped v=206 → v=207 across 28 shipped pages as a side effect. A test must
+    never be able to do that again.
     """
-    before = (_read("sw.js"), _read("js/store.js"), _read("index.html"))
+    tree = _copy_build_tree(tmp_path)
+    live_before = {name: _read(name) for name in
+                   ("sw.js", "index.html", "js/store.js", "css/style.css",
+                    "tests/test_asset_cache_token.py")}
     proc = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "asset_version.py"),
-                           "--write"], cwd=ROOT, capture_output=True, text=True, timeout=180)
+                           "--write", "--root", str(tree)],
+                          cwd=ROOT, capture_output=True, text=True, timeout=180)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "nothing changed" in proc.stdout
-    after = (_read("sw.js"), _read("js/store.js"), _read("index.html"))
-    assert before == after, "a no-op run rewrote shipped files"
+    assert "nothing changed" in proc.stdout, (
+        "the copied build was consistent, so --write must not bump the token: "
+        + proc.stdout)
+    live_after = {name: _read(name) for name in live_before}
+    assert live_before == live_after, (
+        "running the tool rewrote the LIVE tree — it must be given --root")
+
+
+def test_asset_version_tool_bumps_only_a_real_change(tmp_path):
+    """And when an asset DOES change, --write bumps the token and re-records.
+
+    The other half of the contract: the copy starts consistent, one JS byte
+    moves, and the tool must (a) refuse to call that a no-op, (b) move every
+    `?v=` reference and the token constants together, and (c) leave the copy
+    self-consistent so `--check` passes again.
+    """
+    tool = os.path.join(ROOT, "tools", "asset_version.py")
+    tree = _copy_build_tree(tmp_path)
+    stale = subprocess.run([sys.executable, tool, "--check", "--root", str(tree)],
+                           cwd=ROOT, capture_output=True, text=True, timeout=180)
+    assert stale.returncode == 0, stale.stdout + stale.stderr
+    victim = tree / "js" / "store.js"
+    victim.write_text(victim.read_text(encoding="utf-8") + "\n// touch\n", encoding="utf-8")
+    bumped = subprocess.run([sys.executable, tool, "--write", "--root", str(tree)],
+                            cwd=ROOT, capture_output=True, text=True, timeout=180)
+    assert bumped.returncode == 0, bumped.stdout + bumped.stderr
+    token = re.search(r'jaura-v(\d+)', _read("sw.js")).group(1)
+    nxt = str(int(token) + 1)
+    assert f"token {token} -> {nxt}" in bumped.stdout, bumped.stdout
+    again = subprocess.run([sys.executable, tool, "--check", "--root", str(tree)],
+                           cwd=ROOT, capture_output=True, text=True, timeout=180)
+    assert again.returncode == 0, "the bump left the copy inconsistent: " + again.stdout
+    shipped = (tree / "index.html").read_text(encoding="utf-8")
+    assert f"v={token}" not in shipped and f"v={nxt}" in shipped, (
+        "a token bump that misses a page is exactly the half-updated build the "
+        "stale-mobile-page report was about")
+    assert f'const VERSION = "jaura-v{nxt}";' in (tree / "sw.js").read_text(encoding="utf-8")
 
 
 def test_fingerprint_guard_names_the_tool():
@@ -261,9 +318,15 @@ def test_first_paint_language_follows_accept_language(client, header, expected):
         f"{painted.group(1) if painted else '(nothing)'}\">, expected {expected!r}")
 
 
-def test_a_stored_choice_beats_the_device_on_the_server_too(client):
+def test_a_session_choice_beats_the_device_on_the_server_too(client):
     """The server-side decision must mirror js/i18n.js exactly, or the page
-    flashes from one language to the other as the scripts boot."""
+    flashes from one language to the other as the scripts boot.
+
+    The cookie is the client's mirror of sessionStorage — written only by a
+    `?lang=` link, never by the device read, and with no max-age so a new visit
+    re-consults Accept-Language. That last part is pinned here too: a persistent
+    cookie would quietly reinstate the permanent override the owner removed.
+    """
     client.set_cookie("jaura_lang", "en")
     html = client.get("/shop.html", headers={"Accept-Language": "fr"}).get_data(as_text=True)
     assert '<html lang="en"' in html
@@ -271,6 +334,11 @@ def test_a_stored_choice_beats_the_device_on_the_server_too(client):
     client.set_cookie("jaura_lang", "fr")
     html = client.get("/shop.html", headers={"Accept-Language": "en-NG"}).get_data(as_text=True)
     assert '<html lang="fr"' in html
+    js = _read("js/i18n.js")
+    cookie_line = [ln for ln in js.split("\n") if "document.cookie" in ln and "jaura_lang" in ln]
+    assert cookie_line and all("max-age" not in ln for ln in cookie_line), (
+        "js/i18n.js must write a SESSION cookie: a permanent cookie would outlive "
+        "the visit and outrank the device with no control left to undo it")
 
 
 def test_english_documents_are_served_byte_identical(client):

@@ -255,17 +255,31 @@ def test_admin_js_form_and_save_carry_the_french_banner_field():
     assert "convBannerFr" in m.group(1), "the save must post convBannerFr"
 
 
-def test_language_switch_repaints_the_banner():
-    """Tapping EN/FR must repaint the moving banner immediately (no
-    reload): the data-lang click handler calls paintConvBanner right after
-    setLang."""
+def test_language_change_repaints_the_banner():
+    """A language change must repaint the moving banner immediately, with no
+    reload.
+
+    RE-PINNED 2026-10-19. This used to assert it inside the floating EN|FR
+    pill's click handler. The storefront has no language control by owner
+    instruction, so no click exists any more — but the requirement is not
+    about a click, it is about the banner never being left in the wrong
+    language, and the banner is site-config text that `ja:rerender` does not
+    own. So the contract now lives on the one event every language change
+    fires (js/i18n.js setLang → "ja:lang", reached from a `?lang=` link just
+    as from dev tools or the e2e harness). A switch that repaints the grid but
+    leaves the old English tagline crawling is the bug this pins.
+    """
     src = open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8").read()
-    handler = re.search(
-        r'setLang\(next\);(.*?)toast\(next === "fr"', src, re.S)
-    assert handler, "could not find the data-lang click handler body"
+    handler = re.search(r'document\.addEventListener\("ja:lang", \(\) => \{(.*?)\n  \}\);',
+                        src, re.S)
+    assert handler, ("could not find the ja:lang listener body in js/store.js — "
+                     "the language event is what repaints the chrome now")
     body = handler.group(1)
     assert re.search(r"paintConvBanner\(\)", body), \
-        "the handler must repaint the banner when the language changes"
+        "the ja:lang handler must repaint the banner when the language changes"
+    # And no dead click handler came back with the pill's removal.
+    assert 'querySelectorAll("[data-lang]")' not in src, \
+        "there is no language control to bind any more"
 
 
 # ------------------------------------------------- canonical-name persistence

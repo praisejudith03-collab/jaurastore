@@ -301,68 +301,33 @@ def test_currency_pill_hides_when_french_locks_fcfa():
         "the admin page keeps the floating pill hidden like the WhatsApp bubble")
 
 
-def _bottom_px(value):
-    """The pixel floor of a `bottom: calc(Npx + env(...))` value."""
-    return int(re.search(r"(\d+)px", value).group(1))
+def test_no_language_selector_was_bolted_onto_the_floating_column():
+    """The floating column is currency + WhatsApp, and nothing else.
 
-
-def test_language_pill_stacks_above_the_currency_pill_in_every_context():
-    """The EN|FR pill (owner directive 2026-10-19) rides the currency pill's
-    column, so it must sit one pill-height ABOVE it in every stacking context —
-    and above that, clear of the WhatsApp bubble's animation envelope.
-
-    This is the arithmetic that made the currency pill's own offsets permanent
-    (see the STACKING CONTRACT comment in css/style.css): three contexts, each
-    restated, because the highest-specificity rule that is NOT width-scoped wins
-    on phones. A future move of the currency pill that forgets the language pill
-    would drop the two on top of each other, which is exactly the overlap the
-    owner reported before. Pairing them here is what keeps it from coming back.
+    A floating EN|FR pill was added and removed on 2026-10-19 (owner: no
+    visible language selector; the device locale decides). Deleting it is only
+    half the job — its CSS hooks and its `bottom` restatements have to go with
+    it, or the currency pill inherits a phantom neighbour and the next person
+    "fixes" an overlap that no longer exists. This is also the layout-side
+    twin of the locale rule in tests/test_auto_locale_rules.py: the header and
+    menu were already switch-free, so after this the storefront has NO language
+    control anywhere.
     """
     rules = _all_rules()
-    contexts = [
-        # (media query, extra selector prefix for the dock-less homepage)
-        (None, ""),
-        (None, 'body[data-page="home"] '),
-        ("(max-width: 640px)", ""),
-        ("(max-width: 640px)", 'body[data-page="home"] '),
-    ]
-    for media, prefix in contexts:
-        cur = _last_setting([r for r in rules if r[0] == media],
-                            (prefix + ".cur-float").strip(), "bottom")
-        lang = _last_setting([r for r in rules if r[0] == media],
-                             prefix + ".cur-float.lang-float", "bottom")
-        if cur is None:
-            continue                      # that context only restates one of them
-        assert lang is not None, (
-            f"{prefix}.cur-float.lang-float has no `bottom` in context {media!r} — "
-            "it would inherit the currency pill's offset and sit on top of it")
-        gap = _bottom_px(lang[1]) - _bottom_px(cur[1])
-        assert 28 <= gap <= 60, (
-            f"language pill is {gap}px above the currency pill in context "
-            f"{media!r}/{prefix.strip()!r}; one pill height (26px) plus a small gap "
-            "is what keeps the two readable and non-overlapping")
-        assert "env(safe-area-inset-bottom" in lang[1], (
-            "the language pill must respect the phone's safe area like its neighbour")
-
-
-def test_language_pill_survives_french_mode():
-    """French mode hides the CURRENCY pill (FCFA is locked) — it must never hide
-    the LANGUAGE pill. That control is the way out of French, and the absence of
-    a way out is the sole reason auto-detection was switched off on 2026-09-27.
-    """
-    rules = _all_rules()
-    shown = [sel for media, sel, props in rules
-             if media is None and sel == "body.ja-fr .cur-float.lang-float"
-             and props.get("display", "").startswith("flex")]
-    assert shown, ("body.ja-fr .cur-float.lang-float must display:flex — the language "
-                   "pill has to stay reachable in French mode")
-    hidden = [sel for media, sel, props in rules
-              if media is None and "lang-float" in sel and props.get("display", "").startswith("none")]
-    assert any("[hidden]" in s for s in hidden), (
-        "an explicit [hidden] must still put the language pill away, so JS keeps "
-        "the only switch that can hide it")
-
-
+    lang_rules = [sel for media, sel, props in rules if "lang-float" in sel]
+    assert not lang_rules, f"language-pill CSS survived: {lang_rules}"
+    store = open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8").read()
+    assert "lang-float" not in store, "js/store.js must not mount a language pill"
+    # …and nothing in the storefront markup renders the older switch either. The
+    # shared `.lang-switch, .currency-switch` CSS block is not a control: it is
+    # the currency pill's styling (both switched with identical geometry), and
+    # tests/test_browser_smoke.py separately proves no `.lang-switch` element
+    # exists in the rendered header. What must NOT come back is a `.cur-float`
+    # with a second class bolted on, which is how the floating pill was mounted.
+    html = "".join(open(os.path.join(ROOT, f), encoding="utf-8").read()
+                   for f in ("index.html", "shop.html", "product.html", "checkout.html"))
+    assert "lang-switch" not in html and 'class="lang-float' not in html, (
+        "a language selector returned to the storefront markup")
 def test_whatsapp_bubble_position_is_pinned_under_the_pill():
     """WhatsApp stays fixed at bottom:20px right:20px z-index:9998 - directly
     under the currency pill and nowhere else."""

@@ -2912,8 +2912,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=206";
-        const FLYER = "images/brand/logo-flyer.jpg?v=206";
+        const LOGO = "images/brand/logo.jpg?v=209";
+        const FLYER = "images/brand/logo-flyer.jpg?v=209";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -2993,7 +2993,22 @@ const JA = (() => {
     // The live admin exchange rate (growth setting cfaRate) drives every
     // storefront conversion; cache it so an offline repaint keeps the last
     // server-confirmed figure instead of a hardcoded one.
-    if (Number(site.cfaRate) > 0) applyFx(site.cfaRate, "live /api/site");
+    //
+    // When the figure differs from what the page already priced with, repaint
+    // it. A francophone visitor sees a CONVERTED price on every card (owner
+    // rule: French = F CFA at the live rate), and on a slow connection the grid
+    // can paint before this row arrives — without the repaint they would keep
+    // the catalogue's own F CFA figure until they reloaded. Deliberately
+    // `ja:rerender` and not `ja:currency`: that event also refetches the whole
+    // catalogue past every cache, which a rate landing on a normal page load
+    // has not earned. In-memory draw only, same as the site/category repaint.
+    if (Number(site.cfaRate) > 0) {
+      const before = fx ? Number(fx.ngnToXof) : null;
+      const after = Number(site.cfaRate);
+      if (applyFx(after, "live /api/site") && before !== after) {
+        try { document.dispatchEvent(new CustomEvent("ja:rerender")); } catch (e) {}
+      }
+    }
     // A live settings refresh can arrive while a previous page's dialog is
     // open. Remove it immediately when the master toggle is OFF; this makes
     // the OFF state authoritative even without a reload.
@@ -3113,7 +3128,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=206" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=209" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3412,7 +3427,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=206" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=209" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3484,23 +3499,6 @@ const JA = (() => {
       <button type="button" data-cur="NGN">₦</button>
       <button type="button" data-cur="CFA">CFA</button>
     </div>
-    <!-- Floating language pill (owner directive 2026-10-19). The interface now
-         FOLLOWS THE DEVICE — a French phone gets the French shop with F CFA
-         without having to ask for it — so this control is the way BACK, and the
-         way forward: tapping EN is stored as an explicit choice and outranks
-         the device locale on every later visit, which is the half that was
-         missing the last time detection was on (a French-language device in
-         Lagos had no way out and the whole shop stayed French).
-         It rides the currency pill's floating column on purpose: the header and
-         the slide-out menu are pinned switch-free (tests/test_header_layout_lock.py
-         keeps the one-row phone header and the centred logo intact), and
-         js/store.js already binds [data-lang] + the .is-on highlight in
-         bindChrome()/refreshChrome(). It is never hidden in French mode - that
-         is exactly when it is needed - see the .lang-float rules in css/style.css. -->
-    <div class="cur-float lang-float" data-lang-float role="group" aria-label="Language">
-      <button type="button" data-lang="en">EN</button>
-      <button type="button" data-lang="fr">FR</button>
-    </div>
     <a class="wa-float" data-wa-inquiry data-wa-country="benin" href="${waInquiryUrl(WA_BJ)}" target="_blank" rel="noopener" aria-label="WhatsApp">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M12.04 2C6.58 2 2.15 6.4 2.15 11.84c0 1.74.46 3.44 1.33 4.94L2 22l5.36-1.4a10 10 0 0 0 4.68 1.19h.01c5.46 0 9.89-4.4 9.89-9.85C21.94 6.4 17.5 2 12.04 2zm5.72 14.13c-.24.68-1.4 1.3-1.95 1.38-.5.07-1.12.1-1.81-.11-.42-.13-.95-.31-1.64-.6-2.89-1.25-4.77-4.16-4.92-4.35-.14-.2-1.18-1.57-1.18-3 0-1.42.75-2.12 1.01-2.41.27-.29.58-.36.78-.36h.56c.18 0 .42-.07.66.5.24.58.82 2 .89 2.15.07.15.12.32.02.52-.1.2-.14.32-.29.5-.14.17-.3.38-.43.51-.14.14-.29.29-.12.56.16.27.73 1.2 1.56 1.95 1.08.96 1.98 1.26 2.26 1.4.27.14.43.12.59-.07.16-.2.68-.79.86-1.06.18-.27.36-.22.6-.13.25.08 1.57.74 1.84.87.27.14.45.2.52.31.06.11.06.64-.18 1.32z"/></svg>
     </a>`;
@@ -3565,7 +3563,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=206", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=209", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3599,7 +3597,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=206";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=209";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3658,7 +3656,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=206");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=209");
     document.title = title;
     [
       ["name", "description", description],
@@ -3910,10 +3908,6 @@ const JA = (() => {
     document.querySelectorAll("[data-cur]").forEach((btn) => {
       btn.classList.toggle("is-on", btn.dataset.cur === currency());
     });
-    const currentLang = window.I18N ? window.I18N.lang() : "en";
-    document.querySelectorAll("[data-lang]").forEach((btn) => {
-      btn.classList.toggle("is-on", btn.dataset.lang === currentLang);
-    });
     // The floating currency pill only exists for the English storefront: a
     // French interface means CFA is locked in, so the pill is hidden (and
     // the body class lets CSS hide it as a backstop).
@@ -3931,22 +3925,6 @@ const JA = (() => {
       btn.addEventListener("click", () => {
         setCurrency(btn.dataset.cur);
         toast(btn.dataset.cur === "NGN" ? tx("toast.ngn") : tx("toast.cfa"));
-      });
-    });
-    document.querySelectorAll("[data-lang]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const next = btn.getAttribute("data-lang") === "fr" ? "fr" : "en";
-        try { localStorage.setItem("jaura_lang", next); } catch (err) {}
-        try { sessionStorage.setItem("jaura_lang", next); } catch (err) {}
-        try { document.cookie = "jaura_lang=" + next + ";path=/;max-age=31536000;SameSite=Lax"; } catch (err) {}
-        if (window.I18N) window.I18N.setLang(next);
-        // The owner's banner is language-aware (English + French fields):
-        // repaint it at once so the moving line switches the moment the
-        // button is tapped, no reload needed.
-        try { paintConvBanner(); } catch (e) {}
-        toast(next === "fr" ? tx("toast.langFr") : tx("toast.langEn"));
       });
     });
     const overlay = document.querySelector("[data-search]");

@@ -1,20 +1,27 @@
 # Locale-selection / defaulting fix — release notes (2026-09-27)
 > [!IMPORTANT]
-> **Partly superseded on 2026-10-19.** Requirement 1 of this document — "English
-> is the default for every visitor; the device locale is never consulted" — was
-> reversed by owner directive: a visitor whose device reports French now gets the
-> French storefront automatically, with no toggling. Requirements 2 and 3 (an
-> explicit choice is persisted **and read back**, and garbage under `jaura_lang` is
-> migrated away) are what make that safe and are still in force, verbatim.
+> **Superseded on 2026-10-19 by the owner, twice.** Requirement 1 — "English is
+> the default for every visitor; the device locale is never consulted" — was
+> reversed: a visitor whose device reports French gets the French storefront and
+> F CFA automatically, without asking, on **every** entry. A floating EN|FR pill
+> was added the same day as the way back and then also removed, on instruction:
+> **the storefront has no visible language selector of any kind.**
+>
+> Requirement 2 ("an explicit choice is persisted and read back") now applies
+> only to a `?lang=fr|en` link and only **for the browsing session**; requirement
+> 3 (garbage under `jaura_lang` is migrated away) is not just in force but
+> strengthened — `migrateStaleLocale()` now **deletes the permanent `localStorage`
+> key outright**, because with no control on screen a value stored in the era this
+> document describes could never be undone.
 >
 > The reason the 2026-09-27 rule existed was never the detection itself: it was
-> that a shopper on a French-language device had no way back to English, because
-> the header/menu switches had just been removed and the stored choice was written
-> but never read. Both halves are fixed now — the floating EN|FR pill persists a
-> deliberate pick through `I18N.setLang()`, and `readStored()` honours it on every
-> later load — so the device decides the *first* visit and nothing afterwards.
-> See `tests/test_auto_locale_rules.py` (rewritten, with the history) and the
-> "Language: explicit choice > device > English" section of `README.md`.
+> that a shopper on a French-language device could get stuck in French with no way
+> out. That failure mode is closed differently now — not by adding a control, but
+> by never latching the language: the device decides, the decision is re-derived
+> on every entry, and only a deliberate `?lang=` link can override it for a
+> session. See `tests/test_auto_locale_rules.py` (rewritten, with the full
+> three-act history), `tests/_auto_locale_sim.mjs` and the "Language: the
+> visitor's device, on every entry" section of `README.md`.
 
 ## The bug
 

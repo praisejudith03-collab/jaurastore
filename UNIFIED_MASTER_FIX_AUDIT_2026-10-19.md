@@ -20,7 +20,7 @@ this sandbox), so the browser-level layout checks and two DOM sims did not run h
 | # | Reported | What was actually found | Disposition |
 |---|---|---|---|
 | 1 | Stale mobile pages force `?v=live` hacks / cache clearing | **Confirmed, five causes.** The homepage was *deliberately* given `s-maxage=3600` + `stale-if-error=604800`; `/api/categories` had `max-age=60` + `stale-while-revalidate=120`; three different strengths of "no-store" were in use; and the asset token was a 24-file manual chore | **Patched** — one strict constant for every document/API response, both cache windows removed, `tools/asset_version.py` automates the fingerprint |
-| 2 | French locale auto-detection lost | **Confirmed** — and the reason it was removed is documented: the stored choice was not read back and the visible switch had been deleted, so a French device had no way out. The `[data-lang]` binder survived as dead code with no markup | **Patched** — explicit choice > device > English, server-side first paint, floating EN\|FR pill; plus a real FCFA bug found on the way (§2.3) |
+| 2 | French locale auto-detection lost | **Confirmed** — and the reason it was removed is documented: the stored choice was not read back and the visible switch had been deleted, so a French device had no way out. The `[data-lang]` binder survived as dead code with no markup | **Patched** — device locale on every entry, session-scoped `?lang=` link, no visible selector at all, server-side first paint; plus a real FCFA bug found on the way (§2.3, revised §2.6) |
 | 3 | Category image upload engine broken; media not persisted | Upload/persistence engine is sound (production never falls back to disk; bucket pinned). The real defects were **format validation** and **thumbnails** | **Patched** (3 gaps); backfill left as a plan |
 | 4 | Watchdog misses supplier sold-out; manual "Out of Stock" reverts | **Confirmed — reproduced both halves.** The one critical data bug | **Patched** — durable manual lock + one-directional page-availability fallback + admin release route |
 | 5 | Multi-item orders lumped; no per-line cost/URL; net profit not computable | Per-line breakdown **already exists** (`accounting.line_items_for_order`); what was missing is batch-level "other costs" and a manual net-profit override | **Patched** through API + admin table; **one sign convention is your call** (§5.3) |
@@ -129,20 +129,20 @@ in the header or the slide-out menu, and `test_auto_locale_rules.py` pinned
 That is why the fix is not simply "turn detection back on".
 
 ### 2.2 What is in the tree
-* **Precedence in `js/i18n.js`:** explicit choice (`?lang=fr|en` link, or a tap on the pill —
-  persisted under `jaura_lang` and read back) → **device locale** → English. The device read is
-  deliberately *not* persisted, so it decides the first visit only and can never masquerade as
-  a choice or outlive one. `fr`, `fr-FR`, `fr-BJ`, `fr-CI`, … all mean French; an `en` tag listed
-  earlier wins, because that is how the browser itself picks.
-* **The missing control is restored, in the one place the layout locks allow:** a floating
-  EN|FR pill mounted next to the currency pill (`js/store.js`), reusing the `[data-lang]`
-  handler and `.is-on` highlight that had been sitting as dead code since 2026-09-27. It rides
-  `.cur-float` so it inherits the palette, the hide-on-admin rule and the cart-drawer fade, and
-  restates only `bottom` in all three stacking contexts (170→204, 106→140, 162→196) — the same
-  arithmetic discipline the currency pill is pinned by, now extended: two new tests in
-  `tests/test_header_layout_lock.py` recompute the gap per context and assert the pill is **never
-  hidden in French mode**, since that is exactly when the way out matters. The header and menu
-  stay switch-free.
+* **Precedence in `js/i18n.js` (final, after §2.6):** `?lang=fr|en` on the arriving link,
+  remembered for the **browsing session** → **device locale, on every entry** → English. The
+  device read is never persisted at all, so nothing can latch a visitor into a language: changing
+  the phone's language changes the shop. `fr`, `fr-FR`, `fr-BJ`, `fr-CI`, … all mean French; an
+  `en` tag listed earlier wins, because that is how the browser itself picks.
+* **No language control exists in the storefront.** The header and the slide-out menu were
+  already switch-free (`tests/test_header_layout_lock.py`), and a floating EN|FR pill was built
+  for this fix and then **removed on the owner's instruction the same day** — see §2.6. What is
+  left of that control is pinned out of the tree: `js/store.js` carries no `data-lang` markup,
+  no `[data-lang]` binder and no `.is-on` highlight, `css/style.css` has no `.lang-float` rule,
+  and `test_auto_locale_rules.py::test_no_language_selector_exists_anywhere_in_the_storefront`
+  fails the build if any of it comes back. The pre-existing `.lang-switch` CSS block is *not* a
+  control — it is the currency switch's shared styling, and `test_browser_smoke.py` proves no
+  `.lang-switch` element renders.
 * **First paint, server-side:** `app.py` resolves the same precedence ( `jaura_lang` cookie →
   `Accept-Language` → English) and stamps `<html lang="fr">` on the way out, with
   `Vary: Accept-Language, Cookie`. An English visitor gets the file **byte-for-byte as it ships**
@@ -178,10 +178,59 @@ French with ₦, that is a new rule and needs saying — it is a 5-line change i
 
 ### 2.5 Verification
 `tests/_auto_locale_sim.mjs` boots the real `i18n.js` + `store.js` + `app.js` in a stubbed
-browser: **103 checks, all passing**, including the 12 new ones for device-decides-first-visit,
-never-persisted device value, one-tap reversal that sticks, `<html lang>` on the French path,
-pill visibility per mode, and the CFA price fallback. The static rule tests were rewritten
-rather than removed, and they now forbid `navigator.language` everywhere *except* the detector.
+browser: **109 checks, all passing**, covering device-decides-on-every-entry (both language
+directions, list order, unknown locales), the session-scoped `?lang=` link surviving to the next
+page and *not* to a new visit, the retired `localStorage` key being purged rather than honoured,
+`<html lang>` on the French path, the absence of any language control in the rendered chrome, and
+the CFA price fallback. `tests/_naira_first_cart_pill_sim.mjs` (Naira-first + cart drawer) moved
+to the same session semantics and passes. The static rule tests were rewritten rather than
+removed, and they still forbid `navigator.language` everywhere *except* the detector.
+
+### 2.6 Same-day revision: the selector went away, the device became the whole rule
+
+The first version of this fix restored detection *and* shipped a visible EN|FR pill, on the
+reasoning that detection without a way out was the 2026-09-27 defect. The owner's revision was
+explicit and removes that reasoning: **no visible language selector at all**, and the shop listens
+**strictly** to the device/browser locale on entry, with French ⇒ FCFA from the live rate.
+
+Implemented as:
+
+| Piece | Change |
+|---|---|
+| `js/store.js` | floating EN\|FR pill, its `[data-lang]` click handler, its `.is-on` highlight and a dead shadowing `const currentLang` all deleted; the footer's floating column is currency + WhatsApp again, exactly as before |
+| `css/style.css` | every `.lang-float` rule deleted (the pill's `bottom` restatements in all three contexts and the `body.ja-fr` visibility override) — the file returned byte-for-byte to its pre-fix state |
+| `js/i18n.js` | `persist()` writes **sessionStorage + a session cookie** only; `storedChoice()` reads only the session; the device path writes nothing; `migrateStaleLocale()` now **clears the retired `localStorage` key unconditionally** |
+| `checkout.html` | the pre-paint payment-method default no longer reads `localStorage`; it resolves the session choice and otherwise runs its own copy of the device detector, so a French phone pre-selects the Benin/Togo CFA card instead of the Naira one |
+| `app.py` | `_document_lang()` unchanged in logic (session cookie → `Accept-Language`) and re-documented, because the cookie it mirrors is now session-scoped |
+| `i18n.py` | the translation collector seeds `sessionStorage` instead of `localStorage`, which is the only store the storefront reads now |
+
+Why the persistent key had to be **purged**, not merely ignored: with no control on screen, a
+`jaura_lang` value stored in the pill era would override the device forever and could never be
+undone — that is precisely the failure that made auto-detection get switched off on 2026-09-27.
+Clearing it means every visitor's language is, from the next page load, their browser's.
+
+What is deliberately **kept**: the `?lang=fr|en` link override, scoped to the session. French
+WhatsApp broadcast and support links are an owner feature (`categories.html?lang=fr`, order
+notifications) and they must not flip to English when the shopper taps the next product; dying with
+the tab means they also cannot quietly become a permanent override. Session scope is also what
+keeps server and client in lockstep — `app.py` reads the same session cookie, so there is no
+language flash on the first paint of a linked visit.
+
+Two pinned behaviours were **re-pinned rather than preserved**, and this is stated because it
+reverses a previous owner note: the 2026-09-27 rule "French is opt-in only" is now dead, and the
+pill's own layout tests were replaced by a test that the pill does not exist.
+`tests/test_banner_french.py::test_language_switch_repaints_the_banner` pinned the banner repaint
+inside the pill's click handler; the guarantee is real but the click is not, so it is re-pinned on
+the `ja:lang` listener that every language change fires (and on the absence of a `[data-lang]` binder).
+
+**One gap the revision exposed, and closed:** "FCFA from the live exchange rate" was only true once
+`GET /api/site` answered — and on a slow phone the grid paints first. A francophone visitor could
+therefore sit on the per-product `priceCfa` fallback indefinitely, with no currency pill to tap to
+force a repaint (the pill is hidden in French mode by design). `applySiteConfig()` now dispatches
+`ja:rerender` when the live figure differs from the one the page priced with — in-memory redraw
+only, deliberately *not* `ja:currency`, which would also refetch the whole catalogue past every
+cache on every page load. Pinned at the end of the English block in `tests/_auto_locale_sim.mjs`
+(price moves, exactly one repaint, zero catalogue refetches).
 
 ---
 
@@ -322,7 +371,7 @@ stays the ITEMFLOW reference workbook and must not be repurposed.
 |---|---|---|
 | §1 | Every navigation now costs an origin round trip; no `stale-if-error` cushion when the dyno is down | Intended. A cold/failed instance now shows the app's own 404/500 shell rather than a week-old page; assets stay immutable |
 | §1 | Two pinned tests asserted the removed windows and had to be updated | Updated with the reason inline, not deleted — `test_ghost_images`, `test_variant_price_range_speed_and_popup`, `test_regression_headers`, `test_api` |
-| §2 | A French-tagged device in Nigeria now gets French + FCFA until the shopper taps EN once | That is the directive; the reversal persists and the pill is pinned visible. Consider a first-visit hint if the metric moves |
+| §2 | A French-tagged device in Nigeria now gets French + FCFA, with no in-page way back | That is the directive, and the only escape is the device's own language setting — safe only because nothing is latched (the store is session-scoped and the legacy key is purged). If the metric moves, the fix is a device-setting guide, not a toggle |
 | §2 | `fr-FR` (France) also gets F CFA | §2.4 — say if you want currency keyed on region instead |
 | §2 | Currency now has a second source (the row's `priceCfa`) when the rate is unavailable | Only used when conversion cannot run at all; pinned by two sim checks |
 | §4 | A deliberately locked-out product can look like "the sync is broken" | `manual_stock_lock` warning, `locked` count, and the release route exist for exactly this |
@@ -371,7 +420,7 @@ files (`tools/asset_version.py`, `tests/test_zero_cache_policy.py`, this report)
 
 ```
 app.py  security.py  api.py          cache contract, lang first paint, asset refs
-js/i18n.js  js/store.js  css/style.css  device locale, EN|FR pill, CFA fallback
+js/i18n.js  js/store.js  css/style.css  checkout.html  device locale, session-scoped link, no selector, CFA fallback
 accounting.py catalog.py supabase_store.py supplier_watchdog.py storage.py
 google_sheets.py js/accounting.js js/admin.js                  items 3-6 (earlier round)
 20 × *.html sw.js css/fonts.css tools/sync_favicon_head.py    token 204→205→206

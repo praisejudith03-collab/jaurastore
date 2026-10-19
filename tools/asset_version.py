@@ -40,6 +40,24 @@ ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / "tests" / "test_asset_cache_token.py"
 SW = ROOT / "sw.js"
 
+
+def set_root(root: Path) -> None:
+    """Point the whole tool at another tree.
+
+    Exists for the test suite: `--write` REWRITES shipped files, and a pytest
+    that ran it against the live repo bumped the build token across 28 files as
+    a side effect of merely running the tests. Anything that exercises the
+    writer must do it on a copy, so the flag is part of the tool's interface
+    rather than something each caller reimplements.
+    """
+    global ROOT, GUARD, SW
+    ROOT = Path(root).resolve()
+    GUARD = ROOT / "tests" / "test_asset_cache_token.py"
+    SW = ROOT / "sw.js"
+    if not SW.exists() or not GUARD.exists():
+        raise SystemExit(f"asset_version: {ROOT} is not a jaurastore tree "
+                         f"(needs sw.js and tests/test_asset_cache_token.py)")
+
 # Files that may CARRY a `?v=<token>` reference. The list is a allowlist on
 # purpose: `tools/`, the markdown release notes and the schema sections quote
 # old tokens as history and must never be rewritten.
@@ -162,7 +180,11 @@ def main() -> int:
                       help="fail if an asset changed without a token bump (CI)")
     mode.add_argument("--write", action="store_true",
                       help="bump the token and refresh hashes, only if bytes changed")
+    parser.add_argument("--root", default=str(ROOT),
+                        help="tree to operate on (default: this repo). Tests must "
+                             "point this at a COPY: --write rewrites files.")
     args = parser.parse_args()
+    set_root(Path(args.root))
     token = current_token()
     if args.check:
         return 0 if check(token) else 1

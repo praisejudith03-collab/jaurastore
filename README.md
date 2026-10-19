@@ -188,14 +188,21 @@ step: a build that touched no frontend does not throw away a year of phone cachi
 `tests/test_asset_cache_token.py` keeps the fingerprint list honest, and `sw.js`'s
 `const VERSION = "jaura-v<N>"` is the token's source of truth.
 
-**Language: explicit choice > device > English.** `js/i18n.js` honours a `?lang=fr|en`
-link or a tap on the floating EN|FR pill (persisted under `jaura_lang`), and only
-when a visitor has never chosen does it follow the device's `navigator.languages`
-— so a francophone phone opens the French shop with F CFA prices, untouched, and one
-tap on EN is remembered permanently (the missing half that made the 2026-09-27
-attempt unacceptable). `app.py` mirrors that precedence from the `jaura_lang` cookie
-and `Accept-Language` so the very first paint already carries `<html lang="fr">`, and
-those documents `Vary: Accept-Language, Cookie`. Geography and IP are never consulted.
+**Language: the visitor's device, on every entry.** `js/i18n.js` reads
+`navigator.languages` — `fr`, `fr-FR`, `fr-BJ`, `fr-CI`, … give the French
+storefront and F CFA prices at the live exchange rate; `en`, any other language
+and a missing signal give English, the authored language. **There is no language
+switch in the storefront** (owner directive 2026-10-19): not in the header, not
+in the menu, not floating. The only override is a `?lang=fr|en` link — the
+WhatsApp broadcasts and support links — which is remembered for that browsing
+session and then dropped. Nothing about the device is ever written to storage,
+and the retired permanent `jaura_lang` key in `localStorage` is purged on load,
+so a visitor can never be latched into a language they cannot leave: that
+latching is what made the 2026-09-27 attempt unacceptable, and a session-scoped
+decision is what makes this one safe. `app.py` mirrors the same precedence from
+the session `jaura_lang` cookie and `Accept-Language` so the very first paint
+already carries `<html lang="fr">`, and those documents
+`Vary: Accept-Language, Cookie`. Geography and IP are never consulted.
 
 ## Environments
 

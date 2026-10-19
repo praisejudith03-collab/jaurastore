@@ -1,37 +1,41 @@
 """Locale selection / defaulting (owner request 2026-09-27, revised 2026-10-19).
 
-HISTORY. On 2026-09-27 the live storefront was opening in French for visitors
-who should see English (₦ Naira, English navigation, English product cards,
-English checkout and delivery-zone copy). The interface language was being
-decided from the visitor's device/browser locale, and — because the header and
-slide-out-menu switches had just been removed and the stored choice was written
-but never read back — a shopper whose phone reported French had no way back.
-The response that day was to make French strictly opt-in.
+HISTORY, in three acts, so none of it is "fixed" back by accident:
 
-On 2026-10-19 the owner asked for the browser language listener to be
-RESTORED ("renders all UI text … in French without manual toggling"). The
-restore is safe now precisely because the two missing halves exist: the stored
-choice is read back (readStored → storedChoice), and there is a visible
-one-tap control (the floating EN|FR pill in js/store.js) whose tap persists
-through I18N.setLang(). The rules pinned here:
+  1. Before 2026-09-27 the interface followed the visitor's device locale, but
+     the header and slide-out-menu switches had just been removed and the
+     stored choice was written yet never read back — so a shopper whose phone
+     reported French had no way out. The response that day was to make French
+     strictly opt-in.
+  2. On 2026-10-19 the owner asked for the browser-language listener to be
+     RESTORED ("renders all UI text … in French without manual toggling"), and
+     a floating EN|FR pill was added as the way back.
+  3. Also on 2026-10-19 the owner removed that control: no visible language
+     selector of any kind. "Listen strictly to the user's device/browser locale
+     setting on entry" is therefore the WHOLE rule — the device decides, every
+     entry, and nothing may be latched against it.
 
-  * PRECEDENCE: explicit choice (?lang= link, or a pill tap) > device locale >
-    English. The device read decides a FIRST visit only and is never written to
-    storage, so it can never outlive — or masquerade as — a real choice.
-  * A stale/garbage value under the storage key (anything that is not
-    exactly "en" or "fr") is purged on load so it can never leak French/F
-    CFA onto a fresh English visitor.
-  * The currency still follows the active language: French locks FCFA (and a
-    CFA price comes from the live catalogue row, never as 0 because the FX
-    rate has not landed); English opens in Naira first and the floating pill
-    still switches it.
-  * The currency still follows the active language: French locks FCFA;
-    English opens in Naira first and the floating pill still switches it.
-  * The "Benin/Togo delivery detected - choose your currency" confirm()
-    popup stays removed from the checkout (fares stay silent, in the active
-    currency).
-  * The floating white currency pill (English storefront only) sits pinned
-    above the WhatsApp bubble.
+The rules pinned here (js/i18n.js readStored(), js/store.js, css/style.css,
+app.py _document_lang(), checkout.html):
+
+  * PRECEDENCE: an explicit `?lang=fr|en` on the arriving link (support and
+    WhatsApp broadcast links, QA), remembered for that BROWSING SESSION, then
+    the device/browser locale, then English. The device read is never written
+    to storage, so it cannot masquerade as a choice.
+  * There is NO language control anywhere in the storefront: not in the header,
+    not in the menu, not floating. These tests fail if one comes back.
+  * localStorage is RETIRED as a language store — never read, never written,
+    and any legacy value is purged on load, because with no control on screen a
+    permanent choice could never be undone. A stale/garbage session value is
+    purged too, so it can never leak French / F CFA onto a fresh English
+    visitor.
+  * French means F CFA: the currency follows the language through
+    js/store.js currencyLocked(), and a CFA price comes from the live exchange
+    rate with the catalogue row as fallback — never 0 because the rate has not
+    landed. English opens in Naira first and the floating currency pill still
+    switches it (the pill is a CURRENCY control and is unaffected).
+  * The "Benin/Togo delivery detected - choose your currency" confirm() popup
+    stays removed from the checkout (fares stay silent, in the active currency).
 
 The runtime half boots the real js/i18n.js, js/store.js and js/app.js in a
 stubbed browser: tests/_auto_locale_sim.mjs. The static half is asserted
@@ -101,30 +105,31 @@ def test_device_locale_decides_only_when_nothing_was_chosen():
         "only detectBrowserLang() may touch navigator.language(s)")
 
 
-def test_the_way_back_to_english_exists_and_persists():
-    """The escape hatch is the point of the 2026-10-19 restore.
+def test_no_language_selector_exists_anywhere_in_the_storefront():
+    """Owner directive 2026-10-19 (final): remove the language control.
 
-    Without a visible control, a French-tagged device is stuck in French — the
-    exact defect that made auto-detection get switched off on 2026-09-27 — and
-    it is not enough for the pill to exist: its tap must go through
-    I18N.setLang(), which is what persists the reversal.
+    The pill was added on 2026-10-19 as the escape hatch for device-driven
+    French and withdrawn the same day. What makes its removal safe — and what
+    keeps this from being the 2026-09-27 bug wearing a different hat — is that
+    nothing is persisted from the device any more: the language is re-derived
+    from the browser on every entry, so the shop is never stuck in a language
+    the visitor cannot leave. Pinned in the source, not only in the runtime sim,
+    so a re-added control fails the build rather than shipping.
     """
     store = _read(os.path.join("js", "store.js"))
-    start = store.index('<div class="cur-float lang-float" data-lang-float')
-    pill = store[start:start + 400]
-    assert 'data-lang="en"' in pill and 'data-lang="fr"' in pill, (
-        "the floating language pill must offer both EN and FR")
-    # The shared [data-lang] handler in bindChrome() persists and repaints.
-    binder = store.split("function bindChrome()", 1)[1]
-    lang_handler = binder.split('querySelectorAll("[data-lang]")', 1)[1][:900]
-    assert 'localStorage.setItem("jaura_lang"' in lang_handler, (
-        "tapping the pill must persist the choice")
-    assert 'window.I18N.setLang(next)' in lang_handler, (
-        "tapping the pill must go through I18N.setLang so the shop repaints")
-    # And it stays out of the header/menu, which remain switch-free by owner
-    # request 2026-09-27 (see tests/test_header_layout_lock.py).
-    header = store.split('<header class="header" data-header>', 1)[1].split("</header>", 1)[0]
-    assert "data-lang" not in header, "the header stays free of language switches"
+    assert "data-lang" not in store, (
+        "js/store.js must not mount a language control — the storefront is "
+        "switch-free and the device decides (owner, 2026-10-19)")
+    assert "lang-float" not in store and "lang-switch" not in store, (
+        "no floating/header language widget may come back")
+    css = _read(os.path.join("css", "style.css"))
+    assert "lang-float" not in css, "the retired pill must not keep CSS"
+    i18n = _read(os.path.join("js", "i18n.js"))
+    assert "localStorage.setItem(KEY" not in i18n, (
+        "the language must never be written to the permanent store again")
+    for page in ("index.html", "shop.html", "product.html", "checkout.html"):
+        html = _read(page)
+        assert "data-lang" not in html, f"{page} must not ship a language switch"
 
 
 def test_html_documents_never_carry_a_stale_language_to_the_wrong_visitor():
@@ -139,21 +144,39 @@ def test_html_documents_never_carry_a_stale_language_to_the_wrong_visitor():
         "the language rewrite must only ship alongside a no-store + Vary policy")
 
 
-def test_explicit_choice_is_persisted_and_read_back():
+def test_explicit_choice_is_session_scoped_and_read_back():
+    """A `?lang=` link must survive the next page, and no further.
+
+    Both directions matter. Read back at all, or the French broadcast link
+    flips to English the moment the shopper taps a product (that was the
+    original complaint). Read back FOREVER, and with no control on screen it
+    becomes the one-way door that killed the 2026-09-27 attempt. Hence:
+    sessionStorage plus a SESSION cookie — the same cookie app.py reads for the
+    <html lang> of the first paint, so client and server can never disagree.
+    """
     src = _read(os.path.join("js", "i18n.js"))
-    # setLang() must persist to the existing storage mechanism.
-    set_lang = src.split("function setLang(", 1)[1][:400]
-    assert "persist(value)" in set_lang or "localStorage.setItem(KEY" in set_lang, (
-        "setLang must persist the explicit choice")
-    # readStored() must actually read a previously persisted choice back —
-    # this is the bug: the old build wrote the choice but never read it.
+    persist = src.split("function persist(value)", 1)[1].split("\n  }", 1)[0]
+    assert 'sessionStorage.setItem(KEY, value)' in persist, (
+        "an explicit choice must be remembered for the rest of the session")
+    assert "localStorage.setItem" not in persist, (
+        "the language must not be persisted beyond the session: with no "
+        "language control there is no way to undo a permanent choice")
+    cookie_line = [ln for ln in persist.split("\n") if "document.cookie" in ln]
+    assert cookie_line and all("max-age" not in ln for ln in cookie_line), (
+        "the mirror cookie must be a session cookie, like the storage it mirrors")
+    assert 'jaura_lang=' in persist, (
+        "the cookie app.py/_document_lang() reads must be written here")
+    reader = src.split("function storedChoice()", 1)[1].split("\n  }", 1)[0]
+    assert "sessionStorage.getItem(KEY)" in reader, (
+        "the session choice must be read back — writing it and never reading "
+        "it is the exact 2026-09-27 defect")
+    assert "localStorage.getItem" not in reader, (
+        "storedChoice() must not read the retired permanent key")
     body = src.split("function readStored()", 1)[1].split("\n  }", 1)[0]
-    assert "storedChoice()" in body or "localStorage.getItem(KEY)" in body, (
-        "an explicit stored choice must be honoured on later loads")
-    # the ?lang= URL override remains, and it also persists so the choice
-    # sticks past the single page it was opened on.
-    assert 'get("lang")' in body
-    assert "persist(picked)" in body or "localStorage.setItem(KEY" in body
+    assert "storedChoice()" in body, "a session choice must outrank the device"
+    assert 'get("lang")' in body and "persist(picked)" in body, (
+        "the ?lang= override must be read on the page that carries it and "
+        "carried into the session")
 
 
 def test_stale_locale_storage_is_migrated_away():
@@ -162,7 +185,11 @@ def test_stale_locale_storage_is_migrated_away():
         "a migration guard must clear invalid stored locale values"
     )
     assert "migrateStaleLocale();" in src, "the migration must run on load"
-    guard = src.split("function migrateStaleLocale()", 1)[1][:800]
+    guard = src.split("function migrateStaleLocale()", 1)[1][:900]
+    assert "localStorage.removeItem(KEY)" in guard, (
+        "the RETIRED permanent key must be cleared unconditionally — a legacy "
+        "explicit choice must not outvote the device now that no control exists "
+        "to undo it")
     assert "removeItem(KEY)" in guard, (
         "a value that is not exactly \"en\"/\"fr\" must be purged")
 
