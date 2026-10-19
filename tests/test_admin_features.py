@@ -118,6 +118,10 @@ EXPECTED_ADMIN_ROUTES = {
     ("GET", "/api/admin/sales"), ("GET", "/api/admin/sales.csv"),
     ("GET", "/api/admin/session"), ("POST", "/api/admin/site"),
     ("GET", "/api/admin/stock"), ("PUT", "/api/admin/stock"),
+    # The manual stock locks: reading the ledger, and releasing one product so
+    # the supplier feed is trusted again after the owner restocks by hand.
+    ("GET", "/api/admin/stock-locks"),
+    ("POST", "/api/admin/stock-locks/<pid>/release"),
     ("POST", "/api/admin/sync/repo"), ("GET", "/api/admin/sync/status"),
     ("GET", "/api/admin/mail/status"), ("POST", "/api/admin/mail/test"),
     ("POST", "/api/admin/uploads/category"), ("POST", "/api/admin/uploads/hero"),
@@ -561,6 +565,7 @@ def test_payment_proofs_list_and_delete(admin):
     "/api/admin/analytics", "/api/admin/sales", "/api/admin/most-viewed",
     "/api/admin/audit", "/api/admin/live",
     "/api/admin/sync/status",
+    "/api/admin/stock-locks",
 ])
 def test_reporting_endpoints_answer_for_an_admin(admin, path):
     r = admin.get(path)

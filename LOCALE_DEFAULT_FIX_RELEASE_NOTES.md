@@ -1,4 +1,20 @@
 # Locale-selection / defaulting fix — release notes (2026-09-27)
+> [!IMPORTANT]
+> **Partly superseded on 2026-10-19.** Requirement 1 of this document — "English
+> is the default for every visitor; the device locale is never consulted" — was
+> reversed by owner directive: a visitor whose device reports French now gets the
+> French storefront automatically, with no toggling. Requirements 2 and 3 (an
+> explicit choice is persisted **and read back**, and garbage under `jaura_lang` is
+> migrated away) are what make that safe and are still in force, verbatim.
+>
+> The reason the 2026-09-27 rule existed was never the detection itself: it was
+> that a shopper on a French-language device had no way back to English, because
+> the header/menu switches had just been removed and the stored choice was written
+> but never read. Both halves are fixed now — the floating EN|FR pill persists a
+> deliberate pick through `I18N.setLang()`, and `readStored()` honours it on every
+> later load — so the device decides the *first* visit and nothing afterwards.
+> See `tests/test_auto_locale_rules.py` (rewritten, with the history) and the
+> "Language: explicit choice > device > English" section of `README.md`.
 
 ## The bug
 

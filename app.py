@@ -550,27 +550,87 @@ def create_app():
         if not os.path.isfile(full):
             return None
         resp = send_from_directory(os.path.dirname(full), os.path.basename(full))
+        rel = os.path.relpath(full, ROOT).replace(os.sep, "/")
         # The shared ?v=<digits> token is an immutability promise: that exact
         # URL is only ever handed out for one build of the file, so browsers
         # (and any CDN in front of the dyno) may keep it for a year without
         # revalidating - on a 4G phone that is the difference between a
         # ~5s first paint and an instant repeat visit. Every asset whose
-        # content changes ships a new token instead. Anything else - HTML
-        # pages, sw.js, untokened links - keeps Flask's default no-cache so
-        # a visitor always fetches fresh markup on every navigation.
+        # content changes ships a NEW token instead (tools/asset_version.py
+        # bumps it and refreshes the fingerprint hashes).
+        #
+        # Everything that is NOT such a versioned URL is pinned to
+        # sec.NO_STORE: the HTML documents, the service worker itself, and any
+        # untokened asset link. The homepage used to carry a deliberate
+        # shared-cache window (s-maxage=3600 + stale-if-error=604800) to shave
+        # a cold-start round trip off Google entries; that is exactly what let
+        # a phone render a stale layout with stale prices for hours after a
+        # release, so it is gone (owner directive 2026-10-19). Live prices were
+        # never the problem here - they arrive through the uncached APIs - the
+        # cached SHELL around them was.
         if re.fullmatch(r"\d+", request.args.get("v", "")):
-            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-        elif os.path.relpath(full, ROOT).replace(os.sep, "/") == "index.html":
-            # The homepage is static release markup. Let the browser keep it
-            # briefly and let the public edge serve it for an hour (including
-            # stale-while-revalidate/stale-if-error) so a Google-result click
-            # does not wait on an application round-trip or a cold instance.
-            # Versioned CSS/JS remain immutable and live catalogue/site data
-            # still refresh through their uncached APIs after first paint.
-            resp.headers["Cache-Control"] = (
-                "public, max-age=300, s-maxage=3600, "
-                "stale-while-revalidate=86400, stale-if-error=604800")
+            resp.headers["Cache-Control"] = sec.IMMUTABLE_VERSIONED
+        elif rel.endswith((".html", ".htm")) or rel == "sw.js":
+            sec.force_no_store(resp, vary=rel.endswith((".html", ".htm")))
+            if rel.endswith((".html", ".htm")):
+                _stamp_document_lang(resp)
         return resp
+
+    def _browser_prefers_french():
+        """Parse Accept-Language the way a browser would read its own list.
+
+        Any French tag counts - fr, fr-FR and the regional subtags the shop's
+        market actually reports (fr-BJ, fr-CI, fr-CD, fr-CM, ...) - because the
+        language of the interface is a property of the visitor, not of their
+        country. "en" offered BEFORE a French tag wins, which is exactly how the
+        browser itself picks a page language, and is what keeps a bilingual
+        Lagos phone that lists en-NG first in English.
+        """
+        for part in (request.headers.get("Accept-Language") or "").split(","):
+            tag = part.split(";")[0].strip().lower()
+            if not tag:
+                continue
+            weight = re.search(r"q=([0-9.]+)", part)
+            if weight and float(weight.group(1) or 1) <= 0:
+                continue                       # an explicit q=0 means "never"
+            base = tag.split("-")[0]
+            if base == "fr":
+                return True
+            if base == "en":
+                return False                   # English was offered first
+        return False
+
+    def _document_lang():
+        """The language this visitor's own code will resolve to, server-side.
+
+        Same precedence as js/i18n.js: an explicit stored choice (the cookie it
+        writes) wins over the device locale, and the device locale only speaks
+        for a visitor who has never chosen. Kept in step deliberately - if the
+        two ever disagree, the page flashes from one language to the other.
+        """
+        stored = (request.cookies.get("jaura_lang") or "").strip().lower()
+        if stored in ("en", "fr"):
+            return stored
+        return "fr" if _browser_prefers_french() else "en"
+
+    def _stamp_document_lang(resp):
+        """Set <html lang> on the served page so the FIRST paint is already in
+        the right language, before js/i18n.js runs.
+
+        Only a French decision rewrites anything: an English visitor gets the
+        file byte-for-byte as it ships. A failed rewrite is never allowed to
+        break a page - the markup simply stays as authored.
+        """
+        if _document_lang() != "fr":
+            return
+        try:
+            resp.direct_passthrough = False
+            body = resp.get_data(as_text=True)
+            stamped = re.sub(r'(<html\b[^>]*?\blang=)"[a-zA-Z-]+"', r'\1"fr"', body, count=1)
+            if stamped != body:
+                resp.set_data(stamped)
+        except Exception:
+            return
 
     @app.after_request
     def _compress(resp):
@@ -636,7 +696,7 @@ def create_app():
         body, status = health_checks.health_report()
         resp = jsonify(body)
         resp.status_code = status
-        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        resp.headers["Cache-Control"] = sec.NO_STORE
         return resp
 
     @app.route("/uploads/<path:p>")
@@ -667,7 +727,7 @@ def create_app():
                 if os.path.splitext(full)[1].lower() in (".pdf", ".doc", ".docx"):
                     response.headers["Content-Disposition"] = "attachment"
                 response.headers["Cache-Control"] = (
-                    "no-store, no-cache, must-revalidate" if is_proof
+                    sec.NO_STORE if is_proof
                     else "public, max-age=300, must-revalidate")
                 return response
         # Production uploads are Supabase public HTTPS URLs; the dyno never
@@ -680,7 +740,7 @@ def create_app():
             # object URL - and its own long cache - even after the photo is
             # gone. Bound it here too.
             response.headers["Cache-Control"] = (
-                "no-store, no-cache, must-revalidate" if is_proof
+                sec.NO_STORE if is_proof
                 else "public, max-age=300, must-revalidate")
             return response
         abort(404)

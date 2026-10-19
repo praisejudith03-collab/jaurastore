@@ -1032,20 +1032,35 @@ window.I18N = (() => {
   /* --------------------------------------------------------------
    * Explicit language selection ONLY (owner fix 2026-09-27).
    *
-   * ENGLISH IS THE DEFAULT for every visitor. The interface only becomes
-   * French when the shopper (or a support/QA link) explicitly asks for it -
-   * it is NEVER inferred from the visitor's IP address, geography, browser
-   * region or device locale. A Nigerian/English visitor whose phone or
-   * browser happens to report a French system language must still see
-   * English by default, so navigator.language / navigator.languages is
-   * never consulted to pick the interface.
+   * THE PRECEDENCE (owner directive 2026-10-19, which reverses the
+   * opt-in-only rule of 2026-09-27 — read both, because the reason the old
+   * rule existed is the reason this one is written the way it is):
    *
-   * An explicit choice is made in exactly two ways:
+   *   1. an EXPLICIT choice, in either direction, always wins and is kept;
+   *   2. otherwise the DEVICE locale decides, so a French phone gets the
+   *      French shop (and F CFA) without hunting for a toggle;
+   *   3. otherwise English.
+   *
+   * What actually broke on 2026-09-27 was never the detection - it was that a
+   * shopper whose device happened to report French had NO way back to English:
+   * the header/menu switches had just been removed and the stored choice was
+   * written but never read back. Both halves of that are fixed now (the
+   * floating EN|FR pill in js/store.js persists a deliberate pick through
+   * setLang(), and readStored() honours it on every later visit), so following
+   * the device is safe again: it decides the FIRST visit and nothing after it.
+   *
+   * Geography and IP are still never consulted - no such signal exists in this
+   * app, and a francophone device in Lagos and an anglophone one in Cotonou
+   * are both real customers. The language only ever decides the INTERFACE (and
+   * with it the FCFA lock in js/store.js currencyLocked(), which is the shop's
+   * own rule, not a guess about where the visitor lives).
+   *
+   * An explicit choice is made in exactly three ways:
    *   1. Opening a link with ?lang=fr or ?lang=en (support links, WhatsApp
    *      broadcasts, QA) - the query string always wins for that load AND
    *      is remembered for every later page.
-   *   2. Calling I18N.setLang("fr" | "en") from a language control, dev
-   *      tools, or the e2e harness.
+   *   2. Tapping the floating EN|FR pill, which calls I18N.setLang(...).
+   *   3. Calling I18N.setLang("fr" | "en") from dev tools or the e2e harness.
    *
    * Either way the choice is written to localStorage (mirrored to
    * sessionStorage and a cookie for private-mode browsers) under KEY, and
@@ -1055,9 +1070,11 @@ window.I18N = (() => {
    * French (with CFA).
    * ------------------------------------------------------------ */
   function detectBrowserLang() {
-    // Kept as an optional diagnostic ONLY (e.g. a support script that wants
-    // to know what the device reports). It MUST NOT be used to choose the
-    // default interface language - see the note above.
+    // The device's own language list, in the order the browser reports it.
+    // First entry wins over later ones, exactly as a browser picks a page
+    // language: ["en-NG","fr"] is English, ["fr-BJ","en"] is French. An
+    // unknown language is English - the shop's authored language - rather
+    // than a guess.
     let tags = [];
     try {
       if (typeof navigator !== "undefined") {
@@ -1140,9 +1157,12 @@ window.I18N = (() => {
     } catch (e) {}
     const stored = storedChoice();
     if (stored) return stored;
-    // Fresh visitor, no explicit choice yet: ENGLISH — never inferred from
-    // the device, browser region, IP or geography.
-    return "en";
+    // No URL override and nothing stored, so this visitor has never been
+    // asked: follow the device (owner directive 2026-10-19). Deliberately NOT
+    // persisted — a device locale is an observation, not a choice, so the
+    // moment the shopper changes their phone language the shop follows, and a
+    // tap on the EN|FR pill is what turns into a permanent preference.
+    return detectBrowserLang();
   }
 
   function lang() {

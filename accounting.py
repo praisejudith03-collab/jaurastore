@@ -969,24 +969,90 @@ def batch_transport(batch):
     return amount(fee), "batch"
 
 
+def batch_custom_cost(batch):
+    """The owner's extra, itemised cost for one batch (customs, packaging…).
+
+    Stored in the batch's OWN currency. It is a ledger amount, so a loss-making
+    entry is still just a positive cost; a negative value reads as 0 (a cost can
+    never add money to the batch — a profit correction belongs in
+    ``netProfitOverride`` instead).
+    """
+    if not isinstance(batch, dict):
+        return 0
+    return amount(batch.get("customCost"))
+
+
+def batch_net_profit_override(batch):
+    """The hand-set net profit for one batch, or ``None`` when not overridden.
+
+    The owner's own correction always wins over the calculator: a batch can be
+    re-costed in the app even when the amount entered in Google Sheets has to
+    stand as published. Any integer (including a negative one — a batch that
+    lost money) is honoured; a blank or an unparsable value means "no override".
+    """
+    if not isinstance(batch, dict):
+        return None
+    raw = batch.get("netProfitOverride")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    parsed = decimal_value(raw, None)
+    if parsed is None or not parsed.is_finite() or abs(parsed) > AMOUNT_MAX:
+        return None
+    return int(parsed.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def batch_net_profit(batch):
-    """Batch net profit: revenue - discounts - supplier - transport."""
+    """Batch net profit: revenue - discounts - supplier - transport - custom cost.
+
+    A batch the owner corrected by hand answers with her figure instead, and the
+    override is reported as ``"manual"`` so the desk, the running bank balance
+    and the Sales page all agree about which number is the owner's and which is
+    the calculator's.
+
+    The stored ``totals.netCashProfit`` snapshot is used when it already agrees
+    with the batch's transport mode and its custom cost; when either was edited
+    after the push (the Sales page edits exactly that), the figure is
+    recomputed from the same snapshot numbers so a stale total can never swallow
+    a cost the owner just added.
+    """
+    override = batch_net_profit_override(batch)
+    if override is not None:
+        return override
+    if not isinstance(batch, dict):
+        return 0
     totals = batch.get("totals") if isinstance(batch.get("totals"), dict) else {}
-    transport, mode = batch_transport(batch)
-    if mode == "batch" and amount(totals.get("transportExpense")) != transport:
-        return (amount(totals.get("customerRevenue"))
-                - amount(totals.get("discountsTotal"))
-                - amount(totals.get("supplierCostInCurrency"))
-                - transport)
-    return amount(totals.get("netCashProfit"))
+    transport, _mode = batch_transport(batch)
+    custom = batch_custom_cost(batch)
+    if amount(totals.get("transportExpense")) == transport:
+        net = amount(totals.get("netCashProfit"))
+        if custom and totals.get("customCost") is None:
+            # The snapshot was archived before this cost line existed, so the
+            # stored net has to be reduced by it rather than trusted as-is.
+            net -= custom
+        return net
+    return (amount(totals.get("customerRevenue"))
+            - amount(totals.get("discountsTotal"))
+            - amount(totals.get("supplierCostInCurrency"))
+            - transport - custom)
 
 
-def batch_totals(entries, currency, batch_transport_fee=None):
+def batch_profit_source(batch):
+    """``"manual"`` / ``"batch-fee"`` / ``"per-order"`` for one batch."""
+    if batch_net_profit_override(batch) is not None:
+        return "manual"
+    return batch_transport(batch)[1]
+
+
+def batch_totals(entries, currency, batch_transport_fee=None, custom_cost=None):
     """Currency-safe calculator totals for a single-currency batch.
 
     ``batch_transport_fee`` is the single Batch Transportation Fee for the
     whole batch. When it is ``None`` (the box was left blank) the individual
     per-order transport fees are summed instead.
+
+    ``custom_cost`` is the owner's extra itemised cost for the batch (customs,
+    packaging, a buying trip). It is subtracted from the net exactly like a
+    transport fee, and a blank/None leaves the batch's stored figure alone.
     """
     currency = normalize_currency(currency) or "NGN"
     rows = [row for row in (entries or [])
@@ -1000,7 +1066,10 @@ def batch_totals(entries, currency, batch_transport_fee=None):
         transport = per_order_transport
     else:
         transport = amount(batch_transport_fee)
-    return {
+    custom = 0
+    if custom_cost is not None:
+        custom = amount(custom_cost)
+    totals = {
         "currency": currency,
         "orderCount": len(rows),
         "customerRevenue": revenue,
@@ -1008,8 +1077,14 @@ def batch_totals(entries, currency, batch_transport_fee=None):
         "supplierPayableNgn": supplier_ngn,
         "supplierCostInCurrency": supplier_currency,
         "transportExpense": transport,
-        "netCashProfit": revenue - discounts - supplier_currency - transport,
+        "netCashProfit": revenue - discounts - supplier_currency - transport - custom,
     }
+    if custom:
+        # Only present when the owner logged one, exactly like the batch
+        # transport fee: an absent key means "no extra cost", and a legacy
+        # snapshot written before the field existed stays valid untouched.
+        totals["customCost"] = custom
+    return totals
 
 
 # ------------------------------------------------------- manual expense logger
@@ -1177,6 +1252,11 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
     today = today or _datetime.datetime.now(_datetime.timezone.utc).date()
     start, end = _sheets.period_bounds(period, today=today)
     revenue = discounts = supplier = transport = fees = order_count = 0
+    custom = 0
+    # The difference a hand-set net profit makes against what the calculator
+    # would have said. Summing it keeps the period card honest about an
+    # override without re-deriving every batch's figures a second way.
+    manual_delta = 0
     matching = []
     for batch in batches or []:
         if not isinstance(batch, dict):
@@ -1193,8 +1273,14 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
         # that one figure; a batch without one contributes the sum of its
         # individual per-order transport fees.
         transport += batch_transport(batch)[0]
+        custom += batch_custom_cost(batch)
         fees += amount(batch.get("transferFee"))
         order_count += amount(totals.get("orderCount"))
+        computed = (amount(totals.get("customerRevenue"))
+                    - amount(totals.get("discountsTotal"))
+                    - amount(totals.get("supplierCostInCurrency"))
+                    - batch_transport(batch)[0] - batch_custom_cost(batch))
+        manual_delta += batch_net_profit(batch) - computed
         matching.append(batch)
     for expense in expenses or []:
         if not isinstance(expense, dict):
@@ -1219,8 +1305,11 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
         "discounts": discounts,
         "supplierCosts": supplier,
         "transport": transport,
+        "customCosts": custom,
         "transferFees": fees,
-        "netProfit": revenue - discounts - supplier - transport - fees,
+        "manualAdjustment": manual_delta,
+        "netProfit": (revenue - discounts - supplier - transport - fees
+                      - custom + manual_delta),
         "orderCount": order_count,
         "batchCount": len(matching),
         "batches": matching,
