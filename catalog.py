@@ -14,7 +14,7 @@ Two persistence backends are supported:
   mirrored there. The local override file is still used as a read-through cache
   so a momentarily unavailable Supabase never empties the shop.
 """
-import os, sys, json, re, secrets, datetime, contextlib, hashlib
+import os, sys, json, re, secrets, datetime, contextlib, hashlib, time
 from functools import lru_cache
 from config import Config
 
@@ -932,10 +932,14 @@ def derived_stock_status(product):
     screen, so the database row, the admin view and the shop cannot disagree.
     A row whose EVERY variant is zero is out; a row with any variant left is
     in. A deliberate OFF (stockStatus "out", is_in_stock false) is out even if
-    a stale number travels beside it.
+    a stale number travels beside it - and so is a row under the durable
+    manual out-of-stock lock, whatever a mirror, a seed union or a supplier
+    restock left in its quantity columns.
     """
     p = product if isinstance(product, dict) else {}
     if _explicit_out_of_stock(p):
+        return "out"
+    if is_stock_locked(p.get("id")):
         return "out"
     os_map = p.get("optionStock")
     if isinstance(os_map, dict) and os_map:
@@ -1170,6 +1174,157 @@ def _explicit_out_of_stock(product):
             return True
     return False
 
+
+
+# ------------------------------------------------- manual out-of-stock lock ---
+# "Out of stock" as written by the owner is a DECISION, and a decision has to
+# outlive the number it produced. Until now the only trace of it was
+# ``stock_quantity = 0`` — a number the supplier watchdog is explicitly allowed
+# to raise again the moment a supplier page prints "In stock"
+# (``_apply_stock_rule`` opens an empty shelf to SUPPLIER_IN_STOCK_UNITS). That
+# is the reported bug: a hand-sold-out product came back to "In Stock" by
+# itself, on the next tick, with no admin action at all.
+#
+# The lock is therefore stored OUTSIDE the product row, in one durable
+# growth_settings JSON row (mirrored into the local catalogue file so the
+# file/SQLite backend and the test suite are covered too). Two properties
+# matter:
+#   * the products table has no column for it, so a catalogue upsert can never
+#     drop it - and it needs no schema migration to survive a deploy; and
+#   * only an owner write may clear it. A supplier reading, a mirror pass, a
+#     seed union or a redeploy can never unlock a product.
+_LOCK_CACHE_TTL_SECONDS = 5.0
+_stock_lock_cache = {"at": 0.0, "locks": None}
+
+
+def _stock_lock_file_mirror(data):
+    """The lock map inside a catalogue overrides dict ({} when absent)."""
+    raw = (data or {}).get("stockLocks")
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for pid, meta in raw.items():
+        key = str(pid or "").strip()
+        if not key:
+            continue
+        out[key] = meta if isinstance(meta, dict) else {}
+    return out
+
+
+def manual_stock_locks(refresh=False):
+    """``{product id: {"at", "by", "why"}}`` for every owner-sold-out product.
+
+    The local file mirror and the durable Supabase row are UNIONED, because
+    each covers the other's absence: a fresh install has no Supabase row, and
+    Render wipes the file on every deploy. Never raises - an unreachable
+    database just contributes nothing to the union, which is why the write
+    paths re-read the lock immediately before they restock (see
+    supplier_watchdog._restock_refused) instead of trusting this cache.
+    """
+    now = time.monotonic()
+    cached = _stock_lock_cache.get("locks")
+    if (not refresh and cached is not None
+            and now - float(_stock_lock_cache.get("at") or 0) < _LOCK_CACHE_TTL_SECONDS):
+        return dict(cached)
+    locks = {}
+    try:
+        data, _path = _load_overrides()
+        locks.update(_stock_lock_file_mirror(data))
+    except Exception:
+        pass
+    try:
+        from supabase_store import load_manual_stock_locks
+        durable = load_manual_stock_locks()
+        if isinstance(durable, dict):
+            for pid, meta in durable.items():
+                locks.setdefault(str(pid or "").strip(), meta if isinstance(meta, dict) else {})
+    except Exception:
+        pass
+    locks.pop("", None)
+    _stock_lock_cache["locks"] = dict(locks)
+    _stock_lock_cache["at"] = now
+    return locks
+
+
+def is_stock_locked(product_or_id):
+    """True when the owner switched this product off and has not restocked it."""
+    pid = (str(product_or_id).strip() if isinstance(product_or_id, str)
+           else str((product_or_id or {}).get("id") or "").strip())
+    if not pid:
+        return False
+    return pid in manual_stock_locks()
+
+
+def _write_stock_locks(locks):
+    """Mirror the lock map into the local catalogue file (best effort)."""
+    path = _norm_filename(CATALOG_FILE)
+    with _catalog_lock(path):
+        data, path = _load_overrides()
+        data["stockLocks"] = dict(locks or {})
+        data["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        _write_overrides(data, path)
+    return True
+
+
+def remember_manual_stock_lock(pid, actor="", why=""):
+    """Lock one product out of sale until the owner puts stock back.
+
+    Writes both sides (local file + durable Supabase row) and returns True when
+    at least one confirmed. A lock that could not be persisted anywhere is
+    reported as False so the caller can log it - but the save itself still
+    stands, because the row's quantities were zeroed by the same write.
+    """
+    pid = str(pid or "").strip()
+    if not pid:
+        return False
+    locks = manual_stock_locks(refresh=True)
+    entry = {"at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+             "by": str(actor or "")[:120], "why": str(why or "")[:200]}
+    locks[pid] = entry
+    ok = False
+    try:
+        ok = bool(_write_stock_locks(locks))
+    except Exception as exc:
+        print(f"[catalog] local stock-lock mirror failed: {exc}")
+    try:
+        from supabase_store import add_manual_stock_lock
+        ok = bool(add_manual_stock_lock(pid, actor=actor, why=why)) or ok
+    except Exception as exc:
+        print(f"[catalog] durable stock-lock write failed: {exc}")
+    _stock_lock_cache["locks"] = locks
+    _stock_lock_cache["at"] = time.monotonic()
+    return ok
+
+
+def forget_manual_stock_lock(pid, actor=""):
+    """Clear one lock (only an owner write may call this)."""
+    pid = str(pid or "").strip()
+    if not pid:
+        return False
+    locks = manual_stock_locks(refresh=True)
+    existed = pid in locks
+    locks.pop(pid, None)
+    if not existed:
+        return True
+    ok = False
+    try:
+        ok = bool(_write_stock_locks(locks))
+    except Exception as exc:
+        print(f"[catalog] local stock-lock mirror failed: {exc}")
+    try:
+        from supabase_store import clear_manual_stock_lock
+        ok = bool(clear_manual_stock_lock(pid)) or ok
+    except Exception as exc:
+        print(f"[catalog] durable stock-lock clear failed: {exc}")
+    _stock_lock_cache["locks"] = locks
+    _stock_lock_cache["at"] = time.monotonic()
+    return ok
+
+
+def stock_lock_status(pid):
+    """``(locked, meta)`` for one product id, bypassing nothing but the cache."""
+    meta = manual_stock_locks().get(str(pid or "").strip())
+    return (bool(meta), meta or {})
 
 
 def fold_option_value(value):
@@ -2312,6 +2467,17 @@ def apply_supplier_stock(pid, stock, option_changes=None, actor="supplier-watchd
             except (TypeError, ValueError):
                 return None, "rejected", True
 
+    # ------------------------------------------------------- the owner's lock
+    # A product the admin switched to "Out of stock" by hand is locked: no
+    # supplier reading - exact count, bare "In stock" flag, or a whole
+    # catalogue sweep - may put units back on it. Only saving a positive
+    # quantity (or an explicit "in" availability) through the admin path
+    # clears the lock, and that path is :func:`upsert`, never this one. This
+    # guard lives here rather than only in the watchdog so a CSV import, the
+    # nightly sweep, a mirror repair or a future caller cannot bypass it.
+    if is_stock_locked(pid):
+        return None, "locked-out", True
+
     if _prod_source():
         try:
             from supabase_store import apply_supplier_stock as _sb_apply
@@ -2918,6 +3084,29 @@ def remirror_strays(actor=None):
     return len(strays) if ok else 0
 
 
+def _settle_manual_stock_lock(raw, clean, actor=None):
+    """Record or release the owner's out-of-stock lock after a CONFIRMED save.
+
+    Runs after the write, never before it: a save the database rejected must
+    not quietly lock (or unlock) a product. An explicit availability OFF locks
+    the row; any positive quantity the owner typed unlocks it again. A save
+    that carries no availability opinion at all - a price edit, a photo swap -
+    leaves the lock exactly as it was, which is what keeps "sold out until I
+    say otherwise" true across every other writer in the app.
+    """
+    pid = str((clean or {}).get("id") or "").strip()
+    if not pid:
+        return
+    try:
+        if _explicit_out_of_stock(raw) or _explicit_out_of_stock(clean):
+            remember_manual_stock_lock(pid, actor=actor or "",
+                                       why="admin set Out of stock")
+        elif stock_of(clean) > 0:
+            forget_manual_stock_lock(pid, actor=actor or "")
+    except Exception as exc:
+        print(f"[catalog] stock lock update skipped for {pid}: {exc}")
+
+
 def upsert(product, actor=None):
     """Save (create or edit) one product. Returns (product, action, mirrored).
 
@@ -3003,6 +3192,7 @@ def upsert(product, actor=None):
                     pass
                 # Media fields never use this fast path, so no old upload can
                 # be purged without the normal before/after reference guard.
+                _settle_manual_stock_lock(product, saved_row, actor)
                 _sync_repo_async()
                 return saved_row, "updated", True
             if state == "permanently-removed":
@@ -3040,6 +3230,7 @@ def upsert(product, actor=None):
         clean = row
         if previous:
             _purge_removed_media(previous, clean)
+        _settle_manual_stock_lock(product, clean, actor)
         _sync_repo_async()
         return clean, action, True
 
@@ -3086,6 +3277,7 @@ def upsert(product, actor=None):
             mirrored = True
     if previous and mirrored:
         _purge_removed_media(previous, clean)
+    _settle_manual_stock_lock(product, clean, actor)
     _sync_repo_async()
     return clean, action, mirrored
 
@@ -3259,6 +3451,43 @@ def _purge_local_product_rows(pid):
             pass
 
 
+def _settle_bulk_stock_locks(pairs, actor=None, why="bulk import set Out of stock"):
+    """Apply many ``(raw payload, saved row)`` pairs to the lock map at once.
+
+    A CSV import can carry hundreds of rows, and :func:`remember_manual_stock_lock`
+    writes the map each time - so the bulk path decides every row's lock first
+    and persists the result in ONE write.
+    """
+    locks = manual_stock_locks(refresh=True)
+    changed = False
+    stamp = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    for raw, clean in pairs:
+        pid = str((clean or {}).get("id") or "").strip()
+        if not pid:
+            continue
+        if _explicit_out_of_stock(raw) or _explicit_out_of_stock(clean):
+            if pid not in locks:
+                locks[pid] = {"at": stamp, "by": str(actor or "")[:120], "why": why}
+                changed = True
+        elif stock_of(clean) > 0 and pid in locks:
+            locks.pop(pid, None)
+            changed = True
+    if not changed:
+        return False
+    try:
+        _write_stock_locks(locks)
+    except Exception as exc:
+        print(f"[catalog] local stock-lock mirror failed: {exc}")
+    try:
+        from supabase_store import save_manual_stock_locks
+        save_manual_stock_locks(locks)
+    except Exception as exc:
+        print(f"[catalog] durable stock-lock write failed: {exc}")
+    _stock_lock_cache["locks"] = dict(locks)
+    _stock_lock_cache["at"] = time.monotonic()
+    return True
+
+
 def replace_all(products, actor=None):
     """Replace the whole admin catalogue (bulk / CSV import).
 
@@ -3267,6 +3496,7 @@ def replace_all(products, actor=None):
     file is never written.
     """
     kept, rejected = [], []
+    lock_pairs = []            # (raw payload, saved row) for the lock settle
     live = []
     try:
         live = merged(include_hidden=True)
@@ -3289,12 +3519,17 @@ def replace_all(products, actor=None):
         if clean["slug"]:
             taken.add(clean["slug"])
         kept.append(clean)
+        lock_pairs.append((p, clean))
 
     if _prod_source():
         from supabase_store import replace_all_products
         if not replace_all_products(kept):
             return kept, rejected, False
         _purge_catalog_media_diff(live, kept)
+        # A CSV row that says "out" is an owner decision like any other: it
+        # locks, and a row that arrives with a positive quantity releases the
+        # lock a previous hand-sold-out left behind.
+        _settle_bulk_stock_locks(lock_pairs, actor)
         _sync_repo_async()
         return kept, rejected, True
 
@@ -3307,6 +3542,7 @@ def replace_all(products, actor=None):
 
     _mutate(actor, _apply)
     _purge_catalog_media_diff(live, kept)
+    _settle_bulk_stock_locks(lock_pairs, actor)
     from supabase_store import replace_all_products
     mirrored = replace_all_products(kept)
     _sync_repo_async()

@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=204" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=209" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -4433,17 +4433,35 @@ async function fillSales() {
 /** Save one batch's Batch Transportation Fee from the Sales table.
  *  Blank clears it and the batch falls back to its per-order transport fees. */
 async function saveBatchTransportFee(batchId, rawValue) {
+  await saveBatchLedgerField(batchId, "batchTransportFee", rawValue, "Batch transportation fee saved.");
+}
+
+/**
+ * Edit one archived batch in place: its transport fee, a second itemised cost
+ * ("other costs" — customs, packaging, the buying trip), or a hand-set net
+ * profit that overrides the calculator. Blank clears the field, and a cleared
+ * net profit hands the number back to the arithmetic.
+ */
+async function saveBatchLedgerField(batchId, field, rawValue, okMessage) {
   const value = String(rawValue ?? "").trim();
+  const labels = {
+    batchTransportFee: "transport fee",
+    customCost: "custom cost",
+    netProfitOverride: "net profit override",
+  };
+  const name = labels[field] || field;
   try {
     const d = await window.JA_NET.api("api/admin/accounting/batches/" + encodeURIComponent(batchId), {
       method: "PUT",
-      json: { batchTransportFee: value === "" ? null : Number(value) },
+      json: { [field]: value === "" ? null : Number(value) },
     });
-    if (d && d.ok === false) throw new Error(d.error || "Could not save the transport fee.");
-    JA.toast("Batch transportation fee saved.");
+    if (d && d.ok === false) throw new Error(d.error || `Could not save the ${name}.`);
+    JA.toast(value === "" && field === "netProfitOverride"
+      ? "Net profit reset to the calculated figure."
+      : (okMessage || `${name[0].toUpperCase()}${name.slice(1)} saved.`));
     if (typeof fillSalesInsights === "function") fillSalesInsights();
   } catch (err) {
-    JA.toast(err.message || "Could not save the transport fee.");
+    JA.toast(err.message || `Could not save the ${name}.`);
     if (typeof fillSalesInsights === "function") fillSalesInsights();
   }
 }
@@ -4498,7 +4516,7 @@ async function fillSalesInsights() {
   if (box) {
     const rows = d.batches || [];
     box.innerHTML = rows.length
-      ? tableHTML(["Batch", "Pushed", "Orders", "Revenue", "Discounts", "Supplier", "Transport", "Fee", "Net profit", "Sheet"],
+      ? tableHTML(["Batch", "Pushed", "Orders", "Revenue", "Discounts", "Supplier", "Transport", "Other costs", "Fee", "Net profit", "Sheet"],
           rows.map((b) => `<tr>
             <td><strong>${esc(b.name || b.id)}</strong><br /><small class="muted">${esc(b.currency)}${b.exchangeRate ? ` · rate ${Number(b.exchangeRate)}` : ""}</small></td>
             <td>${esc(String(b.pushedAt || "").slice(0, 10))}</td>
@@ -4513,14 +4531,34 @@ async function fillSalesInsights() {
                      placeholder="${Number(b.perOrderTransport || 0)}" title="Batch transportation fee — blank uses the per-order fees (${esc(JA.money(Number(b.perOrderTransport || 0), b.currency))})" />
               <br /><small class="muted">${b.transportSource === "batch" ? "single batch cost" : "per-order fees"}</small>
             </td>
+            <td>
+              <input type="number" min="0" step="1" inputmode="numeric" class="sales-batch-transport"
+                     data-batch-cost="${esc(b.id)}"
+                     value="${b.customCost === null || b.customCost === undefined ? "" : Number(b.customCost)}"
+                     placeholder="0" title="Other costs for this batch — customs, packaging, a buying trip. Subtracted from net profit in ${esc(b.currency)}." />
+            </td>
             <td>${esc(JA.money(Number(b.transferFee || 0), b.currency))}</td>
-            <td><strong>${esc(JA.money(Number(b.netProfit || 0), b.currency))}</strong></td>
+            <td><strong>${esc(JA.money(Number(b.netProfit || 0), b.currency))}</strong>
+              <input type="number" step="1" inputmode="numeric" class="sales-batch-transport"
+                     data-batch-net="${esc(b.id)}"
+                     value="${b.netProfitOverride === null || b.netProfitOverride === undefined ? "" : Number(b.netProfitOverride)}"
+                     placeholder="auto" title="Your own net profit for this batch. Blank = use the calculated figure." />
+              <br /><small class="muted">${b.profitSource === "manual" ? "your figure" : "calculated"}</small>
+            </td>
             <td>${b.sheet && b.sheet.url ? `<a href="${esc(b.sheet.url)}" target="_blank" rel="noopener">↗ ${esc(b.sheet.tab || "open")}</a>` : "—"}</td>
           </tr>`).join(""))
       : `<p class="empty">No batches pushed in this period yet. Push confirmed orders off the <a href="/admin/accounting">accounting queue</a> and their profit summary appears here.</p>`;
   }
   box?.querySelectorAll("[data-batch-transport]").forEach((input) => {
     input.onchange = () => saveBatchTransportFee(input.dataset.batchTransport, input.value);
+  });
+  // The two other editable batch figures, saved the same way (one PUT per
+  // field, so editing a cost never rewrites the transport fee and vice versa).
+  box?.querySelectorAll("[data-batch-cost]").forEach((input) => {
+    input.onchange = () => saveBatchLedgerField(input.dataset.batchCost, "customCost", input.value, "Batch cost saved.");
+  });
+  box?.querySelectorAll("[data-batch-net]").forEach((input) => {
+    input.onchange = () => saveBatchLedgerField(input.dataset.batchNet, "netProfitOverride", input.value, "Net profit overridden.");
   });
   document.querySelectorAll("[data-sales-cur]").forEach((b) => {
     b.onclick = () => {
@@ -4624,7 +4662,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=204" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=209" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5018,7 +5056,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=204", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=209", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");

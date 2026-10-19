@@ -191,7 +191,10 @@ def test_the_uploads_route_bounds_the_photo_cache_and_never_caches_proofs():
         "exactly how a deleted photo kept showing"
     # BOTH branches (the local file and the production redirect) carry the
     # pair, so a proof is never cached and a photo is never pinned forever.
-    assert route.count('"no-store, no-cache, must-revalidate" if is_proof') == 2, \
+    # The proofs branch now names the shared constant instead of repeating the
+    # directive list, so that both an HTML document and a private upload answer
+    # come from ONE policy string (security.NO_STORE) and cannot drift apart.
+    assert route.count("sec.NO_STORE if is_proof") == 2, \
         "payment proofs are private evidence and must never be cached"
     assert route.count('else "public, max-age=300, must-revalidate"') == 2, \
         "the redirect branch needs the bounded header too"

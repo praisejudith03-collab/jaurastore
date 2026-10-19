@@ -55,6 +55,18 @@ fi
 
 export JA_REQUIRE_BROWSER="$REQUIRE_BROWSER"
 
+# Build asset versioning, checked before the suite: a shipped asset whose bytes
+# changed without a token bump is invisible to every returning phone for a year
+# (the versioned URLs are cached `immutable`). tools/asset_version.py --check
+# catches it in one line; --write fixes it. Kept out of pytest so the failure
+# message is the actionable one, not an assertion diff.
+if [ -x "$PY" ] || command -v "$PY" >/dev/null 2>&1; then
+  if ! "$PY" tools/asset_version.py --check; then
+    echo "ci_check.sh: FAIL (asset fingerprint drift) - run: $PY tools/asset_version.py --write" >&2
+    exit 1
+  fi
+fi
+
 echo "ci_check.sh: interpreter ${PY}"
 echo "ci_check.sh: browser checks $([ "$REQUIRE_BROWSER" = "1" ] && echo required || echo optional)"
 echo "ci_check.sh: python -m pytest tests/ -q -rs --durations=15 --junitxml=pytest-results.xml"

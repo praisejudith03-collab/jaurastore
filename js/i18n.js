@@ -1,6 +1,11 @@
 /* J Aura Store — English / French */
 window.I18N = (() => {
   const KEY = "jaura_lang";
+  /* An explicit `?lang=` choice is remembered for the BROWSING SESSION only
+   * (see the precedence note above readStored()): with no visible language
+   * control anywhere in the storefront, a permanent stored choice would be a
+   * one-way door. The persistent localStorage key is therefore RETIRED, and
+   * migrateStaleLocale() clears it so an old value cannot outlive the device. */
 
   const en = {
     "nav.home": "Home",
@@ -1030,34 +1035,45 @@ window.I18N = (() => {
   const dict = { en, fr };
 
   /* --------------------------------------------------------------
-   * Explicit language selection ONLY (owner fix 2026-09-27).
+   * LANGUAGE = THE VISITOR'S DEVICE (owner directive 2026-10-19, final).
    *
-   * ENGLISH IS THE DEFAULT for every visitor. The interface only becomes
-   * French when the shopper (or a support/QA link) explicitly asks for it -
-   * it is NEVER inferred from the visitor's IP address, geography, browser
-   * region or device locale. A Nigerian/English visitor whose phone or
-   * browser happens to report a French system language must still see
-   * English by default, so navigator.language / navigator.languages is
-   * never consulted to pick the interface.
+   *   1. `?lang=fr` / `?lang=en` on the link that brought them in — a support
+   *      or WhatsApp broadcast link, or the QA/e2e harness. Remembered for
+   *      that BROWSING SESSION so following the link does not flip back to
+   *      English on the next page.
+   *   2. Otherwise the device/browser locale decides, on EVERY entry:
+   *      fr, fr-FR, fr-BJ, fr-CI, … → French storefront;
+   *      en, en-NG, en-US, …        → English;
+   *      anything else              → English, the authored language.
+   *      The list order is the browser's own order, so ["en-NG","fr"] is
+   *      English and ["fr-FR","en"] is French.
+   *   3. There is NO language switch in the interface and NO permanent stored
+   *      choice: the device is the single authority, and changing it changes
+   *      the shop. That is why nothing here writes localStorage any more and
+   *      why migrateStaleLocale() clears the retired key.
    *
-   * An explicit choice is made in exactly two ways:
-   *   1. Opening a link with ?lang=fr or ?lang=en (support links, WhatsApp
-   *      broadcasts, QA) - the query string always wins for that load AND
-   *      is remembered for every later page.
-   *   2. Calling I18N.setLang("fr" | "en") from a language control, dev
-   *      tools, or the e2e harness.
+   * HISTORY, so this is not "fixed" back again by accident: on 2026-09-27 the
+   * device read was switched off because a visitor could not get out of French
+   * (the header/menu toggles had just been removed AND the stored choice was
+   * written but never read back). A floating EN|FR pill was tried on
+   * 2026-10-19 and the owner removed it the same day: the storefront carries no
+   * language control. What makes THIS version safe instead of a repeat of the
+   * bug is that the language is now never latched — a wrong-looking French page
+   * is one browser-language setting away from English, and no stale storage can
+   * keep overriding the device from a previous visit.
    *
-   * Either way the choice is written to localStorage (mirrored to
-   * sessionStorage and a cookie for private-mode browsers) under KEY, and
-   * is read back on every later page load until the shopper explicitly
-   * changes it again - so reopening the shop keeps whatever was chosen, in
-   * both directions: English stays English (with Naira), French stays
-   * French (with CFA).
-   * ------------------------------------------------------------ */
+   * What the language drives: the interface text, the product/category French
+   * fields from the live catalogue, and — through js/store.js currencyLocked()
+   * — F CFA as the display currency at the live exchange rate. Geography and IP
+   * are never consulted: no such signal exists in this app, and a francophone
+   * device in Lagos and an anglophone one in Cotonou are both real customers.
+   * -------------------------------------------------------------- */
   function detectBrowserLang() {
-    // Kept as an optional diagnostic ONLY (e.g. a support script that wants
-    // to know what the device reports). It MUST NOT be used to choose the
-    // default interface language - see the note above.
+    // The device's own language list, in the order the browser reports it.
+    // First entry wins over later ones, exactly as a browser picks a page
+    // language: ["en-NG","fr"] is English, ["fr-BJ","en"] is French. An
+    // unknown language is English - the shop's authored language - rather
+    // than a guess.
     let tags = [];
     try {
       if (typeof navigator !== "undefined") {
@@ -1079,18 +1095,22 @@ window.I18N = (() => {
     return v === "fr" || v === "en" ? v : null;
   }
 
-  /** Anything under KEY that is not exactly "en"/"fr" cannot be a real
-   * explicit choice — this build only ever writes one of those two values —
-   * so it is either corruption or a leftover from a retired feature. It is
-   * purged once, on load, so it can never leak French/CFA onto a fresh
-   * English visitor (owner fix 2026-09-27, requirement: clear/migrate stale
-   * locale storage). A *valid* stored "fr" or "en" is left untouched: it is
-   * the shopper's own earlier explicit choice and must keep being honoured. */
+  /** Retire the permanent language store, validate the session one.
+   *
+   * localStorage: this key used to hold an EXPLICIT, lasting choice made on a
+   * visible control. That control is gone by owner instruction (2026-10-19), so
+   * a valid value left here would override the device with nothing on screen to
+   * undo it — a one-way door. It is therefore cleared outright, valid or not,
+   * and the visitor follows their browser from this load on.
+   *
+   * sessionStorage: only corruption is possible here, because a value is
+   * written solely from `?lang=fr|en` / I18N.setLang(). Anything that is not
+   * exactly "en" or "fr" is purged so it can never leak French / F CFA onto a
+   * fresh English visitor (owner fix 2026-09-27, requirement: clear/migrate
+   * stale locale storage). */
   function migrateStaleLocale() {
-    try {
-      const v = localStorage.getItem(KEY);
-      if (v != null && !validLang(v)) localStorage.removeItem(KEY);
-    } catch (e) {}
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    // sessionStorage: a garbage value here is corruption, not a choice.
     try {
       const v = sessionStorage.getItem(KEY);
       if (v != null && !validLang(v)) sessionStorage.removeItem(KEY);
@@ -1104,16 +1124,16 @@ window.I18N = (() => {
   let sessionOverride = null;
 
   function persist(value) {
-    try { localStorage.setItem(KEY, value); } catch (e) {}
+    // Session scope, deliberately: sessionStorage dies with the tab, and so
+    // does the mirror cookie (no max-age). app.py reads that cookie for the
+    // <html lang> of the first paint, so the server and this file resolve the
+    // SAME way on every load — when either one has a value, the other must
+    // have the same value, or the page flashes from one language to the other.
     try { sessionStorage.setItem(KEY, value); } catch (e) {}
-    try { document.cookie = "jaura_lang=" + value + ";path=/;max-age=31536000;SameSite=Lax"; } catch (e) {}
+    try { document.cookie = "jaura_lang=" + value + ";path=/;SameSite=Lax"; } catch (e) {}
   }
 
   function storedChoice() {
-    try {
-      const v = validLang(localStorage.getItem(KEY));
-      if (v) return v;
-    } catch (e) {}
     try {
       const v = validLang(sessionStorage.getItem(KEY));
       if (v) return v;
@@ -1123,26 +1143,29 @@ window.I18N = (() => {
 
   function readStored() {
     // lang()/t() are called many times per render (every translated string
-    // on the page asks), so once this load has already resolved a choice -
-    // from the URL or from storage - answer from that cached value instead
-    // of re-parsing the URL and re-writing localStorage/sessionStorage/the
-    // cookie on every single call. That repeated I/O was pure waste, and on
-    // a slow device it could noticeably delay whatever runs after the first
-    // batch of translations (e.g. a checkout page's gateway selection).
+    // on the page asks), so once this load has already resolved a language -
+    // from the URL or from this session - answer from that cached value instead
+    // of re-parsing the URL and re-writing sessionStorage/the cookie on every
+    // single call. That repeated I/O was pure waste, and on a slow device it
+    // could noticeably delay whatever runs after the first batch of
+    // translations (e.g. a checkout page's gateway selection).
     if (sessionOverride) return sessionOverride;
     try {
       const picked = validLang(new URLSearchParams(location.search).get("lang"));
       if (picked) {
         sessionOverride = picked;
-        persist(picked);                // a deliberate link is a real choice
+        persist(picked);                // for the rest of THIS browsing session
         return picked;
       }
     } catch (e) {}
     const stored = storedChoice();
     if (stored) return stored;
-    // Fresh visitor, no explicit choice yet: ENGLISH — never inferred from
-    // the device, browser region, IP or geography.
-    return "en";
+    // Nothing asked for a language on the way in: the device decides, on this
+    // entry and on every entry (owner directive 2026-10-19). Deliberately NOT
+    // persisted — a device locale is an observation, not a choice, so changing
+    // the phone's language changes the shop immediately and nothing can latch
+    // a visitor into a language they cannot switch out of.
+    return detectBrowserLang();
   }
 
   function lang() {

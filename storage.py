@@ -308,6 +308,64 @@ def optimize_image_bytes(data: bytes, ext: str) -> tuple:
     return out, out_ext
 
 
+# Formats an <img> in a mainstream browser can actually paint. HEIC/HEIF is
+# deliberately NOT one of them: Safari renders it, Chrome and Firefox on
+# desktop and Android do not, so an iPhone photo stored as HEIC is precisely
+# the "upload said OK and the category card shows a broken icon" report.
+BROWSER_IMAGE_EXT = ("jpg", "jpeg", "png", "webp", "gif", "avif")
+HEIC_EXT = ("heic", "heif", "heics", "heif-sequence")
+HEIC_CONVERTED = "jpg"
+
+
+def ensure_browser_displayable(data: bytes, ext: str) -> tuple:
+    """``(ok, message, data, ext)`` - only ever store bytes a browser can paint.
+
+    Uploads are re-identified from their bytes, so an iPhone photo arrives here
+    as a real HEIC: valid, decodable by Pillow, and invisible to every non-Safari
+    shopper. A convertible one is rewritten as a progressive JPEG (and then
+    downscaled by :func:`optimize_image_bytes` like any other photo); one that
+    cannot be converted is refused with the reason, instead of being stored and
+    showing a broken-image icon on the shop forever.
+
+    A format already on the browser allowlist is never rejected on a decode
+    failure: a truncated but recognisable JPEG still paints in a browser, and
+    refusing it would block a photo the shop can display.
+    """
+    k = (ext or "").lower().lstrip(".")
+    if k in BROWSER_IMAGE_EXT:
+        return True, "", data, ext
+    if k not in HEIC_EXT:
+        # a document, a video, or anything else this slot was told to accept
+        return True, "", data, ext
+    try:
+        from PIL import Image, ImageOps
+    except Exception:
+        return False, ("That is a HEIC/HEIF camera image. This shop cannot "
+                       "convert it on the server (Pillow is unavailable), so "
+                       "shoppers on Chrome, Firefox and Android would see a "
+                       "broken picture. Export it as JPG or PNG and upload "
+                       "again."), data, ext
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img.load()
+            img = ImageOps.exif_transpose(img)
+            if img.mode in ("RGBA", "LA", "P"):
+                img = img.convert("RGBA") if "transparency" in img.info else img.convert("RGB")
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=OPTIMIZE_JPEG_QUALITY,
+                     optimize=True, progressive=True)
+            out = buf.getvalue()
+    except Exception:
+        out = b""
+    if not out:
+        return False, ("That is a HEIC/HEIF image, which most browsers cannot "
+                       "display. Open it, save it as a JPG or PNG, and upload "
+                       "that instead."), data, ext
+    return True, "", out, HEIC_CONVERTED
+
+
 # The Cache-Control a PUBLIC uploaded photo is stored and served with. Short
 # and revalidating on purpose: a deleted photo must stop showing (the ghost
 # report), while a browsing session still gets its picture from the cache.
@@ -371,6 +429,9 @@ def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf:
     """
     ok, msg, ext = validate_upload(data, filename, allow_pdf=allow_pdf,
                                    max_bytes=max_bytes, kind="media")
+    if not ok:
+        return False, msg, ""
+    ok, msg, data, ext = ensure_browser_displayable(data, ext)
     if not ok:
         return False, msg, ""
     if kind_for(ext) == "image" and not _is_sensitive(folder):
@@ -481,6 +542,16 @@ def store_thumbnail_bytes(thumb: bytes, key: str) -> str:
                                      PUBLIC_MEDIA_CACHE_CONTROL)
             if ok:
                 return url
+        if Config.UPLOAD_MODE in ("supabase", "s3") and Config.ENV != "testing":
+            # The bucket refused the companion. It must NOT be parked on the
+            # dyno's disk instead: Render's free tier wipes /tmp on every
+            # deploy, so a /uploads/<key> URL handed out here is a photo that
+            # silently breaks the next time the shop ships. No companion is a
+            # cosmetic loss (the original object still serves); a dead URL is
+            # the broken-image report. Fail the companion, keep the photo.
+            print("[thumb] companion skipped: cloud storage unavailable, "
+                  "not written to the ephemeral disk")
+            return ""
         _write_local(companion, thumb)
         return "/uploads/" + companion
     except Exception as exc:
@@ -585,9 +656,23 @@ def save_asset(data: bytes, folder: str = "misc", filename: str = "", max_bytes:
     ok, msg, ext = validate_asset(data, filename, max_bytes=max_bytes)
     if not ok:
         return False, msg, ""
+    # A category cover is the shop's front door: a HEIC an iPhone happily
+    # uploaded would paint a broken icon on every category card, so it is
+    # converted here or the upload fails with the reason.
+    ok, msg, data, ext = ensure_browser_displayable(data, ext)
+    if not ok:
+        return False, msg, ""
     if kind_for(ext) == "image" and not _is_sensitive(folder):
         data, ext = optimize_image_bytes(data, ext)
-    return _save(data, folder, ext)
+    ok, msg, url = _save(data, folder, ext)
+    if ok and kind_for(ext) == "image" and not _is_sensitive(folder):
+        # Category covers are shown at ~300px on every phone; they get the same
+        # .400w.webp companion a product photo gets, queued after the response.
+        try:
+            enqueue_thumbnail(url)
+        except Exception:                              # pragma: no cover
+            pass
+    return ok, msg, url
 
 
 def save_video(data: bytes, folder: str = "videos", filename: str = ""):

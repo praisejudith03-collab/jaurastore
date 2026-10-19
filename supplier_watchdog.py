@@ -790,6 +790,43 @@ def _option_page_row(labels: List[str], rows: List[Dict[str, Any]],
     return rows[0]
 
 
+def _page_availability_row(text: str, product_name: str) -> Optional[Dict[str, Any]]:
+    """A single product-level availability reading for a page with no variants.
+
+    This closes the half of the owner's complaint the parser used to miss: most
+    supplier sites carry no JSON-LD and no data-attributes, and the plain-text
+    scanner only ever searched around Jaura VARIANT labels. A product with no
+    variants therefore had nothing to search for, the tick reported "no supplier
+    stock could be read", and a sold-out item stayed "In Stock" on Jaurastore
+    forever.
+
+    Deliberately one-directional and strict, because the whole page is being
+    read at once: it only ever reports SOLD OUT, and only when the page states
+    it and nowhere contradicts it with a live "add to cart"/"in stock" for
+    something else. A restock always needs a real per-product reading.
+    """
+    if not text:
+        return None
+    plain = html.unescape(re.sub(r"<script[\s\S]*?</script>", " ",
+                                 str(text), flags=re.I))
+    plain = html.unescape(re.sub(r"<style[\s\S]*?</style>", " ", plain, flags=re.I))
+    plain = re.sub(r"<[^>]+>", " ", plain)
+    plain = re.sub(r"\s+", " ", plain).strip()
+    if not plain:
+        return None
+    lowered = plain.lower()
+    has_out = any(term in lowered for term in _OUT_TERMS)
+    has_in = any(term in lowered for term in _IN_TERMS)
+    if not has_out or has_in:
+        return None
+    name = str(product_name or "").strip()
+    if name and name.lower() not in lowered:
+        # The sold-out words must belong to a page that mentions this product
+        # at all; otherwise a category or basket page is being read.
+        return None
+    return {"label": name or "product", "qty": 0, "source": "page", "flag": False}
+
+
 def _fetch_rows(product: Dict[str, Any], url: str, labels: List[str],
                 warnings: List[Dict[str, Any]], scope: str) -> List[Dict[str, Any]]:
     try:
@@ -816,6 +853,8 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog",
     pid = str(p.get("id") or "").strip()
     if not pid:
         return False, warnings
+    if _restock_refused(p, warnings):
+        return False, warnings
     allowed = None if allowed_urls is None else set(allowed_urls)
     all_urls = product_supplier_urls(p)
     selected_urls = [url for url in all_urls if allowed is None or url in allowed]
@@ -833,8 +872,26 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog",
         if not main_urls:
             return False, warnings
         supplier_rows: List[Dict[str, Any]] = []
+        # A variant-free product has no option labels to search a page for, so
+        # the plain-text scanner used to find nothing at all and a sold-out
+        # supplier page left the shop showing "In Stock". Search around the
+        # product's own name, then fall back to one page-level reading.
+        name_labels = [str(p.get("name") or "").strip()]
+        if labels:
+            name_labels = list(labels) + name_labels
         for url in main_urls[:4]:
-            supplier_rows.extend(_fetch_rows(p, url, labels, warnings, "supplier"))
+            supplier_rows.extend(_fetch_rows(p, url, [x for x in name_labels if x],
+                                             warnings, "supplier"))
+        if not supplier_rows:
+            for url in main_urls[:4]:
+                try:
+                    page = fetch_url(url)
+                except Exception:
+                    page = ""
+                row = _page_availability_row(page, p.get("name") or "")
+                if row is not None:
+                    supplier_rows.append(row)
+                    break
         if not supplier_rows:
             warnings.append(_warning(p, "supplier_no_variants", "No supplier stock could be read; existing stock was left unchanged."))
             return False, warnings
@@ -1054,6 +1111,12 @@ def _save_synced(p: Dict[str, Any], row: Dict[str, Any], actor: str,
                                      "The product is on the never-re-create list. "
                                      "Nothing was written."))
             return False, warnings
+        if action == "locked-out":
+            # The owner switched it to Out of stock after this supplier page was
+            # fetched (or the store lock is simply in force): catalog refused the
+            # restock and nothing was written. A deliberate skip, not a failure.
+            _restock_refused(p, warnings)
+            return False, warnings
         if not saved or mirrored is False:
             try:
                 if pid in catalog_mod.deleted_product_ids():
@@ -1206,13 +1269,49 @@ def _watch_prices(p: Dict[str, Any], observed: Dict[str, Optional[float]],
     _save_price_map()
 
 
+def is_locked_out(product: Dict[str, Any]) -> bool:
+    """True when the owner hand-sold this product out (a durable lock).
+
+    The lock lives outside the product row (see catalog.manual_stock_locks)
+    precisely so a catalogue write cannot drop it. Read failures return False
+    here - an unreadable lock store must never look like "everything is
+    locked" and freeze the whole sweep - but the WRITE path (see
+    catalog.apply_supplier_stock) re-checks and fails closed, so the shop can
+    still never restock a locked product on a blip.
+    """
+    pid = str((product or {}).get("id") or "").strip()
+    if not pid:
+        return False
+    try:
+        return bool(catalog_mod.is_stock_locked(pid))
+    except Exception:
+        return False
+
+
+def _restock_refused(product: Dict[str, Any], warnings: List[Dict[str, Any]]) -> bool:
+    """Record "the owner locked this one" and stop. True when it stopped."""
+    if not is_locked_out(product):
+        return False
+    warnings.append(_warning(
+        product, "manual_stock_lock",
+        "This product is switched to Out of stock by hand, so supplier stock "
+        "was NOT mirrored onto it. Put a quantity back in the product editor to "
+        "release the lock."))
+    return True
+
+
 def _active_supplier_urls(product: Dict[str, Any]) -> List[str]:
     """Supplier links that can affect currently sellable stock.
 
     Removed option values and their leftover URL-map entries are excluded so
     stale imports can neither consume the link budget nor restore a variant.
+    A product the owner locked out is excluded too: no reading of it may raise
+    its stock, so fetching it would only burn one of the two links a tick may
+    spend (the tick still reports it, see "locked" in the summary).
     """
     p = product or {}
+    if is_locked_out(p):
+        return []
     main = main_supplier_urls(p)
     keys = _stock_keys(p, variant_labels(p))
     if not keys:
@@ -1233,13 +1332,13 @@ def _run_scheduled_batch(limit: int, min_interval_seconds: int,
     global _last_summary
     if not enabled():
         _last_summary = {**_last_summary, "at": _now(), "checked": 0,
-                         "links": 0, "updated": 0, "warnings": 0}
+                         "links": 0, "updated": 0, "warnings": 0, "locked": 0}
         return dict(_last_summary)
     try:
         products = catalog_mod.merged(include_hidden=True) or []
     except Exception as exc:
         _last_summary = {"at": _now(), "checked": 0, "links": 0,
-                         "updated": 0, "warnings": 1,
+                         "updated": 0, "warnings": 1, "locked": 0,
                          "lastError": str(exc)[:200]}
         return dict(_last_summary)
     try:
@@ -1295,6 +1394,11 @@ def _run_scheduled_batch(limit: int, min_interval_seconds: int,
             break
 
     checked = updated = 0
+    locked = sum(1 for row in products
+                 if row and str(row.get("id") or "").strip()
+                 and str(row.get("id") or "").strip() not in dead_ids
+                 and _active_supplier_urls(row) == []
+                 and is_locked_out(row))
     warnings: List[Dict[str, Any]] = []
     if selected_set:
         # A URL shared by several products is fetched once (fetch_url's cache)
@@ -1319,6 +1423,7 @@ def _run_scheduled_batch(limit: int, min_interval_seconds: int,
         "links": len(selected_urls),
         "updated": updated,
         "warnings": len(warnings),
+        "locked": locked,
         "lastError": "",
     }
     if logger and (checked or selected_urls or warnings):
