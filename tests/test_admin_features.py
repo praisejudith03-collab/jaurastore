@@ -47,6 +47,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("GET", "/api/admin/accounting/google/connect"),
     ("GET", "/api/admin/accounting/google/callback"),
     ("GET", "/api/admin/accounting/google/verify"),
+    ("GET", "/api/admin/accounting/google/ledger/<currency>"),
     ("PATCH", "/api/admin/accounting/orders/<oid>"),
     ("DELETE", "/api/admin/accounting/orders/<oid>"),
     ("POST", "/api/admin/accounting/orders/<oid>/restore"),
@@ -619,6 +620,35 @@ def test_video_upload_endpoint_rejects_an_oversize_body(admin):
     body = r.get_json()
     if r.status_code == 200 and body.get("ok"):
         assert body.get("url"), body
+
+
+@pytest.mark.parametrize("path,storage_method,filename,payload", [
+    ("/api/admin/uploads/image", "save_image", "photo.png", "png"),
+    ("/api/admin/uploads/product", "save_image", "product.png", "png"),
+    ("/api/admin/uploads/video", "save_video", "hero.mp4", "mp4"),
+    ("/api/admin/uploads/category", "save_asset", "category.png", "png"),
+    ("/api/admin/uploads/hero", "save_asset", "hero.png", "png"),
+])
+def test_admin_media_upload_surfaces_cloud_storage_failure(
+        admin, monkeypatch, path, storage_method, filename, payload):
+    """A valid upload must fail closed when its configured cloud write fails."""
+    import api as api_module
+
+    def fail_store(*_args, **_kwargs):
+        return False, "Cloud storage is temporarily unavailable.", ""
+
+    monkeypatch.setattr(api_module.storage, storage_method, fail_store)
+    data = (_png_bytes() if payload == "png"
+            else b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 300)
+    response = admin.post(
+        path, data={"file": (io.BytesIO(data), filename)},
+        content_type="multipart/form-data")
+
+    assert response.status_code == 503, response.data
+    body = response.get_json()
+    assert body["ok"] is False
+    assert "storage" in body["error"].lower()
+    assert not body.get("url")
 
 
 # ===========================================================================

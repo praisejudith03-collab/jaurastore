@@ -53,8 +53,10 @@ dashboard) together with the Supabase pair above. The bucket defaults to
 * payment receipts and proofs → **signed URL** (admin-only, never publicly
   guessable); the admin receipts view refreshes them on the fly, and the
   upload still works even after the 7-day Supabase signed-URL cap
-* if the bucket is unreachable the upload falls back to the local disk, so a
-  payment receipt is never lost — `/uploads/…` keeps serving those files
+* production uploads fail closed if cloud storage is unavailable; they never
+  report success for a file written only to an ephemeral instance disk. In
+  tests/development only, the local backend remains available as a compatibility
+  path. Retry a failed production upload after Storage recovers.
 
 `/sitemap.xml` is generated on every request from the live category table and
 product catalogue (the old committed `sitemap.xml` was deleted — a snapshot
@@ -145,6 +147,9 @@ needs each Render service's deploy hook in `RENDER_DEPLOY_HOOK_STAGING` /
 `RENDER_DEPLOY_HOOK_PRODUCTION`). CI runs the tests and a broken-link check on
 every push and pull request.
 
-The database and uploaded proofs are files on disk. On hosts with an ephemeral
-filesystem, mount a persistent disk at `data/` (see `render.yaml`) or set
-`UPLOAD_MODE=s3` — otherwise they reset on each deploy.
+The database is restored from Supabase; uploaded product/category/site media
+and payment proofs live in the configured cloud Storage bucket. For production
+on an ephemeral host, set `UPLOAD_MODE=supabase` (Render does this in
+`render.yaml`) or configure a durable S3-compatible backend. Production cloud
+write failures are surfaced to the Admin UI rather than falling back to a disk
+that will disappear on deploy.

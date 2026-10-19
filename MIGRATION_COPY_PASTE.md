@@ -53,7 +53,7 @@ select table_name
 
 Creates `public.products` (canonical `id text` primary key) and repairs any older hand-built table add-only.
 
-Copy the **whole block** into one new query (109 lines). Raw link once this is merged: https://github.com/praisejudith03-collab/jaurastore/raw/main/schema_sections/01_products.sql
+Copy the **whole block** into one new query (111 lines). Raw link once this is merged: https://github.com/praisejudith03-collab/jaurastore/raw/main/schema_sections/01_products.sql
 
 ```sql
 -- Jaura Store Supabase schema (run once in the SQL editor; idempotent).
@@ -61,7 +61,7 @@ Copy the **whole block** into one new query (109 lines). Raw link once this is m
 
 -- SECTION: products
 -- ------------------------------------------------------------ products
--- Canonical columns first; legacy aliases (image, stock) ride along.
+-- Canonical columns with legacy image/stock aliases.
 -- camelCase MUST be quoted or Postgres folds it to lowercase (PGRST204).
 create table if not exists products (
   id               text primary key,
@@ -82,6 +82,7 @@ create table if not exists products (
   description      text,
   stock            integer default 0,
   stock_quantity   integer not null default 0,
+  "manualStockLock" boolean not null default false,
   badge            text,
   featured         boolean default false,
   online           boolean default true,
@@ -155,6 +156,7 @@ alter table products add column if not exists image            text;
 alter table products add column if not exists image_url        text;
 alter table products add column if not exists description      text;
 alter table products add column if not exists stock_quantity   integer not null default 0;
+alter table products add column if not exists "manualStockLock" boolean not null default false;
 alter table products add column if not exists "supplierId" text not null default '';
 alter table products add column if not exists "supplierSku" text not null default '';
 -- Variant supplier costing + the Trash Bin soft-delete flag.
@@ -171,7 +173,7 @@ alter table products add column if not exists is_deleted boolean not null defaul
 
 Products-only repair: `legacyId`, `image_url`, `stock_quantity` and the non-negative stock check.
 
-Copy the **whole block** into one new query (97 lines). Raw link once this is merged: https://github.com/praisejudith03-collab/jaurastore/raw/main/schema_sections/09_product_compatibility.sql
+Copy the **whole block** into one new query (104 lines). Raw link once this is merged: https://github.com/praisejudith03-collab/jaurastore/raw/main/schema_sections/09_product_compatibility.sql
 
 ```sql
 -- SECTION: product_compatibility
@@ -187,6 +189,8 @@ create unique index if not exists products_legacy_id_key
 
 alter table products add column if not exists image_url text;
 alter table products add column if not exists stock_quantity integer not null default 0;
+-- Persist the owner-controlled availability override; supplier RPCs honor it.
+alter table products add column if not exists "manualStockLock" boolean not null default false;
 do $$ begin
   alter table products add constraint products_stock_nonnegative check (stock_quantity >= 0) not valid;
 exception when duplicate_object then null;
@@ -197,7 +201,7 @@ create or replace function sync_supplier_stock(p_id text,p_stock integer,
  p_option_snapshot_keys jsonb)
 returns boolean language plpgsql security definer set search_path=public,pg_temp as $$
 declare current_options jsonb; product_options jsonb; merged_options jsonb; safe_changes jsonb;
- total_stock numeric;
+ total_stock numeric; manual_stock_locked boolean;
 begin
  if p_id is null or btrim(p_id)='' or p_stock is null or p_stock<0 or p_stock>10000000 then
   return false;
@@ -206,9 +210,14 @@ begin
   return false;
  end if;
  perform pg_advisory_xact_lock(hashtextextended(p_id,0));
- select coalesce("optionStock",'{}'::jsonb),coalesce(options,'null'::jsonb)
-  into current_options,product_options from products where id=p_id for update;
+ select coalesce("optionStock",'{}'::jsonb),coalesce(options,'null'::jsonb),
+  coalesce("manualStockLock",false)
+  into current_options,product_options,manual_stock_locked
+  from products where id=p_id for update;
  if not found then return false; end if;
+ -- An admin's durable out-of-stock override always wins over a supplier
+ -- observation, including restocks. Return success for this intentional no-op.
+ if manual_stock_locked then return true; end if;
  if p_option_stock_changes is null then
   if current_options<>'{}'::jsonb or
     product_options not in ('null'::jsonb,'[]'::jsonb,'{}'::jsonb)

@@ -481,6 +481,11 @@ def store_thumbnail_bytes(thumb: bytes, key: str) -> str:
                                      PUBLIC_MEDIA_CACHE_CONTROL)
             if ok:
                 return url
+        if Config.ENV != "testing":
+            # A thumbnail is optional, but it must follow the same durable
+            # backend as its source. Never let a failed cloud write quietly
+            # create a restart-bound local copy in production.
+            return ""
         _write_local(companion, thumb)
         return "/uploads/" + companion
     except Exception as exc:
@@ -1029,12 +1034,16 @@ def _live_category_rows():
         import supabase_store
         if supabase_store.enabled():
             # The mirror is authoritative in production, and the disk copy can
-            # be older than a cover the admin set after the last deploy.
-            for source in (supabase_store.load_categories(),
-                           supabase_store.load_categories_table()):
-                if source:
-                    rows.extend(r for r in source if isinstance(r, dict))
-                    readable = True
+            # be older than a cover the admin set after the last deploy. Both
+            # remote reads must succeed: a missing setting is valid, but a read
+            # failure is unknown and must keep the candidate file in storage.
+            table_rows = supabase_store.load_categories_table()
+            details_ok, _details_found, details = supabase_store.load_categories_state()
+            if table_rows is None or not details_ok:
+                return None
+            rows.extend(r for r in (details or []) if isinstance(r, dict))
+            rows.extend(r for r in (table_rows or []) if isinstance(r, dict))
+            readable = True
     except Exception:
         return None
     return rows if readable else []

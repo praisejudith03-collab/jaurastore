@@ -1,13 +1,12 @@
 /* Staged dual-currency accounting desk.
  *
- * The desk is a STAGING queue: confirmed orders land here as itemized rows
- * (customer, items, quantities, selling price, editable supplier link +
- * unit supplier price + discount + per-order transport). Every edit saves
- * itself and the Net Profit recalculates instantly:
+ * The desk is a STAGING queue: confirmed orders land here as one line per
+ * ordered product (customer, item, quantity, line selling price, editable
+ * supplier URL + line cost, order discount, and per-order transport). Every
+ * edit saves itself and the Net Profit recalculates instantly:
  *
- *   Net Profit = Selling Price - Applied Discounts - Total Supplier Cost
+ *   Net Profit = Sum of product sales - Applied Discounts - Supplier Costs
  *                - Delivery / Transport Fee
- *   Total Supplier Cost = Unit Supplier Price x Quantity
  *
  * The Starting Profit / Opening Balance input box at the top is added once to
  * the running bank balance, so each new batch's net profit accumulates on top
@@ -29,8 +28,10 @@
     email: "",
     currency: "NGN",
     entries: [],
+    invalidCurrencyOrders: [],
     expenses: [],
-    settings: { startingBalanceNgn: 0, startingBalanceCfa: 0, referenceSpreadsheetId: "" },
+    settings: { startingBalanceNgn: 0, startingBalanceCfa: 0,
+                referenceSpreadsheetId: "1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE" },
     balances: { NGN: null, CFA: null },
     batches: [],
     google: { configured: false, connected: false, ledgers: {} },
@@ -90,19 +91,43 @@
     const discount = Number(entry.discount || 0);
     const supplier = entrySupplierTotal(entry);
     const transport = Number(entry.deliveryExpense || 0);
-    const netProfit = sale - discount - supplier - transport;
-    return { sale, discount, supplier, transport, netProfit,
+    const calculatedProfit = sale - discount - supplier - transport;
+    const profitOverrideActive = entry.profitOverride !== null
+      && entry.profitOverride !== undefined && entry.profitOverride !== "";
+    const profitOverride = profitOverrideActive ? Number(entry.profitOverride) : null;
+    const netProfit = profitOverrideActive && Number.isFinite(profitOverride)
+      ? profitOverride : calculatedProfit;
+    return { sale, discount, supplier, transport, calculatedProfit,
+             profitOverride, profitOverrideActive, netProfit,
              netCashProfit: netProfit };
   }
 
-  function rowFigures(row, entry) {
+  function orderRowsFor(id) {
+    if (typeof root === "undefined" || !root || !root.querySelectorAll) return [];
+    return [...root.querySelectorAll(".aa-stage-row")]
+      .filter((row) => String(row.dataset.id) === String(id));
+  }
+
+  function rowFigures(rowOrRows, entry) {
     const currency = entry.currency || state.currency;
     const lockedRate = Number(entry.exchangeRate || state.currentExchangeRate || 0);
+    const rows = Array.isArray(rowOrRows) ? rowOrRows
+      : (rowOrRows && rowOrRows.dataset
+        ? (orderRowsFor(rowOrRows.dataset.id).length
+          ? orderRowsFor(rowOrRows.dataset.id) : [rowOrRows])
+        : (rowOrRows ? [rowOrRows] : []));
+    const findInput = (selector) => {
+      for (const row of rows) {
+        const input = row && row.querySelector && row.querySelector(selector);
+        if (input) return input;
+      }
+      return null;
+    };
     const field = (name, fallback, lineIndex = null) => {
       const selector = lineIndex == null
         ? `[data-stage-edit="${name}"]`
         : `[data-stage-edit="${name}"][data-line-index="${lineIndex}"]`;
-      const input = row && row.querySelector(selector);
+      const input = findInput(selector);
       if (!input || input.value === "") return Number(fallback || 0);
       const value = Number(input.value);
       return Number.isFinite(value) ? value : Number(fallback || 0);
@@ -110,13 +135,12 @@
 
     const lines = Array.isArray(entry.lineItems) ? entry.lineItems : [];
     const costChanged = lines.some((line, index) => {
-      const input = row && row.querySelector(
+      const input = findInput(
         `[data-stage-edit="supplierCostNgn"][data-line-index="${index}"]`);
       return input && input.value !== ""
         && Number(input.value) !== Number(line.supplierCostNgn || 0);
     });
-    const transportInput = row && row.querySelector(
-      '[data-stage-edit="deliveryExpense"]');
+    const transportInput = findInput('[data-stage-edit="deliveryExpense"]');
     const transportChanged = transportInput && transportInput.value !== ""
       && Number(transportInput.value) !== Number(entry.deliveryExpenseNgn || 0);
     const rate = currency === "CFA" && (costChanged || transportChanged)
@@ -132,8 +156,7 @@
                supplier: currency === "CFA" ? ngnCostToCfa(lineCost, rate) : lineCost };
     });
 
-    // Older DOM fixtures and legacy snapshots can still have a single
-    // order-level cost control until the queue refreshes into itemized rows.
+    // Older snapshots can still have one order-level control instead of lines.
     if (!lines.length) {
       const unit = field("supplierUnitPriceNgn", entry.supplierUnitPriceNgn);
       const qty = field("supplierQty", entry.supplierQty || entry.itemQuantity) || 1;
@@ -142,13 +165,31 @@
     }
     const supplier = currency === "CFA" ? ngnCostToCfa(totalNgn, rate) : totalNgn;
     const discount = field("discount", entry.discount);
-    const transportNgn = field("deliveryExpense", entry.deliveryExpenseNgn,
-                               null);
+    const transportNgn = field("deliveryExpense", entry.deliveryExpenseNgn);
     const transport = currency === "CFA"
       ? ngnCostToCfa(transportNgn, rate) : transportNgn;
-    const netProfit = sale - discount - supplier - transport;
+    const calculatedProfit = sale - discount - supplier - transport;
+    const overrideInput = findInput('[data-stage-edit="profitOverride"]');
+    let profitOverrideActive = entry.profitOverride !== null
+      && entry.profitOverride !== undefined && entry.profitOverride !== "";
+    let profitOverride = profitOverrideActive ? Number(entry.profitOverride) : null;
+    if (overrideInput) {
+      if (String(overrideInput.value || "").trim() === "") {
+        profitOverrideActive = false;
+        profitOverride = null;
+      } else {
+        const value = Number(overrideInput.value);
+        if (Number.isFinite(value)) {
+          profitOverrideActive = true;
+          profitOverride = value;
+        }
+      }
+    }
+    const netProfit = profitOverrideActive && Number.isFinite(profitOverride)
+      ? profitOverride : calculatedProfit;
     return { currency, totalNgn, supplierNgn: totalNgn, supplier, sale,
-             discount, transport, transportNgn, lineFigures, netProfit,
+             discount, transport, transportNgn, lineFigures, calculatedProfit,
+             profitOverride, profitOverrideActive, netProfit,
              netCashProfit: netProfit };
   }
 
@@ -274,15 +315,21 @@
 
   /* ------------------------------------------------------------ google bar */
 
+  const REFERENCE_SPREADSHEET_ID = "1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE";
+
   function googleActions() {
     const google = state.google || {};
-    const ledgers = google.ledgers || {};
     const reference = referenceSheetUrl();
+    const ledgerLinks = google.connected ? `
+      <a class="aa-button aa-button-sheet" href="/api/admin/accounting/google/ledger/NGN" target="_blank" rel="noopener noreferrer">↗ NGN Ledger</a>
+      <a class="aa-button aa-button-sheet" href="/api/admin/accounting/google/ledger/CFA" target="_blank" rel="noopener noreferrer">↗ CFA Ledger</a>` : `
+      <button class="aa-button aa-button-sheet" type="button" disabled title="Connect Google Sheets to resolve the ledger tabs">↗ NGN Ledger</button>
+      <button class="aa-button aa-button-sheet" type="button" disabled title="Connect Google Sheets to resolve the ledger tabs">↗ CFA Ledger</button>`;
+    const workbookLink = `<a class="aa-button aa-button-sheet" href="${html(reference)}" target="_blank" rel="noopener noreferrer">↗ Open workbook</a>`;
     if (google.connected) {
       return `
-        ${reference ? `<a class="aa-button aa-button-sheet" href="${html(reference)}" target="_blank" rel="noopener noreferrer">↗ Open reference sheet</a>` : ""}
-        <a class="aa-button aa-button-sheet" href="${html((ledgers.NGN || {}).url || "#")}" target="_blank" rel="noopener noreferrer">↗ NGN ledger</a>
-        <a class="aa-button aa-button-sheet" href="${html((ledgers.CFA || {}).url || "#")}" target="_blank" rel="noopener noreferrer">↗ FCFA ledger</a>
+        ${workbookLink}
+        ${ledgerLinks}
         <button class="aa-button aa-button-line" type="button" data-action="verify-google">✓ Test Google sync</button>
         ${state.error && google.configured ? `<a class="aa-button aa-button-primary" href="/api/admin/accounting/google/connect">Reconnect Google Sheets</a>` : ""}
         <span class="aa-drive-status is-connected"><i aria-hidden="true"></i> Drive connected · ${html(google.email || "Google account")}</span>`;
@@ -291,20 +338,16 @@
       ? `<a class="aa-button aa-button-primary" href="/api/admin/accounting/google/connect">Connect Google Sheets</a>`
       : `<span class="aa-setup-hint">Google Sheets setup is required on the server.</span>`;
     return `
-      <button class="aa-button aa-button-sheet" type="button" disabled>↗ Reference sheet</button>
-      <button class="aa-button aa-button-sheet" type="button" disabled>↗ NGN ledger</button>
-      <button class="aa-button aa-button-sheet" type="button" disabled>↗ FCFA ledger</button>
+      ${workbookLink}
+      ${ledgerLinks}
       ${google.configured ? `<button class="aa-button aa-button-line" type="button" data-action="verify-google">✓ Test Google sync</button>` : ""}
       ${connect}
       <span class="aa-drive-status"><i aria-hidden="true"></i> ${html(google.message || "Google Drive is not connected")}</span>`;
   }
 
   function referenceSheetUrl() {
-    // Never turn an unverified saved ID into a browser link: the server resolves
-    // the exact native Google Sheet and publishes its ID after verification or
-    // a successful push.
-    const id = String(state.activeReferenceId || "").trim();
-    return id ? `https://docs.google.com/spreadsheets/d/${encodeURIComponent(id)}/edit` : "";
+    const id = String(state.settings.referenceSpreadsheetId || REFERENCE_SPREADSHEET_ID).trim();
+    return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(id)}/edit`;
   }
 
   /* --------------------------------------------------------- staging queue */
@@ -313,26 +356,31 @@
     return state.entries.filter((entry) => entry.currency === state.currency);
   }
 
+  function batchTransportShares(feeNgn, entries) {
+    const rows = Array.isArray(entries) ? entries : [];
+    if (!rows.length) return new Map();
+    const fee = Math.max(0, Math.round(Number(feeNgn || 0)));
+    const share = Math.floor(fee / rows.length);
+    const remainder = fee - share * rows.length;
+    return new Map(rows.map((entry, index) => {
+      const shareNgn = share + (index === 0 ? remainder : 0);
+      const local = entry.currency === "CFA"
+        ? ngnCostToCfa(shareNgn, entry.exchangeRate || state.currentExchangeRate)
+        : shareNgn;
+      return [String(entry.id), local];
+    }));
+  }
+
   function batchFeePreviewInLedgerCurrency(feeNgn, entries) {
-    if (!entries.length) {
-      return state.currency === "CFA"
-        ? ngnCostToCfa(feeNgn, state.currentExchangeRate) : feeNgn;
-    }
-    if (state.currency !== "CFA") return feeNgn;
-    const share = Math.floor(feeNgn / entries.length);
-    const remainder = feeNgn - share * entries.length;
-    return entries.reduce((sum, entry, index) => sum + ngnCostToCfa(
-      share + (index === 0 ? remainder : 0),
-      entry.exchangeRate || state.currentExchangeRate), 0);
+    return [...batchTransportShares(feeNgn, entries).values()]
+      .reduce((sum, value) => sum + value, 0);
   }
 
   function stageTotals() {
     const rows = stagedEntries();
-    const domRows = typeof root !== "undefined" && root && root.querySelectorAll
-      ? [...root.querySelectorAll(".aa-stage-row")] : [];
     const visible = rows.map((entry) => {
-      const domRow = domRows.find((row) => String(row.dataset.id) === String(entry.id));
-      return domRow ? rowFigures(domRow, entry) : entryFigures(entry);
+      const domRows = orderRowsFor(entry.id);
+      return domRows.length ? rowFigures(domRows, entry) : entryFigures(entry);
     });
     const revenue = visible.reduce((sum, row) => sum + row.sale, 0);
     const discounts = visible.reduce((sum, row) => sum + row.discount, 0);
@@ -351,7 +399,19 @@
         + (selected.has(String(rows[index].id)) ? 0 : row.transport), 0)
       : 0;
     const transport = batchFee === null ? perOrder : batchFee + unselectedTransport;
-    const profit = revenue - discounts - supplier - transport;
+    let profit = visible.reduce((sum, row) => sum + row.netProfit, 0);
+    if (batchFeeNgn !== null) {
+      const feeShares = batchTransportShares(batchFeeNgn, feeRows);
+      const feeIds = new Set(feeRows.map((entry) => String(entry.id)));
+      profit = visible.reduce((sum, row, index) => {
+        const entry = rows[index];
+        if (!feeIds.has(String(entry.id)) || row.profitOverrideActive) {
+          return sum + row.netProfit;
+        }
+        return sum + row.sale - row.discount - row.supplier
+          - Number(feeShares.get(String(entry.id)) || 0);
+      }, 0);
+    }
     return { count: rows.length, revenue, discounts, supplier, perOrder,
              transport, transportSource: batchFee === null ? "per-order" : "batch",
              profit, batchFee, batchFeeNgn };
@@ -365,46 +425,18 @@
     return Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
   }
 
-  function entryRow(entry) {
+  function entryRows(entry) {
     const id = String(entry.id || "");
     const checked = state.selected.has(id) ? " checked" : "";
     const figures = entryFigures(entry);
-    const lines = Array.isArray(entry.lineItems) ? entry.lineItems : [];
+    const lines = Array.isArray(entry.lineItems) && entry.lineItems.length
+      ? entry.lineItems : [{ lineId: "line-01", name: entry.itemsSummary || "Order item",
+        qty: entry.itemQuantity || 1, saleAmount: entry.saleAmount || 0,
+        supplierCostNgn: entry.supplierCostNgn || 0, supplierLink: "" }];
+    const rowSpan = Math.max(1, lines.length);
     const rate = Number(entry.exchangeRate || state.currentExchangeRate || 0);
     const discount = Number(entry.discount || 0);
-    const lineNames = lines.map((line) => `${Number(line.qty || 1)}× ${line.name || "Item"}`);
-    const saleLines = lines.map((line, index) => `
-      <div class="aa-item-edit" data-line-index="${index}">
-        <strong>${html(Number(line.qty || 1))}× ${html(line.name || "Item")}${line.variant ? ` · ${html(line.variant)}` : ""}</strong>
-        <label>Selling price · line total
-          <input type="number" min="0" step="1" inputmode="numeric"
-                 value="${Number(line.saleAmount || 0)}" data-stage-edit="saleAmount"
-                 data-line-index="${index}" data-id="${html(id)}"
-                 aria-label="Selling price for ${html(line.name || "item")}" />
-        </label>
-      </div>`).join("");
-    const costLines = lines.map((line, index) => `
-      <div class="aa-item-edit aa-item-cost" data-line-index="${index}">
-        <strong>${html(Number(line.qty || 1))}× ${html(line.name || "Item")}${line.variant ? ` · ${html(line.variant)}` : ""}</strong>
-        <input type="text" class="aa-stage-link" maxlength="500"
-               placeholder="Supplier URL for ${html(line.name || "this item")}"
-               value="${html(line.supplierLink || "")}" data-stage-edit="supplierLink"
-               data-line-index="${index}" data-id="${html(id)}"
-               aria-label="Supplier link for ${html(line.name || "item")}" />
-        <label>Supplier cost · NGN total
-          <input type="number" min="0" step="1" inputmode="numeric"
-                 value="${Number(line.supplierCostNgn || 0)}" data-stage-edit="supplierCostNgn"
-                 data-line-index="${index}" data-id="${html(id)}"
-                 aria-label="Supplier cost in Naira for ${html(line.name || "item")}" />
-        </label>
-        <small class="aa-stage-cfa">line total <b data-line-cost-total>${html(money(
-          entry.currency === "CFA" ? ngnCostToCfa(line.supplierCostNgn, rate)
-                                    : line.supplierCostNgn,
-          entry.currency))}</b>${entry.currency === "CFA"
-            ? ` · ₦${Number(line.supplierCostNgn || 0).toLocaleString("en")} ÷ ${rate}` : ""}</small>
-      </div>`).join("");
-    // The discount field stays HIDDEN at 0 (a clean view); the small button
-    // opens it when the owner applies one.
+    // The discount field stays hidden at 0; the button opens it when needed.
     const discountCell = discount > 0
       ? `<input type="number" min="0" step="1" inputmode="numeric" value="${discount}"
                 data-stage-edit="discount" data-id="${html(id)}"
@@ -412,19 +444,46 @@
          <small class="aa-stage-cfa">${Number(entry.discountPercent || 0) ? `${Number(entry.discountPercent)}% off` : "applied"}</small>`
       : `<button type="button" class="aa-link-button aa-discount-add" data-stage-discount="${html(id)}"
                  title="Apply a discount to this order">＋ discount</button>`;
-    return `
-      <tr class="aa-stage-row${entry.deleted ? " is-deleted" : ""}" data-id="${html(id)}">
-        <td class="aa-stage-check"><input type="checkbox" data-stage-select="${html(id)}"${checked} aria-label="Select order ${html(id)}" /></td>
-        <td class="aa-stage-date"><span>${html(String(entry.date || "").slice(0, 10))}</span><small>${html(id)}</small></td>
-        <td class="aa-stage-customer">${html(entry.customer || "Customer")}</td>
-        <td class="aa-stage-location" title="Destination mapped from the order">${html(entry.location || "—")}</td>
-        <td class="aa-stage-items">${html(lineNames.join(", ") || entry.itemsSummary || "—")}</td>
-        <td class="aa-stage-sale">${saleLines || `<input type="number" min="0" step="1" inputmode="numeric" value="${Number(entry.saleAmount || 0)}" data-stage-edit="saleAmount" data-id="${html(id)}" aria-label="Selling price for ${html(entry.customer)}" />`}</td>
-        <td class="aa-stage-cost">${costLines || `<small class="aa-stage-cfa">No product lines found</small>`}
-          <small class="aa-stage-cfa aa-order-cost-total">Order supplier total <b data-cost-total>${html(money(figures.supplier, entry.currency))}</b></small>
+    return lines.map((line, index) => {
+      const name = String(line.name || "Item");
+      const variant = line.variant ? ` · ${html(line.variant)}` : "";
+      const lineCost = entry.currency === "CFA"
+        ? ngnCostToCfa(line.supplierCostNgn, rate) : Number(line.supplierCostNgn || 0);
+      return `
+      <tr class="aa-stage-row${index === 0 ? " aa-stage-row-start" : ""}${entry.deleted ? " is-deleted" : ""}"
+          data-id="${html(id)}" data-line-index="${index}">
+        ${index === 0 ? `<td class="aa-stage-check" rowspan="${rowSpan}"><input type="checkbox" data-stage-select="${html(id)}"${checked} aria-label="Select order ${html(id)}" /></td>
+        <td class="aa-stage-date" rowspan="${rowSpan}"><span>${html(String(entry.date || "").slice(0, 10))}</span><small>${html(id)}</small></td>
+        <td class="aa-stage-customer" rowspan="${rowSpan}">${html(entry.customer || "Customer")}</td>
+        <td class="aa-stage-location" rowspan="${rowSpan}" title="Destination mapped from the order">${html(entry.location || "—")}</td>` : ""}
+        <td class="aa-stage-items"><strong>${html(Number(line.qty || 1))}× ${html(name)}${variant}</strong></td>
+        <td class="aa-stage-sale">
+          <label>Selling price · line total
+            <input type="number" min="0" step="1" inputmode="numeric"
+                   value="${Number(line.saleAmount || 0)}" data-stage-edit="saleAmount"
+                   data-line-index="${index}" data-id="${html(id)}"
+                   aria-label="Selling price for ${html(name)}" />
+          </label>
         </td>
-        <td class="aa-stage-discount" data-discount-cell>${discountCell}</td>
-        <td class="aa-stage-transport">
+        <td class="aa-stage-cost">
+          <input type="text" class="aa-stage-link" maxlength="500"
+                 placeholder="Supplier URL for ${html(name)}"
+                 value="${html(line.supplierLink || "")}" data-stage-edit="supplierLink"
+                 data-line-index="${index}" data-id="${html(id)}"
+                 aria-label="Supplier URL for ${html(name)}" />
+          <label>Supplier cost · NGN line total
+            <input type="number" min="0" step="1" inputmode="numeric"
+                   value="${Number(line.supplierCostNgn || 0)}" data-stage-edit="supplierCostNgn"
+                   data-line-index="${index}" data-id="${html(id)}"
+                   aria-label="Supplier cost in Naira for ${html(name)}" />
+          </label>
+          <small class="aa-stage-cfa">line total <b data-line-cost-total data-line-index="${index}">${html(money(
+            lineCost, entry.currency))}</b>${entry.currency === "CFA"
+              ? ` · ₦${Number(line.supplierCostNgn || 0).toLocaleString("en")} ÷ ${rate}` : ""}</small>
+          ${index === 0 ? `<small class="aa-stage-cfa aa-order-cost-total">Order supplier total <b data-cost-total>${html(money(figures.supplier, entry.currency))}</b></small>` : ""}
+        </td>
+        ${index === 0 ? `<td class="aa-stage-discount" data-discount-cell rowspan="${rowSpan}">${discountCell}</td>
+        <td class="aa-stage-transport" rowspan="${rowSpan}">
           <label>NGN base
             <input type="number" min="0" step="1" inputmode="numeric" value="${Number(entry.deliveryExpenseNgn || 0)}"
                    data-stage-edit="deliveryExpense" data-id="${html(id)}"
@@ -432,12 +491,23 @@
           </label>
           <small class="aa-stage-cfa">ledger: <span data-transport-local>${html(money(entry.deliveryExpense || 0, entry.currency))}</span></small>
         </td>
-        <td class="aa-stage-profit${figures.netProfit < 0 ? " is-negative" : ""}" data-row-profit>${html(money(figures.netProfit, entry.currency))}</td>
-        <td class="aa-stage-actions">
+        <td class="aa-stage-profit${figures.netProfit < 0 ? " is-negative" : ""}" rowspan="${rowSpan}">
+          <strong data-row-profit>${html(money(figures.netProfit, entry.currency))}</strong>
+          <label class="aa-profit-override-label">Manual net profit override
+            <input type="number" step="1" inputmode="numeric"
+                   value="${entry.profitOverride == null ? "" : Number(entry.profitOverride)}"
+                   placeholder="automatic" data-stage-edit="profitOverride" data-id="${html(id)}"
+                   aria-label="Final net profit override for order ${html(id)}" />
+          </label>
+          <small class="aa-stage-cfa" data-computed-profit>Auto: ${html(money(figures.calculatedProfit, entry.currency))}</small>
+          <small class="aa-stage-cfa">Blank uses the formula; an override is final after discounts and transport.</small>
+        </td>
+        <td class="aa-stage-actions" rowspan="${rowSpan}">
           <button type="button" class="aa-link-button" data-stage-notes="${html(id)}" title="Edit notes">📝</button>
           <button type="button" class="aa-link-button aa-danger" data-stage-remove="${html(id)}" title="Remove from accounting">✕</button>
-        </td>
+        </td>` : ""}
       </tr>`;
+    }).join("");
   }
 
   function stageSection() {
@@ -476,16 +546,16 @@
           <table class="aa-stage-table">
             <thead>
               <tr>
-                <th></th><th>Date / Order</th><th>Customer</th><th>Location</th><th>Items &amp; quantities</th>
-                <th>Selling price · per item</th><th>Supplier cost &amp; link · per item</th><th>Discount</th>
+                <th></th><th>Date / Order</th><th>Customer</th><th>Location</th><th>Product line</th>
+                <th>Selling price · line total</th><th>Supplier URL &amp; cost · line total</th><th>Discount</th>
                 <th>Transport · NGN base</th><th>Net profit</th><th></th>
               </tr>
             </thead>
-            <tbody>${visible.map(entryRow).join("")}</tbody>
+            <tbody>${visible.map(entryRows).join("")}</tbody>
           </table>
         </div>
         ${displayList.length > state.shown ? `<button type="button" class="aa-button aa-button-more" data-action="more">Show ${Math.min(STAGE_PAGE_SIZE, displayList.length - state.shown)} more (${displayList.length - state.shown} hidden)</button>` : ""}
-        <p class="aa-sheet-hint">Each product has its own selling price, supplier cost and supplier URL; order totals sum all item lines before discounts, transport and Net Profit are calculated. Supplier and transport costs are entered in NGN. For FCFA rows the exact conversion is NGN ÷ the locked FX rate (for example ₦3,150 ÷ 0.45 = FCFA 7,000). Every edit saves itself. Each row's Location maps the customer's destination. Pushed orders leave this queue and land in the ${html(state.currency === "NGN" ? "NGN" : "FCFA")} tab; history and profit analytics live on the <a href="/admin.html?tab=sales">Sales page</a>.</p>`
+        <p class="aa-sheet-hint">One staging line is shown for each ordered product, with its own selling price, supplier cost and supplier URL. Order profit combines all product lines, then subtracts discounts and transport. Supplier and transport costs are entered in NGN. For FCFA rows the exact conversion is NGN ÷ the locked FX rate (for example ₦3,150 ÷ 0.45 = FCFA 7,000). Every edit saves itself. A blank manual profit field uses the formula; a filled override is the final order profit, including batch transport. Pushed orders leave this queue and land in the ${html(state.currency === "NGN" ? "NGN Ledger" : "CFA Ledger")} tab; history and profit analytics live on the <a href="/admin.html?tab=sales">Sales page</a>.</p>`
         : (state.search ? `<p class="aa-stage-empty">No rows match “${html(state.search)}” in the ${html(currencyName)} queue.</p>`
            : `<p class="aa-stage-empty">The ${html(state.currency === "NGN" ? "naira" : "FCFA")} queue is clean — every confirmed order has been pushed. New confirmations will appear here.</p>`)}
       </section>`;
@@ -558,10 +628,7 @@
           <label>Starting profit / opening FCFA balance
             <input name="startingBalanceCfa" type="number" min="0" step="1" inputmode="numeric" value="${Number(s.startingBalanceCfa || 0)}" />
           </label>
-          <label class="aa-settings-ref">Preferred spreadsheet ID (the active target is resolved by Drive)
-            <input name="referenceSpreadsheetId" maxlength="200" value="${html(s.referenceSpreadsheetId || "")}" placeholder="Optional Google Sheets URL or ID" />
-            <small>Pushes resolve the native Google Sheet named <strong>Jaurastore Sales &amp; Accounting Ledger (NGN &amp; CFA)</strong> by Drive MIME type. Uploaded Excel files and legacy Office backups are ignored.</small>
-          </label>
+          <p class="aa-settings-ref aa-sheet-hint">Fixed Google Sheets destination · <strong>${html(REFERENCE_SPREADSHEET_ID)}</strong><br />NGN pushes open the <strong>NGN Ledger</strong> tab; FCFA / XOF pushes open <strong>CFA Ledger</strong>. Uploaded Excel files are rejected.</p>
           <button class="aa-button aa-button-primary" type="submit">Save settings</button>
         </form>
         <p class="aa-sheet-hint">Accounting FX rate: <strong>${rateText()}</strong> — supplier and transport costs in NGN become FCFA by division (NGN ÷ rate). Manage the rate in <a href="/admin.html?tab=settings">Admin → Settings</a>. Each confirmed order locks in its rate, so history never reprices unless you explicitly edit a CFA cost.</p>
@@ -572,7 +639,7 @@
 
   function pushDialog() {
     const count = state.selected.size;
-    const currencies = [...new Set(stagedEntries()
+    const currencies = [...new Set(state.entries
       .filter((entry) => state.selected.has(String(entry.id)))
       .map((entry) => entry.currency))];
     const defaultFeeCurrency = currencies.length === 1 ? currencies[0] : "NGN";
@@ -580,7 +647,7 @@
       <div class="aa-push-dialog" data-push-dialog hidden>
         <div class="aa-push-card" role="dialog" aria-modal="true" aria-label="Push to Google Sheet">
           <h3>Push ${count} order${count === 1 ? "" : "s"} to Google Sheet</h3>
-          <p>Orders are routed to the native <strong>Jaurastore Sales &amp; Accounting Ledger (NGN &amp; CFA)</strong> spreadsheet; Drive excludes Excel and legacy Office backups. Pushed orders are archived into the batch below and cleared off this queue.</p>
+          <p>Orders are routed to workbook <strong>${html(REFERENCE_SPREADSHEET_ID)}</strong>: NGN orders go to <strong>NGN Ledger</strong>, and FCFA / XOF orders go to <strong>CFA Ledger</strong>. The Drive check rejects uploaded Excel files. Pushed orders are archived into the batch below and cleared off this queue.</p>
           <label>Batch / delivery name
             <input name="name" maxlength="100" placeholder="${html(state.currency === "NGN" ? "NGN" : "FCFA")} delivery · ${new Date().toISOString().slice(0, 10)}" />
           </label>
@@ -809,6 +876,9 @@
     const readError = state.error
       ? `<p class="aa-error aa-sheet-error" role="alert">${formatSheetError(state.error)}${state.error.indexOf("Save as Google Sheets") < 0 && google.connected ? " You can still open the Google Sheet directly." : ""}</p>`
       : "";
+    const currencyWarning = state.invalidCurrencyOrders.length
+      ? `<p class="aa-error aa-currency-warning" role="alert">${state.invalidCurrencyOrders.length} confirmed order(s) have an unsupported currency and are excluded from staging, summaries, and pushes: ${html(state.invalidCurrencyOrders.slice(0, 12).join(", "))}${state.invalidCurrencyOrders.length > 12 ? "…" : ""}. Correct the order currency before accounting for them.</p>`
+      : "";
     root.innerHTML = `
       <div class="aa-app">
         <header class="aa-topbar">
@@ -858,6 +928,7 @@
           </section>
           ${connectedMessage}
           ${readError}
+          ${currencyWarning}
 
           ${stageSection()}
           ${expenseSection()}
@@ -905,6 +976,8 @@
       const data = await request("/api/admin/accounting");
       if (requestId !== state.requestSeq) return;
       state.entries = Array.isArray(data.entries) ? data.entries : [];
+      state.invalidCurrencyOrders = Array.isArray(data.invalidCurrencyOrders)
+        ? data.invalidCurrencyOrders : [];
       state.expenses = Array.isArray(data.expenses) ? data.expenses : [];
       state.settings = data.settings || state.settings;
       state.balances = data.balances || { NGN: null, CFA: null };
@@ -1029,8 +1102,7 @@
       if (!options.quiet) {
         render();
       } else if (saved && root && root.querySelectorAll) {
-        const row = [...root.querySelectorAll(".aa-stage-row")]
-          .find((node) => String(node.dataset.id) === String(id));
+        const row = orderRowsFor(id)[0];
         if (row) recalcRow(row);
       }
       return saved;
@@ -1057,11 +1129,23 @@
     }, 900);
   }
 
-  function lineItemsFromRow(row, entry) {
+  function lineItemsFromRow(rowOrRows, entry) {
     const lines = Array.isArray(entry && entry.lineItems) ? entry.lineItems : [];
+    const rows = Array.isArray(rowOrRows) ? rowOrRows
+      : (rowOrRows && rowOrRows.dataset
+        ? (orderRowsFor(rowOrRows.dataset.id).length
+          ? orderRowsFor(rowOrRows.dataset.id) : [rowOrRows])
+        : []);
+    const findInput = (selector) => {
+      for (const row of rows) {
+        const input = row && row.querySelector && row.querySelector(selector);
+        if (input) return input;
+      }
+      return null;
+    };
     return lines.map((line, index) => {
       const read = (field, fallback, text = false) => {
-        const input = row && row.querySelector(
+        const input = findInput(
           `[data-stage-edit="${field}"][data-line-index="${index}"]`);
         if (!input) return fallback;
         return text ? String(input.value || "") : Number(input.value || 0);
@@ -1075,27 +1159,45 @@
     });
   }
 
-  /* Live recalculation while typing: the row's net profit, the cost total and
+  /* Live recalculation while typing: each product line, the order total and
    * the section totals move before the save round-trips. */
   function recalcRow(row) {
     if (!row) return;
     const id = row.dataset.id;
     const entry = state.entries.find((item) => String(item.id) === String(id));
     if (!entry) return;
-    const figures = rowFigures(row, entry);
-    const total = row.querySelector("[data-cost-total]");
+    const rows = orderRowsFor(id);
+    const group = rows.length ? rows : [row];
+    const first = group[0];
+    const figures = rowFigures(group, entry);
+    const findInRows = (selector) => {
+      for (const lineRow of group) {
+        const node = lineRow.querySelector(selector);
+        if (node) return node;
+      }
+      return null;
+    };
+    const total = findInRows("[data-cost-total]");
     if (total) total.textContent = money(figures.supplier, entry.currency);
-    row.querySelectorAll("[data-line-cost-total]").forEach((node, index) => {
+    (entry.lineItems || []).forEach((_line, index) => {
+      const node = findInRows(`[data-line-cost-total][data-line-index="${index}"]`)
+        || (group[index] && group[index].querySelector("[data-line-cost-total]"));
       const line = figures.lineFigures[index];
-      if (line) node.textContent = money(line.supplier, entry.currency);
+      if (node && line) node.textContent = money(line.supplier, entry.currency);
     });
-    const transportLocal = row.querySelector("[data-transport-local]");
+    const transportLocal = first.querySelector("[data-transport-local]");
     if (transportLocal) transportLocal.textContent = money(figures.transport, entry.currency);
-    const profitCell = row.querySelector("[data-row-profit]");
+    const profitCell = first.querySelector("[data-row-profit]");
     if (profitCell) {
       profitCell.textContent = money(figures.netProfit, entry.currency);
-      profitCell.classList.toggle("is-negative", figures.netProfit < 0);
+      const profitContainer = profitCell.closest
+        ? profitCell.closest(".aa-stage-profit") : profitCell.parentElement;
+      if (profitContainer && profitContainer.classList) {
+        profitContainer.classList.toggle("is-negative", figures.netProfit < 0);
+      }
     }
+    const computed = first.querySelector("[data-computed-profit]");
+    if (computed) computed.textContent = `Auto: ${money(figures.calculatedProfit, entry.currency)}`;
     const summary = root.querySelector("[data-stage-summary]");
     if (summary) summary.innerHTML = stageSummaryHTML();
   }
@@ -1133,7 +1235,7 @@
       state.verify = report;
       const reference = report.reference || {};
       state.activeReferenceId = reference.readable
-        && reference.title === "Jaurastore Sales & Accounting Ledger (NGN & CFA)"
+        && String(reference.id || "") === REFERENCE_SPREADSHEET_ID
         && reference.mimeType === "application/vnd.google-apps.spreadsheet"
         ? String(reference.id || "") : "";
       const steps = (report.steps || []).map((step) => `${step.ok ? "✓" : "✕"} ${step.step}${step.detail ? ` — ${step.detail}` : ""}`);
@@ -1237,13 +1339,11 @@
     if (settingsForm) {
       event.preventDefault();
       const fd = new FormData(settingsForm);
-      const reference = String(fd.get("referenceSpreadsheetId") || "").trim();
       request("/api/admin/accounting/settings", {
         method: "PUT",
         body: JSON.stringify({
           startingBalanceNgn: Number(fd.get("startingBalanceNgn") || 0),
           startingBalanceCfa: Number(fd.get("startingBalanceCfa") || 0),
-          referenceSpreadsheetId: extractSpreadsheetId(reference),
         }),
       }).then((data) => {
         state.settings = data.settings || state.settings;
@@ -1255,12 +1355,6 @@
       });
     }
   });
-
-  function extractSpreadsheetId(value) {
-    const text = String(value || "").trim();
-    const match = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-    return match ? match[1] : text;
-  }
 
   root.addEventListener("click", (event) => {
     const currency = event.target.closest("[data-currency]");
@@ -1451,7 +1545,8 @@
       }
       const value = field === "supplierLink"
         ? String(edit.value || "")
-        : Number(edit.value || 0);
+        : (field === "profitOverride" && String(edit.value || "").trim() === ""
+          ? null : Number(edit.value || 0));
       saveEntryFields(edit.dataset.id, { [field]: value });
       return;
     }
@@ -1501,7 +1596,8 @@
     }
     const value = field === "supplierLink"
       ? String(edit.value || "")
-      : Number(edit.value || 0);
+      : (field === "profitOverride" && String(edit.value || "").trim() === ""
+        ? null : Number(edit.value || 0));
     scheduleEntrySave(edit.dataset.id, { [field]: value });
   });
 

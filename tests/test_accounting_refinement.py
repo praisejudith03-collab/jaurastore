@@ -195,6 +195,31 @@ def test_discount_and_net_profit_formula_with_currency_conversion():
     assert zeroed["discount"] == 0 and zeroed["discountPercent"] == 0.0
 
 
+def test_batch_totals_keep_final_profit_overrides_across_transport_edits():
+    rows = [
+        {"id": "manual", "currency": "NGN", "saleAmount": 10_000,
+         "discount": 1_000, "supplierCostInCurrency": 3_000,
+         "supplierCostNgn": 3_000, "deliveryExpense": 500,
+         "profitOverride": -250},
+        {"id": "automatic", "currency": "NGN", "saleAmount": 10_000,
+         "discount": 1_000, "supplierCostInCurrency": 2_000,
+         "supplierCostNgn": 2_000, "deliveryExpense": 400,
+         "profitOverride": None},
+    ]
+    batch = accounting_mod.batch_totals(rows, "NGN", batch_transport_fee=1_000)
+    assert batch["transportExpense"] == 1_000
+    # The override is final; the normal order uses its 500-unit fee share.
+    assert batch["netCashProfit"] == -250 + 10_000 - 1_000 - 2_000 - 500
+    assert accounting_mod.batch_net_profit({
+        "currency": "NGN", "orders": rows,
+        "batchTransportFee": 1_000, "totals": batch,
+    }) == batch["netCashProfit"]
+    # Clearing the batch fee falls back to per-order transport for automatic
+    # orders, but keeps the manual override unchanged.
+    per_order = accounting_mod.batch_totals(rows, "NGN")
+    assert per_order["netCashProfit"] == -250 + 10_000 - 1_000 - 2_000 - 400
+
+
 # ------------------------------------------------------ API auto-save routes
 def test_patch_autosaves_supplier_fields_discounts_and_recalculates(client):
     csrf = csrf_of(client)
@@ -235,6 +260,21 @@ def test_patch_autosaves_supplier_fields_discounts_and_recalculates(client):
     entry = shipped.get_json()["entry"]
     assert entry["netProfit"] == 37_800
     assert entry["netCashProfit"] == 37_800
+
+    # A signed manual override is persisted in the order payload and is the
+    # final net profit, even when it differs from the computed formula.
+    overridden = patch_order(client, csrf, ORDER_IDS[0], {"profitOverride": -2_500})
+    assert overridden.status_code == 200, overridden.get_json()
+    entry = overridden.get_json()["entry"]
+    assert entry["profitOverride"] == -2_500
+    assert entry["profitOverrideActive"] is True
+    assert entry["netProfit"] == -2_500
+    stored = one("SELECT payload FROM orders WHERE id=?", (ORDER_IDS[0],))
+    assert json.loads(stored["payload"])["accounting"]["profitOverride"] == -2_500
+    cleared_override = patch_order(client, csrf, ORDER_IDS[0], {"profitOverride": None})
+    assert cleared_override.status_code == 200
+    assert cleared_override.get_json()["entry"]["profitOverride"] is None
+    assert cleared_override.get_json()["entry"]["netProfit"] == 37_800
 
     # Invalid values are refused (never silently zeroed).
     assert patch_order(client, csrf, ORDER_IDS[0],
@@ -567,30 +607,68 @@ def test_broadcast_products_resolution_refuses_retired_rows(client, monkeypatch)
 
 
 # ------------------------------------------------------------ Google wiring
-def test_google_sheet_id_is_only_a_preference_for_native_drive_resolution(monkeypatch):
+def test_google_sheet_id_is_fixed_and_ignores_legacy_preferences(monkeypatch):
+    target = "1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE"
     monkeypatch.delenv("GOOGLE_SHEET_ID", raising=False)
-    assert google_sheets.reference_spreadsheet_id() == ""
+    assert google_sheets.reference_spreadsheet_id() == target
     monkeypatch.setenv("GOOGLE_SHEET_ID", "env-sheet-123")
-    assert google_sheets.reference_spreadsheet_id() == "env-sheet-123"
-    # A saved preference wins but does not itself become the batch target.
+    assert google_sheets.reference_spreadsheet_id() == target
     assert google_sheets.reference_spreadsheet_id(
-        {"referenceSpreadsheetId": "desk-sheet-9"}) == "desk-sheet-9"
-    # A full URL is accepted and reduced to the id.
+        {"referenceSpreadsheetId": "desk-sheet-9"}) == target
     assert google_sheets.reference_spreadsheet_id(
         {"referenceSpreadsheetId": "https://docs.google.com/spreadsheets/d/abc_123/edit"}
-    ) == "abc_123"
-    # Clearing the saved preference leaves no assumed / legacy file target.
+    ) == target
     assert google_sheets.reference_spreadsheet_id(
-        {"referenceSpreadsheetId": ""}) == "env-sheet-123"
+        {"referenceSpreadsheetId": ""}) == target
 
 
-def test_accounting_page_exposes_the_effective_reference_sheet(client, monkeypatch):
+def test_accounting_page_exposes_the_fixed_reference_sheet(client, monkeypatch):
     monkeypatch.setenv("GOOGLE_SHEET_ID", "env-sheet-123")
     csrf_of(client)
     page = client.get("/api/admin/accounting").get_json()
-    assert page["settings"]["referenceSpreadsheetId"] == "env-sheet-123"
-    assert page["googleSheetId"] == ""
-    assert page["googleSheetTitle"] == google_sheets.REFERENCE_SPREADSHEET_TITLE
+    assert page["settings"]["referenceSpreadsheetId"] == google_sheets.REFERENCE_SPREADSHEET_ID
+    assert page["googleSheetId"] == google_sheets.REFERENCE_SPREADSHEET_ID
+    assert page["googleSheetTitle"] == google_sheets.REFERENCE_WORKBOOK_LABEL
+
+
+def test_accounting_settings_cannot_redirect_the_fixed_workbook(client):
+    csrf = csrf_of(client)
+    denied = client.put("/api/admin/accounting/settings",
+                        headers={"X-CSRF-Token": csrf},
+                        json={"referenceSpreadsheetId": "another-workbook"})
+    assert denied.status_code == 400
+    accepted = client.put("/api/admin/accounting/settings",
+                          headers={"X-CSRF-Token": csrf},
+                          json={"referenceSpreadsheetId": google_sheets.REFERENCE_SPREADSHEET_ID})
+    assert accepted.status_code == 200, accepted.data
+    assert accepted.get_json()["settings"]["referenceSpreadsheetId"] == google_sheets.REFERENCE_SPREADSHEET_ID
+
+
+def test_unsupported_order_currency_is_visible_but_never_staged_or_pushed(client, monkeypatch):
+    csrf = csrf_of(client)
+    add_order("REF-NGN-1", "USD", 15_000)
+    page = client.get("/api/admin/accounting").get_json()
+    assert "REF-NGN-1" in page["invalidCurrencyOrders"]
+    assert "REF-NGN-1" not in {row["id"] for row in page["entries"]}
+    monkeypatch.setattr(google_sheets, "push_orders",
+                        lambda *args, **kwargs: pytest.fail("unsupported order reached Sheets"))
+    pushed = client.post("/api/admin/accounting/push",
+                         headers={"X-CSRF-Token": csrf},
+                         json={"orderIds": ["REF-NGN-1"]})
+    assert pushed.status_code == 409
+    assert "unsupported currency" in pushed.get_json()["error"].lower()
+
+
+def test_unsupported_currencies_are_rejected_by_accounting_mutations(client):
+    csrf = csrf_of(client)
+    expense = client.post("/api/admin/accounting/expenses",
+                          headers={"X-CSRF-Token": csrf},
+                          json={"kind": "payout", "currency": "USD", "amount": 500})
+    assert expense.status_code == 400
+    assert client.get("/api/admin/accounting/summary?currency=USD").status_code == 400
+    assert client.get("/api/admin/sales/insights?currency=USD").status_code == 400
+    assert accounting_mod.new_expense("payout", "FCFA", 500)["currency"] == "CFA"
+    assert accounting_mod.new_expense("payout", "USD", 500) is None
 
 
 def test_google_verify_reports_every_step_without_writing(client, monkeypatch):
@@ -624,14 +702,38 @@ def test_google_verify_is_honest_when_nothing_is_configured(monkeypatch):
     assert "GOOGLE_CLIENT_ID" in report["message"]
 
 
+def test_fixed_ledger_link_routes_to_the_requested_currency_tab(client, monkeypatch):
+    urls = {"NGN": "https://docs.google.com/spreadsheets/d/fixed/edit#gid=121",
+            "CFA": "https://docs.google.com/spreadsheets/d/fixed/edit#gid=808"}
+    monkeypatch.setattr(google_sheets, "reference_tab_url", lambda currency: urls[currency])
+    ngn = client.get("/api/admin/accounting/google/ledger/NGN")
+    cfa = client.get("/api/admin/accounting/google/ledger/FCFA")
+    assert ngn.status_code == 302 and ngn.headers["Location"] == urls["NGN"]
+    assert cfa.status_code == 302 and cfa.headers["Location"] == urls["CFA"]
+    assert ngn.headers["Cache-Control"] == "private, no-store"
+    assert client.get("/api/admin/accounting/google/ledger/USD").status_code == 404
+
+
+def test_fixed_ledger_link_never_falls_back_to_the_wrong_default_tab(client, monkeypatch):
+    def unresolved(_currency):
+        raise google_sheets.GoogleSheetsError("Connect Google Sheets first.")
+
+    monkeypatch.setattr(google_sheets, "reference_tab_url", unresolved)
+    response = client.get("/api/admin/accounting/google/ledger/NGN")
+    assert response.status_code == 503
+    assert not response.headers.get("Location")
+    assert "Connect Google Sheets" in response.get_json()["error"]
+
+
 def test_render_blueprint_and_guide_carry_the_reference_sheet_id():
     guide = open(os.path.join(ROOT, "GOOGLE_DRIVE_SYNC_SETUP.md"), encoding="utf-8").read()
     blueprint = open(os.path.join(ROOT, "render.yaml"), encoding="utf-8").read()
     env_example = open(os.path.join(ROOT, ".env.example"), encoding="utf-8").read()
-    sheet_id = "1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu"
+    sheet_id = google_sheets.REFERENCE_SPREADSHEET_ID
     for blob in (guide, blueprint, env_example):
-        assert "GOOGLE_SHEET_ID" in blob
         assert sheet_id in blob
+    assert "GOOGLE_SHEET_ID" in guide and "GOOGLE_SHEET_ID" in blueprint
+    assert "NGN Ledger" in guide and "CFA Ledger" in guide
     assert "GOOGLE_CLIENT_ID" in guide and "GOOGLE_CLIENT_SECRET" in guide
     assert "GOOGLE_REDIRECT_URI" in guide
     assert "api/admin/accounting/google/callback" in guide
@@ -661,6 +763,8 @@ def test_the_desk_autosaves_per_item_supplier_fields_and_hides_zero_discount():
     assert 'data-stage-edit="supplierCostNgn"' in ACCOUNTING_JS
     assert 'data-stage-edit="saleAmount"' in ACCOUNTING_JS
     assert "function lineItemsFromRow(" in ACCOUNTING_JS
+    assert "function entryRows(" in ACCOUNTING_JS
+    assert 'data-stage-edit="profitOverride"' in ACCOUNTING_JS
     assert "function scheduleEntrySave(" in ACCOUNTING_JS
     assert "function rowFigures(" in ACCOUNTING_JS
     assert "productIsDeleted" not in ACCOUNTING_JS  # marketing lives in admin.js
@@ -677,6 +781,10 @@ def test_the_desk_has_both_transport_inputs_and_keeps_the_per_order_ones():
     assert "blank = per-order fees" in ACCOUNTING_JS
     assert "batchTransportFee" in ACCOUNTING_JS
     assert 'data-action="verify-google"' in ACCOUNTING_JS
+    assert 'href="/api/admin/accounting/google/ledger/NGN"' in ACCOUNTING_JS
+    assert 'href="/api/admin/accounting/google/ledger/CFA"' in ACCOUNTING_JS
+    assert "Connect Google Sheets to resolve the ledger tabs" in ACCOUNTING_JS
+    assert google_sheets.REFERENCE_SPREADSHEET_ID in ACCOUNTING_JS
 
 
 # ------------------------------- accounting desk recalc (runs the real code)
@@ -707,8 +815,8 @@ vm.createContext(sandbox);
 const pieces = [];
 for (const fn of ["entrySupplierTotal", "ngnCostToCfa", "entryFigures",
                   "rowFigures", "entryQuantity", "batchTransportFee",
-                  "stagedEntries", "batchFeePreviewInLedgerCurrency",
-                  "stageTotals"]) {
+                  "stagedEntries", "orderRowsFor", "batchTransportShares",
+                  "batchFeePreviewInLedgerCurrency", "stageTotals"]) {
   pieces.push(grab(fn));
 }
 vm.runInContext(pieces.join("\n"), sandbox);
@@ -777,7 +885,12 @@ run('state.batchTransportFee = "2000"');
 assert(run("stageTotals().transport") === 2000, "batch fee wins over per-order fees");
 assert(run('stageTotals().transportSource') === "batch", "batch mode is reported");
 assert(run("stageTotals().supplier") === 6000, "supplier total stays currency-scoped");
-run('state.currency = "CFA"; state.batchTransportFee = "3150"');
+run('state.entries[0].profitOverride = -1234');
+assert(run("entryFigures(state.entries[0]).netProfit") === -1234,
+       "signed manual profit override replaces the formula");
+assert(run("stageTotals().profit") === -1234,
+       "final override remains authoritative when batch transport is applied");
+run('state.entries[0].profitOverride = null; state.currency = "CFA"; state.batchTransportFee = "3150"');
 assert(run("stageTotals().batchFee") === 7000,
        "FCFA batch transport divides its NGN base at the locked rate");
 console.log("ALL ACCOUNTING RECALC CHECKS PASSED");

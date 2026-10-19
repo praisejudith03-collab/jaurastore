@@ -206,7 +206,7 @@ MIGRATE_COLUMNS = {"id", "legacyId", "sku", "slug", "name", "nameFr",
                    "optionSku", "reviews", "dimensions", "bulkQty",
                    "bulkPercent", "placeholderImage", "usesPlaceholder",
                    "source", "supplierId", "supplierSku", "updated_at",
-                   "enableCustomNote", "customNotePrompt",
+                   "enableCustomNote", "customNotePrompt", "manualStockLock",
                    # Variant-level supplier costing + the Trash Bin flag:
                    # added to the live table by the schema repair block.
                    "supplierCost", "optionSupplierCost", "is_deleted"}

@@ -91,7 +91,7 @@ from currency import round_cfa, to_cfa  # noqa: F401
 BASE_FIELDS = (
     "id", "sku", "slug", "name", "nameFr", "category", "priceCfa", "compareCfa",
     "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
-    "stock", "badge", "featured", "online", "colors", "options", "optionPrices",
+    "stock", "manualStockLock", "badge", "featured", "online", "colors", "options", "optionPrices",
     "optionCompareAt", "dimensions", "supplierId", "supplierSku",
     "optionSupplierSku", "optionSku", "reviews", "enableCustomNote",
     "customNotePrompt",
@@ -764,7 +764,8 @@ def normalize(product):
     # to "in stock". This was the "out of stock does not save" bug: the
     # editor wrote stock=0, the variant sum silently reverted it, and the
     # storefront kept showing the product as orderable.
-    if _explicit_out_of_stock(product):
+    manual_stock_lock = _manual_stock_lock(product)
+    if manual_stock_lock:
         stock_qty = 0
         if option_stock:
             option_stock = {k: 0 for k in option_stock}
@@ -810,6 +811,9 @@ def normalize(product):
             product.get("customNotePrompt") or product.get("custom_note_prompt"), 160),
         "stock": stock_qty,
         "stock_quantity": stock_qty,
+        # Durable owner override: supplier refreshes may never restock this row
+        # until a later admin save explicitly marks it available again.
+        "manualStockLock": manual_stock_lock,
         "badge": sec.clean(product.get("badge"), 20),
         "featured": bool(product.get("featured", False)),
         "online": product.get("online", True) is not False,
@@ -935,7 +939,7 @@ def derived_stock_status(product):
     a stale number travels beside it.
     """
     p = product if isinstance(product, dict) else {}
-    if _explicit_out_of_stock(p):
+    if _manual_stock_lock(p):
         return "out"
     os_map = p.get("optionStock")
     if isinstance(os_map, dict) and os_map:
@@ -1000,6 +1004,12 @@ def stock_guardrail_fix(product):
     """
     p = dict(product or {})
     changed = []
+    # An owner lock is already authoritative for availability. Never rewrite
+    # quantities during a maintenance sweep: they may be the inventory the
+    # owner wants restored when manually re-enabling the product.
+    if _manual_stock_lock(p):
+        return p, changed
+
     os_raw = p.get("optionStock")
     if isinstance(os_raw, dict) and os_raw:
         os_map = _clean_option_stock(os_raw)
@@ -1137,20 +1147,12 @@ def _clean_option_stock(raw):
     return out
 
 
-_OUT_WORDS = ("out", "sold out", "soldout", "sold-out", "unavailable",
-              "false", "0", "no", "off")
+_OUT_WORDS = ("out", "out of stock", "sold out", "soldout", "sold-out",
+              "unavailable", "currently unavailable", "false", "0", "no", "off")
 
 
 def _explicit_out_of_stock(product):
-    """True when the payload itself switches the WHOLE product off.
-
-    Recognised spellings: the admin editor's ``stockStatus`` / API clients'
-    ``stock_status`` set to "out", or an explicit ``is_in_stock`` /
-    ``in_stock`` of false. Anything else - including the fields being absent
-    entirely - means "no opinion", and availability then follows the
-    quantity rules exactly as before (so plain patch writes and seed rows
-    are untouched). Only a deliberate OFF is a hard override.
-    """
+    """True when the payload explicitly switches the whole product off."""
     p = product if isinstance(product, dict) else {}
     for key in ("stockStatus", "stock_status"):
         raw = p.get(key)
@@ -1168,6 +1170,51 @@ def _explicit_out_of_stock(product):
             return True
         if not isinstance(raw, (dict, list)) and str(raw).strip().lower() in _OUT_WORDS:
             return True
+    return False
+
+
+_IN_WORDS = ("in", "in stock", "instock", "available", "true", "1", "yes", "on")
+
+
+def _manual_stock_lock(product):
+    """Resolve the durable whole-product supplier stock lock.
+
+    An explicit available status clears an older lock; an explicit out status
+    establishes it. When the request carries neither, the stored boolean is
+    retained across catalogue reads, supplier refreshes and redeploys.
+    """
+    p = product if isinstance(product, dict) else {}
+    for key in ("stockStatus", "stock_status"):
+        raw = p.get(key)
+        if raw is None or isinstance(raw, bool):
+            continue
+        value = str(raw).strip().lower()
+        if value in _OUT_WORDS:
+            return True
+        if value in _IN_WORDS:
+            return False
+    for key in ("is_in_stock", "in_stock"):
+        if key not in p or p.get(key) is None:
+            continue
+        raw = p.get(key)
+        if raw is False or (isinstance(raw, (int, float)) and raw == 0):
+            return True
+        if raw is True or (isinstance(raw, (int, float)) and raw > 0):
+            return False
+        if not isinstance(raw, (dict, list)):
+            value = str(raw).strip().lower()
+            if value in _OUT_WORDS:
+                return True
+            if value in _IN_WORDS:
+                return False
+    raw_lock = (p.get("manualStockLock") if p.get("manualStockLock") is not None
+                else p.get("manual_stock_lock"))
+    if isinstance(raw_lock, bool):
+        return raw_lock
+    if isinstance(raw_lock, (int, float)):
+        return raw_lock != 0
+    if isinstance(raw_lock, str):
+        return raw_lock.strip().lower() in _IN_WORDS
     return False
 
 
@@ -2154,6 +2201,8 @@ def reserve_stock(pid, qty, option_key=None, actor=None):
         if found is None:
             return None
         rec = dict(found)
+        if _manual_stock_lock(rec):
+            return None
         stock = stock_of(rec)
         if rec.get("online") is False or stock < qty:
             return None
@@ -2330,7 +2379,8 @@ def apply_supplier_stock(pid, stock, option_changes=None, actor="supplier-watchd
         row = _read_back_product(pid)
         if row is None:
             return None, "error", False
-        return row, "updated", True
+        action = "manual-stock-locked" if _manual_stock_lock(row) else "updated"
+        return row, action, True
 
     path = _norm_filename(CATALOG_FILE)
     with _catalog_lock(path):
@@ -2345,6 +2395,8 @@ def apply_supplier_stock(pid, stock, option_changes=None, actor="supplier-watchd
                             if str((p or {}).get("id") or "").strip() == pid), None)
         if current is None or is_permanently_removed(current):
             return None, "permanently-removed", True
+        if _manual_stock_lock(current):
+            return current, "manual-stock-locked", True
         if changes is not None:
             if not current.get("options") and not current.get("optionStock"):
                 return None, "error", False
@@ -2448,6 +2500,7 @@ def set_variant_stock(pid, qty, option_key=None, actor=None):
         else:
             rec["stock"] = qty
         rec["stock_quantity"] = rec["stock"]
+        rec["stockStatus"] = "in" if rec["stock"] > 0 else "out"
         try:
             clean = normalize(rec)
             if clean is None:
@@ -2479,6 +2532,7 @@ def set_variant_stock(pid, qty, option_key=None, actor=None):
         else:
             rec["stock"] = qty
         rec["stock_quantity"] = rec["stock"]
+        rec["stockStatus"] = "in" if rec["stock"] > 0 else "out"
         try:
             clean = normalize(rec)
             if clean is None:

@@ -28,6 +28,27 @@ def normalize_currency(value):
     return ""
 
 
+def order_currency(order, default="NGN"):
+    """Resolve an order's explicit regional currency without misrouting it.
+
+    Blank legacy values may use the supplied compatibility default. A present
+    but unsupported currency returns ``""`` so callers that write financial
+    records can reject the order rather than silently treating it as Naira.
+    """
+    payload = order_payload(order)
+    stored = payload.get("accounting")
+    candidates = (
+        order_value(order, "currency"),
+        payload.get("currency"),
+        stored.get("currency") if isinstance(stored, dict) else None,
+    )
+    for value in candidates:
+        if value is None or not str(value).strip():
+            continue
+        return normalize_currency(value)
+    return normalize_currency(default)
+
+
 def decimal_value(value, default=Decimal(0)):
     try:
         if isinstance(value, bool) or value is None or str(value).strip() == "":
@@ -49,6 +70,15 @@ def validated_amount(value):
     """Return an integer amount, or None when an edit is invalid."""
     parsed = decimal_value(value, None)
     if parsed is None or not parsed.is_finite() or parsed < 0 or parsed > AMOUNT_MAX:
+        return None
+    return int(parsed.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def validated_signed_amount(value):
+    """Return a signed whole-unit amount for a manual net-profit override."""
+    parsed = decimal_value(value, None)
+    if (parsed is None or not parsed.is_finite()
+            or abs(parsed) > AMOUNT_MAX):
         return None
     return int(parsed.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
@@ -525,7 +555,12 @@ def entry_figures(snapshot, currency="NGN", rate=LEGACY_RATE):
             transport_ngn = transport
             transport_cfa = supplier_cost_cfa(transport_ngn, rate)
 
-    net_profit = sale - discount - supplier_in_currency - transport
+    calculated_profit = sale - discount - supplier_in_currency - transport
+    raw_override = snapshot.get("profitOverride")
+    profit_override = (None if raw_override in (None, "")
+                       else validated_signed_amount(raw_override))
+    net_profit = (profit_override if profit_override is not None
+                  else calculated_profit)
     return {
         "saleAmount": sale,
         "discount": discount,
@@ -535,6 +570,9 @@ def entry_figures(snapshot, currency="NGN", rate=LEGACY_RATE):
         "deliveryExpense": transport,
         "deliveryExpenseNgn": transport_ngn,
         "deliveryExpenseCfa": transport_cfa,
+        "calculatedProfit": calculated_profit,
+        "profitOverride": profit_override,
+        "profitOverrideActive": profit_override is not None,
         "netProfit": net_profit,
         "netCashProfit": net_profit,
     }
@@ -916,6 +954,9 @@ def entry_from_order(order, archived_ids=None):
         "deliveryExpenseNgn": figures["deliveryExpenseNgn"],
         "deliveryExpenseCfa": figures["deliveryExpenseCfa"],
         "supplierCostInCurrency": supplier_in_currency,
+        "calculatedProfit": figures["calculatedProfit"],
+        "profitOverride": figures["profitOverride"],
+        "profitOverrideActive": figures["profitOverrideActive"],
         "netProfit": figures["netProfit"],
         "netCashProfit": figures["netCashProfit"],
         "exchangeRate": float(rate),
@@ -970,23 +1011,34 @@ def batch_transport(batch):
 
 
 def batch_net_profit(batch):
-    """Batch net profit: revenue - discounts - supplier - transport."""
+    """Batch profit, preserving final per-order overrides and signed losses."""
+    if not isinstance(batch, dict):
+        return 0
+    rows = [row for row in (batch.get("orders") or []) if isinstance(row, dict)]
     totals = batch.get("totals") if isinstance(batch.get("totals"), dict) else {}
     transport, mode = batch_transport(batch)
+    if rows:
+        return batch_totals(
+            rows, batch.get("currency"), transport if mode == "batch" else None
+        )["netCashProfit"]
     if mode == "batch" and amount(totals.get("transportExpense")) != transport:
         return (amount(totals.get("customerRevenue"))
                 - amount(totals.get("discountsTotal"))
                 - amount(totals.get("supplierCostInCurrency"))
                 - transport)
-    return amount(totals.get("netCashProfit"))
+    saved_profit = validated_signed_amount(totals.get("netCashProfit"))
+    return saved_profit if saved_profit is not None else 0
 
 
 def batch_totals(entries, currency, batch_transport_fee=None):
-    """Currency-safe calculator totals for a single-currency batch.
+    """Currency-safe totals for one ledger, including explicit profit overrides.
 
-    ``batch_transport_fee`` is the single Batch Transportation Fee for the
-    whole batch. When it is ``None`` (the box was left blank) the individual
-    per-order transport fees are summed instead.
+    When a batch fee is supplied it replaces the selected orders' individual
+    transport costs and is allocated evenly in whole currency units (remainder
+    to the first order). A per-order ``profitOverride`` is a final, signed net
+    profit after discounts and transport; it intentionally remains authoritative
+    when the batch fee changes. Non-overridden orders use the recalculated
+    formula with their allocated transport share.
     """
     currency = normalize_currency(currency) or "NGN"
     rows = [row for row in (entries or [])
@@ -998,8 +1050,27 @@ def batch_totals(entries, currency, batch_transport_fee=None):
     per_order_transport = sum(amount(row.get("deliveryExpense")) for row in rows)
     if batch_transport_fee is None:
         transport = per_order_transport
+        shares = [amount(row.get("deliveryExpense")) for row in rows]
     else:
         transport = amount(batch_transport_fee)
+        share, remainder = divmod(transport, max(1, len(rows)))
+        shares = [share + (remainder if index == 0 else 0)
+                  for index in range(len(rows))]
+
+    net_profit = 0
+    for row, row_transport in zip(rows, shares):
+        raw_override = row.get("profitOverride")
+        override = (None if raw_override in (None, "")
+                    else validated_signed_amount(raw_override))
+        if override is not None:
+            net_profit += override
+        else:
+            net_profit += (
+                amount(row.get("saleAmount"))
+                - amount(row.get("discount"))
+                - amount(row.get("supplierCostInCurrency"))
+                - row_transport
+            )
     return {
         "currency": currency,
         "orderCount": len(rows),
@@ -1008,7 +1079,7 @@ def batch_totals(entries, currency, batch_transport_fee=None):
         "supplierPayableNgn": supplier_ngn,
         "supplierCostInCurrency": supplier_currency,
         "transportExpense": transport,
-        "netCashProfit": revenue - discounts - supplier_currency - transport,
+        "netCashProfit": net_profit,
     }
 
 
@@ -1043,7 +1114,8 @@ def new_expense(kind, currency, value, *, note="", at="", actor="",
                 batch_id="", expense_id=""):
     """Build one validated manual-expense record (or None when invalid)."""
     kind = normalize_expense_kind(kind)
-    if not kind:
+    currency = normalize_currency(currency)
+    if not kind or not currency:
         return None
     total = validated_amount(value)
     if total is None or total <= 0 or total > EXPENSE_MAX * 10_000:
@@ -1052,7 +1124,7 @@ def new_expense(kind, currency, value, *, note="", at="", actor="",
     return {
         "id": str(expense_id or ("EXP-" + _secrets.token_hex(5).upper())),
         "kind": kind,
-        "currency": normalize_currency(currency) or "NGN",
+        "currency": currency,
         "amount": total,
         "note": str(note or "")[:300],
         "batchId": str(batch_id or "")[:40],
@@ -1177,6 +1249,7 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
     today = today or _datetime.datetime.now(_datetime.timezone.utc).date()
     start, end = _sheets.period_bounds(period, today=today)
     revenue = discounts = supplier = transport = fees = order_count = 0
+    pushed_profit = manual_expenses = manual_fees = 0
     matching = []
     for batch in batches or []:
         if not isinstance(batch, dict):
@@ -1189,6 +1262,7 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
         revenue += amount(totals.get("customerRevenue"))
         discounts += amount(totals.get("discountsTotal"))
         supplier += amount(totals.get("supplierCostInCurrency"))
+        pushed_profit += batch_net_profit(batch)
         # A batch logged with a single Batch Transportation Fee contributes
         # that one figure; a batch without one contributes the sum of its
         # individual per-order transport fees.
@@ -1205,9 +1279,13 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
         if not _sheets._in_filters(_row_date_safe(day), start, end):
             continue
         if normalize_expense_kind(expense.get("kind")) == "fee":
-            transport += amount(expense.get("amount"))
+            value = amount(expense.get("amount"))
+            transport += value
+            manual_fees += value
         else:
-            supplier += amount(expense.get("amount"))
+            value = amount(expense.get("amount"))
+            supplier += value
+            manual_expenses += value
     matching.sort(key=lambda row: str(row.get("pushedAt")
                                       or row.get("createdAt") or ""), reverse=True)
     return {
@@ -1220,7 +1298,11 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
         "supplierCosts": supplier,
         "transport": transport,
         "transferFees": fees,
-        "netProfit": revenue - discounts - supplier - transport - fees,
+        # The batch snapshots may contain final manual net-profit overrides,
+        # so use their stored aggregate profit rather than recomputing it from
+        # revenue/cost columns. Only external expenses and transfer charges
+        # are deducted here (their display totals remain in supplier/transport).
+        "netProfit": pushed_profit - manual_expenses - manual_fees - fees,
         "orderCount": order_count,
         "batchCount": len(matching),
         "batches": matching,

@@ -112,6 +112,7 @@ def test_metadata_failure_is_not_acknowledged_as_a_saved_order(durable, monkeypa
     monkeypatch.setattr(sb, 'save_categories', lambda cats: False)
     with pytest.raises(RuntimeError):
         api._save_categories([{'id':'perfume','name':'Perfume','nameFr':'Parfum','order':0}])
+    assert durable.rows == {}, "the categories table is restored after companion failure"
 
 
 def test_owner_adds_category_and_shoppers_see_it_immediately(durable, monkeypatch):

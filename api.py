@@ -225,29 +225,36 @@ def _categories_data_uncached():
     if Config.ENV != "testing":
         try:
             from supabase_store import enabled as _sb_enabled
-            from supabase_store import load_categories_table
+            from supabase_store import load_categories_state, load_categories_table
             if _sb_enabled():
                 rows = load_categories_table()
-                from supabase_store import load_categories
-                details = load_categories()
-                if rows is None and details is None:
+                details_ok, details_found, details = load_categories_state()
+                if not details_ok:
+                    raise RuntimeError("Supabase category details unavailable")
+                if rows is None and not details_found:
                     raise RuntimeError("Supabase categories unavailable")
-                by_id = {}
-                if details:
-                    for c in details:
+                details_by_id = {}
+                if details_found:
+                    for c in details or []:
                         if isinstance(c, dict) and c.get("id"):
-                            by_id[str(c["id"]).strip()] = dict(c)
+                            details_by_id[str(c["id"]).strip()] = dict(c)
                 if rows is not None:
+                    # The categories table owns membership; its empty set is
+                    # meaningful. The JSON companion enriches those live rows,
+                    # but stale detail-only records must never resurrect a
+                    # category the owner removed from the table.
+                    by_id = {}
                     for row in rows:
                         cid = str(row.get("id") or "").strip()
                         if not cid:
                             continue
-                        if cid in by_id:
-                            for k, v in row.items():
-                                if v is not None and v != "":
-                                    by_id[cid][k] = v
-                        else:
-                            by_id[cid] = dict(row)
+                        merged = dict(details_by_id.get(cid) or {})
+                        for k, v in row.items():
+                            if v is not None and v != "":
+                                merged[k] = v
+                        by_id[cid] = merged
+                else:
+                    by_id = details_by_id
                 if rows is None and not by_id:
                     raise RuntimeError("Supabase categories unavailable")
                 return {"categories": list(by_id.values()), "updatedAt": "", "updatedBy": ""}
@@ -272,7 +279,8 @@ def _categories_cache_key():
     key = (Config.ENV, os.path.abspath(CATEGORIES_FILE))
     try:
         import supabase_store as _sb
-        return key + (id(_sb.enabled), id(_sb.load_categories_table), id(_sb.load_categories))
+        return key + (id(_sb.enabled), id(_sb.load_categories_table),
+                      id(_sb.load_categories_state))
     except Exception:
         return key
 
@@ -312,14 +320,32 @@ def _save_categories(categories, actor=None):
         try:
             from supabase_store import enabled as _sb_enabled
             if _sb_enabled():
-                from supabase_store import save_categories_table
+                from supabase_store import (
+                    load_categories_state, load_categories_table,
+                    save_categories, save_categories_table,
+                )
+                # Both stores are read before either is mutated so a later
+                # companion failure can be compensated. The category table is
+                # the public index; the JSON row preserves fields that a legacy
+                # table may not have (French name, order, hidden flag, image).
+                previous_table = load_categories_table()
+                if previous_table is None:
+                    raise RuntimeError("The current Supabase category table could not be read")
+                details_readable, _details_found, previous_details = load_categories_state()
+                if not details_readable:
+                    raise RuntimeError("The current Supabase category details could not be read")
+                previous_details = previous_details or []
                 if not save_categories_table(categories):
+                    # The table upsert may have succeeded while its prune
+                    # failed. Restore the previous full set before returning.
+                    if not save_categories_table(previous_table):
+                        print("[supabase] category table rollback failed after write error")
                     raise RuntimeError("Supabase categories write failed")
-                # The legacy table may lack French/image/hidden/order columns.
-                # Its durable JSON companion preserves those fields without a
-                # manual schema migration. Never acknowledge a lost order.
-                from supabase_store import save_categories
                 if not save_categories(categories):
+                    table_restored = save_categories_table(previous_table)
+                    details_restored = save_categories(previous_details)
+                    if not table_restored or not details_restored:
+                        print("[supabase] category rollback incomplete after companion failure")
                     raise RuntimeError("Category details could not be saved; please retry")
                 _invalidate_category_cache()
                 return payload
@@ -375,6 +401,7 @@ def products():
 # inventory fields below are public; supplier references and internal stock
 # aliases remain private. Admin rows continue to carry the canonical fields.
 _FORBIDDEN_PUBLIC_KEYS = ("stock", "stock_quantity", "optionStock",
+                         "manualStockLock", "manual_stock_lock",
                          "variantStock", "inventory",
                          # Supplier and per-option sourcing/SKU notes are
                          # internal admin reference data, never a shopper's
@@ -421,25 +448,31 @@ def _supplier_tracked(product):
 def _public_product(p):
     out = {k: v for k, v in dict(p or {}).items() if k not in _FORBIDDEN_PUBLIC_KEYS}
     out["supplierTracked"] = _supplier_tracked(p)
+    manual_lock = catalog_mod._manual_stock_lock(p)
     qty = catalog_mod.stock_of(p)
     os_map = p.get("optionStock") if isinstance(p, dict) else None
     if isinstance(os_map, dict) and os_map:
         # Variant quantities are authoritative; keep the product total equal
         # to their sum, and publish the exact per-variant remainder so the
         # storefront can strictly cap each selection (and the server can give
-        # an accurate "Only N items remaining" message).
+        # an accurate "Only N items remaining" message). A durable manual lock
+        # is the exception: retain variant names but never expose sellable stock.
         cleaned = {}
         for k, v in os_map.items():
             try:
                 cleaned[str(k)] = max(0, int(v or 0))
             except (TypeError, ValueError):
                 cleaned[str(k)] = 0
+        if manual_lock:
+            cleaned = {key: 0 for key in cleaned}
         out["option_stock_available"] = cleaned
         out["option_stock_status"] = {k: ("in" if v > 0 else "out")
                                       for k, v in cleaned.items()}
         qty = sum(cleaned.values())
+    if manual_lock:
+        qty = 0
     out["stock_available"] = qty
-    out["stock_status"] = "in" if qty > 0 else "out"
+    out["stock_status"] = "out" if manual_lock else ("in" if qty > 0 else "out")
     return out
 
 
@@ -900,6 +933,7 @@ def _stock_rows_for_read():
         pid = str(p.get("id") or "")
         if not pid:
             continue
+        manual_out = catalog_mod._manual_stock_lock(p)
         os_map = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else None
         if os_map:
             for key, val in (os_map or {}).items():
@@ -910,7 +944,7 @@ def _stock_rows_for_read():
                     qty = 0
                 rows.append({"product_id": pid, "variant_key": str(key),
                              "variant_label": old.get("variant_label") or str(key),
-                             "qty": max(0, qty),
+                             "qty": max(0, qty), "manual_out": manual_out,
                              "low_threshold": int(old.get("low_threshold")
                                                   or Config.LOW_STOCK_THRESHOLD)})
         else:
@@ -918,6 +952,7 @@ def _stock_rows_for_read():
             rows.append({"product_id": pid, "variant_key": "__default__",
                          "variant_label": old.get("variant_label") or "Default",
                          "qty": max(0, catalog_mod.stock_of(p)),
+                         "manual_out": manual_out,
                          "low_threshold": int(old.get("low_threshold")
                                               or Config.LOW_STOCK_THRESHOLD)})
     return rows
@@ -933,7 +968,8 @@ def stock():
     for r in rows:
         item = {
             "variant": r["variant_key"], "label": r["variant_label"],
-            "state": "out" if r["qty"] <= 0 else ("low" if r["qty"] <= r["low_threshold"] else "in"),
+            "state": ("out" if r.get("manual_out") or r["qty"] <= 0
+                      else ("low" if r["qty"] <= r["low_threshold"] else "in")),
         }
         if admin:
             item["qty"] = r["qty"]
@@ -1060,6 +1096,8 @@ def _variant_values(variant):
 def _stock_available(product, variant="__default__"):
     """Integer availability; a selected but unassigned variant is zero stock."""
     if not isinstance(product, dict):
+        return 0
+    if catalog_mod._manual_stock_lock(product):
         return 0
     base = catalog_mod.stock_of(product)
     selected = str(variant or "").strip()
@@ -1519,7 +1557,11 @@ def validate_cart_stock():
             "color": sec.clean(item.get("color") or item.get("variant"), 120),
         })
 
-    currency = sec.clean(d.get("currency"), 3).upper() or "NGN"
+    raw_currency = sec.clean(d.get("currency"), 8).upper()
+    currency = (accounting_mod.normalize_currency(raw_currency)
+                if raw_currency else "NGN")
+    if not currency:
+        return jsonify(ok=False, error="Choose NGN or CFA / XOF currency."), 400
     validated, subtotal, error = _checkout_items(clean_items, currency)
     if error:
         return error
@@ -1749,7 +1791,12 @@ def create_order():
             "note": sec.clean(it.get("note"), 300),
         })
 
-    requested_currency = sec.clean(d.get("currency"), 3).upper()
+    requested_currency_raw = sec.clean(d.get("currency"), 8).upper()
+    requested_currency = (accounting_mod.normalize_currency(requested_currency_raw)
+                          if requested_currency_raw else "")
+    if requested_currency_raw and not requested_currency:
+        return jsonify(ok=False, error="Choose NGN or CFA / XOF currency.",
+                       field="currency"), 400
     payment_method = sec.clean(d.get("paymentMethod"), 40).lower()
     if not payment_method:
         # Backwards compatibility for queued checkouts from older storefront
@@ -2908,8 +2955,7 @@ def _accounting_settings_defaults():
     return {
         "startingBalanceNgn": 0,
         "startingBalanceCfa": 0,
-        # GOOGLE_SHEET_ID (Render) beats the built-in ITEMFLOW default; a value
-        # saved on the accounting desk beats both.
+        # Pushes are intentionally fixed to the workbook selected by the owner.
         "referenceSpreadsheetId": google_sheets.reference_spreadsheet_id(),
     }
 
@@ -2942,9 +2988,8 @@ def _accounting_settings():
     merged["startingBalanceCfa"] = accounting_mod.starting_profit(merged, "CFA")
     merged["startingProfitNgn"] = merged["startingBalanceNgn"]
     merged["startingProfitCfa"] = merged["startingBalanceCfa"]
-    merged["referenceSpreadsheetId"] = sec.clean(
-        merged.get("referenceSpreadsheetId"), 120) or \
-        google_sheets.reference_spreadsheet_id()
+    # Legacy saved IDs are ignored; all views expose the required fixed target.
+    merged["referenceSpreadsheetId"] = google_sheets.reference_spreadsheet_id()
     return merged
 
 
@@ -2972,8 +3017,13 @@ def _accounting_save_settings(patch):
     current["startingProfitNgn"] = current.get("startingBalanceNgn", 0)
     current["startingProfitCfa"] = current.get("startingBalanceCfa", 0)
     if "referenceSpreadsheetId" in patch:
-        current["referenceSpreadsheetId"] = sec.clean(
-            patch.get("referenceSpreadsheetId"), 120)
+        import google_sheets
+        requested = google_sheets.extract_spreadsheet_id(
+            sec.clean(patch.get("referenceSpreadsheetId"), 200))
+        target = google_sheets.reference_spreadsheet_id()
+        if requested and requested != target:
+            return None, "The accounting Google Sheets destination is fixed and cannot be redirected."
+        current["referenceSpreadsheetId"] = target
     serialized = json.dumps(current, ensure_ascii=False, separators=(",", ":"))
     if _accounting_uses_supabase():
         if not supabase_store.save_accounting_settings(current):
@@ -3005,7 +3055,8 @@ _ACCOUNTING_BATCH_SNAPSHOT_FIELDS = (
     "discount", "discountPercent", "lineItems", "supplierCostNgn", "supplierCostCfa",
     "supplierUnitPriceNgn", "supplierQty", "supplierLink",
     "supplierCostInCurrency", "deliveryExpense", "deliveryExpenseNgn",
-    "deliveryExpenseCfa", "netProfit", "netCashProfit",
+    "deliveryExpenseCfa", "calculatedProfit", "profitOverride",
+    "profitOverrideActive", "netProfit", "netCashProfit",
     "exchangeRate", "notes", "legacySnapshot")
 
 
@@ -3068,8 +3119,13 @@ def admin_accounting():
     # archived rows back for auditing.
     include_archived = request.args.get("includeArchived") == "true"
     entries = []
+    invalid_currency_orders = []
     for order in orders:
         if not isinstance(order, dict) and not hasattr(order, "keys"):
+            continue
+        if not accounting_mod.order_currency(order):
+            invalid_currency_orders.append(str(
+                accounting_mod.order_value(order, "id") or "(unknown order)"))
             continue
         entry = _accounting_order_entry(order, archived_ids)
         if entry["archived"] and not include_archived:
@@ -3088,6 +3144,7 @@ def admin_accounting():
     response = jsonify(
         ok=True,
         entries=entries,
+        invalidCurrencyOrders=invalid_currency_orders,
         batches=[batch for batch in batches if isinstance(batch, dict)],
         archivedOrderIds=sorted(archived_ids),
         expenses=expenses,
@@ -3096,11 +3153,10 @@ def admin_accounting():
         currentExchangeRate=float(accounting_mod.current_exchange_rate()),
         legacyRate=float(accounting_mod.LEGACY_RATE),
         google=google_sheets.integration_status(),
-        # Do not expose an unverified saved / environment ID as a link or
-        # target. The active native sheet ID is returned by the verify/push
-        # response only after strict Drive title + MIME validation.
-        googleSheetId="",
-        googleSheetTitle=google_sheets.REFERENCE_SPREADSHEET_TITLE,
+        # This is a public workbook identifier selected by the owner; pushes
+        # still validate its native Google Sheets MIME type before writing.
+        googleSheetId=google_sheets.REFERENCE_SPREADSHEET_ID,
+        googleSheetTitle=google_sheets.REFERENCE_WORKBOOK_LABEL,
         transportFeeHint=("Fill Batch Transportation Fee once for the whole "
                           "batch, or leave it blank to add up the per-order "
                           "transport fees."),
@@ -3124,7 +3180,12 @@ def _accounting_summary_json(status=200, **payload):
 def admin_accounting_summary():
     """Four-card summary sourced from the connected owner's Google ledger."""
     import google_sheets
-    currency = accounting_mod.normalize_currency(request.args.get("currency")) or "NGN"
+    raw_currency = request.args.get("currency")
+    currency = (accounting_mod.normalize_currency(raw_currency)
+                if raw_currency not in (None, "") else "NGN")
+    if not currency:
+        return _accounting_summary_json(
+            status=400, ok=False, error="Choose NGN or CFA / XOF currency.")
     period = sec.clean(request.args.get("period"), 16).lower()
     if period not in ("week", "month", "year"):
         period = "month"
@@ -3147,12 +3208,19 @@ def admin_accounting_summary():
         return _accounting_summary_json(
             status=503, ok=False, google=google,
             error="Confirmed orders are temporarily unavailable.")
-    entries = [accounting_mod.entry_from_order(order) for order in orders
-               if isinstance(order, dict) or hasattr(order, "keys")]
+    valid_orders = [order for order in orders
+                    if (isinstance(order, dict) or hasattr(order, "keys"))
+                    and accounting_mod.order_currency(order)]
+    invalid_count = sum(1 for order in orders
+                        if (isinstance(order, dict) or hasattr(order, "keys"))
+                        and not accounting_mod.order_currency(order))
+    entries = [accounting_mod.entry_from_order(order) for order in valid_orders]
     summary = google_sheets.aggregate_fallback(
         entries, currency, period=period, batch=batch)
+    warning = (f"{invalid_count} order(s) with unsupported currency were excluded."
+               if invalid_count else "")
     return _accounting_summary_json(ok=True, google=google,
-                                    summary=summary, error="")
+                                    summary=summary, error=warning)
 
 
 @api.get("/admin/accounting/google/verify")
@@ -3178,6 +3246,26 @@ def admin_accounting_google_verify():
                   "message": f"{type(exc).__name__}: {str(exc)[:200]}"}
     response = jsonify(ok=True, google=google_sheets.integration_status(),
                        verification=report)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@api.get("/admin/accounting/google/ledger/<currency>")
+@authmod.require_admin
+def admin_accounting_google_ledger_link(currency):
+    """Redirect to the fixed workbook's NGN or CFA tab by its current gid."""
+    import google_sheets
+    key = str(currency or "").strip().upper()
+    if key not in ("NGN", "CFA", "FCFA", "XOF"):
+        return jsonify(ok=False, error="Choose the NGN or CFA ledger."), 404
+    canonical = "CFA" if key in ("CFA", "FCFA", "XOF") else "NGN"
+    try:
+        target = google_sheets.reference_tab_url(canonical)
+    except google_sheets.GoogleSheetsError as exc:
+        # Never send a currency-specific button to the workbook's default tab:
+        # without OAuth metadata, its numeric tab gid cannot be verified.
+        return jsonify(ok=False, error=str(exc)), 503
+    response = redirect(target, code=302)
     response.headers["Cache-Control"] = "private, no-store"
     return response
 
@@ -3284,7 +3372,8 @@ def admin_accounting_order_update(oid):
     d = request.get_json(silent=True) or {}
     fields = {"saleAmount", "supplierCostNgn", "supplierUnitPriceNgn",
               "supplierQty", "supplierLink", "lineItems", "discount", "discountPercent",
-              "deliveryExpense", "notes", "exchangeRate", "applyActiveRate"}
+              "deliveryExpense", "profitOverride", "notes", "exchangeRate",
+              "applyActiveRate"}
     changed = fields.intersection(d)
     if not changed:
         return _accounting_mutation_error("Provide at least one accounting field to update.")
@@ -3308,6 +3397,17 @@ def admin_accounting_order_update(oid):
         snapshot["deliveryExpense"] = value
         snapshot["deliveryExpenseNgn"] = value
         snapshot.pop("deliveryExpenseCfaOverride", None)
+    if "profitOverride" in changed:
+        raw_override = d.get("profitOverride")
+        if raw_override is None or (isinstance(raw_override, str)
+                                    and not raw_override.strip()):
+            snapshot.pop("profitOverride", None)
+        else:
+            override = accounting_mod.validated_signed_amount(raw_override)
+            if override is None:
+                return _accounting_mutation_error(
+                    "Profit override must be a signed whole amount within the supported limit.")
+            snapshot["profitOverride"] = override
     if "lineItems" in changed:
         snapshot, line_error = accounting_mod.apply_line_items(
             snapshot, order, d.get("lineItems"))
@@ -3420,6 +3520,12 @@ def admin_accounting_batch_create():
             return jsonify(ok=False, error=(
                 "Some selected orders are no longer confirmed: " + ", ".join(missing[:10])),
                 code="orders_changed"), 409
+        invalid_currency = [oid for oid in order_ids
+                            if not accounting_mod.order_currency(by_id[oid])]
+        if invalid_currency:
+            return _accounting_mutation_error(
+                "Orders with unsupported currency cannot be added to a batch: "
+                + ", ".join(invalid_currency[:10]), 409)
         entries = [accounting_mod.entry_from_order(by_id[oid], archived_ids)
                    for oid in order_ids]
         if any(entry["deleted"] for entry in entries):
@@ -3430,7 +3536,11 @@ def admin_accounting_batch_create():
         if len(currencies) != 1:
             return _accounting_mutation_error("A delivery batch must use one ledger currency.", 409)
         currency = currencies.pop()
-        requested_currency = accounting_mod.normalize_currency(d.get("currency"))
+        requested_raw = sec.clean(d.get("currency"), 8).upper()
+        requested_currency = (accounting_mod.normalize_currency(requested_raw)
+                              if requested_raw else "")
+        if requested_raw and not requested_currency:
+            return _accounting_mutation_error("Choose NGN or CFA / XOF currency.")
         if requested_currency and requested_currency != currency:
             return _accounting_mutation_error("The selected orders do not match the active ledger.", 409)
 
@@ -3462,10 +3572,10 @@ def admin_accounting_batch_create():
 def admin_accounting_push():
     """Push staged orders to Google Sheets, then clear them off the queue.
 
-    The selected confirmed orders are routed automatically: NGN orders land on
-    the NGN tab and FCFA orders on the FCFA tab of the reference workbook (or
-    each currency's own app-created ledger when no reference workbook is set).
-    Only after every row is confirmed written is the batch archived - a failed
+    The selected confirmed orders are routed automatically to the fixed
+    workbook: NGN orders land on ``NGN Ledger`` and FCFA/XOF orders on
+    ``CFA Ledger``. Only after every row is confirmed written is the batch
+    archived - a failed
     push leaves the orders staged so nothing can be lost or double-counted.
     """
     import google_sheets
@@ -3481,7 +3591,11 @@ def admin_accounting_push():
     transfer_fee = accounting_mod.validated_amount(d.get("transferFee") or 0)
     if transfer_fee is None:
         return _accounting_mutation_error("Transfer fee must be a non-negative whole amount.")
-    fee_currency = accounting_mod.normalize_currency(d.get("feeCurrency"))
+    fee_currency_raw = sec.clean(d.get("feeCurrency"), 8).upper()
+    fee_currency = (accounting_mod.normalize_currency(fee_currency_raw)
+                    if fee_currency_raw else "")
+    if fee_currency_raw and not fee_currency:
+        return _accounting_mutation_error("Transfer-fee currency must be NGN or CFA / XOF.")
     # One optional Batch Transportation Fee covers the WHOLE batch. Blank
     # falls back to the individual per-order transport fees already logged on
     # the staged rows.
@@ -3491,10 +3605,15 @@ def admin_accounting_push():
         return _accounting_mutation_error(batch_fee_error)
     # The current UI always sends the fee as an NGN base. Keep the old
     # currency field readable for legacy clients that explicitly entered CFA.
-    batch_fee_input_currency = (
-        "NGN" if "batchTransportFeeNgn" in d
-        else accounting_mod.normalize_currency(d.get("batchTransportFeeCurrency"))
-        or "NGN")
+    batch_fee_currency_raw = sec.clean(d.get("batchTransportFeeCurrency"), 8).upper()
+    if "batchTransportFeeNgn" in d or not batch_fee_currency_raw:
+        batch_fee_input_currency = "NGN"
+    else:
+        batch_fee_input_currency = accounting_mod.normalize_currency(batch_fee_currency_raw)
+    if ("batchTransportFeeNgn" not in d and batch_fee_currency_raw
+            and not batch_fee_input_currency):
+        return _accounting_mutation_error(
+            "Batch transportation fee currency must be NGN or CFA / XOF.")
     name = sec.clean(d.get("name"), 100)
 
     with _ACCOUNTING_BATCH_LOCK:
@@ -3512,6 +3631,12 @@ def admin_accounting_push():
             return jsonify(ok=False, error=(
                 "Some selected orders are no longer confirmed: " + ", ".join(missing[:10])),
                 code="orders_changed"), 409
+        invalid_currency = [oid for oid in order_ids
+                            if not accounting_mod.order_currency(by_id[oid])]
+        if invalid_currency:
+            return _accounting_mutation_error(
+                "Orders with unsupported currency cannot be pushed to Google Sheets: "
+                + ", ".join(invalid_currency[:10]), 409)
         entries = [accounting_mod.entry_from_order(by_id[oid], archived_ids)
                    for oid in order_ids]
         if any(entry["deleted"] for entry in entries):
@@ -3658,6 +3783,10 @@ def admin_accounting_batch_update(bid):
         if index is None:
             return _accounting_mutation_error("That delivery batch was not found.", 404)
         batch = dict(batches[index])
+        batch_currency = accounting_mod.normalize_currency(batch.get("currency"))
+        if not batch_currency:
+            return _accounting_mutation_error(
+                "This saved batch has an unsupported currency and cannot be edited.", 409)
         if "batchTransportFee" in d:
             fee, error = _accounting_batch_transport_fee(d.get("batchTransportFee"))
             if error:
@@ -3668,7 +3797,7 @@ def admin_accounting_batch_update(bid):
                 batch["transportSource"] = "per-order"
             else:
                 batch["batchTransportFee"] = fee
-                currency = accounting_mod.normalize_currency(batch.get("currency")) or "NGN"
+                currency = batch_currency
                 rows_for_rate = [row for row in (batch.get("orders") or [])
                                  if isinstance(row, dict)]
                 rate = (rows_for_rate[0].get("exchangeRate")
@@ -3795,8 +3924,11 @@ def admin_accounting_import_historical():
     if rate is None:
         rate = accounting_mod.current_exchange_rate()
 
-    default_currency = accounting_mod.normalize_currency(
-        (d.get("defaultCurrency") if isinstance(d, dict) else None)) or "NGN"
+    raw_default_currency = sec.clean(d.get("defaultCurrency"), 8).upper()
+    default_currency = (accounting_mod.normalize_currency(raw_default_currency)
+                        if raw_default_currency else "NGN")
+    if not default_currency:
+        return jsonify(ok=False, error="Default currency must be NGN or CFA / XOF."), 400
 
     result = importer.import_rows(headers, rows, rate=rate,
                                   default_currency=default_currency)
@@ -3968,7 +4100,11 @@ def admin_sales_insights():
     historical performance stays separated from the active accounting staging
     queue and can never be rewritten by a later order edit.
     """
-    currency = accounting_mod.normalize_currency(request.args.get("currency")) or "NGN"
+    raw_currency = sec.clean(request.args.get("currency"), 8).upper()
+    currency = (accounting_mod.normalize_currency(raw_currency)
+                if raw_currency else "NGN")
+    if not currency:
+        return jsonify(ok=False, error="Choose NGN or CFA / XOF currency."), 400
     period = sec.clean(request.args.get("period"), 16).lower()
     if period not in ("week", "month", "year", "all"):
         period = "month"
@@ -5065,6 +5201,7 @@ def admin_product_variants_upsert_alias():
         return jsonify(ok=False, error="Product not found."), 404
     patch = dict(product)
     dirty_fields = set()
+    explicit_availability = False
     # Explicitly collect every variant/admin field this endpoint may own.
     aliases = {
         "options": ("options",),
@@ -5087,6 +5224,8 @@ def admin_product_variants_upsert_alias():
             if name in d:
                 patch[canonical] = d.get(name)
                 dirty_fields.add(canonical)
+                if canonical == "stockStatus":
+                    explicit_availability = True
                 if canonical == "supplierSku":
                     patch["supplierUrl"] = d.get(name)
                     patch["supplier_url"] = d.get(name)
@@ -5094,6 +5233,7 @@ def admin_product_variants_upsert_alias():
     # Availability flags an API client may send instead of stockStatus.
     for name in ("is_in_stock", "in_stock"):
         if name in d:
+            explicit_availability = True
             flag = d.get(name)
             off = (flag is False
                    or (isinstance(flag, (int, float)) and flag == 0)
@@ -5132,15 +5272,31 @@ def admin_product_variants_upsert_alias():
             if explicit_qty == 0:
                 patch["stockStatus"] = "out"
                 dirty_fields.add("stockStatus")
-            elif current_map and map_sum == 0:
-                # The mirror image: re-stocking a product whose variants were
-                # all sold out with a plain whole-product quantity. The typed
-                # number is the new availability, so the all-zero variant map
-                # must not pin the row (and the public badge) to "out"
-                # forever. Per-variant tracking simply resumes the next time
-                # variant quantities are saved.
-                patch["optionStock"] = {}
-                dirty_fields.add("optionStock")
+            elif explicit_qty > 0:
+                if not explicit_availability:
+                    patch["stockStatus"] = "in"
+                    dirty_fields.add("stockStatus")
+                if current_map and map_sum == 0:
+                    # Re-stocking a row whose variants were all zero with a
+                    # whole-product quantity clears variant tracking. An
+                    # explicit available status also clears the durable admin
+                    # lock so later supplier reads can update it again.
+                    patch["optionStock"] = {}
+                    dirty_fields.add("optionStock")
+    elif not explicit_availability:
+        # Variant editors send the entire optionStock map. Treat a non-empty
+        # map as the explicit availability decision: any positive variant
+        # clears a prior manual lock; an all-zero map establishes one.
+        raw_map = next((d.get(k) for k in variant_payload_keys if k in d), None)
+        if isinstance(raw_map, dict) and raw_map:
+            total = 0
+            for value in raw_map.values():
+                try:
+                    total += max(0, int(float(value or 0)))
+                except (TypeError, ValueError):
+                    continue
+            patch["stockStatus"] = "in" if total > 0 else "out"
+            dirty_fields.add("stockStatus")
     if dirty_fields:
         patch["baseUpdatedAt"] = str(product.get("updated_at") or "")
         patch["mergeBase"] = dict(product)
@@ -5759,7 +5915,7 @@ def admin_upload_image():
     ok, msg, url = storage.save_image(data, "products", f.filename or "")
     data = b""
     if not ok:
-        return jsonify(ok=False, error=msg), 500
+        return jsonify(ok=False, error=msg), 503
     return jsonify(ok=True, url=url)
 
 # ------------------------------------------------------ admin: hero video
@@ -5776,10 +5932,13 @@ def admin_upload_video():
     if not f:
         return jsonify(ok=False, error="No file received."), 400
     data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
+    ok, msg, _ext = storage.validate_video(data, f.filename or "")
+    if not ok:
+        return jsonify(ok=False, error=msg), 400
     ok, msg, url = storage.save_video(data, "videos", f.filename or "")
     data = b""
     if not ok:
-        return jsonify(ok=False, error=msg), 400
+        return jsonify(ok=False, error=msg), 503
     audit(authmod.current_admin(), "site.hero_video_upload", url, _ip())
     return jsonify(ok=True, url=url)
 
@@ -5798,11 +5957,13 @@ def admin_upload_category():
     if not f:
         return jsonify(ok=False, error="No file received."), 400
     data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
-    ext = storage._ext_from_bytes(data[:32])
+    ok, msg, ext = storage.validate_asset(data, f.filename or "")
+    if not ok:
+        return jsonify(ok=False, error=msg), 400
     ok, msg, url = storage.save_asset(data, "categories", f.filename or "")
     data = b""
     if not ok:
-        return jsonify(ok=False, error=msg), 400
+        return jsonify(ok=False, error=msg), 503
     audit(authmod.current_admin(), "site.category_asset_upload", url, _ip())
     return jsonify(ok=True, url=url, kind=storage.kind_for(ext))
 
@@ -5838,7 +5999,7 @@ def admin_upload_product():
         return jsonify(ok=False, error="Only JPG, PNG, WebP, GIF, AVIF, MP4, WebM or MOV files can be uploaded here."), 400
     data = b""
     if not ok:
-        return jsonify(ok=False, error=msg), 500
+        return jsonify(ok=False, error=msg), 503
     audit(authmod.current_admin(), "site.product_media_upload", url, _ip())
     return jsonify(ok=True, url=url, kind=kind)
 
@@ -5943,11 +6104,13 @@ def admin_upload_hero():
     if not f:
         return jsonify(ok=False, error="No file received."), 400
     data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
-    ext = storage._ext_from_bytes(data[:32])
+    ok, msg, ext = storage.validate_asset(data, f.filename or "")
+    if not ok:
+        return jsonify(ok=False, error=msg), 400
     ok, msg, url = storage.save_asset(data, "videos", f.filename or "")
     data = b""
     if not ok:
-        return jsonify(ok=False, error=msg), 400
+        return jsonify(ok=False, error=msg), 503
     audit(authmod.current_admin(), "site.hero_asset_upload", url, _ip())
     return jsonify(ok=True, url=url, kind=storage.kind_for(ext))
 

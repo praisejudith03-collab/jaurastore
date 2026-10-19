@@ -180,6 +180,23 @@ def test_an_unreadable_category_list_keeps_the_file(monkeypatch, tmp_path):
     assert cover.read_bytes() == b"the only copy"
 
 
+def test_supabase_category_read_failure_keeps_category_media(
+        monkeypatch, tmp_path):
+    import catalog
+    import supabase_store
+
+    cover = _stored_file(monkeypatch, tmp_path)
+    _categories(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(catalog, "merged", lambda **_kwargs: [])
+    monkeypatch.setattr(supabase_store, "enabled", lambda: True)
+    monkeypatch.setattr(supabase_store, "load_categories_table", lambda: [])
+    monkeypatch.setattr(supabase_store, "load_categories_state",
+                        lambda: (False, False, None))
+
+    assert storage.delete_upload("/uploads/categories/bags-cover.jpg") is False
+    assert cover.read_bytes() == b"the only copy"
+
+
 def test_proofs_are_still_outside_the_purge_guard(monkeypatch, tmp_path):
     """Private receipts are never product photos or category covers, so the
     guard must not start protecting them from their own delete."""

@@ -526,7 +526,7 @@ _CRITICAL_PRODUCT_COLUMNS = frozenset({
     "id", "legacyId", "sku", "slug", "name", "nameFr", "descriptionFr",
     "category", "priceCfa", "compareCfa", "priceNgn", "compareNgn",
     "image", "image_url", "images", "description", "stock",
-    "stock_quantity", "badge", "featured", "online", "colors", "options",
+    "stock_quantity", "manualStockLock", "badge", "featured", "online", "colors", "options",
     "optionStock", "optionPrices", "optionCompareAt", "optionSupplierSku",
     "optionSku", "reviews", "dimensions", "bulkQty", "bulkPercent",
     "placeholderImage", "usesPlaceholder", "source", "supplierId",
@@ -1214,18 +1214,24 @@ def save_categories_table(categories):
         if not row["id"] or not row["name"]:
             continue
         rows.append(row)
-    if not rows:
-        return False
     try:
-        _upsert_categories_resilient(c, rows)
+        if rows:
+            _upsert_categories_resilient(c, rows)
+        # An empty list is a valid replacement: deleting the final category
+        # must not be rejected just because there is nothing to upsert.
+        keep = [r["id"] for r in rows]
+        if keep:
+            c.table("categories").delete().not_.in_("id", keep).execute()
+        else:
+            # Category ids are required and sanitized as non-empty strings, so
+            # this predicate safely removes every valid row in the table.
+            c.table("categories").delete().neq("id", "").execute()
     except RuntimeError as exc:
         print(f"[supabase] categories save failed: {exc}")
         return False
-    keep = [r["id"] for r in rows]
-    try:
-        c.table("categories").delete().not_.in_("id", keep).execute()
     except Exception as exc:
         print(f"[supabase] categories prune failed: {exc}")
+        return False
     return True
 
 
@@ -2480,11 +2486,17 @@ def load_customer_care():
         return None
 
 
-def load_categories():
-    """Return the category list stored under CATEGORIES_KEY, or None."""
+def load_categories_state():
+    """Return ``(readable, found, categories)`` for the durable category JSON.
+
+    A missing key is a valid empty result, while a failed query or malformed
+    payload is unavailable. Callers that might overwrite or delete media must
+    keep those states distinct; treating a read failure as an empty list can
+    roll back good data or purge a still-referenced category cover.
+    """
     c = client()
     if c is None:
-        return None
+        return False, False, None
     try:
         res = (c.table("growth_settings")
                .select("value")
@@ -2493,19 +2505,26 @@ def load_categories():
                .execute())
         rows = _res_data(res)
         if not rows:
-            return None
+            return True, False, []
         raw = (rows[0] or {}).get("value")
         if raw is None or raw == "":
-            return None
+            return True, True, []
         data = json.loads(raw) if isinstance(raw, str) else raw
         if isinstance(data, dict) and isinstance(data.get("categories"), list):
             data = data["categories"]
-        if isinstance(data, list) and data:
-            return data
-        return None
+        if isinstance(data, list):
+            return True, True, data
+        print("[supabase] categories load failed: invalid categories payload")
+        return False, True, None
     except Exception as exc:                       # pragma: no cover
         print(f"[supabase] categories load failed: {exc}")
-        return None
+        return False, False, None
+
+
+def load_categories():
+    """Return the saved non-empty category list, or None for absent/empty/error."""
+    readable, found, categories = load_categories_state()
+    return categories if readable and found and categories else None
 
 
 def load_orders(limit=500, offset=0, columns="*"):

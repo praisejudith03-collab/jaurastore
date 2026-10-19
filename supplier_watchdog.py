@@ -816,6 +816,11 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog",
     pid = str(p.get("id") or "").strip()
     if not pid:
         return False, warnings
+    # A manual admin out-of-stock is a durable owner override, not a transient
+    # quantity. Avoid fetching suppliers for this row; the database RPC also
+    # enforces the lock in case the admin changes it while a fetch is in flight.
+    if catalog_mod._manual_stock_lock(p):
+        return False, warnings
     allowed = None if allowed_urls is None else set(allowed_urls)
     all_urls = product_supplier_urls(p)
     selected_urls = [url for url in all_urls if allowed is None or url in allowed]
@@ -1053,6 +1058,8 @@ def _save_synced(p: Dict[str, Any], row: Dict[str, Any], actor: str,
             warnings.append(_warning(p, "product_deleted_during_sync",
                                      "The product is on the never-re-create list. "
                                      "Nothing was written."))
+            return False, warnings
+        if action == "manual-stock-locked":
             return False, warnings
         if not saved or mirrored is False:
             try:

@@ -121,7 +121,10 @@ def seed_missing_default_categories(defaults=None):
     rows = supabase_store.load_categories_table()
     if rows is None:
         return "unavailable", []
-    details = supabase_store.load_categories() or []
+    details_readable, _details_found, details = supabase_store.load_categories_state()
+    if not details_readable:
+        return "unavailable", []
+    details = details or []
 
     rows_by_id = {str((r or {}).get("id") or "").strip(): r for r in rows}
     details_by_id = {str((c or {}).get("id") or "").strip(): c

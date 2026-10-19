@@ -28,7 +28,9 @@ begin
     jsonb_set(coalesce("optionStock",'{}'::jsonb),array[p_option],
       to_jsonb(coalesce(("optionStock"->>p_option)::int,0)-p_qty))
     else "optionStock" end, updated_at=now()
- where id=p_id and online is not false and coalesce(stock_quantity,0)>=p_qty
+ where id=p_id and online is not false
+  and coalesce("manualStockLock",false) is false
+  and coalesce(stock_quantity,0)>=p_qty
   and case when p_option is not null and p_option<>'' then
     ("optionStock" ? p_option and coalesce(("optionStock"->>p_option)::int,0)>=p_qty)
   else coalesce("optionStock",'{}'::jsonb)='{}'::jsonb and

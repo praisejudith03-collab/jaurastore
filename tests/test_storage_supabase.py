@@ -5,9 +5,9 @@ Covers the three things that must hold:
 * UPLOAD_MODE=supabase uploads to the Supabase bucket and returns
   …/storage/v1/object/public/<bucket>/<key> for public assets, and a
   SIGNED url (never a public one) for payment proofs / receipts.
-* A payment receipt is never lost: when the bucket is unreachable (or
-  Supabase is not configured at all) the write falls back to the local
-  disk, and /uploads/... keeps serving those files.
+* In tests/development, local disk remains a compatibility fallback. In
+  production, upload failures fail closed and never claim that an ephemeral
+  local file is durable.
 * delete_upload() removes the object from the Supabase bucket, for both
   the public URL shape and the signed URL shape stored in the database.
 
@@ -114,10 +114,13 @@ class FakeTable:
             store.append(dict(r))
         return self
 
-    def select(self, *a):
+    def select(self, *a, **k):
         return self
 
     def order(self, *a, **k):
+        return self
+
+    def range(self, *_args):
         return self
 
     def limit(self, n=None):
@@ -219,10 +222,40 @@ def test_product_photo_goes_to_bucket_with_public_url(fake):
 def test_category_asset_is_public(fake):
     ok, msg, url = storage.save_asset(_png(), "categories", "cover.png")
     assert ok, msg
-    # url shape changed by owner instruction (same-origin uploads link)
+    # Tests use the local compatibility URL; production returns the complete
+    # stable public object URL below.
     assert url.startswith("/uploads/categories/")
     assert "/storage/v1/object/public/uploads/categories/" in \
         storage.supabase_public_url(url[len("/uploads/"):])
+
+
+def test_production_media_returns_a_stable_absolute_public_url(fake, monkeypatch):
+    monkeypatch.setattr(Config, "ENV", "production")
+    monkeypatch.setattr(storage, "enqueue_thumbnail", lambda _url: "")
+    ok, msg, url = storage.save_image(_png(), "products", "photo.png")
+    assert ok, msg
+    assert url.startswith(f"{FAKE_ORIGIN}/storage/v1/object/public/uploads/products/")
+    assert "?token=" not in url
+    key = url.split("/storage/v1/object/public/uploads/", 1)[1]
+    assert key in fake.objects["uploads"]
+    assert storage.supabase_public_url(key) == url
+
+
+def test_production_upload_failure_never_falls_back_to_ephemeral_disk(fake, monkeypatch):
+    fake.fail_uploads = True
+    monkeypatch.setattr(Config, "ENV", "production")
+    ok, msg, url = storage.save_image(_png(), "categories", "cover.png")
+    assert ok is False
+    assert url == ""
+    assert "failed" in msg.lower()
+    assert not os.path.exists(storage.local_root())
+
+
+def test_production_thumbnail_failure_never_writes_a_local_companion(fake, monkeypatch):
+    fake.fail_uploads = True
+    monkeypatch.setattr(Config, "ENV", "production")
+    assert storage.store_thumbnail_bytes(b"webp-thumbnail", "products/p.png") == ""
+    assert not os.path.exists(storage.local_root())
 
 
 def test_hero_video_is_public(fake):
