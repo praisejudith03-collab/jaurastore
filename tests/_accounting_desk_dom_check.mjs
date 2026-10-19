@@ -161,11 +161,14 @@ ok(patch.body.lineItems[0].supplierCostNgn === 6000,
    "the debounced PATCH preserves the per-item cost: " + JSON.stringify(patch.body));
 
 // A manual net-profit override is immediate, signed, and saved separately.
-const override = row.querySelector('[data-stage-edit="profitOverride"]');
+// Previous autosaves re-render the table, so use the live row rather than a
+// detached node captured before the batch-fee change.
+const overrideRow = root.querySelector('.aa-stage-row[data-id="ORD-1"]');
+const override = overrideRow.querySelector('[data-stage-edit="profitOverride"]');
 override.value = "-1000";
 override.dispatchEvent(new window.Event("input", { bubbles: true }));
 await new Promise((r) => setTimeout(r, 30));
-ok(row.querySelector("[data-row-profit]").textContent.includes("−₦1,000"),
+ok(overrideRow.querySelector("[data-row-profit]").textContent.includes("−₦1,000"),
    "manual override replaces the calculated net profit immediately");
 await new Promise((r) => setTimeout(r, 1000));
 const overridePatch = calls.filter((c) => c.method === "PATCH").at(-1);
