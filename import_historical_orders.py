@@ -417,9 +417,12 @@ def row_currency(row, mapping, default="NGN"):
     """
     index = mapping.get("currency")
     if index is not None and index < len(row):
-        explicit = accounting.normalize_currency(row[index])
-        if explicit:
-            return explicit, "explicit"
+        raw_explicit = str(row[index] or "").strip()
+        if raw_explicit:
+            explicit = accounting.normalize_currency(raw_explicit) or detect_currency(raw_explicit)
+            if explicit:
+                return explicit, "explicit"
+            return "", "unsupported"
     found = detect_currency(" ".join(str(cell or "") for cell in row))
     if found:
         # "inferred" label kept for backwards compatibility; the more
@@ -437,7 +440,8 @@ def row_currency(row, mapping, default="NGN"):
         # where every row is marked by location. We ALWAYS honour strong
         # city-level matches (Cotonou, Lomé) because those cannot be NGN.
         return by_country, "inferred-location"
-    return (accounting.normalize_currency(default) or "NGN"), "default"
+    normalized_default = accounting.normalize_currency(default)
+    return (normalized_default, "default") if normalized_default else ("", "unsupported-default")
 
 
 def column_currency(headers, mapping, field, row_currency_value, cell_text=""):
@@ -791,6 +795,13 @@ def build_order(row, headers, mapping, *, rate, default_currency="NGN",
         return None, {"skipped": "blank row", "warnings": warnings}
 
     currency, how = row_currency(row, mapping, default_currency)
+    if not currency:
+        index = mapping.get("currency")
+        raw_currency = (str(row[index] or "").strip()
+                        if index is not None and index < len(row) else "")
+        reason = (f"unsupported currency: {raw_currency[:40]}"
+                  if how == "unsupported" else "unsupported default currency")
+        return None, {"skipped": reason, "warnings": warnings}
     if how == "default":
         warnings.append(f"currency assumed {currency} (no marker found)")
 

@@ -3,6 +3,8 @@ import datetime as dt
 import os
 import sys
 
+import pytest
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.environ.setdefault("FLASK_ENV", "testing")
@@ -17,6 +19,27 @@ import google_sheets
 def _ledger_row(day, order_id, revenue, supplier=0, transport=0, batch=""):
     return [day, order_id, "Customer", "2× Item", "NGN", revenue,
             supplier, transport, "", batch, ""]
+
+
+def test_reference_order_rows_and_summary_honor_signed_profit_override():
+    snapshot = accounting.new_snapshot(50_000, "NGN", 0.44,
+                                       "2026-10-05T10:00:00Z")
+    snapshot["profitOverride"] = -1_234
+    order = {
+        "id": "OVERRIDE-1", "status": "confirmed", "total": 50_000,
+        "currency": "NGN", "at": "2026-10-05T10:00:00Z",
+        "payload": {"customer": {"name": "Override buyer"},
+                    "items": [{"name": "Scarf", "qty": 1}],
+                    "accounting": snapshot},
+    }
+    row = google_sheets._order_row(order, batch="Batch A", include_net=True)
+    assert row[8] == -1_234
+    assert "Manual net profit override" in row[10]
+    summary = google_sheets.summarize({
+        "currency": "NGN", "orders": [google_sheets._headers("NGN"), row],
+        "expenses": [],
+    }, period="all", today=dt.date(2026, 10, 6))
+    assert summary["netProfit"] == -1_234
 
 
 def test_monthly_summary_counts_order_and_unlinked_costs_by_batch():
@@ -47,12 +70,37 @@ def test_monthly_summary_counts_order_and_unlinked_costs_by_batch():
     }
 
 
+def test_local_summary_fallback_includes_discounts_and_signed_overrides():
+    summary = google_sheets.aggregate_fallback([
+        {"currency": "NGN", "date": "2026-10-06", "saleAmount": 1_000,
+         "discount": 200, "supplierCostInCurrency": 300,
+         "deliveryExpense": 100, "netProfit": 400},
+        {"currency": "NGN", "date": "2026-10-06", "saleAmount": 1_000,
+         "discount": 100, "supplierCostInCurrency": 200,
+         "deliveryExpense": 50, "netProfit": -250,
+         "profitOverrideActive": True},
+        {"currency": "CFA", "date": "2026-10-06", "saleAmount": 99_000,
+         "supplierCostInCurrency": 1, "deliveryExpense": 1, "netProfit": 99_000},
+    ], "NGN", period="month", today=dt.date(2026, 10, 6))
+
+    assert summary["revenue"] == 1_700
+    assert summary["supplierCosts"] == 500
+    assert summary["transport"] == 150
+    assert summary["netProfit"] == 150
+    assert summary["orderCount"] == 2
+
+
 def test_periods_and_fcfa_normalization_are_explicit():
     start, end = google_sheets.period_bounds("week", today=dt.date(2026, 10, 6))
     assert (start.isoformat(), end.isoformat()) == ("2026-10-05", "2026-10-06")
     start, end = google_sheets.period_bounds("year", today=dt.date(2026, 10, 6))
     assert (start.isoformat(), end.isoformat()) == ("2026-01-01", "2026-10-06")
     assert google_sheets._currency("FCFA") == "CFA"
+    assert google_sheets._currency("XOF") == "CFA"
+    assert google_sheets._currency("NGN") == "NGN"
+    with pytest.raises(google_sheets.GoogleSheetsError) as unsupported:
+        google_sheets._currency("USD")
+    assert unsupported.value.code == "UNSUPPORTED_CURRENCY"
 
     summary = google_sheets.summarize({
         "currency": "FCFA",
@@ -63,6 +111,59 @@ def test_periods_and_fcfa_normalization_are_explicit():
     }, period="month", today=dt.date(2026, 10, 6))
     assert summary["currency"] == "CFA"
     assert summary["netProfit"] == 13_000
+
+
+def test_fixed_reference_workbook_and_currency_tab_urls(monkeypatch):
+    requests = []
+    monkeypatch.setattr(google_sheets, "_google_request",
+                        lambda method, url, body=None: requests.append((method, url, body)) or {
+                            "id": google_sheets.REFERENCE_SPREADSHEET_ID,
+                            "name": "Owner workbook",
+                            "mimeType": google_sheets.GOOGLE_SHEETS_MIME_TYPE,
+                            "sheets": [
+                                {"properties": {"title": "NGN Ledger", "sheetId": 12}},
+                                {"properties": {"title": "CFA Ledger", "sheetId": 34}},
+                            ],
+                        })
+    resolved = google_sheets.resolve_native_reference_spreadsheet(
+        preferred_id="legacy-wrong-id")
+    assert resolved["id"] == google_sheets.REFERENCE_SPREADSHEET_ID
+    assert requests[0][1].startswith(
+        "https://www.googleapis.com/drive/v3/files/"
+        + google_sheets.REFERENCE_SPREADSHEET_ID + "?")
+    assert google_sheets.reference_tab_url("NGN").endswith("#gid=12")
+    assert google_sheets.reference_tab_url("FCFA").endswith("#gid=34")
+    assert google_sheets.REFERENCE_TABS == {"NGN": "NGN Ledger", "CFA": "CFA Ledger"}
+
+
+def test_read_ledger_uses_the_fixed_currency_tab(monkeypatch):
+    requested = []
+    monkeypatch.setattr(google_sheets, "resolve_native_reference_spreadsheet",
+                        lambda **kwargs: {"id": google_sheets.REFERENCE_SPREADSHEET_ID})
+    monkeypatch.setattr(google_sheets, "_spreadsheet_tab_properties", lambda _id: [
+        {"title": "NGN Ledger", "sheetId": 12},
+        {"title": "CFA Ledger", "sheetId": 34},
+    ])
+    monkeypatch.setattr(google_sheets, "_values_batch_get",
+                        lambda sheet_id, ranges: requested.append((sheet_id, ranges))
+                        or [[google_sheets._headers("CFA")]])
+    ledger = google_sheets.read_ledger("FCFA")
+    assert requested == [(google_sheets.REFERENCE_SPREADSHEET_ID,
+                          ["'CFA Ledger'!A1:L"])]
+    assert ledger["currency"] == "CFA"
+    assert ledger["orders"] == [google_sheets._headers("CFA")]
+
+
+def test_unsupported_order_currency_fails_before_any_drive_write(monkeypatch):
+    monkeypatch.setattr(google_sheets, "resolve_native_reference_spreadsheet",
+                        lambda **kwargs: pytest.fail("resolved a workbook before validation"))
+    order = {
+        "id": "BAD-CURRENCY", "status": "confirmed", "total": 12_000,
+        "currency": "USD", "payload": {"accounting": {"currency": "USD"}},
+    }
+    with pytest.raises(google_sheets.GoogleSheetsError) as unsupported:
+        google_sheets.push_orders([order])
+    assert unsupported.value.code == "UNSUPPORTED_CURRENCY"
 
 
 def test_sheet_order_row_keeps_order_facts_and_manual_cost_fields():

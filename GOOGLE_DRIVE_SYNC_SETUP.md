@@ -1,9 +1,10 @@
 # Google Drive sync setup (Render) — step-by-step
 
 This is the operator guide for the **Admin → Accounting → Google Sheets**
-integration: the app writes confirmed orders straight into the store owner's
-Google Drive (the ITEMFLOW reference workbook's **NGN** and **FCFA** tabs, plus
-its own Naira / CFA ledgers).
+integration: confirmed-order sync can maintain app-created ledgers, while batch
+pushes are written to the owner's fixed regional workbook
+`1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE`, on its **NGN Ledger** and
+**CFA Ledger** tabs. The app never redirects pushes to a different workbook.
 
 Read it top to bottom once. After that you only ever repeat **Part 3** when you
 want to confirm the sync still works.
@@ -98,7 +99,7 @@ Both must read **Manage → API enabled**.
 | `GOOGLE_CLIENT_ID` | *(paste the Client ID from Part 1)* | Secret-ish; keep it out of git. |
 | `GOOGLE_CLIENT_SECRET` | *(paste the Client secret from Part 1)* | Secret. Never share or commit. |
 | `GOOGLE_REDIRECT_URI` | `https://jaurastore.com.ng/api/admin/accounting/google/callback` | Must match Part 1 step 4 **character for character**. |
-| `GOOGLE_SHEET_ID` | `1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu` | The ITEMFLOW workbook whose **NGN** / **FCFA** tabs receive pushed batches. A value saved on the accounting desk wins over this. |
+| `GOOGLE_SHEET_ID` | `1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE` | Fixed owner-selected workbook; batches go to **NGN Ledger** / **CFA Ledger**. Legacy saved IDs and environment overrides cannot redirect a push. |
 | `GOOGLE_SHEETS_TOKEN_KEY` | `python -c "import secrets; print(secrets.token_urlsafe(48))"` | Encrypts the stored refresh token. Set once and never change it, or the saved Google grant cannot be decrypted. |
 | `SITE_ORIGIN` | `https://jaurastore.com.ng` | Used for canonical links and as the callback fallback. |
 | `SECRET_KEY` | *(generate)* | Must stay stable across deploys. |
@@ -114,8 +115,9 @@ marked `sync: false` on purpose and must be typed into the dashboard.
 
 The app writes as the **account that completes the OAuth connect** (shown on
 the Accounting desk). The simplest setup is to connect with the same Google
-account that owns the ITEMFLOW workbook. If they differ, open the workbook →
-**Share** → add the connected address as **Editor**.
+account that owns the fixed regional workbook. If they differ, open workbook
+`1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE` → **Share** → add the
+connected address as **Editor**.
 
 ---
 
@@ -125,9 +127,10 @@ account that owns the ITEMFLOW workbook. If they differ, open the workbook →
    <https://jaurastore.com.ng/admin/accounting> and sign in.
 2. In the **Your ledgers** strip, click **Connect Google Sheets** and pick the
    owner's Google account. Approve the consent screen (the app asks for Drive +
-   Sheets access so it can write to your own ITEMFLOW workbook). You come back
-   to the accounting page with a green **Drive connected · you@gmail.com** chip
-   and three buttons: **Open reference sheet**, **NGN ledger**, **FCFA ledger**.
+   Sheets access so it can write to the fixed regional workbook). You come
+   back to the accounting page with a green **Drive connected · you@gmail.com**
+   chip and buttons for **Open workbook**, **NGN Ledger**, and **CFA Ledger**.
+   The ledger buttons resolve each tab's current numeric `gid` through Google.
 3. Click **✓ Test Google sync**. Expected result:
    - a green toast **“Google Drive sync is working.”**, and
    - the checks it just ran are logged in the browser console
@@ -136,15 +139,17 @@ account that owns the ITEMFLOW workbook. If they differ, open the workbook →
    needed, reads both ledgers, and reads the reference workbook’s tabs
    (creating nothing, sending nothing).
 4. **Prove a real write.** On the staging queue, pick one confirmed NGN order
-   and press **⬆ Push … to Google Sheet**. Open the reference workbook: the row
-   appears on the **NGN** tab (order id, customer, items, revenue, supplier
-   cost, transport, net profit, batch). Pushing the same order twice updates the
-   same row instead of duplicating it.
-5. Confirm the **Dashboard → Accounting** summary cards fill in from the sheet
-   (📅 Week / Month / Year filter), and that **Open reference sheet** opens the
-   workbook whose id you set as `GOOGLE_SHEET_ID`.
+   and press **⬆ Push … to Google Sheet**. Open workbook
+   `1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE`: the row appears on
+   **NGN Ledger** or **CFA Ledger** according to its saved currency (order id,
+   customer, items, revenue, supplier cost, transport, net profit, batch).
+   Pushing the same order twice updates the same row instead of duplicating it.
+5. Click **NGN Ledger** and **CFA Ledger** from the accounting page; after the
+   owner OAuth session can read sheet metadata, each button should open its
+   matching tab using the current numeric `gid`.
 
-If all five steps pass, direct Google Drive syncing is live.
+Only after completing these steps against the deployed Google account should
+anyone describe live Google Sheets syncing as verified.
 
 ### API equivalent (for a scripted check)
 
@@ -165,8 +170,8 @@ returns `verification.ok = true` and per-step details (`oauth-client`,
 | `redirect_uri_mismatch` on the Google screen | The callback in Google differs from `GOOGLE_REDIRECT_URI` (extra slash, `www`, or `http`). | Make them identical in **Credentials → OAuth client → Authorized redirect URIs**. |
 | *“Reconnect Google Sheets to restore access to the saved ledgers.”* | `GOOGLE_SHEETS_TOKEN_KEY` (or `SECRET_KEY`) changed, or the app is still in Google *Testing* mode and the 7-day refresh token expired. | Set a stable `GOOGLE_SHEETS_TOKEN_KEY`, click **Connect Google Sheets** again, and consider publishing the consent screen. |
 | Connect returns `?google=state-error` | The sign-in link was opened in another tab/host, or it sat for over 15 minutes. | Start the connect flow again from `/admin/accounting`. |
-| `403` / *“The caller does not have permission”* when pushing | The connected account cannot edit the ITEMFLOW workbook. | Share the workbook with the connected address as **Editor** (Part 2). |
-| Pushes work but the ITEMFLOW tabs are empty | The batch went to the app-created ledgers because the reference id was cleared on the desk. | Set **Reference spreadsheet** back to `1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu`, or clear the field to fall back to `GOOGLE_SHEET_ID`. |
+| `403` / *“The caller does not have permission”* when pushing | The connected account cannot edit the fixed regional workbook. | Share workbook `1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE` with the connected address as **Editor** (Part 2). |
+| A ledger button is disabled or the tab could not be resolved | OAuth is not connected, or the sheet-tab metadata could not be read. | Connect or reconnect Google Sheets and retry; the button stays disabled rather than opening the workbook's wrong default tab. |
 | *“Set GOOGLE_SHEETS_TOKEN_KEY (or a stable SECRET_KEY) before connecting”* | Production is using a random per-boot `SECRET_KEY`. | Set `GOOGLE_SHEETS_TOKEN_KEY` (recommended) or a fixed `SECRET_KEY`, then redeploy. |
 
 > Security notes: the refresh token is encrypted with Fernet before it is

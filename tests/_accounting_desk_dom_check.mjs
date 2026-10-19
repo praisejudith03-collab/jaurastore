@@ -42,16 +42,20 @@ const dom = new JSDOM(html, { runScripts: "outside-only", url: "https://jaurasto
 const { window } = dom;
 
 const settings = { startingBalanceNgn: 250000, startingBalanceCfa: 40000,
-  startingProfitNgn: 250000, referenceSpreadsheetId: "" };
+  startingProfitNgn: 250000, referenceSpreadsheetId: "1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE" };
 const entries = [
   { id: "ORD-1", date: "2026-10-05T09:00:00Z", currency: "NGN", customer: "Ada Ngo",
-    itemsSummary: "3× Silk scarf", itemQuantity: 3, saleAmount: 50000, discount: 0,
+    itemsSummary: "2× Silk scarf, 1× Hair clip", itemQuantity: 3, saleAmount: 50000, discount: 0,
     discountPercent: 0, supplierCostNgn: 0, supplierCostCfa: 0,
     supplierUnitPriceNgn: 0, supplierQty: 3, supplierLink: "", supplierCostInCurrency: 0,
     deliveryExpense: 0, deliveryExpenseNgn: 0, deliveryExpenseCfa: 0,
     netProfit: 50000, netCashProfit: 50000, exchangeRate: 0.44,
-    lineItems: [{ lineId: "line-01", name: "Silk scarf", qty: 3, saleAmount: 50000,
-      supplierCostNgn: 0, supplierLink: "" }],
+    lineItems: [
+      { lineId: "line-01", name: "Silk scarf", qty: 2, saleAmount: 30000,
+        supplierCostNgn: 0, supplierLink: "" },
+      { lineId: "line-02", name: "Hair clip", qty: 1, saleAmount: 20000,
+        supplierCostNgn: 0, supplierLink: "" },
+    ],
     notes: "", legacySnapshot: false, deleted: false, archived: false },
   { id: "ORD-2", date: "2026-10-05T10:00:00Z", currency: "NGN", customer: "Bola Ade",
     itemsSummary: "1× Handbag", itemQuantity: 1, saleAmount: 40000, discount: 4000,
@@ -122,11 +126,16 @@ ok(discountInputs[0].closest(".aa-stage-row").dataset.id === "ORD-2", "on the ri
 ok(text.includes("10% off"), "the discount percentage is shown");
 ok((text.match(/＋ discount/g) || []).length === 1, "the two undiscounted rows keep the clean add button");
 ok(text.includes("Test Google sync"), "verify button");
-ok(text.includes("Supplier cost &amp; link · per item"), "supplier column header explains itemized costs");
+ok(text.includes('href="/api/admin/accounting/google/ledger/NGN"'), "NGN button resolves the fixed workbook tab");
+ok(text.includes('href="/api/admin/accounting/google/ledger/CFA"'), "CFA button resolves the fixed workbook tab");
+ok(text.includes("1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE"), "fixed workbook ID is shown to the operator");
+ok(text.includes("Supplier URL &amp; cost · line total"), "supplier column header explains itemized costs");
 
 // Live recalculation: type a line supplier cost, the row's net profit moves now.
 const row = root.querySelector('.aa-stage-row[data-id="ORD-1"]');
 ok(!!row, "the staged row rendered");
+ok(root.querySelectorAll('.aa-stage-row[data-id="ORD-1"]').length === 2,
+   "a multi-product order renders one staging row for each product");
 const cost = row.querySelector('[data-stage-edit="supplierCostNgn"][data-line-index="0"]');
 cost.value = "6000";
 cost.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -150,6 +159,21 @@ const patch = calls.find((c) => c.method === "PATCH");
 ok(!!patch, "the edit auto-saved");
 ok(patch.body.lineItems[0].supplierCostNgn === 6000,
    "the debounced PATCH preserves the per-item cost: " + JSON.stringify(patch.body));
+
+// A manual net-profit override is immediate, signed, and saved separately.
+// Previous autosaves re-render the table, so use the live row rather than a
+// detached node captured before the batch-fee change.
+const overrideRow = root.querySelector('.aa-stage-row[data-id="ORD-1"]');
+const override = overrideRow.querySelector('[data-stage-edit="profitOverride"]');
+override.value = "-1000";
+override.dispatchEvent(new window.Event("input", { bubbles: true }));
+await new Promise((r) => setTimeout(r, 30));
+ok(overrideRow.querySelector("[data-row-profit]").textContent.includes("−₦1,000"),
+   "manual override replaces the calculated net profit immediately");
+await new Promise((r) => setTimeout(r, 1000));
+const overridePatch = calls.filter((c) => c.method === "PATCH").at(-1);
+ok(overridePatch.body.profitOverride === -1000,
+   "the signed profit override is persisted by the PATCH");
 
 // Saving the opening balance PUTs the settings route.
 const openingForm = root.querySelector("[data-opening-form]");

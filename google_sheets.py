@@ -1,10 +1,10 @@
-"""Owner-authorized Google Sheets ledgers for dual-currency accounting.
+"""Owner-authorized Google Sheets integration for dual-currency accounting.
 
-The OAuth grant now includes full Drive access so the app can also write to
-the owner's pre-existing ITEMFLOW reference workbook (NGN / FCFA tabs), not
-only the files this app created. The refresh token and spreadsheet IDs are
-encrypted before they are kept in the existing durable growth_settings
-key/value store. No Google credential is ever sent to the browser.
+The OAuth grant includes Drive access for the app-created auxiliary ledgers
+and the fixed owner-selected batch workbook (NGN Ledger / CFA Ledger). The
+refresh token and created-ledger IDs are encrypted before they are kept in the
+existing durable growth_settings key/value store. No Google credential is ever
+sent to the browser.
 """
 from __future__ import annotations
 
@@ -52,16 +52,17 @@ def _guarded_read(req, *, timeout=HTTP_TIMEOUT):
     except security.UnsafeURLError as exc:
         raise GoogleSheetsError(f"Blocked Google request: {exc}") from exc
 
-# Batch pushes resolve the exact active, native Google Sheet by Drive metadata.
-# Saved / environment IDs are only tie-break preferences if they identify one
-# of the exact-title native Sheets files; they can never select an .xlsx or a
-# differently named legacy workbook.
-REFERENCE_SPREADSHEET_TITLE = "Jaurastore Sales & Accounting Ledger (NGN & CFA)"
+# The owner-selected workbook is the single durable destination for staged
+# regional batches. The Drive MIME check below rejects uploaded .xlsx files;
+# Google Sheets tab IDs are resolved at runtime before direct links are built.
+REFERENCE_SPREADSHEET_ID = "1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE"
+REFERENCE_WORKBOOK_LABEL = "Jaura Store regional accounting workbook"
+# Compatibility alias for older callers; this is a label, not the live Drive title.
+REFERENCE_SPREADSHEET_TITLE = REFERENCE_WORKBOOK_LABEL
 GOOGLE_SHEETS_MIME_TYPE = "application/vnd.google-apps.spreadsheet"
 _XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-# Retained for migration compatibility only. Never used as a batch-push target.
-DEFAULT_REFERENCE_SPREADSHEET_ID = "1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu"
-REFERENCE_TABS = {"NGN": "NGN", "CFA": "FCFA"}
+DEFAULT_REFERENCE_SPREADSHEET_ID = REFERENCE_SPREADSHEET_ID
+REFERENCE_TABS = {"NGN": "NGN Ledger", "CFA": "CFA Ledger"}
 
 
 # ---------------------------------------------------------------- live ledgers
@@ -192,7 +193,7 @@ def _first_existing_tab(spreadsheet_id, candidates):
 
 
 def environment_reference_spreadsheet_id():
-    """Optional preferred Drive ID from ``GOOGLE_SHEET_ID`` (not a target)."""
+    """Read the deployment hint; the fixed owner-selected ID remains authoritative."""
     return (os.environ.get("GOOGLE_SHEET_ID") or "").strip()
 
 
@@ -206,16 +207,13 @@ def extract_spreadsheet_id(value):
 
 
 def reference_spreadsheet_id(settings=None):
-    """Return the optional preferred ID, never an assumed push destination.
+    """Return the owner-selected workbook ID; settings cannot redirect pushes.
 
-    The actual batch target is resolved from the connected Drive and must
-    match both :data:`REFERENCE_SPREADSHEET_TITLE` and the native Google Sheets
-    MIME type. A saved ID or ``GOOGLE_SHEET_ID`` can only disambiguate multiple
-    exact native matches; clearing either does not fall back to a legacy file.
+    ``settings`` remains accepted for API compatibility, but the supported
+    ledger destination is fixed to the workbook requested by the owner. The
+    Drive metadata check still validates that it is a native Google Sheet.
     """
-    settings = settings if isinstance(settings, dict) else {}
-    saved = extract_spreadsheet_id(settings.get("referenceSpreadsheetId"))
-    return saved or extract_spreadsheet_id(environment_reference_spreadsheet_id())
+    return REFERENCE_SPREADSHEET_ID
 
 _lock = threading.RLock()
 _refresh_lock = threading.Lock()
@@ -570,93 +568,79 @@ def _google_request(method, url, body=None):
     return _json_request(url, method=method, body=body, headers=headers)
 
 
-def _drive_reference_files():
-    """List only exact-title native Sheets files from the connected Drive.
-
-    Uploaded .xlsx files and legacy Office backups have different MIME types,
-    so they are excluded by the server-side query and checked again locally.
-    Pagination is bounded to protect the admin request from a malformed or
-    unexpectedly huge Drive response.
-    """
-    escaped_title = REFERENCE_SPREADSHEET_TITLE.replace("\\", "\\\\").replace("'", "\\'")
-    query = (f"name = '{escaped_title}' and "
-             f"mimeType = '{GOOGLE_SHEETS_MIME_TYPE}' and trashed = false")
-    page_token = ""
-    matches = []
-    for _ in range(20):
-        params = [
-            ("q", query),
-            ("fields", "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)"),
-            ("pageSize", "100"),
-            ("orderBy", "modifiedTime desc"),
-            ("spaces", "drive"),
-            ("supportsAllDrives", "true"),
-            ("includeItemsFromAllDrives", "true"),
-        ]
-        if page_token:
-            params.append(("pageToken", page_token))
-        url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode(params)
-        result = _google_request("GET", url)
-        for item in result.get("files") or []:
-            if not isinstance(item, dict):
-                continue
-            if (str(item.get("name") or "") == REFERENCE_SPREADSHEET_TITLE
-                    and str(item.get("mimeType") or "") == GOOGLE_SHEETS_MIME_TYPE
-                    and str(item.get("id") or "").strip()):
-                matches.append(item)
-        page_token = str(result.get("nextPageToken") or "")
-        if not page_token:
-            break
-    return matches
-
-
-def resolve_native_reference_spreadsheet(settings=None, preferred_id=""):
-    """Resolve the active exact-name native Google Sheet from Drive.
-
-    A saved setting, environment ID, or legacy hard-coded ID is never accepted
-    on its own: the file must appear in Drive with the exact target title and
-    ``application/vnd.google-apps.spreadsheet`` MIME type. When Drive contains
-    duplicate exact-title native sheets, an ID preference wins only if it is
-    among those matches; otherwise Drive's most recently modified match wins.
-    """
-    try:
-        candidates = _drive_reference_files()
-    except GoogleSheetsError:
-        raise
-    except Exception as exc:
-        raise GoogleSheetsError("The Google Drive spreadsheet search failed.") from exc
-    if not candidates:
+def _drive_reference_file(spreadsheet_id=REFERENCE_SPREADSHEET_ID):
+    """Fetch and validate the one configured native Google spreadsheet."""
+    target_id = extract_spreadsheet_id(spreadsheet_id)
+    if target_id != REFERENCE_SPREADSHEET_ID:
         raise GoogleSheetsError(
-            f'No native Google Sheets file named "{REFERENCE_SPREADSHEET_TITLE}" '
-            "was found in the connected Drive. Uploaded .xlsx files and legacy "
-            "Office backups are ignored; save or create the active file as a "
-            "native Google Sheet, then retry.",
-            code="REFERENCE_SHEET_NOT_FOUND")
-    preference = (extract_spreadsheet_id(preferred_id)
-                  or reference_spreadsheet_id(settings))
-    selected = next((item for item in candidates
-                     if str(item.get("id") or "") == preference), None)
-    if selected is None:
-        # Drive returned the newest first. Keep the explicit sort as a guard
-        # against test doubles or future API changes that omit orderBy.
-        selected = max(candidates, key=lambda item: str(item.get("modifiedTime") or ""))
+            "Accounting pushes are fixed to the owner's configured regional ledger.",
+            code="REFERENCE_SHEET_MISMATCH")
+    file_url = ("https://www.googleapis.com/drive/v3/files/"
+                f"{urllib.parse.quote(target_id, safe='')}?"
+                + urllib.parse.urlencode({
+                    "fields": "id,name,mimeType,modifiedTime,webViewLink",
+                    "supportsAllDrives": "true",
+                }))
+    metadata = _google_request("GET", file_url)
+    if str(metadata.get("id") or "") != REFERENCE_SPREADSHEET_ID:
+        raise GoogleSheetsError("Google Drive returned a different ledger file.",
+                                code="REFERENCE_SHEET_MISMATCH")
+    mime = str(metadata.get("mimeType") or "")
+    if mime != GOOGLE_SHEETS_MIME_TYPE:
+        if mime == _XLSX_MIME_TYPE:
+            raise GoogleSheetsError(_annotate_error(
+                "The configured accounting workbook is an uploaded Excel file."),
+                code="XLSX_FORMAT")
+        raise GoogleSheetsError(
+            "The configured accounting workbook is not a native Google Sheet.",
+            code="REFERENCE_SHEET_NOT_NATIVE")
     return {
-        "id": str(selected.get("id") or ""),
-        "title": str(selected.get("name") or REFERENCE_SPREADSHEET_TITLE),
-        "mimeType": str(selected.get("mimeType") or ""),
-        "modifiedTime": str(selected.get("modifiedTime") or ""),
-        "url": str(selected.get("webViewLink") or _spreadsheet_url(selected.get("id"))),
-        "matchCount": len(candidates),
+        "id": REFERENCE_SPREADSHEET_ID,
+        "title": str(metadata.get("name") or ""),
+        "mimeType": mime,
+        "modifiedTime": str(metadata.get("modifiedTime") or ""),
+        "url": str(metadata.get("webViewLink") or _spreadsheet_url(target_id)),
+        "matchCount": 1,
     }
 
 
+def resolve_native_reference_spreadsheet(settings=None, preferred_id=""):
+    """Validate the exact owner-selected workbook by ID and native MIME type.
+
+    Saved accounting settings, legacy preferences and environment overrides
+    cannot redirect financial batches to another workbook.
+    """
+    del settings, preferred_id
+    try:
+        return _drive_reference_file(REFERENCE_SPREADSHEET_ID)
+    except GoogleSheetsError:
+        raise
+    except Exception as exc:
+        raise GoogleSheetsError("The configured Google Drive spreadsheet could not be read.") from exc
+
+
 def _currency(value):
+    """Canonicalize only the store's active regional currencies.
+
+    Nigeria routes to NGN; Benin and Togo route to the shared West African
+    CFA franc (XOF/FCFA). Unknown currencies must fail rather than leak into
+    the Naira workbook.
+    """
     value = str(value or "").strip().upper()
-    return "CFA" if value in ("CFA", "XOF", "FCFA") else "NGN"
+    if value in ("CFA", "XOF", "FCFA"):
+        return "CFA"
+    if value in ("NGN", "NAIRA", "N"):
+        return "NGN"
+    raise GoogleSheetsError(f"Unsupported accounting currency: {value or '(blank)'}.",
+                            code="UNSUPPORTED_CURRENCY")
 
 
-def _spreadsheet_url(spreadsheet_id):
-    return "https://docs.google.com/spreadsheets/d/" + urllib.parse.quote(str(spreadsheet_id or ""), safe="") + "/edit"
+def _spreadsheet_url(spreadsheet_id, sheet_id=None):
+    url = ("https://docs.google.com/spreadsheets/d/"
+           + urllib.parse.quote(str(spreadsheet_id or ""), safe="") + "/edit")
+    if sheet_id is not None and str(sheet_id).strip().isdigit():
+        return url + "#gid=" + str(int(sheet_id))
+    return url
 
 
 def _headers(currency):
@@ -857,18 +841,18 @@ def verify_sync(reference_id="", *, settings=None):
 
     Checked, in order: the OAuth client is configured, a non-expired token
     (with automatic refresh) exists for the owner's account, both app-created
-    ledgers are named and readable, and - when a reference workbook is
-    configured - that workbook and its NGN / FCFA tabs can be read. Returns a
+    ledgers are readable, and the fixed owner-selected workbook is a native
+    Google Sheet with readable NGN Ledger / CFA Ledger tabs. Returns a
     JSON-safe report; it never raises and never writes to the owner's files.
     """
     report = {"ok": False, "configured": configured(), "connected": False,
-              "email": "", "reference": {"id": "",
-                                         "title": REFERENCE_SPREADSHEET_TITLE,
-                                         "mimeType": "", "tabs": [],
+              "email": "", "reference": {"id": REFERENCE_SPREADSHEET_ID,
+                                         "title": "", "mimeType": "",
+                                         "tabs": [], "missingTabs": [],
                                          "readable": False},
               "ledgers": {}, "steps": [], "message": ""}
-    preference = (str(reference_id or "").strip()
-                  or reference_spreadsheet_id(settings))
+    # Settings and the legacy reference_id argument cannot redirect the target.
+    del reference_id, settings
 
     def step(name, ok, detail=""):
         report["steps"].append({"step": name, "ok": bool(ok), "detail": str(detail)[:240]})
@@ -913,53 +897,39 @@ def verify_sync(reference_id="", *, settings=None):
             step(f"{currency}-ledger", False, str(exc))
 
     try:
-        native = resolve_native_reference_spreadsheet(
-            settings=settings, preferred_id=preference)
+        native = resolve_native_reference_spreadsheet()
         target = native["id"]
         report["reference"].update(native)
-        step("native-reference-sheet", True,
-             f'{native["title"]} · native Google Sheets'
-             + (f' · {native["matchCount"]} exact-title match(es)'
-                if native.get("matchCount", 1) > 1 else ""))
+        step("fixed-reference-sheet", True,
+             f'{native["title"] or target} · native Google Sheets · exact configured ID')
     except GoogleSheetsError as exc:
         target = ""
         report["message"] = str(exc)
-        step("native-reference-sheet", False, str(exc))
+        step("fixed-reference-sheet", False, str(exc))
 
     if target:
         try:
-            url = (f"{SHEETS_API}/spreadsheets/"
-                   f"{urllib.parse.quote(str(target), safe='')}"
-                   f"?fields=properties.title,sheets.properties")
-            meta = _google_request("GET", url)
-            title = str((meta.get("properties") or {}).get("title") or "")
-            titles = []
-            for sheet in meta.get("sheets") or []:
-                tab_title = str((sheet.get("properties") or {}).get("title") or "").strip()
-                if tab_title:
-                    titles.append(tab_title)
-            report["reference"]["title"] = title
+            tabs = _spreadsheet_tab_properties(target)
+            titles = [item["title"] for item in tabs]
             report["reference"]["tabs"] = titles
-            if title != REFERENCE_SPREADSHEET_TITLE:
-                raise GoogleSheetsError(
-                    "The Drive target title changed during verification; no batch push is allowed.",
-                    code="REFERENCE_SHEET_CHANGED")
-            missing = [want for want in REFERENCE_TABS.values()
-                       if want.upper() not in [t.upper() for t in titles]]
+            missing = [wanted for wanted in REFERENCE_TABS.values()
+                       if wanted.casefold() not in {title.casefold() for title in titles}]
+            report["reference"]["missingTabs"] = missing
             report["reference"]["readable"] = True
-            step("reference-sheet", True,
-                 (title or target)
-                 + (f" (missing tabs: {', '.join(missing)} - created automatically on push)"
-                    if missing else " (NGN + FCFA tabs present)"))
+            detail = f'{report["reference"].get("title") or target} · readable'
+            detail += (f" · missing tabs: {', '.join(missing)}"
+                       if missing else " · NGN Ledger and CFA Ledger tabs present")
+            step("reference-tabs", not missing, detail)
         except GoogleSheetsError as exc:
             report["reference"]["readable"] = False
             report["message"] = report["message"] or str(exc)
-            step("reference-sheet", False, str(exc))
+            step("reference-tabs", False, str(exc))
 
     report["ok"] = bool(report["connected"]
                         and all((report["ledgers"].get(c) or {}).get("readable")
                                 for c in CURRENCIES)
-                        and report["reference"]["readable"])
+                        and report["reference"]["readable"]
+                        and not report["reference"].get("missingTabs"))
     if report["ok"]:
         report["message"] = ("Google Drive sync is working. The active native "
                              "reference spreadsheet and ledgers are readable.")
@@ -992,17 +962,20 @@ def _values_batch_get(spreadsheet_id, ranges):
 
 
 def read_ledger(currency):
-    """Read dashboard inputs, manual expenses, and batch names from one sheet."""
+    """Read the selected currency's pushed-batch tab from the fixed workbook."""
     currency = _currency(currency)
-    spreadsheet_id = _spreadsheet_id(currency)
-    values = _values_batch_get(spreadsheet_id, [
-        "'Orders'!A1:K", "'Expenses'!A1:F", "'Lists'!A2:A21",
-    ])
-    values += [[] for _ in range(3 - len(values))]
+    native = resolve_native_reference_spreadsheet()
+    spreadsheet_id = native["id"]
+    wanted = REFERENCE_TABS[currency]
+    tabs = _spreadsheet_tab_properties(spreadsheet_id)
+    tab = next((item["title"] for item in tabs
+                if item["title"].strip().casefold() == wanted.casefold()), None)
+    if not tab:
+        raise GoogleSheetsError(f"The required {wanted} tab is missing.",
+                                code="REFERENCE_TAB_MISSING")
+    orders = _values_batch_get(spreadsheet_id, [f"'{tab}'!A1:L"])[0]
     return {"currency": currency, "spreadsheetId": spreadsheet_id,
-            "orders": values[0], "expenses": values[1],
-            "batchOptions": [str(row[0]).strip() for row in values[2]
-                             if row and str(row[0] or "").strip()]}
+            "orders": orders, "expenses": [], "batchOptions": []}
 
 
 def _header_map(rows):
@@ -1028,6 +1001,22 @@ def _number(value):
         return 0
     try:
         return max(0, int(round(float(match.group(0)))))
+    except (ValueError, OverflowError):
+        return 0
+
+
+def _signed_number(value):
+    """Read a signed ledger amount without clamping a net loss to zero."""
+    if isinstance(value, bool) or value is None or str(value).strip() == "":
+        return 0
+    if isinstance(value, (int, float)):
+        return int(round(value))
+    text = str(value).strip().replace(",", "")
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not match:
+        return 0
+    try:
+        return int(round(float(match.group(0))))
     except (ValueError, OverflowError):
         return 0
 
@@ -1080,9 +1069,12 @@ def summarize(ledger, period="month", batch="", today=None):
     expense_rows = list(ledger.get("expenses") or [])
     order_headers = _header_map(order_rows)
     expense_headers = _header_map(expense_rows)
-    revenue = supplier_costs = transport = 0
+    revenue = supplier_costs = transport = net_profit = 0
+    unlinked_costs = 0
     order_count = 0
     batches = set()
+    net_column = next((index for name, index in order_headers.items()
+                       if name.startswith("net profit")), 8)
 
     for row in order_rows[1:]:
         if not isinstance(row, list):
@@ -1098,9 +1090,16 @@ def summarize(ledger, period="month", batch="", today=None):
         order_id = str(_column(row, order_headers, "order id", 1) or "").strip()
         if not order_id:
             continue
-        revenue += _number(_column(row, order_headers, "revenue", 5))
-        supplier_costs += _number(_column(row, order_headers, "supplier costs", 6))
-        transport += _number(_column(row, order_headers, "transport", 7))
+        row_revenue = _number(_column(row, order_headers, "revenue", 5))
+        row_supplier = _number(_column(row, order_headers, "supplier costs", 6))
+        row_transport = _number(_column(row, order_headers, "transport", 7))
+        revenue += row_revenue
+        supplier_costs += row_supplier
+        transport += row_transport
+        saved_profit = row[net_column] if len(row) > net_column else ""
+        net_profit += (_signed_number(saved_profit)
+                       if str(saved_profit or "").strip() != ""
+                       else row_revenue - row_supplier - row_transport)
         order_count += 1
 
     for row in expense_rows[1:]:
@@ -1118,8 +1117,10 @@ def summarize(ledger, period="month", batch="", today=None):
         amount = _number(_column(row, expense_headers, "amount", 4))
         if kind in ("supplier", "supplier cost", "supplier costs", "stock", "purchase"):
             supplier_costs += amount
+            unlinked_costs += amount
         elif kind in ("transport", "transportation", "delivery", "delivery / transport"):
             transport += amount
+            unlinked_costs += amount
 
     return {
         "currency": _currency(ledger.get("currency")),
@@ -1130,7 +1131,7 @@ def summarize(ledger, period="month", batch="", today=None):
         "revenue": revenue,
         "supplierCosts": supplier_costs,
         "transport": transport,
-        "netProfit": revenue - supplier_costs - transport,
+        "netProfit": net_profit - unlinked_costs,
         "orderCount": order_count,
         "batches": sorted(batches, key=str.casefold),
     }
@@ -1149,6 +1150,11 @@ def _order_row(order, batch="", include_net=False):
     true Net Profit on every sheet, formula-driven or written.
     """
     import accounting
+    order_currency = accounting.order_currency(order)
+    if not order_currency:
+        raise GoogleSheetsError(
+            "This order has an unsupported currency and cannot be written to a ledger.",
+            code="UNSUPPORTED_CURRENCY")
     payload = accounting.order_payload(order)
     entry = accounting.entry_from_order(order)
     items = [item for item in (payload.get("items") or []) if isinstance(item, dict)]
@@ -1176,8 +1182,13 @@ def _order_row(order, batch="", include_net=False):
     link = str(entry.get("supplierLink") or "").strip()
     if link:
         extras.append(f"Supplier link: {link}")
+    if entry.get("profitOverrideActive"):
+        extras.append(f"Manual net profit override: {entry.get('profitOverride')}")
     if extras:
         notes = (notes + " · " if notes else "") + " · ".join(extras)
+    net_profit = (entry.get("profitOverride")
+                  if entry.get("profitOverrideActive")
+                  else revenue - supplier - transport)
     return [
         str(entry.get("date") or "")[:10],
         str(entry.get("id") or ""),
@@ -1187,7 +1198,7 @@ def _order_row(order, batch="", include_net=False):
         revenue,
         supplier or "",
         transport or "",
-        (revenue - supplier - transport) if include_net else "",
+        net_profit if include_net else "",
         str(batch or ""),
         notes[:900],
         # Column L: the customer's destination, mapped from the staging queue
@@ -1211,6 +1222,10 @@ def _line_item_rows(orders, batch=""):
     for order in orders or []:
         if not isinstance(order, dict) or str(order.get("status") or "") != "confirmed":
             continue
+        if not accounting.order_currency(order):
+            raise GoogleSheetsError(
+                "This order has an unsupported currency and cannot be written to a ledger.",
+                code="UNSUPPORTED_CURRENCY")
         entry = accounting.entry_from_order(order)
         for line in entry.get("lineItems") or []:
             if not isinstance(line, dict):
@@ -1358,38 +1373,60 @@ def _existing_order_rows_in(spreadsheet_id, tab):
     return result
 
 
-def _spreadsheet_tab_titles(spreadsheet_id):
-    """Every tab title in a workbook, or [] when the workbook is unreadable.
-
-    Raises a GoogleSheetsError with code ``XLSX_FORMAT`` when the target
-    document is an uploaded .xlsx file that has not been saved as Google
-    Sheets - in that state the Sheets API cannot write rows and the owner
-    needs to convert it first.
-    """
+def _spreadsheet_tab_properties(spreadsheet_id):
+    """Every sheet tab's title and stable numeric sheetId (gid)."""
     url = (f"{SHEETS_API}/spreadsheets/"
            f"{urllib.parse.quote(str(spreadsheet_id), safe='')}"
            f"?fields=properties(title,timeZone,locale),spreadsheetId,sheets.properties")
     try:
         meta = _google_request("GET", url)
     except _GoogleHTTPError as exc:
-        # Some xlsx documents return a 400/403 at metadata fetch; annotate
-        # those with the same hint.
-        if not _is_xlsx_format_error(exc):
-            raise
+        if _is_xlsx_format_error(exc):
+            raise GoogleSheetsError(_annotate_error(str(exc)),
+                                    code="XLSX_FORMAT") from exc
         raise
-    # The Sheets API returns spreadsheet.properties.mimeType only on the
-    # newer drive-integrated endpoint; however reading an uploaded .xlsx
-    # through the spreadsheets endpoint already fails at the GET above with
-    # "This operation is not supported for this document". Belt and braces:
-    # if we ever encounter an alternate error response, re-raise with hint.
-    props = meta.get("properties") or {}
-    titles = []
+    result = []
     for sheet in meta.get("sheets") or []:
-        sp = sheet.get("properties") or {}
-        title = str(sp.get("title") or "").strip()
+        props = sheet.get("properties") or {}
+        title = str(props.get("title") or "").strip()
         if title:
-            titles.append(title)
-    return titles
+            result.append({"title": title, "sheetId": props.get("sheetId")})
+    return result
+
+
+def _spreadsheet_tab_titles(spreadsheet_id):
+    """Compatibility helper returning only the visible tab titles."""
+    return [item["title"] for item in _spreadsheet_tab_properties(spreadsheet_id)]
+
+
+def reference_tab_url(currency):
+    """Build a direct browser URL for the fixed workbook's currency tab.
+
+    A tab name is not a valid Google Sheets URL selector; resolve its numeric
+    gid through the Sheets API so the NGN/CFA buttons reliably open the right
+    tab even when the tab order changes.
+    """
+    currency = _currency(currency)
+    wanted = REFERENCE_TABS[currency]
+    native = resolve_native_reference_spreadsheet()
+    spreadsheet_id = native["id"]
+    tabs = _spreadsheet_tab_properties(spreadsheet_id)
+    found = next((tab for tab in tabs
+                  if str(tab.get("title") or "").strip().casefold()
+                  == wanted.casefold()), None)
+    if found is None:
+        # A button click is an explicit operator request to open that ledger;
+        # create the missing named tab (with canonical headers) so the redirect
+        # can still target a real gid instead of silently opening another tab.
+        ensure_reference_tab(spreadsheet_id, currency)
+        tabs = _spreadsheet_tab_properties(spreadsheet_id)
+        found = next((tab for tab in tabs
+                      if str(tab.get("title") or "").strip().casefold()
+                      == wanted.casefold()), None)
+    if found is None:
+        raise GoogleSheetsError(f"The {wanted} tab could not be resolved.",
+                                code="REFERENCE_TAB_MISSING")
+    return _spreadsheet_url(spreadsheet_id, found.get("sheetId"))
 
 
 def ensure_reference_tab(spreadsheet_id, currency):
@@ -1424,9 +1461,9 @@ def ensure_reference_tab(spreadsheet_id, currency):
 def push_orders(orders, *, batch_name="", reference_id=""):
     """Push staged orders only to the active native reference spreadsheet.
 
-    Drive resolution is strict: both the exact requested title and native
-    Google Sheets MIME type must match. Uploaded .xlsx documents and legacy
-    Office backups are never fallbacks. NGN and FCFA orders land on their
+    Drive resolution is strict: the fixed spreadsheet ID must resolve to a
+    native Google Sheets MIME type. Uploaded .xlsx documents and legacy Office
+    backups are never fallbacks. NGN and FCFA orders land on their named
     currency tabs; item details are upserted separately in ``Order Lines``.
     Rows are idempotently upserted by order/line ID.
 
@@ -1439,10 +1476,11 @@ def push_orders(orders, *, batch_name="", reference_id=""):
         if str(order.get("status") or "") != "confirmed":
             continue
         import accounting
-        snapshot = accounting.account_block(order)
-        currency = _currency(snapshot.get("currency") or order.get("currency"))
+        currency = _currency(accounting.order_currency(order))
         grouped.setdefault(currency, []).append(order)
 
+    # A legacy saved preference is intentionally ignored; the workbook ID is
+    # fixed to the owner-selected destination and validated by Drive MIME type.
     native = resolve_native_reference_spreadsheet(preferred_id=reference_id)
     spreadsheet_id = native["id"]
     report = {}
@@ -1466,10 +1504,12 @@ def push_orders(orders, *, batch_name="", reference_id=""):
                     updated += 1
             for offset in range(0, len(fresh), 250):
                 _append_rows_to(spreadsheet_id, tab, fresh[offset:offset + 250])
+            tab_meta = next((item for item in _spreadsheet_tab_properties(spreadsheet_id)
+                             if item["title"].casefold() == tab.casefold()), {})
             report[currency] = {
                 "spreadsheetId": spreadsheet_id,
                 "tab": tab,
-                "url": native.get("url") or _spreadsheet_url(spreadsheet_id),
+                "url": _spreadsheet_url(spreadsheet_id, tab_meta.get("sheetId")),
                 "count": len(group),
                 "appended": len(fresh),
                 "updated": updated,
@@ -1492,8 +1532,7 @@ def sync_order(order):
     if str((order or {}).get("status") or "") != "confirmed":
         return False
     import accounting
-    currency = _currency(accounting.account_block(order).get("currency")
-                         or (order or {}).get("currency"))
+    currency = _currency(accounting.order_currency(order))
     row = _order_row(order)
     spreadsheet_id = _spreadsheet_id(currency)
     with _lock:
@@ -1550,8 +1589,8 @@ def _do_backfill(orders):
             if not isinstance(order, dict) or str(order.get("status") or "") != "confirmed":
                 continue
             import accounting
-            snapshot = accounting.account_block(order)
-            if _currency(snapshot.get("currency") or order.get("currency")) == currency:
+            order_currency = _currency(accounting.order_currency(order))
+            if order_currency == currency:
                 matching.append(order)
         matching.sort(key=lambda row: str(row.get("at") or row.get("updated_at") or ""))
         spreadsheet_id = _spreadsheet_id(currency)
@@ -1601,7 +1640,7 @@ def aggregate_fallback(entries, currency, period="month", batch="", today=None):
     """Local order-snapshot fallback before Drive connects (no unlinked expenses)."""
     currency = _currency(currency)
     start, end = period_bounds(period, today=today)
-    revenue = supplier_costs = transport = count = 0
+    revenue = supplier_costs = transport = net_profit = count = 0
     for entry in entries or []:
         if _currency(entry.get("currency")) != currency:
             continue
@@ -1614,15 +1653,23 @@ def aggregate_fallback(entries, currency, period="month", batch="", today=None):
             continue
         if entry.get("deleted"):
             continue
-        revenue += _number(entry.get("saleAmount"))
-        supplier_costs += _number(entry.get("supplierCostInCurrency"))
-        transport += _number(entry.get("deliveryExpense"))
+        sale = _number(entry.get("saleAmount"))
+        discount = _number(entry.get("discount"))
+        supplier = _number(entry.get("supplierCostInCurrency"))
+        row_transport = _number(entry.get("deliveryExpense"))
+        revenue += max(0, sale - discount)
+        supplier_costs += supplier
+        transport += row_transport
+        saved_profit = entry.get("netProfit")
+        if saved_profit is None or str(saved_profit).strip() == "":
+            saved_profit = sale - discount - supplier - row_transport
+        net_profit += _signed_number(saved_profit)
         count += 1
     return {"currency": currency, "period": str(period or "month"),
             "periodStart": start.isoformat() if start else "",
             "periodEnd": end.isoformat() if end else "", "batch": str(batch or ""),
             "revenue": revenue, "supplierCosts": supplier_costs, "transport": transport,
-            "netProfit": revenue - supplier_costs - transport,
+            "netProfit": net_profit,
             "orderCount": count, "batches": []}
 
 

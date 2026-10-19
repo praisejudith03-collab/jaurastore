@@ -46,6 +46,11 @@ def test_public_catalog_flags_supplier_tracked_products_without_exposing_urls():
     ordinary = _public_product({"id": "jau-local-item", "stock": 1})
     assert ordinary["supplierTracked"] is False
 
+    locked = _public_product({"id": "jau-manual-lock", "stock": 0,
+                              "manualStockLock": True})
+    assert "manualStockLock" not in locked
+    assert locked["stock_status"] == "out"
+
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
     translations = open(os.path.join(root, "js", "i18n.js"), encoding="utf-8").read()
@@ -146,6 +151,24 @@ def test_supplier_out_of_stock_zeroes_the_matched_variant(monkeypatch, saved):
     assert saved["optionStock"]["Serum"] == 0
     assert saved["optionStock"]["Cream"] == 4
     assert saved["stock"] == 4
+
+
+def test_manual_admin_out_of_stock_lock_blocks_supplier_fetch_and_restock(
+        monkeypatch, saved):
+    calls = []
+    product = _product(stock=0, stock_quantity=0,
+                       optionStock={"Serum": 0, "Cream": 0})
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "is_stock_locked",
+                        lambda pid: pid == product["id"])
+    monkeypatch.setattr(supplier_watchdog, "fetch_url", lambda url: calls.append(url) or
+                        _variants_html(("Serum", True, 25), ("Cream", True, 40)))
+
+    changed, warnings = supplier_watchdog.sync_product(product)
+
+    assert changed is False
+    assert [warning["code"] for warning in warnings] == ["manual_stock_lock"]
+    assert calls == []
+    assert not saved
 
 
 def test_supplier_count_is_sold_one_to_one_without_a_buffer(monkeypatch, saved):

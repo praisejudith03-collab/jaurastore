@@ -28,6 +28,27 @@ def normalize_currency(value):
     return ""
 
 
+def order_currency(order, default="NGN"):
+    """Resolve an order's explicit regional currency without misrouting it.
+
+    Blank legacy values may use the supplied compatibility default. A present
+    but unsupported currency returns ``""`` so callers that write financial
+    records can reject the order rather than silently treating it as Naira.
+    """
+    payload = order_payload(order)
+    stored = payload.get("accounting")
+    candidates = (
+        order_value(order, "currency"),
+        payload.get("currency"),
+        stored.get("currency") if isinstance(stored, dict) else None,
+    )
+    for value in candidates:
+        if value is None or not str(value).strip():
+            continue
+        return normalize_currency(value)
+    return normalize_currency(default)
+
+
 def decimal_value(value, default=Decimal(0)):
     try:
         if isinstance(value, bool) or value is None or str(value).strip() == "":
@@ -49,6 +70,15 @@ def validated_amount(value):
     """Return an integer amount, or None when an edit is invalid."""
     parsed = decimal_value(value, None)
     if parsed is None or not parsed.is_finite() or parsed < 0 or parsed > AMOUNT_MAX:
+        return None
+    return int(parsed.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def validated_signed_amount(value):
+    """Return a signed whole-unit amount for a manual net-profit override."""
+    parsed = decimal_value(value, None)
+    if (parsed is None or not parsed.is_finite()
+            or abs(parsed) > AMOUNT_MAX):
         return None
     return int(parsed.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
@@ -525,7 +555,12 @@ def entry_figures(snapshot, currency="NGN", rate=LEGACY_RATE):
             transport_ngn = transport
             transport_cfa = supplier_cost_cfa(transport_ngn, rate)
 
-    net_profit = sale - discount - supplier_in_currency - transport
+    calculated_profit = sale - discount - supplier_in_currency - transport
+    raw_override = snapshot.get("profitOverride")
+    profit_override = (None if raw_override in (None, "")
+                       else validated_signed_amount(raw_override))
+    net_profit = (profit_override if profit_override is not None
+                  else calculated_profit)
     return {
         "saleAmount": sale,
         "discount": discount,
@@ -535,6 +570,9 @@ def entry_figures(snapshot, currency="NGN", rate=LEGACY_RATE):
         "deliveryExpense": transport,
         "deliveryExpenseNgn": transport_ngn,
         "deliveryExpenseCfa": transport_cfa,
+        "calculatedProfit": calculated_profit,
+        "profitOverride": profit_override,
+        "profitOverrideActive": profit_override is not None,
         "netProfit": net_profit,
         "netCashProfit": net_profit,
     }
@@ -916,6 +954,9 @@ def entry_from_order(order, archived_ids=None):
         "deliveryExpenseNgn": figures["deliveryExpenseNgn"],
         "deliveryExpenseCfa": figures["deliveryExpenseCfa"],
         "supplierCostInCurrency": supplier_in_currency,
+        "calculatedProfit": figures["calculatedProfit"],
+        "profitOverride": figures["profitOverride"],
+        "profitOverrideActive": figures["profitOverrideActive"],
         "netProfit": figures["netProfit"],
         "netCashProfit": figures["netCashProfit"],
         "exchangeRate": float(rate),
@@ -1048,7 +1089,8 @@ def batch_totals(entries, currency, batch_transport_fee=None, custom_cost=None):
 
     ``batch_transport_fee`` is the single Batch Transportation Fee for the
     whole batch. When it is ``None`` (the box was left blank) the individual
-    per-order transport fees are summed instead.
+    per-order transport fees are summed instead. A per-order final-profit
+    override supersedes that order's calculated transport share.
 
     ``custom_cost`` is the owner's extra itemised cost for the batch (customs,
     packaging, a buying trip). It is subtracted from the net exactly like a
@@ -1056,7 +1098,7 @@ def batch_totals(entries, currency, batch_transport_fee=None, custom_cost=None):
     """
     currency = normalize_currency(currency) or "NGN"
     rows = [row for row in (entries or [])
-            if normalize_currency(row.get("currency")) == currency]
+            if isinstance(row, dict) and normalize_currency(row.get("currency")) == currency]
     revenue = sum(amount(row.get("saleAmount")) for row in rows)
     discounts = sum(amount(row.get("discount")) for row in rows)
     supplier_ngn = sum(amount(row.get("supplierCostNgn")) for row in rows)
@@ -1064,11 +1106,31 @@ def batch_totals(entries, currency, batch_transport_fee=None, custom_cost=None):
     per_order_transport = sum(amount(row.get("deliveryExpense")) for row in rows)
     if batch_transport_fee is None:
         transport = per_order_transport
+        transport_shares = [amount(row.get("deliveryExpense")) for row in rows]
     else:
         transport = amount(batch_transport_fee)
-    custom = 0
-    if custom_cost is not None:
-        custom = amount(custom_cost)
+        share, remainder = divmod(transport, max(1, len(rows)))
+        transport_shares = [share + (remainder if index == 0 else 0)
+                            for index in range(len(rows))]
+    custom = amount(custom_cost) if custom_cost is not None else 0
+
+    net_profit = 0
+    for index, row in enumerate(rows):
+        raw_override = row.get("profitOverride")
+        override = (None if raw_override is None
+                    or (isinstance(raw_override, str) and not raw_override.strip())
+                    else validated_signed_amount(raw_override))
+        if override is not None:
+            # This is a final owner-entered profit for the order; changing the
+            # shared transport arrangement does not change that figure.
+            net_profit += override
+        else:
+            net_profit += (amount(row.get("saleAmount"))
+                           - amount(row.get("discount"))
+                           - amount(row.get("supplierCostInCurrency"))
+                           - transport_shares[index])
+    net_profit -= custom
+
     totals = {
         "currency": currency,
         "orderCount": len(rows),
@@ -1077,7 +1139,7 @@ def batch_totals(entries, currency, batch_transport_fee=None, custom_cost=None):
         "supplierPayableNgn": supplier_ngn,
         "supplierCostInCurrency": supplier_currency,
         "transportExpense": transport,
-        "netCashProfit": revenue - discounts - supplier_currency - transport - custom,
+        "netCashProfit": net_profit,
     }
     if custom:
         # Only present when the owner logged one, exactly like the batch
@@ -1118,7 +1180,8 @@ def new_expense(kind, currency, value, *, note="", at="", actor="",
                 batch_id="", expense_id=""):
     """Build one validated manual-expense record (or None when invalid)."""
     kind = normalize_expense_kind(kind)
-    if not kind:
+    currency = normalize_currency(currency)
+    if not kind or not currency:
         return None
     total = validated_amount(value)
     if total is None or total <= 0 or total > EXPENSE_MAX * 10_000:
@@ -1127,7 +1190,7 @@ def new_expense(kind, currency, value, *, note="", at="", actor="",
     return {
         "id": str(expense_id or ("EXP-" + _secrets.token_hex(5).upper())),
         "kind": kind,
-        "currency": normalize_currency(currency) or "NGN",
+        "currency": currency,
         "amount": total,
         "note": str(note or "")[:300],
         "batchId": str(batch_id or "")[:40],
@@ -1252,7 +1315,7 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
     today = today or _datetime.datetime.now(_datetime.timezone.utc).date()
     start, end = _sheets.period_bounds(period, today=today)
     revenue = discounts = supplier = transport = fees = order_count = 0
-    custom = 0
+    custom = pushed_profit = manual_expenses = manual_fees = 0
     # The difference a hand-set net profit makes against what the calculator
     # would have said. Summing it keeps the period card honest about an
     # override without re-deriving every batch's figures a second way.
@@ -1269,6 +1332,7 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
         revenue += amount(totals.get("customerRevenue"))
         discounts += amount(totals.get("discountsTotal"))
         supplier += amount(totals.get("supplierCostInCurrency"))
+        pushed_profit += batch_net_profit(batch)
         # A batch logged with a single Batch Transportation Fee contributes
         # that one figure; a batch without one contributes the sum of its
         # individual per-order transport fees.
@@ -1291,9 +1355,13 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
         if not _sheets._in_filters(_row_date_safe(day), start, end):
             continue
         if normalize_expense_kind(expense.get("kind")) == "fee":
-            transport += amount(expense.get("amount"))
+            value = amount(expense.get("amount"))
+            transport += value
+            manual_fees += value
         else:
-            supplier += amount(expense.get("amount"))
+            value = amount(expense.get("amount"))
+            supplier += value
+            manual_expenses += value
     matching.sort(key=lambda row: str(row.get("pushedAt")
                                       or row.get("createdAt") or ""), reverse=True)
     return {
@@ -1308,8 +1376,10 @@ def sales_summary(batches, expenses, currency, period="month", today=None):
         "customCosts": custom,
         "transferFees": fees,
         "manualAdjustment": manual_delta,
-        "netProfit": (revenue - discounts - supplier - transport - fees
-                      - custom + manual_delta),
+        # Sum the immutable batch figures so both per-order and batch-level
+        # manual profit overrides survive display edits; external purchases,
+        # bank fees, and transfer fees are deducted separately.
+        "netProfit": pushed_profit - manual_expenses - manual_fees - fees,
         "orderCount": order_count,
         "batchCount": len(matching),
         "batches": matching,
