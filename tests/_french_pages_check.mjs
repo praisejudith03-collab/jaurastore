@@ -148,13 +148,34 @@ for (const page of TARGETS) {
   for (let i = 0; i < 40 && !window.I18N; i += 1) {
     await new Promise((r) => setTimeout(r, 25));
   }
-  try { window.I18N.setLang("fr"); } catch (err) { /* boot paints fr anyway */ }
-  await new Promise((r) => setTimeout(r, 250));
+  // The boot path itself must have chosen French (store.js/app.js call
+  // I18N.apply() on every page). If it did not, the page is broken for a
+  // French phone no matter what a later manual apply() would produce - so
+  // this is checked BEFORE the settle loop that re-applies the engine.
+  const bootLang = window.document.documentElement.lang;
+  // Boot paints in stages (mountChrome, then the catalogue paint, then the
+  // late checkout/cart panels), and a slow runner can still be mid-paint when
+  // the first scan runs. Re-apply the engine and re-scan until the page stops
+  // changing, so a page is judged on its settled state - the same thing a
+  // shopper sees once the spinner is gone - never on a half-painted one.
+  let hits = [];
+  let stable = 0;
+  for (let i = 0; i < 8 && stable < 2; i += 1) {
+    try {
+      window.I18N.setLang("fr");
+      window.I18N.apply();
+    } catch (err) { /* boot paints fr anyway */ }
+    await new Promise((r) => setTimeout(r, 180));
+    const next = englishNodes(window);
+    stable = next.length === hits.length && next.every((h, k) => h.text === hits[k].text)
+      ? stable + 1 : 0;
+    hits = next;
+  }
   const lang = window.document.documentElement.lang;
-  const hits = englishNodes(window);
-  const bad = lang !== "fr" || hits.length > 0;
+  const bad = bootLang !== "fr" || lang !== "fr" || hits.length > 0;
   if (bad) failures += 1;
   console.log((bad ? "FAIL  " : "PASS  ") + page + "  lang=" + lang
+    + (bootLang !== "fr" ? "  BOOT LANG=" + bootLang : "")
     + (hits.length ? "  " + hits.length + " English node(s):" : ""));
   hits.slice(0, 4).forEach((h) => console.log("        [" + h.en + "] " + h.text.slice(0, 150)));
   dom.window.close();
