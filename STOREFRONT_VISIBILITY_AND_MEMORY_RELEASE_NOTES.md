@@ -175,3 +175,22 @@ Full suite: see the run recorded with this change (`pytest tests/ -q`).
   not in the shop" report: `missingFromPublic` empty means the API served it,
   and the client-side causes are then `noCategory` / `noPrice` /
   `placeholderPhoto` / `hidden` rather than a mystery.
+
+---
+
+## 6. Post-deploy verification (follow-up)
+
+Local tests prove the code; two checks now prove the deployed service:
+
+* `python3 tools/post_deploy_check.py` — read-only, no credentials. Verifies
+  `/healthz` inside the 50 ms budget (≥ 80 % of samples), the catalogue's
+  `publishedCount == len(products)` invariant, a non-zero live exchange rate,
+  a French first paint with a single asset token, and that the catalogue audit
+  is admin-only. Exit `0` pass, `1` a failed check, `2` nothing answered.
+* `node tests/_toast_check.mjs` — loads the shipped `js/store.js` in jsdom and
+  drives the real toast: one element, green `data-kind="success"`, the exact
+  save sentence, reused for the next notice, red for errors, hidden on its
+  timer.
+
+See `POST_DEPLOY_VERIFICATION.md` for the check table, sample output and the
+triage steps when `catalog` fails.
