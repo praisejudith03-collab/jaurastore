@@ -28,6 +28,13 @@ _loaded = False
 _probe_client = None
 _probe_loaded = False
 
+# Monotonic timestamp of the last SHOP read. Used by memory_manager to decide
+# when the connection pools have gone idle. The health probe deliberately does
+# not touch this: a 15-minute monitor ping must not be the reason an otherwise
+# idle instance keeps its pools open.
+_last_activity = _time.monotonic()
+_activity_lock = _threading.Lock()
+
 # Every PostgREST request is bounded. The supabase package's own default is
 # 120 seconds, which is unusable twice over: gunicorn kills the worker at 45s
 # (Procfile --timeout 45), so a request still waiting at 120s can never
@@ -188,12 +195,78 @@ def client():
     Imported lazily so the package is only required on hosts that use
     Supabase (it is a heavier dependency than the rest of the stack).
     """
-    global _client, _loaded
+    global _client, _loaded, _last_activity
+    with _activity_lock:
+        _last_activity = _time.monotonic()
     if _loaded:
         return _client
     _loaded = True
     _client = _build_client(SUPABASE_HTTP_TIMEOUT_SECONDS)
     return _client
+
+
+def last_activity():
+    """Monotonic time of the last shop-side Supabase access."""
+    with _activity_lock:
+        return _last_activity
+
+
+def idle_seconds(now=None):
+    now = _time.monotonic() if now is None else float(now)
+    return max(0.0, now - last_activity())
+
+
+def _close_client(c):
+    """Close every httpx pool a supabase client holds, best-effort."""
+    closed = 0
+    if c is None:
+        return closed
+    # postgrest/functions/storage each own a SyncClient with a ``session``;
+    # auth keeps its own httpx client under ``_http_client``.
+    for attr in ("postgrest", "functions", "storage", "auth"):
+        sub = getattr(c, attr, None)
+        if sub is None:
+            continue
+        for holder in (sub, getattr(sub, "session", None),
+                       getattr(sub, "_http_client", None)):
+            closer = getattr(holder, "close", None) if holder is not None else None
+            if not callable(closer):
+                continue
+            try:
+                closer()
+                closed += 1
+            except Exception:
+                pass
+    return closed
+
+
+def recycle_clients(reason="idle"):
+    """Close and forget both cached clients (the shop's and the probe's).
+
+    A Supabase client is a thin PostgREST wrapper over a long-lived httpx
+    connection pool. On a free instance that never sleeps, those pools - and
+    the read cache beside them - are the only structures that outlive a
+    request by design. Dropping them when the shop is idle returns the file
+    descriptors and the pool memory, and the next read rebuilds a client in a
+    few milliseconds.
+
+    Returns ``{"recycled": bool, "closed": n, "reason": reason}``. Safe to call
+    concurrently: the swap is done under a lock, and a client already handed
+    to an in-flight request keeps working (closing its pool only makes the
+    *next* call on it reconnect) because supabase-py creates connections per
+    request.
+    """
+    global _client, _loaded, _probe_client, _probe_loaded
+    global _last_activity
+    with _activity_lock:
+        shop, probe = _client, _probe_client
+        had = bool(_loaded or _probe_loaded or shop or probe)
+        _client, _probe_client = None, None
+        _loaded, _probe_loaded = False, False
+        _last_activity = _time.monotonic()
+    closed = _close_client(shop) + _close_client(probe)
+    invalidate_read_cache()
+    return {"recycled": bool(had), "closed": closed, "reason": str(reason or "")}
 
 
 def probe_client():

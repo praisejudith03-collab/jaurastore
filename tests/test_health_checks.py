@@ -21,6 +21,7 @@ def client(monkeypatch):
     monkeypatch.setattr(Config, "SUPABASE_URL", "")
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "")
     init_db()
+    health_checks.reset_caches()
     app = appmod.create_app()
     app.config.update(TESTING=True)
     return app.test_client()
@@ -63,22 +64,90 @@ def test_hung_supabase_probe_returns_http_500_before_five_seconds(client, monkey
     time.sleep(0.45)
 
 
-def test_unreachable_supabase_fails_both_health_endpoints(client, monkeypatch):
+def test_unreachable_supabase_fails_the_full_health_endpoints(client, monkeypatch):
+    """The FULL report still fails closed, on the same request."""
     monkeypatch.setattr(Config, "SUPABASE_URL", "https://fake.supabase.co")
     monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
     monkeypatch.setattr(supabase_store, "ping", lambda: "unreachable")
-    for path in ("/healthz", "/api/health"):
+    for path in ("/health", "/api/health"):
         response = client.get(path)
         assert response.status_code == 500
         assert response.get_json()["database"]["ok"] is False
+
+
+def test_liveness_reports_degraded_then_fails_after_a_sustained_outage(client, monkeypatch):
+    """ /healthz never blocks on the network, but it is not blind either.
+
+    The 15-minute ping and Render's own probe must stay under 50 ms even while
+    Supabase is hanging, so the verdict is whatever the last background
+    observation was. One bad observation is ``degraded`` (still 200: a blip
+    must not roll the instance); three in a row - ~30 s - is 503, which is
+    what lets Render recycle a genuinely wedged process without the owner
+    pressing "Restart Service".
+    """
+    monkeypatch.setattr(Config, "SUPABASE_URL", "https://fake.supabase.co")
+    monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
+    monkeypatch.setattr(supabase_store, "ping", lambda: "unreachable")
+    health_checks.reset_caches()
+
+    def settle(timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while health_checks._readiness_inflight and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not health_checks._readiness_inflight, "the background probe never returned"
+        time.sleep(health_checks.LIVENESS_CACHE_SECONDS + 0.05)
+
+    first = client.get("/healthz")
+    assert first.status_code == 200, first.get_json()
+    settle()
+    degraded = client.get("/healthz")
+    assert degraded.status_code == 200, degraded.get_json()
+    assert degraded.get_json()["database"]["degraded"] is True
+
+    for _ in range(health_checks.HEALTHZ_FAIL_STREAK):
+        health_checks.refresh_readiness(force=True)
+        settle()
+
+    response = client.get("/healthz")
+    body = response.get_json()
+    assert response.status_code == 503, body
+    assert body["database"]["ok"] is False
+    assert body["database"]["streak"] >= health_checks.HEALTHZ_FAIL_STREAK
+
+
+def test_healthz_answers_under_fifty_milliseconds_and_touches_no_network(client, monkeypatch):
+    """/healthz is the one endpoint the free instance pays for, so it is free.
+
+    Any Supabase call, scheduler report or fresh event-loop probe on this path
+    is a bug: warm it once, then time it. The bound is generous for a loaded
+    CI box (the production target measured ~3 ms) while still failing loudly
+    if a future change reaches for the network here.
+    """
+    monkeypatch.setattr(supabase_store, "probe_client",
+                        lambda: (_ for _ in ()).throw(AssertionError("/healthz must not touch Supabase")))
+    monkeypatch.setattr(health_checks, "_supabase_ping",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("/healthz must not ping Supabase")))
+    monkeypatch.setattr(health_checks, "_sqlite_ping",
+                        lambda: {"ok": True, "latencyMs": 0.0})
+    health_checks.reset_caches()
+    client.get("/healthz")            # warm the one-second liveness cache
+    started = time.monotonic()
+    response = client.get("/healthz")
+    elapsed_ms = (time.monotonic() - started) * 1000
+    assert response.status_code == 200, response.get_json()
+    assert elapsed_ms < 50, f"/healthz took {elapsed_ms:.1f}ms"
+    body = response.get_json()
+    assert body["database"]["cached"] is True
+    assert "latencyMs" in body
 
 
 def test_runtime_scheduling_failure_is_unhealthy(client, monkeypatch):
     monkeypatch.setattr(health_checks, "_event_loop_probe",
                         lambda: {"ok": False, "latencyMs": 251,
                                  "error": "runtime scheduling probe timed out"})
+    health_checks.reset_caches()
     response = client.get("/healthz")
-    assert response.status_code == 500
+    assert response.status_code == 503
     assert response.get_json()["eventLoop"]["ok"] is False
 
 

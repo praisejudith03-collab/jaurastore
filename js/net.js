@@ -589,7 +589,19 @@ window.JA_NET = (function () {
       el.type = "button";
       el.className = "sync-pill";
       document.body.appendChild(el);
-      el.addEventListener("click", function () { JA.toast("Sending…"); flush(true); });
+      el.addEventListener("click", function () {
+        // The pill is storefront UI: a French shopper must not read English
+        // here either. I18N is loaded before this script, with a fallback.
+        var label = "Sending…";
+        try {
+          if (window.I18N && typeof window.I18N.t === "function") {
+            var said = window.I18N.t("sync.sending");
+            if (said && said !== "sync.sending") label = said;
+          }
+        } catch (e) { /* keep the English fallback */ }
+        JA.toast(label);
+        flush(true);
+      });
     } else if (el.classList.contains("is-dismissing")) {
       // A genuinely new queued action arrived during the slide-out.
       clearPillTimers(el);

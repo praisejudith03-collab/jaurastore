@@ -108,6 +108,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("DELETE", "/api/admin/job-failures"),
     ("DELETE", "/api/admin/job-failures/<int:fid>"),
 
+    ("GET", "/api/admin/catalog/audit"),
     ("GET", "/api/admin/products.csv"),
     ("POST", "/api/admin/products"), ("PUT", "/api/admin/products"),
     ("PUT", "/api/admin/products/<pid>/media"),
@@ -116,6 +117,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("GET", "/api/admin/coupon-uses"), ("POST", "/api/admin/reviews/migrate"),
     ("GET", "/api/admin/reviews"), ("PATCH", "/api/admin/reviews"),
     ("DELETE", "/api/admin/reviews"),
+    ("GET", "/api/admin/memory"), ("POST", "/api/admin/memory/recycle"),
     ("GET", "/api/admin/sales"), ("GET", "/api/admin/sales.csv"),
     ("GET", "/api/admin/session"), ("POST", "/api/admin/site"),
     ("GET", "/api/admin/stock"), ("PUT", "/api/admin/stock"),

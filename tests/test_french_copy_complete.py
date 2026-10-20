@@ -112,3 +112,36 @@ def test_a_french_description_survives_normalisation_and_storage_aliases():
     snake = catalog.normalize({"id": "jau-fr-2", "name": "Test",
                                "description_fr": "Copie française snake"})
     assert snake["descriptionFr"] == "Copie française snake"
+
+
+def test_storefront_status_copy_is_read_through_the_dictionary():
+    """A French shopper must not read English from a toast or a stock line.
+
+    The cart/storefront contract pins two canonical English sentences ("Out of
+    Stock", "Only N items remaining in stock") in js/store.js and js/app.js,
+    and the server answers in English with a machine code. Both are fine as
+    *data* - they are the contract with the API - but the shopper must read the
+    active language, so the storefront passes them through tx()/t() at the
+    moment they are shown.
+    """
+    store = open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8").read()
+    app = open(os.path.join(ROOT, "js", "app.js"), encoding="utf-8").read()
+    net = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
+    assert 'toast(tx("store.paused"))' in store
+    assert 'toast(tx("cart.oos"))' in store
+    assert 'toast(tx("cart.onlyLeft", { n: remaining }))' in store
+    assert 'return tx("cart.verifyFailed")' in store
+    # The English source strings stay (the API contract depends on them).
+    assert "Only ${remaining} items remaining in stock" in store
+    assert "Only ${room} items remaining in stock" in app
+    assert "stockCopy(qtyStockMessage)" in app
+    assert 'JA.toast(t("contact.whatsapp"))' in app
+    assert '"sync.sending"' in net
+
+
+def test_the_new_status_keys_are_translated_not_copied():
+    en, fr = _pairs(_i18n(), "en"), _pairs(_i18n(), "fr")
+    for key in ("store.paused", "cart.oos", "cart.onlyLeft",
+                "cart.verifyFailed", "contact.whatsapp", "sync.sending"):
+        assert key in en and key in fr, key
+        assert fr[key] != en[key], f"{key} is not translated"

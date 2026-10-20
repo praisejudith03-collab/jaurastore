@@ -21,7 +21,12 @@ services:
     buildCommand: pip install -r requirements.txt
     # Gunicorn replaces a silent worker after 45s; Render separately removes
     # an unhealthy instance from traffic and restarts it after its health-check
-    # failure window. /healthz returns within 5s and fails closed on DB hangs.
+    # failure window. /healthz is a cached liveness probe (<50 ms, no network,
+    # no allocation) so the 15-minute UptimeRobot ping and Render's own checks
+    # cost the free instance nothing. It answers 503 after three consecutive
+    # failed background database probes (~30 s), so a genuinely wedged process
+    # is recycled without anyone pressing "Restart Service"; /health keeps the
+    # full synchronous report for humans and the catalogue watchdog.
     startCommand: gunicorn "app:create_app()" --workers 1 --threads 8 --worker-class gthread --timeout 45 --graceful-timeout 30 --keep-alive 5
     healthCheckPath: /healthz
     envVars:

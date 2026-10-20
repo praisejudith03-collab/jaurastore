@@ -276,6 +276,11 @@ def inject_product_meta(html_text, product):
     return out
 
 
+# Largest response body the gzip handler will materialise twice. Chosen to
+# match the owner's "buffers under 3 MB" ceiling for the free 512 MB worker.
+MAX_COMPRESS_BYTES = 3 * 1024 * 1024
+
+
 def create_app():
     app = Flask(__name__, static_folder=None)
 
@@ -668,10 +673,20 @@ def create_app():
             # stylesheet alone is ~190 KB and it blocks the first paint, so
             # they are exactly the responses worth compressing: read the body
             # in and turn passthrough off before replacing it.
+            # Owner constraint 2026-10-20: buffers stay under 3 MB. A large
+            # body (a full orders CSV, a long export) must NOT be duplicated
+            # in memory just to test whether compressing it helps. When the
+            # length is known and over the ceiling, it is sent uncompressed.
+            limit = MAX_COMPRESS_BYTES
+            declared = resp.content_length
+            if declared is not None and declared > limit:
+                return resp
             if resp.direct_passthrough:
                 resp.direct_passthrough = False
             body = resp.get_data()
             if len(body) < 1024:
+                return resp
+            if len(body) > limit:
                 return resp
             packed = gzip.compress(body, 6)
             if len(packed) >= len(body):
@@ -688,14 +703,38 @@ def create_app():
     def _headers(resp):
         return sec.apply_headers(resp)
 
-    @app.route("/health")
+    # Request-scoped memory hygiene: a bounded ``gc.collect(1)`` once the
+    # response is on the wire, and a full sweep after an upload. The idle pool
+    # reaping is driven from the scheduler (memory_manager.idle_tick), because
+    # the instance is kept awake by a 15-minute ping even when nobody shops.
+    try:
+        import memory_manager
+        memory_manager.install(app)
+    except Exception as exc:                       # memory hygiene is optional
+        app.logger.warning("memory manager could not be installed: %s", exc)
+
     @app.route("/healthz")
     def healthz():
-        # Render requires a fresh 2xx/3xx response within five seconds. Ping
-        # the real database (with a bounded Supabase probe) and verify Python
-        # request-thread scheduling on every check; a stuck DB must return 500
-        # so Render's health monitor can take the instance out of rotation and
-        # restart it. Never let a CDN cache a previous 200.
+        """The <50 ms liveness probe Render and the 15-minute ping poll.
+
+        Owner directive 2026-10-20: this endpoint must answer in under 50 ms
+        with zero memory overhead. It therefore does NO network I/O, allocates
+        no buffer, and reads the Supabase verdict the background refresher last
+        observed (three consecutive failures - ~30 s - turn it into a 503 so
+        Render recycles a genuinely wedged process on its own). The full,
+        synchronous report stays on ``/health`` and ``/api/health`` for humans
+        and for the watchdog's detail, which is where the cost belongs.
+        """
+        import health_checks
+        body = health_checks.liveness_report()
+        resp = jsonify(body)
+        resp.status_code = 200 if body.get("ok") else 503
+        resp.headers["Cache-Control"] = sec.NO_STORE
+        return resp
+
+    @app.route("/health")
+    def health():
+        """Full diagnostic health: live SQLite + Supabase probe, every call."""
         import health_checks
         body, status = health_checks.health_report()
         resp = jsonify(body)

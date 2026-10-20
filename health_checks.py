@@ -41,6 +41,32 @@ _remote_probe_started = 0.0
 # endpoint recovers on its own if something hangs outside that timeout's reach.
 PROBE_STALE_AFTER_SECONDS = 30.0
 
+# ---------------------------------------------------------------- liveness
+# /healthz is Render's health-check path AND the endpoint the 15-minute
+# UptimeRobot ping hits. It must answer in milliseconds without touching the
+# network, allocating a buffer or waiting on the filesystem, so the expensive
+# facts are measured elsewhere and read from memory here:
+#
+#   * the runtime + SQLite checks are cheap (~1 ms) and cached for one second;
+#   * the Supabase verdict is refreshed by a background daemon at most every
+#     READINESS_TTL_SECONDS, and this endpoint only reads the last one.
+#
+# A failed Supabase streak shorter than HEALTHZ_FAIL_STREAK is reported as
+# ``degraded`` but still answers 200: one slow query must not make Render kill
+# an otherwise healthy instance. After three consecutive failures (roughly 30
+# seconds of a genuinely broken database) the probe answers 503, which is what
+# lets Render recycle the process without anyone pressing "Restart Service".
+LIVENESS_CACHE_SECONDS = 1.0
+READINESS_TTL_SECONDS = 10.0
+HEALTHZ_FAIL_STREAK = 3
+
+_liveness_lock = threading.Lock()
+_liveness = {"at": 0.0, "payload": None}
+_readiness_lock = threading.Lock()
+_readiness = {"ok": None, "at": 0.0, "checkedAt": 0.0, "error": "", "streak": 0}
+_readiness_inflight = False
+_STARTED_AT = time.time()
+
 
 def _event_loop_probe(timeout=EVENT_LOOP_TIMEOUT_SECONDS):
     """Check that the service can schedule work off the request thread."""
@@ -200,3 +226,188 @@ def health_report():
         "mail": mail,
         "latencyMs": round((time.monotonic() - started) * 1000),
     }, 200 if ok else 500)
+
+def reset_caches():
+    """Forget cached liveness/readiness observations (tests, after a change)."""
+    global _readiness_inflight
+    with _liveness_lock:
+        _liveness["payload"] = None
+        _liveness["at"] = 0.0
+    with _readiness_lock:
+        _readiness.update({"ok": None, "at": 0.0, "checkedAt": 0.0,
+                           "error": "", "streak": 0})
+        _readiness_inflight = False
+
+
+def _supabase_configured():
+    try:
+        import supabase_store
+        return bool(supabase_store.enabled())
+    except Exception:
+        return False
+
+
+def _liveness_snapshot():
+    """The cheap half of health, recomputed at most once a second."""
+    now = time.monotonic()
+    with _liveness_lock:
+        cached = _liveness.get("payload")
+        if cached is not None and (now - float(_liveness.get("at") or 0)) < LIVENESS_CACHE_SECONDS:
+            return cached
+    payload = {"eventLoop": _event_loop_probe(), "sqlite": _sqlite_ping(), "at": time.time()}
+    with _liveness_lock:
+        _liveness["payload"] = payload
+        _liveness["at"] = time.monotonic()
+    return payload
+
+
+def refresh_readiness(force=False):
+    """Refresh the Supabase verdict in the background (never blocks the caller).
+
+    One daemon thread at a time; a probe already in flight is reused. The
+    scheduler's ``ensure_alive()`` runs here too, so a dead background worker
+    is restarted on the same cadence without depending on the 5-minute tick.
+    """
+    global _readiness_inflight
+    now = time.monotonic()
+    with _readiness_lock:
+        stale = _readiness.get("ok") is None or (now - float(_readiness.get("at") or 0)) > READINESS_TTL_SECONDS
+        if _readiness_inflight or (not force and not stale):
+            return False
+        if not _supabase_configured():
+            _readiness.update({"ok": True, "at": now, "checkedAt": time.time(),
+                               "error": "", "streak": 0})
+            return False
+        _readiness_inflight = True
+
+    def run():
+        global _readiness_inflight
+        try:
+            outcome = _supabase_ping()
+        except Exception as exc:                   # pragma: no cover - defensive
+            outcome = {"ok": False, "error": str(exc)[:160]}
+        try:
+            import scheduler
+            scheduler.ensure_alive()
+        except Exception:
+            pass
+        with _readiness_lock:
+            ok = bool(outcome.get("ok"))
+            _readiness["ok"] = ok
+            _readiness["at"] = time.monotonic()
+            _readiness["checkedAt"] = time.time()
+            _readiness["error"] = "" if ok else str(outcome.get("error") or "database ping failed")[:160]
+            _readiness["streak"] = 0 if ok else int(_readiness.get("streak") or 0) + 1
+            _readiness_inflight = False
+
+    try:
+        threading.Thread(target=run, name="health-readiness", daemon=True).start()
+    except Exception:                              # pragma: no cover - defensive
+        with _readiness_lock:
+            _readiness_inflight = False
+        return False
+    return True
+
+
+def _iso(epoch):
+    if not epoch:
+        return ""
+    try:
+        import datetime
+        return datetime.datetime.utcfromtimestamp(float(epoch)).isoformat(timespec="seconds") + "Z"
+    except Exception:
+        return ""
+
+
+def quick_background():
+    """Background-worker liveness without the scheduler's full report.
+
+    ``health_snapshot()`` reads the failure table and may restart a worker;
+    both are wrong on a <50 ms probe. This only asks ``threading.enumerate``,
+    and mirrors the old report's ``None`` when the scheduler is off (tests,
+    one-off CLI runs) so the documented shape does not change.
+    """
+    if not Config.SCHEDULER_ENABLED or Config.ENV == "testing":
+        return None
+    try:
+        import scheduler
+        alive = bool(scheduler._alive())
+        return {
+            **dict(getattr(scheduler, "_health", {}) or {}),
+            "started": bool(scheduler._started.is_set()),
+            "backgroundAlive": alive,
+            # Kept for the watchdog and the admin panel, which still read the
+            # two pre-consolidation worker names.
+            "maintenanceAlive": alive,
+            "remindersAlive": alive,
+            "supplierAlive": alive,
+            "threadName": scheduler.BACKGROUND_THREAD,
+            "intervalSeconds": scheduler.TICK_SECONDS,
+            # Deliberately omitted here (they are DB reads, and this probe is
+            # not allowed to do I/O): the full report on /health still has
+            # them.
+            "recentFailures": [],
+        }
+    except Exception:
+        return {"started": False, "backgroundAlive": False,
+                "maintenanceAlive": False, "remindersAlive": False,
+                "supplierAlive": False}
+
+
+def liveness_report():
+    """The <50 ms probe: no network, no threads we spawn, no scheduler work.
+
+    Keeps the keys the watchdog and Render already read (``database.ok``,
+    ``database.checks.sqlite``, ``eventLoop``, ``background``) so nothing
+    downstream has to change, while the expensive Supabase round trip moves to
+    a background refresher. ``/health`` and ``/api/health`` keep the full,
+    synchronous report for humans and for the watchdog's detail.
+    """
+    started = time.monotonic()
+    snap = _liveness_snapshot()
+    configured = _supabase_configured()
+    refresh_readiness()
+    with _readiness_lock:
+        readiness = dict(_readiness)
+    streak = int(readiness.get("streak") or 0)
+    verdict = readiness.get("ok")
+    if not configured:
+        db_ok = True
+    elif verdict is False and streak >= HEALTHZ_FAIL_STREAK:
+        db_ok = False
+    else:
+        db_ok = True
+    ok = bool(snap["eventLoop"].get("ok") and snap["sqlite"].get("ok") and db_ok)
+    try:
+        import memory_manager
+        memory = memory_manager.stats()
+    except Exception:
+        memory = {}
+    body = {
+        "ok": ok,
+        "live": True,
+        "env": Config.ENV,
+        "uptimeSeconds": round(time.time() - _STARTED_AT, 1),
+        "database": {
+            "ok": db_ok,
+            "backend": "supabase+sqlite" if configured else "sqlite",
+            "cached": True,
+            "checkedAt": _iso(readiness.get("checkedAt")),
+            "streak": streak,
+            "degraded": bool(verdict is False and db_ok),
+            "error": readiness.get("error") or "",
+            "checks": {
+                # SQLite is cheap enough to sample inline (cached 1s); the
+                # Supabase verdict is the last background observation.
+                "sqlite": snap["sqlite"],
+                "supabase": {"ok": verdict, "cached": True,
+                             "checkedAt": _iso(readiness.get("checkedAt")),
+                             "error": readiness.get("error") or ""},
+            },
+        },
+        "eventLoop": snap["eventLoop"],
+        "background": quick_background(),
+        "memory": memory,
+        "latencyMs": round((time.monotonic() - started) * 1000, 2),
+    }
+    return body

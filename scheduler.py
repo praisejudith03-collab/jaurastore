@@ -409,12 +409,36 @@ def _abandoned_tick(logger=None, attempts=3):
 
 
 def _release_memory(job, logger=None):
-    """Drop per-tick garbage and log RSS for free-tier RAM safety."""
+    """Drop per-tick garbage, recycle idle DB pools and log RSS.
+
+    The five-minute tick is the only clock that still runs when nobody is
+    shopping - the 15-minute external ping keeps the instance alive but does
+    not touch the catalogue. That makes it the right place to hand back the
+    memory an idle shop should not be holding: closed httpx pools, dropped
+    catalogue caches and ``malloc_trim`` (see ``memory_manager``). A shop in
+    use is never disturbed: the recycle only runs after ten minutes without a
+    Supabase access and with no request in flight.
+    """
     try:
+        report = {}
+        memory_stats = {}
+        try:
+            import memory_manager
+            report = memory_manager.idle_tick() or {}
+            memory_stats = memory_manager.stats()
+        except Exception as exc:
+            logger and logger.debug("idle pool recycle skipped: %s", exc)
         gc.collect()
         rss = observability.memory_mb()
         _health["rssMb"] = rss
-        if logger and rss:
+        if memory_stats.get("lastRecycleAt"):
+            _health["lastIdleRecycleAt"] = memory_stats["lastRecycleAt"]
+        if report.get("recycled"):
+            _health["idleRecycles"] = int(_health.get("idleRecycles") or 0) + 1
+            if logger:
+                logger.info("idle memory recycle: closed=%s trimmed=%sB rss=%.1fMB",
+                            report.get("closed"), report.get("trimmedBytes"), rss or 0)
+        elif logger and rss:
             logger.debug("%s tick finished rss=%.1fMB", job, rss)
         return rss
     except Exception:                             # pragma: no cover

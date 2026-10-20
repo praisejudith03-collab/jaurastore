@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=216";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=216";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=219";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=219";
 }
 
 function renderCategories() {
@@ -90,17 +90,34 @@ function renderCategories() {
   }).join("");
 }
 
+/** Milliseconds of a product's own creation/edit stamp, or 0.
+ *
+ * The catalogue carries whichever spelling the backend wrote: Supabase rows
+ * have created_at/updated_at, the admin editor writes updatedAt, and the
+ * bundled seed rows carry no date at all. 0 keeps those rows in catalogue
+ * order (Array.sort is stable), so the row an owner just saved - the only
+ * one with a real timestamp - sorts to the front without reshuffling the
+ * rest of the shop. */
+function productStamp(p) {
+  if (!p) return 0;
+  const raw = p.createdAt || p.created_at || p.updated_at || p.updatedAt || p.at || "";
+  const n = Date.parse(String(raw));
+  return Number.isFinite(n) ? n : 0;
+}
+
 function newestTwelve() {
   const all = JA.products();
   // Products the owner flagged "New Product Arrival" on the product editor's
   // promo ribbon lead the row - that dropdown is the control for this
   // section, and before this it only drove the card's pill, so ticking it
-  // never actually moved a product into "Just in". Featured products, then
-  // everything else, fill the remaining slots so the row is never empty.
+  // never actually moved a product into "Just in". Within each group the
+  // newest row wins, so a product created without a badge still surfaces as
+  // soon as its group is reached (featured, then everything else).
   const isNew = (p) => p.badge === "new";
-  const arrivals = all.filter(isNew);
-  const featured = all.filter((p) => !isNew(p) && p.featured);
-  const rest = all.filter((p) => !isNew(p) && !p.featured);
+  const newest = (a, b) => productStamp(b) - productStamp(a);
+  const arrivals = all.filter(isNew).sort(newest);
+  const featured = all.filter((p) => !isNew(p) && p.featured).sort(newest);
+  const rest = all.filter((p) => !isNew(p) && !p.featured).sort(newest);
   return arrivals.concat(featured, rest).slice(0, 12);
 }
 
@@ -309,7 +326,19 @@ function renderHome() {
  * grid came back short (the "27 products in ₦, 17 in CFA" report).
  * renderShop() re-derives the bounds from the catalogue whenever `cur` no
  * longer matches JA.currency(). */
-const shopFilter = { min: 0, max: 0, color: "", size: "", inited: false, cat: "", cur: "" };
+const shopFilter = {
+  min: 0, max: 0, color: "", size: "", inited: false, cat: "", cur: "",
+  // Whether the PRICE bounds were actually chosen by the shopper. The drawer
+  // still paints sensible lo/hi sliders, but an untouched range must never
+  // filter the catalogue: the first paint can happen before /api/site hands
+  // over the live exchange rate, when every Naira-anchored product converts
+  // to 0 and the derived floor (`lo`) is then a price most of the shop sits
+  // below. That single frozen bound is what reduced a 259-product catalogue
+  // to one visible card for a French visitor (French locks the currency to
+  // F CFA), and it is also how a brand-new unpriced product disappeared from
+  // the grid while still showing on the admin order form.
+  touched: false,
+};
 
 /** Forget price bounds captured in a currency that is no longer active. */
 function resetShopFilterForCurrency() {
@@ -320,6 +349,7 @@ function resetShopFilterForCurrency() {
   shopFilter.min = 0;
   shopFilter.max = 0;
   shopFilter.inited = false;        // paintFilterDrawer re-derives lo/hi
+  shopFilter.touched = false;       // a new currency means an untouched range
   return true;
 }
 
@@ -381,11 +411,31 @@ function translateOptionTitle(title) {
   }
   return s;
 }
+/** A product's active-currency price, or 0 when it is not known yet.
+ *
+ *  0 is a real state, not a cheap product: a row can be created before its
+ *  price is entered ("price on request"), and every Naira-anchored row reads
+ *  0 in F CFA until the live exchange rate arrives. Callers must never treat
+ *  that as "below the floor". */
+function shopPrice(p) {
+  try {
+    const n = Number(JA.priceOf(p));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
 function applyShopFilters(list) {
   return list.filter((p) => {
-    const price = JA.priceOf(p);
-    if (shopFilter.min != null && price < shopFilter.min) return false;
-    if (shopFilter.max != null && shopFilter.max > 0 && price > shopFilter.max) return false;
+    const price = shopPrice(p);
+    // Price bounds apply only when the shopper set them, and only to rows
+    // whose price is known. An untouched range (or a price still awaiting
+    // the live rate) never hides a product.
+    if (shopFilter.touched && price > 0) {
+      if (shopFilter.min != null && price < shopFilter.min) return false;
+      if (shopFilter.max != null && shopFilter.max > 0 && price > shopFilter.max) return false;
+    }
     if (shopFilter.color) {
       const want = shopFilter.color.toLowerCase();
       if (!productColors(p).some((c) => c.toLowerCase() === want)) return false;
@@ -397,10 +447,13 @@ function applyShopFilters(list) {
 function paintFilterDrawer(baseList) {
   const body = document.querySelector("[data-filt-body]");
   if (!body) return;
-  const prices = baseList.map((p) => JA.priceOf(p)).filter((n) => n > 0);
+  const prices = baseList.map(shopPrice).filter((n) => n > 0);
   const lo = prices.length ? Math.min(...prices) : 0;
   const hi = prices.length ? Math.max(...prices) : 0;
-  if (!shopFilter.inited) {
+  // The slider POSITIONS are always re-derived from the live catalogue. They
+  // only become an actual filter once the shopper moves one (see syncLab),
+  // so a range painted before the exchange rate arrived cannot hide rows.
+  if (!shopFilter.inited || !shopFilter.touched) {
     shopFilter.min = lo;
     shopFilter.max = hi;
     shopFilter.inited = true;
@@ -463,6 +516,8 @@ function paintFilterDrawer(baseList) {
     maxEl.value = String(b);
     shopFilter.min = a;
     shopFilter.max = b;
+    // This is the shopper's own choice, so from here the bounds DO filter.
+    shopFilter.touched = true;
     if (lab) lab.textContent = t("filt.priceLab") + " " + JA.money(a) + " — " + JA.money(b);
   };
   minEl?.addEventListener("input", syncLab);
@@ -509,6 +564,11 @@ function bindShopFilter() {
       shopFilter.color = "";
       shopFilter.size = "";
       shopFilter.inited = false;
+      // Clearing the filter means "show everything" - including products
+      // whose price is not known yet, so the price range must stop filtering.
+      shopFilter.touched = false;
+      shopFilter.min = 0;
+      shopFilter.max = 0;
       renderShop();
       return;
     }
@@ -530,6 +590,60 @@ function bindShopFilter() {
   });
 }
 
+/** "257 products" / "257 produits", singular included.
+ *
+ * The count line is painted by renderShop() on every catalogue repaint (a
+ * currency switch, an admin save arriving over the live sync), so it cannot
+ * rely on a later I18N sweep to fix it: a shopper reading French saw the
+ * English word between two paints. The plural is decided here, where the
+ * number is known. */
+function productCountLabel(n) {
+  const total = Math.max(0, Number(n) || 0);
+  let fr = false;
+  try { fr = !!(window.I18N && I18N.lang && I18N.lang() === "fr"); } catch (e) { fr = false; }
+  if (fr) return total + (total === 1 ? " produit" : " produits");
+  return total + (total === 1 ? " product" : " products");
+}
+
+/** Every category id the shop must offer as a filter pill.
+ *
+ * The category table first (that is the owner's order and the shipped copy),
+ * then any id a live product carries but the table does not know. A product
+ * saved with a brand-new or legacy category used to be reachable only through
+ * "All products": no pill could open it, so it read as missing from the shop.
+ * An empty category is deliberately skipped - those rows stay in All products.
+ */
+function shopCategoryIds() {
+  const ids = [];
+  const push = (raw) => {
+    const id = String(raw == null ? "" : raw).trim();
+    if (id && !ids.includes(id)) ids.push(id);
+  };
+  try { (JA.categories() || []).forEach((c) => push(c && c.id)); } catch (e) {}
+  try { (JA.products() || []).forEach((p) => push(p && p.category)); } catch (e) {}
+  return ids;
+}
+
+/** The grid's HTML, one card at a time.
+ *
+ * A single malformed row must never blank the whole catalogue: the old
+ * `slice.map(JA.cardHTML).join("")` threw away every card when one product
+ * broke a template. Each card is now isolated, and a failure is logged (never
+ * silently swallowed) so the owner can report the exact product id.
+ */
+function renderCards(list) {
+  const out = [];
+  (list || []).forEach((p) => {
+    try {
+      const html = JA.cardHTML(p);
+      if (html) out.push(html);
+    } catch (e) {
+      try { console.error("card render failed for", p && p.id, e); } catch (_) {}
+    }
+  });
+  return out.join("");
+}
+
 function renderShop() {
   const cat = param("cat") || "all";
   // A currency switch invalidates the price bounds before anything is
@@ -540,6 +654,9 @@ function renderShop() {
     shopFilter.inited = false;
     shopFilter.color = "";
     shopFilter.size = "";
+    // A price range chosen for one category must not silently hide products
+    // in the next one: entering a category always starts from "all prices".
+    shopFilter.touched = false;
   }
   // --- Shop banner auto-switches to selected category's custom image ---
   try {
@@ -587,9 +704,14 @@ function renderShop() {
   list = [...list];
   try { paintFilterDrawer(list); } catch (e) {}
   try { list = applyShopFilters(list); } catch (e) {}
-  if (sort === "price-asc") list.sort((a, b) => JA.priceOf(a) - JA.priceOf(b));
-  if (sort === "price-desc") list.sort((a, b) => JA.priceOf(b) - JA.priceOf(a));
-  if (sort === "name") list.sort((a, b) => a.name.localeCompare(b.name));
+  if (sort === "price-asc") list.sort((a, b) => shopPrice(a) - shopPrice(b));
+  if (sort === "price-desc") list.sort((a, b) => shopPrice(b) - shopPrice(a));
+  if (sort === "name") list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  // "Newest" used to mean "whatever order the server sent", which is id order:
+  // a product saved this morning landed on the LAST page of the shop and read
+  // as missing. Sort on the row's own timestamps (stable for the bundled
+  // seed rows, which carry none) so a freshly created product opens page 1.
+  if (sort === "newest") list.sort((a, b) => productStamp(b) - productStamp(a));
 
   // Clean pagination: 24 products per page with numbered controls plus
   // Previous/Next. Every product stays reachable — the pages cover the whole
@@ -603,7 +725,7 @@ function renderShop() {
     title.textContent = q ? t("shop.resultsFor", { q }) : (cat === "all" ? t("shop.all") : JA.categoryName(cat));
   });
   const count = document.querySelector("[data-shop-count]");
-  if (count) count.textContent = list.length + " products";
+  if (count) count.textContent = productCountLabel(list.length);
   if (live && param("q") && !live.dataset.filled) {
     live.value = param("q");
     live.dataset.filled = "1";
@@ -612,13 +734,13 @@ function renderShop() {
   const filters = document.querySelector("[data-filters]");
   if (filters) {
     filters.innerHTML = `<a class="cat-pill ${cat === "all" ? "is-on" : ""}" href="shop.html">${t("shop.all")}</a>` +
-      JA.categories().map((c) =>
-        `<a class="cat-pill ${cat === c.id ? "is-on" : ""}" href="shop.html?cat=${c.id}">${JA.categoryName(c.id)}</a>`
+      shopCategoryIds().map((id) =>
+        `<a class="cat-pill ${cat === id ? "is-on" : ""}" href="shop.html?cat=${encodeURIComponent(id)}">${JA.categoryName(id)}</a>`
       ).join("");
   }
 
   const grid = document.querySelector("[data-shop-grid]");
-  if (grid) grid.innerHTML = slice.length ? slice.map(JA.cardHTML).join("") : `<p class="empty">${t("shop.empty")}</p>`;
+  if (grid) grid.innerHTML = slice.length ? renderCards(slice) : `<p class="empty">${t("shop.empty")}</p>`;
 
   const pager = document.querySelector("[data-pager]");
   if (pager && pages > 1) {
@@ -631,11 +753,11 @@ function renderShop() {
       else if (nums[nums.length - 1] !== "…") nums.push("…");
     }
     pager.innerHTML =
-      `<button type="button" class="pager-nav" ${page <= 1 ? "disabled" : ""} data-goto="${JA.escape(url(page - 1))}" aria-label="Previous page">‹ <span data-i18n="pager.prev">Prev</span></button>`
+      `<button type="button" class="pager-nav" ${page <= 1 ? "disabled" : ""} data-goto="${JA.escape(url(page - 1))}" aria-label="${t("pager.prevLabel")}">‹ <span data-i18n="pager.prev">Prev</span></button>`
       + nums.map((n) => n === "…"
         ? `<span class="pager-gap">…</span>`
         : `<button type="button" ${n === page ? 'class="is-on" disabled aria-current="page"' : ""} data-goto="${JA.escape(url(n))}">${n}</button>`).join("")
-      + `<button type="button" class="pager-nav" ${page >= pages ? "disabled" : ""} data-goto="${JA.escape(url(page + 1))}" aria-label="Next page"><span data-i18n="pager.next">Next</span> ›</button>`;
+      + `<button type="button" class="pager-nav" ${page >= pages ? "disabled" : ""} data-goto="${JA.escape(url(page + 1))}" aria-label="${t("pager.nextLabel")}"><span data-i18n="pager.next">Next</span> ›</button>`;
     pager.querySelectorAll("[data-goto]:not([disabled])").forEach((b) => {
       b.addEventListener("click", () => { location.href = b.dataset.goto; });
     });
@@ -1065,7 +1187,7 @@ function paintProduct(root, p) {
       });
     }
     if (qtyStockError) {
-      qtyStockError.textContent = qtyStockMessage;
+      qtyStockError.textContent = stockCopy(qtyStockMessage);
       qtyStockError.hidden = !qtyStockMessage;
     }
     if (buyBtn) {
@@ -1090,7 +1212,7 @@ function paintProduct(root, p) {
     }
     qtyStockMessage = String(detail.message || "Out of Stock");
     if (qtyStockError) {
-      qtyStockError.textContent = qtyStockMessage;
+      qtyStockError.textContent = stockCopy(qtyStockMessage);
       qtyStockError.hidden = false;
     }
     updateStockUI(false);
@@ -2831,16 +2953,14 @@ function paintQueuedOrderNote(persisted) {
   note.className = "ck-queued";
   note.setAttribute("data-order-queued", "");
   note.setAttribute("role", "status");
-  note.textContent = persisted
-    ? "No internet right now — your order and receipt are saved on this phone and will be sent automatically when you are back online. Keep your order ID."
-    : "No internet right now — keep this page open while your order is waiting to send. Keep your order ID.";
+  note.textContent = t(persisted ? "ck.queuedSaved" : "ck.queuedWaiting");
   root.insertBefore(note, root.firstChild);
 }
 
 function bindOrderDoneCopy() {
   document.querySelector("[data-copy-id]")?.addEventListener("click", (ev) => {
     const id = ev.currentTarget.getAttribute("data-copy-id");
-    navigator.clipboard?.writeText(id).then(() => JA.toast("Order ID copied: " + id));
+    navigator.clipboard?.writeText(id).then(() => JA.toast(t("toast.orderIdCopied", { id })));
   });
 }
 
@@ -2862,7 +2982,7 @@ async function renderOrderComplete() {
   if (!order) {
     root.innerHTML = `<div class="order-done">
       <h2 class="serif-title">${t("ck.completedTitle")}</h2>
-      <p>We could not load this order on this device.</p>
+      <p>${t("ck.orderMissing")}</p>
       <a class="btn" href="shop.html">${t("ck.return")}</a>
     </div>`;
     return;
@@ -3059,13 +3179,42 @@ function renderAccount() {
   }).catch(() => paintAccountGuest(root));
 }
 
+/** The stock message a shopper reads, in their language.
+ *
+ * The catalogue and the cart API speak in two canonical English sentences
+ * ("Out of Stock", "Only N items remaining in stock"); both are pinned by the
+ * storefront contract, so they are translated here, at the point the customer
+ * reads them, never rewritten at the source. Anything else passes through.
+ */
+function stockCopy(message) {
+  const text = String(message == null ? "" : message).trim();
+  if (!text) return "";
+  // Translate only when a loaded engine really has the key. Without I18N (a
+  // harness, or the engine not yet parsed) t() derives a label from the key
+  // name - "cart.onlyLeft" would become "Only Left", which is worse than the
+  // English sentence the server already sent.
+  const say = (key, vars) => {
+    try {
+      if (window.I18N && typeof window.I18N.t === "function") {
+        const out = window.I18N.t(key, vars);
+        if (out && out !== key) return out;
+      }
+    } catch (e) { /* fall through to the server's sentence */ }
+    return "";
+  };
+  if (/^out of stock$/i.test(text)) return say("cart.oos") || text;
+  const left = text.match(/^only\s+(\d+)\s+items?\s+remaining\s+in\s+stock$/i);
+  if (left) return say("cart.onlyLeft", { n: left[1] }) || text;
+  return text;
+}
+
 function bindContactForm() {
   const form = document.querySelector("[data-contact-form]");
   if (!form || form.dataset.bound) return;
   form.dataset.bound = "1";
   form.addEventListener("submit", (e) => {
     e.preventDefault();
-    JA.toast("Please contact the store through the WhatsApp link on this page.");
+    JA.toast(t("contact.whatsapp"));
   });
 }
 
@@ -3171,7 +3320,7 @@ async function boot() {
     loading.className = "catalog-live-loading";
     loading.setAttribute("role", "status");
     loading.setAttribute("aria-live", "polite");
-    loading.innerHTML = `<div class="catalog-skeleton-head"></div><div class="catalog-skeleton-grid">${"<i></i>".repeat(8)}</div><span>Loading live products and stock…</span>`;
+    loading.innerHTML = `<div class="catalog-skeleton-head"></div><div class="catalog-skeleton-grid">${"<i></i>".repeat(8)}</div><span>${t("shop.loadingLive")}</span>`;
     document.body.appendChild(loading);
   }
 
