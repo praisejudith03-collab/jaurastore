@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=211" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=214" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1443,9 +1443,11 @@ async function handleProductSubmit(e, existing) {
     savedMsg = "Saved on the server only — not yet on the cloud copy. Tap Retry now.";
   } else {
     const liveState = isOnline ? "Live on the store now" : "Hidden from the store";
+    // The owner's wording: every confirmed save says "Saved successfully", even
+    // to a screen reader, and the details follow it.
     savedMsg = stock > 0
-      ? `Saved · ${liveState} · ${images.length} photo(s).`
-      : `Saved · ${liveState} · Out of stock.`;
+      ? `Saved successfully · ${liveState} · ${images.length} photo(s).`
+      : `Saved successfully · ${liveState} · Out of stock.`;
   }
   // Only now may the UI purge media the owner removed. The product write has
   // succeeded, so a storage reference guard sees the replacement row rather
@@ -1504,6 +1506,12 @@ let marketingTo = "";
 let selectedProductIds = new Set();
 let dashTimer = null;
 let dashCat = "";
+// "all" | "live" | "hidden". The Hidden / Drafts tab is a first-class view,
+// not a search: it collects every hidden product so the owner can restore
+// one with a single tap, and it is part of the captured return state so a
+// save from that tab comes back to the same tab.
+let prodView = "all";
+const PRODUCT_VIEWS = ["all", "live", "hidden"];
 
 /* ================================================== isolated return navigation
  *
@@ -1534,6 +1542,7 @@ function productsReturnUrl() {
   const category = dashCat || String((catEl && catEl.value) || prodCatSel || "");
   const query = String((searchEl && searchEl.value) || prodSearchQ || "").trim();
   if (category) params.set("category", category);
+  if (prodView && prodView !== "all") params.set("view", prodView);
   if (prodPage > 1) params.set("page", String(prodPage));
   if (query) params.set("q", query);
   const qs = params.toString();
@@ -1565,6 +1574,7 @@ function rememberProductsReturn() {
   const box = {
     url: productsReturnUrl(),
     category,
+    view: prodView || "all",
     q: query,
     page: Math.max(1, prodPage || 1),
     scrollTop: Math.max(0, window.scrollY || 0),
@@ -1592,7 +1602,9 @@ function productsStateFromUrl(raw) {
   const page = parseInt(params.get("page"), 10);
   const q = (params.get("q") || params.get("search") || "").trim();
   const id = (params.get("id") || params.get("product") || params.get("edit") || "").trim();
+  const view = (params.get("view") || "").trim().toLowerCase();
   if (cat) state.category = cat;
+  if (PRODUCT_VIEWS.indexOf(view) > 0) state.view = view;
   if (Number.isFinite(page) && page >= 1) state.page = page;
   if (q) state.q = q;
   if (id) state.id = id;
@@ -1614,6 +1626,7 @@ function applyProductsState(state) {
     dashCat = "";
     prodCatSel = "";
   }
+  prodView = PRODUCT_VIEWS.indexOf(String(s.view || "")) > 0 ? String(s.view) : "all";
   if (typeof s.q === "string") prodSearchQ = s.q;
   if (Number.isFinite(s.page) && s.page >= 1) prodPage = s.page; else prodPage = 1;
 }
@@ -1625,7 +1638,7 @@ function restoreProductsReturn(scrollToSaved) {
   editingId = null;
   if (box) applyProductsState(productsStateFromUrl(box.url));
   else {
-    dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1;
+    dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1; prodView = "all";
   }
   paintDesk("products");
   // paintDesk() rebuilds the filters from HTML but does not set their current
@@ -1659,6 +1672,11 @@ function getFilteredProducts() {
   const catSel = String(prodCatSel || cEl?.value || "");
   const catFilter = dashCat || catSel;
   return all.filter((p) => {
+    // The Hidden / Drafts tab is its own listing. "Live" is the complement,
+    // so the two tabs always add up to the full catalogue even if an older
+    // row has no explicit `online` flag (absence means published).
+    if (prodView === "hidden" && p.online !== false) return false;
+    if (prodView === "live" && p.online === false) return false;
     if (catFilter && p.category !== catFilter) return false;
     if (q) {
       const blob = (p.name + " " + (p.nameFr || "") + " " + (p.sku || "") + " " + p.category).toLowerCase();
@@ -1696,17 +1714,39 @@ function renderProdGrid() {
     return `<article class="adx-card" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
       <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
-      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong></div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price${rangeText ? " adx-price-range" : ""}">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn && !rangeText ? cfaNow : ""}</span>${pill}</div>
+      <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong></div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price${rangeText ? " adx-price-range" : ""}">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn && !rangeText ? cfaNow : ""}</span>${pill}${p.online === false ? `<button type="button" class="adx-unhide" data-unhide="${JA.escape(p.id)}">Unhide</button>` : ""}</div>
       <button type="button" class="adx-card-vis${p.online === false ? " is-off" : ""}" data-vis="${JA.escape(p.id)}" aria-label="${(p.online === false ? "Show " : "Hide ") + JA.escape(p.name)}" title="${p.online === false ? "Show on website" : "Hide from website"}"><svg viewBox="0 0 24 24">${p.online === false ? '<path d="M3 3l18 18M10.5 10.7a2.5 2.5 0 003.4 3.4M7 12a7.5 7.5 0 0113.2-2.4M4.5 8.6A10.5 10.5 0 0012 17.5c1.2 0 2.4-.2 3.4-.6M9.9 5.2A10.5 10.5 0 0112 5c2.9 0 5.6 1.4 7.5 3.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>' : '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="#fff" stroke-width="1.6"/>'}</svg></button>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     </article>`;
   }).join("");
   const grid = document.getElementById("prod-grid");
-  if (grid) grid.innerHTML = cards || `<p class="empty">No products match that search.</p>`;
-  const count = document.getElementById("prod-count");
-  if (count) count.textContent = total;
-  const countAll = document.getElementById("prod-count-all");
-  if (countAll) countAll.textContent = all.length;
+  const emptyCopy = prodView === "hidden"
+    ? "No hidden products — every piece in the catalogue is live."
+    : (prodView === "live"
+      ? "No live products in this view yet."
+      : "No products match that search.");
+  if (grid) grid.innerHTML = cards || `<p class="empty">${emptyCopy}</p>`;
+  // The catalogue counters ALWAYS speak about the whole catalogue, never only
+  // the filtered slice: a hidden product must never look missing. The tab
+  // badges and the header line share the same numbers.
+  const liveCount = all.filter((p) => p.online !== false).length;
+  const hiddenCount = all.length - liveCount;
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(value);
+  };
+  setText("prod-count", total);
+  setText("prod-count-all", all.length);
+  setText("prod-count-live", liveCount);
+  setText("prod-count-hidden", hiddenCount);
+  setText("prod-tab-all", all.length);
+  setText("prod-tab-live", liveCount);
+  setText("prod-tab-hidden", hiddenCount);
+  document.querySelectorAll("[data-prod-view]").forEach((b) => {
+    const active = String(b.getAttribute("data-prod-view")) === prodView;
+    b.classList.toggle("is-on", active);
+    if (b.getAttribute("role") === "tab") b.setAttribute("aria-selected", active ? "true" : "false");
+  });
   const none = document.getElementById("prod-none");
   if (none) none.hidden = total > 0;
   const pager = document.getElementById("prod-pager");
@@ -1820,6 +1860,40 @@ function bindProdGridEvents() {
       renderProdGrid(); bindProdGridEvents();
     };
   });
+  // One-tap unhide from the Hidden / Drafts tab. The card stays in the same
+  // listing until the repaint removes it, so the green confirmation lands on
+  // the page the owner is already looking at.
+  document.querySelectorAll("#prod-grid [data-unhide]").forEach((b) => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      const id = String(b.dataset.unhide);
+      const product = JA.product(id);
+      if (!product) return;
+      b.disabled = true;
+      const res = await JA.upsertProduct({ ...product, online: true });
+      b.disabled = false;
+      if (!res || res.ok === false) {
+        JA.toast((res && res.error) || "Could not unhide that product. No changes were made.");
+        return;
+      }
+      JA.success("Product is live again — customers can see it now.");
+      renderProdGrid(); bindProdGridEvents();
+    };
+  });
+  // The All / Live / Hidden-Drafts tabs. repaint the whole desk so the
+  // counters, the heading and the empty state all agree with the new view.
+  document.querySelectorAll("[data-prod-view]").forEach((b) => {
+    b.onclick = (e) => {
+      const view = String(b.getAttribute("data-prod-view") || "all");
+      if (PRODUCT_VIEWS.indexOf(view) < 0 || view === prodView) return;
+      e.preventDefault();
+      prodView = view;
+      prodPage = 1;
+      selectedProductIds.clear();
+      paintDesk("products");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+  });
   document.querySelectorAll("#prod-grid [data-del]").forEach((b) => {
     b.onclick = async (e) => {
       e.stopPropagation();
@@ -1855,18 +1929,25 @@ function productsTable() {
   const trashBtn = `<button type="button" class="btn btn-line" id="open-trash" aria-controls="trash-drawer">🗑 Trash <span id="trash-count" class="adx-trash-count" hidden>0</span></button>`;
   const filteredNote = activeCategory ? ` · <strong>${JA.escape(catName(activeCategory))}</strong>` : "";
   const qVal = JA.escape(prodSearchQ);
+  const liveCount = all.filter((p) => p.online !== false).length;
+  const hiddenCount = all.length - liveCount;
+  const viewTab = (id, label, count) =>
+    `<button type="button" role="tab" data-prod-view="${id}" class="${prodView === id ? "is-on" : ""}" aria-selected="${prodView === id ? "true" : "false"}">${label} <b id="prod-tab-${id}">${count}</b></button>`;
   return `<div class="adx-list-head">
       <button type="button" class="btn adx-add-btn" id="add-product">+ New Product</button>
       ${backBtn}
       ${trashBtn}
       ${exportBtn}
+      <div class="adx-viewtabs" role="tablist" aria-label="Product visibility">
+        ${viewTab("all", "All", all.length)}${viewTab("live", "Live", liveCount)}${viewTab("hidden", "Hidden / Drafts", hiddenCount)}
+      </div>
       <div class="adx-filters">
         <input id="prod-search" type="search" placeholder="Search products…" autocomplete="off" value="${qVal}" />
         <select id="prod-cat" aria-label="Filter by category"><option value="">All categories</option>${catOpts}</select>
         <label class="adx-select-all"><input type="checkbox" id="products-select-visible" /> Select visible</label>
       </div>
       <div class="adx-bulkbar" id="product-bulk" hidden><strong><span id="products-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-product-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-product-bulk="show">Show selected</button><button type="button" class="btn btn-line" data-product-bulk="hide">Hide selected</button><button type="button" class="btn btn-line btn-danger" data-product-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-product-bulk="clear">Clear selection</button></div>
-      <p class="adx-count"><span id="prod-count">${all.length}</span> of <span id="prod-count-all">${all.length}</span> products${filteredNote} · <button type="button" class="au-cats-link" data-tab="categories">Manage categories</button></p>
+      <p class="adx-count"><b><span id="prod-count-all">${all.length}</span> Products</b>: <span id="prod-count-live">${liveCount}</span> Active, <button type="button" class="au-cats-link" data-prod-view="hidden"><span id="prod-count-hidden">${hiddenCount}</span> Hidden</button> · <span id="prod-count">${all.length}</span> shown${filteredNote} · <button type="button" class="au-cats-link" data-tab="categories">Manage categories</button></p>
     </div>
     <div class="adx-trash-drawer" id="trash-drawer" hidden></div>
     <div class="adx-grid" id="prod-grid"></div>
@@ -4667,7 +4748,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=211" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=214" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5071,7 +5152,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=211", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=214", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -6304,6 +6385,9 @@ function applyAdminDeepLink() {
     }
     if (target && !target.includes("q=") && search.get("q")) {
       target += "&q=" + search.get("q");
+    }
+    if (target && !target.includes("view=") && search.get("view")) {
+      target += "&view=" + search.get("view");
     }
     // /admin/products?id=<ID> (the link the low-stock drawer uses) opens that
     // product's editor directly. It may arrive on its own or inside a

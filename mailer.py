@@ -912,8 +912,44 @@ def _payload_id(args):
     return ""
 
 
+# ---------------------------------------------------------------- in-flight
+# A notification runs on a daemon thread so a slow provider can never time an
+# HTTP request out. The one thing a daemon thread does NOT survive is the
+# worker being recycled - and Render recycles/redeploys the instance regularly
+# (and after a free-tier spin-down). Without a drain, an order confirmation
+# accepted by the shop could be killed mid-flight and the customer would never
+# receive it.
+#
+# So every dispatched job is counted, and the process registers an atexit
+# drain that waits (bounded) for those sends to finish on SIGTERM/deploy.
+_INFLIGHT_LOCK = threading.Lock()
+_INFLIGHT = 0
+_IDLE = threading.Event()
+_IDLE.set()
+DRAIN_SECONDS = 20.0
+
+
+def pending_sends():
+    """How many notification jobs are still running (for /healthz)."""
+    with _INFLIGHT_LOCK:
+        return _INFLIGHT
+
+
+def drain(timeout=DRAIN_SECONDS):
+    """Wait for in-flight notification jobs, bounded. Returns True when idle.
+
+    Called at interpreter shutdown (a graceful Render restart sends SIGTERM,
+    gunicorn waits, then the worker exits) and available to the scheduler and
+    health checks. It never raises and never waits longer than ``timeout``.
+    """
+    try:
+        return bool(_IDLE.wait(max(0.0, float(timeout))))
+    except Exception:                                    # pragma: no cover
+        return True
+
+
 def _fire(fn, *args):
-    """Run fn(*args) on a daemon thread (fire-and-forget).
+    """Run fn(*args) on a daemon thread (fire-and-forget), drained on exit.
 
     Never raises and never blocks the caller: this is what keeps SMTP/HTTPS
     dispatch off the HTTP request path so a slow provider cannot time a
@@ -921,10 +957,12 @@ def _fire(fn, *args):
     (exception, stack trace, timestamp, worker memory and the payload id)
     so a broken notification pipeline is visible instead of merely quiet.
     """
+    global _INFLIGHT
     job = "notifications." + getattr(fn, "__name__", "mail")
     payload_id = _payload_id(args)
 
     def _run():
+        global _INFLIGHT
         try:
             result = fn(*args)
             # the notify_* helpers return (ok, detail) - log quiet failures
@@ -935,12 +973,32 @@ def _fire(fn, *args):
         except Exception as exc:
             _log(f"{getattr(fn, '__name__', 'mail')} error: {str(exc)[:200]}")
             _trace(job, exc, payload_id)
+        finally:
+            with _INFLIGHT_LOCK:
+                _INFLIGHT = max(0, _INFLIGHT - 1)
+                if _INFLIGHT == 0:
+                    _IDLE.set()
 
+    with _INFLIGHT_LOCK:
+        _INFLIGHT += 1
+        _IDLE.clear()
     try:
         threading.Thread(target=_run, daemon=True).start()
     except Exception as exc:
         _trace(job + ".thread", exc, payload_id)
         _run()
+
+
+def _install_drain():
+    """Register the shutdown drain exactly once."""
+    import atexit
+    if getattr(_install_drain, "_done", False):
+        return
+    _install_drain._done = True
+    atexit.register(drain)
+
+
+_install_drain()
 
 
 def _trace(job, exc, payload_id=""):

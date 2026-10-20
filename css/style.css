@@ -5682,7 +5682,21 @@ body[data-page="admin"] { background: #f8f9fc !important; }
 .adx-filters { display: flex; gap: 8px; flex: 1 1 320px; }
 .adx-filters input[type="search"] { flex: 1 1 auto; min-width: 0; }
 .adx-filters select { flex: 0 1 190px; }
+/* All / Live / Hidden-Drafts: a first-class view switch, not a search term.
+   The counts ride on each tab so the catalogue's real size is always visible
+   even while one slice of it is on screen. */
+.adx-viewtabs { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: #faf6ef; border: 1px solid #efe6d8; border-radius: 999px; }
+.adx-viewtabs button { border: 0; background: transparent; color: #6b5a49; font: inherit; font-size: 13px; font-weight: 600; padding: 7px 13px; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background .18s ease, color .18s ease; }
+.adx-viewtabs button b { font-weight: 700; font-size: 12px; color: #968675; background: #fff; border-radius: 999px; padding: 1px 7px; min-width: 18px; text-align: center; }
+.adx-viewtabs button.is-on { background: #342922; color: #fff; }
+.adx-viewtabs button.is-on b { background: #fff; color: #342922; }
+.adx-viewtabs button:hover:not(.is-on) { background: #f1e9dc; }
 .adx-count { flex-basis: 100%; font-size: 13px; color: #968675; }
+.adx-count b { color: #4a3c30; }
+/* One-tap restore from the Hidden / Drafts tab. */
+.adx-unhide { margin-top: 8px; border: 1px solid #1f7a4d; background: #eaf6ee; color: #1f7a4d; font: inherit; font-size: 12px; font-weight: 700; border-radius: 8px; padding: 6px 10px; cursor: pointer; width: 100%; }
+.adx-unhide:hover { background: #1f7a4d; color: #fff; }
+.adx-unhide:disabled { opacity: .55; cursor: default; }
 .adx-count .au-cats-link { border: 0 !important; background: transparent !important; color: #5b29ae !important; text-decoration: underline; cursor: pointer; padding: 0; font-size: 13px; }
 .adx-grid {
   display: grid;
@@ -5947,6 +5961,8 @@ body[data-page="admin"] { background: #f8f9fc !important; }
   .adx-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
   .adx-filters { flex-wrap: wrap; }
   .adx-filters select { flex: 1 1 100%; }
+  .adx-viewtabs { flex: 1 1 100%; justify-content: space-between; }
+  .adx-viewtabs button { flex: 1 1 0; justify-content: center; padding: 8px 6px; font-size: 12px; }
   .adx-order-row { flex-wrap: wrap; row-gap: 4px; }
   .adx-order-total { margin-left: auto; }
   .track-form { align-items: stretch; flex-direction: column; }

@@ -750,6 +750,22 @@ def supabase_public_url(key: str) -> str:
     return f"{base}/storage/v1/object/public/{supabase_store._bucket()}/{key}"
 
 
+_ALREADY_STORED_MARKERS = ("already exists", "duplicate", "resource already",
+                            "409")
+
+
+def _already_stored(exc) -> bool:
+    """True when a failed upload means "these exact bytes are already here".
+
+    Object keys are content-addressed (sha256 + extension), so a duplicate is
+    by definition the same file. Treating it as a failure used to make a
+    retried or double-tapped upload report an error even though the photo was
+    in the bucket and its public URL worked.
+    """
+    text = str(exc or "").lower()
+    return any(marker in text for marker in _ALREADY_STORED_MARKERS)
+
+
 def _save_supabase(data: bytes, key: str, ext: str, content_type: str,
                    folder: str = "") -> tuple:
     """Upload to Supabase Storage. Requires SUPABASE_URL + the service-role
@@ -783,17 +799,25 @@ def _save_supabase(data: bytes, key: str, ext: str, content_type: str,
     options = {"content-type": content_type or "application/octet-stream"}
     if not sensitive:
         options["cache-control"] = PUBLIC_MEDIA_CACHE_CONTROL
+    def _upload(opts):
+        c.storage.from_(bucket).upload(key, data, opts)
+
     try:
-        c.storage.from_(bucket).upload(key, data, options)
+        _upload(options)
     except Exception as exc:
-        if len(options) > 1:
+        # The object key is the sha256 of the bytes, so "already exists" means
+        # this exact photo is already stored - a re-upload after a retry is a
+        # success, not a failure. Supabase answers 409/Duplicate; the storage
+        # client raises it as a plain exception with that word in the message.
+        if _already_stored(exc):
+            pass
+        elif len(options) > 1:
             try:
-                c.storage.from_(bucket).upload(
-                    key, data,
-                    {"content-type": content_type or "application/octet-stream"})
+                _upload({"content-type": content_type or "application/octet-stream"})
             except Exception as exc2:
-                return False, f"supabase upload failed ({exc2.__class__.__name__})", ""
-        else:
+                if not _already_stored(exc2):
+                    return False, f"supabase upload failed ({exc2.__class__.__name__})", ""
+        elif not _already_stored(exc):
             return False, f"supabase upload failed ({exc.__class__.__name__})", ""
     if sensitive:
         try:

@@ -149,15 +149,34 @@ def _log(logger, level, message):
 
 
 def _apply_with_psycopg(dsn, sql_list):
-    """Run the statements over a direct Postgres connection."""
+    """Run the statements over ONE short-lived Postgres connection.
+
+    The boot pass is the only direct-Postgres consumer in the app (every other
+    read/write goes through PostgREST, which pools server-side). It therefore
+    opens exactly one connection, never keeps it, and bounds it three ways so a
+    slow or unreachable database can never hold the worker open:
+
+      * connect_timeout - a hanging TCP handshake;
+      * a per-statement ``statement_timeout`` - a lock waiting behind a long
+        transaction on the Supabase side;
+      * an overall ``application_name`` marker, so the connection is
+        identifiable in the Supabase dashboard / pg_stat_activity.
+
+    No pool is created on purpose: pooling a once-per-boot DDL pass would leak
+    idle connections that count against the free-tier connection limit.
+    """
     try:
         import psycopg  # psycopg 3
-        connect = lambda: psycopg.connect(dsn, connect_timeout=8)
+        connect = lambda: psycopg.connect(
+            dsn, connect_timeout=8,
+            options="-c statement_timeout=15000 -c application_name=jaurastore-boot")
         execute = lambda conn, sql: conn.execute(sql)
     except ImportError:
         try:
             import psycopg2  # psycopg 2
-            connect = lambda: psycopg2.connect(dsn, connect_timeout=8)
+            connect = lambda: psycopg2.connect(
+                dsn, connect_timeout=8,
+                options="-c statement_timeout=15000 -c application_name=jaurastore-boot")
             execute = lambda conn, sql: conn.cursor().execute(sql)
         except ImportError:
             return False, "psycopg is not installed"

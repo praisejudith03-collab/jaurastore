@@ -1971,21 +1971,65 @@ def _french_description_table(path=None):
     return by_id, by_text
 
 
+NAMES_FR_PATH = os.environ.get(
+    "NAMES_FR_PATH", os.path.join(ROOT, "data", "names_fr.json"))
+
+
+@lru_cache(maxsize=4)
+def _french_name_table(path=None):
+    """``(by_id, by_normalised_english_name)`` from data/names_fr.json."""
+    raw = _read_json(path or NAMES_FR_PATH, {})
+    by_id, by_text = {}, {}
+    if isinstance(raw, dict):
+        for pid, value in raw.items():
+            text = str(value or "").strip()
+            key = str(pid or "").strip()
+            if key and text:
+                by_id[key] = text
+        for row in _seed_products():
+            pid = str((row or {}).get("id") or "").strip()
+            english = str((row or {}).get("name") or "").strip()
+            french = by_id.get(pid)
+            if english and french:
+                by_text[re.sub(r"\s+", " ", english).strip().lower()] = french
+    return by_id, by_text
+
+
 def _with_french_description(product):
-    """Fill a blank ``descriptionFr`` from the shipped translation table."""
+    """Fill blank ``descriptionFr`` / ``nameFr`` from the shipped tables.
+
+    The owner's own French always wins; this only fills a field that is empty,
+    so a Supabase row mirrored before the French columns existed still reads
+    French instead of falling back to English.
+    """
     p = product if isinstance(product, dict) else {}
-    if str(p.get("descriptionFr") or "").strip():
-        return product
-    by_id, by_text = _french_description_table()
-    french = by_id.get(str(p.get("id") or "").strip())
-    if not french:
-        english = re.sub(r"\s+", " ", str(p.get("description") or "")).strip().lower()
-        french = by_text.get(english) if english else ""
-    if not french:
-        return product
-    out = dict(p)
-    out["descriptionFr"] = french
-    return out
+    out = None
+
+    def _set(key, value):
+        nonlocal out
+        if out is None:
+            out = dict(p)
+        out[key] = value
+
+    if not str(p.get("descriptionFr") or "").strip():
+        by_id, by_text = _french_description_table()
+        french = by_id.get(str(p.get("id") or "").strip())
+        if not french:
+            english = re.sub(r"\s+", " ", str(p.get("description") or "")).strip().lower()
+            french = by_text.get(english) if english else ""
+        if french:
+            _set("descriptionFr", french)
+
+    if not str(p.get("nameFr") or "").strip():
+        name_by_id, name_by_text = _french_name_table()
+        french_name = name_by_id.get(str(p.get("id") or "").strip())
+        if not french_name:
+            english_name = re.sub(r"\s+", " ", str(p.get("name") or "")).strip().lower()
+            french_name = name_by_text.get(english_name) if english_name else ""
+        if french_name:
+            _set("nameFr", french_name)
+
+    return out if out is not None else product
 
 
 def _fold_p(product):

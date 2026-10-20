@@ -83,3 +83,62 @@ def test_the_dead_duplicate_except_is_gone():
         os.path.abspath(__file__))), "mailer.py"), encoding="utf-8").read()
     block = src.split("def _http_post_json", 1)[1].split("def _send_resend", 1)[0]
     assert block.count("except Exception as exc:") == 1
+
+
+def test_in_flight_sends_are_drained_on_shutdown(monkeypatch):
+    """A recycle must not kill an accepted order email mid-flight.
+
+    Render recycles the worker on every deploy and after a free-tier spin-down.
+    The send runs on a daemon thread, so without a drain an order confirmation
+    the shop already acknowledged could die before the provider saw it.
+    """
+    import threading
+    import time as _time
+
+    import mailer
+
+    started = threading.Event()
+    finished = threading.Event()
+
+    def slow():
+        started.set()
+        _time.sleep(0.25)
+        finished.set()
+        return True, "accepted"
+
+    mailer._fire(slow)
+    assert started.wait(2), "the job never started"
+    assert mailer.pending_sends() >= 1, "an in-flight send must be visible"
+    assert mailer.drain(5) is True, "drain must wait for the send"
+    assert finished.is_set(), "the send was cut off"
+    assert mailer.pending_sends() == 0, "the counter must return to zero"
+
+
+def test_the_drain_is_bounded_and_never_raises(monkeypatch):
+    import threading
+    import time as _time
+
+    import mailer
+
+    release = threading.Event()
+
+    def stuck():
+        release.wait(5)
+        return True, "accepted"
+
+    mailer._fire(stuck)
+    started = _time.monotonic()
+    assert mailer.drain(0.2) is False, "a stuck provider must not block forever"
+    assert _time.monotonic() - started < 3
+    release.set()
+    assert mailer.drain(5) is True
+    assert mailer.pending_sends() == 0
+
+
+def test_health_reports_the_notification_queue_but_never_fails_on_it():
+    import health_checks
+    body, status = health_checks.health_report()
+    assert "mail" in body
+    assert isinstance(body["mail"], dict)
+    assert "pending" in body["mail"]
+    assert status in (200, 500)      # the mail figure itself never decides

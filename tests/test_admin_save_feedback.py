@@ -27,7 +27,7 @@ def test_toast_accepts_a_kind_and_exports_a_success_helper():
     assert "function toast(msg, options)" in js
     assert 'data-kind' in js
     assert "function success(msg)" in js
-    assert "toast, success, upsertProduct" in js
+    assert "toast, upsertProduct, success" in js
 
 
 def test_product_save_redirects_first_and_then_raises_the_green_toast():

@@ -1394,7 +1394,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Bracelet a",
+    "nameFr": "Bracelet A",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -1559,7 +1559,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Ceramic mug",
+    "nameFr": "Mug en céramique",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -1651,7 +1651,7 @@
     "badge": "sale",
     "featured": false,
     "colors": [],
-    "nameFr": "Coconut oil deodorant",
+    "nameFr": "Déodorant à l'huile de coco",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -2206,7 +2206,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Fashion bracelet 5600 1",
+    "nameFr": "Bracelet fashion 5600 1",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -3024,7 +3024,7 @@
       "Red",
       "Mint green"
     ],
-    "nameFr": "Headphone",
+    "nameFr": "Casque audio",
     "options": [
       {
         "title": "Colour",
@@ -3477,7 +3477,7 @@
       "Pink",
       "White"
     ],
-    "nameFr": "Hello master bottle",
+    "nameFr": "Bouteille Hello Master",
     "options": [
       {
         "title": "Colour",
@@ -3624,7 +3624,7 @@
       "Pink",
       "Green"
     ],
-    "nameFr": "Ice bottle",
+    "nameFr": "Bouteille isotherme",
     "options": [
       {
         "title": "Colour",
@@ -3776,7 +3776,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "July diffuser",
+    "nameFr": "Diffuseur July",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
     "descriptionFr": "Sélectionné au hasard."
@@ -3922,7 +3922,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Knuckles ring a",
+    "nameFr": "Bague articulée A",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -3942,7 +3942,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Knuckles ring b",
+    "nameFr": "Bague articulée B",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
     "usesPlaceholder": true
@@ -3963,7 +3963,7 @@
     "badge": "sale",
     "featured": false,
     "colors": [],
-    "nameFr": "L16 tripod",
+    "nameFr": "Trépied L16",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
     "usesPlaceholder": true
@@ -4314,7 +4314,7 @@
     "badge": "sale",
     "featured": false,
     "colors": [],
-    "nameFr": "M10 earpod",
+    "nameFr": "Écouteurs M10",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -4603,7 +4603,7 @@
     "badge": "sale",
     "featured": false,
     "colors": [],
-    "nameFr": "Mini influencer light",
+    "nameFr": "Lampe mini influencer",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -4664,7 +4664,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Mini q light",
+    "nameFr": "Mini lampe Q",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -4933,7 +4933,7 @@
     "badge": "sale",
     "featured": false,
     "colors": [],
-    "nameFr": "Order me light",
+    "nameFr": "Lampe « Order me »",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -5835,7 +5835,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Stanley cup",
+    "nameFr": "Gobelet Stanley",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -5982,7 +5982,7 @@
     "badge": "sale",
     "featured": false,
     "colors": [],
-    "nameFr": "Toilet fragrance",
+    "nameFr": "Parfum pour toilettes",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -6454,7 +6454,7 @@
     "badge": "sale",
     "featured": false,
     "colors": [],
-    "nameFr": "Vogue frame",
+    "nameFr": "Cadre Vogue",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
     "descriptionFr": "Accessoires Vogue."
@@ -6554,7 +6554,7 @@
     "badge": "sale",
     "featured": false,
     "colors": [],
-    "nameFr": "Wipes 5 packs",
+    "nameFr": "Lingettes, 5 paquets",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
     "descriptionFr": "Lot de 5 paquets."

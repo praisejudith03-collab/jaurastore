@@ -179,6 +179,17 @@ def health_report():
             background = {"started": False, "backgroundAlive": False,
                           "error": str(exc)[:160]}
 
+    # Notification queue visibility: a send still in flight is normal, but a
+    # number that never returns to zero means the provider is hanging. It is
+    # informational only - it never fails the health check, because a slow
+    # mail provider must not take the shop out of rotation.
+    mail = None
+    try:
+        import mailer
+        mail = {"pending": mailer.pending_sends()}
+    except Exception:
+        mail = None
+
     return ({
         "ok": ok,
         "env": Config.ENV,
@@ -186,5 +197,6 @@ def health_report():
                      "checks": databases},
         "eventLoop": event_loop,
         "background": background,
+        "mail": mail,
         "latencyMs": round((time.monotonic() - started) * 1000),
     }, 200 if ok else 500)
