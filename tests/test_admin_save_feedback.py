@@ -46,6 +46,17 @@ def test_category_save_and_photo_upload_return_to_the_catalog_list():
     assert "JA.success(text);" in js
 
 
+def test_the_confirmed_product_save_uses_the_owner_wording():
+    """The owner asked for "Saved Successfully" by name, so the toast copy
+    says it before the live-state detail instead of a bare "Saved"."""
+    js = _read("js", "admin.js")
+    assert "Saved successfully \u00b7 ${liveState}" in js
+    assert js.count("`Saved successfully \u00b7 ${liveState}") == 2, (
+        "both the in-stock and the out-of-stock save message must open with "
+        "the owner's wording"
+    )
+
+
 def test_the_main_admin_saves_use_the_success_variant():
     js = _read("js", "admin.js")
     for message in (
