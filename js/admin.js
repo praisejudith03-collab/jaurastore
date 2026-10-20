@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=215" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=216" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -2558,9 +2558,12 @@ async function sendTestEmail() {
   if (btn) { btn.disabled = false; btn.textContent = "Email a test"; }
   if (!res || res.ok === false) {
     if (note) note.textContent = "Shop emails: test failed — " + ((res && res.error) || "check the mail settings in Render.");
+    JA.toast((res && res.error) || "The test email could not be sent.");
     return;
   }
   if (note) note.textContent = `Shop emails: on via ${res.provider} to ${res.to} — test email sent, check the inbox (and spam).`;
+  // A tap that worked must say so, in green, like every other save.
+  JA.success(`Test email sent to ${res.to || "the store address"}.`);
 }
 // ------------------------------------------------------- admin list paging
 // Every scaling admin list (orders, uploaded receipts, notifications, crash
@@ -2735,6 +2738,7 @@ function renderCrashPage() {
       try {
         await window.JA_NET.api("api/admin/job-failures/" + encodeURIComponent(id), { method: "DELETE" });
         fillCrashReports();
+        JA.success("Crash report deleted.");
       } catch (err) { JA.toast(err.message || "Could not delete that report."); }
     };
   });
@@ -4542,7 +4546,7 @@ async function saveBatchLedgerField(batchId, field, rawValue, okMessage) {
       json: { [field]: value === "" ? null : Number(value) },
     });
     if (d && d.ok === false) throw new Error(d.error || `Could not save the ${name}.`);
-    JA.toast(value === "" && field === "netProfitOverride"
+    JA.success(value === "" && field === "netProfitOverride"
       ? "Net profit reset to the calculated figure."
       : (okMessage || `${name[0].toUpperCase()}${name.slice(1)} saved.`));
     if (typeof fillSalesInsights === "function") fillSalesInsights();
@@ -4748,7 +4752,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=215" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=216" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5152,7 +5156,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=215", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=216", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -5780,7 +5784,7 @@ function bindDeliveryZones() {
       // form above it and throw away whatever the owner was typing.
       paintZoneTable();
       if ((form.zone_id.value || "").trim() === String(id || "").trim()) resetZoneForm(form);
-      JA.toast("Zone deleted — live now.");
+      JA.success("Zone deleted — live now.");
       return;
     }
     const edit = e.target.closest("[data-zone-edit]");
@@ -5878,7 +5882,7 @@ function bindDeliveryZones() {
       if (z.kind === "pickup") fareTxt = "free pickup";
       else if (z.kind === "quote") fareTxt = "quote";
       else fareTxt = `${Number(z.fare_min || 0).toLocaleString()}–${Number(z.fare_max || 0).toLocaleString()} ${z.currency || payload.currency || ""}`.trim();
-      JA.toast(`${z.name}: ${fareTxt} saved — live now.`);
+      JA.success(`${z.name}: ${fareTxt} saved — live now.`);
     } else {
       JA.success("Zone saved — live now.");
     }
@@ -6190,14 +6194,14 @@ function bindHeroVideo() {
     const freshUrl = bustMediaCache(res.url);
     const patch = res.kind === "video" ? { heroVideo: freshUrl, heroDoc: "", heroPoster: "" } : res.kind === "document" ? { heroVideo: "", heroDoc: freshUrl, heroPoster: "" } : { heroVideo: "", heroPoster: freshUrl, heroDoc: "" };
     const saved = await saveSiteConfig(patch);
-    if (saved && saved.ok !== false) { if (msg) msg.textContent = res.kind === "video" ? "Done — homepage hero now plays your video." : res.kind === "document" ? "Done — homepage hero links to your document." : "Done — homepage hero uses your photo."; JA.toast("Hero asset is on the homepage."); paintHeroVideoNow(patch); }
+    if (saved && saved.ok !== false) { if (msg) msg.textContent = res.kind === "video" ? "Done — homepage hero now plays your video." : res.kind === "document" ? "Done — homepage hero links to your document." : "Done — homepage hero uses your photo."; JA.success("Hero asset is on the homepage."); paintHeroVideoNow(patch); }
     else { if (msg) msg.textContent = (saved && saved.error) || "Uploaded, but saving failed."; }
   });
   $("#hero-video-remove")?.addEventListener("click", async () => {
     if (!confirm("Remove the hero asset? Homepage goes back to default.")) return;
     // Explicit clear: an empty value alone means "leave what is stored".
     const saved = await saveSiteConfig({ _clear: ["heroVideo", "heroDoc", "heroPoster"] });
-    if (saved && saved.ok !== false) { JA.toast("Hero removed."); paintHeroVideoNow({}); if (msg) msg.textContent = ""; } else JA.toast((saved && saved.error) || "Could not remove.");
+    if (saved && saved.ok !== false) { JA.success("Hero removed."); paintHeroVideoNow({}); if (msg) msg.textContent = ""; } else JA.toast((saved && saved.error) || "Could not remove.");
   });
 }
 function paintBrandingNow(site) {

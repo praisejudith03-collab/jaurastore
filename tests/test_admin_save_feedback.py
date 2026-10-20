@@ -67,3 +67,19 @@ def test_the_main_admin_saves_use_the_success_variant():
         "Social links saved — live on the storefront now.",
     ):
         assert 'JA.success("' + message + '");' in js, message
+
+def test_the_secondary_admin_writes_also_confirm_in_green():
+    """Every confirmed write says so. These six used a neutral toast (or none
+    at all), which is the same "did that work?" doubt the directive removes
+    for product and category saves."""
+    js = _read("js", "admin.js")
+    for message in (
+        "Zone deleted — live now.",
+        "Hero asset is on the homepage.",
+        "Hero removed.",
+        "Crash report deleted.",
+    ):
+        assert 'JA.success("' + message + '");' in js, message
+    assert 'JA.success(`Test email sent to ${res.to || "the store address"}.`);' in js
+    assert "JA.success(`${z.name}: ${fareTxt} saved — live now.`);" in js
+    assert 'JA.success(value === "" && field === "netProfitOverride"' in js
