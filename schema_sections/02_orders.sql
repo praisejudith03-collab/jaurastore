@@ -51,6 +51,9 @@ alter table orders add column if not exists customer_user_id text;
 alter table orders add column if not exists proof_upload_failed boolean default false;
 create index if not exists idx_orders_at on orders (at desc);
 create index if not exists idx_orders_status on orders (status);
+-- Owner dashboards list one status in newest-first order; the composite index
+-- answers both predicates without a sort.
+create index if not exists idx_orders_status_at on orders (status, at desc);
 create index if not exists idx_orders_customer on orders (customer_user_id);
 -- Review gating and the customer order history both look an order up by
 -- email; without this index each lookup scanned the whole orders table.

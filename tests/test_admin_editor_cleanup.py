@@ -41,12 +41,15 @@ const product = {
 };
 const html = sandbox.productForm(product);
 const names = [...html.matchAll(/\bname="([^"]+)"/g)].map(match => match[1]);
-const required = ["id", "name", "sku", "description", "category", "priceNgn", "supplierSku",
+// descriptionFr joined the approved set on 2026-10-19: French shoppers must
+// never receive raw English product copy, and the owner can override the
+// automatic French translation directly in the editor.
+const required = ["id", "name", "sku", "description", "descriptionFr", "category", "priceNgn", "supplierSku",
   "stock", "enableCustomNote", "customNotePrompt", "opt-title-0", "opt-vals-0"];
 for (const name of required) {
   if (!names.includes(name)) throw new Error("missing form control " + name);
 }
-for (const removed of ["nameFr", "descriptionFr", "dimensions", "compareNgn", "bulkQty",
+for (const removed of ["nameFr", "dimensions", "compareNgn", "bulkQty",
   "bulkPercent", "featured", "badge", "online", "stockStatus",
   "Customer Name", "Customer Stars", "Customer Review"]) {
   if (html.includes(removed)) throw new Error("removed control still rendered: " + removed);

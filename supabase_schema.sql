@@ -161,6 +161,9 @@ alter table orders add column if not exists customer_user_id text;
 alter table orders add column if not exists proof_upload_failed boolean default false;
 create index if not exists idx_orders_at on orders (at desc);
 create index if not exists idx_orders_status on orders (status);
+-- Owner dashboards list one status in newest-first order; the composite index
+-- answers both predicates without a sort.
+create index if not exists idx_orders_status_at on orders (status, at desc);
 create index if not exists idx_orders_customer on orders (customer_user_id);
 -- Review gating and the customer order history both look an order up by
 -- email; without this index each lookup scanned the whole orders table.
@@ -444,6 +447,19 @@ do $$ begin
   alter table products add constraint products_stock_nonnegative check (stock_quantity >= 0) not valid;
 exception when duplicate_object then null;
 end $$;
+
+-- Read-path indexes. The products table is the shop's hot path: every page
+-- load filters online / is_deleted and the admin desk filters by category.
+-- Without these, PostgREST scans the whole table on each catalogue rebuild.
+-- The partial online index is the exact predicate merged() uses.
+create index if not exists products_online_live_idx
+  on products (online, updated_at desc) where is_deleted is not true;
+create index if not exists products_category_live_idx
+  on products (category) where is_deleted is not true;
+create index if not exists products_deleted_idx
+  on products (is_deleted);
+create index if not exists products_updated_idx
+  on products (updated_at desc);
 
 create or replace function sync_supplier_stock(p_id text,p_stock integer,
  p_option_stock_changes jsonb,p_allow_increase boolean,

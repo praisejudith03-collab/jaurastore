@@ -510,7 +510,11 @@ def test_the_success_banner_lands_on_the_list_view_not_the_editor():
     js = _admin_js()
     save = js[js.index("const res = await JA.upsertProduct({"):]
     save = save[:save.index("\nlet prodPage")]
-    assert save.index("restoreProductsReturn();") < save.index("JA.toast(savedMsg);")
+    # Owner directive 2026-10-19: a confirmed save is a GREEN success toast.
+    # The ordering is unchanged - redirect first, toast second - so the green
+    # banner lands on the catalog list (JA.success is the green variant of
+    # JA.toast; the old neutral call was the pre-directive behaviour).
+    assert save.index("restoreProductsReturn();") < save.index("JA.success(savedMsg);")
     assert 'savedMsg = "Saved' in save
 
 

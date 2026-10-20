@@ -39,11 +39,18 @@ import hmac
 import json
 import re
 import threading
+import time
 import urllib.parse
 from html import escape as _esc
 
 TIMEOUT = 20                 # seconds per provider attempt
 PROBE_JOIN_SECONDS = 25      # the admin "Email a test" request waits at most this long
+# Resend/Brevo occasionally answer 429 or a transient 5xx during a Render
+# cold start. Retry those (and network blips) with a short bounded backoff;
+# permanent 4xx answers (bad key, unverified sender) are returned at once so
+# the admin sees the real reason instead of three identical failures.
+HTTP_ATTEMPTS = 3
+HTTP_RETRY_DELAYS = (0.6, 1.5)
 
 _EMAIL_IN_BRACKETS = re.compile(r"^\s*(.*?)\s*<([^>]+)>\s*$")
 _ADDRESS = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
@@ -132,28 +139,44 @@ def _split_address(value):
 
 
 def _http_post_json(url, headers, payload):
-    """POST JSON, return (ok, detail). Never raises."""
+    """POST JSON with bounded retries, return (ok, detail). Never raises.
+
+    Retries only transient failures: HTTP 408/425/429/5xx and network errors.
+    A permanent 4xx (bad API key, unverified sender) is returned immediately.
+    The total wait is at most ~2.1s, so a provider outage still cannot hold an
+    order notification thread open for long.
+    """
     import urllib.error
     import security
-    try:
-        # SSRF-guarded POST (https only, public IPs, size/time caps).
-        raw = security.safe_fetch(
-            url, data=json.dumps(payload).encode("utf-8"), method="POST",
-            timeout=TIMEOUT, max_bytes=4096,
-            headers={**headers, "Content-Type": "application/json",
-                     "User-Agent": "jaurastore-mailer"})
-        body = raw.decode("utf-8", "replace")[:300]
-        return True, body
-    except urllib.error.HTTPError as exc:
+    last_detail = ""
+    for attempt in range(HTTP_ATTEMPTS):
         try:
-            body = (exc.read() or b"").decode("utf-8", "replace")[:300]
-        except Exception:
-            body = ""
-        return False, f"HTTP {exc.code}: {body}".strip()
-    except Exception as exc:
-        return False, str(exc)[:300]
-    except Exception as exc:
-        return False, str(exc)[:300]
+            # SSRF-guarded POST (https only, public IPs, size/time caps).
+            raw = security.safe_fetch(
+                url, data=json.dumps(payload).encode("utf-8"), method="POST",
+                timeout=TIMEOUT, max_bytes=4096,
+                headers={**headers, "Content-Type": "application/json",
+                         "User-Agent": "jaurastore-mailer"})
+            body = raw.decode("utf-8", "replace")[:300]
+            return True, body
+        except urllib.error.HTTPError as exc:
+            try:
+                body = (exc.read() or b"").decode("utf-8", "replace")[:300]
+            except Exception:
+                body = ""
+            last_detail = f"HTTP {exc.code}: {body}".strip()
+            retryable = exc.code in (408, 425, 429) or 500 <= exc.code <= 599
+            if not retryable or attempt + 1 >= HTTP_ATTEMPTS:
+                return False, last_detail
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+            last_detail = str(exc)[:300]
+            if attempt + 1 >= HTTP_ATTEMPTS:
+                return False, last_detail
+        except Exception as exc:
+            # UnsafeURL / payload errors are permanent; never retry them.
+            return False, str(exc)[:300]
+        time.sleep(HTTP_RETRY_DELAYS[min(attempt, len(HTTP_RETRY_DELAYS) - 1)])
+    return False, last_detail or "mail provider did not answer"
 
 
 def _send_resend(to, subject, html, attachments):
@@ -889,8 +912,44 @@ def _payload_id(args):
     return ""
 
 
+# ---------------------------------------------------------------- in-flight
+# A notification runs on a daemon thread so a slow provider can never time an
+# HTTP request out. The one thing a daemon thread does NOT survive is the
+# worker being recycled - and Render recycles/redeploys the instance regularly
+# (and after a free-tier spin-down). Without a drain, an order confirmation
+# accepted by the shop could be killed mid-flight and the customer would never
+# receive it.
+#
+# So every dispatched job is counted, and the process registers an atexit
+# drain that waits (bounded) for those sends to finish on SIGTERM/deploy.
+_INFLIGHT_LOCK = threading.Lock()
+_INFLIGHT = 0
+_IDLE = threading.Event()
+_IDLE.set()
+DRAIN_SECONDS = 20.0
+
+
+def pending_sends():
+    """How many notification jobs are still running (for /healthz)."""
+    with _INFLIGHT_LOCK:
+        return _INFLIGHT
+
+
+def drain(timeout=DRAIN_SECONDS):
+    """Wait for in-flight notification jobs, bounded. Returns True when idle.
+
+    Called at interpreter shutdown (a graceful Render restart sends SIGTERM,
+    gunicorn waits, then the worker exits) and available to the scheduler and
+    health checks. It never raises and never waits longer than ``timeout``.
+    """
+    try:
+        return bool(_IDLE.wait(max(0.0, float(timeout))))
+    except Exception:                                    # pragma: no cover
+        return True
+
+
 def _fire(fn, *args):
-    """Run fn(*args) on a daemon thread (fire-and-forget).
+    """Run fn(*args) on a daemon thread (fire-and-forget), drained on exit.
 
     Never raises and never blocks the caller: this is what keeps SMTP/HTTPS
     dispatch off the HTTP request path so a slow provider cannot time a
@@ -898,10 +957,12 @@ def _fire(fn, *args):
     (exception, stack trace, timestamp, worker memory and the payload id)
     so a broken notification pipeline is visible instead of merely quiet.
     """
+    global _INFLIGHT
     job = "notifications." + getattr(fn, "__name__", "mail")
     payload_id = _payload_id(args)
 
     def _run():
+        global _INFLIGHT
         try:
             result = fn(*args)
             # the notify_* helpers return (ok, detail) - log quiet failures
@@ -912,12 +973,32 @@ def _fire(fn, *args):
         except Exception as exc:
             _log(f"{getattr(fn, '__name__', 'mail')} error: {str(exc)[:200]}")
             _trace(job, exc, payload_id)
+        finally:
+            with _INFLIGHT_LOCK:
+                _INFLIGHT = max(0, _INFLIGHT - 1)
+                if _INFLIGHT == 0:
+                    _IDLE.set()
 
+    with _INFLIGHT_LOCK:
+        _INFLIGHT += 1
+        _IDLE.clear()
     try:
         threading.Thread(target=_run, daemon=True).start()
     except Exception as exc:
         _trace(job + ".thread", exc, payload_id)
         _run()
+
+
+def _install_drain():
+    """Register the shutdown drain exactly once."""
+    import atexit
+    if getattr(_install_drain, "_done", False):
+        return
+    _install_drain._done = True
+    atexit.register(drain)
+
+
+_install_drain()
 
 
 def _trace(job, exc, payload_id=""):

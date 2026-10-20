@@ -1,13 +1,16 @@
-"""In-process supplier stock watchdog.
+"""Supplier stock watchdog.
 
 The admin can attach one supplier URL to a product that has several Jaura
 variants (Colour, Size, Scent, Flavour, ...). This module fetches that supplier
-page in small batches from the main web service, extracts whatever variant
-availability the page exposes (JSON-LD/product JSON/data attributes/plain
-HTML), and mirrors only the matching Jaura variant's stock flag.
+page in small batches, extracts whatever variant availability the page exposes
+(JSON-LD/product JSON/data attributes/plain HTML), and mirrors only the
+matching Jaura variant's stock flag.
+
+Production runs it from .github/workflows/supplier-watchdog.yml (every 20
+minutes, plus a 02:00 deep audit), not from the Render web process.
 
 Design goals:
-  * no separate Render worker/service;
+  * no Render worker/service and no supplier fetches on the web CPU;
   * one URL fetched once per tick even when it feeds many variants;
   * bounded memory/network use (small batches, byte cap, short timeout);
   * fuzzy alias matching ("Dark Brown" supplier == "Chocolate" Jaura,
@@ -23,6 +26,7 @@ from __future__ import annotations
 import datetime
 import html
 import json
+import math
 import os
 import re
 import time
@@ -40,17 +44,30 @@ CACHE_TTL_SECONDS = 20 * 60
 USER_AGENT = "jaurastore-supplier-watchdog/1.0 (+https://jaurastore.com.ng)"
 
 # ---------------------------------------------------------------- stock rules
-# Owner rule (2026-10-05): the shop sells what the supplier actually has. The
-# supplier count is mirrored 1:1 - there is no 40%/50% "safety buffer" and no
-# one-unit clamp any more. Pages that only print "In stock" (a flag, not a
-# count) used to be read as the number 1, which hard-capped the storefront at
-# a single unit and answered "You cannot order more than the available stock
-# (1 remaining)" to any shopper who asked for two. A flagged page now keeps
-# the shop's existing shelf, and a sold-out row is opened to this many units
-# so multi-unit orders go through; the database still re-checks the real
-# quantity atomically at checkout, so a wrong guess can never oversell
-# silently - it surfaces to the admin as an out-of-stock line instead.
+# Owner rule (2026-10-19, superseding the 2026-10-05 1:1 rule): high supplier
+# stock is published with a 20%-40% safety buffer, because a supplier page can
+# claim 50 units while a few are damaged, reserved or already sold in another
+# channel. The buffer is a PERCENTAGE of the supplier quantity, clamped to the
+# owner's 20-40% band (default 30%): a supplier 50 therefore shows 35, inside
+# the owner's "50 -> 30-35" example. The buffer is applied only to genuinely
+# high stock; a small count (1-9) is mirrored exactly, so a supplier with one
+# unit is never rounded down to "out of stock". Supplier 0 / Sold Out always
+# becomes 0 immediately.
+#
+# Pages that only print "In stock" (a flag, not a count) carry no number to
+# buffer: they keep the shop's existing shelf and, when that shelf is empty,
+# open SUPPLIER_IN_STOCK_UNITS units so multi-unit orders go through. The
+# database still re-checks the real quantity atomically at checkout, so a
+# wrong guess can never oversell silently - it surfaces to the admin as an
+# out-of-stock line instead.
 SUPPLIER_IN_STOCK_UNITS = max(1, int(os.environ.get("SUPPLIER_IN_STOCK_UNITS", "10") or 10))
+DEFAULT_SAFETY_BUFFER_PERCENT = 30
+MIN_SAFETY_BUFFER_PERCENT = 20
+MAX_SAFETY_BUFFER_PERCENT = 40
+# Below this supplier count the buffer would hide too much of a small shelf
+# (25% of 4 is 1 unit, and rounding could turn a real 1 into 0). The owner's
+# directive targets "high supplier stock", so small counts stay exact.
+SUPPLIER_BUFFER_MIN_QTY = max(1, int(os.environ.get("SUPPLIER_BUFFER_MIN_QTY", "10") or 10))
 
 # Supplier URLs, not products, are the unit of cooldown. At most two unique
 # links are selected per scheduler tick (normally five minutes apart); each
@@ -66,6 +83,72 @@ _last_summary: Dict[str, Any] = {
     "warnings": 0,
     "lastError": "",
 }
+
+
+# The per-URL cooldown lives in memory during a normal Render process. The
+# GitHub Actions live-update job is a fresh process every 20 minutes, so it
+# must carry "which URL did we last look at" between runs or it would fetch the
+# same first two links forever. The state file is opt-in (SUPPLIER_WATCHDOG_STATE)
+# and stores only URL -> epoch seconds; supplier URLs are never printed.
+SUPPLIER_STATE_VERSION = 1
+
+
+def _state_path(path: Optional[str] = None) -> str:
+    raw = path if path is not None else os.environ.get("SUPPLIER_WATCHDOG_STATE", "")
+    return str(raw or "").strip()
+
+
+def load_state(path: Optional[str] = None) -> bool:
+    """Restore the per-URL cooldown from a JSON file. Never raises."""
+    target = _state_path(path)
+    if not target:
+        return False
+    try:
+        with open(target, encoding="utf-8") as fh:
+            data = json.load(fh)
+        checked = data.get("lastChecked") if isinstance(data, dict) else None
+        if not isinstance(checked, dict):
+            return False
+        restored = {}
+        for url, value in checked.items():
+            url = _clean_url(url)
+            if not url:
+                continue
+            try:
+                epoch = float(value)
+            except (TypeError, ValueError):
+                continue
+            if epoch > 0:
+                restored[url] = epoch
+        _last_checked.update(restored)
+        return bool(restored)
+    except Exception:
+        return False
+
+
+def save_state(path: Optional[str] = None) -> bool:
+    """Persist the per-URL cooldown for the next Actions run. Never raises."""
+    target = _state_path(path)
+    if not target:
+        return False
+    try:
+        parent = os.path.dirname(os.path.abspath(target))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        now_ts = time.time()
+        # Drop entries that can no longer influence any sane cooldown (30 days)
+        # so the cache cannot grow without bound when links are retired.
+        kept = {url: ts for url, ts in _last_checked.items()
+                if url and now_ts - float(ts or 0) < 30 * 24 * 60 * 60}
+        payload = {"version": SUPPLIER_STATE_VERSION,
+                   "savedAt": _now(), "lastChecked": kept}
+        tmp = target + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, target)
+        return True
+    except Exception:
+        return False
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 _URL_RE = re.compile(r"^https?://", re.I)
@@ -993,14 +1076,27 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog",
     return _save_synced(p, row, actor, warnings)
 
 
+def safety_buffer_percent() -> int:
+    """The configured high-stock buffer, clamped to the owner's 20-40% band."""
+    raw = os.environ.get("SUPPLIER_SAFETY_BUFFER_PERCENT",
+                         str(DEFAULT_SAFETY_BUFFER_PERCENT))
+    try:
+        pct = int(round(float(raw)))
+    except (TypeError, ValueError):
+        pct = DEFAULT_SAFETY_BUFFER_PERCENT
+    return min(MAX_SAFETY_BUFFER_PERCENT, max(MIN_SAFETY_BUFFER_PERCENT, pct))
+
+
 def _apply_stock_rule(qty: int, old: int, flagged: bool = False) -> int:
     """The stock the shop should offer for one supplier reading.
 
-    An exact supplier count is mirrored 1:1 - no safety buffer, no one-unit
-    clamp. A bare availability flag (``flagged``) carries no number, so the
-    shop keeps the shelf it already had and, when that shelf is empty, opens
-    ``SUPPLIER_IN_STOCK_UNITS`` units (multi-unit purchases included) instead
-    of the old single unit.
+    * supplier 0 / Sold Out -> 0 immediately;
+    * high supplier stock (>= SUPPLIER_BUFFER_MIN_QTY) -> keep 60-80% of it,
+      i.e. apply the configured 20-40% safety buffer (default 30%: 50 -> 35);
+    * small supplier stock (1-9) -> exact, so one unit never becomes zero;
+    * a bare availability flag -> keep the existing shelf, or open
+      SUPPLIER_IN_STOCK_UNITS when the shelf is empty (there is no count to
+      buffer).
     """
     try:
         qty = max(0, int(qty or 0))
@@ -1010,11 +1106,14 @@ def _apply_stock_rule(qty: int, old: int, flagged: bool = False) -> int:
         return 0
     if flagged:
         return max(max(0, int(old or 0)), SUPPLIER_IN_STOCK_UNITS)
-    return qty
+    if qty < SUPPLIER_BUFFER_MIN_QTY:
+        return qty
+    buffer = int(math.ceil(qty * safety_buffer_percent() / 100.0))
+    return max(1, qty - buffer)
 
 
 def _apply_option_stock_rule(qty: int, old: int, flagged: bool = False) -> int:
-    """Per-option-URL supplier stock. Same 1:1, uncapped contract."""
+    """Per-option-URL supplier stock. Same high-stock buffer as the product."""
     return _apply_stock_rule(qty, old, flagged=flagged)
 
 
@@ -1351,9 +1450,10 @@ def _run_scheduled_batch(limit: int, min_interval_seconds: int,
     except (TypeError, ValueError):
         max_products = DEFAULT_BATCH_SIZE
     try:
-        # Hard cap at two even if a misconfigured environment asks for more.
-        max_links = min(DEFAULT_LINKS_PER_TICK,
-                        max(1, int(link_limit or DEFAULT_LINKS_PER_TICK)))
+        # The caller owns the budget. The five-minute in-process tick clamps
+        # itself to two links; the nightly GitHub Actions deep audit may ask
+        # for a larger, bounded batch so every linked product is re-checked.
+        max_links = max(1, int(link_limit or DEFAULT_LINKS_PER_TICK))
     except (TypeError, ValueError):
         max_links = DEFAULT_LINKS_PER_TICK
     try:
@@ -1434,23 +1534,41 @@ def _run_scheduled_batch(limit: int, min_interval_seconds: int,
 
 def tick(limit: int = DEFAULT_BATCH_SIZE, min_interval_seconds: int = 60 * 60,
          logger=None, link_limit: int = DEFAULT_LINKS_PER_TICK) -> Dict[str, Any]:
-    """Run one cooldown-protected batch of no more than two supplier links."""
-    return _run_scheduled_batch(limit, min_interval_seconds, link_limit,
+    """Run one cooldown-protected batch of no more than two supplier links.
+
+    The daytime/live path stays deliberately small because it runs on a
+    five-minute clock; the nightly deep audit uses :func:`nightly_sweep`
+    with an explicit larger budget instead.
+    """
+    try:
+        cap = min(DEFAULT_LINKS_PER_TICK, max(1, int(link_limit or DEFAULT_LINKS_PER_TICK)))
+    except (TypeError, ValueError):
+        cap = DEFAULT_LINKS_PER_TICK
+    return _run_scheduled_batch(limit, min_interval_seconds, cap,
                                 logger=logger, label="supplier watchdog")
 
 
 def nightly_sweep(logger=None, max_products: Optional[int] = None,
-                  min_interval_seconds: int = 60 * 60,
-                  link_limit: int = DEFAULT_LINKS_PER_TICK) -> Dict[str, Any]:
-    """Run the same tightly paced supplier batch during nightly maintenance.
+                  min_interval_seconds: int = 0,
+                  link_limit: Optional[int] = None) -> Dict[str, Any]:
+    """Re-check the whole linked catalogue during the 02:00 deep audit.
 
-    The historical full-catalogue sweep bypassed the link cooldown and could
-    burst hundreds of outbound requests at once. Nightly maintenance now uses
-    the exact same per-URL cooldown and two-link ceiling as daytime ticks.
+    The nightly pass is the one run allowed to work through every due supplier
+    link, so ``min_interval_seconds`` defaults to 0 and the link budget comes
+    from ``SUPPLIER_WATCHDOG_NIGHTLY_LINKS`` (bounded by the catalogue itself).
+    It still fetches each unique URL once and writes one stock patch per
+    product. The in-process scheduler passes its explicit two-link budget when
+    it owns the night shift, but the GitHub Actions deep audit passes a larger
+    one so a product cannot wait days for its turn.
     """
     try:
         cap = max_products or int(os.environ.get("SUPPLIER_WATCHDOG_NIGHTLY_MAX", "400") or 400)
     except (TypeError, ValueError):
         cap = DEFAULT_BATCH_SIZE
+    if link_limit is None:
+        try:
+            link_limit = max(1, int(os.environ.get("SUPPLIER_WATCHDOG_NIGHTLY_LINKS", "200") or 200))
+        except (TypeError, ValueError):
+            link_limit = 200
     return _run_scheduled_batch(cap, min_interval_seconds, link_limit,
                                 logger=logger, label="supplier nightly batch")

@@ -1,9 +1,15 @@
 # Render blueprint — free-tier option-1 architecture.
 #
 # This file intentionally defines ONE web service only. Abandoned-cart
-# reminders, maintenance, backups and supplier stock checks run inside that web
-# process (scheduler.py) instead of separate Render background workers, so the
+# reminders, maintenance and backups run inside that web process
+# (scheduler.py) instead of separate Render background workers, so the
 # workspace does not double-count instance hours.
+#
+# Supplier stock polling deliberately does NOT run here: it lives in
+# .github/workflows/supplier-watchdog.yml (every 20 minutes, plus a 02:00
+# deep audit) with SUPPLIER_WATCHDOG_ENABLED=0 below. That keeps supplier
+# fetches, parsing and retries off the Render CPU/memory budget while the
+# scheduler remains available for the shop's own housekeeping.
 services:
   - name: jaurastore
     type: web
@@ -33,8 +39,11 @@ services:
         value: "1"
       - key: SCHEDULER_ENABLED
         value: "1"
+      # Moved to GitHub Actions (see the header above): the web process must
+      # not spend a worker thread on supplier polling. The scheduler's tick
+      # calls become a cheap no-op, and the 02:00 deep audit runs in Actions.
       - key: SUPPLIER_WATCHDOG_ENABLED
-        value: "1"
+        value: "0"
       - key: SUPPLIER_WATCHDOG_BATCH
         value: "2"
       - key: SUPPLIER_WATCHDOG_LINKS_PER_TICK

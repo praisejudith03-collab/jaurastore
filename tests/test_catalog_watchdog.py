@@ -614,7 +614,11 @@ def test_watchdog_workflow_stays_safe():
     data = yaml.safe_load(text)
     triggers = data.get("on", data.get(True))
     assert "schedule" in triggers and "workflow_dispatch" in triggers
-    assert triggers["schedule"] == [{"cron": "0 * * * *"}]
+    # Owner directive 2026-10-19: the full catalogue deep audit runs nightly
+    # at 02:00 local server time (01:00 UTC, the shop's UTC+1 clock). The
+    # hourly drift check moved to the 20-minute supplier live-update workflow;
+    # this tool remains the nightly deep audit and manual diagnostic.
+    assert triggers["schedule"] == [{"cron": "0 1 * * *"}]
     perms = data["permissions"]
     assert perms == {"contents": "read", "issues": "write"}, perms
     assert data["concurrency"]["group"] == "catalog-watchdog"

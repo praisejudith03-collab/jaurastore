@@ -450,9 +450,23 @@ def _supplier_tracked(product):
 def _public_product(p):
     out = {k: v for k, v in dict(p or {}).items() if k not in _FORBIDDEN_PUBLIC_KEYS}
     out["supplierTracked"] = _supplier_tracked(p)
-    manual_lock = (catalog_mod._manual_stock_lock(p)
-                   or catalog_mod.is_stock_locked(p.get("id")))
-    qty = catalog_mod.stock_of(p)
+    # The owner's hand-set "Out of stock" is a durable decision, not a snapshot
+    # of today's quantity. Even if an older mirror/redeploy left units in the
+    # row, the storefront must never advertise the product as buyable while the
+    # lock exists. This is the same invariant derived_stock_status() enforces.
+    try:
+        manually_locked = catalog_mod.is_stock_locked(p.get("id"))
+    except Exception:
+        manually_locked = False
+    # A row-level lock (manual_stock_locks_json mirrored into the product) is
+    # just as binding as the store-wide lock map, so the serializer honours
+    # both before it publishes any quantity.
+    try:
+        row_locked = bool(catalog_mod._manual_stock_lock(p))
+    except Exception:
+        row_locked = False
+    manual_lock = manually_locked or row_locked
+    qty = 0 if manual_lock else catalog_mod.stock_of(p)
     os_map = p.get("optionStock") if isinstance(p, dict) else None
     if isinstance(os_map, dict) and os_map:
         # Variant quantities are authoritative; keep the product total equal
@@ -463,7 +477,7 @@ def _public_product(p):
         cleaned = {}
         for k, v in os_map.items():
             try:
-                cleaned[str(k)] = max(0, int(v or 0))
+                cleaned[str(k)] = 0 if manually_locked else max(0, int(v or 0))
             except (TypeError, ValueError):
                 cleaned[str(k)] = 0
         if manual_lock:
@@ -1107,9 +1121,15 @@ def _stock_available(product, variant="__default__"):
     """Integer availability; a selected but unassigned variant is zero stock."""
     if not isinstance(product, dict):
         return 0
-    if (catalog_mod._manual_stock_lock(product)
-            or catalog_mod.is_stock_locked(product.get("id"))):
-        return 0
+    # Checkout must agree with the storefront: the owner's manual Out of stock
+    # lock — store-wide or mirrored onto the row — is absolute, whatever
+    # quantity a stale mirror still carries.
+    try:
+        if (catalog_mod._manual_stock_lock(product)
+                or catalog_mod.is_stock_locked(product.get("id"))):
+            return 0
+    except Exception:
+        pass
     base = catalog_mod.stock_of(product)
     selected = str(variant or "").strip()
     os_map = product.get("optionStock")
@@ -3357,10 +3377,10 @@ def admin_accounting_google_callback():
     if not code:
         return redirect("/admin/accounting?google=failed")
     try:
+        # Connecting Drive only stores the credential. It must not backfill
+        # or push confirmed orders: the ledger is updated exclusively by the
+        # owner's manual batch push after shipping/transport adjustments.
         google_sheets.complete_authorization(code, admin)
-        orders = _accounting_orders()
-        if orders is not None:
-            google_sheets.start_backfill(orders)
         return redirect("/admin/accounting?google=connected")
     except google_sheets.GoogleSheetsError as exc:
         print(f"[google-sheets] OAuth callback failed: {str(exc)[:180]}")
@@ -4683,21 +4703,12 @@ def admin_order_update(oid):
                 "and retry so the status, customer notice and payment review "
                 "do not silently revert.")), 503
 
-    # Every confirmed order is idempotently upserted to its matching owner
-    # ledger in Google Drive. This is deliberately asynchronous: Google is an
-    # extra accounting destination and must never delay/undo the order status.
-    if status == "confirmed":
-        try:
-            import google_sheets
-            sheet_order = {
-                "id": oid, "status": status, "payload": payload,
-                "total": row["total"], "currency": row["currency"],
-                "at": row["at"], "updated_at": now,
-                "customer_name": row["customer_name"],
-            }
-            google_sheets.sync_order_async(sheet_order)
-        except Exception as exc:
-            print(f"[google-sheets] confirmation hook skipped: {type(exc).__name__}")
+    # Deliberately NO automatic Google Sheets write here. The owner ships
+    # orders in batches and only then pushes the selected confirmed orders
+    # from the accounting desk (POST /admin/accounting/push), after transport
+    # and shipping adjustments are known. An order confirmation must never
+    # create or update a ledger row on its own; the manual push remains the
+    # single write path and stays idempotent by order id.
 
     # Build one complete customer copy, with a fallback for legacy rows whose
     # payload predates the nested customer email field.

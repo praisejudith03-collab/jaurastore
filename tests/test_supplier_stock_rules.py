@@ -1,7 +1,8 @@
 """Supplier stock sync rules - freeze the owner-specified contract.
 
-  * product-level supplier counts    -> mirrored 1:1 (no buffer, no cap)
-  * option-URL counts                -> mirrored 1:1 (no buffer, no cap)
+  * product-level high supplier stock -> 20-40% safety buffer (50 -> 35)
+  * option-URL high stock             -> the same buffer, never > supplier
+  * small supplier counts (1-9)       -> mirrored exactly (never rounded to 0)
   * bare "In stock" (no count)       -> keeps the shelf, opens a multi-unit one
   * supplier out / 0                 -> only the matched product/variant goes out
   * restock                          -> restores only the matched variant
@@ -171,14 +172,23 @@ def test_manual_admin_out_of_stock_lock_blocks_supplier_fetch_and_restock(
     assert not saved
 
 
-def test_supplier_count_is_sold_one_to_one_without_a_buffer(monkeypatch, saved):
-    """No 40% buffer: 25 units on the supplier page are 25 units on the PDP."""
+def test_high_supplier_count_gets_the_20_40_percent_safety_buffer(monkeypatch, saved):
+    """Owner directive 2026-10-19 supersedes the old 1:1 rule.
+
+    25 supplier units at the default 30% buffer keeps 17 (25 - ceil(7.5)); a
+    small 4-unit shelf is below the high-stock threshold and stays exact.
+
+    This test replaces test_supplier_count_is_sold_one_to_one_without_a_buffer.
+    The owner asked for a 20-40% safety buffer on high supplier stock, so the
+    old 1:1 assertion would pin the rule they explicitly superseded. Deleting
+    it outright would hide that history, hence this note.
+    """
     ok, warns = _sync(monkeypatch, _product(),
                       _variants_html(("Serum", True, 25), ("Cream", True, 4)))
     assert ok is True
-    assert saved["optionStock"]["Serum"] == 25
+    assert saved["optionStock"]["Serum"] == 17
     assert saved["optionStock"]["Cream"] == 4
-    assert saved["stock"] == 29
+    assert saved["stock"] == 21
 
 
 def test_generic_in_stock_signal_opens_a_multi_unit_shelf(monkeypatch, saved):
@@ -248,9 +258,10 @@ def test_option_supplier_urls_win_and_watchdog_restocks_black_and_brown_separate
     """The option URLs override a conflicting main page for each colour.
 
     This exercises the actual watchdog tick (the same cycle used in service).
-    A 100-unit Black listing and a 40-unit Brown listing are mirrored 1:1. The
-    main product URL says Black is sold out and Brown has 100; neither result
-    may leak into the explicitly linked option URLs.
+    A 100-unit Black listing keeps 70 and a 40-unit Brown listing keeps 28 at
+    the default 30% safety buffer. The main product URL says Black is sold out
+    and Brown has 100; neither result may leak into the explicitly linked
+    option URLs.
     """
     p = _colour_product()
     pages = {
@@ -277,11 +288,11 @@ def test_option_supplier_urls_win_and_watchdog_restocks_black_and_brown_separate
     assert result["checked"] == 1 and result["updated"] == 1
     assert calls == ["https://supplier.example/tote-black",
                      "https://supplier.example/tote-brown"]
-    assert saved["optionStock"] == {"Black": 100, "Brown": 40}
-    assert saved["stock"] == saved["stock_quantity"] == 140
+    assert saved["optionStock"] == {"Black": 70, "Brown": 28}
+    assert saved["stock"] == saved["stock_quantity"] == 98
 
 
-def test_option_url_out_of_stock_is_isolated_and_main_url_sells_one_to_one(
+def test_option_url_out_of_stock_is_isolated_and_main_url_uses_the_buffer(
         monkeypatch, saved):
     p = _colour_product(optionStock={"Black": 8, "Brown": 10}, stock=18,
                         optionSupplierSku={"Colour: Black": "https://supplier.example/tote-black"})
@@ -296,12 +307,12 @@ def test_option_url_out_of_stock_is_isolated_and_main_url_sells_one_to_one(
     ok, warnings = supplier_watchdog.sync_product(p)
 
     assert ok is True
-    assert saved["optionStock"] == {"Black": 0, "Brown": 100}
-    assert saved["stock"] == saved["stock_quantity"] == 100
+    assert saved["optionStock"] == {"Black": 0, "Brown": 70}
+    assert saved["stock"] == saved["stock_quantity"] == 70
     assert not any(w["code"] == "supplier_partial_match" for w in warnings)
 
 
-def test_option_url_one_to_one_survives_a_real_local_watchdog_catalog_cycle(tmp_path, monkeypatch):
+def test_option_url_buffer_survives_a_real_local_watchdog_catalog_cycle(tmp_path, monkeypatch):
     """Exercise tick -> stock-only catalog patch -> persisted local row.
 
     The storage backend here is the test/local catalog, not a real Supabase
@@ -336,8 +347,8 @@ def test_option_url_one_to_one_survives_a_real_local_watchdog_catalog_cycle(tmp_
     assert result["checked"] == 1 and result["updated"] == 1
     assert calls == ["https://supplier.example/tote-black",
                      "https://supplier.example/tote-brown"]
-    assert stored["optionStock"] == {"Black": 100, "Brown": 40}
-    assert stored["stock"] == stored["stock_quantity"] == 140
+    assert stored["optionStock"] == {"Black": 70, "Brown": 28}
+    assert stored["stock"] == stored["stock_quantity"] == 98
 
 
 def test_removed_option_supplier_url_is_never_polled_or_restored():
@@ -382,13 +393,20 @@ def test_simple_product_out_of_stock(monkeypatch, saved):
     assert saved["stock_quantity"] == 0
 
 
-def test_simple_product_restock_mirrors_the_supplier_count(monkeypatch, saved):
+def test_simple_product_restock_uses_the_safety_buffer(monkeypatch, saved):
+    """A 100-unit supplier shelf publishes 70 at the default 30% buffer.
+
+    This replaces the old 1:1 assertion (owner directive 2026-10-19); it still
+    pins the critical half of the rule: the shop never shows MORE than the
+    supplier actually has.
+    """
     p = _product(options=[], optionStock={}, stock=0)
     ok, warns = _sync(monkeypatch, p,
                       '<script type="application/json">{"quantity": 100, "name": "Shea Glow Set"}</script>')
     assert ok is True
-    assert saved["stock"] == 100
-    assert saved["stock_quantity"] == 100
+    assert saved["stock"] == 70
+    assert saved["stock_quantity"] == 70
+    assert saved["stock"] <= 100
 
 
 # ------------------------------------------------------------- link safety

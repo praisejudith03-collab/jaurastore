@@ -33,6 +33,8 @@ const sandbox = {
   document: { getElementById: (id) => controls[id] || null },
   selectedProductIds: new Set(["stale-selection"]),
   prodPage: 9, prodSearchQ: "", prodCatSel: "beauty", dashCat: "beauty",
+  // The All / Live / Hidden-Drafts view switch (owner directive 2026-10-20).
+  prodView: "all", PRODUCT_VIEWS: ["all", "live", "hidden"],
   paintDesk: (tab) => { sandbox.lastPainted = tab; },
   renderProdGrid: () => {}, bindProdGridEvents: () => {},
 };

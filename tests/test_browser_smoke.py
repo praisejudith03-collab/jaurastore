@@ -676,6 +676,12 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     with mobile.expect_response(lambda r: '/api/admin/categories' in r.url and r.request.method == 'PUT') as asset_saved:
         perfume.locator('[data-cat-img]').set_input_files(Path(__file__).resolve().parents[1] / 'images/products/_placeholder.jpg')
     assert asset_saved.value.ok
+    # Directive 2026-10-19: a category cover is an admin save like any other,
+    # so a confirmed upload raises the green toast and returns the owner to the
+    # catalog list. Re-open the categories desk before the reorder checks.
+    expect(mobile.locator('#panel-products.is-on')).to_be_visible()
+    open_admin_tab(mobile, "categories")
+    expect(mobile.locator('#cat-list > article')).to_have_count(3)
     for _ in range(2):
         with mobile.expect_response(lambda r: '/api/admin/categories' in r.url and r.request.method == 'PUT') as saved:
             perfume.locator('[data-cat-move="-1"]').click()

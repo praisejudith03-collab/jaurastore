@@ -168,13 +168,19 @@ def test_a_clean_slug_link_resolves_but_an_imported_slug_is_never_published(
     r = client.get("/product.html?slug=sandwich-maker")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
-    assert "Sandwich Maker · Jaura Store" in body
+    # Since 2026-10-20 every catalogue row carries its French name (the
+    # read-time table fills a blank nameFr), so a shared link's headline is
+    # bilingual by design - see app._product_display_name(). The point of this
+    # test is unchanged: a CLEAN slug resolves while the imported wix-003 slug
+    # is never published.
+    assert re.search(r"<title>Sandwich Maker(?: / [^<·]+)? · Jaura Store</title>", body)
     assert 'og:url" content="https://jaurastore.com.ng/products/sandwich-maker"' in body
     assert "?slug=wix-003" not in body
     # Preserved public aliases keep opening the same product while canonical
     # links and sharing stay clean.
     legacy = client.get("/product.html?id=legacy-003")
-    assert "Sandwich Maker · Jaura Store" in legacy.get_data(as_text=True)
+    assert re.search(r"<title>Sandwich Maker(?: / [^<·]+)? · Jaura Store</title>",
+                     legacy.get_data(as_text=True))
 
 
 def test_clean_path_route_serves_metadata_and_redirects_imported_slugs(

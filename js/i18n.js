@@ -519,6 +519,7 @@ window.I18N = (() => {
     "nf.title": "This page is not in the boutique",
     "nf.lead": "The link may have changed. Continue shopping.",
     "nf.back": "Back to Jaura Store",
+    "price.onRequest": "Price on request",
   };
 
   const fr = {
@@ -579,7 +580,7 @@ window.I18N = (() => {
     "cat.children": "Articles pour enfants",
     "cat.decor": "Décoration",
     "cat.perfume": "Parfum",
-    "ticker": "• SHOP LUXE • LAGOS & COTONOU • WHATSAPP +229 68 95 31 10 • PAYEZ EN ₦ OU CFA •",
+    "ticker": "• BOUTIQUE LUXE • LAGOS & COTONOU • WHATSAPP +229 68 95 31 10 • PAYEZ EN ₦ OU CFA •",
     "conv.banner": "Clients du Bénin 🇧🇯 : passez commande maintenant, livraison au prochain envoi",
     "home.kicker": "Bienvenue. Prêt à faire vos achats ?",
     "home.heroLine": "Élégance, en toute simplicité et des essentiels choisis",
@@ -798,7 +799,7 @@ window.I18N = (() => {
     "ck.payTogoCfaHint": "Payez avec le prestataire et le compte du Togo ci-dessous.",
     "ck.beninPayDetails": "Coordonnées de paiement CFA — Bénin",
     "ck.togoPayDetails": "Coordonnées de paiement CFA — Togo",
-    "ck.togoFeeNotice": "Moov Money Togo may charge a fee for cross-border transfers.",
+    "ck.togoFeeNotice": "Moov Money Togo peut facturer des frais pour les transferts transfrontaliers.",
     "ck.payUnconfigured": "Les coordonnées de paiement ne sont pas encore configurées. Contactez-nous sur WhatsApp.",
     "ck.provider": "Prestataire",
     "ck.accountHolder": "Titulaire du compte",
@@ -828,7 +829,7 @@ window.I18N = (() => {
     "ck.idHelp": "Donnez cet identifiant à JauraStore ou indiquez-le sur le virement.",
     "ck.track": "Suivre cette commande",
     "ck.fareRange": "Les frais de transport varient selon votre localité et le poids des produits. Appuyez ci-dessous pour WhatsApp avec votre n° de commande et votre adresse, afin de recevoir votre tarif.",
-    "ck.uploadHere": "Upload payment receipt",
+    "ck.uploadHere": "Téléverser le reçu de paiement",
     "ck.uploadNow": "WhatsApp pour le transport",
     "ck.copyId": "Copier le n° de commande",
     "ck.waId": "WhatsApp cet identifiant",
@@ -866,7 +867,7 @@ window.I18N = (() => {
     "toast.unavailable": "Cette pièce n’est pas disponible.",
     "toast.ngn": "Prix affichés en ₦ naira",
     "toast.cfa": "Prix affichés en CFA",
-    "toast.langEn": "Language: English",
+    "toast.langEn": "Langue : anglais",
     "toast.langFr": "Langue : français",
     "toast.needShot": "Choisissez une capture du paiement.",
     "toast.badImg": "Image illisible. Essayez une autre capture.",
@@ -1030,6 +1031,7 @@ window.I18N = (() => {
     "nf.title": "Cette page n’est pas dans la boutique",
     "nf.lead": "Le lien a peut-être changé. Continuez vos achats.",
     "nf.back": "Retour à Jaura Store",
+    "price.onRequest": "Prix sur demande",
   };
 
   const dict = { en, fr };
@@ -1303,6 +1305,230 @@ window.I18N = (() => {
     return null;
   }
 
+  /* ------------------------------------------------- dynamic product copy
+   * The server ships a French description for every catalogue piece it can
+   * (data/descriptions_fr.json + the owner's descriptionFr field). This is the
+   * last-resort layer for copy that arrives WITHOUT one: an owner-written
+   * product description, an old cached row, or a phrase inside a longer
+   * paragraph. It never invents a translation for unknown text and it never
+   * touches a product NAME (a brand or SKU is not a sentence) - it only
+   * replaces vocabulary it is certain about, longest phrase first, so
+   * "100% human hair" is translated before the bare word "hair" could be.
+   *
+   * Every pair below is drawn from the shop's own catalogue vocabulary, so the
+   * French a shopper reads here matches the French in the shipped table.
+   */
+  const COPY_GLOSSARY = [
+    ["made with beautiful, high-quality printed materials", "confectionn\u00e9 dans de beaux tissus imprim\u00e9s de haute qualit\u00e9"],
+    ["made with beautiful high-quality printed materials", "confectionn\u00e9 dans de beaux tissus imprim\u00e9s de haute qualit\u00e9"],
+    ["for all body types with comfort and elegance", "pour toutes les morphologies, avec confort et \u00e9l\u00e9gance"],
+    ["works for both iphone and type c", "compatible iPhone et USB-C"],
+    ["it blows well and comes with light too", "il souffle bien et \u00e9claire aussi"],
+    ["it captures sound and neglect noise", "il capte le son et r\u00e9duit le bruit"],
+    ["the exact print may vary from what is shown", "l\u2019imprim\u00e9 exact peut varier par rapport \u00e0 la photo"],
+    ["a comprehensive 6-piece skincare kit", "un coffret complet de 6 soins de la peau"],
+    ["lightweight, non-greasy sunscreen", "cr\u00e8me solaire l\u00e9g\u00e8re et non grasse"],
+    ["designed for brightening, hydrating", "con\u00e7u pour \u00e9claircir, hydrater"],
+    ["targets dullness, uneven skin tone", "cible la ternit\u00e9 et le teint irr\u00e9gulier"],
+    ["for all body sizes", "pour toutes les morphologies"],
+    ["for all body size", "pour toutes les morphologies"],
+    ["for all sizes", "pour toutes les tailles"],
+    ["for all body types", "pour toutes les morphologies"],
+    ["all body size", "toutes les morphologies"],
+    ["100% human hair", "cheveux 100 % humains"],
+    ["100 % human hair", "cheveux 100 % humains"],
+    ["human hair", "cheveux humains"],
+    ["full closure", "closure complet"],
+    ["t frontal", "frontal en T"],
+    ["fringe bob", "bob \u00e0 frange"],
+    ["closure bob", "bob closure"],
+    ["skull cap", "bonnet"],
+    ["press on nails", "faux ongles"],
+    ["press on nail", "faux ongles"],
+    ["with a glue", "avec de la colle"],
+    ["with glue", "avec de la colle"],
+    ["pink silk pillowcase", "taie d\u2019oreiller en soie rose"],
+    ["pillowcase", "taie d\u2019oreiller"],
+    ["wall suction hanger", "crochet ventouse mural"],
+    ["non sticking coating", "rev\u00eatement antiadh\u00e9sif"],
+    ["non-stick coating", "rev\u00eatement antiadh\u00e9sif"],
+    ["sandwich maker", "appareil \u00e0 sandwich"],
+    ["dish washer", "\u00e9gouttoir \u00e0 vaisselle"],
+    ["magnetic powerbank", "batterie externe magn\u00e9tique"],
+    ["powerbank", "batterie externe"],
+    ["wireless chargers", "chargeurs sans fil"],
+    ["wireless charger", "chargeur sans fil"],
+    ["magnetic wireless chargers", "chargeurs sans fil magn\u00e9tiques"],
+    ["bluetooth headset", "casque Bluetooth"],
+    ["wireless earphones", "\u00e9couteurs sans fil"],
+    ["wireless mic", "micro sans fil"],
+    ["torch light", "lampe torche"],
+    ["interchangeable straps", "bracelets interchangeables"],
+    ["7 straps", "7 bracelets"],
+    ["smartwatch", "montre connect\u00e9e"],
+    ["wristwatch", "montre"],
+    ["press on nail", "faux ongles"],
+    ["gift set", "coffret cadeau"],
+    ["jewelry set", "parure de bijoux"],
+    ["jewellery set", "parure de bijoux"],
+    ["key chain", "porte-cl\u00e9s"],
+    ["key holder", "porte-cl\u00e9s"],
+    ["hand cream", "cr\u00e8me pour les mains"],
+    ["hair band", "bandeau cheveux"],
+    ["sun cream", "cr\u00e8me solaire"],
+    ["face cream", "cr\u00e8me visage"],
+    ["facial cleanser", "nettoyant visage"],
+    ["essence toner", "lotion tonique"],
+    ["face serum", "s\u00e9rum visage"],
+    ["vitamin c", "vitamine C"],
+    ["anti-aging", "anti-\u00e2ge"],
+    ["anti aging", "anti-\u00e2ge"],
+    ["fine lines", "ridules"],
+    ["uneven skin tone", "teint irr\u00e9gulier"],
+    ["broad-spectrum", "large spectre"],
+    ["skincare", "soins de la peau"],
+    ["skin texture", "texture de la peau"],
+    ["moisturizing", "hydratant"],
+    ["brightening", "\u00e9claircissant"],
+    ["hydrating", "hydratant"],
+    ["high-quality", "de haute qualit\u00e9"],
+    ["high quality", "de haute qualit\u00e9"],
+    ["quality is great", "la qualit\u00e9 est excellente"],
+    ["quality and comfortable", "de qualit\u00e9 et confortables"],
+    ["for slim wrist", "pour poignets fins"],
+    ["suitable for any occasion", "convient \u00e0 toute occasion"],
+    ["for day to day activities", "pour les activit\u00e9s du quotidien"],
+    ["for day to day", "pour le quotidien"],
+    ["different prints available", "plusieurs imprim\u00e9s disponibles"],
+    ["prints may vary", "les imprim\u00e9s peuvent varier"],
+    ["before delivery", "avant la livraison"],
+    ["randomly selected", "choisi au hasard"],
+    ["randomly picked", "choisi au hasard"],
+    ["available in all colors", "disponible dans toutes les couleurs"],
+    ["available in all colours", "disponible dans toutes les couleurs"],
+    ["black available", "disponible en noir"],
+    ["comes with a box", "livr\u00e9 avec sa bo\u00eete"],
+    ["comes in a box", "livr\u00e9 dans sa bo\u00eete"],
+    ["comes with 2 mic", "livr\u00e9 avec 2 micros"],
+    ["comes with", "livr\u00e9 avec"],
+    ["kit contents", "contenu du coffret"],
+    ["it contains", "il contient"],
+    ["comprises of", "comprend"],
+    ["contains:", "contient :"],
+    ["live streaming", "streaming en direct"],
+    ["video shooting", "tournage vid\u00e9o"],
+    ["content creators", "cr\u00e9ateurs de contenu"],
+    ["online tutorials", "tutoriels en ligne"],
+    ["latest heels", "talons tendance"],
+    ["a dozen", "une douzaine"],
+    ["wipes", "lingettes"],
+    ["packs", "paquets"],
+    ["press on", "faux"],
+    ["inch", "pouces"],
+    ["available", "disponible"],
+    ["rechargeable", "rechargeable"],
+    ["lightweight", "l\u00e9ger"],
+    ["non-greasy", "non gras"],
+    /* Function words, last because they are the shortest. A fallback paragraph
+       is read as a whole sentence, so leaving "with" or "and" in English would
+       look worse than translating the noun; only words the shop actually uses
+       are here, and an unknown brand name is never touched. */
+    ["they are", "ils sont"],
+    ["it is", "c'est"],
+    ["there are", "il y a"],
+    ["as well as", "ainsi que"],
+    ["sizes", "tailles"],
+    ["size", "taille"],
+    ["colours", "couleurs"],
+    ["colors", "couleurs"],
+    ["colour", "couleur"],
+    ["color", "couleur"],
+    ["they", "ils"],
+    ["your", "votre"],
+    ["our", "notre"],
+    ["you", "vous"],
+    ["with", "avec"],
+    ["and", "et"],
+    ["for", "pour"],
+    ["the", "le"],
+    ["from", "de"],
+    ["are", "sont"],
+    ["may", "peut"],
+    ["but", "mais"],
+    ["will", "va"],
+    ["all", "tous"],
+    ["note", "remarque"],
+    ["exact", "exact"],
+    ["before", "avant"],
+    ["materials", "tissus"],
+    ["material", "tissu"],
+    ["printed", "imprim\u00e9"],
+    ["beautiful", "beaux"],
+    ["body", "corps"],
+    ["box", "bo\u00eete"],
+    ["watch", "montre"],
+    ["set", "ensemble"],
+    ["sets", "ensembles"],
+    ["hair", "cheveux"],
+    ["nail", "ongle"],
+    ["nail", "ongle"],
+    ["skin", "peau"],
+    ["bag", "sac"],
+    ["bags", "sacs"],
+    ["shoes", "chaussures"],
+    ["heels", "talons"]
+  ];
+
+  let _copyPairs = null;
+  function copyPairs() {
+    if (_copyPairs) return _copyPairs;
+    const seen = {};
+    _copyPairs = COPY_GLOSSARY
+      .filter((pair) => pair && pair[0] && pair[1])
+      .filter((pair) => {
+        const key = pair[0].toLowerCase();
+        if (seen[key]) return false;      // first (longest) spelling wins
+        seen[key] = true;
+        return true;
+      })
+      .sort((a, b) => b[0].length - a[0].length);
+    return _copyPairs;
+  }
+
+  function escapeRe(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  /** Best-effort French for product copy that arrived without descriptionFr.
+   *  Returns "" when nothing could be translated with confidence, so callers
+   *  can fall back to the original text instead of showing an empty line. */
+  function translateCopy(text) {
+    if (lang() !== "fr") return "";
+    const raw = String(text == null ? "" : text).trim();
+    if (!raw || !/[A-Za-z]/.test(raw)) return "";
+    // Legacy imported line breaks arrive as entities; treat them as ends
+    // so each known fragment can be translated on its own.
+    const plain = raw.replace(/&#0*10;/g, "\n").replace(/<br\s*\/?>/gi, "\n");
+    const segments = plain.split(/(?<=[.!?;])\s+|\n+/).map((seg) => seg.trim()).filter(Boolean);
+    const out = segments.map((seg) => {
+      const known = translate(seg);
+      if (known) return known;
+      let line = seg;
+      copyPairs().forEach((pair) => {
+        const re = new RegExp("\\b" + escapeRe(pair[0]) + "\\b", "gi");
+        line = line.replace(re, pair[1]);
+      });
+      // A sentence that began with a capital must still begin with one.
+      if (/^[A-Z]/.test(seg) && line && line[0] === line[0].toLowerCase()) {
+        line = line.charAt(0).toUpperCase() + line.slice(1);
+      }
+      return line;
+    }).join(" ").trim();
+    if (!out) return "";
+    // Nothing was actually translated: do not pretend otherwise.
+    return out === raw || out.replace(/\s+/g, " ") === raw.replace(/\s+/g, " ") ? "" : out;
+  }
+
   function sweep(root) {
     if (!root) return;
     if (lang() !== "fr") return;
@@ -1425,6 +1651,6 @@ window.I18N = (() => {
 
   if (document.documentElement) document.documentElement.lang = lang();
 
-  return { lang, setLang, t, apply, sweep, detectBrowserLang };
+  return { lang, setLang, t, apply, sweep, detectBrowserLang, translateCopy };
 })();
 var I18N = window.I18N;

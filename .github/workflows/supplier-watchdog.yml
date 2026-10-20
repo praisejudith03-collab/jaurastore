@@ -1,0 +1,142 @@
+# Supplier stock watchdog: live updates every 20 minutes, deep audit nightly.
+#
+# The Render web service is kept for serving the shop and its small in-process
+# maintenance loop; this workflow is the supplier watchdog's home. GitHub
+# Actions is the scheduler, so no extra Render instance-hours or worker memory
+# are spent on supplier polling.
+#
+#   * LIVE (every 20 minutes, :05/:25/:45): at most two unique supplier URLs,
+#     one-hour per-URL cooldown. A fresh Actions process restores the cooldown
+#     state from the Actions cache so the rotation advances across the whole
+#     linked catalogue instead of re-reading the same first two products.
+#   * DEEP AUDIT (01:00 UTC = 02:00 Africa/Porto-Novo, the shop's UTC+1 local
+#     server clock): no cooldown, every linked product re-checked with the
+#     configured nightly budget. The catalog drift watchdog also runs at that
+#     hour from catalog-watchdog.yml, so the full catalogue is audited nightly.
+#
+# It needs the repository secrets SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
+# (Settings -> Secrets and variables -> Actions). They are never printed.
+name: Supplier watchdog
+
+on:
+  schedule:
+    # Offset by five minutes so the live run never collides with the 01:00
+    # deep audit (GitHub keeps one running + one pending run per group).
+    - cron: "5,25,45 * * * *"
+    # 02:00 in the shop's UTC+1 local time.
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "light = two links, nightly = whole linked catalogue"
+        type: choice
+        default: light
+        options: [light, nightly]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: supplier-watchdog
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPPLIER_WATCHDOG_STATE: .supplier-watchdog-state.json
+      # A light run is two links; the nightly budget is bounded well below the
+      # job timeout (each URL has its own 8s fetch timeout).
+      SUPPLIER_WATCHDOG_BATCH: "4"
+      SUPPLIER_WATCHDOG_MIN_INTERVAL: "3600"
+      SUPPLIER_WATCHDOG_NIGHTLY_MAX: "400"
+      SUPPLIER_WATCHDOG_NIGHTLY_LINKS: "200"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install production dependencies
+        run: pip install -r requirements.txt
+      - name: Restore the supplier cooldown state
+        uses: actions/cache/restore@v4
+        with:
+          path: .supplier-watchdog-state.json
+          key: supplier-watchdog-state-${{ github.run_id }}
+          restore-keys: supplier-watchdog-state-
+      - name: Run the supplier watchdog
+        id: sync
+        env:
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          DISPATCH_MODE: ${{ inputs.mode }}
+        run: |
+          set -o pipefail
+          if [ -n "$EVENT_SCHEDULE" ] && [ "$EVENT_SCHEDULE" = "0 1 * * *" ]; then
+            MODE=nightly
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            MODE="${DISPATCH_MODE:-light}"
+          else
+            MODE=light
+          fi
+          ARGS=""
+          BUDGET="20m"
+          if [ "$MODE" = "nightly" ]; then
+            ARGS="--nightly"
+            BUDGET="45m"
+          fi
+          echo "Supplier watchdog mode: $MODE"
+          timeout --signal=TERM --kill-after=15s "$BUDGET" \
+            python3 tools/supplier_sync.py $ARGS 2>&1 | tee supplier-watchdog.log
+      - name: Save the supplier cooldown state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .supplier-watchdog-state.json
+          key: supplier-watchdog-state-${{ github.run_id }}
+      - name: Upload the watchdog log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supplier-watchdog-log
+          path: supplier-watchdog.log
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Open or update the alert issue
+        if: failure() && steps.sync.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -e
+          {
+            echo "The supplier stock watchdog failed on $(date -u '+%Y-%m-%d %H:%M UTC')."
+            echo
+            echo "Run: ${RUN_URL}"
+            echo
+            echo '```'
+            cat supplier-watchdog.log
+            echo '```'
+            echo
+            echo "Manually Out-of-stock products stay locked: the write path refuses any supplier restock while the owner's lock exists."
+            echo "This issue was opened automatically; close it once the run is healthy again."
+          } > issue-body.md
+          NUMBER=$(gh issue list --state open --search "in:title Supplier watchdog" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$NUMBER" ]; then
+            gh issue comment "$NUMBER" --body-file issue-body.md
+          else
+            gh issue create --title "Supplier watchdog: stock sync is failing" --body-file issue-body.md
+          fi
+      - name: Close the alert issue on recovery
+        if: always() && steps.sync.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NUMBER=$(gh issue list --state open --search "in:title Supplier watchdog" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$NUMBER" ]; then
+            gh issue comment "$NUMBER" --body "Recovered: the supplier watchdog completed successfully on $(date -u '+%Y-%m-%d %H:%M UTC')."
+            gh issue close "$NUMBER"
+          fi

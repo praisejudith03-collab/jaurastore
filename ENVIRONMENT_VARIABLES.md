@@ -159,22 +159,35 @@ the exact statement to run in the Supabase SQL editor; boot is never blocked.
 - `AUTO_MIGRATE_IN_TESTS=1` (testing only) — run the pass under
   `FLASK_ENV=testing` too.
 
-## Supplier stock sync (in-process watchdog)
+## Supplier stock sync (GitHub Actions watchdog)
 
 Product stock can follow the supplier page attached to a product's **Supplier
-URL for Auto Stock Sync** field. The sync runs quietly inside the web service
-(consolidated scheduler loop, bounded hourly batches — no worker service),
-never deletes a supplier link, and writes a warning row for anything it could
-not read with confidence instead of guessing.
+URL for Auto Stock Sync** field. The watchdog runs in
+`.github/workflows/supplier-watchdog.yml`, never on the Render web service:
 
-The stock rule, per matched product/variant (owner rule, 2026-10-05): the
-supplier count is mirrored **1:1** — no safety buffer, no one-unit clamp. A
-page that only says “in stock” (a flag, not a count) keeps the shelf the shop
-already has and, when that shelf is empty, opens
-`SUPPLIER_IN_STOCK_UNITS` units so multi-unit orders go through. Supplier
-**out** → Jaura out. Variants with no confident supplier match, products whose
-supplier page cannot be fetched/parsed, and uncertain readings are left exactly
-as they are (with a logged warning).
+- **live updates every 20 minutes** (`:05/:25/:45`) — at most two unique
+  supplier URLs, one-hour per-URL cooldown. The cooldown map is carried
+  between fresh Actions runs through the Actions cache, so the rotation
+  advances across the catalogue.
+- **nightly deep audit at 02:00 local server time** (01:00 UTC; the shop's
+  `SUPPLIER_WATCHDOG_NIGHTLY_TZ_OFFSET=1`) — no cooldown, every due linked
+  product re-checked, bounded by `SUPPLIER_WATCHDOG_NIGHTLY_LINKS`.
+- `tools/supplier_sync.py` is the entry point. It refuses to run without
+  Supabase credentials, so a misconfigured job can never write stock to a
+  throwaway local catalogue.
+
+The stock rule, per matched product/variant (owner directive 2026-10-19):
+supplier **0 / Sold Out → out immediately**. High supplier stock is published
+with a **20–40% safety buffer** (default 30%; supplier 50 → 35), so the shop
+never advertises the full supplier shelf. Counts below
+`SUPPLIER_BUFFER_MIN_QTY` (default 10) are mirrored exactly, so a supplier with
+one unit is never rounded down to zero. A page that only says “in stock” (a
+flag, not a count) keeps the shelf the shop already has and, when that shelf is
+empty, opens `SUPPLIER_IN_STOCK_UNITS` units so multi-unit orders go through.
+Variants with no confident supplier match, products whose supplier page cannot
+be fetched/parsed, and uncertain readings are left exactly as they are (with a
+logged warning). Manually “Out of stock” products stay locked: every write path
+re-checks the durable lock and refuses to restock them.
 
 The checkout never refuses an order over a mirrored quantity: the request is
 taken, the real shelf is drained atomically to zero (never below) and any
@@ -182,9 +195,16 @@ shortfall is recorded on the order (`stockShortfall`) for the admin. Only an
 item with nothing available at all is refused, as *This item is currently out
 of stock.*
 
-- `SUPPLIER_WATCHDOG_ENABLED` (default `1`) — master switch for the sync.
+- `SUPPLIER_WATCHDOG_ENABLED` (default `1`) — master switch. `render.yaml`
+  sets it to `0`; the Actions job leaves it at `1`.
+- `SUPPLIER_SAFETY_BUFFER_PERCENT` (default `30`) — high-stock buffer,
+  clamped to the owner's 20–40% band.
+- `SUPPLIER_BUFFER_MIN_QTY` (default `10`) — supplier counts below this are
+  mirrored exactly.
 - `SUPPLIER_IN_STOCK_UNITS` (default `10`) — the shelf opened when the
   supplier page confirms availability without printing a number.
+- `SUPPLIER_WATCHDOG_NIGHTLY_LINKS` (default `200`) — maximum unique supplier
+  URLs in one Actions deep audit.
 
 ### Price watch
 
@@ -198,16 +218,19 @@ decision.
 
 ### The 2:00 AM nightly pass
 
-Once per day, after 2:00 AM in the owner's timezone, the scheduler runs a
-deep pass: every supplier-linked product is checked **exactly once**
-(regardless of day-time batching), followed by the **storage sweeper** that
-purges orphaned/duplicate upload media through the same protected plan as the
-Admin Portal's *Settings → Advanced settings → Storage cleanup* card (files a
-live product, order, receipt or the site still references are never touched;
-uploads younger than two days are protected; a failed reference scan aborts
-rather than guessing). `/healthz` reports the schedule and the last run under
-`background.nightly`. Hard-deleted product ids are skipped by every automated
-pass, so a deleted product can never be re-created by a sync.
+The supplier deep audit runs in GitHub Actions at 01:00 UTC (02:00 UTC+1,
+the shop's local server clock) alongside the read-only catalogue deep audit.
+The Render scheduler keeps its own 02:00 pass for housekeeping (storage
+sweeper, backup and repairs) even though its supplier step is disabled:
+
+the **storage sweeper** purges orphaned/duplicate upload media through the
+same protected plan as the Admin Portal's *Settings → Advanced settings →
+Storage cleanup* card (files a live product, order, receipt or the site still
+references are never touched; uploads younger than two days are protected; a
+failed reference scan aborts rather than guessing). `/healthz` reports the
+schedule and the last run under `background.nightly`. Hard-deleted product ids
+are skipped by every automated pass, so a deleted product can never be
+re-created by a sync.
 
 - `SUPPLIER_WATCHDOG_NIGHTLY` (default `1`) — set `0`/`off` to disable the
   nightly pass entirely.
@@ -219,8 +242,8 @@ pass, so a deleted product can never be re-created by a sync.
 - `SUPPLIER_WATCHDOG_NIGHTLY_MAX` (default `400`) — upper bound on products
   checked in one nightly pass.
 - `SUPPLIER_WATCHDOG_MIN_INTERVAL` (default `3600`) — how long a
-  supplier-linked product waits before a *day-time* tick may check it again.
-  The nightly pass always ignores it.
+  supplier-linked URL waits before a live run may check it again. The nightly
+  Actions deep audit passes `0` and ignores it.
 - `STORAGE_SWEEPER_NIGHTLY` (default `1`) — set `0`/`off` to keep the nightly
   supplier sweep but skip the automatic media purge (the admin card and the
   CLI tool keep working either way).

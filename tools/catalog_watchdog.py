@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Production catalog watchdog: the storefront may never lose a product.
 
-Runs autonomously every hour from .github/workflows/catalog-watchdog.yml
-(and can also run on demand for diagnostics). It takes two INDEPENDENT
-measurements and compares them:
+Runs autonomously once a night at 01:00 UTC (02:00 local server time, UTC+1)
+from .github/workflows/catalog-watchdog.yml (and can also run on demand for
+diagnostics). It takes two INDEPENDENT measurements and compares them:
 
   1. the public storefront answer - GET {WATCHDOG_BASE_URL}/api/catalog
   2. the source of truth - the Supabase products table, read directly over
