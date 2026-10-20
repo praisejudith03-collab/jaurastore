@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=209" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=211" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -434,7 +434,7 @@ function persistEditedMedia() {
         // an in-flight save could otherwise delete a file the save is about
         // to reference. The storage guard also protects shared gallery files.
         removed.forEach((entry) => { void purgeRemovedMedia(entry); });
-        JA.toast("Photo update is live; unused replaced files were deleted.");
+        JA.success("Photo update is live; unused replaced files were deleted.");
       }
       return { ok: true, data: result };
     } catch (error) {
@@ -684,7 +684,7 @@ function bindMedia() {
     }));
     if (res && res.url) {
       if (acceptUploadedUrl(res.url, false)) {
-        JA.toast(isVideo ? "Video uploaded."
+        JA.success(isVideo ? "Video uploaded."
           : (squeezed && squeezed.compressed
             ? "Photo uploaded — compressed " + readableBytes(squeezed.originalSize) + " → " + readableBytes(squeezed.size) + "."
             : "Photo uploaded."));
@@ -1084,6 +1084,7 @@ const EDIT_FIELD_MAP = {
   name: ["name"],
   sku: ["sku"],
   description: ["description"],
+  descriptionFr: ["descriptionFr"],
   enableCustomNote: ["enableCustomNote"],
   customNotePrompt: ["customNotePrompt"],
   category: ["category"],
@@ -1186,6 +1187,9 @@ function productForm(p = {}) {
       <p class="admin-note">Used on your supplier sheets and in order item lines. Leave it blank to keep the saved code; a brand-new product is given one automatically.</p>
     </div>
     <div class="field"><label>Description</label><textarea name="description" rows="3" maxlength="2000">${JA.escape(p.description || "")}</textarea></div>
+    <div class="field"><label>Description (Français)</label><textarea name="descriptionFr" rows="3" maxlength="2000" placeholder="Facultatif — la boutique utilise la traduction française automatique si ce champ reste vide.">${JA.escape(p.descriptionFr || p.description_fr || "")}</textarea>
+      <p class="admin-note">Shown to French shoppers. Leave it blank to keep the automatic French translation; write here to override it.</p>
+    </div>
     <div class="field"><label>Category</label><select name="category" required>${cats}</select></div>
     <div class="field"><label>Price (Naira ₦)</label><div class="au-price"><input name="priceNgn" type="number" min="0" inputmode="numeric" value="${p.priceNgn || ""}" /><i>₦</i></div>
       <p class="admin-note" id="cfa-preview">${JA.escape(cfaProof(p.priceNgn))}</p>
@@ -1377,6 +1381,7 @@ async function handleProductSubmit(e, existing) {
       image_url: image,
       imageUrl: image,
       description: String(fd.get("description") || "").trim(),
+      descriptionFr: String(fd.get("descriptionFr") || "").trim(),
       stock,
       stock_quantity: stock,
       stockStatus: stock > 0 ? "in" : "out",
@@ -1470,7 +1475,7 @@ async function handleProductSubmit(e, existing) {
   restoreProductsReturn();
   // The success banner is raised AFTER the redirect, so it lands on the list
   // view the admin was sent back to rather than on the editor that is gone.
-  JA.toast(savedMsg);
+  JA.success(savedMsg);
 }
 
 let prodPage = 1;
@@ -1775,7 +1780,7 @@ function bindProductBulk() {
       button.disabled = false;
       const ok = results.filter((r) => r && r.ok !== false).length;
       const queued = results.filter((r) => r && r.queued).length;
-      selectedProductIds.clear(); JA.toast(`${ok} product${ok === 1 ? "" : "s"} deleted${queued ? " (files purging in the background)" : ""}${ok < products.length ? ` · ${products.length - ok} failed` : ""}.`);
+      selectedProductIds.clear(); (ok === products.length ? JA.success : JA.toast)(`${ok} product${ok === 1 ? "" : "s"} deleted${queued ? " (files purging in the background)" : ""}${ok < products.length ? ` · ${products.length - ok} failed` : ""}.`);
       renderProdGrid(); bindProdGridEvents(); return;
     }
     const online = action === "show";
@@ -1784,7 +1789,7 @@ function bindProductBulk() {
     const results = await Promise.all(products.map((p) => JA.upsertProduct({ ...p, online })));
     button.disabled = false;
     const ok = results.filter((r) => r && r.ok !== false).length;
-    selectedProductIds.clear(); JA.toast(`${ok} product${ok === 1 ? "" : "s"} updated${ok < products.length ? ` · ${products.length - ok} failed` : ""}.`);
+    selectedProductIds.clear(); (ok === products.length ? JA.success : JA.toast)(`${ok} product${ok === 1 ? "" : "s"} updated${ok < products.length ? ` · ${products.length - ok} failed` : ""}.`);
     renderProdGrid(); bindProdGridEvents();
   });
 }
@@ -1810,7 +1815,7 @@ function bindProdGridEvents() {
       if (!res || res.ok === false) {
         JA.toast((res && res.error) || "Could not change the visibility. No changes were made.");
       } else {
-        JA.toast(hiding ? "Hidden from the website — customers no longer see it." : "Back on the website.");
+        JA.success(hiding ? "Hidden from the website — customers no longer see it." : "Back on the website.");
       }
       renderProdGrid(); bindProdGridEvents();
     };
@@ -1825,7 +1830,7 @@ function bindProdGridEvents() {
           renderProdGrid(); bindProdGridEvents();   // the server list is still the truth
           return;
         }
-        JA.toast(res.mode === "trash"
+        JA.success(res.mode === "trash"
           ? "Moved to the Trash — restore it any time from the Trash button."
           : res.queued
             ? "Deleted from the website — photos are purging in the background."
@@ -1936,7 +1941,7 @@ async function renderTrashDrawer() {
       try {
         const res = await window.JA_NET.api(`api/admin/products/trash/${encodeURIComponent(b.dataset.trashRestore)}/restore`, { method: "POST", json: {} });
         if (res && res.ok === false) throw new Error(res.error || "Could not restore.");
-        JA.toast("Restored — the product is back on the website.");
+        JA.success("Restored — the product is back on the website.");
         await JA.reloadCatalog();
         renderProdGrid(); bindProdGridEvents();
         await renderTrashDrawer();
@@ -1954,7 +1959,7 @@ async function renderTrashDrawer() {
       try {
         const res = await window.JA_NET.api(`api/admin/products/trash/${encodeURIComponent(b.dataset.trashPurge)}`, { method: "DELETE" });
         if (res && res.ok === false) throw new Error(res.error || "Could not permanently delete.");
-        JA.toast("Permanently deleted.");
+        JA.success("Permanently deleted.");
         await renderTrashDrawer();
         refreshTrashCount();
       } catch (err) {
@@ -2570,7 +2575,7 @@ function renderProofPage() {
       b.disabled = true; let res = null;
       try { res = await window.JA_NET.api("api/admin/payment-proofs/" + encodeURIComponent(id), { method: "DELETE" }); } catch (e) { res = null; }
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not delete that receipt."); b.disabled = false; return; }
-      JA.toast(res.queued ? "Receipt queued — the file is being removed now." : "Receipt deleted."); fillProofs();
+      JA.success(res.queued ? "Receipt queued — the file is being removed now." : "Receipt deleted."); fillProofs();
     };
   });
 }
@@ -2770,7 +2775,7 @@ function bindOrderBulk() {
       const results = await Promise.all(pending.map((id) => JA.setOrderStatus(id, "confirmed")));
       button.disabled = false;
       const ok = results.filter((r) => r && r.ok !== false).length;
-      selectedOrderIds.clear(); JA.toast(`${ok} order${ok === 1 ? "" : "s"} confirmed${ok < pending.length ? ` · ${pending.length - ok} failed` : ""}.`);
+      selectedOrderIds.clear(); (ok === pending.length ? JA.success : JA.toast)(`${ok} order${ok === 1 ? "" : "s"} confirmed${ok < pending.length ? ` · ${pending.length - ok} failed` : ""}.`);
       fillOrders(); return;
     }
     if (action === "delete") {
@@ -2824,7 +2829,7 @@ function bindOrderButtons() {
       const res = await JA.setOrderStatus(id, "confirmed");
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not update the order."); b.disabled = false; return; }
       const o = serverOrders.find((x) => x.id === id);
-      JA.toast("Confirmed · " + id); fillOrders();
+      JA.success("Confirmed · " + id); fillOrders();
     };
   });
   box.querySelectorAll("[data-partial]").forEach((b) => {
@@ -2840,7 +2845,7 @@ function bindOrderButtons() {
       b.disabled = true;
       const res = await JA.setOrderStatus(id, "pending", { action: "partial_payment", paidAmount });
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not record the partial payment."); b.disabled = false; return; }
-      JA.toast("Pending balance notification sent · " + id); fillOrders();
+      JA.success("Pending balance notification sent · " + id); fillOrders();
     };
   });
   box.querySelectorAll("[data-decline]").forEach((b) => {
@@ -2850,7 +2855,7 @@ function bindOrderButtons() {
       b.disabled = true;
       const res = await JA.setOrderStatus(id, "declined", { reason: "Invalid payment image uploaded" });
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not update the order."); b.disabled = false; return; }
-      JA.toast("Declined and customer notified · " + id); fillOrders();
+      JA.success("Declined and customer notified · " + id); fillOrders();
     };
   });
   box.querySelectorAll("[data-reopen]").forEach((b) => {
@@ -2858,7 +2863,7 @@ function bindOrderButtons() {
       b.disabled = true;
       const res = await JA.setOrderStatus(b.dataset.reopen, "pending");
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not update the order."); b.disabled = false; return; }
-      JA.toast("Reopened · " + b.dataset.reopen); fillOrders();
+      JA.success("Reopened · " + b.dataset.reopen); fillOrders();
     };
   });
   box.querySelectorAll("[data-del-order]").forEach((b) => {
@@ -2868,7 +2873,7 @@ function bindOrderButtons() {
       b.disabled = true;
       const res = await JA.deleteOrder(id);
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not delete the order."); b.disabled = false; return; }
-      JA.toast("Deleted " + id + "."); serverOrders = serverOrders.filter((o) => o.id !== id); renderOrderPage(); fillProofs();
+      JA.success("Deleted " + id + "."); serverOrders = serverOrders.filter((o) => o.id !== id); renderOrderPage(); fillProofs();
     };
   });
 }
@@ -3293,7 +3298,7 @@ async function fillBroadcastHub() {
       const d = await api("api/admin/marketing/broadcast", { method: "POST", json: p });
       if (d && d.ok === false) throw new Error(d.error || "Could not queue the broadcast.");
       if (status) status.textContent = `Queued ${Number(d.recipientCount || 0).toLocaleString()} recipients as ${d.campaignId} (job ${d.jobId}). It is sending now — you can leave this page.`;
-      JA.toast("Broadcast queued.");
+      JA.success("Broadcast queued.");
       trackBroadcast(d.campaignId);
     } catch (err) {
       if (status) status.textContent = err.message || "Could not queue the broadcast.";
@@ -3315,7 +3320,7 @@ async function fillBroadcastHub() {
       const stop = $("#mk-hub-cancel");
       if (stop) stop.onclick = async () => {
         if (!confirm("Stop this broadcast at the next batch?")) return;
-        try { const d = await api("api/admin/marketing/broadcast/" + encodeURIComponent(campaignId) + "/cancel", { method: "POST" }); JA.toast("Broadcast stopped."); if (d && d.campaign) paint(d.campaign); }
+        try { const d = await api("api/admin/marketing/broadcast/" + encodeURIComponent(campaignId) + "/cancel", { method: "POST" }); JA.success("Broadcast stopped."); if (d && d.campaign) paint(d.campaign); }
         catch (err) { JA.toast(err.message || "Could not stop the broadcast."); }
       };
     };
@@ -3356,7 +3361,7 @@ async function fillBackgroundJobs() {
     list.querySelectorAll("[data-job-retry]").forEach((b) => {
       b.onclick = async () => {
         b.disabled = true;
-        try { await api("api/admin/tasks/jobs/" + encodeURIComponent(b.dataset.jobRetry) + "/retry", { method: "POST" }); JA.toast("Job re-queued."); load(); }
+        try { await api("api/admin/tasks/jobs/" + encodeURIComponent(b.dataset.jobRetry) + "/retry", { method: "POST" }); JA.success("Job re-queued."); load(); }
         catch (err) { JA.toast(err.message || "Could not re-queue that job."); b.disabled = false; }
       };
     });
@@ -4258,7 +4263,7 @@ async function fillMarketing() {
         const sent = await api("api/admin/marketing/campaigns", { method: "POST", json: { type: type?.value, subject: subject?.value, content: content?.value, productIds: [...selectedProducts] } });
         const failed = Number(sent.failed || 0);
         if (status) status.textContent = failed ? `Campaign sent to ${sent.sent || 0} of ${sent.recipientCount || recipientCount}; ${failed} failed.` : `Campaign sent to ${sent.sent || recipientCount} customer${Number(sent.sent || recipientCount) === 1 ? "" : "s"}.`;
-        JA.toast(failed ? "Campaign partially sent." : "Campaign sent.");
+        (failed ? JA.toast : JA.success)(failed ? "Campaign partially sent." : "Campaign sent.");
         await loadCampaignLog();
       } catch (err) {
         if (status) status.textContent = err.message || "Could not send the campaign.";
@@ -4291,7 +4296,7 @@ async function fillMarketing() {
         e.preventDefault(); const fd = new FormData(e.target);
         const bulkDiscountTiers = [...e.target.querySelectorAll("[data-bulk-tier]")].map((row) => ({ minQuantity: Number(row.querySelector('[name="bulkMin"]')?.value), percent: Number(row.querySelector('[name="bulkPercent"]')?.value) }));
         const patch = { referralEnabled: e.target.referralEnabled.checked, promosEnabled: e.target.promosEnabled.checked, minimumOrderEnabled: e.target.minimumOrderEnabled.checked, minOrderCfa: Math.max(0, Math.round(Number(fd.get("minOrderCfa")) || 0)), minSpendNgn: Number(fd.get("minSpendNgn")), buyerPercent: Number(fd.get("buyerPercent")), referrerPercent: Number(fd.get("referrerPercent")), milestone: Number(fd.get("milestone")), bulkDiscountTiers };
-        try { await api("api/admin/growth/settings", { method: "POST", json: patch }); JA.toast("Marketing settings saved."); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not save."); }
+        try { await api("api/admin/growth/settings", { method: "POST", json: patch }); JA.success("Marketing settings saved."); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not save."); }
       };
     }
   } catch (e) {}
@@ -4303,10 +4308,10 @@ async function fillMarketing() {
       card.innerHTML = `<h3 class="admin-h">Coupons</h3>${promosOff ? `<p class="admin-note"><strong>Promotions are currently OFF.</strong> Your coupons stay saved below, but customers cannot redeem any code until Promotions are switched back ON above.</p>` : ""}<form id="mk-cp-form" class="mk-inline-form"><input name="code" placeholder="Code (blank = auto)" maxlength="24" /><input name="percent" type="number" placeholder="%" min="1" max="90" required style="width:80px" /><input name="maxUses" type="number" placeholder="Max uses" min="1" style="width:110px" /><input name="expiresAt" type="date" title="Expiry date (optional)" /><input name="note" placeholder="Note (optional)" maxlength="200" /><button class="btn" type="submit">Create coupon</button></form>${rows ? `<table class="mk-table"><thead><tr><th>Code</th><th>%</th><th>Uses</th><th>Expires</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">No coupons yet.</p>`}`;
       $("#mk-cp-form").onsubmit = async (e) => {
         e.preventDefault(); const fd = new FormData(e.target); const body = { code: fd.get("code"), percent: Number(fd.get("percent")), note: fd.get("note") }; if (fd.get("maxUses")) body.maxUses = Number(fd.get("maxUses")); if (fd.get("expiresAt")) body.expiresAt = fd.get("expiresAt") + " 23:59:59";
-        try { const res = await api("api/admin/coupons", { method: "POST", json: body }); JA.toast("Coupon created: " + res.code); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not create the coupon."); }
+        try { const res = await api("api/admin/coupons", { method: "POST", json: body }); JA.success("Coupon created: " + res.code); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not create the coupon."); }
       };
-      card.querySelectorAll("[data-mk-cp-toggle]").forEach((b) => { b.onclick = async () => { try { await api("api/admin/coupons/" + encodeURIComponent(b.dataset.mkCpToggle), { method: "PATCH", json: { active: b.dataset.on !== "1" } }); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not update."); } }; });
-      card.querySelectorAll("[data-mk-cp-del]").forEach((b) => { b.onclick = async () => { if (!confirm("Delete coupon " + b.dataset.mkCpDel + "?")) return; try { await api("api/admin/coupons/" + encodeURIComponent(b.dataset.mkCpDel), { method: "DELETE" }); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not delete."); } }; });
+      card.querySelectorAll("[data-mk-cp-toggle]").forEach((b) => { b.onclick = async () => { try { await api("api/admin/coupons/" + encodeURIComponent(b.dataset.mkCpToggle), { method: "PATCH", json: { active: b.dataset.on !== "1" } }); JA.success("Coupon saved."); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not update."); } }; });
+      card.querySelectorAll("[data-mk-cp-del]").forEach((b) => { b.onclick = async () => { if (!confirm("Delete coupon " + b.dataset.mkCpDel + "?")) return; try { await api("api/admin/coupons/" + encodeURIComponent(b.dataset.mkCpDel), { method: "DELETE" }); JA.success("Coupon deleted."); fillMarketing(); } catch (err) { JA.toast(err.message || "Could not delete."); } }; });
     }
   } catch (e) {}
   try {
@@ -4324,7 +4329,7 @@ async function fillMarketing() {
       card.querySelectorAll("[data-mk-ref-del]").forEach((b) => {
         b.onclick = async () => {
           if (!confirm("Delete referral code " + b.dataset.mkRefDel + "? It will no longer work for new orders.")) return;
-          try { await api("api/admin/referrals/" + encodeURIComponent(b.dataset.mkRefDel), { method: "DELETE" }); fillMarketing(); }
+          try { await api("api/admin/referrals/" + encodeURIComponent(b.dataset.mkRefDel), { method: "DELETE" }); JA.success("Referral code deleted."); fillMarketing(); }
           catch (err) { JA.toast(err.message || "Could not delete that referral code."); }
         };
       });
@@ -4662,7 +4667,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=209" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=211" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -4724,7 +4729,7 @@ function paintDesk(tab = "analytics") {
       const label = $("#store-active-label"), err = $("#store-active-error");
       try { const saved = await saveSiteConfig({ store_active: wanted }); if (!saved || saved.ok === false) throw new Error((saved && saved.error) || "Could not update store status.");
         if (label) label.textContent = `Store Status: ${wanted ? "ONLINE 🟢" : "PAUSED 🔴"}`;
-        if (err) err.hidden = true; window.dispatchEvent(new CustomEvent("ja:store-status", { detail: { active: wanted } })); JA.toast("Store status updated.");
+        if (err) err.hidden = true; window.dispatchEvent(new CustomEvent("ja:store-status", { detail: { active: wanted } })); JA.success("Store status updated.");
       } catch (e) { statusToggle.checked = !wanted; if (err) { err.textContent = e.message; err.hidden = false; } }
       statusToggle.disabled = false;
     });
@@ -4842,7 +4847,7 @@ function paintDesk(tab = "analytics") {
     // server-confirmed: repaint the form from the saved row
     const site = (saved && saved.site) || {};
     if (site) { try { fillSiteForm(site); } catch (err) {} }
-    JA.toast("Settings saved — live on the site now.");
+    JA.success("Settings saved — live on the site now.");
     JA.mountChrome();
   });
 }
@@ -4953,14 +4958,23 @@ function collectCats() {
 function bindCategories() {
   const list = document.getElementById("cat-list");
   if (!list) return;
-  const persist = async (msg) => {
+  const persist = async (msg, options) => {
     const cats = collectCats();
     const res = await JA.saveCategories(cats);
     if (!res || res.ok === false) {
       JA.toast((res && res.error) || "Could not save categories. No changes are live.");
       return false;
     }
-    JA.toast(msg || "Categories saved. They show on the shop now.");
+    const text = msg || "Categories saved. They show on the shop now.";
+    if (options && options.redirect) {
+      // Every confirmed category/photo save returns the admin to the catalog
+      // list, exactly like a product save. The green toast is raised AFTER
+      // the redirect so it lands on the list the admin is looking at.
+      restoreProductsReturn();
+      JA.success(text);
+    } else {
+      JA.success(text);
+    }
     return true;
   };
   list.addEventListener("change", async (e) => {
@@ -4988,7 +5002,8 @@ function bindCategories() {
             if (upLabel) pic.appendChild(upLabel);
             else pic.innerHTML += `<label class="au-cat-up">Change asset<input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf" data-cat-img="${card.getAttribute("data-cat-i")}" hidden /></label>`;
           }
-          await persist("Asset saved — banner will use this image on shop page.");
+          await persist("Asset saved — banner will use this image on shop page.",
+                        { redirect: true });
           return;
         }
         // never claim success when the upload was only queued or failed:
@@ -4999,7 +5014,7 @@ function bindCategories() {
       // no live server (test/dev static hosting): keep the local preview
       const data = await fileToData(f);
       if (pic) { const upLabel = pic.querySelector(".au-cat-up"); pic.innerHTML = `<img src="${data}" alt="" />`; if (upLabel) pic.appendChild(upLabel); }
-      persist("Photo saved.");
+      persist("Photo saved.", { redirect: true });
     } catch (err) { JA.toast((err && err.message) || "Could not read that asset."); }
     finally { input.value = ""; }
   });
@@ -5044,7 +5059,7 @@ function bindCategories() {
       const res = await JA.deleteCategory(id, "beauty");
       if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not delete the category. No changes are live."); return; }
     }
-    JA.toast("Category deleted.");
+    JA.success("Category deleted.");
     if (dashCat === id || prodCatSel === id) {
       dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1;
     }
@@ -5056,15 +5071,16 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=209", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=211", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
-    JA.toast("Category added — now you can add products in " + name + ". It shows on website instantly.");
+    JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");
     paintDesk("categories");
   });
   document.getElementById("save-cats")?.addEventListener("click", async () => {
-    const ok = await persist();
-    if (ok) paintDesk("categories");
+    // persist() paints the products list and raises the green toast itself.
+    await persist("Categories saved. They show on the shop now.",
+                  { redirect: true });
   });
 }
 
@@ -5191,7 +5207,7 @@ function bindHomepageFeatured() {
       return;
     }
     paintHomepageFeaturedPicker();
-    JA.toast("Homepage featured products saved — live now.");
+    JA.success("Homepage featured products saved — live now.");
   });
 }
 
@@ -5534,7 +5550,7 @@ function bindDeliveryPage() {
     }
     // Repaint from what the server actually stored, not from the form.
     dpCache = res.page || page;
-    JA.toast("Delivery page saved \u2014 it is live on the store now.");
+    JA.success("Delivery page saved \u2014 it is live on the store now.");
     paintDesk("delivery");
   });
 }
@@ -5783,7 +5799,7 @@ function bindDeliveryZones() {
       else fareTxt = `${Number(z.fare_min || 0).toLocaleString()}–${Number(z.fare_max || 0).toLocaleString()} ${z.currency || payload.currency || ""}`.trim();
       JA.toast(`${z.name}: ${fareTxt} saved — live now.`);
     } else {
-      JA.toast("Zone saved — live now.");
+      JA.success("Zone saved — live now.");
     }
     // Clear the editor WITHOUT paintDesk(): rebuilding the whole delivery desk
     // is what used to swallow the repaint and leave a stale Update button.
@@ -5865,7 +5881,7 @@ function bindCustomerCare() {
       const site = { ...((JA.getSiteConfig && JA.getSiteConfig()) || {}), customer_care: saved.customer_care || customer_care };
       if (JA.applySiteConfig) JA.applySiteConfig(site);
     } catch (err) {}
-    JA.toast("Customer care details saved — live across the storefront now.");
+    JA.success("Customer care details saved — live across the storefront now.");
   });
 }
 
@@ -5918,7 +5934,7 @@ function bindWelcome() {
       if (!saved || saved.ok === false) throw new Error((saved && saved.error) || "Could not save welcome pop-up.");
       repaint(saved.site || { ...loadedRow, ...patch });
       if (JA.applySiteConfig) JA.applySiteConfig(saved.site || patch);
-      JA.toast("Welcome pop-up saved — changes are live on the next page load.");
+      JA.success("Welcome pop-up saved — changes are live on the next page load.");
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
       if (errorBox) { errorBox.textContent = message; errorBox.hidden = false; }
@@ -6001,7 +6017,7 @@ function bindSocialLinks() {
       repaint(saved.site || { ...loadedRow, ...patch });
       if (JA.applySiteConfig) JA.applySiteConfig(saved.site || patch);
       if (JA.paintSocialLinks) JA.paintSocialLinks();
-      JA.toast("Social links saved — live on the storefront now.");
+      JA.success("Social links saved — live on the storefront now.");
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
       if (errorBox) { errorBox.textContent = message; errorBox.hidden = false; }
@@ -6153,7 +6169,7 @@ function bindSiteBranding() {
           const freshUrl = bustMediaCache(res.url);
           const saved = await saveSiteConfig({ logoUrl: freshUrl });
           if (saved && saved.ok !== false) {
-            JA.toast("Logo saved — live sitewide now.");
+            JA.success("Logo saved — live sitewide now.");
             if (msg) msg.textContent = "Logo live now.";
             if (form) form.dataset.logoUrl = freshUrl;
             // repaint from the server-confirmed row (canonical site_logo_url)
@@ -6181,7 +6197,7 @@ function bindSiteBranding() {
           const freshUrl = bustMediaCache(res.url);
           const saved = await saveSiteConfig({ shopBannerUrl: freshUrl });
           if (saved && saved.ok !== false) {
-            JA.toast("Shop banner saved — live sitewide now.");
+            JA.success("Shop banner saved — live sitewide now.");
             if (msg) msg.textContent = "Shop banner live now.";
             if (form) form.dataset.shopBannerUrl = freshUrl;
             // repaint from the server-confirmed row (canonical shop_banner_url)

@@ -38,7 +38,8 @@
     "colors": [],
     "nameFr": "10in1 raf appareil à sandwich",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Revêtement antiadhésif"
   },
   {
     "id": "wix-004",
@@ -129,7 +130,8 @@
     "nameFr": "2 by 6 dd birthmark",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Qualité SDD.\nCheveux humains, 10 pouces."
   },
   {
     "id": "wix-008",
@@ -229,7 +231,8 @@
     "colors": [],
     "nameFr": "24 k nicotinamide toner 300 ml",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Vise à lutter contre le vieillissement, à nourrir et à raffermir la peau."
   },
   {
     "id": "wix-013",
@@ -416,7 +419,8 @@
     "colors": [],
     "nameFr": "3 niveaux égouttoir",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Disponible en noir"
   },
   {
     "id": "wix-020",
@@ -495,7 +499,8 @@
     "nameFr": "4 by 4 carré full closure",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Couleur NC.\nCheveux humains 100 %, 12 pouces."
   },
   {
     "id": "wix-023",
@@ -651,7 +656,8 @@
       }
     ],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Montre connectée A58 avec parure :\nune montre A58,\nune montre-bracelet,\n2 bracelets,\nun collier, des boucles d'oreilles et 2 bracelets,\nun rouge à lèvres."
   },
   {
     "id": "wix-029",
@@ -671,7 +677,8 @@
     "colors": [],
     "nameFr": "Ac design ventilateur",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Souffle bien et est livré avec un éclairage."
   },
   {
     "id": "wix-030",
@@ -807,7 +814,8 @@
         ]
       }
     ],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Pour poignet fin."
   },
   {
     "id": "wix-036",
@@ -848,7 +856,8 @@
     "nameFr": "Ensemble ankara",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Pour toutes les morphologies."
   },
   {
     "id": "wix-038",
@@ -869,7 +878,8 @@
     "nameFr": "Pantalon ankara",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Le motif exact du tissu peut varier."
   },
   {
     "id": "wix-039",
@@ -889,7 +899,8 @@
     "colors": [],
     "nameFr": "Short ankara",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Pour toutes les tailles."
   },
   {
     "id": "wix-040",
@@ -909,7 +920,8 @@
     "colors": [],
     "nameFr": "Ankara sundresslong gown",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Différents imprimés disponibles."
   },
   {
     "id": "wix-041",
@@ -970,7 +982,8 @@
     "colors": [],
     "nameFr": "Ashake gown",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Confectionnée dans de beaux tissus imprimés de haute qualité. Haut et pantalon fumés. Tailles pour toutes les morphologies.\nRemarque : l'imprimé exact peut différer de la photo ; nous sélectionnons les meilleures options et vous les partageons toujours avant la livraison."
   },
   {
     "id": "wix-044",
@@ -1069,7 +1082,8 @@
     "nameFr": "Sac k",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Disponible dans toutes les couleurs."
   },
   {
     "id": "wix-047",
@@ -1281,7 +1295,8 @@
     "nameFr": "Bioaqua vitamin c coffret",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Coffret de soins BIOAQUA à la vitamine C, kit complet de 6 pièces conçu pour illuminer, hydrater et améliorer la texture de la peau. Enrichi en vitamine C, acide hyaluronique et antioxydants, il cible la ternité, le teint irrégulier et les premiers signes de l'âge. Contient : nettoyant, tonique, sérum, crème, contour des yeux et masque."
   },
   {
     "id": "wix-056",
@@ -1738,7 +1753,8 @@
         ]
       }
     ],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Nos robes Bubu sont conçues pour toutes les morphologies, avec confort et élégance.\n\nLes imprimés peuvent varier selon la disponibilité, mais la qualité est toujours garantie.\n\nSi le modèle choisi n'est pas disponible, nous vous proposons d'autres options tout aussi belles avant la livraison."
   },
   {
     "id": "wix-074",
@@ -1917,7 +1933,8 @@
     "colors": [],
     "nameFr": "Dr rashel crème solaire",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "La crème solaire anti-âge Dr Rashel est légère, non grasse et offre une protection large spectre SPF 60 contre les rayons UVA/UVB."
   },
   {
     "id": "wix-080",
@@ -1937,7 +1954,8 @@
     "colors": [],
     "nameFr": "Dr rashel vitamin c coffret",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Coffret Dr Rashel à la vitamine C.\n\nContient : essence tonique, sérum visage, crème visage et nettoyant visage."
   },
   {
     "id": "wix-081",
@@ -2057,7 +2075,8 @@
     "colors": [],
     "nameFr": "Enny grand sac comes avec a scarf",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Très grand. Excellente qualité. 💯"
   },
   {
     "id": "wix-087",
@@ -2118,7 +2137,8 @@
     "nameFr": "F15 micro sans fil double",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Micro sans fil F15 double.\n\nIdéal pour le streaming en direct, la vidéo, les créateurs de contenu, les tutoriels en ligne, les interviews, etc.\nRechargeable.\nLéger et pratique.\nCapture le son et réduit le bruit.\nLivré avec 2 micros.\nCompatible iPhone et USB-C."
   },
   {
     "id": "wix-090",
@@ -2327,7 +2347,8 @@
     "colors": [],
     "nameFr": "Fife coffret",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Confectionnée dans de beaux tissus imprimés de haute qualité. Haut et pantalon fumés. Tailles pour toutes les morphologies.\nRemarque : l'imprimé exact peut différer de la photo ; nous sélectionnons les meilleures options et vous les partageons toujours avant la livraison."
   },
   {
     "id": "wix-097",
@@ -2685,7 +2706,8 @@
     "nameFr": "Carré à frange",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Cheveux humains 100 %.\n10 pouces."
   },
   {
     "id": "wix-108",
@@ -2796,7 +2818,8 @@
     "nameFr": "Gucci sac",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Livré avec une boîte."
   },
   {
     "id": "wix-112",
@@ -2817,7 +2840,8 @@
     "nameFr": "Bandeau 3pcs",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Couleurs sélectionnées au hasard."
   },
   {
     "id": "wix-113",
@@ -2937,7 +2961,8 @@
     "colors": [],
     "nameFr": "Crème pour les mains",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Couleur choisie au hasard."
   },
   {
     "id": "wix-118",
@@ -3539,7 +3564,8 @@
         ]
       }
     ],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "• 7 bracelets : plusieurs styles, dont métal, silicone et multicolore.\n• Écouteurs sans fil : une paire d'écouteurs TWS pour l'audio et les appels.\n• Chargeur : charge sans fil pour la montre connectée.\n• Protection : coque de protection incluse."
   },
   {
     "id": "wix-136",
@@ -3573,7 +3599,8 @@
         ]
       }
     ],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Ce « coffret » complet contient généralement 12 articles :\n2 boîtiers de montre connectée (styles Ultra et Series)\n7 bracelets interchangeables en silicone, métal, nylon et cuir\nAirPods de 5e génération\nDeux pochettes\nChargeurs sans fil magnétiques"
   },
   {
     "id": "wix-137",
@@ -3751,7 +3778,8 @@
     "colors": [],
     "nameFr": "July diffuser",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Sélectionné au hasard."
   },
   {
     "id": "wix-143",
@@ -3781,7 +3809,8 @@
       }
     ],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Une douzaine (12 pièces) coûte 3 000 CFA."
   },
   {
     "id": "wix-144",
@@ -3802,7 +3831,8 @@
     "nameFr": "Porte-clés",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "12 pièces — 7 500 ₦ / 3 200 CFA."
   },
   {
     "id": "wix-145",
@@ -3873,7 +3903,8 @@
       }
     ],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Qualité et confort pour tous les jours."
   },
   {
     "id": "wix-147",
@@ -4264,7 +4295,8 @@
       }
     ],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Livré dans une boîte."
   },
   {
     "id": "wix-162",
@@ -4425,7 +4457,8 @@
         ]
       }
     ],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Comprend une ceinture, un portefeuille, des boutons de manchette, un stylo et une montre."
   },
   {
     "id": "wix-169",
@@ -4457,7 +4490,8 @@
         ]
       }
     ],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Comprend :\n1 montre-bracelet\n1 paire de boutons de manchette\n1 stylo\n1 cravate\n1 parfum\n1 ceinture\n1 portefeuille"
   },
   {
     "id": "wix-170",
@@ -5003,7 +5037,8 @@
         ]
       }
     ],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Vivez le luxe avec nos deux-pièces en Ankara, conçus pour toutes les tailles. Confectionnés dans des matières vibrantes, chaque ensemble est durable et unique. J Aura Store célèbre la diversité et la qualité et offre un confort inégalé. Sublimez votre style avec des collections qui allient culture et modernité. Découvrez une version de vous-même confiante et rayonnante."
   },
   {
     "id": "wix-194",
@@ -5065,7 +5100,8 @@
         ]
       }
     ],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "La montre Poedagar est livrée avec une boîte."
   },
   {
     "id": "wix-196",
@@ -5107,7 +5143,8 @@
     "nameFr": "Faux ongles",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "24 pièces de faux ongles à coller avec de la colle."
   },
   {
     "id": "wix-198",
@@ -5127,7 +5164,8 @@
     "colors": [],
     "nameFr": "Faux ongles 1",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "24 pièces de faux ongles à coller avec de la colle."
   },
   {
     "id": "wix-199",
@@ -5167,7 +5205,8 @@
     "colors": [],
     "nameFr": "Faux ongles c",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "24 pièces de faux ongles à coller avec de la colle."
   },
   {
     "id": "wix-201",
@@ -5187,7 +5226,8 @@
     "colors": [],
     "nameFr": "Faux ongles d",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "24 pièces de faux ongles à coller avec de la colle."
   },
   {
     "id": "wix-202",
@@ -5207,7 +5247,8 @@
     "colors": [],
     "nameFr": "Faux ongles e",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "24 pièces de faux ongles à coller avec de la colle."
   },
   {
     "id": "wix-203",
@@ -5282,7 +5323,8 @@
       }
     ],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Talons tendance pour votre look glamour."
   },
   {
     "id": "wix-206",
@@ -5374,7 +5416,8 @@
         ]
       }
     ],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Coffret montre connectée Rock 006.\nContient :\nune montre connectée\nune batterie externe magnétique\nune lampe torche\nun ventilateur\nun casque Bluetooth"
   },
   {
     "id": "wix-209",
@@ -5551,7 +5594,8 @@
     "nameFr": "Bonnet skull",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Bonnet en cheveux humains 100 %.\nCouleur 1b."
   },
   {
     "id": "wix-216",
@@ -5572,7 +5616,8 @@
     "nameFr": "Bonnet skull 1",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Couleur : 350.\nCheveux humains 100 %."
   },
   {
     "id": "wix-217",
@@ -5593,7 +5638,8 @@
     "nameFr": "Bonnet skull jerry",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Cheveux humains 100 %."
   },
   {
     "id": "wix-218",
@@ -5845,7 +5891,8 @@
     "nameFr": "T frontal ag bounce",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Cheveux humains de qualité inférieure."
   },
   {
     "id": "wix-227",
@@ -6022,7 +6069,8 @@
       }
     ],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "descriptionFr": "Livré dans une boîte."
   },
   {
     "id": "wix-234",
@@ -6149,7 +6197,8 @@
     "colors": [],
     "nameFr": "Two piece blanc top avec ankara trousers",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Convient à toutes les occasions."
   },
   {
     "id": "wix-239",
@@ -6407,7 +6456,8 @@
     "colors": [],
     "nameFr": "Vogue frame",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Accessoires Vogue."
   },
   {
     "id": "wix-249",
@@ -6465,7 +6515,8 @@
     "colors": [],
     "nameFr": "Crochet ventouse",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Utilisable dans la cuisine ou la salle de bain."
   },
   {
     "id": "wix-251",
@@ -6505,7 +6556,8 @@
     "colors": [],
     "nameFr": "Wipes 5 packs",
     "options": [],
-    "placeholderImage": "images/products/_placeholder.jpg"
+    "placeholderImage": "images/products/_placeholder.jpg",
+    "descriptionFr": "Lot de 5 paquets."
   },
   {
     "id": "wix-253",

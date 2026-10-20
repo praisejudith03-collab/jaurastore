@@ -804,6 +804,13 @@ td img { width: 44px; height: 54px; object-fit: cover; background: #f8f0e2; }
   z-index: 120;
 }
 .toast.show { opacity: 1; transform: translateX(-50%); }
+/* A confirmed admin save. Green is the owner's "it really saved" signal;
+   errors keep a deep red so the two can never be confused. The base neutral
+   toast (espresso) stays for storefront notices such as "Added to cart". */
+.toast[data-kind="success"],
+.toast.is-success { background: #1f7a4d; color: #fff; }
+.toast[data-kind="error"],
+.toast.is-error { background: #8e3e30; color: #fff; }
 
 .empty {
   padding: 60px 20px;

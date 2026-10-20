@@ -1932,7 +1932,60 @@ def merged(include_hidden=False):
     # backend the row came from. This is the read-time half of the rounding
     # contract in currency.py; js/store.js ceilings the same figures.
     products = [_clean_cfa_prices(p) for p in products]
+    # Fill the shipped French descriptions (blank field only) before the
+    # image resolver hands the rows to the storefront.
+    products = [_with_french_description(p) for p in products]
     return resolve_images(products)
+
+
+# ------------------------------------------------ shipped French descriptions
+# The bundled catalogue was English-only for 52 product descriptions: nameFr
+# existed, descriptionFr did not. The storefront therefore switched its chrome
+# to French and then printed the English paragraph under the French title. The
+# table below fills that hole at READ time, for Supabase rows as well as the
+# seed rows, without inventing copy for a product the owner wrote himself.
+# An owner-entered descriptionFr always wins; this only fills a blank field.
+DESCRIPTIONS_FR_PATH = os.environ.get(
+    "DESCRIPTIONS_FR_PATH", os.path.join(ROOT, "data", "descriptions_fr.json"))
+
+
+@lru_cache(maxsize=4)
+def _french_description_table(path=None):
+    """``(by_id, by_normalised_english_text)`` from data/descriptions_fr.json."""
+    raw = _read_json(path or DESCRIPTIONS_FR_PATH, {})
+    by_id, by_text = {}, {}
+    if isinstance(raw, dict):
+        for pid, value in raw.items():
+            text = str(value or "").strip()
+            key = str(pid or "").strip()
+            if key and text:
+                by_id[key] = text
+        # Text keys let a re-created row (new id, same shipped paragraph) keep
+        # its French copy. Built separately so the file stays human-editable.
+        for row in _seed_products():
+            pid = str((row or {}).get("id") or "").strip()
+            english = str((row or {}).get("description") or "").strip()
+            french = by_id.get(pid)
+            if english and french:
+                by_text[re.sub(r"\s+", " ", english).strip().lower()] = french
+    return by_id, by_text
+
+
+def _with_french_description(product):
+    """Fill a blank ``descriptionFr`` from the shipped translation table."""
+    p = product if isinstance(product, dict) else {}
+    if str(p.get("descriptionFr") or "").strip():
+        return product
+    by_id, by_text = _french_description_table()
+    french = by_id.get(str(p.get("id") or "").strip())
+    if not french:
+        english = re.sub(r"\s+", " ", str(p.get("description") or "")).strip().lower()
+        french = by_text.get(english) if english else ""
+    if not french:
+        return product
+    out = dict(p)
+    out["descriptionFr"] = french
+    return out
 
 
 def _fold_p(product):

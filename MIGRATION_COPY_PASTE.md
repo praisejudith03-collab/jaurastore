@@ -171,7 +171,7 @@ alter table products add column if not exists is_deleted boolean not null defaul
 
 Products-only repair: `legacyId`, `image_url`, `stock_quantity` and the non-negative stock check.
 
-Copy the **whole block** into one new query (97 lines). Raw link once this is merged: https://github.com/praisejudith03-collab/jaurastore/raw/main/schema_sections/09_product_compatibility.sql
+Copy the **whole block** into one new query (110 lines). Raw link once this is merged: https://github.com/praisejudith03-collab/jaurastore/raw/main/schema_sections/09_product_compatibility.sql
 
 ```sql
 -- SECTION: product_compatibility
@@ -191,6 +191,19 @@ do $$ begin
   alter table products add constraint products_stock_nonnegative check (stock_quantity >= 0) not valid;
 exception when duplicate_object then null;
 end $$;
+
+-- Read-path indexes. The products table is the shop's hot path: every page
+-- load filters online / is_deleted and the admin desk filters by category.
+-- Without these, PostgREST scans the whole table on each catalogue rebuild.
+-- The partial online index is the exact predicate merged() uses.
+create index if not exists products_online_live_idx
+  on products (online, updated_at desc) where is_deleted is not true;
+create index if not exists products_category_live_idx
+  on products (category) where is_deleted is not true;
+create index if not exists products_deleted_idx
+  on products (is_deleted);
+create index if not exists products_updated_idx
+  on products (updated_at desc);
 
 create or replace function sync_supplier_stock(p_id text,p_stock integer,
  p_option_stock_changes jsonb,p_allow_increase boolean,

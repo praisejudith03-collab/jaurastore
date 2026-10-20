@@ -92,8 +92,13 @@ def test_health_snapshot_advertises_the_nightly_schedule():
 
 # ------------------------------------------------------- the nightly sweep
 
-def test_nightly_sweep_uses_the_two_link_ceiling(monkeypatch):
-    """Nightly maintenance must not bypass the link cap or URL cooldown."""
+def test_nightly_sweep_honours_an_explicit_two_link_budget(monkeypatch):
+    """The in-process scheduler still owns a two-link night shift.
+
+    Owner directive 2026-10-19 moves the DEEP audit to GitHub Actions, but
+    scheduler.py keeps passing link_limit=2 so a deployment that leaves the
+    in-process watchdog enabled cannot burst supplier requests at 02:00.
+    """
     synced = []
     rows = [
         {"id": "jau-ghost-1", "name": "Deleted", "stock": 3,
@@ -125,7 +130,11 @@ def test_nightly_sweep_uses_the_two_link_ceiling(monkeypatch):
 
 
 def test_nightly_sweep_is_bounded_and_terminates(monkeypatch):
-    """One night pass selects no more than two distinct supplier links."""
+    """The GitHub Actions deep audit may cover many links, still bounded.
+
+    It must terminate at max_products and never fetch an unbounded number of
+    URLs in one process (the Actions job has a 45-minute budget).
+    """
     rows = [{"id": f"jau-live-{i}", "name": f"Bag {i}", "stock": 3,
              "supplierSku": f"https://supplier.example/item/{i}"}
             for i in range(150)]
@@ -138,9 +147,10 @@ def test_nightly_sweep_is_bounded_and_terminates(monkeypatch):
                         (synced.append((p["id"], set(allowed_urls or []))), (False, []))[1])
     monkeypatch.setattr(supplier_watchdog, "_save_warnings", lambda w: None)
     supplier_watchdog._last_checked.clear()
-    out = supplier_watchdog.nightly_sweep(max_products=100, link_limit=2)
-    assert out["links"] == 2 and out["checked"] == 2
-    assert len(synced) == 2 and len({next(iter(urls)) for _, urls in synced}) == 2
+    out = supplier_watchdog.nightly_sweep(max_products=100, link_limit=200)
+    assert out["links"] == 100 and out["checked"] == 100
+    assert len(synced) == 100
+    assert len({next(iter(urls)) for _, urls in synced}) == 100
 
 
 # ------------------------------------------------- ghost products stay dead
@@ -339,7 +349,8 @@ def test_supplier_price_increase_raises_a_warning_not_a_rewrite(monkeypatch, sav
     up = [w for w in warns if w["code"] == "supplier_price_increased"]
     assert up and "Serum" in up[0]["reason"] and "42" in up[0]["reason"]
     # ... the stock update went through ...
-    # One-to-one supplier counts (no 40% buffer): 3 and 5 sell as 3 and 5.
+    # Below the high-stock threshold: 3 and 5 are small counts, so the
+    # 20-40% buffer does not apply and they sell exactly as 3 and 5.
     assert saved.get("optionStock") == {"Serum": 3, "Cream": 5}
     # ... and the shop's own retail price was NEVER rewritten by the supplier
     assert saved.get("priceNgn") == 5000

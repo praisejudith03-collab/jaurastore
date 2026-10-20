@@ -1850,17 +1850,31 @@ const JA = (() => {
     }, 0);
   }
 
-  function toast(msg) {
+  /** Show the single site toast. `options.kind` may be "success" or
+   *  "error"; admin saves use success (green) so a confirmed write is
+   *  unmistakable at a glance, while storefront notices stay neutral. */
+  function toast(msg, options) {
     let el = document.querySelector(".toast");
     if (!el) {
       el = document.createElement("div");
       el.className = "toast";
       document.body.appendChild(el);
     }
+    const kind = (options && typeof options === "object")
+      ? String(options.kind || "").toLowerCase() : "";
+    if (kind) el.setAttribute("data-kind", kind);
+    else el.removeAttribute("data-kind");
+    el.classList.toggle("is-success", kind === "success");
+    el.classList.toggle("is-error", kind === "error");
     el.textContent = msg;
     el.classList.add("show");
     clearTimeout(el._t);
     el._t = setTimeout(() => el.classList.remove("show"), 2200);
+  }
+
+  /** A confirmed save: green, same duration, same single toast element. */
+  function success(msg) {
+    toast(msg, { kind: "success" });
   }
 
   function upsertProduct(p) {
@@ -2912,8 +2926,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=209";
-        const FLYER = "images/brand/logo-flyer.jpg?v=209";
+        const LOGO = "images/brand/logo.jpg?v=211";
+        const FLYER = "images/brand/logo-flyer.jpg?v=211";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -3128,7 +3142,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=209" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=211" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3427,7 +3441,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=209" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=211" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3563,7 +3577,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=209", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=211", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3597,7 +3611,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=209";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=211";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3656,7 +3670,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=209");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=211");
     document.title = title;
     [
       ["name", "description", description],
@@ -4198,7 +4212,7 @@ const JA = (() => {
     cart, addToCart, setQty, clearCart, cartCount, cartDetailed, cartTotal,
     cartQtyFor, stockFor, stockLeft, stockProblems, stockProblemLine,
     wish, isWished, toggleWish, wishDetailed, openMini, closeMini,
-    toast, upsertProduct, removeProduct, importProducts, applyServerProduct, syncPending, retryStrandedProducts, reloadCatalog,
+    toast, success, upsertProduct, removeProduct, importProducts, applyServerProduct, syncPending, retryStrandedProducts, reloadCatalog,
     refreshCatalog, invalidateCatalogCache,
     orders, saveOrder, getOrder, updateOrder, nextOrderId,
     isAdmin, loginAdmin, logoutAdmin, adminSession,

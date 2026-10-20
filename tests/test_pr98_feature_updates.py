@@ -64,12 +64,18 @@ def test_product_editor_excludes_redundant_discount_and_merchandising_fields():
     assert "Option price overrides" not in source
 
 
-def test_watchdog_runs_hourly_and_audits_service_health():
-    """Hourly since 2026-09-16 (owner directive): with the watchdog's own
-    two-run missing tolerance, a real defect still pages within ~2 hours
-    while transient mismatches (deploys, cache edges) never page at all."""
+def test_watchdog_runs_nightly_and_audits_service_health():
+    """Nightly since 2026-10-19 (owner directive): the full catalogue deep
+    audit runs once a day at 02:00 local server time (01:00 UTC). The
+    watchdog's own two-run missing tolerance still survives, and supplier
+    live updates are handled by the separate 20-minute workflow.
+
+    The old "hourly" pin is intentionally superseded, not deleted: the
+    schedule moved, the health audit it guards did not.
+    """
     workflow = (ROOT / ".github/workflows/catalog-watchdog.yml").read_text(encoding="utf-8")
     watchdog = (ROOT / "tools/catalog_watchdog.py").read_text(encoding="utf-8")
-    assert 'cron: "0 * * * *"' in workflow
+    assert 'cron: "0 1 * * *"' in workflow
+    assert 'cron: "0 * * * *"' not in workflow
     assert "fetch_service_health(base)" in watchdog
     assert '"/healthz"' in watchdog

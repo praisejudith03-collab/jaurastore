@@ -434,20 +434,34 @@ emit({
     assert "clearCheckoutDraft();" in app.split("const finishOrder = () => {", 1)[1][:120]
 
 
-def test_supplier_counts_are_never_capped_at_one_unit():
+def test_supplier_counts_use_the_owner_approved_20_40_percent_buffer():
+    """Owner directive 2026-10-19 supersedes the 2026-10-05 1:1 rule.
+
+    High supplier stock now publishes at 60-80% of the supplier figure (a
+    20-40% safety buffer, default 30%). Small counts stay exact so one unit is
+    never rounded down to "out of stock", and 0 always means out of stock.
+    """
     import supplier_watchdog as sw
 
+    assert sw.MIN_SAFETY_BUFFER_PERCENT == 20
+    assert sw.MAX_SAFETY_BUFFER_PERCENT == 40
     assert sw._apply_stock_rule(1, 0) == 1
-    assert sw._apply_stock_rule(25, 0) == 25
-    assert sw._apply_stock_rule(100, 3) == 100
-    assert sw._apply_option_stock_rule(40, 0) == 40
+    assert sw._apply_stock_rule(25, 0) == 17
+    assert sw._apply_stock_rule(100, 3) == 70
+    assert sw._apply_option_stock_rule(40, 0) == 28
+    assert sw._apply_stock_rule(50, 0) == 35
+    assert 30 <= sw._apply_stock_rule(50, 0) <= 35
     # A bare "In stock" (no count) opens a multi-unit shelf, never one unit.
     assert sw._apply_stock_rule(1, 0, flagged=True) == sw.SUPPLIER_IN_STOCK_UNITS
     assert sw.SUPPLIER_IN_STOCK_UNITS > 1
     assert sw._apply_stock_rule(0, 9) == 0
-    # No 40%/50% buffer arithmetic may come back.
+    # The old integer-only "// 100" arithmetic is gone; the buffer is a
+    # documented percentage with an explicit 20-40 clamp, never an accidental
+    # hardcoded 40%/50% divisor.
     source = _read("supplier_watchdog.py")
-    assert "// 100" not in source.split("def _apply_stock_rule", 1)[1].split("def ", 1)[0]
+    body = source.split("def _apply_stock_rule", 1)[1].split("def ", 1)[0]
+    assert "// 100" not in body
+    assert "safety_buffer_percent" in body
 
 
 # ===========================================================================

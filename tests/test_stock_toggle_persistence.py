@@ -266,30 +266,37 @@ def test_editor_uses_zero_for_blank_and_unassigned_stock():
 def test_clean_editor_has_only_the_approved_product_controls():
     """The product form stays focused on shop essentials. The SKU is one of
     them again, at BOTH levels (one code for the product, one per variant);
-    import, discount, translation, visibility, rating and review-entry
-    controls are still not part of the editor, and verified reviews remain in
-    their separate flow. The dedicated supplier-cost field joined the
-    approved set (owner spec 2026-10: per-variant pricing + cost controls);
-    per-option prices/costs ride on data attributes, not names."""
+    import, discount, visibility, rating and review-entry controls are still
+    not part of the editor, and verified reviews remain in their separate
+    flow. The dedicated supplier-cost field joined the approved set (owner
+    spec 2026-10: per-variant pricing + cost controls); per-option
+    prices/costs ride on data attributes, not names.
+
+    ``descriptionFr`` also joined on 2026-10-19 (owner directive): French
+    shoppers must never receive raw English product copy, and the owner can
+    override the automatic French translation in the editor. The French
+    product *name* remains out of the editor (the catalogue already ships
+    nameFr for every product)."""
     import re
 
     js = _admin_js()
     form = js[js.index("function productForm(p = {})"):js.index("async function handleProductSubmit")]
     names = set(re.findall(r'name="([^"]+)"', form))
     assert names == {
-        "id", "name", "sku", "description", "category", "priceNgn", "supplierSku",
-        "supplierCost",
+        "id", "name", "sku", "description", "descriptionFr", "category",
+        "priceNgn", "supplierSku", "supplierCost",
         "stock", "enableCustomNote", "customNotePrompt",
     }
     for required in (
         "Product title", "SKU (your code for this product)", "Description",
-        "Category", "Price (Naira ₦)", "Supplier cost (Naira ₦)",
+        "Description (Français)", "Category", "Price (Naira ₦)",
+        "Supplier cost (Naira ₦)",
         "Main supplier URL", "Stock quantity", "Enable a note for this product",
         "Customer prompt", "id=\"media-box\"", "id=\"add-opt\"",
     ):
         assert required in form, required
     for removed in (
-        "nameFr", "descriptionFr", "dimensions", "compareNgn", "bulkQty",
+        "nameFr", "dimensions", "compareNgn", "bulkQty",
         "bulkPercent", "stock-status", "stockStatus", "featured", "badge",
         "Customer Name", "Customer Stars", "Customer Review",
     ):

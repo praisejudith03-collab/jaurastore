@@ -1513,7 +1513,13 @@ def sync_order(order):
 
 
 def sync_order_async(order):
-    """Confirmation hook: never delay or fail an order status change."""
+    """Manual/diagnostic single-order sync (not called on confirmation).
+
+    The owner's ledger is updated by the accounting desk's manual batch push
+    only (POST /admin/accounting/push), after shipping and transport
+    adjustments. This helper is retained for explicit admin tooling and
+    tests; nothing in the order-status path calls it.
+    """
     if not configured():
         return
 
@@ -1573,7 +1579,12 @@ def _do_backfill(orders):
 
 
 def start_backfill(orders):
-    """Import existing confirmed orders after OAuth without blocking redirect."""
+    """Manual historical import helper (never called by the OAuth callback).
+
+    Connecting Google Drive must not auto-push confirmed orders. The owner
+    decides when a batch is ready, so this utility is only for an explicit
+    owner/admin action; the callback calls complete_authorization() alone.
+    """
     copied = [dict(row) for row in (orders or []) if isinstance(row, dict)]
     with _backfill_lock:
         if _backfill_state.get("pending"):

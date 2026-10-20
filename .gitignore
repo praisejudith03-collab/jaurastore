@@ -62,3 +62,9 @@ supplier_match_review.json
 supplier_sync_warnings.json
 # One-time/scheduled supplier audit report
 supplier-sync-report.json
+
+# Watchdog run state (per-run caches, never source)
+.watchdog-state.json
+.watchdog-stock.json
+.supplier-watchdog-state.json
+.supplier-watchdog-state.json.tmp

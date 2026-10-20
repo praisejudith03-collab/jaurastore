@@ -16,6 +16,19 @@ do $$ begin
 exception when duplicate_object then null;
 end $$;
 
+-- Read-path indexes. The products table is the shop's hot path: every page
+-- load filters online / is_deleted and the admin desk filters by category.
+-- Without these, PostgREST scans the whole table on each catalogue rebuild.
+-- The partial online index is the exact predicate merged() uses.
+create index if not exists products_online_live_idx
+  on products (online, updated_at desc) where is_deleted is not true;
+create index if not exists products_category_live_idx
+  on products (category) where is_deleted is not true;
+create index if not exists products_deleted_idx
+  on products (is_deleted);
+create index if not exists products_updated_idx
+  on products (updated_at desc);
+
 create or replace function sync_supplier_stock(p_id text,p_stock integer,
  p_option_stock_changes jsonb,p_allow_increase boolean,
  p_option_snapshot_keys jsonb)

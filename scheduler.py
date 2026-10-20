@@ -2,9 +2,12 @@
 
 Option-1 free-tier architecture: there are no Render background worker services.
 The web dyno starts one lightweight daemon thread named ``jaurastore-background``
-that runs the old maintenance job, the abandoned-cart reminders, and the
+that runs maintenance, abandoned-cart reminders and (when enabled) the
 supplier stock watchdog in bounded batches. This keeps instance-hours at one
 web service only and avoids the duplicated RAM footprint of separate workers.
+In production the Render blueprint sets ``SUPPLIER_WATCHDOG_ENABLED=0``:
+supplier polling lives in .github/workflows/supplier-watchdog.yml every 20
+minutes, and this thread keeps the shop's own housekeeping.
 
 Every step is isolated with observability.record_failure(), so a failing email,
 backup, supplier page or storage probe is logged and cannot crash the Flask
@@ -92,7 +95,7 @@ def _storage_sweeper(logger=None):
 
 
 def _nightly_run(logger=None):
-    """At 2 AM run one paced supplier batch plus the bounded storage sweeper."""
+    """At 2 AM run the optional supplier batch plus the storage sweeper."""
     global _last_nightly_date
     now = datetime.datetime.utcnow()
     local = now + datetime.timedelta(hours=NIGHTLY_TZ_OFFSET)
@@ -287,7 +290,12 @@ def _persist_counters(logger=None):
 
 
 def _supplier_watchdog(logger=None):
-    """Run a two-link, cooldown-protected supplier batch in the web process."""
+    """Run a two-link, cooldown-protected supplier batch when enabled.
+
+    The production blueprint disables this step so supplier fetches stay off
+    the Render CPU/memory budget; GitHub Actions runs the same watchdog every
+    20 minutes. The call remains for deployments that opt back in.
+    """
     import supplier_watchdog
     result = supplier_watchdog.tick(limit=SUPPLIER_PAGE_SIZE,
                                     min_interval_seconds=SUPPLIER_MIN_INTERVAL,
