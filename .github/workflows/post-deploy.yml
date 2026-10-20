@@ -1,0 +1,69 @@
+name: Post-deploy check
+
+# Verifies the DEPLOYED shop, not the repository: health, catalogue
+# completeness, the live exchange rate, the French first paint and the private
+# audit endpoint. Read-only, no credentials, no pip install (the verifier is
+# plain urllib).
+#
+# Manual only, on purpose. A schedule would turn Render hiccups into red runs
+# and e-mail noise, and UptimeRobot already watches liveness on its 15-minute
+# ping - this job answers the different question "did the release land and is
+# it serving every product?". Run it from the Actions tab after a deploy, or
+# run `python3 tools/post_deploy_check.py` locally.
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Site origin to verify"
+        required: false
+        default: "https://jaurastore.com.ng"
+      samples:
+        description: "How many /healthz probes to time"
+        required: false
+        default: "5"
+      checks:
+        description: "Comma-separated subset: healthz,catalog,site,shop,audit"
+        required: false
+        default: "healthz,catalog,site,shop,audit"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    # A black-holed connection must fail this job in minutes, not hours.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify the live deployment
+        env:
+          BASE: ${{ inputs.base }}
+          SAMPLES: ${{ inputs.samples }}
+          CHECKS: ${{ inputs.checks }}
+        # No `| tee`: the pipe would replace the verifier's exit status with
+        # tee's, and a red deployment would report a green job. Print the
+        # report either way, then exit with the verifier's own status.
+        run: |
+          status=0
+          python3 tools/post_deploy_check.py \
+            --base "$BASE" \
+            --samples "$SAMPLES" \
+            --checks "$CHECKS" \
+            --json > post-deploy-report.json || status=$?
+          cat post-deploy-report.json
+          exit "$status"
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-deploy-report
+          path: post-deploy-report.json
+          if-no-files-found: ignore
+          retention-days: 14

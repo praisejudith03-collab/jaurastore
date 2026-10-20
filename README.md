@@ -129,6 +129,20 @@ python3 tests/e2e.py
 python3 tests/responsive.py
 ```
 
+### After a deploy
+
+```bash
+python3 tools/post_deploy_check.py            # health, catalogue, rate, French paint, audit
+python3 tools/post_deploy_check.py --json     # same verdicts, machine-readable
+node tests/_toast_check.mjs                   # the admin save toast, in a real DOM
+```
+
+`tools/post_deploy_check.py` is read-only and needs no credentials: exit `0`
+means the deployed service serves every catalogue row it counts, at the live
+rate, in French on first paint, with the admin audit still private. Exit `1`
+names the broken invariant, exit `2` means nothing answered at all. Details,
+sample output and triage: `POST_DEPLOY_VERIFICATION.md`.
+
 ## Layout
 
 | Path | What it holds |
@@ -148,6 +162,7 @@ python3 tests/responsive.py
 | `js/net.js` | fetch wrapper + offline outbox |
 | `sw.js` | offline caching |
 | `tests/` | pytest API tests, Playwright end-to-end and layout audits |
+| `tools/` | `asset_version.py` (cache tokens), `ci_check.sh`/`ci_report.py` (the gate), `post_deploy_check.py` (live verification) |
 
 ## Caching, asset versioning and language
 
