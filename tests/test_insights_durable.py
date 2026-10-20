@@ -385,7 +385,11 @@ def test_boot_survives_supabase_being_unreachable(monkeypatch):
     assert health["ok"] is True
     assert health["env"] == Config.ENV
     assert health["background"] is None
-    assert health["database"]["checks"]["supabase"]["ok"] is True
+    # /healthz no longer performs the Supabase probe inline (owner directive
+    # 2026-10-20: <50 ms, zero memory overhead), so the very first answer may
+    # honestly say "not measured yet" - but it must never claim a failure it
+    # has not observed, and it must stay ok.
+    assert health["database"]["checks"]["supabase"]["ok"] in (True, None)
     assert health["eventLoop"]["ok"] is True
     assert analytics_mod.report(days=7)["totals"]["pageViews"] == 0
 

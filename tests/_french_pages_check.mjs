@@ -120,17 +120,110 @@ function englishNodes(window) {
   return hits;
 }
 
-let failures = 0;
-for (const page of TARGETS) {
+/* ------------------------------------------------------------------ live API
+ * The cold pass above is the first paint on a slow phone: nothing answers, so
+ * the page shows its skeleton and its default copy. The SECOND pass is what
+ * the shopper sees once /api/site and /api/catalog have answered - and that is
+ * where dynamic copy is built (grid counts, order panels, footer rows painted
+ * from the site row). A string that only ever appears after boot is exactly as
+ * English as one baked into the HTML, so both passes are required.
+ */
+const LIVE_PRODUCTS = [
+  {
+    id: "wix-001", sku: "JAU001", slug: "10000-mah-power-bank",
+    name: "10000 mah power bank", nameFr: "Batterie externe 10 000 mAh",
+    category: "gadgets", priceNgn: 10000, priceCfa: 0,
+    image: "images/products/10000-mah-power-bank.jpg",
+    images: ["images/products/10000-mah-power-bank.jpg"],
+    description: "Fast charging power bank", descriptionFr: "Batterie externe à charge rapide",
+    stock_available: 5, stock_status: "in", online: true, badge: "", featured: true,
+    colors: ["Black"], options: [{ title: "Colour", values: ["Black"] }],
+  },
+  {
+    id: "wix-012", sku: "JAU012", slug: "24-k-nicotinamide-toner-300-ml",
+    name: "24 k nicotinamide toner 300 ml", nameFr: "Tonique à la niacinamide 24 k 300 ml",
+    category: "beauty", priceNgn: 0, priceCfa: 3500,
+    image: "images/products/24-k-nicotinamide-toner-300-ml.jpg",
+    images: ["images/products/24-k-nicotinamide-toner-300-ml.jpg"],
+    description: "Brightening toner", descriptionFr: "Tonique éclaircissant",
+    stock_available: 2, stock_status: "in", online: true, badge: "",
+  },
+  {
+    /* Saved a moment ago: no price yet, a category the table does not know. */
+    id: "jau-live-new", sku: "JAUNEW", slug: "nouveaute",
+    name: "Mystery gift box", nameFr: "Boîte cadeau mystère",
+    category: "brandnew-cat", priceNgn: 0, priceCfa: 0,
+    image: "images/products/_placeholder.jpg", images: [],
+    description: "Surprise box", descriptionFr: "Boîte surprise",
+    stock_available: 0, stock_status: "out", online: true, badge: "new",
+  },
+];
+const LIVE_CATALOG = {
+  ok: true, products: LIVE_PRODUCTS,
+  meta: { count: 3, publishedCount: 3, hiddenCount: 0 },
+  homepageFeatured: {},
+};
+const LIVE_CATEGORIES = {
+  ok: true,
+  categories: [
+    { id: "gadgets", name: "Gadgets / Electronics", nameFr: "Gadgets / Électronique", image: "images/categories/gadgets.jpg", hidden: false },
+    { id: "beauty", name: "Beauty", nameFr: "Beauté & soins", image: "images/categories/beauty.jpg", hidden: false },
+  ],
+};
+const LIVE_SITE = {
+  ok: true,
+  site: {
+    cfaRate: 0.44, store_active: true, referralEnabled: false, promosEnabled: false,
+    bulkDiscountTiers: [], minimumOrderEnabled: false, minOrderCfa: 0, minOrderNgn: 0,
+    customer_care: {
+      phone_primary: "+229 68 95 31 10", phone_secondary: "+234 916 167 0236",
+      email: "jaurastore@gmail.com",
+      business_contact_info: "Cotonou, Bénin",
+      support_hours: "Lundi – samedi, 9h – 18h",
+      support_details: "Notre équipe est disponible pour vos commandes.",
+    },
+  },
+};
+
+function liveApiBody(url) {
+  const u = String(url);
+  if (u.includes("api/catalog")) return LIVE_CATALOG;
+  if (u.includes("api/categories")) return LIVE_CATEGORIES;
+  if (u.includes("api/site")) return LIVE_SITE;
+  if (u.includes("api/realtime-config")) return { ok: true, enabled: false };
+  if (u.includes("api/most-viewed")) return { ok: true, items: [{ productId: "wix-001" }] };
+  if (u.includes("api/config")) return { ok: true, csrf: "x", env: "production" };
+  return { ok: true };
+}
+
+async function checkPage(page, live) {
   const dom = new JSDOM(readFileSync(join(ROOT, page), "utf8"), {
     url: BASE + page,
     runScripts: "dangerously",
     resources: "usable",
     pretendToBeVisual: false,
     beforeParse(window) {
-      // No backend in this harness: /api/site and /api/catalog never answer,
-      // which is exactly the cold first visit a slow phone sees.
-      window.fetch = () => new Promise(() => {});
+      if (!live) {
+        // No backend in the cold harness: /api/site and /api/catalog never
+        // answer, which is exactly the first visit a slow phone sees.
+        window.fetch = () => new Promise(() => {});
+      } else {
+        window.AbortSignal = globalThis.AbortSignal;
+        window.IntersectionObserver = class {
+          constructor(cb) { this.cb = cb; }
+          observe() {} unobserve() {} disconnect() {}
+        };
+        window.fetch = (url) => {
+          const payload = JSON.stringify(liveApiBody(url));
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: { get: () => "application/json" },
+            json: () => Promise.resolve(JSON.parse(payload)),
+            text: () => Promise.resolve(payload),
+          });
+        };
+      }
       window.matchMedia = () => ({
         matches: false, addEventListener() {}, removeEventListener() {},
         addListener() {}, removeListener() {},
@@ -145,8 +238,17 @@ for (const page of TARGETS) {
   const window = dom.window;
   // Give the deferred scripts their turn, then drive the switch explicitly so
   // the check measures the FINAL French rendering, not a race.
-  for (let i = 0; i < 40 && !window.I18N; i += 1) {
+  for (let i = 0; i < 80 && !window.I18N; i += 1) {
     await new Promise((r) => setTimeout(r, 25));
+  }
+  if (live) {
+    // Wait for the catalogue/site round-trips the page really makes before it
+    // is judged: the boot path paints in stages and the last stage is built
+    // from the API answer.
+    for (let i = 0; i < 120 && !(window.JA_SEED && window.JA_SEED.length); i += 1) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    await new Promise((r) => setTimeout(r, 300));
   }
   // The boot path itself must have chosen French (store.js/app.js call
   // I18N.apply() on every page). If it did not, the page is broken for a
@@ -173,17 +275,26 @@ for (const page of TARGETS) {
   }
   const lang = window.document.documentElement.lang;
   const bad = bootLang !== "fr" || lang !== "fr" || hits.length > 0;
-  if (bad) failures += 1;
-  console.log((bad ? "FAIL  " : "PASS  ") + page + "  lang=" + lang
-    + (bootLang !== "fr" ? "  BOOT LANG=" + bootLang : "")
-    + (hits.length ? "  " + hits.length + " English node(s):" : ""));
-  hits.slice(0, 4).forEach((h) => console.log("        [" + h.en + "] " + h.text.slice(0, 150)));
   dom.window.close();
+  return { bad, lang, bootLang, hits };
+}
+
+let failures = 0;
+for (const page of TARGETS) {
+  for (const live of [false, true]) {
+    const { bad, lang, bootLang, hits } = await checkPage(page, live);
+    const label = page + (live ? " (after API boot)" : " (cold)");
+    if (bad) failures += 1;
+    console.log((bad ? "FAIL  " : "PASS  ") + label + "  lang=" + lang
+      + (bootLang !== "fr" ? "  BOOT LANG=" + bootLang : "")
+      + (hits.length ? "  " + hits.length + " English node(s):" : ""));
+    hits.slice(0, 4).forEach((h) => console.log("        [" + h.en + "] " + h.text.slice(0, 150)));
+  }
 }
 
 server.close();
 if (failures) {
-  console.error(`\n${failures} page(s) still render English for a French device`);
+  console.error(`\n${failures} page render(s) still show English for a French device`);
   process.exit(1);
 }
 console.log("\nFRENCH PAGES CHECKS PASSED");

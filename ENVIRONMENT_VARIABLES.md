@@ -280,3 +280,31 @@ Portal under **Orders → Background job failures**. When `GITHUB_TOKEN` (or
 `jaura-crash` repository dispatch, which `.github/workflows/crash-report.yml`
 turns into a GitHub issue comment — the same pair of variables `repo_sync.py`
 already uses, so nothing new needs configuring if repo sync is on.
+
+## Free-tier memory (optional tuning)
+
+The single free Render worker is kept awake on purpose (a 15-minute
+UptimeRobot ping plus the in-process scheduler), so memory has to be recycled
+rather than hoped for. Two optional variables tune that; the defaults are the
+ones tuned for the 512 MB instance:
+
+- `SUPABASE_POOL_IDLE_SECONDS` (default `600`) — how long the shop must be
+  untouched before `memory_manager` closes the Supabase connection pools and
+  drops the catalogue caches. The next request rebuilds them in a few
+  milliseconds.
+- `JAURA_GC_INTERVAL` (default `2.0`) — minimum spacing between
+  request-triggered `gc.collect(1)` sweeps, so a burst of traffic cannot spend
+  its time in the collector.
+
+`GET /healthz` never touches the network, the database or the scheduler: it
+answers from an in-memory snapshot in under 50 ms (measured p50 ≈ 1.2 ms on the
+deployed worker) and reports the last Supabase verdict the background
+refresher observed. `GET /health` and `GET /api/health` keep the full,
+synchronous probe for humans and the catalogue watchdog.
+
+Recycling can also be driven from the portal — `GET /api/admin/memory` shows
+RSS, collector counters and the last recycle, and `POST
+/api/admin/memory/recycle?force=1` performs one immediately. A worker restart
+in the Render dashboard is never required for memory, and a sustained database
+outage (three consecutive failed probes, ≈30 s) makes `/healthz` answer 503 so
+Render recycles the process by itself.

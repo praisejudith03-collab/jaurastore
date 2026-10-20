@@ -617,7 +617,15 @@ def _catalog_response_snapshot():
                 "updatedAt": max(str(local_meta.get("updatedAt") or ""), latest_update,
                                  str(featured.get("updatedAt") or "")),
                 "updatedBy": local_meta.get("updatedBy") or "",
+                # ``count`` stays the size of the LIVE catalogue (hidden rows
+                # included) - the admin portal's counter and the watchdog read
+                # it that way. ``publishedCount`` is the number of rows the
+                # public answer actually carries; the two differing by more
+                # than ``hiddenCount`` is the signal that a row was dropped
+                # somewhere between storage and the grid.
                 "count": len(all_products),
+                "publishedCount": len(public_products),
+                "hiddenCount": len(all_products) - len(public_products),
                 "homepageFeatured": featured,
             }
             snapshot = {}
@@ -638,6 +646,8 @@ def _catalog_response_snapshot():
     featured = catalog_mod.homepage_featured(all_products)
     meta = catalog_mod.meta()
     meta["homepageFeatured"] = featured
+    meta["publishedCount"] = len(public_products)
+    meta["hiddenCount"] = len(all_products) - len(public_products)
     snapshot = {}
     for key, products in (("public", public_products), ("admin", all_products)):
         body = json.dumps({"ok": True, "products": products, "meta": meta,
@@ -697,6 +707,103 @@ def catalog():
     policy = ("private, no-cache, must-revalidate" if include_hidden else
               "private, no-cache, must-revalidate, max-age=0")
     return _etag_response(body, etag, policy, vary_cookie=True)
+
+
+def _public_payload_rows():
+    """The rows the storefront actually receives, as Python dicts.
+
+    Reads the same cached snapshot /api/catalog and /api/products serve, so a
+    diagnostic can never disagree with the answer a shopper got.
+    """
+    body, _etag = _catalog_response_snapshot()["public"]
+    try:
+        return (json.loads(body) or {}).get("products") or []
+    except Exception:
+        return []
+
+
+@api.get("/admin/catalog/audit")
+@authmod.require_admin
+def admin_catalog_audit():
+    """Every stage of the catalogue, counted - so a "missing" product is traceable.
+
+    The owner's recurring report is "I saved it, it is on the order form, it is
+    not in the shop". This answers that with data instead of guesswork:
+
+      tableRows      rows the products table returned (None = Supabase unset)
+      mergedRows     rows the merge keeps (deleted/archived/fixture removed)
+      onlineRows     merged rows the public answer is allowed to publish
+      publishedRows  rows /api/catalog and /api/products actually carry
+      hiddenRows     online=false rows (deliberately not published)
+
+    ``missingFromPublic`` must always be empty: an online row in the merge that
+    the public answer dropped is a serializer bug. The remaining lists are the
+    usual, legitimate reasons a product is invisible *within* the grid: no
+    category (only reachable from "All products"), no price (renders as "price
+    on request"), or the branded placeholder photo.
+    """
+    table_rows = None
+    try:
+        import supabase_store
+        table_rows = supabase_store.products_table_rows()
+    except Exception:
+        table_rows = None
+    merged_rows = catalog_mod.merged(include_hidden=True)
+    public_rows = _public_payload_rows()
+    public_ids = {str(p.get("id") or "") for p in public_rows}
+    merged_ids = {str(p.get("id") or "") for p in merged_rows}
+    online_rows = [p for p in merged_rows if p.get("online") is not False]
+    hidden_ids = sorted(str(p.get("id") or "") for p in merged_rows
+                        if p.get("online") is False)
+    missing = sorted(str(p.get("id") or "") for p in online_rows
+                     if str(p.get("id") or "") not in public_ids)
+    extra = sorted(pid for pid in public_ids
+                   if pid and pid not in merged_ids)
+    no_category = sorted(str(p.get("id") or "") for p in public_rows
+                         if not str(p.get("category") or "").strip())
+    no_price = []
+    no_photo = []
+    for p in public_rows:
+        pid = str(p.get("id") or "")
+        try:
+            ngn = float(p.get("priceNgn") or 0)
+        except (TypeError, ValueError):
+            ngn = 0.0
+        try:
+            cfa = float(p.get("priceCfa") or 0)
+        except (TypeError, ValueError):
+            cfa = 0.0
+        priced_option = False
+        try:
+            priced_option = any(float(v or 0) > 0
+                                for v in (catalog_mod._clean_option_prices(
+                                    p.get("optionPrices") or p.get("option_prices")) or {}).values())
+        except Exception:
+            priced_option = False
+        if ngn <= 0 and cfa <= 0 and not priced_option:
+            no_price.append(pid)
+        if "placeholder" in str(p.get("image") or "").lower():
+            no_photo.append(pid)
+    limit = sec.clean_int(request.args.get("limit"), 50, 1, 500)
+    body = {
+        "ok": True,
+        "counts": {
+            "tableRows": len(table_rows) if table_rows is not None else None,
+            "mergedRows": len(merged_rows),
+            "onlineRows": len(online_rows),
+            "publishedRows": len(public_rows),
+            "hiddenRows": len(hidden_ids),
+        },
+        "missingFromPublic": missing[:limit],
+        "unexpectedInPublic": extra[:limit],
+        "noCategory": no_category[:limit],
+        "noPrice": no_price[:limit],
+        "placeholderPhoto": no_photo[:limit],
+        "hidden": hidden_ids[:limit],
+    }
+    if request.args.get("ids") == "1":
+        body["publishedIds"] = [str(p.get("id") or "") for p in public_rows]
+    return jsonify(body)
 
 
 def _featured_group_payload(group, public=True):
@@ -2800,6 +2907,47 @@ def admin_job_failures():
     return jsonify(ok=True, count=len(items), total=total, page=page,
                    pages=max(1, -(-total // limit)), limit=limit,
                    failures=items, background=health)
+
+
+@api.get("/admin/memory")
+@authmod.require_admin
+def admin_memory():
+    """Free-tier memory state: RSS, collector counters and last idle recycle.
+
+    Read-only and cheap (it never touches Supabase), so the owner can watch a
+    deployed instance settle without opening a shell.
+    """
+    import memory_manager
+    stats = memory_manager.stats()
+    try:
+        import scheduler
+        stats["background"] = {"rssMb": scheduler._health.get("rssMb"),
+                               "idleRecycles": scheduler._health.get("idleRecycles") or 0,
+                               "restarts": scheduler._health.get("restarts") or 0}
+    except Exception:
+        stats["background"] = {}
+    return jsonify(ok=True, memory=stats,
+                   limits={"idleSeconds": memory_manager.IDLE_SECONDS,
+                           "gcIntervalSeconds": memory_manager.GC_INTERVAL_SECONDS,
+                           "bufferBytes": 3 * 1024 * 1024})
+
+
+@api.post("/admin/memory/recycle")
+@authmod.require_admin
+@sec.require_csrf
+def admin_memory_recycle():
+    """Recycle idle pools + caches and return freed pages to the OS.
+
+    The owner's "self-heal without Restart Service" control. It is safe at any
+    time: a request in flight makes it a no-op unless ``?force=1`` is passed,
+    and a normal request simply rebuilds whatever it needs.
+    """
+    import memory_manager
+    force = request.args.get("force") == "1"
+    report = memory_manager.recycle_idle_pools(force=force)
+    audit(authmod.current_admin(), "memory.recycled",
+          str(report.get("reason") or ""), _ip())
+    return jsonify(ok=True, report=report, memory=memory_manager.stats())
 
 
 @api.delete("/admin/job-failures/<int:fid>")

@@ -128,6 +128,13 @@ const JA = (() => {
     "ck.bjMin": "Benin deliveries: minimum order 5,000 CFA (about 12,000 naira).",
     "bulk.label": "Bulk discount",
     "cart.bulkApplied": "Bulk discount applied — {p}% off this item.",
+    // Storefront status copy. These defaults are the ENGLISH strings the cart
+    // contract (and the server) already use, so the bundle reads correctly when
+    // I18N has not loaded; in French they come from js/i18n.js.
+    "cart.oos": "Out of Stock",
+    "cart.onlyLeft": "Only {n} items remaining in stock",
+    "cart.verifyFailed": "We couldn't verify current stock. Please try again.",
+    "store.paused": "The store is temporarily paused. Please chat with us on WhatsApp.",
   };
 
   const tx = (key, vars) => {
@@ -1545,9 +1552,16 @@ const JA = (() => {
     });
   }
   function cartServerError(err) {
-    if (err && err.data && err.data.code === "out_of_stock") return "Out of Stock";
+    // The server answers in English with a machine code; the shopper reads the
+    // active language. Anything we do not recognise falls back to the server's
+    // own sentence rather than hiding the reason.
+    const data = (err && err.data) || {};
+    if (data.code === "out_of_stock") return tx("cart.oos");
+    if (data.code === "insufficient_stock" && data.availableStock != null) {
+      return tx("cart.onlyLeft", { n: Math.max(0, Number(data.availableStock) || 0) });
+    }
     if (err && (err.status === 409 || err.status === 400) && err.message) return err.message;
-    return "We couldn't verify current stock. Please try again.";
+    return tx("cart.verifyFailed");
   }
   function notifyStockLimit(message, id, variant, err) {
     try {
@@ -1755,26 +1769,26 @@ const JA = (() => {
       if (scheduledGeneration !== cartMutationGeneration) return false;
       if (_siteConfig.store_active === false) {
         paintStoreStatus(false);
-        toast("The store is temporarily paused. Please chat with us on WhatsApp.");
+        toast(tx("store.paused"));
         return false;
       }
       const p = product(id);
       const want = Math.max(1, Math.round(Number(qty) || 1));
       if (!p) {
-        toast("Out of Stock");
+        toast(tx("cart.oos"));
         return false;
       }
       const available = stockFor(p, String(color || ""));
       const alreadyInCart = cartQtyFor(id, String(color || ""));
       const remaining = Math.max(0, available - alreadyInCart);
       if (available <= 0) {
-        toast("Out of Stock");
+        toast(tx("cart.oos"));
         notifyStockLimit("Out of Stock", id, color, null);
         return false;
       }
       if (want > remaining) {
         const message = `Only ${remaining} items remaining in stock`;
-        toast(message);
+        toast(tx("cart.onlyLeft", { n: remaining }));
         notifyStockLimit(message, id, color, null);
         return false;
       }
@@ -2981,8 +2995,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=216";
-        const FLYER = "images/brand/logo-flyer.jpg?v=216";
+        const LOGO = "images/brand/logo.jpg?v=219";
+        const FLYER = "images/brand/logo-flyer.jpg?v=219";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -3197,7 +3211,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=216" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=219" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3496,7 +3510,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=216" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=219" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3632,7 +3646,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=216", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=219", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3666,7 +3680,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=216";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=219";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3725,7 +3739,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=216");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=219");
     document.title = title;
     [
       ["name", "description", description],
