@@ -64,6 +64,8 @@ os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = PW
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SQL_PATH = ROOT / "hard_delete_products.sql"
 APPROVED_SECTIONS = ("01_products.sql", "09_product_compatibility.sql")
+MEDIA_GUARD_CATEGORY_SECTION = "08_categories.sql"
+MEDIA_GUARD_SETTINGS_SECTION = "06_growth_settings.sql"
 EMAIL = "jaurastore@gmail.com"
 
 
@@ -118,16 +120,19 @@ class _PG:
 
 def _start(apply_migration):
     pg = _PG()
-    for name in APPROVED_SECTIONS:
+    for name in APPROVED_SECTIONS + (MEDIA_GUARD_CATEGORY_SECTION,):
         pg.apply(ROOT / "schema_sections" / name)
     if apply_migration:
+        # The successful hard-delete fixture needs readable empty category and
+        # key/value stores so the media-reference guard can prove files unused.
+        pg.apply(ROOT / "schema_sections" / MEDIA_GUARD_SETTINGS_SECTION)
         pg.apply(SQL_PATH)
     return pg
 
 
 @pytest.fixture(scope="module")
 def migrated():
-    """Sections 01 + 09 (approved) and then the delete migration."""
+    """Approved product sections, media-guard support tables, and delete RPC."""
     pg = _start(True)
     try:
         yield pg
@@ -137,7 +142,7 @@ def migrated():
 
 @pytest.fixture(scope="module")
 def bare():
-    """The same approved sections with NO delete migration (staging today)."""
+    """Category table but no key/value store or delete migration."""
     pg = _start(False)
     try:
         yield pg

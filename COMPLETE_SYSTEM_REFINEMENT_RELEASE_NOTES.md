@@ -13,11 +13,12 @@ things the owner has to do** (Section 7).
 
 ### 1.1 What the code now does
 
-* `google_sheets.py` reads the workbook id in this precedence order:
-  **Accounting desk setting → `GOOGLE_SHEET_ID` environment variable →
-  `DEFAULT_REFERENCE_SPREADSHEET_ID`** (`google_sheets.py:41`, the owner's own
-  workbook `1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu`). That default means a fresh
-  deploy with no environment variable still writes to the right file.
+* **Current target update:** batch pushes are fixed to the owner-selected
+  workbook `1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE` and route to its
+  `NGN Ledger` / `CFA Ledger` tabs. Legacy settings and environment overrides
+  are ignored; the Drive API validates the fixed ID is a native Google Sheet.
+  The old preference order recorded in this historical release note is
+  superseded.
 * Order rows now carry the **discount** and the supplier fields (unit price,
   quantity, link) on the row's Notes, so the sheet shows the same numbers the
   desk shows. The app-created ledgers keep their own net-profit formula.
@@ -28,8 +29,9 @@ things the owner has to do** (Section 7).
   the app's batch total can never disagree.
 * `GET /api/admin/accounting/google/verify` runs a real end-to-end check
   (`google_sheets.verify_sync`): OAuth client present → owner token valid
-  (refreshing if needed) → both app ledgers readable → the reference workbook
-  and its `NGN` / `FCFA` tabs readable. It **never raises and never writes**,
+  (refreshing if needed) → both auxiliary app ledgers readable → the fixed
+  workbook and its `NGN Ledger` / `CFA Ledger` tabs readable. It **never raises
+  and never writes**,
   so it is safe to press as often as you like.
 * The Accounting desk has a **✓ Test Google sync** button
   (`data-action="verify-google"`) that calls that route and prints the step
@@ -43,7 +45,7 @@ things the owner has to do** (Section 7).
 | `GOOGLE_CLIENT_ID` | from Google Cloud Console | e.g. `1234-abc.apps.googleusercontent.com` |
 | `GOOGLE_CLIENT_SECRET` | from Google Cloud Console | starts with `GOCSPX-` |
 | `GOOGLE_REDIRECT_URI` | `https://<your-render-host>/api/admin/accounting/google/callback` | must match the OAuth client **exactly**; when unset the app builds it from `SITE_ORIGIN` |
-| `GOOGLE_SHEET_ID` | `1GnBgXl-VNoRzV-jiz4qCeb_BKzs31_Fu` | the owner's reference workbook |
+| `GOOGLE_SHEET_ID` | `1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE` | fixed batch-push workbook; runtime routing is ID-locked |
 | `GOOGLE_SHEETS_TOKEN_KEY` | any long random string | encrypts the stored refresh token; falls back to `SECRET_KEY`. Set it so rotating `SECRET_KEY` does not disconnect Google |
 
 No service-account e-mail is involved: the app signs in **as the owner** over
@@ -84,15 +86,15 @@ the longer walkthrough.
 3. Press **✓ Test Google sync** (route `GET /api/admin/accounting/google/verify`).
    A healthy install prints a green step list: `oauth-client`,
    `owner-token` (with the connected e-mail), `NGN-ledger`, `FCFA-ledger`,
-   `reference-sheet` (workbook title, and whether its NGN / FCFA tabs are
-   there — a missing tab is created automatically on the next push).
+   `fixed-reference-sheet` and `reference-tabs` (native Google Sheets MIME
+   type, exact workbook ID, and the NGN Ledger / CFA Ledger tab names).
    A failure names the exact step and what to fix (missing variables, no
    token, wrong workbook id, wrong account).
 4. The same report is available as JSON for support — the button is just a
    pretty printer over it (admin session + CSRF).
-5. Push a batch (**Push to Google Sheets**), then open the workbook — the
-   `NGN` / `FCFA` tabs show one row per order, with the supplier fields and the
-   discount of each order, and the transport column split from the batch fee.
+5. Push a batch (**Push to Google Sheets**), then open the fixed workbook —
+   the `NGN Ledger` / `CFA Ledger` tabs show one row per order, with supplier
+   details, discounts, batch transport and the saved net-profit value.
 
 ---
 

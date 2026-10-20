@@ -75,6 +75,10 @@ class _LegacyCatTable:
         self._keep = set(keep or [])
         return self
 
+    def neq(self, _col, value):
+        self._keep = {pid for pid in self._store if pid == value}
+        return self
+
     def execute(self):
         if self._pending_upsert is not None:
             rows = self._pending_upsert
@@ -123,6 +127,34 @@ class _FakeClient:
         raise AssertionError(f"unexpected table {name!r} in fake")
 
 
+class _FakeCategorySettings:
+    def __init__(self, values=None, error=None):
+        self.values = dict(values or {})
+        self.error = error
+        self.key = None
+
+    def table(self, name):
+        assert name == "growth_settings"
+        return self
+
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def eq(self, _column, value):
+        self.key = value
+        return self
+
+    def limit(self, _count):
+        return self
+
+    def execute(self):
+        if self.error:
+            raise self.error
+        if self.key not in self.values:
+            return _FakeResult([])
+        return _FakeResult([{"value": self.values[self.key]}])
+
+
 @pytest.fixture()
 def _blank_cat_shape():
     """The discovered-table-shape cache is per worker; a test must not
@@ -149,6 +181,39 @@ def _cats():
          "image_url": "images/categories/gift.jpg",
          "hidden": False, "updated_at": "2026-09-10T00:00:00Z"},
     ]
+
+
+def test_category_settings_read_distinguishes_absent_empty_and_failure(monkeypatch):
+    fake = _FakeCategorySettings()
+    monkeypatch.setattr(supabase_store, "client", lambda: fake)
+    assert supabase_store.load_categories_state() == (True, False, [])
+
+    fake.values[supabase_store.CATEGORIES_KEY] = "[]"
+    assert supabase_store.load_categories_state() == (True, True, [])
+
+    fake.error = RuntimeError("temporary read failure")
+    assert supabase_store.load_categories_state() == (False, False, None)
+
+
+def test_admin_category_save_does_not_overwrite_when_snapshot_read_fails(monkeypatch):
+    import api
+
+    monkeypatch.setattr(api.Config, "ENV", "production")
+    monkeypatch.setattr(supabase_store, "enabled", lambda: True)
+    monkeypatch.setattr(supabase_store, "load_categories_table", lambda: _cats())
+    monkeypatch.setattr(supabase_store, "load_categories_state",
+                        lambda: (False, False, None))
+    table_writes = []
+    detail_writes = []
+    monkeypatch.setattr(supabase_store, "save_categories_table",
+                        lambda rows: table_writes.append(rows) or True)
+    monkeypatch.setattr(supabase_store, "save_categories",
+                        lambda rows: detail_writes.append(rows) or True)
+
+    with pytest.raises(RuntimeError, match="category details could not be read"):
+        api._save_categories(_cats()[:1], actor="test")
+    assert table_writes == []
+    assert detail_writes == []
 
 
 def test_save_drops_columns_the_narrow_table_lacks(monkeypatch, _blank_cat_shape):
@@ -226,6 +291,19 @@ def test_save_prunes_categories_removed_locally(monkeypatch, _blank_cat_shape):
     assert set(store) == {"beauty", "gift-set"}
     assert supabase_store.save_categories_table(_cats()[:1]) is True
     assert set(store) == {"beauty"}, "the prune must remove gift-set"
+
+
+def test_saving_empty_category_list_removes_the_last_category(
+        monkeypatch, _blank_cat_shape):
+    store = {}
+    table = _LegacyCatTable(store)
+    monkeypatch.setattr(supabase_store, "client",
+                        lambda: _FakeClient(store, table))
+
+    assert supabase_store.save_categories_table(_cats()[:1]) is True
+    assert set(store) == {"beauty"}
+    assert supabase_store.save_categories_table([]) is True
+    assert store == {}
 
 
 def test_unsatisfiable_table_fails_loudly_and_stores_nothing(

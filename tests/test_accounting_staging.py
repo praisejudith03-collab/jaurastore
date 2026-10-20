@@ -122,7 +122,7 @@ def test_push_routes_by_currency_clears_the_queue_and_keeps_history(client, monk
     # The staged queue holds every confirmed, un-pushed order.
     staged = client.get("/api/admin/accounting").get_json()
     assert {row["id"] for row in staged["entries"]} == set(ORDER_IDS)
-    assert staged["settings"]["referenceSpreadsheetId"] == ""
+    assert staged["settings"]["referenceSpreadsheetId"] == google_sheets.REFERENCE_SPREADSHEET_ID
 
     pushed = client.post("/api/admin/accounting/push", headers={"X-CSRF-Token": csrf},
                          json={"orderIds": list(ORDER_IDS),
@@ -132,15 +132,14 @@ def test_push_routes_by_currency_clears_the_queue_and_keeps_history(client, monk
     body = pushed.get_json()
 
     # Mixed-currency pushes are routed automatically in one request.
-    # The endpoint passes only an optional preference; the pusher performs
-    # strict native Drive resolution instead of selecting a default ID.
-    assert fake.calls and fake.calls[0]["referenceId"] == ""
+    # The endpoint passes the fixed owner-selected workbook ID to the pusher.
+    assert fake.calls and fake.calls[0]["referenceId"] == google_sheets.REFERENCE_SPREADSHEET_ID
     assert fake.calls[0]["orderIds"] == sorted(ORDER_IDS)
 
     by_currency = {batch["currency"]: batch for batch in body["batches"]}
     assert set(by_currency) == {"NGN", "CFA"}
-    assert by_currency["NGN"]["sheet"]["tab"] == "NGN"
-    assert by_currency["CFA"]["sheet"]["tab"] == "FCFA"
+    assert by_currency["NGN"]["sheet"]["tab"] == "NGN Ledger"
+    assert by_currency["CFA"]["sheet"]["tab"] == "CFA Ledger"
     assert by_currency["NGN"]["transferFee"] == 100
     assert by_currency["CFA"]["transferFee"] == 0
     assert by_currency["NGN"]["orderIds"] == [ORDER_IDS[0], ORDER_IDS[1]]
@@ -240,19 +239,24 @@ def test_manual_expense_logger_feeds_the_live_balance(client):
     assert removed.get_json()["balances"]["NGN"]["bankCharges"] == 0
 
 
-def test_starting_balance_setting_and_reference_sheet_override(client):
+def test_starting_balance_setting_and_fixed_reference_sheet(client):
     csrf = csrf_of(client)
     saved = client.put("/api/admin/accounting/settings",
                        headers={"X-CSRF-Token": csrf},
                        json={"startingBalanceNgn": 250_000,
                              "startingBalanceCfa": 40_000,
-                             "referenceSpreadsheetId": "abc123"})
+                             "referenceSpreadsheetId": google_sheets.REFERENCE_SPREADSHEET_ID})
     assert saved.status_code == 200, saved.data
     body = saved.get_json()
     assert body["settings"]["startingBalanceNgn"] == 250_000
-    assert body["settings"]["referenceSpreadsheetId"] == "abc123"
+    assert body["settings"]["referenceSpreadsheetId"] == google_sheets.REFERENCE_SPREADSHEET_ID
     assert body["balances"]["NGN"]["balance"] == 250_000
     assert body["balances"]["CFA"]["balance"] == 40_000
+
+    redirected = client.put("/api/admin/accounting/settings",
+                            headers={"X-CSRF-Token": csrf},
+                            json={"referenceSpreadsheetId": "abc123"})
+    assert redirected.status_code == 400
 
     bad = client.put("/api/admin/accounting/settings",
                      headers={"X-CSRF-Token": csrf},
@@ -262,6 +266,7 @@ def test_starting_balance_setting_and_reference_sheet_override(client):
     # The accounting page serves the saved settings back.
     page = client.get("/api/admin/accounting").get_json()
     assert page["settings"]["startingBalanceCfa"] == 40_000
+    assert page["settings"]["referenceSpreadsheetId"] == google_sheets.REFERENCE_SPREADSHEET_ID
 
 
 def test_sales_insights_read_pushed_batches_by_period(client, monkeypatch):
@@ -287,7 +292,7 @@ def test_sales_insights_read_pushed_batches_by_period(client, monkeypatch):
     assert summary["batchCount"] == 1
     assert data["batches"][0]["name"] == "Week 41 push"
     assert data["batches"][0]["netProfit"] == 9_850
-    assert data["batches"][0]["tab" if False else "sheet"]["tab"] == "NGN"
+    assert data["batches"][0]["sheet"]["tab"] == "NGN Ledger"
     # The live balance rides along for the header strip.
     assert data["balances"]["NGN"]["balance"] == 9_850
 
@@ -304,45 +309,40 @@ def test_sheet_reference_tabs_are_created_when_missing(monkeypatch):
     def fake_request(method, url, body=None):
         if method == "GET":
             calls["meta"] += 1
-            return {"sheets": [{"properties": {"title": " ngn "}},
+            return {"sheets": [{"properties": {"title": " NGN LEDGER "}},
                                {"properties": {"title": "Dashboard"}}]}
         if ":batchUpdate" in url:
             calls["batch"] += 1
-            assert body["requests"][0]["addSheet"]["properties"]["title"] == "FCFA"
+            assert body["requests"][0]["addSheet"]["properties"]["title"] == "CFA Ledger"
             return {"spreadsheetId": "sb"}
         calls["values"] += 1
-        assert "FCFA" in url or "fcfa" in url
+        assert "CFA%20Ledger" in url or "CFA Ledger" in url
         return {}
 
     monkeypatch.setattr(google_sheets, "_google_request", fake_request)
-    assert google_sheets.ensure_reference_tab("sb", "NGN") == "ngn"
-    assert google_sheets.ensure_reference_tab("sb", "CFA") == "FCFA"
+    assert google_sheets.ensure_reference_tab("sb", "NGN") == "NGN LEDGER"
+    assert google_sheets.ensure_reference_tab("sb", "CFA") == "CFA Ledger"
     assert calls == {"meta": 2, "batch": 1, "values": 1}
 
 
 def test_push_orders_upsert_by_order_id_never_duplicates(monkeypatch):
-    """The reference-tab writer updates an existing row instead of appending."""
+    """The fixed reference-tab writer updates rows and returns tab-aware links."""
     seen = {}
 
     def fake_request(method, url, body=None):
         seen.setdefault("calls", []).append((method, url, body))
-        if method == "GET" and "/drive/v3/files?" in url:
-            return {"files": [
-                {"id": "xlsx-backup", "name": google_sheets.REFERENCE_SPREADSHEET_TITLE,
-                 "mimeType": google_sheets._XLSX_MIME_TYPE,
-                 "modifiedTime": "2027-01-01T00:00:00Z"},
-                {"id": "native-old", "name": google_sheets.REFERENCE_SPREADSHEET_TITLE,
-                 "mimeType": google_sheets.GOOGLE_SHEETS_MIME_TYPE,
-                 "modifiedTime": "2025-01-01T00:00:00Z"},
-                {"id": "native-active", "name": google_sheets.REFERENCE_SPREADSHEET_TITLE,
-                 "mimeType": google_sheets.GOOGLE_SHEETS_MIME_TYPE,
-                 "modifiedTime": "2026-10-01T00:00:00Z"},
-            ]}
+        if method == "GET" and "/drive/v3/files/" in url:
+            return {"id": google_sheets.REFERENCE_SPREADSHEET_ID,
+                    "name": "Owner regional workbook",
+                    "mimeType": google_sheets.GOOGLE_SHEETS_MIME_TYPE,
+                    "webViewLink": "https://docs.google.com/spreadsheets/d/fixed/edit"}
         if method == "GET" and "fields=properties(title" in url:
-            return {"properties": {"title": google_sheets.REFERENCE_SPREADSHEET_TITLE},
-                    "sheets": [{"properties": {"title": "NGN"}},
-                               {"properties": {"title": "FCFA"}},
-                               {"properties": {"title": "Order Lines"}}]}
+            return {"properties": {"title": "Owner regional workbook"},
+                    "sheets": [
+                        {"properties": {"title": "NGN Ledger", "sheetId": 101}},
+                        {"properties": {"title": "CFA Ledger", "sheetId": 202}},
+                        {"properties": {"title": "Order Lines", "sheetId": 303}},
+                    ]}
         if method == "GET" and "/values:batchGet" in url:
             return {"valueRanges": [{"values": [
                 google_sheets._headers("NGN"),
@@ -362,8 +362,10 @@ def test_push_orders_upsert_by_order_id_never_duplicates(monkeypatch):
                  "accounting": accounting_mod.new_snapshot(
                      4_000, "NGN", 0.44, "2026-10-05T10:00:00Z")})}
     report = google_sheets.push_orders([order], batch_name="Batch 9",
-                                       reference_id="xlsx-backup")
-    assert report["NGN"]["spreadsheetId"] == "native-active"
+                                       reference_id="legacy-wrong-workbook")
+    assert report["NGN"]["spreadsheetId"] == google_sheets.REFERENCE_SPREADSHEET_ID
+    assert report["NGN"]["tab"] == "NGN Ledger"
+    assert report["NGN"]["url"].endswith("#gid=101")
     assert report["NGN"]["updated"] == 1
     assert report["NGN"]["appended"] == 0
     assert report["NGN"]["lineCount"] == 1

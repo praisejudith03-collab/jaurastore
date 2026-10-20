@@ -47,6 +47,11 @@ def test_public_catalog_flags_supplier_tracked_products_without_exposing_urls():
     ordinary = _public_product({"id": "jau-local-item", "stock": 1})
     assert ordinary["supplierTracked"] is False
 
+    locked = _public_product({"id": "jau-manual-lock", "stock": 0,
+                              "manualStockLock": True})
+    assert "manualStockLock" not in locked
+    assert locked["stock_status"] == "out"
+
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     app_js = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
     translations = open(os.path.join(root, "js", "i18n.js"), encoding="utf-8").read()
@@ -149,11 +154,34 @@ def test_supplier_out_of_stock_zeroes_the_matched_variant(monkeypatch, saved):
     assert saved["stock"] == 4
 
 
+def test_manual_admin_out_of_stock_lock_blocks_supplier_fetch_and_restock(
+        monkeypatch, saved):
+    calls = []
+    product = _product(stock=0, stock_quantity=0,
+                       optionStock={"Serum": 0, "Cream": 0})
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "is_stock_locked",
+                        lambda pid: pid == product["id"])
+    monkeypatch.setattr(supplier_watchdog, "fetch_url", lambda url: calls.append(url) or
+                        _variants_html(("Serum", True, 25), ("Cream", True, 40)))
+
+    changed, warnings = supplier_watchdog.sync_product(product)
+
+    assert changed is False
+    assert [warning["code"] for warning in warnings] == ["manual_stock_lock"]
+    assert calls == []
+    assert not saved
+
+
 def test_high_supplier_count_gets_the_20_40_percent_safety_buffer(monkeypatch, saved):
     """Owner directive 2026-10-19 supersedes the old 1:1 rule.
 
     25 supplier units at the default 30% buffer keeps 17 (25 - ceil(7.5)); a
     small 4-unit shelf is below the high-stock threshold and stays exact.
+
+    This test replaces test_supplier_count_is_sold_one_to_one_without_a_buffer.
+    The owner asked for a 20-40% safety buffer on high supplier stock, so the
+    old 1:1 assertion would pin the rule they explicitly superseded. Deleting
+    it outright would hide that history, hence this note.
     """
     ok, warns = _sync(monkeypatch, _product(),
                       _variants_html(("Serum", True, 25), ("Cream", True, 4)))

@@ -25,11 +25,20 @@ def test_explicit_currency_column_routes_correctly():
         ["2024-03-14", "NGN", "45,000"],
         ["2024-03-15", "CFA", "62,000 FCFA"],
         ["2024-03-16", "FCFA", "8,000"],
+        ["2024-03-17", "XOF", "12,000"],
     ])
     assert len(result["ngn"]) == 1
-    assert len(result["cfa"]) == 2
+    assert len(result["cfa"]) == 3
     assert [i["currency"] for _, i in result["ngn"]] == ["NGN"]
     assert [i["currencyHow"] for _, i in result["ngn"]] == ["explicit"]
+
+
+def test_explicit_unsupported_currency_is_skipped_not_defaulted_to_ngn():
+    headers = ["Date", "Currency", "Selling Price"]
+    result = _import(headers, [["2024-03-17", "USD", "12,000"]], default="NGN")
+    assert result["ngn"] == []
+    assert result["cfa"] == []
+    assert result["skipped"] == [(2, "unsupported currency: USD")]
 
 
 def test_cfa_markers_in_row_body_route_to_cfa():

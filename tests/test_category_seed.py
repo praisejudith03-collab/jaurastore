@@ -258,6 +258,15 @@ def test_unreadable_table_retries_next_boot(shop, monkeypatch):
     assert category_seed.MARKER_KEY not in store["growth"]
 
 
+def test_unreadable_category_details_never_seed_over_hidden_state(shop, monkeypatch):
+    store, table = shop
+    monkeypatch.setattr(supabase_store, "load_categories_state",
+                        lambda: (False, False, None))
+    assert category_seed.seed_missing_default_categories() == ("unavailable", [])
+    assert category_seed.MARKER_KEY not in store["growth"]
+    assert table.attempts == []
+
+
 def test_not_configured_is_a_no_op(shop, monkeypatch):
     monkeypatch.setattr(supabase_store, "enabled", lambda: False)
     assert category_seed.seed_missing_default_categories() == ("not-configured", [])
