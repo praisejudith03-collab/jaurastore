@@ -287,6 +287,8 @@ window.I18N_PHRASES = {
   "To process and deliver your order, confirm payment, answer questions and keep you updated on that order. We do not sell your data.":
     "Pour traiter et livrer votre commande, confirmer le paiement, répondre à vos questions et vous tenir informé de cette commande. Nous ne vendons pas vos données.",
   "Who we share it with": "Avec qui nous les partageons",
+  "Only the partners needed to fulfil your order (delivery partners) and to support order communications through the channels shown on the site. Each is required to protect your data.":
+    "Uniquement les partenaires nécessaires pour traiter votre commande (partenaires de livraison) et pour assurer les échanges liés à la commande par les canaux indiqués sur le site. Chacun est tenu de protéger vos données.",
   "How long we keep it": "Combien de temps nous les gardons",
   "Order records are kept for accounting and warranty purposes. Marketing messages are only sent if you asked for them, and you can opt out at any time.":
     "Les commandes sont conservées à des fins comptables et de garantie. Les messages marketing ne sont envoyés que si vous les avez demandés, et vous pouvez vous désinscrire à tout moment.",
@@ -349,10 +351,14 @@ window.I18N_PHRASES = {
   "Fares depend on your delivery city and the weight of the parcel. The exact fare is confirmed with you after your order is placed, before dispatch.":
     "Les frais dépendent de votre ville de livraison et du poids du colis. Le tarif exact est confirmé avec vous après la commande, avant l'expédition.",
   "Tracking": "Suivi",
+  "Our customer care team is ready to help with orders, delivery and payments.":
+    "Notre service client est à votre écoute pour les commandes, la livraison et les paiements.",
   "Once your order is confirmed you will receive an order ID. Use it on our":
     "Une fois votre commande confirmée, vous recevrez un numéro de commande. Utilisez-le sur notre page",
   "page, or message us on WhatsApp for a status update.":
     ", ou écrivez-nous sur WhatsApp pour connaître le statut.",
+  "Once your order is confirmed you will receive an order ID. Message us on WhatsApp with that order ID for a status update.":
+    "Une fois votre commande confirmée, vous recevrez un numéro de commande. Écrivez-nous sur WhatsApp avec ce numéro pour connaître le statut.",
   "Delivery issues": "Problèmes de livraison",
   "If a parcel is delayed beyond the stated window, contact":
     "Si un colis dépasse le délai annoncé, contactez",

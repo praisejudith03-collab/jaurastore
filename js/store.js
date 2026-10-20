@@ -257,6 +257,26 @@ const JA = (() => {
       ? _siteConfig.customer_care : {};
     return { ...CUSTOMER_CARE_DEFAULTS, ...cached, ...live };
   }
+
+  /* The shipped care defaults are written in English because the admin panel
+   * shows them to the owner that way. A French shopper must not read them, so
+   * the three default SENTENCES have a French twin here. Only the shipped
+   * default is swapped: the moment the owner types his own hours or support
+   * line, that text is displayed exactly as he wrote it (and the phrase sweep
+   * may still translate it if the wording is one it knows). */
+  const CARE_DEFAULTS_FR = {
+    support_hours: "Lundi – samedi, 9h – 18h",
+    support_details: "Notre service client est à votre écoute pour les commandes, la livraison et les paiements.",
+    business_contact_info: "Lagos, Nigéria\nCotonou, République du Bénin",
+  };
+  function careText(key, value) {
+    const text = String(value == null ? "" : value);
+    const isDefault = !text.trim() || text.trim() === String(CUSTOMER_CARE_DEFAULTS[key] || "").trim();
+    const fr = String((typeof currentLang === "function" ? currentLang() : "en") || "en")
+      .toLowerCase().indexOf("fr") === 0;
+    if (fr && isDefault && CARE_DEFAULTS_FR[key]) return CARE_DEFAULTS_FR[key];
+    return text || String(CUSTOMER_CARE_DEFAULTS[key] || "");
+  }
   function carePhones() {
     const c = care();
     return [c.phone_primary, c.phone_secondary].map((v) => String(v || "").trim()).filter(Boolean);
@@ -269,13 +289,14 @@ const JA = (() => {
     return carePhones().map((phone) => `<a href="${escape(carePhoneHref(phone))}">${escape(phone)}</a>`).join("<br>");
   }
   function careBusinessHTML() {
-    return escape(String(care().business_contact_info || "")).replace(/\n/g, "<br>");
+    return escape(careText("business_contact_info", care().business_contact_info)).replace(/\n/g, "<br>");
   }
   function careSummary() {
     const c = care();
     const phone = carePhones().join(" / ");
     return [c.whatsapp ? "WhatsApp " + c.whatsapp : "WhatsApp", phone && "Phone " + phone,
-      c.email, String(c.business_contact_info || "").replace(/\n+/g, ", ")].filter(Boolean).join(" · ");
+      c.email, careText("business_contact_info", c.business_contact_info).replace(/\n+/g, ", ")]
+      .filter(Boolean).join(" · ");
   }
   function careWhatsAppHref() {
     const raw = String(care().whatsapp || "").trim();
@@ -293,8 +314,8 @@ const JA = (() => {
       el.setAttribute("href", "mailto:" + String(c.email || "").trim());
     });
     document.querySelectorAll("[data-care-business]").forEach((el) => { el.innerHTML = careBusinessHTML(); });
-    document.querySelectorAll("[data-care-hours]").forEach((el) => { el.textContent = c.support_hours || ""; });
-    document.querySelectorAll("[data-care-support]").forEach((el) => { el.textContent = c.support_details || ""; });
+    document.querySelectorAll("[data-care-hours]").forEach((el) => { el.textContent = careText("support_hours", c.support_hours); });
+    document.querySelectorAll("[data-care-support]").forEach((el) => { el.textContent = careText("support_details", c.support_details); });
     document.querySelectorAll("[data-care-summary]").forEach((el) => { el.textContent = careSummary(); });
     document.querySelectorAll("[data-care-whatsapp]").forEach((el) => { el.setAttribute("href", careWhatsAppHref()); });
   }
@@ -2960,8 +2981,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=215";
-        const FLYER = "images/brand/logo-flyer.jpg?v=215";
+        const LOGO = "images/brand/logo.jpg?v=216";
+        const FLYER = "images/brand/logo-flyer.jpg?v=216";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -3176,7 +3197,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=215" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=216" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3475,7 +3496,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=215" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=216" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3484,7 +3505,7 @@ const JA = (() => {
           <p data-care-phones>${carePhonesHTML()}</p>
           <p><a data-care-email href="mailto:${escape(care().email)}">${escape(care().email)}</a></p>
           <p data-care-business>${careBusinessHTML()}</p>
-          <p class="foot-support" data-care-support>${escape(care().support_details)}</p>
+          <p class="foot-support" data-care-support>${escape(careText("support_details", care().support_details))}</p>
         </div>
         <div>
           <h4>${tx("footer.visit")}</h4>
@@ -3611,7 +3632,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=215", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=216", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3645,7 +3666,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=215";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=216";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3704,7 +3725,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=215");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=216");
     document.title = title;
     [
       ["name", "description", description],
@@ -3907,6 +3928,12 @@ const JA = (() => {
     const bot = document.getElementById("site-footer");
     if (top) top.innerHTML = headerHTML();
     if (bot) bot.innerHTML = footerHTML();
+    // Paint the customer-care lines from what this device already knows
+    // (cache, else the shipped defaults) BEFORE GET /api/site answers. The
+    // contact page carries the same three lines as static markup, and without
+    // this an English default sat there for the whole round trip on a cold
+    // visit - the one place a French shopper still read English.
+    try { applyCustomerCare(); } catch (e) { /* chrome only */ }
     // Keep the in-flight promise: showWelcome() must know whether the
     // referral programme is ON before it paints, or a disabled programme
     // still advertises a code for the split second before /api/site lands.
