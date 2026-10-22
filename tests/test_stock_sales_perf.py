@@ -128,8 +128,15 @@ def test_sales_confirmed_only_and_csv(client):
     assert r.status_code == 200, r.get_json()
 
     report = client.get("/api/admin/sales?days=all").get_json()
-    assert report["orders"] == 1
-    assert report["pendingCount"] == 1
+    try:
+        assert report["orders"] == 1
+        assert report["pendingCount"] == 1
+    finally:
+        # This module confirms an order; leaving it in the shared /tmp database
+        # inflated the next module's sales/accounting totals (test_accounting
+        # failed with 18600 == 15000 when a walk-in order survived, and with
+        # 20000 more whenever this file ran before it).
+        execute("DELETE FROM orders WHERE id IN ('JA-SPEND1','JA-SCONF1','JA-OVER2')")
     by_cur = {row["currency"]: row["value"]
               for row in report["revenueByCurrency"]}
     assert by_cur.get("NGN") == 20000
@@ -137,8 +144,8 @@ def test_sales_confirmed_only_and_csv(client):
 
     from analytics import sales_csv
 
-    first_line = sales_csv(days="all").splitlines()[0]
-    assert first_line.startswith("Order,Date (UTC),Customer")
+    header = sales_csv(days="all").splitlines()[0]
+    assert header.startswith("Order,Date (UTC),Customer")
 
     r = client.get("/api/admin/sales.csv?days=all")
     assert r.status_code == 200

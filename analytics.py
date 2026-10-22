@@ -770,11 +770,17 @@ def sales_report(days=30, date_from=None, date_to=None, search=None):
             bucket["supplierCost"] += int(figures.get("supplierCostInCurrency") or 0)
             bucket["delivery"] += int(figures.get("deliveryExpense") or 0)
             bucket["discount"] += int(figures.get("discount") or 0)
-            bucket["netProfit"] += int(figures.get("netProfit") or 0)
-            if (not snapshot
-                    or (not figures.get("profitOverrideActive")
-                        and not figures.get("supplierCostInCurrency"))):
+            cost_unknown = (not snapshot
+                            or (not figures.get("profitOverrideActive")
+                                and not figures.get("supplierCostInCurrency")))
+            if cost_unknown:
+                # An unknown cost price is NOT a zero cost price. Counting the
+                # whole sale as profit would print a 100% margin the owner
+                # never made, so the order still counts as revenue, is flagged
+                # by name, and only its profit is left out.
                 bucket["missingCost"] += 1
+            else:
+                bucket["netProfit"] += int(figures.get("netProfit") or 0)
         except Exception:
             pass
         items = payload.get("items") or []
@@ -809,6 +815,7 @@ def sales_report(days=30, date_from=None, date_to=None, search=None):
     # One comparable figure for the headline card: CFA profit converted to
     # Naira at the same admin FX rate the cost desk uses. The per-currency
     # cards stay separate so a CFA total is never printed with a ₦ sign.
+    # Only costed orders contribute, so every figure below is a real margin.
     net_ngn = sum(b["netProfit"] for b in profit_by_currency if b["currency"] == "NGN")
     net_cfa = sum(b["netProfit"] for b in profit_by_currency if b["currency"] == "CFA")
     try:
