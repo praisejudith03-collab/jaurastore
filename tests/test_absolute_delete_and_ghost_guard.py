@@ -69,39 +69,33 @@ def test_a_live_product_receives_only_a_stock_patch(monkeypatch):
     latest = _row(name="Admin's current name", priceNgn=9000, image="latest.jpg")
     monkeypatch.setattr(catalog_mod, "deleted_product_ids", lambda: set())
 
-    def patch(pid, stock, option_changes=None, actor=None, allow_increase=False, option_snapshot_keys=None):
-        calls.append((pid, stock, option_changes, actor, allow_increase))
-        latest["stock"] = latest["stock_quantity"] = stock
-        return latest, "updated", True
-
-    monkeypatch.setattr(catalog_mod, "apply_supplier_stock", patch)
+    calls = []
+    def status_only(pid, status, actor="supplier-watchdog"):
+        calls.append((pid, status, actor)); return True
+    monkeypatch.setattr(catalog_mod, "apply_supplier_status", status_only)
     stale = _row(name="Stale name", priceNgn=1000, image="old.jpg")
     warnings = []
     ok, warnings = supplier_watchdog._save_synced(
-        stale, _row(stock=3, stock_quantity=3, name="Stale name",
-                    priceNgn=1000, image="old.jpg"),
+        stale, _row(stock=3, stock_quantity=3, name="Stale name", priceNgn=1000, image="old.jpg"),
         "supplier-watchdog", warnings)
-
     assert ok is True and warnings == []
-    assert calls == [("jau-ghost-1", 3, None, "supplier-watchdog", True)]
+    assert calls == [("jau-ghost-1", "low_stock", "supplier-watchdog")]
     assert latest["name"] == "Admin's current name"
     assert latest["priceNgn"] == 9000 and latest["image"] == "latest.jpg"
-    assert latest["stock"] == 3
+    assert latest["stock"] == _row()["stock"]
 
 
 def test_the_never_recreate_result_is_honoured_before_the_written_check(monkeypatch):
-    """The atomic UPDATE-only RPC reports a delete that won the race."""
+    """A status-only update failure never falls back to upsert/recreation."""
     monkeypatch.setattr(catalog_mod, "deleted_product_ids", lambda: set())
-    monkeypatch.setattr(catalog_mod, "apply_supplier_stock",
-                        lambda *args, **kwargs: (None, "permanently-removed", True))
+    monkeypatch.setattr(catalog_mod, "apply_supplier_status", lambda *args, **kwargs: False)
 
     warnings = []
     ok, warnings = supplier_watchdog._save_synced(
         _row(), _row(stock=9), "supplier-watchdog", warnings)
 
     assert ok is False
-    assert warnings[0]["code"] == "product_deleted_during_sync"
-    assert "never-re-create" in warnings[0]["reason"]
+    assert warnings[0]["code"] == "supplier_save_failed"
 
 
 def test_a_deleted_id_is_skipped_by_both_the_tick_and_the_nightly_sweep(monkeypatch):

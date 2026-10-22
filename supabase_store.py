@@ -597,7 +597,7 @@ def _canonicalize_product(row, _c=None):
 # bulk tiers, media, availability or publication flags.
 _CRITICAL_PRODUCT_COLUMNS = frozenset({
     "id", "legacyId", "sku", "slug", "name", "nameFr", "descriptionFr",
-    "category", "priceCfa", "compareCfa", "priceNgn", "compareNgn",
+    "category", "category_id", "supplier_status", "priceCfa", "compareCfa", "priceNgn", "compareNgn",
     "image", "image_url", "images", "description", "stock",
     "stock_quantity", "badge", "featured", "online", "colors", "options",
     "optionStock", "optionPrices", "optionCompareAt", "optionSupplierSku",
@@ -682,7 +682,7 @@ def upsert_products(products):
 # touched columns, preserving every concurrent value without a catalogue read.
 _PRODUCT_PATCH_COLUMNS = {
     "name": {"name"}, "nameFr": {"nameFr"}, "description": {"description"},
-    "descriptionFr": {"descriptionFr"}, "sku": {"sku"}, "category": {"category"},
+    "descriptionFr": {"descriptionFr"}, "sku": {"sku"}, "category": {"category"}, "category_id": {"category_id"},
     "online": {"online"}, "featured": {"featured"}, "badge": {"badge"},
     "dimensions": {"dimensions"}, "enableCustomNote": {"enableCustomNote"},
     "customNotePrompt": {"customNotePrompt"}, "priceNgn": {"priceNgn", "priceCfa"},
@@ -1046,6 +1046,26 @@ def reserve_product_stock(product_id, qty, option=None):
         return True
     except Exception as exc:
         print(f"[supabase] reserve_product_stock failed: {exc}")
+        return False
+
+
+def set_supplier_status(product_id, status):
+    """Update only the isolated supplier_status flag for an existing product."""
+    if status not in ("out_of_stock", "low_stock", "ok"):
+        return False
+    c = client()
+    if c is None:
+        return False
+    try:
+        pid = str(product_id or "").strip()
+        if not pid:
+            return False
+        result = c.rpc("set_supplier_status", {"p_id": pid, "p_status": status}).execute()
+        data = _res_data(result)
+        invalidate_read_cache("products_rows")
+        return bool(data and (data[0] if isinstance(data, list) else data))
+    except Exception as exc:
+        print(f"[supabase] set supplier status failed: {exc}")
         return False
 
 

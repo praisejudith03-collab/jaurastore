@@ -45,24 +45,12 @@ def test_stock_update_is_variant_isolated(monkeypatch):
       "variants": [{"title":"Dark Brown", "available": false}, {"title":"Black", "available": true}]
     }</script>''')
     saved = {}
-
-    def fake_apply(pid, stock, option_changes=None, actor=None, allow_increase=False, option_snapshot_keys=None):
-        options = {"Chocolate": 5, "Black": 3}
-        for key, value in (option_changes or {}).items():
-            incoming = max(0, int(value or 0))
-            options[key] = incoming if allow_increase else min(options.get(key, 0), incoming)
-        row = {"id": pid, "optionStock": options,
-               "stock": sum(options.values()), "stock_quantity": sum(options.values()),
-               "supplierSku": product["supplierSku"]}
-        saved.update(row)
-        return row, "updated", True
-
-    monkeypatch.setattr(supplier_watchdog.catalog_mod, "apply_supplier_stock", fake_apply)
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "apply_supplier_status",
+                        lambda pid, status, actor="supplier-watchdog": saved.update(status=status) or True)
+    original = dict(product)
     ok, warnings = supplier_watchdog.sync_product(product)
-    assert ok is True
-    assert warnings == []
-    # Black is a bare "available: true" (no count): it is opened to the
-    # multi-unit fallback, never clamped to one unit.
-    assert saved["optionStock"] == {"Chocolate": 0,
-                                    "Black": supplier_watchdog.SUPPLIER_IN_STOCK_UNITS}
-    assert saved["stock"] == supplier_watchdog.SUPPLIER_IN_STOCK_UNITS
+    assert ok is True and warnings == []
+    assert saved["status"] in {"low_stock", "out_of_stock", "ok"}
+    assert product == original
+    assert product["optionStock"] == {"Chocolate": 5, "Black": 3}
+    assert product["stock"] == 8

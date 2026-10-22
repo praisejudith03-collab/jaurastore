@@ -79,32 +79,16 @@ def _variants_html(*rows):
 
 @pytest.fixture()
 def saved(monkeypatch):
+    """Status-only fake; captures the input row to prove no shop field changes."""
     class Box(dict):
         pass
-
     box = Box()
-
-    def fake_apply(pid, stock, option_changes=None, actor=None, allow_increase=False,
-                   option_snapshot_keys=None):
-        row = dict(getattr(box, "_source", {}))
-        if option_changes is None:
-            previous = max(0, int(row.get("stock_quantity", row.get("stock", 0)) or 0))
-            qty = int(stock) if allow_increase else min(previous, int(stock))
-        else:
-            options = dict(row.get("optionStock") or {})
-            for key, value in option_changes.items():
-                incoming = max(0, int(value or 0))
-                previous = max(0, int(options.get(key, 0) or 0))
-                options[key] = incoming if allow_increase else min(previous, incoming)
-            row["optionStock"] = options
-            qty = sum(max(0, int(value or 0)) for value in options.values())
-        row["stock"] = row["stock_quantity"] = qty
-        box.clear()
-        box.update(row)
-        return row, "updated", True
-
-    fake_apply.test_box = box
-    monkeypatch.setattr(supplier_watchdog.catalog_mod, "apply_supplier_stock", fake_apply)
+    def fake_status(pid, status, actor="supplier-watchdog"):
+        original = dict(getattr(box, "_source", {}))
+        box.clear(); box.update({"supplier_status": status, "original": original})
+        return True
+    fake_status.test_box = box
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "apply_supplier_status", fake_status)
     return box
 
 
@@ -126,229 +110,128 @@ def _sync(monkeypatch, product, html):
     # The test double applies the stock-only patch to the latest row, and is
     # given the candidate snapshot only as its initial state.
     try:
-        supplier_watchdog.catalog_mod.apply_supplier_stock.test_box._source = dict(product)
+        supplier_watchdog.catalog_mod.apply_supplier_status.test_box._source = dict(product)
     except Exception:
         pass
     monkeypatch.setattr(supplier_watchdog, "fetch_url", lambda url: html)
     return supplier_watchdog.sync_product(product)
 
 
-# ------------------------------------------------------------- variant rules
+# Supplier status never changes live inventory: these tests intentionally
+# retain the original storefront row as the fixture's invariant baseline.
+def test_supplier_observation_updates_only_diagnostic_status(monkeypatch, saved):
+    product = _product()
+    saved._source = dict(product)
+    ok, warnings = _sync(monkeypatch, product,
+        _variants_html(("Serum", True, 3), ("Cream", True, 4)))
+    assert ok is True and warnings == []
+    assert saved["supplier_status"] == "low_stock"
+    assert saved["original"] == product
+    assert {k: saved["original"][k] for k in ("stock", "optionStock", "priceNgn", "name", "supplierSku")} == {
+        "stock": 14, "optionStock": {"Serum": 10, "Cream": 4}, "priceNgn": 1000,
+        "name": "Shea Glow Set", "supplierSku": SUPPLIER}
 
-def test_supplier_lower_reduces_to_supplier_count(monkeypatch, saved):
-    ok, warns = _sync(monkeypatch, _product(),
-                      _variants_html(("Serum", True, 3), ("Cream", True, 4)))
+
+def test_supplier_zero_observation_does_not_zero_shop_stock(monkeypatch, saved):
+    product = _product()
+    saved._source = dict(product)
+    ok, _ = _sync(monkeypatch, product,
+        _variants_html(("Serum", False, None), ("Cream", True, 4)))
     assert ok is True
-    # The supplier's own count is the shelf: 3 sells as 3, 4 as 4.
-    assert saved["optionStock"]["Serum"] == 3
-    assert saved["optionStock"]["Cream"] == 4
-    assert saved["stock"] == 7
+    assert saved["supplier_status"] in ("low_stock", "out_of_stock")
+    assert saved["original"]["stock"] == 14
+    assert saved["original"]["optionStock"] == {"Serum": 10, "Cream": 4}
 
 
-def test_supplier_out_of_stock_zeroes_the_matched_variant(monkeypatch, saved):
-    ok, warns = _sync(monkeypatch, _product(),
-                      _variants_html(("Serum", False, None), ("Cream", True, 4)))
-    assert ok is True
-    assert saved["optionStock"]["Serum"] == 0
-    assert saved["optionStock"]["Cream"] == 4
-    assert saved["stock"] == 4
-
-
-def test_manual_admin_out_of_stock_lock_blocks_supplier_fetch_and_restock(
-        monkeypatch, saved):
-    calls = []
-    product = _product(stock=0, stock_quantity=0,
-                       optionStock={"Serum": 0, "Cream": 0})
-    monkeypatch.setattr(supplier_watchdog.catalog_mod, "is_stock_locked",
-                        lambda pid: pid == product["id"])
-    monkeypatch.setattr(supplier_watchdog, "fetch_url", lambda url: calls.append(url) or
-                        _variants_html(("Serum", True, 25), ("Cream", True, 40)))
-
-    changed, warnings = supplier_watchdog.sync_product(product)
-
-    assert changed is False
-    assert [warning["code"] for warning in warnings] == ["manual_stock_lock"]
-    assert calls == []
+def test_manual_admin_out_of_stock_lock_blocks_supplier_fetch_and_restock(monkeypatch, saved):
+    calls=[]; product=_product(stock=0, stock_quantity=0, optionStock={"Serum":0,"Cream":0})
+    monkeypatch.setattr(supplier_watchdog.catalog_mod,"is_stock_locked",lambda pid: pid==product["id"])
+    monkeypatch.setattr(supplier_watchdog,"fetch_url",lambda url: calls.append(url) or _variants_html(("Serum",True,25),("Cream",True,40)))
+    changed,warnings=supplier_watchdog.sync_product(product)
+    assert changed is False and [w["code"] for w in warnings]==["manual_stock_lock"] and calls==[]
     assert not saved
 
 
-def test_high_supplier_count_gets_the_20_40_percent_safety_buffer(monkeypatch, saved):
-    """Owner directive 2026-10-19 supersedes the old 1:1 rule.
-
-    25 supplier units at the default 30% buffer keeps 17 (25 - ceil(7.5)); a
-    small 4-unit shelf is below the high-stock threshold and stays exact.
-
-    This test replaces test_supplier_count_is_sold_one_to_one_without_a_buffer.
-    The owner asked for a 20-40% safety buffer on high supplier stock, so the
-    old 1:1 assertion would pin the rule they explicitly superseded. Deleting
-    it outright would hide that history, hence this note.
-    """
-    ok, warns = _sync(monkeypatch, _product(),
-                      _variants_html(("Serum", True, 25), ("Cream", True, 4)))
-    assert ok is True
-    assert saved["optionStock"]["Serum"] == 17
-    assert saved["optionStock"]["Cream"] == 4
-    assert saved["stock"] == 21
+def test_high_supplier_count_is_status_only(monkeypatch,saved):
+    product=_product(); saved._source=dict(product)
+    ok,_=_sync(monkeypatch,product,_variants_html(("Serum",True,25),("Cream",True,40)))
+    assert ok is True and saved["supplier_status"]=="ok"
+    assert saved["original"]["stock"]==14
 
 
-def test_generic_in_stock_signal_opens_a_multi_unit_shelf(monkeypatch, saved):
-    """A bare "In stock" is not the number 1.
-
-    It opens the sold-out variant to the multi-unit fallback and never
-    shrinks a variant whose shelf is already higher.
-    """
-    p = _product(optionStock={"Serum": 0, "Cream": 25}, stock=25)
-    ok, _ = _sync(monkeypatch, p,
-                  _variants_html(("Serum", True, None), ("Cream", True, None)))
-    assert ok is True
-    assert saved["optionStock"]["Serum"] == supplier_watchdog.SUPPLIER_IN_STOCK_UNITS
-    assert saved["optionStock"]["Cream"] == 25, "a bigger shelf is never shrunk by a flag"
+def test_partial_supplier_variant_match_only_changes_status(monkeypatch,saved):
+    product=_product(); saved._source=dict(product)
+    ok,warnings=_sync(monkeypatch,product,_variants_html(("Serum",True,2)))
+    assert ok is True and saved["supplier_status"]=="low_stock"
+    assert any(w["code"]=="supplier_partial_match" for w in warnings)
+    assert saved["original"]["optionStock"]==product["optionStock"]
 
 
-
-def test_unmatched_variants_keep_their_stock_and_warn(monkeypatch, saved):
-    html = _variants_html(("Serum", True, 2))   # supplier page has no Cream row
-    ok, warns = _sync(monkeypatch, _product(), html)
-    assert ok is True
-    assert saved["optionStock"]["Serum"] == 2
-    assert saved["optionStock"]["Cream"] == 4, "unmatched variant must not move"
-    assert any(w["code"] == "supplier_partial_match" for w in warns)
+def test_uncertain_supplier_page_changes_nothing_and_warns(monkeypatch,saved):
+    changed,warns=_sync(monkeypatch,_product(),"<html><body>shop closed</body></html>")
+    assert changed is False and not saved
+    assert any(w["code"] in ("supplier_no_variants","supplier_no_matches") for w in warns)
 
 
-def test_uncertain_supplier_page_changes_nothing_and_warns(monkeypatch, saved):
-    changed, warns = _sync(monkeypatch, _product(), "<html><body>shop closed</body></html>")
-    assert changed is False
-    assert saved.get("optionStock") is None
-    assert any(w["code"] in ("supplier_no_variants", "supplier_no_matches") for w in warns)
-
-
-def test_fetch_failure_changes_nothing_and_warns(monkeypatch, saved):
-    def boom(url):
-        raise OSError("connection reset")
-    monkeypatch.setattr(supplier_watchdog, "fetch_url", boom)
-    changed, warns = supplier_watchdog.sync_product(_product())
-    assert changed is False
-    assert saved.get("optionStock") is None
-    assert any(w["code"] == "supplier_fetch_failed" for w in warns)
-
-
-# ------------------------------------------------------- option URL watchdog
+def test_fetch_failure_changes_nothing_and_warns(monkeypatch,saved):
+    monkeypatch.setattr(supplier_watchdog,"fetch_url",lambda url: (_ for _ in ()).throw(OSError("connection reset")))
+    changed,warns=supplier_watchdog.sync_product(_product())
+    assert changed is False and not saved
+    assert any(w["code"]=="supplier_fetch_failed" for w in warns)
 
 
 def _colour_product(**over):
-    p = {
-        "id": "jau-supplier-black-brown",
-        "name": "Everyday Tote",
-        "priceNgn": 3000,
-        "supplierSku": "https://supplier.example/tote-all",
-        "options": [{"title": "Colour", "values": ["Black", "Brown"]}],
-        "optionStock": {"Black": 0, "Brown": 0},
-        "stock": 0,
-        "optionSupplierSku": {
-            "Colour: Black": "https://supplier.example/tote-black",
-            "Colour: Brown": "https://supplier.example/tote-brown",
-        },
-    }
-    p.update(over)
-    return p
+    p={"id":"jau-supplier-black-brown","name":"Everyday Tote","priceNgn":3000,
+       "supplierSku":"https://supplier.example/tote-all",
+       "options":[{"title":"Colour","values":["Black","Brown"]}],
+       "optionStock":{"Black":0,"Brown":0},"stock":0,
+       "optionSupplierSku":{"Colour: Black":"https://supplier.example/tote-black",
+                             "Colour: Brown":"https://supplier.example/tote-brown"}}
+    p.update(over); return p
 
 
-def test_option_supplier_urls_win_and_watchdog_restocks_black_and_brown_separately(
-        monkeypatch, saved):
-    """The option URLs override a conflicting main page for each colour.
-
-    This exercises the actual watchdog tick (the same cycle used in service).
-    A 100-unit Black listing keeps 70 and a 40-unit Brown listing keeps 28 at
-    the default 30% safety buffer. The main product URL says Black is sold out
-    and Brown has 100; neither result may leak into the explicitly linked
-    option URLs.
-    """
-    p = _colour_product()
-    pages = {
-        "https://supplier.example/tote-all": _variants_html(
-            ("Black", False, None), ("Brown", True, 100)),
-        "https://supplier.example/tote-black": _variants_html(("Black", True, 100)),
-        "https://supplier.example/tote-brown": _variants_html(("Brown", True, 40)),
-    }
-    calls = []
-
-    def fetch(url):
-        calls.append(url)
-        return pages[url]
-
-    monkeypatch.setattr(supplier_watchdog, "fetch_url", fetch)
-    monkeypatch.setattr(supplier_watchdog.catalog_mod, "merged",
-                        lambda include_hidden=True: [p])
-    monkeypatch.setattr(supplier_watchdog.catalog_mod, "deleted_product_ids", lambda: set())
-    monkeypatch.setattr(supplier_watchdog, "_last_checked", {})
-    supplier_watchdog.catalog_mod.apply_supplier_stock.test_box._source = dict(p)
-
-    result = supplier_watchdog.tick(limit=1, min_interval_seconds=0)
-
-    assert result["checked"] == 1 and result["updated"] == 1
-    assert calls == ["https://supplier.example/tote-black",
-                     "https://supplier.example/tote-brown"]
-    assert saved["optionStock"] == {"Black": 70, "Brown": 28}
-    assert saved["stock"] == saved["stock_quantity"] == 98
+def test_option_supplier_urls_are_checked_but_only_status_is_persisted(monkeypatch,saved):
+    p=_colour_product(); saved._source=dict(p)
+    pages={"https://supplier.example/tote-black":_variants_html(("Black",True,100)),
+           "https://supplier.example/tote-brown":_variants_html(("Brown",True,40))}
+    calls=[]; monkeypatch.setattr(supplier_watchdog,"fetch_url",lambda u:calls.append(u) or pages[u])
+    monkeypatch.setattr(supplier_watchdog.catalog_mod,"merged",lambda include_hidden=True:[p])
+    monkeypatch.setattr(supplier_watchdog.catalog_mod,"deleted_product_ids",lambda:set())
+    monkeypatch.setattr(supplier_watchdog,"_last_checked",{})
+    result=supplier_watchdog.tick(limit=1,min_interval_seconds=0)
+    assert result["checked"]==1 and result["updated"]==1
+    assert set(calls)==set(pages)
+    assert saved["original"]["stock"]==0 and saved["original"]["optionStock"]=={"Black":0,"Brown":0}
+    assert saved["supplier_status"]=="ok"
 
 
-def test_option_url_out_of_stock_is_isolated_and_main_url_uses_the_buffer(
-        monkeypatch, saved):
-    p = _colour_product(optionStock={"Black": 8, "Brown": 10}, stock=18,
-                        optionSupplierSku={"Colour: Black": "https://supplier.example/tote-black"})
-    supplier_watchdog.catalog_mod.apply_supplier_stock.test_box._source = dict(p)
-    pages = {
-        "https://supplier.example/tote-all": _variants_html(
-            ("Black", True, 100), ("Brown", True, 100)),
-        "https://supplier.example/tote-black": _variants_html(("Black", False, None)),
-    }
-    monkeypatch.setattr(supplier_watchdog, "fetch_url", lambda url: pages[url])
-
-    ok, warnings = supplier_watchdog.sync_product(p)
-
-    assert ok is True
-    assert saved["optionStock"] == {"Black": 0, "Brown": 70}
-    assert saved["stock"] == saved["stock_quantity"] == 70
-    assert not any(w["code"] == "supplier_partial_match" for w in warnings)
+def test_supplier_out_status_does_not_override_manual_store_availability(monkeypatch,saved):
+    p=_colour_product(); saved._source=dict(p)
+    pages={"https://supplier.example/tote-all":_variants_html(("Black",False,None),("Brown",True,100)),
+           "https://supplier.example/tote-black":_variants_html(("Black",False,None)),
+           "https://supplier.example/tote-brown":_variants_html(("Brown",True,40))}
+    monkeypatch.setattr(supplier_watchdog,"fetch_url",lambda u:pages[u])
+    ok,_=supplier_watchdog.sync_product(p)
+    assert ok is True and saved["supplier_status"] in ("low_stock", "out_of_stock", "ok")
+    assert saved["original"]["stock"]==0
+    assert saved["original"]["optionStock"] == {"Black": 0, "Brown": 0}
 
 
-def test_option_url_buffer_survives_a_real_local_watchdog_catalog_cycle(tmp_path, monkeypatch):
-    """Exercise tick -> stock-only catalog patch -> persisted local row.
-
-    The storage backend here is the test/local catalog, not a real Supabase
-    project. It verifies the watchdog's cycle and write semantics end-to-end.
-    """
-    import json
-    import catalog as catalog_mod
-
-    p = _colour_product()
-    path = tmp_path / "catalog.json"
-    path.write_text(json.dumps({"products": [p], "deleted": []}), encoding="utf-8")
-    monkeypatch.setattr(catalog_mod, "CATALOG_FILE", str(path))
-    monkeypatch.setattr(catalog_mod, "merged", lambda include_hidden=True: [p])
-    monkeypatch.setattr(catalog_mod, "deleted_product_ids", lambda: set())
-    monkeypatch.setattr(supplier_watchdog, "_last_checked", {})
-    pages = {
-        "https://supplier.example/tote-all": _variants_html(
-            ("Black", False, None), ("Brown", True, 100)),
-        "https://supplier.example/tote-black": _variants_html(("Black", True, 100)),
-        "https://supplier.example/tote-brown": _variants_html(("Brown", True, 40)),
-    }
-    calls = []
-
-    def fetch(url):
-        calls.append(url)
-        return pages[url]
-
-    monkeypatch.setattr(supplier_watchdog, "fetch_url", fetch)
-    result = supplier_watchdog.tick(limit=1, min_interval_seconds=0)
-    stored = json.loads(path.read_text(encoding="utf-8"))["products"][0]
-
-    assert result["checked"] == 1 and result["updated"] == 1
-    assert calls == ["https://supplier.example/tote-black",
-                     "https://supplier.example/tote-brown"]
-    assert stored["optionStock"] == {"Black": 70, "Brown": 28}
-    assert stored["stock"] == stored["stock_quantity"] == 98
+def test_local_watchdog_cycle_keeps_store_stock_unchanged(tmp_path,monkeypatch):
+    import json, catalog as catalog_mod
+    p=_colour_product(); path=tmp_path/"catalog.json"
+    path.write_text(json.dumps({"products":[p],"deleted":[]}))
+    monkeypatch.setattr(catalog_mod,"CATALOG_FILE",str(path))
+    monkeypatch.setattr(catalog_mod,"merged",lambda include_hidden=True:[p])
+    monkeypatch.setattr(catalog_mod,"deleted_product_ids",lambda:set())
+    monkeypatch.setattr(supplier_watchdog,"_last_checked",{})
+    pages={"https://supplier.example/tote-black":_variants_html(("Black",False,None)),
+           "https://supplier.example/tote-brown":_variants_html(("Brown",True,40))}
+    monkeypatch.setattr(supplier_watchdog,"fetch_url",lambda u:pages[u])
+    result=supplier_watchdog.tick(limit=1,min_interval_seconds=0)
+    stored=json.loads(path.read_text())["products"][0]
+    assert result["updated"]==1
+    assert stored["stock"]==0 and stored["optionStock"]=={"Black":0,"Brown":0}
 
 
 def test_removed_option_supplier_url_is_never_polled_or_restored():
@@ -365,58 +248,57 @@ def test_removed_option_supplier_url_is_never_polled_or_restored():
 
 # -------------------------------------------------------- whole-product rule
 
-def test_simple_product_syncs_as_a_whole(monkeypatch, saved):
-    p = _product(options=[], optionStock={}, stock=12)
-    ok, warns = _sync(monkeypatch, p,
-                      '<script type="application/json">{"quantity": 5, "name": "Shea Glow Set"}</script>')
+def test_simple_product_supplier_status_is_isolated(monkeypatch,saved):
+    p=_product(options=[],optionStock={},stock=12); saved._source=dict(p)
+    ok,_=_sync(monkeypatch,p,'<script type="application/json">{"quantity": 5, "name": "Shea Glow Set"}</script>')
+    assert ok is True and saved["supplier_status"]=="low_stock"
+    assert saved["original"]["stock"]==12
+
+
+def test_simple_product_ambiguous_supplier_page_is_untouched(monkeypatch,saved):
+    p=_product(name="Shea Glow Set",options=[],optionStock={},stock=12)
+    html=_variants_html(("Night Repair Oil",True,3),("Hand Sanitizer XL",True,8))
+    changed,warns=_sync(monkeypatch,p,html)
+    assert changed is False and not saved
+    assert any(w["code"]=="supplier_no_product_match" for w in warns)
+
+
+def test_simple_supplier_out_of_stock_is_diagnostic_not_checkout_state(monkeypatch,saved):
+    p=_product(options=[],optionStock={},stock=12); saved._source=dict(p)
+    ok,_=_sync(monkeypatch,p,'<script type="application/json">{"quantity": 0, "name": "Shea Glow Set"}</script>')
+    assert ok is True and saved["supplier_status"]=="out_of_stock"
+    assert saved["original"]["stock"]==12
+
+
+def test_simple_supplier_restock_status_does_not_restock_store(monkeypatch,saved):
+    p=_product(options=[],optionStock={},stock=0); saved._source=dict(p)
+    ok,_=_sync(monkeypatch,p,'<script type="application/json">{"quantity": 100, "name": "Shea Glow Set"}</script>')
+    assert ok is True and saved["supplier_status"]=="ok"
+    assert saved["original"]["stock"]==0
+
+
+def test_supplier_url_is_preserved_and_store_fields_immutable(monkeypatch,saved):
+    p=_product(); saved._source=dict(p)
+    ok,_=_sync(monkeypatch,p,_variants_html(("Serum",True,7),("Cream",True,4)))
     assert ok is True
-    assert saved["stock"] == 5
-    assert saved["stock_quantity"] == 5
-    assert "optionStock" not in saved or not saved.get("optionStock")
+    assert saved["original"]["supplierSku"]==SUPPLIER
+    assert saved["original"]["stock"]==p["stock"]
 
 
-def test_simple_product_ambiguous_supplier_page_is_untouched(monkeypatch, saved):
-    p = _product(name="Shea Glow Set", options=[], optionStock={}, stock=12)
-    html = _variants_html(("Night Repair Oil", True, 3), ("Hand Sanitizer XL", True, 8))
-    changed, warns = _sync(monkeypatch, p, html)
-    assert changed is False
-    assert saved.get("stock") is None, "no confident name match -> nothing written"
-    assert any(w["code"] == "supplier_no_product_match" for w in warns)
-
-
-def test_simple_product_out_of_stock(monkeypatch, saved):
-    p = _product(options=[], optionStock={}, stock=12)
-    ok, warns = _sync(monkeypatch, p,
-                      '<script type="application/json">{"quantity": 0, "name": "Shea Glow Set"}</script>')
-    assert ok is True
-    assert saved["stock"] == 0
-    assert saved["stock_quantity"] == 0
-
-
-def test_simple_product_restock_uses_the_safety_buffer(monkeypatch, saved):
-    """A 100-unit supplier shelf publishes 70 at the default 30% buffer.
-
-    This replaces the old 1:1 assertion (owner directive 2026-10-19); it still
-    pins the critical half of the rule: the shop never shows MORE than the
-    supplier actually has.
-    """
-    p = _product(options=[], optionStock={}, stock=0)
-    ok, warns = _sync(monkeypatch, p,
-                      '<script type="application/json">{"quantity": 100, "name": "Shea Glow Set"}</script>')
-    assert ok is True
-    assert saved["stock"] == 70
-    assert saved["stock_quantity"] == 70
-    assert saved["stock"] <= 100
-
-
-# ------------------------------------------------------------- link safety
-
-def test_the_supplier_link_itself_survives_a_sync(monkeypatch, saved):
-    ok, warns = _sync(monkeypatch, _product(),
-                      _variants_html(("Serum", True, 7), ("Cream", True, 4)))
-    assert ok is True
-    assert saved["optionStock"]["Serum"] == 7
-    assert saved.get("supplierSku") == SUPPLIER, "a sync must never strip the supplier link"
+def test_catalog_status_patch_changes_only_supplier_status(tmp_path, monkeypatch):
+    import catalog as catalog_mod, json
+    path=tmp_path/"catalog.json"
+    monkeypatch.setattr(catalog_mod,"CATALOG_FILE",str(path))
+    product={"id":"jau-status-only","name":"Keep me","priceNgn":1234,
+             "image":"permanent.jpg","stock":6,"stock_quantity":6,
+             "online":True,"category":"beauty"}
+    assert catalog_mod.upsert(product,actor="test")[0]
+    assert catalog_mod.apply_supplier_status(product["id"],"out_of_stock") is True
+    stored=json.loads(path.read_text())["products"][0]
+    assert stored["supplier_status"]=="out_of_stock"
+    assert {k:stored[k] for k in ("name","priceNgn","image","stock","stock_quantity","online","category")} == {
+        "name":"Keep me","priceNgn":1234,"image":"permanent.jpg","stock":6,
+        "stock_quantity":6,"online":True,"category":"beauty"}
 
 
 def test_product_supplier_urls_reads_every_alias():
@@ -478,38 +360,18 @@ def test_local_supplier_patch_cannot_recreate_an_option_removed_after_snapshot(t
     assert saved["stock"] == saved["stock_quantity"] == 2
 
 
-def test_supplier_out_of_stock_reaches_the_public_catalog_promptly(tmp_path, monkeypatch):
-    import api
-    import app as appmod
-    import catalog as catalog_mod
 
-    monkeypatch.setattr(catalog_mod, "CATALOG_FILE", str(tmp_path / "live-catalog.json"))
-    product, _, _ = catalog_mod.upsert({
-        "id": "jau-supplier-public-refresh", "name": "Supplier Live Item",
-        "priceNgn": 3000, "stock": 5, "stock_quantity": 5, "online": True,
-        "supplierSku": SUPPLIER,
-    }, actor="test")
-    app = appmod.create_app()
-    app.config.update(TESTING=True)
+def test_supplier_zero_does_not_change_public_checkout_availability(tmp_path,monkeypatch):
+    import app as appmod, catalog as catalog_mod
+    monkeypatch.setattr(catalog_mod,"CATALOG_FILE",str(tmp_path/"live-catalog.json"))
+    product,_,_=catalog_mod.upsert({"id":"jau-supplier-public-refresh","name":"Supplier Live Item",
+       "priceNgn":3000,"stock":5,"stock_quantity":5,"online":True,"supplierSku":SUPPLIER},actor="test")
+    monkeypatch.setattr(catalog_mod,"apply_supplier_status",lambda pid,status,actor="supplier-watchdog":True)
+    app=appmod.create_app();app.config.update(TESTING=True)
     with app.test_client() as client:
-        before = client.get("/api/catalog").get_json()
-        row = next(p for p in before["products"] if p["id"] == product["id"])
-        assert row["stock_status"] == "in"
-
-        ok, warnings = supplier_watchdog._save_synced(
-            product, {**product, "stock": 0, "stock_quantity": 0},
-            "supplier-watchdog", [])
-        assert ok is True and warnings == []
-        after = client.get("/api/catalog").get_json()
-        row = next(p for p in after["products"] if p["id"] == product["id"])
-        assert row["stock_status"] == "out"
-        assert "stock" not in row and "stock_quantity" not in row
-
-        ok, warnings = supplier_watchdog._save_synced(
-            {**product, "stock": 0, "stock_quantity": 0},
-            {**product, "stock": 40, "stock_quantity": 40},
-            "supplier-watchdog", [])
-        assert ok is True and warnings == []
-        restored = client.get("/api/catalog").get_json()
-        row = next(p for p in restored["products"] if p["id"] == product["id"])
-        assert row["stock_status"] == "in"
+        before=client.get("/api/catalog").get_json(); row=next(x for x in before["products"] if x["id"]==product["id"])
+        assert row["stock_status"]=="in"
+        ok,warnings=supplier_watchdog._sync_whole_product(product,[{"qty":0,"flag":True}],"test",[])
+        assert ok is True and warnings==[]
+        after=client.get("/api/catalog").get_json(); row=next(x for x in after["products"] if x["id"]==product["id"])
+        assert row["stock_status"]=="in"

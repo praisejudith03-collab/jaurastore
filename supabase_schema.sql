@@ -14,6 +14,7 @@ create table if not exists products (
   "nameFr"         text,
   "descriptionFr"  text,
   category         text,
+  category_id      text,
   "priceCfa"       numeric,
   "compareCfa"     numeric,
   "priceNgn"       numeric,
@@ -47,6 +48,7 @@ create table if not exists products (
   "supplierSku" text not null default '',
   "supplierCost" numeric,
   "optionSupplierCost" jsonb,
+  supplier_status text not null default 'ok' check (supplier_status in ('out_of_stock','low_stock','ok')),
   is_deleted boolean not null default false,
   updated_at       timestamptz default now(),
   constraint products_price_positive check ("priceCfa" >= 0 and "priceNgn" >= 0
@@ -93,6 +95,7 @@ alter table products add column if not exists "legacyId"       text;
 alter table products add column if not exists sku              text;
 alter table products add column if not exists slug             text;
 alter table products add column if not exists category         text;
+alter table products add column if not exists category_id      text;
 alter table products add column if not exists image            text;
 alter table products add column if not exists image_url        text;
 alter table products add column if not exists description      text;
@@ -102,6 +105,13 @@ alter table products add column if not exists "supplierSku" text not null defaul
 -- Variant supplier costing + the Trash Bin soft-delete flag.
 alter table products add column if not exists "supplierCost" numeric;
 alter table products add column if not exists "optionSupplierCost" jsonb;
+alter table products add column if not exists supplier_status text not null default 'ok';
+do $$ begin
+  alter table products add constraint products_supplier_status_check
+    check (supplier_status in ('out_of_stock','low_stock','ok')) not valid;
+exception when duplicate_object then null;
+end $$;
+alter table products validate constraint products_supplier_status_check;
 alter table products add column if not exists is_deleted boolean not null default false;
 
 -- Dead leftovers (price_cfa, price_ngn, name_fr, compare_cfa, compare_ngn,
@@ -429,6 +439,11 @@ alter table categories add column if not exists name_fr    text not null default
 alter table categories add column if not exists image_url  text not null default '';
 alter table categories add column if not exists hidden     boolean not null default false;
 alter table categories add column if not exists updated_at timestamptz not null default now();
+do $$ begin
+  alter table products add constraint products_category_id_fkey
+    foreign key (category_id) references categories(id) on update cascade not valid;
+exception when duplicate_object then null;
+end $$;
 
 -- SECTION: product_compatibility
 -- Legacy id alias. A product's `id` is its primary key and is NEVER renamed
@@ -461,83 +476,41 @@ create index if not exists products_deleted_idx
 create index if not exists products_updated_idx
   on products (updated_at desc);
 
+-- Supplier watchdogs may change only this isolated diagnostic flag.
+create or replace function set_supplier_status(p_id text, p_status text)
+returns boolean language plpgsql security definer set search_path=public,pg_temp as $$
+begin
+ if p_id is null or btrim(p_id)='' or p_status not in ('out_of_stock','low_stock','ok') then return false; end if;
+ update products set supplier_status=p_status where id=p_id and is_deleted is not true;
+ return found;
+end $$;
+revoke all on function set_supplier_status(text,text) from public;
+do $$ begin
+  execute 'grant execute on function public.set_supplier_status(text,text) to service_role';
+exception when undefined_object then null;
+end $$;
+
 create or replace function sync_supplier_stock(p_id text,p_stock integer,
  p_option_stock_changes jsonb,p_allow_increase boolean,
  p_option_snapshot_keys jsonb)
 returns boolean language plpgsql security definer set search_path=public,pg_temp as $$
-declare current_options jsonb; product_options jsonb; merged_options jsonb; safe_changes jsonb;
- total_stock numeric;
+declare status_value text;
 begin
- if p_id is null or btrim(p_id)='' or p_stock is null or p_stock<0 or p_stock>10000000 then
-  return false;
- end if;
- if p_option_snapshot_keys is not null and jsonb_typeof(p_option_snapshot_keys)<>'array' then
-  return false;
- end if;
- perform pg_advisory_xact_lock(hashtextextended(p_id,0));
- select coalesce("optionStock",'{}'::jsonb),coalesce(options,'null'::jsonb)
-  into current_options,product_options from products where id=p_id for update;
- if not found then return false; end if;
+ -- Compatibility RPC: ignore all observed quantities and touch only status.
+ if p_id is null or btrim(p_id)='' then return false; end if;
+ if p_option_stock_changes is not null and jsonb_typeof(p_option_stock_changes)<>'object' then return false; end if;
  if p_option_stock_changes is null then
-  if current_options<>'{}'::jsonb or
-    product_options not in ('null'::jsonb,'[]'::jsonb,'{}'::jsonb)
-    then return false; end if;
-  update products set stock_quantity=case when p_allow_increase then p_stock
-    else least(coalesce(stock_quantity,0),p_stock) end,
-    stock=case when p_allow_increase then p_stock
-    else least(coalesce(stock_quantity,0),p_stock) end,updated_at=now()
-    where id=p_id;
-  return found;
+   if p_stock is null or p_stock<0 then return false; end if;
+   status_value := case when p_stock=0 then 'out_of_stock' when p_stock<=9 then 'low_stock' else 'ok' end;
+ else
+   if exists (select 1 from jsonb_each(p_option_stock_changes) x(k,v)
+     where coalesce(v #>> '{}','') !~ '^[0-9]+$' or (v #>> '{}')::numeric<0) then return false; end if;
+   status_value := case when not exists(select 1 from jsonb_each(p_option_stock_changes) x(k,v) where (v #>> '{}')::numeric>0)
+     then 'out_of_stock'
+     when exists(select 1 from jsonb_each(p_option_stock_changes) x(k,v) where (v #>> '{}')::numeric<=9)
+     then 'low_stock' else 'ok' end;
  end if;
- if jsonb_typeof(p_option_stock_changes)<>'object' then return false; end if;
- if exists (select 1 from jsonb_each(p_option_stock_changes) x(k,v)
-  where jsonb_typeof(v) not in ('number','string')
-    or case when coalesce(v #>> '{}','') ~ '^[0-9]+$'
-      then (v #>> '{}')::numeric>10000000 else true end)
-  then return false; end if;
- if jsonb_typeof(current_options)<>'object' then current_options:='{}'::jsonb; end if;
- if current_options='{}'::jsonb and
-  product_options in ('null'::jsonb,'[]'::jsonb,'{}'::jsonb)
-  then return false; end if;
- -- A supplier response was fetched against an earlier option snapshot. A key
- -- that was in that snapshot but has since disappeared from optionStock is a
- -- tombstone: do not merge it back. A previously untracked key may be added
- -- only while its value still exists in the current product options.
- select coalesce(jsonb_object_agg(k,to_jsonb(case when p_allow_increase
-  then (v #>> '{}')::integer else least(case when current_options ? k
-    and (current_options->>k) ~ '^[0-9]+$' then (current_options->>k)::integer
-    else 0 end,(v #>> '{}')::integer) end)),'{}'::jsonb)
-  into safe_changes
-  from jsonb_each(p_option_stock_changes) x(k,v)
-  where (current_options ? k or not coalesce(p_option_snapshot_keys ? k,false))
-    and (
-      exists (
-        select 1 from jsonb_array_elements(
-          case when jsonb_typeof(product_options)='array' then product_options else '[]'::jsonb end) o
-        cross join lateral jsonb_array_elements_text(
-          case when jsonb_typeof(o->'values')='array' then o->'values' else '[]'::jsonb end) val(value)
-        where lower(btrim(val.value))=lower(k)
-           or lower(btrim(coalesce(o->>'title','')) || ': ' || btrim(val.value))=lower(k)
-      )
-      or (position(' · ' in k)>0 and not exists (
-        select 1 from unnest(string_to_array(k,' · ')) part(value)
-        where not exists (
-          select 1 from jsonb_array_elements(
-            case when jsonb_typeof(product_options)='array' then product_options else '[]'::jsonb end) o
-          cross join lateral jsonb_array_elements_text(
-            case when jsonb_typeof(o->'values')='array' then o->'values' else '[]'::jsonb end) val(value)
-          where lower(btrim(val.value))=lower(btrim(part.value))
-             or lower(btrim(coalesce(o->>'title','')) || ': ' || btrim(val.value))=lower(btrim(part.value))
-        )
-      ))
-    );
- merged_options:=current_options||safe_changes;
- select coalesce(sum(case when (v #>> '{}') ~ '^[0-9]+$'
-  then (v #>> '{}')::numeric else 0 end),0)
-  into total_stock from jsonb_each(merged_options) x(k,v);
- if total_stock>10000000 then return false; end if;
- update products set "optionStock"=merged_options,stock_quantity=total_stock::integer,
-  stock=total_stock::integer,updated_at=now() where id=p_id;
+ update products set supplier_status=status_value where id=p_id and is_deleted is not true;
  return found;
 end $$;
 
