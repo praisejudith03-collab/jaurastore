@@ -4629,6 +4629,10 @@ def admin_walkin_sale_create():
         cost_missing = not bool(cost_ngn) and not figures.get("profitOverrideActive")
     except Exception:
         revenue, net_profit, cost_missing = total, None, not bool(cost_ngn)
+    if cost_missing:
+        # With no cost price the honest answer is "unknown", not "all of it is
+        # profit": the modal then shows revenue only, and the message says why.
+        net_profit = None
     audit(authmod.current_admin(),"walkin.sale",f"{oid} {pid} qty={qty} cur={currency} sheet={sheet_sync['ok']}",_ip())
     message = "Sale recorded." if sheet_sync["ok"] else (
         "Sale recorded, but Google Sheets sync failed: "

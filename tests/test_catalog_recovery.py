@@ -402,6 +402,33 @@ def test_walkin_costing_uses_the_fractional_accounting_rate(client, monkeypatch)
         db.execute("DELETE FROM orders WHERE id=?", (sold["orderId"],))
 
 
+def test_walkin_sale_without_a_cost_price_reports_unknown_profit(client, monkeypatch):
+    """No cost price must never look like a 100% margin: revenue is reported,
+    profit is reported as unknown, and the admin is told what to fix."""
+    _login(client)
+    monkeypatch.setattr(Config, "SUPABASE_ENABLED", False)
+    monkeypatch.setattr(catalog, "merged", lambda **kw: [{
+        "id": "wi-nocost", "name": "No Cost Item", "online": True, "stock": 4,
+        "stock_quantity": 4, "priceNgn": 3000, "priceCfa": 1400}])
+    monkeypatch.setattr(catalog, "reserve_stock", lambda *a, **k: True)
+    monkeypatch.setattr(catalog, "release_stock", lambda *a, **k: True)
+    import google_sheets
+    monkeypatch.setattr(google_sheets, "push_orders", lambda orders: {"NGN": {"count": 1}})
+    token = client.get("/api/admin/session").get_json()["csrf"]
+    body = client.post("/api/admin/walk-in-sales", json={
+        "customerName": "Unknown Cost", "productId": "wi-nocost", "quantity": 1,
+        "salePrice": 3000, "currency": "NGN", "paymentMethod": "transfer",
+    }, headers={"X-CSRF-Token": token}).get_json()
+    import db
+    try:
+        assert body["ok"] is True
+        assert body["revenue"] == 3000
+        assert body["netProfit"] is None and body["costMissing"] is True
+        assert "cost price" in body["message"]
+    finally:
+        db.execute("DELETE FROM orders WHERE id=?", (body.get("orderId"),))
+
+
 def test_sales_report_counts_net_profit_and_flags_missing_cost(client, monkeypatch):
     """Net profit = selling price - cost price - delivery fee, and a legacy
     order with no cost recorded is counted *and* flagged, never silently
