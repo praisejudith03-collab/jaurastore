@@ -81,6 +81,9 @@ alter table products add column if not exists "bulkQty"      integer;
 alter table products add column if not exists "bulkPercent"  integer;
 alter table products add column if not exists "placeholderImage" text;
 alter table products add column if not exists "usesPlaceholder"  boolean default false;
+alter table products add column if not exists "supplierCost" numeric;
+alter table products add column if not exists "optionSupplierCost" jsonb;
+alter table products add column if not exists is_deleted boolean not null default false;
 alter table products add column if not exists badge              text;
 alter table products add column if not exists featured           boolean default false;
 alter table products add column if not exists online             boolean default true;
@@ -88,31 +91,6 @@ alter table products add column if not exists colors             jsonb;
 alter table products add column if not exists options            jsonb;
 alter table products add column if not exists source             text default 'admin';
 alter table products add column if not exists updated_at         timestamptz default now();
--- Additional repair for any older table missing the remaining non-key columns.
--- These are add-only and nullable for legacy rows so no invented values are
--- written and every existing row keeps its id, name, prices and stock.
-alter table products add column if not exists "legacyId"       text;
-alter table products add column if not exists sku              text;
-alter table products add column if not exists slug             text;
-alter table products add column if not exists category         text;
-alter table products add column if not exists category_id      text;
-alter table products add column if not exists image            text;
-alter table products add column if not exists image_url        text;
-alter table products add column if not exists description      text;
-alter table products add column if not exists stock_quantity   integer not null default 0;
-alter table products add column if not exists "supplierId" text not null default '';
-alter table products add column if not exists "supplierSku" text not null default '';
--- Variant supplier costing + the Trash Bin soft-delete flag.
-alter table products add column if not exists "supplierCost" numeric;
-alter table products add column if not exists "optionSupplierCost" jsonb;
-alter table products add column if not exists supplier_status text not null default 'ok';
-do $$ begin
-  alter table products add constraint products_supplier_status_check
-    check (supplier_status in ('out_of_stock','low_stock','ok')) not valid;
-exception when duplicate_object then null;
-end $$;
-alter table products validate constraint products_supplier_status_check;
-alter table products add column if not exists is_deleted boolean not null default false;
 
 -- Dead leftovers (price_cfa, price_ngn, name_fr, compare_cfa, compare_ngn,
 -- option_stock) are harmless legacy junk. Never drop them and never rename
@@ -452,6 +430,32 @@ end $$;
 -- so old product links, order lines, reviews and cart entries keep resolving
 -- through catalog.product_index() / supabase_store.product_by_id(). It stays
 -- NULL for rows that were created with a canonical id and have no history.
+-- Additional repair for any older table missing the remaining non-key columns.
+-- These are add-only and nullable for legacy rows so no invented values are
+-- written and every existing row keeps its id, name, prices and stock.
+alter table products add column if not exists "legacyId"       text;
+alter table products add column if not exists sku              text;
+alter table products add column if not exists slug             text;
+alter table products add column if not exists category         text;
+alter table products add column if not exists category_id      text;
+alter table products add column if not exists image            text;
+alter table products add column if not exists image_url        text;
+alter table products add column if not exists description      text;
+alter table products add column if not exists stock_quantity   integer not null default 0;
+alter table products add column if not exists "supplierId" text not null default '';
+alter table products add column if not exists "supplierSku" text not null default '';
+-- Variant supplier costing + the Trash Bin soft-delete flag.
+alter table products add column if not exists "supplierCost" numeric;
+alter table products add column if not exists "optionSupplierCost" jsonb;
+alter table products add column if not exists supplier_status text not null default 'ok';
+do $$ begin
+  alter table products add constraint products_supplier_status_check
+    check (supplier_status in ('out_of_stock','low_stock','ok')) not valid;
+exception when duplicate_object then null;
+end $$;
+alter table products validate constraint products_supplier_status_check;
+alter table products add column if not exists is_deleted boolean not null default false;
+
 alter table products add column if not exists "legacyId" text;
 create unique index if not exists products_legacy_id_key
   on products ("legacyId") where "legacyId" is not null;

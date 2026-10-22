@@ -329,6 +329,7 @@
         ${reference ? `<a class="aa-button aa-button-sheet" href="${html(reference)}" target="_blank" rel="noopener noreferrer">↗ Open reference sheet</a>` : ""}
         ${ledgerLinks}
         <button class="aa-button aa-button-line" type="button" data-action="verify-google">✓ Test Google sync</button>
+        <button class="aa-button aa-button-line" type="button" data-action="refresh-google" title="Ask Google for a fresh access token; ledger pushes then run without waiting for an expiry retry">↻ Refresh connection</button>
         ${state.error && google.configured ? `<a class="aa-button aa-button-primary" href="/api/admin/accounting/google/connect">Reconnect Google Sheets</a>` : ""}
         <span class="aa-drive-status is-connected"><i aria-hidden="true"></i> Drive connected · ${html(google.email || "Google account")}</span>`;
     }
@@ -1224,6 +1225,24 @@
     }
   }
 
+  /** Force a fresh Google access token before the day's ledger push.
+   *  Green toast on success, red toast with the server's reason on failure. */
+  async function refreshGoogleConnection(button) {
+    const label = button ? button.textContent : "";
+    if (button) { button.disabled = true; button.textContent = "Refreshing…"; }
+    try {
+      const data = await request("/api/admin/accounting/google/refresh", {
+        method: "POST", body: "{}",
+      });
+      toast(data.message || "Google Sheets connection refreshed.", "ok");
+      await loadAll();
+    } catch (error) {
+      toast(error.message || "Could not refresh the Google Sheets connection.", "error");
+    } finally {
+      if (button) { button.disabled = false; button.textContent = label || "↻ Refresh connection"; }
+    }
+  }
+
   async function verifyGoogleSync() {
     const button = root.querySelector('[data-action="verify-google"]');
     if (button) { button.disabled = true; button.textContent = "Checking…"; }
@@ -1384,6 +1403,8 @@
     if (discount) { applyDiscount(discount.dataset.stageDiscount); return; }
     const verify = event.target.closest('[data-action="verify-google"]');
     if (verify) { verifyGoogleSync(); return; }
+    const refreshGoogle = event.target.closest('[data-action="refresh-google"]');
+    if (refreshGoogle) { refreshGoogleConnection(refreshGoogle); return; }
     const notes = event.target.closest("[data-stage-notes]");
     if (notes) { editNotes(notes.dataset.stageNotes); return; }
     const remove = event.target.closest("[data-stage-remove]");

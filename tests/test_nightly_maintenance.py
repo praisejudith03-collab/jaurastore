@@ -315,6 +315,16 @@ def saved(monkeypatch):
 
     fake_apply.test_box = box
     monkeypatch.setattr(supplier_watchdog.catalog_mod, "apply_supplier_stock", fake_apply)
+    # The 2026-10 isolation contract: a supplier check records a status badge
+    # and nothing else. Captured separately so a test can prove the shop's own
+    # stock was never written.
+    statuses = {}
+    def fake_status(pid, status, actor="supplier-watchdog"):
+        statuses.clear()
+        statuses.update({"id": pid, "status": status})
+        return True
+    monkeypatch.setattr(supplier_watchdog.catalog_mod, "apply_supplier_status", fake_status)
+    box.status = statuses
     return box
 
 
@@ -348,13 +358,14 @@ def test_supplier_price_increase_raises_a_warning_not_a_rewrite(monkeypatch, sav
     _, warns = _run(monkeypatch, _variant_page([("Serum", 3, 42.0), ("Cream", 5, 35.0)]))
     up = [w for w in warns if w["code"] == "supplier_price_increased"]
     assert up and "Serum" in up[0]["reason"] and "42" in up[0]["reason"]
-    # ... the stock update went through ...
-    # Below the high-stock threshold: 3 and 5 are small counts, so the
-    # 20-40% buffer does not apply and they sell exactly as 3 and 5.
-    assert saved.get("optionStock") == {"Serum": 3, "Cream": 5}
+    # ... and the observation is recorded as a status badge only. A supplier
+    # check must never write store stock, so the stock-patch fake stayed empty.
+    assert saved == {}, "a supplier check wrote product stock - the isolation regressed"
+    assert saved.status.get("id") == "jau-price-1"
+    assert saved.status.get("status") == "low_stock"   # 3 and 5 are small counts
     # ... and the shop's own retail price was NEVER rewritten by the supplier
-    assert saved.get("priceNgn") == 5000
-    assert (saved.get("optionPrices") or {}).get("Serum") != 42.0
+    assert saved.get("priceNgn") is None
+    assert (saved.status or {}).get("priceNgn") is None
 
 
 def test_supplier_price_drop_is_reported_too(monkeypatch, saved):

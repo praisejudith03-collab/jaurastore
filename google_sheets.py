@@ -523,12 +523,12 @@ def _valid_credentials(credentials):
     return credentials
 
 
-def _refresh_access_token(credentials):
+def _refresh_access_token(credentials, force=False):
     with _refresh_lock:
         # Re-read after taking the lock; another request may already have
         # refreshed and saved the token while this request waited.
         current = _load_credentials()
-        if (current.get("accessToken")
+        if (not force and current.get("accessToken")
                 and float(current.get("expiresAt") or 0) > time.time() + 90):
             return current
         client_id, client_secret = _client_credentials()
@@ -834,6 +834,39 @@ def integration_status():
     if not base["connected"]:
         base["message"] = "Finish setting up the NGN and FCFA spreadsheets by reconnecting Google Sheets."
     return base
+
+
+def refresh_connection():
+    """Force a fresh OAuth access token from the stored refresh token.
+
+    Render restarts wipe nothing (credentials live in Supabase), but a token
+    that expired while the worker slept used to fail the first ledger push of
+    the day and only recover on a retry. This exchange is deliberately
+    synchronous and short: the accounting desk's "Refresh connection" button
+    calls it and shows the result as a toast.
+    """
+    report = {"ok": False, "configured": configured(), "connected": False,
+              "email": "", "refreshed": False, "expiresAt": 0}
+    if not configured():
+        report["error"] = ("Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on "
+                           "Render, then reconnect Google Sheets.")
+        return report
+    try:
+        credentials = _load_credentials()
+        _valid_credentials(credentials)
+        before = str(credentials.get("accessToken") or "")
+        credentials = _refresh_access_token(credentials, force=True)
+        report.update(ok=True, connected=True,
+                      email=str(credentials.get("email") or ""),
+                      refreshed=str(credentials.get("accessToken") or "") != before,
+                      expiresAt=float(credentials.get("expiresAt") or 0))
+        report["message"] = "Google Sheets connection refreshed."
+    except GoogleSheetsError as exc:
+        report["error"] = str(exc)
+        report["needsReconnect"] = True
+    except Exception as exc:                     # network / token endpoint
+        report["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    return report
 
 
 def verify_sync(reference_id="", *, settings=None):

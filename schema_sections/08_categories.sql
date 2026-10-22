@@ -13,4 +13,9 @@ alter table categories add column if not exists name_fr    text not null default
 alter table categories add column if not exists image_url  text not null default '';
 alter table categories add column if not exists hidden     boolean not null default false;
 alter table categories add column if not exists updated_at timestamptz not null default now();
+do $$ begin
+  alter table products add constraint products_category_id_fkey
+    foreign key (category_id) references categories(id) on update cascade not valid;
+exception when duplicate_object then null;
+end $$;
 

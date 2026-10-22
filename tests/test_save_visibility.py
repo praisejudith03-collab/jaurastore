@@ -198,7 +198,7 @@ class _BoomSupabase:
 # one of these columns rejects the write and the admin route must surface 503,
 # never silently drop the field.
 MIGRATE_COLUMNS = {"id", "legacyId", "sku", "slug", "name", "nameFr",
-                   "descriptionFr", "category", "priceCfa", "compareCfa",
+                   "descriptionFr", "category", "category_id", "supplier_status", "priceCfa", "compareCfa",
                    "priceNgn", "compareNgn", "image", "image_url", "images",
                    "description", "stock", "stock_quantity", "badge",
                    "featured", "online", "colors", "options", "optionStock",

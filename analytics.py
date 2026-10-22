@@ -720,15 +720,63 @@ def sales_report(days=30, date_from=None, date_to=None, search=None):
         f"SELECT COUNT(*) n FROM orders WHERE {pend_where}", pend_params) or {})
     pending_count = pend.get("n", 0) or 0
 
-    # Top products from the same filtered confirmed-order payloads only.
+    # Top products + net profit from the same filtered confirmed-order payloads
+    # only. Profit uses the immutable accounting snapshot the order was
+    # confirmed with (selling price - cost price - delivery fee), so editing a
+    # product's cost today never rewrites yesterday's profit. An order with no
+    # cost price recorded is still counted, and flagged, instead of silently
+    # looking like 100% margin.
     agg = {}
     rows = query(f"SELECT id, payload FROM orders WHERE {where}", params) or []
+    import accounting as _accounting
+    try:
+        fx_rate = _accounting.current_exchange_rate()
+    except Exception:
+        fx_rate = 0
+    profit_buckets = {}
+
+    def _profit_bucket(currency):
+        return profit_buckets.setdefault(currency or "NGN", {
+            "currency": currency or "NGN", "orders": 0, "revenue": 0,
+            "supplierCost": 0, "delivery": 0, "discount": 0,
+            "netProfit": 0, "missingCost": 0})
+
     for r in rows:
         oid = r["id"] if "id" in r.keys() else ""
         try:
             payload = json.loads(r["payload"] or "{}")
         except ValueError:
             continue
+        try:
+            currency = str(payload.get("currency") or (payload.get("accounting") or {}).get("currency")
+                           or (r["currency"] if "currency" in r.keys() else "") or "NGN").upper()
+            currency = "CFA" if currency in ("CFA", "FCFA", "XOF") else "NGN"
+            snapshot = payload.get("accounting") if isinstance(payload.get("accounting"), dict) else {}
+            if snapshot:
+                figures = _accounting.entry_figures(
+                    snapshot, currency,
+                    snapshot.get("exchangeRate") or fx_rate or _accounting.LEGACY_RATE)
+            else:
+                # A legacy order without a snapshot: revenue is still real,
+                # cost is unknown (flagged), delivery is unknown.
+                figures = {"saleAmount": float(payload.get("total") or 0),
+                           "supplierCostInCurrency": 0, "deliveryExpense": 0,
+                           "discount": 0,
+                           "netProfit": float(payload.get("total") or 0),
+                           "profitOverrideActive": False}
+            bucket = _profit_bucket(currency)
+            bucket["orders"] += 1
+            bucket["revenue"] += int(figures.get("saleAmount") or 0)
+            bucket["supplierCost"] += int(figures.get("supplierCostInCurrency") or 0)
+            bucket["delivery"] += int(figures.get("deliveryExpense") or 0)
+            bucket["discount"] += int(figures.get("discount") or 0)
+            bucket["netProfit"] += int(figures.get("netProfit") or 0)
+            if (not snapshot
+                    or (not figures.get("profitOverrideActive")
+                        and not figures.get("supplierCostInCurrency"))):
+                bucket["missingCost"] += 1
+        except Exception:
+            pass
         items = payload.get("items") or []
         seen_in_order = set()
         for it in items:
@@ -756,6 +804,19 @@ def sales_report(days=30, date_from=None, date_to=None, search=None):
                 row["orders"] += 1
     top = sorted(agg.values(), key=lambda d: (-d["units"], -d["revenue"]))[:10]
 
+    profit_by_currency = [profit_buckets[key] for key in sorted(profit_buckets)]
+    missing_cost_orders = sum(b["missingCost"] for b in profit_by_currency)
+    # One comparable figure for the headline card: CFA profit converted to
+    # Naira at the same admin FX rate the cost desk uses. The per-currency
+    # cards stay separate so a CFA total is never printed with a ₦ sign.
+    net_ngn = sum(b["netProfit"] for b in profit_by_currency if b["currency"] == "NGN")
+    net_cfa = sum(b["netProfit"] for b in profit_by_currency if b["currency"] == "CFA")
+    try:
+        net_profit_ngn = net_ngn + (_accounting.supplier_cost_ngn_from_cfa(net_cfa, fx_rate)
+                                    if net_cfa else 0)
+    except Exception:
+        net_profit_ngn = net_ngn
+
     return {
         "ok": True,
         "days": days_out,
@@ -770,6 +831,14 @@ def sales_report(days=30, date_from=None, date_to=None, search=None):
         "topProducts": top,
         "pendingCount": pending_count,
         "pendingOrders": pending_count,
+        # Net profit = selling price - cost price - delivery fee, per currency,
+        # with a Naira-normalised headline for the mixed-currency shop.
+        "profitByCurrency": profit_by_currency,
+        "netProfit": net_profit_ngn,
+        "netProfitNgn": net_profit_ngn,
+        "exchangeRate": fx_rate,
+        "ordersMissingCost": missing_cost_orders,
+        "costComplete": missing_cost_orders == 0,
     }
 
 

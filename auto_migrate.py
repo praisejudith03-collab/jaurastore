@@ -86,6 +86,33 @@ POPUP_BANNER_STATEMENT = (
     "popup_banner_active boolean not null default true"
 )
 
+# The products columns this codebase writes on every save. A live table that
+# predates one of them makes `supabase_store._upsert_products_resilient`
+# REFUSE the write (that is deliberate: silently dropping an admin-entered
+# field is data loss), and the owner sees "The product could not be saved to
+# Supabase" on a photo change. Healing them at boot is what turns that from a
+# manual SQL chore into something a redeploy fixes by itself.
+#
+# The DO block is one statement so a database without a products table (a
+# fresh project, or the test suite's SQLite cache) is a no-op instead of
+# aborting the site_settings heals that follow it.
+PRODUCT_SCHEMA_STATEMENT = """do $$ begin
+  if to_regclass('public.products') is null then return; end if;
+  alter table public.products add column if not exists category_id text;
+  alter table public.products add column if not exists supplier_status text not null default 'ok';
+  alter table public.products add column if not exists is_active boolean not null default true;
+  alter table public.products add column if not exists is_deleted boolean not null default false;
+  alter table public.products add column if not exists "supplierCost" numeric;
+  alter table public.products add column if not exists "optionSupplierCost" jsonb;
+  alter table public.products add column if not exists "enableCustomNote" boolean not null default false;
+  alter table public.products add column if not exists "customNotePrompt" text not null default '';
+  alter table public.products add column if not exists "placeholderImage" text;
+  alter table public.products add column if not exists "usesPlaceholder" boolean default false;
+  alter table public.products add column if not exists dimensions text;
+  alter table public.products add column if not exists "bulkQty" integer;
+  alter table public.products add column if not exists "bulkPercent" integer;
+end $$;"""
+
 RPC_NAMES = ("exec_sql", "execute_sql", "run_sql", "apply_schema_migration")
 
 _lock = threading.Lock()
@@ -117,6 +144,11 @@ def statements(columns=None):
         ddl = SITE_SETTINGS_COLUMNS.get(column)
         if ddl:
             out.append(f"alter table site_settings add column if not exists {column} {ddl}")
+    # A full boot pass also heals the products columns. A targeted heal (an
+    # Admin save naming the one column it needs) does not: it must stay a
+    # single-statement, minimal intervention.
+    if columns is None:
+        out.append(PRODUCT_SCHEMA_STATEMENT)
     return out
 
 
