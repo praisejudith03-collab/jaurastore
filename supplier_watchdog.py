@@ -1136,6 +1136,20 @@ def _whole_product_row(product: Dict[str, Any], supplier_rows: List[Dict[str, An
     return best[1] if best[0] >= 70 else None
 
 
+def _save_supplier_status(p: Dict[str, Any], status: str,
+                          warnings: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]]]:
+    """Persist supplier observation without changing storefront product fields."""
+    try:
+        saved = catalog_mod.apply_supplier_status(str(p.get("id") or ""), status)
+        if not saved:
+            warnings.append(_warning(p, "supplier_save_failed", "Supplier status could not be saved."))
+            return False, warnings
+        return True, warnings
+    except Exception as exc:
+        warnings.append(_warning(p, "supplier_save_failed", f"Supplier status could not be saved: {exc}"))
+        return False, warnings
+
+
 def _sync_whole_product(p: Dict[str, Any], supplier_rows: List[Dict[str, Any]],
                         actor: str, warnings: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]]]:
     row = _whole_product_row(p, supplier_rows)
@@ -1149,12 +1163,8 @@ def _sync_whole_product(p: Dict[str, Any], supplier_rows: List[Dict[str, Any]],
     if qty is None:
         warnings.append(_warning(p, "supplier_stock_uncertain", "Stock could not be read with confidence; left unchanged."))
         return False, warnings
-    old = max(0, int(p.get("stock") if p.get("stock") is not None else (p.get("stock_quantity") or 0) or 0))
-    new_qty = _apply_stock_rule(int(qty), old, flagged=bool(row.get("flag")))
-    if new_qty == old:
-        return False, warnings
-    out = {**p, "stock": new_qty, "stock_quantity": new_qty}
-    return _save_synced(p, out, actor, warnings)
+    status = "out_of_stock" if row.get("flag") or int(qty) <= 0 else ("low_stock" if int(qty) <= 9 else "ok")
+    return _save_supplier_status(p, status, warnings)
 
 
 def _save_synced(p: Dict[str, Any], row: Dict[str, Any], actor: str,
@@ -1194,14 +1204,14 @@ def _save_synced(p: Dict[str, Any], row: Dict[str, Any], actor: str,
 
     try:
         previous_options = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else {}
-        saved, action, mirrored = catalog_mod.apply_supplier_stock(
-            pid, row.get("stock_quantity") if row.get("stock_quantity") is not None
-            else row.get("stock"), option_changes, actor=actor,
-            # The 40% supplier rule is the intended public stock level, so a
-            # restock may raise a former zero while never exposing the full
-            # supplier quantity.
-            allow_increase=True,
-            option_snapshot_keys=list(previous_options.keys()) if option_changes is not None else None)
+        # Supplier observations are deliberately isolated from storefront inventory.
+        # A check records status only; the owner controls stock and availability.
+        observed = [max(0, int(v)) for v in (option_changes or {}).values()]
+        if row.get("stock_quantity") is not None or row.get("stock") is not None:
+            observed.append(max(0, int(row.get("stock_quantity") if row.get("stock_quantity") is not None else row.get("stock"))))
+        status = "out_of_stock" if observed and max(observed) == 0 else ("low_stock" if observed and min(observed) <= 9 else "ok")
+        saved = catalog_mod.apply_supplier_status(pid, status, actor=actor)
+        action, mirrored = ("updated", True) if saved else ("failed", False)
         # A hard delete won the race after the read above. The atomic helper
         # answers "permanently-removed" and, importantly, never inserts as a
         # fallback.

@@ -4508,6 +4508,78 @@ def _order_row(r):
         or payload.get("proofUploadFailed"))
     return out
 
+@api.get("/admin/walk-in/products")
+@authmod.require_admin
+def admin_walkin_products():
+    products = [p for p in catalog_mod.merged() if p.get("online") is not False]
+    return jsonify(ok=True, products=[{"id": p.get("id"), "name": p.get("name"),
+        "priceNgn": p.get("priceNgn"), "priceCfa": p.get("priceCfa"),
+        "stock": catalog_mod.stock_of(p)} for p in products])
+
+
+@api.post("/admin/walk-in-sales")
+@authmod.require_admin
+@sec.require_csrf
+def admin_walkin_sale_create():
+    """Record a single-product walk-in sale, reserve stock, persist, then sync ledger."""
+    d = request.get_json(silent=True) or {}
+    name = sec.clean(d.get("customerName"), 160).strip()
+    pid = sec.clean(d.get("productId"), 64).strip()
+    qty = _requested_quantity(d.get("quantity"))
+    payment = sec.clean(d.get("paymentMethod"), 24).lower()
+    currency = accounting_mod.normalize_currency(d.get("currency"))
+    price = sec.clean_int(d.get("salePrice"), -1, 0, 10**9)
+    if not name or not pid or qty is None or payment not in {"cash", "transfer", "pos"} or not currency:
+        return jsonify(ok=False, error="Enter customer, product, quantity, price, currency and payment method."), 400
+    product = next((p for p in catalog_mod.merged() if str(p.get("id")) == pid), None)
+    if not product or product.get("online") is False or catalog_mod.is_stock_locked(pid):
+        return jsonify(ok=False, error="Product is unavailable for sale."), 409
+    if price <= 0:
+        return jsonify(ok=False, error="Sale price must be greater than zero."), 400
+    reserved = catalog_mod.reserve_stock(pid, qty, actor=authmod.current_admin())
+    if not reserved:
+        return jsonify(ok=False, error="Insufficient stock or inventory service unavailable."), 409
+    now = _utcnow(); oid = "WI" + uuid.uuid4().hex[:10].upper()
+    cost_ngn = sec.clean_int(product.get("supplierCost") or 0, 0, 0, 10**9)
+    rate = max(1, sec.clean_int((_load_site() or {}).get("cfaRate"), 1, 1, 10**6))
+    cost_in_currency = cost_ngn if currency == "NGN" else accounting_mod.supplier_cost_cfa(cost_ngn, rate)
+    total = price * qty
+    snapshot = {"currency": currency, "exchangeRate": rate, "saleAmount": total,
+        "supplierCostNgn": cost_ngn * qty, "supplierQty": qty,
+        "supplierUnitPriceNgn": cost_ngn, "deliveryExpense": 0, "discount": 0,
+        "notes": "Walk-in sale · " + payment.upper(), "confirmedAt": now,
+        "snapshotSource": "walk-in", "lineItems": [{"lineId":"line-01", "productId":pid,
+        "name":product.get("name") or pid, "qty":qty, "saleAmount":total,
+        "supplierCostNgn":cost_ngn * qty, "supplierUnitPriceNgn":cost_ngn,
+        "supplierQty":qty, "supplierLink":product.get("supplierSku") or ""}]}
+    payload = {"id":oid,"currency":currency,"total":total,"customer":{"name":name},
+        "items":[{"id":pid,"name":product.get("name") or pid,"qty":qty,"price":price}],
+        "accounting":snapshot,"source":"walk-in","paymentMethod":payment}
+    order = {"id":oid,"customer_name":name,"email":"","phone":"","payment":payment,
+        "items_count":qty,"total":total,"currency":currency,"source":"walk-in",
+        "status":"confirmed","at":now,"updated_at":now,"payload":payload}
+    try:
+        if Config.SUPABASE_ENABLED and not supabase_store.create_order_strict(order):
+            catalog_mod.release_stock(pid, qty, actor=authmod.current_admin())
+            return jsonify(ok=False,error="Sale could not be saved to Supabase; stock reservation was rolled back."),503
+        import db as dbmod
+        dbmod.upsert_orders([{**order, "payload": json.dumps(payload, ensure_ascii=False)}])
+    except Exception as exc:
+        catalog_mod.release_stock(pid, qty, actor=authmod.current_admin())
+        return jsonify(ok=False,error=f"Sale could not be recorded: {str(exc)[:180]}"),503
+    sheet_sync = {"ok":False,"error":"Google Sheets sync did not run."}
+    try:
+        import google_sheets
+        report = google_sheets.push_orders([order])
+        sheet_sync = {"ok":bool(report),"report":report}
+        if not report: sheet_sync["error"] = "No ledger tab accepted the sale."
+    except Exception as exc:
+        sheet_sync = {"ok":False,"error":str(exc)[:240]}
+    audit(authmod.current_admin(),"walkin.sale",f"{oid} {pid} qty={qty} cur={currency} sheet={sheet_sync['ok']}",_ip())
+    return jsonify(ok=True,orderId=oid,stockReserved=True,sheets=sheet_sync,
+                   message="Sale recorded." if sheet_sync["ok"] else "Sale recorded, but Google Sheets sync failed: " + sheet_sync.get("error","")), (200 if sheet_sync["ok"] else 207)
+
+
 @api.get("/admin/orders")
 @authmod.require_admin
 def admin_orders():
@@ -6046,6 +6118,45 @@ def admin_sync_status():
                    gitRepo=repo, gitBranch=Config.GITHUB_BRANCH,
                    onWrite=bool(Config.REPO_SYNC_ON_WRITE),
                    syncBlockedReason=blocked_reason)
+
+
+@api.get("/admin/supplier-alerts")
+@authmod.require_admin
+def admin_supplier_alerts():
+    """Return supplier diagnostics without conflating them with shop stock."""
+    rows = supabase_store.products_table_rows()
+    if rows is None:
+        rows = catalog_mod.merged(include_hidden=True)
+    alerts = []
+    for row in rows or []:
+        status = str((row or {}).get("supplier_status") or "ok")
+        if status not in {"out_of_stock", "low_stock"}:
+            continue
+        alerts.append({"id": str(row.get("id") or ""), "name": row.get("name") or "",
+                       "image": row.get("image_url") or row.get("image") or "",
+                       "supplierUrl": row.get("supplierSku") or row.get("supplierUrl") or "",
+                       "status": status, "storeOutOfStock": catalog_mod.is_stock_locked(row.get("id"))})
+    return jsonify(ok=True, alerts=alerts)
+
+
+@api.post("/admin/supplier-alerts/<pid>/toggle-out-of-stock")
+@authmod.require_admin
+@sec.require_csrf
+def admin_supplier_alert_toggle(pid):
+    pid = sec.clean(pid, 64).strip()
+    if not pid:
+        return jsonify(ok=False, error="Product id required."), 400
+    if catalog_mod.is_stock_locked(pid):
+        ok = catalog_mod.forget_manual_stock_lock(pid, actor=authmod.current_admin())
+        state = False
+    else:
+        ok = catalog_mod.remember_manual_stock_lock(pid, actor=authmod.current_admin(),
+                                                     why="Supplier Alerts manual toggle")
+        state = True
+    if not ok:
+        return jsonify(ok=False, error="Store availability could not be saved."), 503
+    _invalidate_all_catalog_caches()
+    return jsonify(ok=True, outOfStock=state)
 
 
 @api.get("/admin/stock-locks")

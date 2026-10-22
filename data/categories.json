@@ -83,6 +83,13 @@
       "nameFr": "Parfum",
       "image": "images/categories/beauty.jpg",
       "hidden": false
+    },
+    {
+      "id": "clothing",
+      "name": "Clothing",
+      "nameFr": "V\u00eatements",
+      "image": "images/categories/fashion.jpg",
+      "hidden": false
     }
   ],
   "updatedAt": "2026-09-10T12:00:00Z",

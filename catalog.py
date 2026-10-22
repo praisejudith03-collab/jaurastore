@@ -89,7 +89,7 @@ from currency import round_cfa, to_cfa  # noqa: F401
 
 # Every field an admin-edited product may carry (with sensible defaults).
 BASE_FIELDS = (
-    "id", "sku", "slug", "name", "nameFr", "category", "priceCfa", "compareCfa",
+    "id", "sku", "slug", "name", "nameFr", "category", "category_id", "priceCfa", "compareCfa",
     "priceNgn", "compareNgn", "image", "images", "description", "descriptionFr",
     "stock", "badge", "featured", "online", "colors", "options", "optionPrices",
     "optionCompareAt", "dimensions", "supplierId", "supplierSku",
@@ -781,6 +781,7 @@ def normalize(product):
         "name": name,
         "nameFr": sec.clean(product.get("nameFr") or product.get("name_fr"), 200),
         "category": sec.clean(product.get("category"), 40),
+        "category_id": sec.clean(product.get("category_id"), 64) or None,
         "priceCfa": cfa if cfa is not None else 0,
         "compareCfa": compare_cfa,
         "priceNgn": ngn if ngn is not None else 0,
@@ -2577,6 +2578,41 @@ def _supplier_option_key_is_current(product, key):
 
     parts = raw.split(" · ") if " · " in raw else [raw]
     return bool(parts) and all(part_is_current(part) for part in parts)
+
+
+def apply_supplier_status(pid, status, actor="supplier-watchdog"):
+    """Update only supplier_status; never mutate public stock or catalog fields."""
+    pid = str(pid or "").strip()
+    if not pid or status not in ("out_of_stock", "low_stock", "ok"):
+        return False
+    if _prod_source():
+        try:
+            from supabase_store import set_supplier_status
+            return bool(set_supplier_status(pid, status))
+        except Exception:
+            return False
+    if not any(str((row or {}).get("id") or "").strip() == pid
+               for row in merged(include_hidden=True)):
+        return False
+    path = _norm_filename(CATALOG_FILE)
+    with _catalog_lock(path):
+        data, wpath = _load_overrides()
+        rows = data.get("products") if isinstance(data.get("products"), list) else []
+        found = False
+        for row in rows:
+            if str((row or {}).get("id") or "").strip() == pid:
+                row["supplier_status"] = status
+                found = True
+                break
+        if not found:
+            rows.append({"id": pid, "supplier_status": status})
+        data["products"] = rows
+        try:
+            _write_overrides(data, wpath)
+            return True
+        except Exception as exc:
+            print(f"[catalog] supplier status patch failed: {exc}")
+            return False
 
 
 def apply_supplier_stock(pid, stock, option_changes=None, actor="supplier-watchdog",

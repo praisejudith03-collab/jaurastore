@@ -2744,7 +2744,8 @@
       }
     ],
     "placeholderImage": "images/products/_placeholder.jpg",
-    "usesPlaceholder": true
+    "usesPlaceholder": true,
+    "category_id": "clothing"
   },
   {
     "id": "wix-109",
