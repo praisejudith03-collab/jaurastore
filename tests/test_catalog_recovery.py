@@ -475,10 +475,11 @@ def test_sales_report_counts_net_profit_and_flags_missing_cost(client, monkeypat
         assert ngn["revenue"] == 12000
         assert ngn["supplierCost"] == 4000
         assert ngn["delivery"] == 500
-        # 9000 - 4000 - 500, plus the 3000 legacy sale whose cost is unknown.
-        assert ngn["netProfit"] == 7500
+        # 9000 - 4000 - 500. The legacy 3000 sale has no cost price, so it is
+        # revenue - never a 3000 profit that was never earned.
+        assert ngn["netProfit"] == 4500
         assert ngn["missingCost"] == 1
-        assert data["netProfit"] == 7500
+        assert data["netProfit"] == 4500
         assert data["ordersMissingCost"] == 1
         assert data["costComplete"] is False
         # A fully costed range says so, so the UI can hide the warning.
