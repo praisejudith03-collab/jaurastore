@@ -14,6 +14,7 @@ create table if not exists products (
   "nameFr"         text,
   "descriptionFr"  text,
   category         text,
+  category_id      text,
   "priceCfa"       numeric,
   "compareCfa"     numeric,
   "priceNgn"       numeric,
@@ -47,6 +48,7 @@ create table if not exists products (
   "supplierSku" text not null default '',
   "supplierCost" numeric,
   "optionSupplierCost" jsonb,
+  supplier_status text not null default 'ok' check (supplier_status in ('out_of_stock','low_stock','ok')),
   is_deleted boolean not null default false,
   updated_at       timestamptz default now(),
   constraint products_price_positive check ("priceCfa" >= 0 and "priceNgn" >= 0
@@ -79,6 +81,9 @@ alter table products add column if not exists "bulkQty"      integer;
 alter table products add column if not exists "bulkPercent"  integer;
 alter table products add column if not exists "placeholderImage" text;
 alter table products add column if not exists "usesPlaceholder"  boolean default false;
+alter table products add column if not exists "supplierCost" numeric;
+alter table products add column if not exists "optionSupplierCost" jsonb;
+alter table products add column if not exists is_deleted boolean not null default false;
 alter table products add column if not exists badge              text;
 alter table products add column if not exists featured           boolean default false;
 alter table products add column if not exists online             boolean default true;
@@ -86,23 +91,6 @@ alter table products add column if not exists colors             jsonb;
 alter table products add column if not exists options            jsonb;
 alter table products add column if not exists source             text default 'admin';
 alter table products add column if not exists updated_at         timestamptz default now();
--- Additional repair for any older table missing the remaining non-key columns.
--- These are add-only and nullable for legacy rows so no invented values are
--- written and every existing row keeps its id, name, prices and stock.
-alter table products add column if not exists "legacyId"       text;
-alter table products add column if not exists sku              text;
-alter table products add column if not exists slug             text;
-alter table products add column if not exists category         text;
-alter table products add column if not exists image            text;
-alter table products add column if not exists image_url        text;
-alter table products add column if not exists description      text;
-alter table products add column if not exists stock_quantity   integer not null default 0;
-alter table products add column if not exists "supplierId" text not null default '';
-alter table products add column if not exists "supplierSku" text not null default '';
--- Variant supplier costing + the Trash Bin soft-delete flag.
-alter table products add column if not exists "supplierCost" numeric;
-alter table products add column if not exists "optionSupplierCost" jsonb;
-alter table products add column if not exists is_deleted boolean not null default false;
 
 -- Dead leftovers (price_cfa, price_ngn, name_fr, compare_cfa, compare_ngn,
 -- option_stock) are harmless legacy junk. Never drop them and never rename

@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=219" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=221" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1713,7 +1713,7 @@ function renderProdGrid() {
     const productSelected = selectedProductIds.has(String(p.id)) ? " checked" : "";
     return `<article class="adx-card" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
       <input type="checkbox" class="adx-card-select" data-prod-select="${JA.escape(p.id)}"${productSelected} aria-label="Select ${JA.escape(p.name)}" />
-      <div class="adx-card-pic"><img src="${JA.asset(p.image)}" alt="" loading="lazy" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
+      <div class="adx-card-pic"><img src="${JA.asset(p.image || "images/products/_placeholder.jpg")}" alt="${JA.escape(p.name || "")}" loading="lazy" decoding="async" data-ph="${JA.escape(p.placeholderImage || "images/products/_placeholder.jpg")}" onerror="fallbackImg(event)" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
       <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong></div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price${rangeText ? " adx-price-range" : ""}">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn && !rangeText ? cfaNow : ""}</span>${pill}${p.online === false ? `<button type="button" class="adx-unhide" data-unhide="${JA.escape(p.id)}">Unhide</button>` : ""}</div>
       <button type="button" class="adx-card-vis${p.online === false ? " is-off" : ""}" data-vis="${JA.escape(p.id)}" aria-label="${(p.online === false ? "Show " : "Hide ") + JA.escape(p.name)}" title="${p.online === false ? "Show on website" : "Hide from website"}"><svg viewBox="0 0 24 24">${p.online === false ? '<path d="M3 3l18 18M10.5 10.7a2.5 2.5 0 003.4 3.4M7 12a7.5 7.5 0 0113.2-2.4M4.5 8.6A10.5 10.5 0 0012 17.5c1.2 0 2.4-.2 3.4-.6M9.9 5.2A10.5 10.5 0 0112 5c2.9 0 5.6 1.4 7.5 3.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>' : '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="#fff" stroke-width="1.6"/>'}</svg></button>
       <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
@@ -2533,22 +2533,75 @@ function orderCardHTML(o) {
 }
 let orderFilter = "all";
 function supplierAlertsPanel() {
-  return `<div class="admin-card"><h2 class="admin-h">Supplier Alerts</h2><p class="admin-note">Supplier availability is diagnostic only. Store stock and availability change only when you use the manual toggle.</p><div id="supplier-alerts-list"><p class="empty">Loading supplier alerts…</p></div></div>`;
+  return `<div class="admin-card"><div class="an-top" style="margin-bottom:6px"><div><h2 class="admin-h" style="margin:0">Supplier Alerts</h2><p class="admin-note" style="margin:6px 0 0">Background supplier checks are diagnostic only. They write a status badge into an isolated field and can never hide, delete or unpublish a product — the storefront changes only when you press the toggle.</p></div><button type="button" class="btn btn-line" id="supplier-alerts-refresh">Refresh</button></div><div class="stats" id="supplier-alerts-summary"></div><div id="supplier-alerts-list"><p class="empty">Loading supplier alerts…</p></div></div>`;
 }
+
+/** One flagged product: card details, supplier badge, direct link, 1-click toggle. */
+function supplierAlertCardHTML(p) {
+  const out = p.status === "out_of_stock";
+  const badge = out ? "Supplier out of stock" : "Supplier low stock";
+  const price = [Number(p.priceNgn) > 0 ? JA.money(Number(p.priceNgn), "NGN") : "",
+                 Number(p.priceCfa) > 0 ? JA.money(Number(p.priceCfa), "CFA") : ""]
+    .filter(Boolean).join(" · ");
+  const stockLine = p.stock == null ? "Stock unknown" : `Shop stock ${Number(p.stock) || 0}`;
+  const link = p.supplierUrl
+    ? `<a href="${esc(p.supplierUrl)}" target="_blank" rel="noopener noreferrer">Open supplier listing ↗</a>`
+    : `<span class="admin-note">No supplier link saved</span>`;
+  return `<article class="admin-card supplier-alert" style="display:flex;gap:14px;align-items:center;margin:10px 0;flex-wrap:wrap">`
+    + `<img src="${esc(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="${esc(p.name || "Product")}" width="72" height="72" loading="lazy" decoding="async" style="object-fit:cover;border-radius:10px" data-ph="images/products/_placeholder.jpg" onerror="fallbackImg(event)"/>`
+    + `<div style="flex:1;min-width:180px"><strong>${esc(p.name || p.id)}</strong>`
+    + `<div class="admin-note">${esc([price, stockLine].filter(Boolean).join(" · "))}</div>`
+    + `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><span class="adx-badge ${out ? "is-out" : "is-low"}">${esc(badge)}</span>`
+    + `<span class="adx-badge ${p.storeOutOfStock ? "is-out" : "is-ok"}">${p.storeOutOfStock ? "Hidden from shop" : "On sale"}</span>${link}</div></div>`
+    + `<button type="button" class="btn ${p.storeOutOfStock ? "btn-line" : ""}" data-supplier-toggle="${esc(p.id)}">${p.storeOutOfStock ? "Put Back in Stock" : "Toggle Out of Stock"}</button>`
+    + `</article>`;
+}
+
 async function fillSupplierAlerts() {
   const box = $("#supplier-alerts-list"); if (!box) return;
+  const summary = $("#supplier-alerts-summary");
+  const refresh = $("#supplier-alerts-refresh");
+  if (refresh && !refresh.dataset.bound) { refresh.dataset.bound = "1"; refresh.onclick = () => fillSupplierAlerts(); }
   try {
     const res = await timedFetch("api/admin/supplier-alerts", { cache: "no-store" });
     const data = await res.json(); if (!res.ok || data.ok === false) throw new Error(data.error || "Supplier alerts unavailable");
     const rows = data.alerts || [];
-    box.innerHTML = rows.length ? rows.map((p) => `<article class="admin-card" style="display:flex;gap:14px;align-items:center;margin:10px 0"><img src="${esc(JA.asset(p.image || "images/products/_placeholder.jpg"))}" alt="" width="72" height="72" style="object-fit:cover" onerror="fallbackImg(event)"/><div style="flex:1"><strong>${esc(p.name)}</strong><div><span class="adx-badge">${p.status === "out_of_stock" ? "Supplier out of stock" : "Supplier low stock"}</span></div>${p.supplierUrl ? `<a href="${esc(p.supplierUrl)}" target="_blank" rel="noopener">Open supplier listing</a>` : "<span>No supplier link</span>"}</div><button class="btn ${p.storeOutOfStock ? "btn-line" : ""}" data-supplier-toggle="${esc(p.id)}">${p.storeOutOfStock ? "Mark In Stock" : "Toggle Out of Stock"}</button></article>`).join("") : `<p class="empty">No supplier alerts right now.</p>`;
-    box.querySelectorAll("[data-supplier-toggle]").forEach((button) => button.onclick = async () => {
-      try { const csrf = await window.JA_NET.csrf(); const response = await timedFetch(`api/admin/supplier-alerts/${encodeURIComponent(button.dataset.supplierToggle)}/toggle-out-of-stock`, { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf }, body: "{}" }); const result = await response.json(); if (!response.ok || result.ok === false) throw new Error(result.error || "Could not change availability"); JA.toast(result.outOfStock ? "Store item marked out of stock." : "Store item returned to stock."); fillSupplierAlerts(); } catch (error) { JA.toast(error.message || "Could not change availability."); }
+    const outCount = rows.filter((p) => p.status === "out_of_stock").length;
+    const lowCount = rows.filter((p) => p.status === "low_stock").length;
+    const hidden = rows.filter((p) => p.storeOutOfStock).length;
+    if (summary) summary.innerHTML = [
+      ["Supplier alerts", rows.length, "flagged links"],
+      ["Out of stock", outCount, "supplier says none"],
+      ["Low stock", lowCount, "supplier says few"],
+      ["Hidden from shop", hidden, "by your manual toggle"],
+    ].map(([k, v, s]) => `<div class="stat"><span class="kicker">${esc(k)}</span><b>${esc(String(v))}</b>${s ? `<i>${esc(s)}</i>` : ""}</div>`).join("");
+    box.innerHTML = rows.length
+      ? rows.map(supplierAlertCardHTML).join("")
+      : `<p class="empty">No supplier alerts right now. Every checked supplier link reported stock — and nothing here can change your shop on its own.</p>`;
+    box.querySelectorAll("[data-supplier-toggle]").forEach((button) => {
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          const csrf = await window.JA_NET.csrf();
+          const response = await timedFetch(`api/admin/supplier-alerts/${encodeURIComponent(button.dataset.supplierToggle)}/toggle-out-of-stock`, { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf }, body: "{}" });
+          const result = await response.json();
+          if (!response.ok || result.ok === false) throw new Error(result.error || "Could not change availability");
+          JA.success(result.outOfStock ? "Store item marked out of stock." : "Store item returned to stock.");
+          fillSupplierAlerts();
+        } catch (error) {
+          button.disabled = false;
+          JA.toast(error.message || "Could not change availability.");
+        }
+      };
     });
-  } catch (error) { box.innerHTML = `<p class="empty">${esc(error.message || "Supplier alerts unavailable")}</p>`; }
+  } catch (error) {
+    if (summary) summary.innerHTML = "";
+    box.innerHTML = `<p class="empty">${esc(error.message || "Supplier alerts unavailable")}</p>`;
+  }
 }
+
 function ordersPanel() {
-  return `<div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button type="button" class="btn" id="walkin-open">Record Offline / Walk-In Sale</button></div><dialog id="walkin-dialog" class="admin-modal"><form id="walkin-form" method="dialog"><h2>Record Offline / Walk-In Sale</h2><label>Customer name<input name="customerName" required maxlength="160" /></label><label>Product<select name="productId" id="walkin-product" required><option value="">Loading products…</option></select></label><div class="admin-grid"><label>Quantity<input name="quantity" type="number" min="1" step="1" value="1" required /></label><label>Sale price<input name="salePrice" type="number" min="1" step="1" required /></label><label>Currency<select name="currency"><option value="NGN">NGN ₦</option><option value="CFA">CFA</option></select></label><label>Payment method<select name="paymentMethod"><option value="cash">Cash</option><option value="transfer">Bank Transfer</option><option value="pos">POS</option></select></label></div><div style="display:flex;gap:8px"><button class="btn" type="submit">Record Sale</button><button class="btn btn-line" type="button" id="walkin-cancel">Cancel</button></div><p id="walkin-feedback" role="status"></p></form></dialog><div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}</div><div class="adx-filter-bar" aria-label="Filter orders"><input id="order-search" type="search" placeholder="Search order, customer, email…" autocomplete="off" value="${esc(orderSearch)}" /><label>From <input id="order-from" type="date" value="${esc(orderFrom)}" /></label><label>To <input id="order-to" type="date" value="${esc(orderTo)}" /></label><button type="button" class="btn btn-line" id="order-filter-clear">Clear</button><label class="adx-select-all"><input type="checkbox" id="orders-select-visible" /> Select visible</label><a class="au-link-btn" id="orders-csv" href="api/admin/orders.csv" download>Download CSV</a></div><div class="adx-bulkbar" id="orders-bulk" hidden><strong><span id="orders-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-order-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-order-bulk="confirm">Confirm selected</button><button type="button" class="btn btn-line btn-danger" data-order-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-order-bulk="clear">Clear selection</button></div><p class="admin-note">Search and dates apply before the list is paginated. Tap an order to see everything — customer details, items, the payment receipt and the action buttons.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><p class="admin-note" id="mail-status" role="status" aria-live="polite" style="margin-bottom:10px">Checking receipt emails…</p><button type="button" class="btn btn-line" id="mail-test" hidden>Email a test</button><div id="proofs-box"><p class="empty">Loading receipts…</p></div><div id="proofs-pager"></div><h3 class="admin-h">Background job failures</h3><p class="admin-note">Scheduler ticks and notification sends that failed, newest first — each one carries the error, the stack trace, the memory the worker was using and the record it was working on. Ten per page. Delete a report once you have resolved it, or clear the whole list.</p><div id="crash-health"></div><div class="adx-bulkbar" id="crash-toolbar" style="margin-bottom:10px"><button type="button" class="btn btn-line btn-danger" id="crash-clear-all">Clear all</button></div><div id="crash-box"><p class="empty">Loading crash reports…</p></div><div id="crash-pager"></div>`;
+  return `<div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button type="button" class="btn" id="walkin-open">Record Offline / Walk-In Sale</button></div><dialog id="walkin-dialog" class="admin-modal"><form id="walkin-form" method="dialog"><h2>Record Offline / Walk-In Sale</h2><p class="admin-note">No email or phone number needed. Stock is deducted in the same database transaction, the sale counts in the Sales dashboard, and a row is pushed to the Google Sheets ledger.</p><label>Customer name<input name="customerName" required maxlength="160" autocomplete="off" placeholder="e.g. Mama Ngozi" /></label><label>Product<select name="productId" id="walkin-product" required><option value="">Loading products…</option></select></label><div class="admin-grid"><label>Quantity<input name="quantity" type="number" min="1" step="1" value="1" required /></label><label>Sale price (each)<input name="salePrice" type="number" min="1" step="1" required /></label><label>Currency<select name="currency"><option value="NGN">NGN ₦</option><option value="CFA">CFA</option></select></label><label>Payment method<select name="paymentMethod"><option value="cash">Cash</option><option value="transfer">Bank Transfer</option><option value="pos">POS</option></select></label></div><p class="admin-note" id="walkin-preview" role="status" aria-live="polite">Choose a product to see stock and expected profit.</p><div style="display:flex;gap:8px"><button class="btn" type="submit" id="walkin-submit">Record Sale</button><button class="btn btn-line" type="button" id="walkin-cancel">Cancel</button></div><p id="walkin-feedback" role="status" aria-live="polite"></p></form></dialog><div class="adx-order-filters" id="order-filters">${["all", "pending", "past", "confirmed", "declined"].map((s) => `<button type="button" class="an-rng${orderFilter === s ? " is-on" : ""}" data-ofilter="${s}">${s === "all" ? "All" : orderStatusLabel(s)}</button>`).join("")}</div><div class="adx-filter-bar" aria-label="Filter orders"><input id="order-search" type="search" placeholder="Search order, customer, email…" autocomplete="off" value="${esc(orderSearch)}" /><label>From <input id="order-from" type="date" value="${esc(orderFrom)}" /></label><label>To <input id="order-to" type="date" value="${esc(orderTo)}" /></label><button type="button" class="btn btn-line" id="order-filter-clear">Clear</button><label class="adx-select-all"><input type="checkbox" id="orders-select-visible" /> Select visible</label><a class="au-link-btn" id="orders-csv" href="api/admin/orders.csv" download>Download CSV</a></div><div class="adx-bulkbar" id="orders-bulk" hidden><strong><span id="orders-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-order-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-order-bulk="confirm">Confirm selected</button><button type="button" class="btn btn-line btn-danger" data-order-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-order-bulk="clear">Clear selection</button></div><p class="admin-note">Search and dates apply before the list is paginated. Tap an order to see everything — customer details, items, the payment receipt and the action buttons.</p><div id="orders-box"><p class="empty">Loading orders…</p></div><div id="orders-pager"></div><h3 class="admin-h">Receipts customers uploaded</h3><p class="admin-note" id="mail-status" role="status" aria-live="polite" style="margin-bottom:10px">Checking receipt emails…</p><button type="button" class="btn btn-line" id="mail-test" hidden>Email a test</button><div id="proofs-box"><p class="empty">Loading receipts…</p></div><div id="proofs-pager"></div><h3 class="admin-h">Background job failures</h3><p class="admin-note">Scheduler ticks and notification sends that failed, newest first — each one carries the error, the stack trace, the memory the worker was using and the record it was working on. Ten per page. Delete a report once you have resolved it, or clear the whole list.</p><div id="crash-health"></div><div class="adx-bulkbar" id="crash-toolbar" style="margin-bottom:10px"><button type="button" class="btn btn-line btn-danger" id="crash-clear-all">Clear all</button></div><div id="crash-box"><p class="empty">Loading crash reports…</p></div><div id="crash-pager"></div>`;
 }
 async function refreshMailStatus() {
   const note = $("#mail-status"); if (!note) return;
@@ -2891,13 +2944,99 @@ function bindOrderBulk() {
   });
 }
 async function bindWalkinSale() {
-  const open = $("#walkin-open"), dialog = $("#walkin-dialog"), form = $("#walkin-form"), select = $("#walkin-product");
+  const open = $("#walkin-open"), dialog = $("#walkin-dialog"),
+        form = $("#walkin-form"), select = $("#walkin-product");
   if (!open || !dialog || !form || !select) return;
-  open.onclick = async () => { dialog.showModal(); try { const r=await timedFetch("api/admin/walk-in/products",{cache:"no-store"}); const d=await r.json(); if(!r.ok||d.ok===false) throw new Error(d.error||"Products unavailable"); select.innerHTML='<option value="">Choose a product</option>'+(d.products||[]).map(p=>`<option value="${esc(p.id)}" data-ngn="${Number(p.priceNgn)||0}" data-cfa="${Number(p.priceCfa)||0}">${esc(p.name)} · stock ${Number(p.stock)||0}</option>`).join(""); } catch(e){ select.innerHTML=`<option value="">${esc(e.message)}</option>`; } };
-  $("#walkin-cancel").onclick=()=>dialog.close();
-  select.onchange=()=>{const o=select.selectedOptions[0],price=form.elements.currency.value==="CFA"?o?.dataset.cfa:o?.dataset.ngn;if(price)form.elements.salePrice.value=price;};
-  form.elements.currency.onchange=()=>select.dispatchEvent(new Event("change"));
-  form.onsubmit=async(e)=>{e.preventDefault();const feedback=$("#walkin-feedback"),fd=new FormData(form),body=Object.fromEntries(fd.entries());feedback.textContent="Recording sale…";try{const csrf=await window.JA_NET.csrf();const r=await timedFetch("api/admin/walk-in-sales",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":csrf},body:JSON.stringify(body)});const d=await r.json();if(!r.ok&&r.status!==207||d.ok===false)throw new Error(d.error||"Sale failed");feedback.textContent=d.message||"Sale recorded.";JA.toast(d.message||"Sale recorded.");setTimeout(()=>dialog.close(),600);fillOrders();fillSales();}catch(err){feedback.textContent=err.message;JA.toast(err.message||"Sale failed.");}};
+  const preview = $("#walkin-preview"), feedback = $("#walkin-feedback"),
+        submit = $("#walkin-submit");
+  const money = (value, currency) => (window.JA && JA.money)
+    ? JA.money(Number(value) || 0, currency)
+    : (currency === "CFA" ? "FCFA " : "₦") + (Number(value) || 0).toLocaleString();
+  let catalog = [];
+
+  const selected = () => catalog.find((p) => String(p.id) === String(select.value)) || null;
+  function paintPreview() {
+    if (!preview) return;
+    const p = selected();
+    if (!p) { preview.textContent = "Choose a product to see stock and expected profit."; return; }
+    const currency = form.elements.currency.value;
+    const qty = Math.max(1, Number(form.elements.quantity.value) || 1);
+    const price = Number(form.elements.salePrice.value) || 0;
+    const unitCost = Number(currency === "CFA" ? p.supplierCostCfa : p.supplierCost) || 0;
+    const profit = (price - unitCost) * qty;
+    const bits = [`Stock left: ${Number(p.stock) || 0}`];
+    if (price) bits.push(`Sale ${money(price * qty, currency)}`);
+    bits.push(unitCost
+      ? `Cost ${money(unitCost * qty, currency)} · Net profit ${money(profit, currency)}`
+      : "No cost price saved for this product — profit will be flagged until you add one.");
+    if (price && qty > (Number(p.stock) || 0)) bits.push("⚠ More than the stock left — the sale will be refused.");
+    preview.textContent = bits.join(" · ");
+  }
+
+  open.onclick = async () => {
+    dialog.showModal();
+    if (feedback) feedback.textContent = "";
+    try {
+      const r = await timedFetch("api/admin/walk-in/products", { cache: "no-store" });
+      const d = await r.json();
+      if (!r.ok || d.ok === false) throw new Error(d.error || "Products unavailable");
+      catalog = d.products || [];
+      select.innerHTML = '<option value="">Choose a product</option>' + catalog.map((p) =>
+        `<option value="${esc(p.id)}">${esc(p.name)} · stock ${Number(p.stock) || 0}</option>`).join("");
+      paintPreview();
+      form.elements.salePrice.value = "";
+      form.elements.customerName.value = "";
+      form.elements.quantity.value = "1";
+    } catch (e) {
+      select.innerHTML = `<option value="">${esc(e.message)}</option>`;
+      if (preview) preview.textContent = e.message;
+    }
+  };
+  $("#walkin-cancel").onclick = () => dialog.close();
+  select.onchange = () => {
+    const p = selected();
+    const currency = form.elements.currency.value;
+    if (p) {
+      const price = currency === "CFA" ? p.priceCfa : p.priceNgn;
+      if (price) form.elements.salePrice.value = Math.round(Number(price) || 0);
+    }
+    paintPreview();
+  };
+  form.elements.currency.onchange = () => select.dispatchEvent(new Event("change"));
+  form.elements.quantity.oninput = paintPreview;
+  form.elements.salePrice.oninput = paintPreview;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form), body = Object.fromEntries(fd.entries());
+    if (feedback) feedback.textContent = "Recording sale…";
+    if (submit) submit.disabled = true;
+    try {
+      const csrf = await window.JA_NET.csrf();
+      const r = await timedFetch("api/admin/walk-in-sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if ((!r.ok && r.status !== 207) || d.ok === false) throw new Error(d.error || "Sale failed");
+      const ledgerOk = !!(d.sheets && d.sheets.ok);
+      if (feedback) {
+        const profitLine = d.netProfit != null
+          ? ` Net profit ${money(d.netProfit, d.currency || body.currency)}.` : "";
+        feedback.textContent = (d.message || "Sale recorded.") + profitLine;
+      }
+      if (ledgerOk) JA.success(d.message || "Sale recorded.");
+      else JA.toast(d.message || "Sale recorded, but the Google Sheets sync failed.", { kind: "error" });
+      setTimeout(() => dialog.close(), 900);
+      fillOrders();
+      fillSales();
+    } catch (err) {
+      if (feedback) feedback.textContent = err.message || "Sale failed.";
+      JA.toast(err.message || "Sale failed.", { kind: "error" });
+    } finally {
+      if (submit) submit.disabled = false;
+    }
+  };
 }
 async function fillOrders() {
   const box = $("#orders-box"); if (!box) return;
@@ -2988,7 +3127,7 @@ function bindOrderButtons() {
   });
 }
 function accountPanel() {
-  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. You sign in with <strong>ADMIN_MASTER_PASSWORD</strong> — that is your main admin password. <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> is the backup one, and it still works if the master password is ever unset. Both are managed in Render (Environment → Environment Variables), not in this portal: change one there and the new password works at your next sign-in.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn btn-line" id="repair-photos">Repair missing photos</button><button class="btn" id="sync-github" hidden>Sync to GitHub</button></div><div id="sync-status" role="status" aria-live="polite" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Everything you save goes straight to the live store. If your Wi-Fi drops, the change waits on this device and sends itself as soon as you are back online.</p></div><div class="admin-card"><h3 class="admin-h">Storage cleanup</h3><p class="admin-note">Photos and receipts that no product or order uses any more stay in storage forever and eat the quota. The scan never touches files a live product or order still shows, and never touches uploads from the last two days (they may still be being saved).</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="storage-cleanup-scan">Scan storage now</button><button class="btn" id="storage-cleanup-apply" hidden>Delete unused files</button></div><p class="admin-note" id="storage-cleanup-out" role="status" aria-live="polite" style="margin-top:12px">Nothing scanned yet.</p></div></details>`;
+  return `<div class="admin-card"><h3 class="admin-h">Your account</h3><p class="admin-note">Signed in as <strong id="acct-email">…</strong>. You sign in with <strong>ADMIN_MASTER_PASSWORD</strong> — that is your main admin password. <strong>ADMIN_BOOTSTRAP_PASSWORD</strong> is the backup one, and it still works if the master password is ever unset. Both are managed in Render (Environment → Environment Variables), not in this portal: change one there and the new password works at your next sign-in.</p></div><details class="adx-advanced" style="margin-top:22px"><summary class="admin-h">Advanced settings</summary><div class="admin-card"><h3 class="admin-h">Connection &amp; sync</h3><p class="admin-note" id="sync-note">Checking for unsaved changes…</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="retry-sync">Retry now</button><button class="btn btn-line" id="reload-cat">Reload catalogue</button><button class="btn btn-line" id="repair-photos">Repair missing photos</button><button class="btn" id="sync-github" hidden>Sync to GitHub</button></div><div id="sync-status" role="status" aria-live="polite" class="admin-note" style="margin-top:12px"></div><p class="admin-note" style="margin-top:12px">Everything you save goes straight to the live store. If your Wi-Fi drops, the change waits on this device and sends itself as soon as you are back online.</p></div><div class="admin-card"><h3 class="admin-h">Storage cleanup</h3><p class="admin-note">Photos and receipts that no product or order uses any more stay in storage forever and eat the quota. The scan never touches files a live product or order still shows, and never touches uploads from the last two days (they may still be being saved).</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="storage-cleanup-scan">Scan storage now</button><button class="btn" id="storage-cleanup-apply" hidden>Delete unused files</button></div><p class="admin-note" id="storage-cleanup-out" role="status" aria-live="polite" style="margin-top:12px">Nothing scanned yet.</p></div><div class="admin-card" id="catalog-recovery-card"><h3 class="admin-h">Catalogue recovery &amp; write lock</h3><p class="admin-note">Restores every soft-deleted or unavailable product — photos, prices and categories included — without re-uploading anything. Permanently deleted products stay deleted. Background supplier checks and audits can no longer hide, unpublish or blank a product; only these buttons and the admin editor can.</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-line" id="catalog-health-refresh">Check catalogue</button><button class="btn" id="catalog-recover">Recover unavailable products</button><button class="btn btn-line" id="catalog-fix-covers">Make cover URLs absolute</button></div><p class="admin-note" id="catalog-health" role="status" aria-live="polite" style="margin-top:12px">Not checked yet.</p><p class="admin-note" id="catalog-recovery-out" role="status" aria-live="polite"></p></div></details>`;
 }
 function bindAccount() {
   const email = $("#acct-email");
@@ -3099,6 +3238,92 @@ function bindAccount() {
       + (stuck ? " · " + stuck + " product(s) have no photo left to use — open them and add one." : ".")
       + (fixed ? " The shop shows them now." : "");
   });
+  // Catalogue recovery: the one-click "bring my products back" action, plus
+  // the cover-URL repair that makes every saved photo an absolute public
+  // bucket address. Both are admin-only and CSRF-guarded server-side.
+  {
+    const healthNote = $("#catalog-health");
+    const out = $("#catalog-recovery-out");
+    const checkBtn = $("#catalog-health-refresh");
+    const recoverBtn = $("#catalog-recover");
+    const coverBtn = $("#catalog-fix-covers");
+    const paintHealth = async () => {
+      if (!healthNote) return;
+      healthNote.textContent = "Checking every product…";
+      try {
+        const d = await syncFetch("api/admin/catalog/health", { method: "GET" });
+        const h = d.health || {};
+        const bits = [`${h.products || 0} products`, `${h.unavailable || 0} unavailable`];
+        if (h.missingCover) bits.push(`${h.missingCover} without a photo`);
+        if (h.relativeCover) bits.push(`${h.relativeCover} with a relative cover URL`);
+        if (h.nonAbsoluteCover) bits.push(`${h.nonAbsoluteCover} on another host`);
+        if (h.missingCategory) bits.push(`${h.missingCategory} without a category`);
+        bits.push(h.writeLock ? "write lock active" : "write lock NOT installed — run recover_unavailable_products.sql");
+        healthNote.textContent = bits.join(" · ");
+      } catch (err) {
+        healthNote.textContent = "Catalogue health unavailable: " + (err.message || "retry");
+      }
+    };
+    if (checkBtn && !checkBtn.dataset.bound) {
+      checkBtn.dataset.bound = "1";
+      checkBtn.onclick = () => paintHealth();
+    }
+    if (recoverBtn && !recoverBtn.dataset.bound) {
+      recoverBtn.dataset.bound = "1";
+      recoverBtn.onclick = async () => {
+        if (!confirm("Restore every soft-deleted / unavailable product to the shop?\n\nPermanently deleted products stay deleted. Every restored row is logged.")) return;
+        recoverBtn.disabled = true;
+        if (out) out.textContent = "Restoring products in the database…";
+        try {
+          const csrf = await window.JA_NET.csrf();
+          const d = await syncFetch("api/admin/catalog/recover", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+            body: JSON.stringify({ reason: "Admin catalogue recovery" }),
+          });
+          const report = d.report || {};
+          const extra = [];
+          if (report.prunedDeletedIds) extra.push(`${report.prunedDeletedIds} old delete marker(s) cleared`);
+          if (report.skippedPermanent) extra.push(`${report.skippedPermanent} permanently deleted kept out`);
+          if (report.repairedImages) extra.push(`${report.repairedImages} cover(s) repaired`);
+          if (out) out.textContent = d.message + (extra.length ? " " + extra.join(" · ") + "." : "");
+          JA.success(d.message || "Catalogue recovered.");
+          if (JA.reloadCatalog) await JA.reloadCatalog();
+          paintHealth();
+        } catch (err) {
+          if (out) out.textContent = "Recovery failed: " + (err.message || "retry");
+          JA.toast(err.message || "Recovery failed.");
+        } finally {
+          recoverBtn.disabled = false;
+        }
+      };
+    }
+    if (coverBtn && !coverBtn.dataset.bound) {
+      coverBtn.dataset.bound = "1";
+      coverBtn.onclick = async () => {
+        coverBtn.disabled = true;
+        if (out) out.textContent = "Checking every saved cover URL…";
+        try {
+          const csrf = await window.JA_NET.csrf();
+          const d = await syncFetch("api/admin/catalog/repair-image-urls", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+            body: "{}",
+          });
+          if (out) out.textContent = d.message || "Covers checked.";
+          JA.success(d.message || "Covers checked.");
+          if (d.fixed && JA.reloadCatalog) await JA.reloadCatalog();
+          paintHealth();
+        } catch (err) {
+          if (out) out.textContent = "Cover repair failed: " + (err.message || "retry");
+          JA.toast(err.message || "Cover repair failed.");
+        } finally {
+          coverBtn.disabled = false;
+        }
+      };
+    }
+    paintHealth();
+  }
   // Storage cleanup: a two-step flow - the scan only REPORTS (dry-run), and
   // the delete button appears once there is something safe to remove. The
   // server re-validates every file against the live catalogue at apply time,
@@ -3191,7 +3416,7 @@ function marketingPickerPrice(p) {
 
 function marketingPickerRowHTML(p, name, checked) {
   return `<label class="mk-product-option"><input type="checkbox" name="${esc(name)}" value="${esc(p.id)}"${checked ? " checked" : ""} />`
-    + `<img src="${esc(p.image_url || p.image || "images/products/_placeholder.jpg")}" alt="" loading="lazy" />`
+    + `<img src="${esc(p.image_url || p.image || "images/products/_placeholder.jpg")}" alt="" loading="lazy" decoding="async" data-ph="images/products/_placeholder.jpg" onerror="fallbackImg(event)" />`
     + `<span><b>${esc(p.name || "Product")}</b><small>${esc(marketingPickerPrice(p))}${p.badge ? ` · ${esc(p.badge)}` : ""}</small></span></label>`;
 }
 
@@ -4486,6 +4711,7 @@ function salesPanel() {
     <div class="adx-filter-bar sales-filters" aria-label="Filter sales"><input id="sales-search" type="search" placeholder="Search customer, order, product…" autocomplete="off" value="${esc(salesSearch)}" /><label>From <input id="sales-from" type="date" value="${esc(salesFrom)}" /></label><label>To <input id="sales-to" type="date" value="${esc(salesTo)}" /></label><button type="button" class="btn btn-line" id="sales-filter-clear">Clear</button></div>
     <p class="admin-note">Only confirmed orders count as sales. Pending orders are listed separately below. Date and search filters apply to the totals and top products.</p>
     <div class="stats" id="sales-kpis"><div class="stat"><span class="kicker">Loading</span><b>…</b></div></div>
+    <p class="admin-note" id="sales-cost-note" role="status" aria-live="polite"></p>
     <p class="admin-note" id="sales-pending">Loading…</p>
     <h3 class="admin-h">Top products</h3><div id="sales-top" class="empty">Loading…</div>`;
 }
@@ -4511,12 +4737,27 @@ async function fillSales() {
     ? (d.averageByCurrency || []).map((r) => JA.money(r.average, r.currency)).join(" · ")
     : ((d.averageByCurrency || [])[0] ? JA.money((d.averageByCurrency || [])[0].average, (d.averageByCurrency || [])[0].currency) : (d.averageOrderValue ? JA.money(d.averageOrderValue, ((d.revenueByCurrency || [])[0] || {}).currency || "NGN") : "—"));
   const rangeLab = (salesFrom || salesTo) ? "selected dates" : String(salesRange) === "all" ? "all time" : `last ${salesRange} days`;
+  // Net profit = selling price - cost price - delivery fee, per ledger
+  // currency. Wallet-share rows (walk-in sales included) carry the same
+  // accounting snapshot the ledger gets, so this figure matches the sheet.
+  const profitChips = (d.profitByCurrency || [])
+    .map((b) => JA.money(Number(b.netProfit) || 0, b.currency)).join(" · ") || "—";
   box.innerHTML = [
     ["Confirmed revenue", rev, rangeLab],
+    ["Net profit", profitChips, "after cost + delivery"],
     ["Orders", d.orders || 0, "confirmed"],
     ["Average order value", avg, "confirmed"],
     ["Units", d.units || 0, "items sold"],
   ].map(([k, v, s]) => `<div class="stat"><span class="kicker">${esc(k)}</span><b>${esc(String(v))}</b>${s ? `<i>${esc(s)}</i>` : ""}</div>`).join("");
+  const costNote = $("#sales-cost-note");
+  if (costNote) {
+    const missing = Number(d.ordersMissingCost) || 0;
+    if (missing > 0) {
+      costNote.innerHTML = `⚠ <strong>${missing} order${missing === 1 ? "" : "s"}</strong> in this period ${missing === 1 ? "has" : "have"} no cost price recorded, so ${missing === 1 ? "its" : "their"} profit is overstated. Open the product (or the accounting desk) and add the supplier cost.`;
+    } else {
+      costNote.textContent = "Every order in this period has a cost price, so net profit is complete.";
+    }
+  }
   const pend = $("#sales-pending");
   if (pend) {
     const n = d.pendingCount != null ? d.pendingCount : (d.pendingOrders || 0);
@@ -4777,7 +5018,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=219" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=221" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5183,7 +5424,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=219", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=221", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");

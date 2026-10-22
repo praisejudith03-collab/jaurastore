@@ -1726,7 +1726,7 @@ def _prefer_real_photos(rows, local_rows):
     return out
 
 
-def product_for_save(pid):
+def product_for_save(pid, strict=False):
     """Load one product for a save/merge without rebuilding the full catalog.
 
     Production uses an indexed id/legacyId lookup in Supabase. The local path
@@ -1738,6 +1738,11 @@ def product_for_save(pid):
     if not wanted:
         return None
     if _prod_source():
+        if strict:
+            # Let a read failure stay a read failure; the API turns it into a
+            # 503 "nothing was changed" instead of a 404 "product vanished".
+            from supabase_store import product_by_id
+            return product_by_id(wanted, strict=True)
         try:
             from supabase_store import product_by_id
             return product_by_id(wanted)
@@ -2868,6 +2873,96 @@ def deleted_product_ids():
     except Exception:
         pass
     return ids
+
+
+def catalog_health():
+    """Availability / cover / category health for the recovery screen.
+
+    Supabase is authoritative in production; a local checkout reports the same
+    shape from the override file so the Admin screen works in every mode.
+    """
+    if _prod_source():
+        try:
+            from supabase_store import catalog_health as _health
+            return _health()
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:240], "unavailable": 0,
+                    "products": 0, "writeLock": False}
+    rows = merged(include_hidden=True)
+    deleted = set(overrides().get("deleted") or [])
+    health = {"ok": True, "products": len(rows), "unavailable": 0,
+              "softDeleted": 0, "inactive": 0, "hidden": 0,
+              "missingCover": 0, "relativeCover": 0, "nonAbsoluteCover": 0,
+              "missingCategory": 0, "writeLock": False, "storageBase": "",
+              "method": "local"}
+    for row in rows:
+        if str(row.get("id") or "") in deleted:
+            health["softDeleted"] += 1
+        if row.get("is_active") is False:
+            health["inactive"] += 1
+        if row.get("online") is False:
+            health["hidden"] += 1
+        if not str(row.get("image_url") or row.get("image") or "").strip():
+            health["missingCover"] += 1
+        elif str(row.get("image_url") or row.get("image") or "").startswith(("/uploads/", "uploads/")):
+            health["relativeCover"] += 1
+        if not str(row.get("category_id") or row.get("category") or "").strip():
+            health["missingCategory"] += 1
+    health["unavailable"] = health["softDeleted"] + health["inactive"] + health["hidden"]
+    return health
+
+
+def recover_unavailable_products(ids=None, reason="owner recovery"):
+    """Restore every soft-deleted / unavailable product, one idempotent call.
+
+    Two layers, because the shop has two: the Supabase products table (the
+    source of truth) and the local durable ``deleted`` list (which still hides
+    a restored row on the next render). Both are cleared for exactly the ids
+    that were restored, so nothing else is resurrected.
+    """
+    wanted = [str(i or "").strip() for i in (ids or []) if str(i or "").strip()]
+    report = {"ok": False, "restored": 0, "restoredIds": [],
+              "skippedPermanent": 0, "repairedImages": 0,
+              "prunedDeletedIds": 0, "reason": reason, "method": "local"}
+    if _prod_source():
+        try:
+            from supabase_store import recover_unavailable_products as _recover
+            report = _recover(ids=wanted or None, reason=reason)
+        except Exception as exc:
+            report["error"] = str(exc)[:240]
+            return report
+    else:
+        # Local mode: a row is unavailable when it sits on the deleted list or
+        # the override carries online/is_active false.
+        local_ids = set(wanted)
+        if not local_ids:
+            local_ids = set(str(x or "").strip()
+                            for x in (overrides().get("deleted") or []))
+            local_ids |= {str(p.get("id") or "") for p in overrides().get("products") or []
+                          if (p or {}).get("online") is False or (p or {}).get("is_active") is False}
+        report.update(ok=True, method="local",
+                      restoredIds=sorted(x for x in local_ids if x),
+                      restored=len([x for x in local_ids if x]))
+
+    restored = [str(x) for x in (report.get("restoredIds") or []) if str(x or "").strip()]
+    if report.get("ok") and restored:
+        try:
+            def _apply(data, _path):
+                gone = set(restored)
+                data["deleted"] = [pid for pid in (data.get("deleted") or [])
+                                   if str(pid or "").strip() not in gone]
+                for row in data.get("products") or []:
+                    if isinstance(row, dict) and str(row.get("id") or "") in gone:
+                        row["online"] = True
+                        row["is_active"] = True
+                        row["is_deleted"] = False
+                        if str(row.get("source") or "").lower() in ("deleted", "replaced"):
+                            row["source"] = "admin"
+                return data
+            _mutate(reason or "recovery", _apply)
+        except Exception as exc:
+            report["localWarning"] = f"The database was restored, but the local list could not be updated: {exc}"
+    return report
 
 
 def local_only_products():

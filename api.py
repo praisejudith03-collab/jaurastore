@@ -3464,6 +3464,33 @@ def admin_accounting_google_verify():
     return response
 
 
+@api.post("/admin/accounting/google/refresh")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_google_refresh():
+    """Force a fresh Sheets access token, then report the live connection.
+
+    The ledger push already refreshes on its own, but a token that expired
+    overnight used to turn the first manual push into a red error with no way
+    to recover except reconnecting OAuth. This is the one-click recovery the
+    accounting desk exposes, and every caller gets a toast-ready message.
+    """
+    import google_sheets
+    try:
+        report = google_sheets.refresh_connection()
+    except Exception as exc:
+        report = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    if not report.get("ok"):
+        return jsonify(ok=False, error=report.get("error") or
+                       "Google Sheets could not be refreshed.", report=report,
+                       google=google_sheets.integration_status()), 503
+    audit(authmod.current_admin(), "accounting.google_refresh",
+          f"email={report.get('email')} refreshed={report.get('refreshed')}", _ip())
+    return jsonify(ok=True, message=report.get("message") or
+                   "Google Sheets connection refreshed.", report=report,
+                   google=google_sheets.integration_status())
+
+
 @api.get("/admin/accounting/google/ledger/<currency>")
 @authmod.require_admin
 def admin_accounting_google_ledger_link(currency):
@@ -4512,9 +4539,24 @@ def _order_row(r):
 @authmod.require_admin
 def admin_walkin_products():
     products = [p for p in catalog_mod.merged() if p.get("online") is not False]
-    return jsonify(ok=True, products=[{"id": p.get("id"), "name": p.get("name"),
-        "priceNgn": p.get("priceNgn"), "priceCfa": p.get("priceCfa"),
-        "stock": catalog_mod.stock_of(p)} for p in products])
+    # The accounting rate is "NGN value of one FCFA" (about 0.44), NOT a
+    # whole number: reading it with clean_int truncated it to 0 -> 1, which
+    # then divided nothing and printed a CFA supplier cost in Naira.
+    rate = float(accounting_mod.current_exchange_rate())
+    rows = []
+    for p in products:
+        cost_ngn = sec.clean_int(p.get("supplierCost") or 0, 0, 0, 10**9)
+        rows.append({"id": p.get("id"), "name": p.get("name"),
+            "priceNgn": p.get("priceNgn"), "priceCfa": p.get("priceCfa"),
+            "image": p.get("image") or p.get("image_url") or "",
+            # The costing fields let the walk-in modal show the profit of the
+            # sale before it is recorded, exactly like the accounting desk.
+            "supplierCost": cost_ngn,
+            "supplierCostCfa": accounting_mod.supplier_cost_cfa(cost_ngn, rate)
+                               if cost_ngn else 0,
+            "supplierUrl": p.get("supplierSku") or "",
+            "stock": catalog_mod.stock_of(p)})
+    return jsonify(ok=True, exchangeRate=rate, products=rows)
 
 
 @api.post("/admin/walk-in-sales")
@@ -4541,7 +4583,9 @@ def admin_walkin_sale_create():
         return jsonify(ok=False, error="Insufficient stock or inventory service unavailable."), 409
     now = _utcnow(); oid = "WI" + uuid.uuid4().hex[:10].upper()
     cost_ngn = sec.clean_int(product.get("supplierCost") or 0, 0, 0, 10**9)
-    rate = max(1, sec.clean_int((_load_site() or {}).get("cfaRate"), 1, 1, 10**6))
+    # Same rate the accounting desk and the Sales dashboard use, kept as a
+    # float so the stored order snapshot stays JSON-serialisable.
+    rate = float(accounting_mod.current_exchange_rate())
     cost_in_currency = cost_ngn if currency == "NGN" else accounting_mod.supplier_cost_cfa(cost_ngn, rate)
     total = price * qty
     snapshot = {"currency": currency, "exchangeRate": rate, "saleAmount": total,
@@ -4575,9 +4619,30 @@ def admin_walkin_sale_create():
         if not report: sheet_sync["error"] = "No ledger tab accepted the sale."
     except Exception as exc:
         sheet_sync = {"ok":False,"error":str(exc)[:240]}
+    # The same net-profit arithmetic the Sales dashboard and the ledger use:
+    # selling price - cost price - delivery fee (a walk-in has no delivery).
+    # A missing cost price is reported, not silently treated as 100% profit.
+    try:
+        figures = accounting_mod.entry_figures(snapshot, currency, rate)
+        revenue = accounting_mod.amount(figures.get("saleAmount"))
+        net_profit = accounting_mod.amount(figures.get("netProfit"))
+        cost_missing = not bool(cost_ngn) and not figures.get("profitOverrideActive")
+    except Exception:
+        revenue, net_profit, cost_missing = total, None, not bool(cost_ngn)
+    if cost_missing:
+        # With no cost price the honest answer is "unknown", not "all of it is
+        # profit": the modal then shows revenue only, and the message says why.
+        net_profit = None
     audit(authmod.current_admin(),"walkin.sale",f"{oid} {pid} qty={qty} cur={currency} sheet={sheet_sync['ok']}",_ip())
-    return jsonify(ok=True,orderId=oid,stockReserved=True,sheets=sheet_sync,
-                   message="Sale recorded." if sheet_sync["ok"] else "Sale recorded, but Google Sheets sync failed: " + sheet_sync.get("error","")), (200 if sheet_sync["ok"] else 207)
+    message = "Sale recorded." if sheet_sync["ok"] else (
+        "Sale recorded, but Google Sheets sync failed: "
+        + str(sheet_sync.get("error") or "unknown error"))
+    if cost_missing:
+        message += " Add this product's cost price so its profit counts."
+    return jsonify(ok=True, orderId=oid, stockReserved=True, sheets=sheet_sync,
+                   revenue=revenue, netProfit=net_profit,
+                   costMissing=cost_missing, currency=currency,
+                   message=message), (200 if sheet_sync["ok"] else 207)
 
 
 @api.get("/admin/orders")
@@ -5447,10 +5512,23 @@ def admin_product_media_update(pid):
     if not images:
         return jsonify(ok=False, error="Add a replacement photo before removing the last saved media."), 400
     try:
-        current = catalog_mod.product_for_save(product_id)
-    except Exception:
+        current = catalog_mod.product_for_save(product_id, strict=True)
+    except Exception as exc:
+        # A catalogue read that failed is not proof the product is gone. The
+        # owner saw "That product is no longer available." while the row was
+        # still there and the database was simply slow - the old photo was
+        # always safe, so answer 503 and say so.
+        try:
+            import observability
+            observability.record_failure("admin.media_save", exc,
+                                         payload_id=product_id,
+                                         logger=current_app.logger)
+        except Exception:
+            pass
         return jsonify(ok=False, error=(
-            "The product could not be loaded, so its saved media was left unchanged.")), 503
+            "The catalogue could not be read to load that product. The "
+            "previously saved photo is safe and nothing was changed - "
+            "please retry.")), 503
     if not current:
         return jsonify(ok=False, error="That product is no longer available."), 404
     product = dict(current)
@@ -6135,8 +6213,17 @@ def admin_supplier_alerts():
         alerts.append({"id": str(row.get("id") or ""), "name": row.get("name") or "",
                        "image": row.get("image_url") or row.get("image") or "",
                        "supplierUrl": row.get("supplierSku") or row.get("supplierUrl") or "",
-                       "status": status, "storeOutOfStock": catalog_mod.is_stock_locked(row.get("id"))})
-    return jsonify(ok=True, alerts=alerts)
+                       "priceNgn": row.get("priceNgn"), "priceCfa": row.get("priceCfa"),
+                       "stock": catalog_mod.stock_of(row),
+                       "status": status,
+                       "online": row.get("online") is not False,
+                       "storeOutOfStock": catalog_mod.is_stock_locked(row.get("id"))})
+    alerts.sort(key=lambda a: (a["status"] != "out_of_stock", str(a["name"]).lower()))
+    return jsonify(ok=True, alerts=alerts,
+                   counts={"total": len(alerts),
+                           "outOfStock": sum(1 for a in alerts if a["status"] == "out_of_stock"),
+                           "lowStock": sum(1 for a in alerts if a["status"] == "low_stock"),
+                           "hidden": sum(1 for a in alerts if a["storeOutOfStock"])})
 
 
 @api.post("/admin/supplier-alerts/<pid>/toggle-out-of-stock")
@@ -6157,6 +6244,94 @@ def admin_supplier_alert_toggle(pid):
         return jsonify(ok=False, error="Store availability could not be saved."), 503
     _invalidate_all_catalog_caches()
     return jsonify(ok=True, outOfStock=state)
+
+
+@api.get("/admin/catalog/health")
+@authmod.require_admin
+def admin_catalog_health():
+    """What the recovery card shows before anything is changed.
+
+    ``unavailable`` is the number of rows the storefront is currently hiding
+    (soft-deleted, inactive or hidden). ``writeLock`` says whether
+    recover_unavailable_products.sql has been applied to this database; when it
+    is false the card offers the exact SQL instead of pretending a recovery
+    would stick.
+    """
+    try:
+        health = catalog_mod.catalog_health()
+    except Exception as exc:
+        return jsonify(ok=False, error=f"Catalogue health could not be read: {str(exc)[:200]}"), 503
+    health["local"] = not bool(catalog_mod._prod_source())
+    response = jsonify(ok=True, health=health)
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
+    return response
+
+
+@api.post("/admin/catalog/recover")
+@authmod.require_admin
+@sec.require_csrf
+def admin_catalog_recover():
+    """Restore every unavailable product. Admin-only, confirmed, audited.
+
+    Body (all optional): ``{ids: [...], reason: "..."}``. With no ids this is
+    the owner's one-click "bring my products back" action. Permanently deleted
+    ids are skipped by the database; this route reports that count instead of
+    silently including them.
+    """
+    body = request.get_json(silent=True) or {}
+    raw_ids = body.get("ids") if isinstance(body, dict) else None
+    ids = []
+    if isinstance(raw_ids, list):
+        for value in raw_ids[:500]:
+            pid = sec.clean(value, 64).strip()
+            if pid:
+                ids.append(pid)
+    reason = sec.clean(body.get("reason"), 120).strip() or "Admin catalogue recovery"
+    try:
+        report = catalog_mod.recover_unavailable_products(ids=ids or None,
+                                                          reason=reason)
+    except Exception as exc:
+        return jsonify(ok=False, error=f"The recovery could not run: {str(exc)[:200]}"), 503
+    if not report.get("ok"):
+        return jsonify(ok=False, error=report.get("error") or
+                       "The recovery could not run.", report=report), 503
+    _invalidate_all_catalog_caches()
+    try:
+        audit(authmod.current_admin(), "catalog.recover",
+              f"restored={report.get('restored')} method={report.get('method')} "
+              f"reason={reason}", _ip())
+    except Exception:
+        pass
+    restored = int(report.get("restored") or 0)
+    message = (f"{restored} product{'s' if restored != 1 else ''} restored."
+               if restored else "Nothing was unavailable - every product is already live.")
+    return jsonify(ok=True, message=message, report=report,
+                   health=catalog_mod.catalog_health())
+
+
+@api.post("/admin/catalog/repair-image-urls")
+@authmod.require_admin
+@sec.require_csrf
+def admin_catalog_repair_image_urls():
+    """Rewrite legacy same-origin /uploads/ covers to absolute bucket URLs.
+
+    Absolute public Supabase Storage URLs are the storage contract; a relative
+    cover only works while /uploads/ can still redirect, and it 404s on any
+    other host. This is idempotent and reports how many rows changed.
+    """
+    try:
+        from supabase_store import repair_relative_image_urls
+        fixed = repair_relative_image_urls()
+    except Exception as exc:
+        return jsonify(ok=False, error=f"Covers could not be repaired: {str(exc)[:200]}"), 503
+    if fixed:
+        _invalidate_all_catalog_caches()
+        audit(authmod.current_admin(), "catalog.repair_image_urls",
+              f"fixed={fixed}", _ip())
+    return jsonify(ok=True, fixed=fixed,
+                   message=(f"{fixed} cover URL{'s' if fixed != 1 else ''} rewritten to the public bucket."
+                            if fixed else "Every saved cover already uses an absolute URL."),
+                   health=catalog_mod.catalog_health())
 
 
 @api.get("/admin/stock-locks")

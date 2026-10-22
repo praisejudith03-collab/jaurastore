@@ -57,7 +57,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # "create table products"). A save must survive against the full table.
 FULL_PRODUCT_COLUMNS = {
     "id", "legacyId", "sku", "slug", "name", "nameFr", "descriptionFr",
-    "category", "priceCfa", "compareCfa", "priceNgn", "compareNgn",
+    "category", "category_id", "supplier_status", "priceCfa", "compareCfa", "priceNgn", "compareNgn",
     "image", "image_url", "images", "description", "stock", "stock_quantity",
     "badge", "featured", "online", "colors", "options", "optionStock",
     "optionPrices", "optionCompareAt", "optionSupplierSku", "optionSku",

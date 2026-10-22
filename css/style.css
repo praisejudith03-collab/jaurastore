@@ -8237,6 +8237,7 @@ body.ac-drawer-open .ac-batch-drawer { visibility: visible; transform: translate
 .ac-login-foot { align-self: start; margin-top: 20px; color: #a08f7d; font-size: 10px; text-align: center; }
 .ac-toast { position: fixed; z-index: 110; right: 22px; bottom: 22px; max-width: min(400px,calc(100vw - 30px)); padding: 12px 16px; border-radius: 10px; background: #342922; color: #fff; box-shadow: 0 10px 30px rgba(0,0,0,.2); font-size: 12px; opacity: 0; pointer-events: none; transform: translateY(10px); transition: opacity .18s,transform .18s; }
 .ac-toast.is-visible { opacity: 1; transform: translateY(0); }
+.ac-toast[data-kind="ok"], .ac-toast[data-kind="success"] { background: #1f7a4d; }
 .ac-toast[data-kind="error"] { background: #8e3e30; }
 .admin-more-sheet .admin-more-link { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 8px 6px; border: 0; border-radius: 10px; background: transparent; color: #72675b; font: 500 10px var(--sans); text-decoration: none; }
 .admin-more-sheet .admin-more-link:hover { background: #faf7fd; color: #5b309f; }
@@ -8430,6 +8431,9 @@ body[data-page="accounting"] select { font: inherit; }
 body[data-page="accounting"] button:disabled { cursor: not-allowed; opacity: .5; }
 #aa-toast { position: fixed; z-index: 200; right: 20px; bottom: 20px; max-width: min(420px,calc(100vw - 32px)); padding: 13px 16px; border-radius: 12px; background: #2d3029; color: #fff; box-shadow: 0 12px 34px #24261c2e; font-size: 13px; opacity: 0; pointer-events: none; transform: translateY(8px); transition: opacity .2s,transform .2s; }
 #aa-toast.is-visible { opacity: 1; transform: translateY(0); }
+/* Sync feedback is colour-coded exactly like the storefront toast:
+   green means the ledger accepted the rows, red means it did not. */
+#aa-toast[data-kind="ok"], #aa-toast[data-kind="success"] { background: #1f7a4d; }
 #aa-toast[data-kind="error"] { background: var(--aa-error); }
 .aa-app { min-height: 100vh; padding-bottom: 34px; }
 .aa-topbar { display: flex; min-height: 68px; align-items: center; justify-content: space-between; gap: 20px; padding: 10px max(24px,calc((100vw - 1120px)/2)); border-bottom: 1px solid var(--aa-line); background: rgba(255,255,255,.94); }

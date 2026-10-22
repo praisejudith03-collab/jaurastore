@@ -456,19 +456,24 @@ def dead_product_ids_table():
     return cached_read("dead_product_ids", _fetch)
 
 
-def product_by_id(pid):
+def product_by_id(pid, strict=False):
     """One live product row from Supabase, dict-shaped, or None.
 
     Looks the id up as a primary key first, then as a `legacyId` alias, so an
     old wix-* product link or order line still resolves after the row has been
     given a canonical jau-* id.
 
-    Never raises: an unreachable Supabase returns None and the caller
-    decides how to surface that (checkout must not fall back to a stale
-    local price).
+    Never raises by default: an unreachable Supabase returns None and the
+    caller decides how to surface that (checkout must not fall back to a stale
+    local price). ``strict=True`` is for the admin save paths, where "the row
+    is gone" and "the database did not answer" are DIFFERENT answers - telling
+    the owner a product no longer exists because a read timed out sent them
+    re-uploading a photo that was never lost.
     """
     c = client()
     if c is None:
+        if strict:
+            raise RuntimeError("Supabase is not configured")
         return None
     key = str(pid or "").strip()
     if not key:
@@ -482,6 +487,8 @@ def product_by_id(pid):
             # that must not break the primary-key lookup that already ran.
             if column == "legacyId":
                 return None
+            if strict:
+                raise
             print(f"[supabase] product read failed for {pid!r}: {exc}")
             return None
         rows = _res_data(res)
@@ -655,7 +662,10 @@ def upsert_products(products):
         from catalog import resolve_image
         r = resolve_image(dict(p))
         r.setdefault("source", "admin")
-        r.setdefault("updated_at", _now())
+        # ALWAYS a fresh timestamp. A save is an update: carrying the row's
+        # previous value forward made a later Hide look like a stale background
+        # write to the catalogue write-lock, which then reverted it.
+        r["updated_at"] = _now()
         # A save through the live catalogue IS a live product. Restoring a
         # trashed piece runs through here, so the soft-delete markers its old
         # row carried (source='deleted', is_deleted=true) must be cleared in
@@ -739,12 +749,29 @@ def update_product_fields(product, dirty_fields):
         patch["updated_at"] = _now()
     if len(patch) <= 2:
         return "error", None
+    # A targeted `online: false` patch is exactly what the catalogue write-lock
+    # reverts, because it cannot prove an admin asked for it. Send the flag
+    # through the guarded RPC instead, then persist the rest of the columns.
+    hide = patch.get("online") is False
+    if hide:
+        patch.pop("online", None)
+        if len(patch) <= 2:
+            if not set_product_online([pid], False):
+                return "error", None
+            row = product_by_id(pid)
+            return ("updated", row) if row else ("missing", None)
     try:
         result = (c.table("products").update(patch).eq("id", pid)
                   .select("*").execute())
         rows = _res_data(result)
         if not rows:
             return "missing", None
+        if hide:
+            if not set_product_online([pid], False):
+                return "error", None
+            # The update above was read back before the flag moved; report the
+            # row the way it now exists so the portal's "Hidden" tag is true.
+            rows[0] = dict(rows[0] or {}, online=False, is_active=False)
         invalidate_read_cache()
         return "updated", _canonicalize_product(rows[0], c)
     except Exception as exc:
@@ -788,20 +815,39 @@ def delete_products_strict(ids):
     c = client()
     if c is None or not ids:
         return False
+    ids = [str(i) for i in ids if str(i or "").strip()]
+    if not ids:
+        return False
+    # Prefer the guarded RPC: it sets the transaction-scoped admin flag that
+    # the catalogue write-lock (recover_unavailable_products.sql) requires, and
+    # it logs the action in product_guard_events. A one-column REST update of
+    # `is_deleted` is exactly the shape the lock reverts, by design.
     try:
-        c.table("products").update({"source": "deleted",
-                                    "is_deleted": True}).in_("id", list(ids)).execute()
+        c.rpc("admin_trash_products", {"p_ids": ids}).execute()
         invalidate_read_cache()
         return True
     except Exception as exc:
-        # A legacy products table may not have the is_deleted column yet
-        # (auto_migrate adds it at boot). The source='deleted' marker alone
-        # still hides the row from every reader, so the trash must not fail.
+        if not _function_missing(exc):
+            print(f"[supabase] admin_trash_products failed: {exc}")
+            return False
+        # The migration has not been applied on this database, so the lock is
+        # not installed either: the legacy REST write is still safe.
+    try:
+        c.table("products").update({"source": "deleted",
+                                    "is_deleted": True,
+                                    "is_active": False,
+                                    "updated_at": _now()}).in_("id", ids).execute()
+        invalidate_read_cache()
+        return True
+    except Exception as exc:
+        # A legacy products table may not have the is_deleted / is_active
+        # columns yet. The source='deleted' marker alone still hides the row
+        # from every reader, so the trash must not fail.
         match = _MISSING_COLUMN_RE.search(str(exc))
-        if match and match.group(1) == "is_deleted":
+        if match and match.group(1) in ("is_deleted", "is_active"):
             try:
                 c.table("products").update({"source": "deleted"}).in_(
-                    "id", list(ids)).execute()
+                    "id", ids).execute()
                 invalidate_read_cache()
                 return True
             except Exception as exc2:
@@ -809,6 +855,315 @@ def delete_products_strict(ids):
                 return False
         print(f"[supabase] products delete failed: {exc}")
         return False
+
+
+def _function_missing(exc):
+    """True when PostgREST says the RPC itself does not exist (PGRST202).
+
+    Only that error may fall back to a plain REST write. Any other failure -
+    permission denied, the write-lock rejecting the statement, a dropped
+    connection - must stay visible to the caller instead of being retried
+    through a weaker path.
+    """
+    message = str(exc or "")
+    if "PGRST202" in message or "404" in message and "function" in message.lower():
+        return True
+    lowered = message.lower()
+    # A client double / an older supabase-py without .rpc() means the same
+    # thing as a missing function: this deployment has no guarded RPC, so the
+    # legacy REST path is the only one available.
+    if "has no attribute 'rpc'" in lowered or "object has no attribute" in lowered:
+        return True
+    return ("could not find the function" in lowered
+            or "function public." in lowered and "does not exist" in lowered)
+
+
+def set_product_online(ids, online):
+    """Hide / show products through the guarded RPC. True only on success.
+
+    Used by the admin editor's fast patch path. A plain REST update of the
+    `online` column is reverted by the catalogue write-lock, so the column
+    must travel through the RPC that carries the admin intent.
+    """
+    c = client()
+    ids = [str(i) for i in (ids or []) if str(i or "").strip()]
+    if c is None or not ids:
+        return False
+    try:
+        c.rpc("admin_set_product_online", {"p_ids": ids,
+                                           "p_online": bool(online)}).execute()
+        invalidate_read_cache()
+        return True
+    except Exception as exc:
+        if not _function_missing(exc):
+            print(f"[supabase] admin_set_product_online failed: {exc}")
+            return False
+    try:
+        c.table("products").update({"online": bool(online),
+                                    "is_active": bool(online),
+                                    "updated_at": _now()}).in_("id", ids).execute()
+        invalidate_read_cache()
+        return True
+    except Exception as exc:
+        print(f"[supabase] product availability update failed: {exc}")
+        return False
+
+
+def restore_products(ids, reason="owner recovery"):
+    """Restore trashed / unavailable rows through the guarded RPC."""
+    c = client()
+    ids = [str(i) for i in (ids or []) if str(i or "").strip()]
+    if c is None or not ids:
+        return False
+    try:
+        c.rpc("admin_restore_products", {"p_ids": ids}).execute()
+        invalidate_read_cache()
+        return True
+    except Exception as exc:
+        if not _function_missing(exc):
+            print(f"[supabase] admin_restore_products failed: {exc}")
+            return False
+    try:
+        c.table("products").update({"source": "admin", "is_deleted": False,
+                                    "is_active": True, "online": True,
+                                    "updated_at": _now()}).in_("id", ids).execute()
+        invalidate_read_cache()
+        return True
+    except Exception as exc:
+        print(f"[supabase] product restore failed: {exc}")
+        return False
+
+
+def _unavailable_rows():
+    """Rows currently hidden from the shop, as raw products-table dicts.
+
+    Returns None when the table cannot be read at all. Never raises: the
+    recovery endpoint reports an unreachable database as its own error instead
+    of pretending there was nothing to restore.
+    """
+    c = client()
+    if c is None:
+        return None
+    try:
+        rows = []
+        for query in ("is_deleted.eq.true", "is_active.eq.false", "online.eq.false"):
+            try:
+                res = c.table("products").select("*").or_(query).execute()
+            except Exception:
+                # A column this database does not have yet: skip that filter
+                # rather than losing the other two.
+                continue
+            rows.extend(_res_data(res) or [])
+    except Exception as exc:
+        print(f"[supabase] unavailable product read failed: {exc}")
+        return None
+    seen, unique = set(), []
+    for row in rows:
+        pid = str((row or {}).get("id") or "").strip()
+        if pid and pid not in seen:
+            seen.add(pid)
+            unique.append(row)
+    return unique
+
+
+def recover_unavailable_products(ids=None, reason="owner recovery"):
+    """Bring every soft-deleted / unavailable product back to the shop.
+
+    One call, idempotent, auditable. Prefers the SQL function so the write-lock
+    and the audit ledger stay in charge; falls back to the REST path only when
+    that function has not been installed. Rows in the permanent
+    ``deleted_products`` ledger are never resurrected.
+    """
+    wanted = [str(i).strip() for i in (ids or []) if str(i or "").strip()]
+    c = client()
+    report = {"ok": False, "restored": 0, "restoredIds": [],
+              "skippedPermanent": 0, "repairedImages": 0,
+              "prunedDeletedIds": 0, "uncategorized": 0, "reason": reason}
+    if c is None:
+        report["error"] = "Supabase is not configured."
+        return report
+    # Always prefer the SQL function - with ids or without - so the write-lock
+    # context, the audit ledger and the legacy-tombstone pruning all run in one
+    # transaction. The REST path below is only for a database that has not had
+    # the migration applied yet.
+    try:
+        params = {"p_reason": reason}
+        if wanted:
+            params["p_ids"] = wanted
+        res = c.rpc("recover_unavailable_products", params).execute()
+        data = _res_data(res)
+        payload = data[0] if isinstance(data, list) and data else data
+        if isinstance(payload, dict) and payload.get("ok"):
+            report.update({k: payload.get(k, report[k]) for k in list(report)})
+            report["ok"] = True
+            report["method"] = "rpc"
+            invalidate_read_cache()
+            return report
+    except Exception as exc:
+        if not _function_missing(exc):
+            report["error"] = str(exc)[:240]
+            return report
+
+    # REST fallback (migration not applied). Restores only what the read
+    # returns, prunes the durable tombstone list per id, and never touches a
+    # hard-deleted id.
+    try:
+        from catalog import is_permanently_removed
+        hard = set(load_hard_deleted_ids() or [])
+    except Exception:
+        is_permanently_removed = None
+        hard = set()
+    rows = _unavailable_rows()
+    if rows is None:
+        report["error"] = "The products table could not be read."
+        return report
+    restored = []
+    for row in rows:
+        pid = str(row.get("id") or "").strip()
+        if not pid:
+            continue
+        if wanted and pid not in wanted:
+            continue
+        if pid in hard or (is_permanently_removed and is_permanently_removed(row)):
+            report["skippedPermanent"] += 1
+            continue
+        patch = {"is_deleted": False, "is_active": True, "online": True,
+                 "updated_at": _now()}
+        if str(row.get("source") or "").strip().lower() in ("deleted", "replaced") \
+                or not str(row.get("source") or "").strip():
+            patch["source"] = "admin"
+        if not str(row.get("image_url") or "").strip():
+            cover = str(row.get("image") or "").strip()
+            gallery = row.get("images")
+            if not cover and isinstance(gallery, list) and gallery:
+                cover = str(gallery[0] or "").strip()
+            if cover:
+                patch["image_url"] = cover
+                patch["image"] = cover
+                report["repairedImages"] += 1
+        try:
+            c.table("products").update(patch).eq("id", pid).execute()
+        except Exception as exc:
+            # A legacy table may lack is_active. Retry without the new column
+            # instead of leaving the row unavailable.
+            if "is_active" in str(exc):
+                patch.pop("is_active", None)
+                try:
+                    c.table("products").update(patch).eq("id", pid).execute()
+                except Exception as exc2:
+                    print(f"[supabase] recovery failed for {pid!r}: {exc2}")
+                    continue
+            else:
+                print(f"[supabase] recovery failed for {pid!r}: {exc}")
+                continue
+        restored.append(pid)
+        try:
+            clear_deleted_id(pid)
+            report["prunedDeletedIds"] += 1
+        except Exception:
+            pass
+    report.update({"ok": True, "restored": len(restored),
+                   "restoredIds": restored, "method": "rest"})
+    invalidate_read_cache()
+    return report
+
+
+def catalog_health():
+    """Counts the recovery screen shows before anything is changed.
+
+    ``unavailable`` is the number of rows the shop is currently hiding;
+    ``missingCover`` counts rows with no cover at all; ``relativeCover`` counts
+    rows whose cover is still a legacy same-origin ``/uploads/`` path instead
+    of an absolute public bucket URL.
+    """
+    rows = products_table_rows()
+    health = {"ok": rows is not None, "products": 0, "unavailable": 0,
+              "softDeleted": 0, "inactive": 0, "hidden": 0,
+              "missingCover": 0, "relativeCover": 0, "nonAbsoluteCover": 0,
+              "missingCategory": 0, "writeLock": False, "storageBase": ""}
+    base = (Config.SUPABASE_URL or "").rstrip("/")
+    health["storageBase"] = f"{base}/storage/v1/object/public/uploads/" if base else ""
+    # Is the recovery/write-lock migration installed? A missing function is
+    # the answer, not an error: the screen then offers the SQL to run.
+    try:
+        c = client()
+        if c is not None:
+            c.rpc("jaura_catalog_admin", {}).execute()
+            health["writeLock"] = True
+    except Exception:
+        health["writeLock"] = False
+    if rows is None:
+        return health
+    health["products"] = len(rows)
+    base = (Config.SUPABASE_URL or "").rstrip("/")
+    for row in rows:
+        row = dict(row or {})
+        cover = str(row.get("image_url") or row.get("image") or "").strip()
+        deleted = bool(row.get("is_deleted"))
+        inactive = row.get("is_active") is False
+        hidden = row.get("online") is False
+        if deleted:
+            health["softDeleted"] += 1
+        if inactive:
+            health["inactive"] += 1
+        if hidden:
+            health["hidden"] += 1
+        if deleted or inactive or hidden:
+            health["unavailable"] += 1
+        if not cover:
+            health["missingCover"] += 1
+        elif cover.startswith(("/uploads/", "uploads/")):
+            health["relativeCover"] += 1
+        elif cover.startswith(("http://", "https://")):
+            if "/storage/v1/object/" in cover and base and not cover.startswith(base + "/"):
+                health["nonAbsoluteCover"] += 1
+        elif not cover.startswith(("images/", "data:", "blob:")):
+            health["nonAbsoluteCover"] += 1
+        if not str(row.get("category_id") or row.get("category") or "").strip():
+            health["missingCategory"] += 1
+    return health
+
+
+def repair_relative_image_urls():
+    """Rewrite legacy `/uploads/<key>` covers to absolute public bucket URLs.
+
+    Returns the number of rows changed. Requires SUPABASE_URL, because the
+    absolute address of the bucket is a property of the project, not of the
+    row. Never rewrites a value that is already absolute.
+    """
+    base = (Config.SUPABASE_URL or "").rstrip("/")
+    c = client()
+    if not base or c is None:
+        return 0
+    try:
+        res = (c.table("products").select("id,image,image_url")
+               .or_("image_url.like./uploads/%,image_url.like.uploads/%").execute())
+    except Exception as exc:
+        print(f"[supabase] relative cover read failed: {exc}")
+        return 0
+    fixed = 0
+    for row in _res_data(res) or []:
+        pid = str((row or {}).get("id") or "").strip()
+        current = str((row or {}).get("image_url") or "").strip()
+        if not pid or not current:
+            continue
+        key = current[len("/uploads/"):] if current.startswith("/uploads/") else (
+            current[len("uploads/"):] if current.startswith("uploads/") else "")
+        key = key.lstrip("/")
+        if not key:
+            continue
+        absolute = f"{base}/storage/v1/object/public/uploads/{key}"
+        patch = {"image_url": absolute}
+        if not str(row.get("image") or "").strip():
+            patch["image"] = absolute
+        try:
+            c.table("products").update(patch).eq("id", pid).execute()
+            fixed += 1
+        except Exception as exc:
+            print(f"[supabase] cover repair failed for {pid!r}: {exc}")
+    if fixed:
+        invalidate_read_cache()
+    return fixed
 
 
 def _product_media_urls(row):
