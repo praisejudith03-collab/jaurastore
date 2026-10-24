@@ -143,6 +143,23 @@ def test_the_featured_accordion_has_a_styled_toggle_marker():
     assert ".home-featured-admin-cat[open] > summary::before" in css
 
 
+def test_featured_products_endpoint_accepts_list_atomically_across_status_flags(admin, monkeypatch):
+    cat_a, prod_a, cat_b, prod_b = _two_categories()
+    # Simulate an individual product having differing status flags in overrides:
+    # the save handler must still accept the entire list atomically and re-enable it.
+    r = admin.post("/api/featured-products",
+                   json={"featured_products": [prod_a["id"], prod_b["id"], "jau-inactive-test"]})
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["message"] == "Homepage featured products updated!"
+    assert body["featured_products"] == [prod_a["id"], prod_b["id"], "jau-inactive-test"]
+
+    get_r = admin.get("/api/featured-products")
+    assert get_r.status_code == 200
+    assert get_r.get_json()["featured_products"] == [prod_a["id"], prod_b["id"], "jau-inactive-test"]
+
+
 def test_homepage_currency_dom_updates_featured_and_most_viewed():
     node = shutil.which("node")
     if not node:

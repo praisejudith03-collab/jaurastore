@@ -83,6 +83,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("POST", "/api/admin/customer-care"),
     ("GET", "/api/admin/growth/settings"), ("POST", "/api/admin/growth/settings"),
     ("GET", "/api/admin/homepage-featured"), ("POST", "/api/admin/homepage-featured"),
+    ("GET", "/api/admin/featured-products"), ("POST", "/api/admin/featured-products"),
     ("GET", "/api/admin/live"),
     ("GET", "/api/admin/needs-attention"),
     ("GET", "/api/admin/customers.csv"),
@@ -110,6 +111,8 @@ EXPECTED_ADMIN_ROUTES = {
     # The background task queue (async deletions + broadcasts): list, poll one
     # job, and put a parked job back on the queue.
     ("GET", "/api/admin/tasks/jobs"),
+    ("DELETE", "/api/admin/tasks/jobs"),
+    ("POST", "/api/admin/tasks/jobs/clear"),
     ("GET", "/api/admin/tasks/jobs/<job_id>"),
     ("POST", "/api/admin/tasks/jobs/<job_id>/retry"),
     ("GET", "/api/admin/job-failures"),

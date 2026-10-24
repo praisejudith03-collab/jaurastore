@@ -7778,6 +7778,18 @@ body.attention-drawer-open { overflow: hidden; }
 .mk-hub-bar span { display: block; height: 100%; background: #a97e48; transition: width .3s ease; }
 .mk-hub-progress { margin-top: 12px; }
 .mk-hub-progress .btn { margin-left: 8px; }
+.mk-jobs-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.mk-jobs-head .admin-h { margin: 0; }
+.mk-jobs-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mk-jobs-clean-note { margin: 0 0 8px; }
+.mk-jobs-history { margin-top: 10px; border: 1px solid #eadfce; border-radius: 10px; background: #faf7f2; overflow: hidden; }
+.mk-jobs-history-toggle { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; font-weight: 600; font-size: 13px; cursor: pointer; list-style: none; user-select: none; }
+.mk-jobs-history-toggle::-webkit-details-marker { display: none; }
+.mk-jobs-history-toggle::before { content: "▸ "; color: #8c6538; }
+.mk-jobs-history[open] > .mk-jobs-history-toggle { border-bottom: 1px solid #eadfce; }
+.mk-jobs-history[open] > .mk-jobs-history-toggle::before { content: "▾ "; }
+.mk-jobs-history-toggle small { color: #6b6b6b; font-weight: 500; }
+.mk-jobs-completed-list { padding: 10px 12px; }
 .mk-jobs-list { display: flex; flex-direction: column; gap: 8px; }
 .mk-jobs-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 10px 12px; border: 1px solid #eadfce; border-radius: 10px; background: #fff; }
 .mk-jobs-row strong { display: block; font-size: 14px; }

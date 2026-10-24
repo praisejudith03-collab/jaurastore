@@ -2141,10 +2141,95 @@ def _homepage_featured_raw_from_supabase():
 def _product_category_index(products):
     out = {}
     for p in products or []:
-        pid = str((p or {}).get("id") or "").strip()
+        if not isinstance(p, dict):
+            continue
+        pid = str(p.get("id") or "").strip()
         if not pid:
             continue
-        out[pid] = _folded_category((p or {}).get("category"))
+        out[pid] = _folded_category(p.get("category") or p.get("category_id"))
+        legacy = str(p.get("legacyId") or "").strip()
+        if legacy and legacy not in out:
+            out[legacy] = out[pid]
+    return out
+
+
+def _all_known_products_for_featured(products=None):
+    """All catalogue rows across sources, independent of individual status flags.
+
+    Ensures a product selected by the admin for homepage featuring is never
+    rejected or dropped just because its individual ``is_active``,
+    ``is_deleted`` or ``online`` flag differed at save time.
+    """
+    rows = []
+    seen = set()
+
+    def _add(items):
+        for p in items or []:
+            if not isinstance(p, dict):
+                continue
+            pid = str(p.get("id") or "").strip()
+            if not pid or pid in seen or is_permanently_removed(p):
+                continue
+            seen.add(pid)
+            rows.append(p)
+
+    _add(products)
+    try:
+        _add(merged(include_hidden=True))
+    except Exception:
+        pass
+    try:
+        _add(_supabase_products() or [])
+    except Exception:
+        pass
+    try:
+        _add((overrides() or {}).get("products") or [])
+    except Exception:
+        pass
+    try:
+        _add(_seed_products())
+    except Exception:
+        pass
+    return rows
+
+
+def _extract_featured_ids(raw):
+    """Extract an ordered list of product ID strings from any payload shape."""
+    if isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    elif isinstance(raw, dict):
+        items = None
+        for key in ("featured_products", "featuredProducts", "product_ids",
+                    "productIds", "ids", "products"):
+            if isinstance(raw.get(key), (list, tuple, set)):
+                items = list(raw.get(key))
+                break
+        if items is None and isinstance(raw.get("featured"), (list, tuple, set)):
+            items = list(raw.get("featured"))
+        elif items is None and isinstance(raw.get("featured"), dict):
+            return _extract_featured_ids(raw.get("featured"))
+        if items is None:
+            cats = raw.get("categories") if isinstance(raw.get("categories"), dict) else raw
+            items = []
+            if isinstance(cats, dict):
+                skip_keys = {"maxTotal", "updatedAt", "updatedBy", "ok", "custom"}
+                for k, values in cats.items():
+                    if k in skip_keys:
+                        continue
+                    if isinstance(values, (list, tuple, set)):
+                        items.extend(values)
+                    elif values:
+                        items.append(values)
+    else:
+        items = []
+    out = []
+    for item in items:
+        if isinstance(item, dict):
+            pid = str(item.get("id") or item.get("product_id") or item.get("productId") or "").strip()
+        else:
+            pid = str(item or "").strip()
+        if pid:
+            out.append(pid)
     return out
 
 
@@ -2156,29 +2241,26 @@ def _normalize_homepage_featured(raw, products=None):
     rows and flatten them in insertion order so existing admin selections are
     not lost.  The derived ``categories`` map is retained only as a backwards
     compatible admin/read-cache field and is not used by the storefront.
+
+    Accepts the selected product list atomically without failing or dropping
+    an item if its individual status flag differs.
     """
     source = raw if isinstance(raw, dict) else {}
-    ids_raw = raw if isinstance(raw, (list, tuple)) else source.get("featured_products")
-    if not isinstance(ids_raw, (list, tuple)):
-        cats = source.get("categories") if isinstance(source.get("categories"), dict) else source
-        ids_raw = []
-        if isinstance(cats, dict):
-            for values in cats.values():
-                ids_raw.extend(values if isinstance(values, (list, tuple, set)) else [values])
+    ids_raw = _extract_featured_ids(raw)
     by_pid = _product_category_index(products or [])
     seen, flat = set(), []
-    for item in ids_raw:
-        pid = str(item or "").strip()
+    for pid in ids_raw:
         if not pid or pid in seen or len(flat) >= HOMEPAGE_FEATURED_MAX:
             continue
-        if by_pid and pid not in by_pid:  # deleted/unknown products are not saved
+        if is_permanently_removed({"id": pid}):
             continue
         seen.add(pid)
         flat.append(pid)
     derived = {}
     for pid in flat:
-        derived.setdefault(by_pid.get(pid, ""), []).append(pid)
-    derived.pop("", None)
+        cat = by_pid.get(pid, "")
+        if cat:
+            derived.setdefault(cat, []).append(pid)
     return {"maxTotal": HOMEPAGE_FEATURED_MAX, "featured_products": flat,
             "categories": derived, "updatedAt": str(source.get("updatedAt") or ""),
             "updatedBy": str(source.get("updatedBy") or "")}
@@ -2193,7 +2275,7 @@ def homepage_featured(products=None):
     """
     if products is None:
         try:
-            products = merged(include_hidden=True)
+            products = _all_known_products_for_featured()
         except Exception:
             products = []
     raw = None
@@ -2207,14 +2289,16 @@ def homepage_featured(products=None):
 def save_homepage_featured(raw, actor=None):
     """Persist Homepage Featured Products selections. Returns payload or None.
 
-    In production, a failed Supabase write is a real failure: the Admin portal
-    must not claim a homepage change is live unless the durable setting landed.
-    The local override copy is refreshed after a successful write so a rolling
-    process can still answer consistently while Supabase is momentarily slow.
+    Accepts the selected product list atomically without failing if an
+    individual item's status flag (``is_active``, ``is_deleted``, ``online``)
+    differs, and restores any selected item's active/online flags so it
+    renders on the storefront immediately.
     """
-    clean = _normalize_homepage_featured(raw, merged(include_hidden=True))
+    known = _all_known_products_for_featured()
+    clean = _normalize_homepage_featured(raw, known)
     clean["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
     clean["updatedBy"] = actor or ""
+    selected_set = set(clean.get("featured_products") or [])
 
     if _prod_source():
         try:
@@ -2223,11 +2307,27 @@ def save_homepage_featured(raw, actor=None):
                 return None
         except Exception:
             return None
+        if selected_set:
+            try:
+                from supabase_store import restore_products
+                restore_products(list(selected_set), reason="homepage featured save")
+            except Exception:
+                pass
 
     def _apply(data, _path):
         data["homepageFeatured"] = clean
         data["updatedAt"] = clean["updatedAt"]
         data["updatedBy"] = actor or ""
+        if selected_set:
+            data["deleted"] = [pid for pid in (data.get("deleted") or [])
+                               if str(pid or "").strip() not in selected_set]
+            for row in data.get("products") or []:
+                if isinstance(row, dict) and str(row.get("id") or "") in selected_set:
+                    row["is_active"] = True
+                    row["is_deleted"] = False
+                    row["online"] = True
+                    if str(row.get("source") or "").lower() in ("deleted", "replaced"):
+                        row["source"] = "admin"
         return data
 
     try:
@@ -2258,9 +2358,14 @@ def homepage_featured_groups(products=None, limit=HOMEPAGE_FEATURED_MAX):
     """Legacy API projection of the flat selector (storefront does not group)."""
     live = list(products if products is not None else merged())
     max_total = max(1, min(HOMEPAGE_FEATURED_MAX, int(limit or HOMEPAGE_FEATURED_MAX)))
-    settings = homepage_featured()
+    settings = homepage_featured(live)
     by_id = {str(p.get("id")): p for p in live if p.get("id")}
     ids = settings.get("featured_products") or []
+    if ids and any(pid not in by_id for pid in ids):
+        for p in _all_known_products_for_featured(live):
+            pid = str(p.get("id") or "")
+            if pid and pid not in by_id:
+                by_id[pid] = p
     chosen = [by_id[pid] for pid in ids if pid in by_id][:max_total]
     if not chosen:
         chosen = sorted(live, key=_home_rank)[:max_total]
@@ -2278,9 +2383,15 @@ def homepage_featured_products(products=None, limit=HOMEPAGE_FEATURED_MAX):
     """Resolve the ordered, admin-selected flat homepage product list."""
     live = list(products if products is not None else merged())
     max_total = max(1, min(HOMEPAGE_FEATURED_MAX, int(limit or HOMEPAGE_FEATURED_MAX)))
-    settings = homepage_featured()
+    settings = homepage_featured(live)
     by_id = {str(p.get("id")): p for p in live if p.get("id")}
-    selected = [by_id[pid] for pid in settings.get("featured_products", []) if pid in by_id]
+    ids = settings.get("featured_products", [])
+    if ids and any(pid not in by_id for pid in ids):
+        for p in _all_known_products_for_featured(live):
+            pid = str(p.get("id") or "")
+            if pid and pid not in by_id:
+                by_id[pid] = p
+    selected = [by_id[pid] for pid in ids if pid in by_id]
     if selected:
         return selected[:max_total]
     return sorted(live, key=_home_rank)[:max_total]

@@ -498,6 +498,15 @@ end $$;
 -- editor's output pane.
 select public.recover_unavailable_products('master fix 2026-10-22') as recovery_report;
 
+-- Ensure all non-permanently-deleted products have is_active = true, is_deleted = false:
+-- UPDATE products SET is_active = true, is_deleted = false;
+do $$ begin
+  perform set_config('jaura.catalog_admin', 'on', true);
+  UPDATE products SET is_active = true, is_deleted = false
+   WHERE not exists (select 1 from public.deleted_products d where d.product_id = products.id)
+     AND (coalesce(is_active, false) is not true or coalesce(is_deleted, true) is not false);
+end $$;
+
 commit;
 
 -- Verification (read-only). Expect restored rows to be live, and 0 for both
