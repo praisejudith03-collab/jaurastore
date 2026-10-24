@@ -214,7 +214,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=222" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=223" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -3504,11 +3504,16 @@ function broadcastHubCard() {
 
 function backgroundJobsCard() {
   return `<div class="admin-card mk-jobs-card" id="mk-jobs-card">
-    <h3 class="admin-h">Background jobs</h3>
-    <p class="admin-note">Deletions and broadcasts finish here. A queued job is work the server has accepted; a failed one carries its reason and can be retried without re-running the request.</p>
+    <div class="mk-jobs-head">
+      <h3 class="admin-h">Background jobs</h3>
+      <div class="mk-jobs-head-actions">
+        <button type="button" class="btn btn-line" id="mk-jobs-clear" title="Delete Completed Jobs" aria-label="Clear Log History / Delete Completed Jobs">Clear Log History</button>
+        <button type="button" class="btn btn-line" id="mk-jobs-refresh">Refresh</button>
+      </div>
+    </div>
+    <p class="admin-note">Deletions and broadcasts finish here. A queued job is work the server has accepted; a failed one carries its reason and can be retried without re-running the request. Completed jobs auto-archive after 24 hours.</p>
     <div class="mk-jobs-stats" id="mk-jobs-stats"></div>
     <div id="mk-jobs-list"><p class="empty">Loading…</p></div>
-    <div class="mk-campaign-foot"><button type="button" class="btn btn-line" id="mk-jobs-refresh">Refresh</button></div>
   </div>`;
 }
 
@@ -3683,16 +3688,42 @@ async function fillBackgroundJobs() {
   if (!card || card.dataset.bound === "1") return;
   card.dataset.bound = "1";
   const api = (path, opts) => window.JA_NET.api(path, opts);
+  const JOB_RETENTION_MS = 24 * 60 * 60 * 1000;
+  const isCompletedJob = (j) => j && (j.state === "done" || j.state === "completed");
+  const isFreshJob = (j) => {
+    if (!isCompletedJob(j)) return true;
+    const raw = j.finishedAt || j.createdAt || "";
+    const ts = Date.parse(String(raw));
+    if (!Number.isFinite(ts)) return true;
+    return (Date.now() - ts) <= JOB_RETENTION_MS;
+  };
+  const renderJobRow = (j) => `<article class="mk-jobs-row is-${esc(j.state || "")}"><div><strong>${esc(j.label || j.kind)}</strong><small>${esc(j.target || "")} ${j.attempts ? `· attempt ${Number(j.attempts)}` : ""}</small></div><div><b>${esc(j.state || "")}</b><small>${esc(j.finishedAt || j.createdAt || "")}</small>${j.state === "failed" ? `<button type="button" class="btn btn-line" data-job-retry="${esc(j.id)}">Retry</button>` : ""}</div>${j.lastError ? `<p class="admin-note">${esc(j.lastError)}</p>` : ""}</article>`;
   const paint = (d) => {
-    const stats = $("#mk-jobs-stats"), list = $("#mk-jobs-list");
+    const stats = $("#mk-jobs-stats"), list = $("#mk-jobs-list"), clearBtn = $("#mk-jobs-clear");
     const s = (d && d.stats) || {};
+    const jobs = ((d && d.jobs) || []).filter(isFreshJob);
+    const activeJobs = jobs.filter((j) => !isCompletedJob(j));
+    const completedJobs = jobs.filter(isCompletedJob);
     if (stats) {
       stats.innerHTML = `<p class="mk-hub-count"><strong>${Number(s.pending || 0).toLocaleString()}</strong> waiting`
-        + `<small>${Number(s.done || 0).toLocaleString()} done · ${Number(s.failed || 0).toLocaleString()} failed · chunks of ${Number(s.batchSize || 0)} · ${s.threadAlive ? "worker running" : "worker restarting"}</small></p>`;
+        + `<small>${completedJobs.length.toLocaleString()} recent done · ${Number(s.failed || 0).toLocaleString()} failed · chunks of ${Number(s.batchSize || 0)} · ${s.threadAlive ? "worker running" : "worker restarting"}</small></p>`;
     }
+    if (clearBtn) clearBtn.disabled = completedJobs.length === 0 && Number(s.done || 0) === 0;
     if (!list) return;
-    const jobs = (d && d.jobs) || [];
-    list.innerHTML = jobs.length ? `<div class="mk-jobs-list">${jobs.map((j) => `<article class="mk-jobs-row is-${esc(j.state || "")}"><div><strong>${esc(j.label || j.kind)}</strong><small>${esc(j.target || "")} ${j.attempts ? `· attempt ${Number(j.attempts)}` : ""}</small></div><div><b>${esc(j.state || "")}</b><small>${esc(j.finishedAt || j.createdAt || "")}</small>${j.state === "failed" ? `<button type="button" class="btn btn-line" data-job-retry="${esc(j.id)}">Retry</button>` : ""}</div>${j.lastError ? `<p class="admin-note">${esc(j.lastError)}</p>` : ""}</article>`).join("")}</div>` : `<p class="empty">Nothing has run yet.</p>`;
+    if (!jobs.length) {
+      list.innerHTML = `<p class="empty">Nothing has run yet.</p>`;
+      return;
+    }
+    const activeHTML = activeJobs.length
+      ? `<div class="mk-jobs-list mk-jobs-active-list">${activeJobs.map(renderJobRow).join("")}</div>`
+      : `<p class="admin-note mk-jobs-clean-note">No active background jobs right now.</p>`;
+    const historyHTML = completedJobs.length
+      ? `<details class="mk-jobs-history" id="mk-jobs-history">
+          <summary class="mk-jobs-history-toggle">View Completed Jobs History <small>(${completedJobs.length})</small></summary>
+          <div class="mk-jobs-list mk-jobs-completed-list">${completedJobs.map(renderJobRow).join("")}</div>
+        </details>`
+      : "";
+    list.innerHTML = activeHTML + historyHTML;
     list.querySelectorAll("[data-job-retry]").forEach((b) => {
       b.onclick = async () => {
         b.disabled = true;
@@ -3706,6 +3737,19 @@ async function fillBackgroundJobs() {
     catch (err) { const list = $("#mk-jobs-list"); if (list) list.innerHTML = `<p class="empty">The job list is unavailable right now.</p>`; }
   };
   $("#mk-jobs-refresh")?.addEventListener("click", load);
+  $("#mk-jobs-clear")?.addEventListener("click", async () => {
+    const clearBtn = $("#mk-jobs-clear");
+    if (clearBtn) { clearBtn.disabled = true; clearBtn.textContent = "Clearing…"; }
+    try {
+      const res = await api("api/admin/tasks/jobs/clear", { method: "POST", json: {} });
+      paint(res);
+      JA.success("Completed background jobs cleared.");
+    } catch (err) {
+      JA.toast((err && err.message) || "Could not clear completed jobs.");
+    } finally {
+      if (clearBtn) clearBtn.textContent = "Clear Log History";
+    }
+  });
   await load();
 }
 
@@ -5018,7 +5062,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=222" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=223" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5424,7 +5468,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=222", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=223", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -5481,13 +5525,16 @@ function paintHomepageFeaturedPicker() {
   const settings = JA.homepageFeatured ? JA.homepageFeatured() : { featured_products: [] };
   const selected = new Set((settings.featured_products || []).map(String));
   const all = (JA.products ? JA.products() : []).slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
-  const cats = JA.categories ? JA.categories() : [];
+  const cats = (JA.categories ? JA.categories() : []).slice();
   const known = new Set(cats.map((c) => c.id));
-  all.forEach((p) => { if (p.category && !known.has(p.category)) { cats.push({ id: p.category, name: JA.categoryName(p.category) }); known.add(p.category); } });
+  all.forEach((p) => {
+    const cid = String((p && p.category) || "uncategorized");
+    if (!known.has(cid)) { cats.push({ id: cid, name: JA.categoryName ? JA.categoryName(cid) : cid }); known.add(cid); }
+  });
   // Each category is a compact, collapsible accordion selector, collapsed
   // by default so the admin sees a clean list of category headers with selection counters.
   const html = cats.map((c) => {
-    const rows = all.filter((p) => String(p.category || "") === String(c.id));
+    const rows = all.filter((p) => String((p && p.category) || "uncategorized") === String(c.id));
     if (!rows.length) return "";
     const pickedHere = rows.filter((p) => selected.has(String(p.id))).length;
     const catName = JA.categoryName(c.id);
@@ -5512,7 +5559,9 @@ function bindHomepageFeatured() {
   if (!root || root.dataset.bound === "1") return;
   root.dataset.bound = "1";
   paintHomepageFeaturedPicker();
+  if (JA.ready && typeof JA.ready.then === "function") JA.ready.then(paintHomepageFeaturedPicker).catch(() => {});
   if (JA.loadHomepageFeatured) JA.loadHomepageFeatured().then(paintHomepageFeaturedPicker).catch(() => {});
+  document.addEventListener("ja:catalog", paintHomepageFeaturedPicker);
   root.addEventListener("change", (e) => {
     const input = e.target.closest && e.target.closest('[data-home-featured-pid]');
     if (!input) return;
@@ -5560,7 +5609,7 @@ function bindHomepageFeatured() {
       return;
     }
     paintHomepageFeaturedPicker();
-    JA.success("Homepage featured products saved — live now.");
+    JA.success("Homepage featured products updated!");
   });
 }
 

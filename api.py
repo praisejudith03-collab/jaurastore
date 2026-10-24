@@ -819,43 +819,67 @@ def _featured_group_payload(group, public=True):
 
 
 @api.get("/homepage-featured")
+@api.get("/featured-products")
 def homepage_featured():
     """Homepage Featured Products settings resolved into storefront groups."""
     products = catalog_mod.merged()
     groups = catalog_mod.homepage_featured_groups(products)
-    featured = catalog_mod.homepage_featured()
+    featured = catalog_mod.homepage_featured(products)
     return jsonify(ok=True, featured=featured, featured_products=featured.get("featured_products", []),
                    groups=[_featured_group_payload(g, public=True) for g in groups])
 
 
 @api.get("/admin/homepage-featured")
+@api.get("/admin/featured-products")
 @authmod.require_admin
 def admin_homepage_featured():
     products = catalog_mod.merged(include_hidden=True)
     groups = catalog_mod.homepage_featured_groups(products)
-    featured = catalog_mod.homepage_featured()
+    featured = catalog_mod.homepage_featured(products)
     return jsonify(ok=True, featured=featured, featured_products=featured.get("featured_products", []),
                    groups=[_featured_group_payload(g, public=False) for g in groups])
 
 
+@api.post("/featured-products")
 @api.post("/admin/homepage-featured")
+@api.post("/admin/featured-products")
 @authmod.require_admin
 @sec.require_csrf
 def admin_homepage_featured_save():
-    d = request.get_json(silent=True) or {}
-    raw = d.get("featured_products") if isinstance(d.get("featured_products"), list) else (d.get("categories") if isinstance(d.get("categories"), dict) else d.get("featured"))
-    if isinstance(raw, dict) and isinstance(raw.get("categories"), dict):
-        raw = raw.get("categories")
-    if raw is None and isinstance(d, dict):
+    d = request.get_json(silent=True)
+    if isinstance(d, list):
         raw = d
+    elif isinstance(d, dict):
+        raw = None
+        for key in ("featured_products", "featuredProducts", "product_ids",
+                    "productIds", "ids", "products"):
+            if isinstance(d.get(key), list):
+                raw = d.get(key)
+                break
+        if raw is None:
+            raw = d.get("categories") if isinstance(d.get("categories"), dict) else d.get("featured")
+            if isinstance(raw, dict) and isinstance(raw.get("categories"), dict) and not isinstance(raw.get("featured_products"), list):
+                raw = raw.get("categories")
+            if raw is None:
+                raw = d
+    else:
+        raw = {}
     saved = catalog_mod.save_homepage_featured(raw, authmod.current_admin())
     if saved is None:
         return jsonify(ok=False, error="Homepage featured products could not be saved. No changes were made."), 503
     audit(authmod.current_admin(), "homepage_featured.save", json.dumps(saved.get("featured_products") or [])[:300], _ip())
-    _invalidate_catalog_cache()
+    try:
+        from supabase_store import invalidate_read_cache
+        invalidate_read_cache()
+    except Exception:
+        pass
+    _invalidate_all_catalog_caches()
     products = catalog_mod.merged(include_hidden=True)
     groups = catalog_mod.homepage_featured_groups(products)
-    return jsonify(ok=True, featured=saved, featured_products=saved.get("featured_products", []),
+    return jsonify(ok=True,
+                   message="Homepage featured products updated!",
+                   featured=saved,
+                   featured_products=saved.get("featured_products", []),
                    groups=[_featured_group_payload(g, public=False) for g in groups])
 
 # ========================================================== public: categories
@@ -5184,6 +5208,27 @@ task_queue.register("media.delete", _task_media_delete,
 def admin_task_jobs():
     """The background job panel: what was queued, what landed, what retried."""
     return jsonify(ok=True, jobs=task_queue.snapshot(40),
+                   stats=task_queue.stats())
+
+
+@api.delete("/admin/tasks/jobs")
+@api.post("/admin/tasks/jobs/clear")
+@authmod.require_admin
+@sec.require_csrf
+def admin_task_jobs_clear():
+    """Purge completed background jobs from the queue log."""
+    d = request.get_json(silent=True) or {}
+    include_failed = bool(
+        (isinstance(d, dict) and d.get("includeFailed"))
+        or request.args.get("includeFailed") == "1"
+    )
+    report = task_queue.clear_completed(include_failed=include_failed)
+    audit(authmod.current_admin(), "tasks.clear",
+          f"cleared={report.get('cleared', 0)}", _ip())
+    return jsonify(ok=True,
+                   cleared=report.get("cleared", 0),
+                   clearedIds=report.get("clearedIds", []),
+                   jobs=task_queue.snapshot(40),
                    stats=task_queue.stats())
 
 

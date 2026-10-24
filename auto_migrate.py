@@ -96,6 +96,8 @@ POPUP_BANNER_STATEMENT = (
 # The DO block is one statement so a database without a products table (a
 # fresh project, or the test suite's SQLite cache) is a no-op instead of
 # aborting the site_settings heals that follow it.
+PRODUCT_RECOVERY_STATEMENT = "UPDATE products SET is_active = true, is_deleted = false;"
+
 PRODUCT_SCHEMA_STATEMENT = """do $$ begin
   if to_regclass('public.products') is null then return; end if;
   alter table public.products add column if not exists category_id text;
@@ -111,6 +113,20 @@ PRODUCT_SCHEMA_STATEMENT = """do $$ begin
   alter table public.products add column if not exists dimensions text;
   alter table public.products add column if not exists "bulkQty" integer;
   alter table public.products add column if not exists "bulkPercent" integer;
+  perform set_config('jaura.catalog_admin', 'on', true);
+  if to_regclass('public.deleted_products') is not null then
+    update public.products p
+       set is_active = true,
+           is_deleted = false,
+           online = true,
+           source = case when lower(coalesce(p.source, '')) in ('deleted', 'replaced') then 'admin' else p.source end
+     where not exists (select 1 from public.deleted_products d where d.product_id = p.id)
+       and (coalesce(p.is_active, false) is not true
+            or coalesce(p.is_deleted, true) is not false
+            or lower(coalesce(p.source, '')) in ('deleted', 'replaced'));
+  else
+    UPDATE products SET is_active = true, is_deleted = false;
+  end if;
 end $$;"""
 
 RPC_NAMES = ("exec_sql", "execute_sql", "run_sql", "apply_schema_migration")

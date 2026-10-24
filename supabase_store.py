@@ -364,9 +364,14 @@ def _fetch_product_pages(c, include_dead=False):
         for r in rows:
             source = str((r or {}).get("source") or "").strip().lower()
             if source in DEAD_SOURCES:
-                if include_dead:
-                    yield r
-                continue                     # a tombstone, not a live product
+                if (isinstance(r, dict)
+                        and r.get("is_active") is True
+                        and r.get("is_deleted") is False):
+                    r = dict(r, source="admin")
+                else:
+                    if include_dead:
+                        yield r
+                    continue                 # a tombstone, not a live product
             yield r
         got = len(rows)
         collected += got
@@ -946,7 +951,8 @@ def _unavailable_rows():
         return None
     try:
         rows = []
-        for query in ("is_deleted.eq.true", "is_active.eq.false", "online.eq.false"):
+        for query in ("is_deleted.eq.true", "is_active.eq.false", "online.eq.false",
+                      "source.eq.deleted", "source.eq.replaced"):
             try:
                 res = c.table("products").select("*").or_(query).execute()
             except Exception:
@@ -2914,9 +2920,11 @@ def save_homepage_featured(featured):
         return False
     try:
         payload = json.dumps(featured or {"categories": {}}, ensure_ascii=False)
-        c.table("growth_settings").upsert(
-            [{"key": HOMEPAGE_FEATURED_KEY, "value": payload}]
-        ).execute()
+        row = [{"key": HOMEPAGE_FEATURED_KEY, "value": payload}]
+        try:
+            c.table("growth_settings").upsert(row, on_conflict="key").execute()
+        except TypeError:
+            c.table("growth_settings").upsert(row).execute()
         invalidate_read_cache("homepage_featured")
         return True
     except Exception as exc:                       # pragma: no cover

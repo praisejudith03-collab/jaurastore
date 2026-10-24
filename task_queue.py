@@ -60,6 +60,9 @@ MAX_ATTEMPTS = _int_env("JAURA_TASK_ATTEMPTS", 4, 1, 10)
 RETRY_BASE = 2.0            # 2s, 4s, 8s ... between attempts
 RETRY_CAP = 60.0            # a parked task never sleeps longer than a minute
 RING_SIZE = 120             # jobs kept for the admin panel after they finish
+COMPLETED_RETENTION_SECONDS = float(
+    os.environ.get("JAURA_TASK_RETENTION_SECONDS", str(24 * 3600)) or (24 * 3600)
+)
 # One drain() call is bounded by wall clock as well as by count, so a slow
 # network RPC can never turn a queue tick into a stalled worker.
 CHUNK_SECONDS = float(os.environ.get("JAURA_TASK_CHUNK_SECONDS", "45") or 45)
@@ -178,8 +181,24 @@ def enqueue(kind, payload=None, dedupe=True, delay=0.0):
     return public_job(job)
 
 
+def _purge_expired_locked(now=None, max_age=None):
+    """Automatically purge completed jobs older than ``max_age`` (default 24h)."""
+    now = _now() if now is None else float(now)
+    age = COMPLETED_RETENTION_SECONDS if max_age is None else max(0.0, float(max_age))
+    cutoff = now - age
+    purged = 0
+    for job_id, job in list(_jobs.items()):
+        if job.get("state") in ("done", "completed"):
+            stamp = float(job.get("finishedAt") or job.get("createdAt") or 0.0)
+            if stamp > 0 and stamp < cutoff:
+                _jobs.pop(job_id, None)
+                purged += 1
+    return purged
+
+
 def _trim_locked():
-    """Keep the ring bounded: finished jobs are dropped from the front first."""
+    """Keep the ring bounded: expired completed jobs and oldest finished jobs drop first."""
+    _purge_expired_locked()
     while len(_jobs) > RING_SIZE:
         for job_id, job in list(_jobs.items()):
             if job["state"] in ("done", "failed"):
@@ -191,12 +210,15 @@ def _trim_locked():
 
 def public_job(job):
     """A JSON-safe view: no payload blobs, no unbounded error strings."""
+    payload = job.get("payload") or {}
     return {
         "id": job.get("id"),
         "kind": job.get("kind"),
         "label": job.get("label") or job.get("kind"),
-        "target": str((job.get("payload") or {}).get("id") or
-                      (job.get("payload") or {}).get("campaign") or "")[:80],
+        "target": str(payload.get("id") or
+                      payload.get("campaign") or
+                      payload.get("key") or
+                      payload.get("url") or "")[:80],
         "state": job.get("state"),
         "attempts": int(job.get("attempts") or 0),
         "createdAt": _iso(job.get("createdAt")),
@@ -222,14 +244,47 @@ def get(job_id):
 def snapshot(limit=40):
     """Most recent jobs, newest first - the admin job panel reads this."""
     with _lock:
+        _purge_expired_locked()
         jobs = list(_jobs.values())[-max(1, int(limit or 40)):]
     return [public_job(j) for j in reversed(jobs)]
 
 
+def clear_completed(include_failed=False):
+    """Immediately purge completed jobs from the queue log.
+
+    Active jobs (``queued``, ``running``, ``retry``) are never touched.
+    """
+    states = {"done", "completed"}
+    if include_failed:
+        states.add("failed")
+    cleared_ids = []
+    with _lock:
+        _purge_expired_locked()
+        for job_id, job in list(_jobs.items()):
+            if job.get("state") in states:
+                _jobs.pop(job_id, None)
+                cleared_ids.append(job_id)
+        _stats["done"] = len([j for j in _jobs.values() if j.get("state") == "done"])
+        if include_failed:
+            _stats["failed"] = len([j for j in _jobs.values() if j.get("state") == "failed"])
+    return {
+        "cleared": len(cleared_ids),
+        "clearedIds": cleared_ids,
+        "ids": cleared_ids,
+        "remaining": pending(),
+    }
+
+
+purge_completed = clear_completed
+
+
 def stats():
     with _lock:
+        _purge_expired_locked()
         out = dict(_stats)
         out["pending"] = pending()
+        out["completedInLog"] = len([j for j in _jobs.values() if j.get("state") == "done"])
+        out["retentionHours"] = int(round(COMPLETED_RETENTION_SECONDS / 3600))
         out["batchSize"] = BATCH_SIZE
         out["maxAttempts"] = MAX_ATTEMPTS
         out["thread"] = TASK_THREAD

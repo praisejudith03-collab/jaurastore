@@ -62,7 +62,7 @@ def test_the_main_admin_saves_use_the_success_variant():
     for message in (
         "Photo update is live; unused replaced files were deleted.",
         "Settings saved — live on the site now.",
-        "Homepage featured products saved — live now.",
+        "Homepage featured products updated!",
         "Zone saved — live now.",
         "Social links saved — live on the storefront now.",
     ):

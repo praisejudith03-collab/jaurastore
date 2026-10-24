@@ -305,3 +305,74 @@ def test_the_runbook_documents_both_delete_modes():
     assert "?sync=1" in text
     assert "supabase-hard" in text
     assert "Background jobs" in text
+
+
+def test_completed_background_jobs_can_be_cleared_and_auto_purge_after_24h():
+    task_queue.register("thumb.build", lambda payload: {"built": True},
+                        label="Build thumbnail")
+    try:
+        j1 = task_queue.enqueue("thumb.build", {"key": "photos/a.jpg"},
+                                dedupe=False)
+        j2 = task_queue.enqueue("thumb.build", {"key": "photos/b.jpg"},
+                                dedupe=False)
+        task_queue.drain()
+        snap = task_queue.snapshot()
+        assert len(snap) == 2
+        assert all(j["state"] == "done" and j["label"] == "Build thumbnail" for j in snap)
+        assert {j["target"] for j in snap} == {"photos/a.jpg", "photos/b.jpg"}
+
+        # Simulate j1 finishing over 24 hours ago -> auto-purged on next snapshot/stats
+        with task_queue._lock:
+            task_queue._jobs[j1["id"]]["finishedAt"] = time.time() - (task_queue.COMPLETED_RETENTION_SECONDS + 60)
+        snap_after_ttl = task_queue.snapshot()
+        assert [j["id"] for j in snap_after_ttl] == [j2["id"]]
+
+        # Manual clear removes remaining completed jobs immediately
+        cleared = task_queue.clear_completed()
+        assert cleared["cleared"] == 1
+        assert j2["id"] in cleared["ids"]
+        assert task_queue.snapshot() == []
+    finally:
+        task_queue._handlers.pop("thumb.build", None)
+
+
+def test_admin_can_clear_completed_background_jobs_over_http_and_ui_has_collapsible_history(client):
+    from _pw import PW as ADMIN_PW
+    from db import execute, init_db
+    init_db()
+    execute("DELETE FROM rate_limits")
+
+    task_queue.register("thumb.build", lambda payload: {"built": True},
+                        label="Build thumbnail")
+    try:
+        task_queue.enqueue("thumb.build", {"key": "photos/item1.jpg"},
+                           dedupe=False)
+        task_queue.drain()
+        assert len(task_queue.snapshot()) == 1
+
+        with client.test_client() as c:
+            r = c.post("/api/admin/login",
+                       json={"email": "jaurastore@gmail.com", "password": ADMIN_PW,
+                             "recaptcha": ""})
+            assert r.status_code == 200, r.data
+            tok = r.get_json()["csrf"]
+
+            clear_r = c.post("/api/admin/tasks/jobs/clear",
+                             json={},
+                             headers={"X-CSRF-Token": tok})
+            assert clear_r.status_code == 200, clear_r.data
+            body = clear_r.get_json()
+            assert body["ok"] is True
+            assert body["cleared"] == 1
+            assert body["jobs"] == []
+    finally:
+        task_queue._handlers.pop("thumb.build", None)
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "js", "admin.js"), encoding="utf-8") as fh:
+        admin_js = fh.read()
+    assert 'id="mk-jobs-clear"' in admin_js
+    assert "Clear Log History" in admin_js
+    assert "View Completed Jobs History" in admin_js
+    assert '<details class="mk-jobs-history"' in admin_js
+

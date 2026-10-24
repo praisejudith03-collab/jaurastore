@@ -562,8 +562,12 @@ const JA = (() => {
   }
 
   function normalizeHomepageFeatured(raw) {
-    const src = raw && typeof raw === "object" ? raw : {};
-    let ids = Array.isArray(src.featured_products) ? src.featured_products : [];
+    const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    let ids = Array.isArray(raw) ? raw
+      : (Array.isArray(src.featured_products) ? src.featured_products
+      : (Array.isArray(src.featuredProducts) ? src.featuredProducts
+      : (Array.isArray(src.productIds) ? src.productIds
+      : (Array.isArray(src.ids) ? src.ids : []))));
     if (!ids.length && src.categories && typeof src.categories === "object") {
       Object.keys(src.categories).forEach((cat) => {
         const values = Array.isArray(src.categories[cat]) ? src.categories[cat] : [src.categories[cat]];
@@ -571,11 +575,28 @@ const JA = (() => {
       });
     }
     const seen = new Set();
-    const flat = ids.map((id) => String(id || "").trim()).filter((id) => id && !seen.has(id) && seen.add(id)).slice(0, HOME_FEATURED_MAX);
+    const flat = ids
+      .map((item) => (item && typeof item === "object" ? String(item.id || item.product_id || "").trim() : String(item || "").trim()))
+      .filter((id) => id && !seen.has(id) && seen.add(id))
+      .slice(0, HOME_FEATURED_MAX);
     return { maxTotal: HOME_FEATURED_MAX, featured_products: flat,
       categories: src.categories && typeof src.categories === "object" ? src.categories : {},
       updatedAt: String(src.updatedAt || ""), updatedBy: String(src.updatedBy || "") };
   }
+
+  let featuredChannel = null;
+  try {
+    if (typeof BroadcastChannel === "function") {
+      featuredChannel = new BroadcastChannel("jaura-homepage-featured");
+      featuredChannel.onmessage = (ev) => {
+        if (ev && ev.data && ev.data.featured) {
+          homepageFeaturedSettings = normalizeHomepageFeatured(ev.data.featured);
+          try { document.dispatchEvent(new CustomEvent("ja:homepage-featured")); } catch (e) {}
+          try { document.dispatchEvent(new CustomEvent("ja:rerender")); } catch (e) {}
+        }
+      };
+    }
+  } catch (e) { featuredChannel = null; }
 
   function setHomepageFeatured(raw) {
     homepageFeaturedSettings = normalizeHomepageFeatured(raw);
@@ -590,6 +611,9 @@ const JA = (() => {
     const all = products();
     const max = Math.max(1, Math.min(HOME_FEATURED_MAX, Number(limit || HOME_FEATURED_MAX) || HOME_FEATURED_MAX));
     const byId = new Map(all.map((p) => [String(p.id), p]));
+    (seed && seed.length ? seed : (window.JA_SEED || [])).forEach((p) => {
+      if (p && p.id && !byId.has(String(p.id))) byId.set(String(p.id), p);
+    });
     const selected = (homepageFeaturedSettings.featured_products || []).map((id) => byId.get(String(id))).filter(Boolean);
     return (selected.length ? selected : homeSorted(all)).slice(0, max);
   }
@@ -689,7 +713,11 @@ const JA = (() => {
   }
 
   async function saveHomepageFeatured(categoriesPayload) {
-    const payload = { featured_products: (categoriesPayload && categoriesPayload.featured_products) || (Array.isArray(categoriesPayload) ? categoriesPayload : []) };
+    const normalized = normalizeHomepageFeatured(categoriesPayload);
+    const payload = {
+      featured_products: normalized.featured_products,
+      categories: normalized.categories,
+    };
     const call = window.JA_NET && window.JA_NET.api
       ? window.JA_NET.api("api/admin/homepage-featured", { method: "POST", json: payload })
       : fetch("api/admin/homepage-featured", {
@@ -699,7 +727,10 @@ const JA = (() => {
     const d = await call;
     if (d && d.ok !== false && d.featured) {
       setHomepageFeatured(d.featured);
+      invalidateCatalogCache();
+      try { if (featuredChannel) featuredChannel.postMessage({ featured: d.featured }); } catch (e) {}
       try { document.dispatchEvent(new CustomEvent("ja:homepage-featured")); } catch (e) {}
+      try { document.dispatchEvent(new CustomEvent("ja:catalog")); } catch (e) {}
       try { document.dispatchEvent(new CustomEvent("ja:rerender")); } catch (e) {}
     }
     return d;
@@ -2995,8 +3026,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=222";
-        const FLYER = "images/brand/logo-flyer.jpg?v=222";
+        const LOGO = "images/brand/logo.jpg?v=223";
+        const FLYER = "images/brand/logo-flyer.jpg?v=223";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -3211,7 +3242,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=222" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=223" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3510,7 +3541,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=222" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=223" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3646,7 +3677,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=222", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=223", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3680,7 +3711,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=222";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=223";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3739,7 +3770,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=222");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=223");
     document.title = title;
     [
       ["name", "description", description],
