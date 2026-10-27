@@ -229,6 +229,32 @@ def test_category_asset_is_public(fake):
         storage.supabase_public_url(url[len("/uploads/"):])
 
 
+def test_catalog_persistence_refuses_ephemeral_image_paths(fake, monkeypatch):
+    monkeypatch.setattr(Config, "ENV", "production")
+    temporary = "/uploads/products/item.jpg"
+    assert supabase_store._public_image_url_error(temporary)
+    assert supabase_store._upsert_products_resilient([{
+        "id": "no-temporary-path", "image": temporary, "image_url": temporary,
+    }]) is False
+    assert fake.tables.get("products", []) == []
+
+    durable = f"{FAKE_ORIGIN}/storage/v1/object/public/uploads/products/item.jpg"
+    assert supabase_store._public_image_url_error(durable) == ""
+    assert supabase_store._upsert_products_resilient([{
+        "id": "durable-image", "image": durable, "image_url": durable,
+    }]) is True
+    assert fake.tables["products"][0]["image_url"] == durable
+    with pytest.raises(RuntimeError, match="image_url"):
+        supabase_store._upsert_categories_resilient(fake, [{
+            "id": "ephemeral-category", "name": "Temporary",
+            "image_url": "images/categories/temporary.jpg",
+        }])
+    assert supabase_store._upsert_categories_resilient(fake, [{
+        "id": "durable-category", "name": "Durable", "image_url": durable,
+    }]) is True
+    assert fake.tables["categories"][0]["image_url"] == durable
+
+
 def test_production_media_returns_a_stable_absolute_public_url(fake, monkeypatch):
     monkeypatch.setattr(Config, "ENV", "production")
     monkeypatch.setattr(storage, "enqueue_thumbnail", lambda _url: "")

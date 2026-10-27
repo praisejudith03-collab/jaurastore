@@ -624,10 +624,112 @@ _CRITICAL_PRODUCT_COLUMNS = frozenset({
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
 
 
+def _enforce_public_catalog_images():
+    """Only enforce the production storage contract for real Supabase projects.
+
+    Local test bridges and self-hosted development endpoints deliberately use
+    non-Supabase origins. Render's configured project ref is always hosted at
+    ``*.supabase.co``; there we fail closed on every new catalog write.
+    """
+    try:
+        host = (urllib.parse.urlsplit((Config.SUPABASE_URL or "").strip()).hostname
+                or "").lower()
+        return Config.ENV != "testing" and host.endswith(".supabase.co")
+    except (TypeError, ValueError):
+        return False
+
+
+def _public_image_url_error(value):
+    """Return a reason when a catalog cover is not a durable public object.
+
+    Product/category image_url values written to PostgreSQL must point at this
+    configured Supabase project's public ``uploads`` bucket. Empty covers
+    remain valid for intentionally image-less records.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        base = urllib.parse.urlsplit((Config.SUPABASE_URL or "").strip())
+        parsed = urllib.parse.urlsplit(raw)
+        base_host = (base.hostname or "").lower()
+        path = urllib.parse.unquote(parsed.path or "")
+        if (base.scheme != "https" or not base_host.endswith(".supabase.co")
+                or parsed.scheme != "https"
+                or (parsed.hostname or "").lower() != base_host
+                or parsed.port != base.port
+                or parsed.username or parsed.password
+                or not path.startswith(f"/storage/v1/object/public/{_bucket()}/")
+                or any(part in (".", "..") for part in path.split("/"))):
+            return "must be an absolute public Supabase Storage URL for this project"
+        if not path.rsplit("/", 1)[-1]:
+            return "must include a Storage object key"
+    except (TypeError, ValueError):
+        return "must be an absolute public Supabase Storage URL for this project"
+    return ""
+
+
+def _canonical_catalog_image_url(value):
+    """Return an absolute public URL, migrating a legacy /uploads alias in place.
+
+    Relative upload links are accepted only if the object is verified in the
+    configured Supabase bucket; they are immediately rewritten to its absolute
+    URL so no new database reference depends on the Render filesystem.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return "", ""
+    if "_placeholder" in raw:
+        return "", ""       # display fallback, not a catalog object
+    if not _public_image_url_error(raw):
+        return raw, ""
+    path = raw.split("?", 1)[0]
+    if path.startswith("/uploads/"):
+        key = path[len("/uploads/"):]
+    elif path.startswith("uploads/"):
+        key = path[len("uploads/"):]
+    else:
+        return "", _public_image_url_error(raw)
+    if (not key or key.startswith("/") or "\\" in key
+            or any(part in (".", "..") for part in key.split("/"))
+            or key.split("/", 1)[0] not in {"products", "categories", "misc"}):
+        return "", "legacy upload path is not a public catalog object"
+    try:
+        import storage
+        if storage.object_exists(raw) is True:
+            absolute = storage.supabase_public_url(key)
+            if absolute and not _public_image_url_error(absolute):
+                return absolute, ""
+    except Exception:
+        pass
+    return "", "relative upload path is not verified in Supabase Storage; re-upload the image"
+
+
 def _upsert_products_resilient(rows):
     pending = [dict(r) for r in (rows or []) if r]
     if not pending:
         return False
+    for row in pending:
+        image_url = row.get("image_url") or row.get("image") or ""
+        if _enforce_public_catalog_images():
+            image_url, reason = _canonical_catalog_image_url(image_url)
+            if reason:
+                print(f"[supabase] products upsert refused: image_url {reason}; "
+                      "upload the image to Supabase Storage before saving.")
+                return False
+            gallery = []
+            for item in row.get("images") or []:
+                canonical, image_error = _canonical_catalog_image_url(item)
+                if image_error:
+                    # A stale/missing gallery member is not a durable reference.
+                    # Omit it rather than re-saving an ephemeral URL; the
+                    # cover remains independently validated above.
+                    continue
+                if canonical and canonical not in gallery:
+                    gallery.append(canonical)
+            row["images"] = gallery
+        row["image_url"] = image_url
+        row["image"] = image_url
     c = client()
     if c is None:
         return False
@@ -1573,6 +1675,15 @@ def _upsert_categories_resilient(c, rows):
     pending = [dict(r) for r in (rows or []) if r]
     if not pending:
         return False
+    for row in pending:
+        image_url = row.get("image_url") or row.get("image") or ""
+        if _enforce_public_catalog_images():
+            image_url, reason = _canonical_catalog_image_url(image_url)
+            if reason:
+                raise RuntimeError(
+                    f"category {row.get('id') or '(unknown)'} image_url {reason}; "
+                    "upload the image to Supabase Storage before saving.")
+        row["image_url"] = image_url
     for r in pending:
         for col in _CATS_SHAPE["drop"]:
             if col not in _CAT_CRITICAL_COLUMNS:
@@ -1612,7 +1723,9 @@ def _upsert_categories_resilient(c, rows):
                 m = _PG_MISSING_COLUMN_RE.search(text)
             if m:
                 col = m.group(1)
-                if col in _CAT_CRITICAL_COLUMNS or all(
+                image_column_required = (col == "image_url"
+                    and _enforce_public_catalog_images())
+                if col in _CAT_CRITICAL_COLUMNS or image_column_required or all(
                         col not in r for r in pending):
                     raise RuntimeError(
                         _cats_unsatisfiable(

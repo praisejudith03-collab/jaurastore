@@ -249,11 +249,12 @@ def test_repair_re_points_a_missing_cover_at_a_live_sibling(monkeypatch, iso_cat
     assert report["missing"] == ["jau-photo-3"]
     assert report["repaired"][0]["image"] == alive
     stored = [x for x in fake.tables["products"] if x["id"] == "jau-photo-3"][0]
-    assert stored["image"] == alive, "the repair was not saved, so a deploy undoes it"
-    assert stored["image_url"] == alive
+    absolute = f"{FAKE_PROJECT}/storage/v1/object/public/uploads/products/2026/09/here.jpg"
+    assert stored["image"] == absolute, "the repaired cover must use a durable public Storage URL"
+    assert stored["image_url"] == absolute
     # the fake table has no `images` column (MIGRATE_COLUMNS); the resilient
     # writer drops it, exactly as it does against the real narrow table
-    assert "images" not in stored or stored["images"][0] == alive
+    assert "images" not in stored or stored["images"][0] == absolute
 
 
 def test_repair_leaves_a_healthy_photo_alone(monkeypatch, iso_catalog):
@@ -280,7 +281,7 @@ def test_photo_missing_route_repairs_the_row(client, iso_catalog, monkeypatch):
     body = r.get_json()
     assert body["repaired"] is True and body["image"] == alive
     stored = [x for x in fake.tables["products"] if x["id"] == "jau-photo-5"][0]
-    assert stored["image"] == alive
+    assert stored["image"] == f"{FAKE_PROJECT}/storage/v1/object/public/uploads/products/2026/09/here.jpg"
 
 
 def test_photo_missing_ignores_a_foreign_url(client, monkeypatch):

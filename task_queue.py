@@ -188,7 +188,10 @@ def _purge_expired_locked(now=None, max_age=None):
     cutoff = now - age
     purged = 0
     for job_id, job in list(_jobs.items()):
-        if job.get("state") in ("done", "completed"):
+        # Every terminal state is history, including parked failures. Active
+        # work (queued/running/retry) is never age-purged; completed and failed
+        # records are automatically archived after the same 24-hour window.
+        if job.get("state") in ("done", "completed", "failed"):
             stamp = float(job.get("finishedAt") or job.get("createdAt") or 0.0)
             if stamp > 0 and stamp < cutoff:
                 _jobs.pop(job_id, None)
