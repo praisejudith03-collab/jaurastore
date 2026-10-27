@@ -321,6 +321,14 @@ def test_completed_background_jobs_can_be_cleared_and_auto_purge_after_24h():
         assert all(j["state"] == "done" and j["label"] == "Build thumbnail" for j in snap)
         assert {j["target"] for j in snap} == {"photos/a.jpg", "photos/b.jpg"}
 
+        # Terminal failures are archived too, but active retries are not.
+        failed = task_queue.enqueue("thumb.build", {"key": "photos/failed.jpg"},
+                                    dedupe=False)
+        with task_queue._lock:
+            failed_job = task_queue._jobs[failed["id"]]
+            failed_job["state"] = "failed"
+            failed_job["finishedAt"] = time.time() - (task_queue.COMPLETED_RETENTION_SECONDS + 60)
+
         # Simulate j1 finishing over 24 hours ago -> auto-purged on next snapshot/stats
         with task_queue._lock:
             task_queue._jobs[j1["id"]]["finishedAt"] = time.time() - (task_queue.COMPLETED_RETENTION_SECONDS + 60)
