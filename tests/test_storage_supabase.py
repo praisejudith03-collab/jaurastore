@@ -213,8 +213,10 @@ def test_product_photo_goes_to_bucket_with_public_url(fake):
         f"{FAKE_ORIGIN}/storage/v1/object/public/uploads/products/")
     path = url.split("/uploads/", 1)[1]
     data, content_type = fake.objects["uploads"][path]
-    assert data == _png()
-    assert content_type == "image/png"
+    from PIL import Image
+    assert Image.open(io.BytesIO(data)).format == "JPEG"
+    assert path.endswith(".jpg")
+    assert content_type == "image/jpeg"
     # nothing was written to the local disk
     assert not os.path.isdir(storage.local_root())
 
@@ -653,7 +655,7 @@ def test_an_old_client_that_rejects_the_option_still_gets_the_photo(fake):
     ok, msg, url = storage.save_image(_png(), folder="products", filename="p.png")
     assert ok, msg
     assert fake.objects.get("uploads"), "the retry without the option must still store the file"
-    assert url.endswith(".png")
+    assert url.endswith(".jpg")
     assert fake.cache_headers[-1][1] == "", \
         "the retry is the plain upload: no cache-control to reject"
 

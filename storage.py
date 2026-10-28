@@ -35,11 +35,14 @@ from security import clean
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
-MAX_BYTES = 6 * 1024 * 1024              # 6 MB: product photos
+MAX_BYTES = 6 * 1024 * 1024              # legacy/default image limit
+MAX_CATALOG_IMAGE_BYTES = 30 * 1024 * 1024  # original product/category photos
+MAX_CATALOG_IMAGE_PIXELS = 40_000_000         # bound decoded memory on Render
 MAX_RECEIPT_BYTES = 24 * 1024 * 1024     # 24 MB: payment receipts / PDFs / docs
 MAX_VIDEO_BYTES = 50 * 1024 * 1024       # 50 MB: product + homepage hero video
 
-# Upload-time image optimisation (see optimize_image_bytes). A phone original
+# Legacy public-image optimisation (see optimize_image_bytes). Catalog photos
+# use optimize_catalog_image instead. A phone original
 # can be several megabytes of 4000px pixels; the shop only ever displays it a
 # few hundred pixels wide, so anything bigger than this is downscaled to
 # OPTIMIZE_MAX_DIMENSION and re-encoded before it is stored - a 4G shopper
@@ -179,8 +182,8 @@ def validate_upload(data: bytes, filename: str = "", allow_pdf: bool = False,
     if not data:
         return False, "The file was empty.", ""
     if len(data) > max_bytes:
-        return False, (f"That file is {len(data) / 1048576:.1f} MB. "
-                       f"The limit is {max_bytes // (1024 * 1024)} MB."), ""
+        return False, (f"That file exceeds the {max_bytes // (1024 * 1024)} MB upload limit. "
+                       "Please choose a smaller file."), ""
     ext = _ext_from_bytes(data[:32])
     k = kind_for(ext)
 
@@ -224,18 +227,19 @@ def _type_label(ext: str) -> str:
             "gif": "GIF", "avif": "AVIF", "heic": "HEIC"}.get((ext or "").lower(), "file")
 
 
-def validate_image(data: bytes, filename: str = ""):
+def validate_image(data: bytes, filename: str = "", max_bytes: int = MAX_BYTES):
     """Product photos: images only."""
     ok, msg, ext = validate_upload(data, filename, allow_pdf=False,
-                                   max_bytes=MAX_BYTES, kind="image")
+                                   max_bytes=max_bytes, kind="image")
     return ok, msg, ext
 
 
-def validate_asset(data: bytes, filename: str = "", max_bytes: int = None):
+def validate_asset(data: bytes, filename: str = "", max_bytes: int = None,
+                   image_max_bytes: int = MAX_BYTES):
     """Category / hero assets: the broad allowlist, documents included."""
     ext = _ext_from_bytes(data[:32]) if data else ""
     k = kind_for(ext)
-    limit = max_bytes if max_bytes is not None else (MAX_VIDEO_BYTES if k == "video" else max(MAX_BYTES, 15 * 1024 * 1024 if k == "document" else MAX_BYTES))
+    limit = max_bytes if max_bytes is not None else (MAX_VIDEO_BYTES if k == "video" else max(MAX_BYTES, 15 * 1024 * 1024 if k == "document" else image_max_bytes))
     return validate_upload(data, filename, allow_documents=True,
                            max_bytes=limit, kind="asset")
 
@@ -289,7 +293,7 @@ def optimize_image_bytes(data: bytes, ext: str) -> tuple:
                 img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))),
                                  resample)
             has_alpha = (img.mode in ("RGBA", "LA", "PA")
-                         or (img.mode == "P" and "transparency" in img.info))
+                         or ("transparency" in img.info))
             buf = io.BytesIO()
             if has_alpha:
                 img.save(buf, "WEBP", quality=OPTIMIZE_WEBP_QUALITY, method=6)
@@ -306,6 +310,40 @@ def optimize_image_bytes(data: bytes, ext: str) -> tuple:
     if not out or len(out) >= len(data):
         return data, ext
     return out, out_ext
+
+
+def optimize_catalog_image(data: bytes, ext: str) -> tuple:
+    """Decode and optimize catalog JPEG/PNG/WebP; never silently store failures.
+
+    Preserve animation in GIF and other formats, and keep transparency in WebP.
+    Limit dimensions before decoding to protect the small production instance.
+    """
+    if ext not in ("jpg", "jpeg", "png", "webp"):
+        return True, "", data, ext
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(io.BytesIO(data)) as img:
+            if img.width * img.height > MAX_CATALOG_IMAGE_PIXELS:
+                return False, ("That image has too many pixels. The limit is "
+                               "40 megapixels; export it at a smaller resolution."), b"", ""
+            if getattr(img, "is_animated", False):
+                return False, "Animated PNG or WebP is not supported here. Upload a still image or GIF.", b"", ""
+            img.load()
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+            has_alpha = (img.mode in ("RGBA", "LA", "PA") or
+                         ("transparency" in img.info))
+            buf = io.BytesIO()
+            if has_alpha:
+                img.convert("RGBA").save(buf, "WEBP", quality=82, method=4)
+                out_ext = "webp"
+            else:
+                img.convert("RGB").save(buf, "JPEG", quality=82, optimize=True, progressive=True)
+                out_ext = "jpg"
+            return True, "", buf.getvalue(), out_ext
+    except Exception:
+        return False, ("That image could not be decoded or optimized. "
+                       "Please upload a valid JPG, PNG or WebP file."), b"", ""
 
 
 # Formats an <img> in a mainstream browser can actually paint. HEIC/HEIF is
@@ -347,6 +385,8 @@ def ensure_browser_displayable(data: bytes, ext: str) -> tuple:
                        "again."), data, ext
     try:
         with Image.open(io.BytesIO(data)) as img:
+            if img.width * img.height > MAX_CATALOG_IMAGE_PIXELS:
+                return False, "That image has too many pixels. The limit is 40 megapixels; export it at a smaller resolution.", data, ext
             img.load()
             img = ImageOps.exif_transpose(img)
             if img.mode in ("RGBA", "LA", "P"):
@@ -415,7 +455,8 @@ def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf:
                max_bytes: int = MAX_BYTES):
     """Validate and upload an image/receipt through Supabase Storage.
 
-    Re-encoded before storage: a phone original is downscaled and written back
+    Catalog images are accepted up to 30 MB and re-encoded before storage: a
+    phone original is downscaled and written back
     as a progressive JPEG, or as WebP when the image carries transparency (a
     WebP with an alpha channel is smaller than a PNG and keeps the alpha).
     Opaque photos deliberately stay JPEG: the same URL is used in the order
@@ -427,6 +468,8 @@ def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf:
     companion is built after the response, so an upload is never slower - and
     never fails - because of it.
     """
+    if _folder_name(folder) == "products" and max_bytes == MAX_BYTES:
+        max_bytes = MAX_CATALOG_IMAGE_BYTES
     ok, msg, ext = validate_upload(data, filename, allow_pdf=allow_pdf,
                                    max_bytes=max_bytes, kind="media")
     if not ok:
@@ -435,7 +478,12 @@ def save_image(data: bytes, folder: str = "misc", filename: str = "", allow_pdf:
     if not ok:
         return False, msg, ""
     if kind_for(ext) == "image" and not _is_sensitive(folder):
-        data, ext = optimize_image_bytes(data, ext)
+        if _folder_name(folder) in ("products", "categories"):
+            ok, msg, data, ext = optimize_catalog_image(data, ext)
+            if not ok:
+                return False, msg, ""
+        else:
+            data, ext = optimize_image_bytes(data, ext)
     ok, msg, url = _save(data, folder, ext)
     if ok and kind_for(ext) == "image" and not _is_sensitive(folder):
         # A thumbnail is an optimisation, never a condition: if the queue is
@@ -653,7 +701,8 @@ def enqueue_thumbnail(value: str) -> str:
 
 def save_asset(data: bytes, folder: str = "misc", filename: str = "", max_bytes: int = None):
     """Validate and upload a general site asset through Supabase Storage."""
-    ok, msg, ext = validate_asset(data, filename, max_bytes=max_bytes)
+    image_limit = MAX_CATALOG_IMAGE_BYTES if _folder_name(folder) == "categories" else MAX_BYTES
+    ok, msg, ext = validate_asset(data, filename, max_bytes=max_bytes, image_max_bytes=image_limit)
     if not ok:
         return False, msg, ""
     # A category cover is the shop's front door: a HEIC an iPhone happily
@@ -663,7 +712,12 @@ def save_asset(data: bytes, folder: str = "misc", filename: str = "", max_bytes:
     if not ok:
         return False, msg, ""
     if kind_for(ext) == "image" and not _is_sensitive(folder):
-        data, ext = optimize_image_bytes(data, ext)
+        if _folder_name(folder) in ("products", "categories"):
+            ok, msg, data, ext = optimize_catalog_image(data, ext)
+            if not ok:
+                return False, msg, ""
+        else:
+            data, ext = optimize_image_bytes(data, ext)
     ok, msg, url = _save(data, folder, ext)
     if ok and kind_for(ext) == "image" and not _is_sensitive(folder):
         # Category covers are shown at ~300px on every phone; they get the same

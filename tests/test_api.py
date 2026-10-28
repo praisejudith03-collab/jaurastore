@@ -1359,7 +1359,10 @@ def test_shop_pagination_is_real(client):
 # ------------------------------------------------------------ media uploads
 def test_category_asset_upload_accepts_image_and_document(client):
     tok = login(client)
-    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 200
+    from PIL import Image
+    image = io.BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "PNG")
+    png = image.getvalue()
     r = client.post("/api/admin/uploads/category", data={"file": (io.BytesIO(png), "cat.png")},
                     headers={"X-CSRF-Token": tok}, content_type="multipart/form-data")
     assert r.status_code == 200, r.data
@@ -1423,8 +1426,10 @@ def test_admin_upload_purge_never_unlinks_a_saved_product(client):
     import catalog
     import storage
     pid = "jau-purge-media"
-    ok, _msg, url = storage.save_image(b"\xff\xd8\xff\xe0" + b"0" * 512 + b"\xff\xd9",
-                                       "products", "photo.jpg")
+    from PIL import Image
+    photo = io.BytesIO()
+    Image.new("RGB", (8, 8), "red").save(photo, "JPEG")
+    ok, _msg, url = storage.save_image(photo.getvalue(), "products", "photo.jpg")
     assert ok and url
     key = storage._key_from_url(url)
     assert storage.resolve_local(key)
@@ -2176,3 +2181,79 @@ def test_100l_storage_bag_is_permanently_filtered(client):
     prods = res.get_json()["products"]
     assert not any(p["id"] == "wix-002" or "100l" in str(p.get("slug") or "") for p in prods)
 
+
+
+@pytest.mark.parametrize("path", ["/api/admin/uploads/image", "/api/admin/uploads/product", "/api/admin/uploads/category"])
+def test_large_catalog_upload_optimized_before_storage(client, monkeypatch, path):
+    from PIL import Image
+    import storage
+    tok = login(client)
+    # An incompressible PNG larger than the old 6 MB gate.
+    original = io.BytesIO()
+    Image.effect_noise((3000, 3000), 100).save(original, "PNG")
+    data = original.getvalue()
+    assert 6 * 1024 * 1024 < len(data) < storage.MAX_CATALOG_IMAGE_BYTES
+    writes = []
+    monkeypatch.setattr(storage, "_save", lambda data, folder, ext: (writes.append((data, folder, ext)) or (True, "stored", "/uploads/test." + ext)))
+    monkeypatch.setattr(storage, "enqueue_thumbnail", lambda url: None)
+    r = client.post(path, data={"file": (io.BytesIO(data), "supplier.png")},
+                    headers={"X-CSRF-Token": tok}, content_type="multipart/form-data")
+    assert r.status_code == 200, r.data
+    stored, folder, ext = writes[0]
+    assert folder == ("categories" if path.endswith("category") else "products")
+    assert ext == "jpg" and r.json["url"].endswith(".jpg")
+    assert len(stored) < len(data) / 2
+    image = Image.open(io.BytesIO(stored))
+    assert image.format == "JPEG" and image.size == (1200, 1200)
+
+
+@pytest.mark.parametrize("path", ["/api/admin/uploads/image", "/api/admin/uploads/product", "/api/admin/uploads/category"])
+def test_catalog_upload_reports_size_type_and_corruption(client, monkeypatch, path):
+    import storage
+    tok = login(client)
+    monkeypatch.setattr(storage, "_save", lambda *args: pytest.fail("invalid file must not reach storage"))
+    for data, expected in [
+        (b"\x89PNG\r\n\x1a\n" + b"x" * storage.MAX_CATALOG_IMAGE_BYTES, "30 MB"),
+        (b"MZ" + b"x" * 100, "Only"),
+        (b"\x89PNG\r\n\x1a\n" + b"x" * 100, "could not be decoded"),
+    ]:
+        r = client.post(path, data={"file": (io.BytesIO(data), "image.png")},
+                        headers={"X-CSRF-Token": tok}, content_type="multipart/form-data")
+        assert r.status_code == 400, r.data
+        assert expected in r.json["error"]
+
+
+def test_catalog_optimizer_transparency_orientation_and_memory_guard(monkeypatch):
+    from PIL import Image
+    import storage
+    transparent = io.BytesIO()
+    Image.new("RGBA", (1600, 800), (255, 0, 0, 80)).save(transparent, "PNG")
+    ok, msg, output, ext = storage.optimize_catalog_image(transparent.getvalue(), "png")
+    assert ok, msg
+    result = Image.open(io.BytesIO(output))
+    assert ext == "webp" and result.size == (1200, 600)
+    assert result.convert("RGBA").getpixel((0, 0))[3] == 80
+
+    photo = io.BytesIO()
+    exif = Image.Exif()
+    exif[274] = 6
+    Image.new("RGB", (1600, 800), "blue").save(photo, "JPEG", exif=exif)
+    ok, msg, output, ext = storage.optimize_catalog_image(photo.getvalue(), "jpg")
+    assert ok, msg
+    assert Image.open(io.BytesIO(output)).size == (600, 1200)
+
+    monkeypatch.setattr(storage, "MAX_CATALOG_IMAGE_PIXELS", 10)
+    ok, msg, *_ = storage.optimize_catalog_image(photo.getvalue(), "jpg")
+    assert not ok and "too many pixels" in msg
+
+
+def test_webp_and_small_but_large_dimension_png_are_resized():
+    from PIL import Image
+    import storage
+    for fmt, ext in [("PNG", "png"), ("WEBP", "webp"), ("JPEG", "jpg")]:
+        original = io.BytesIO()
+        Image.new("RGB", (2400, 400), "blue").save(original, fmt)
+        ok, msg, data, out_ext = storage.optimize_catalog_image(original.getvalue(), ext)
+        assert ok, msg
+        assert out_ext == "jpg"
+        assert Image.open(io.BytesIO(data)).size == (1200, 200)

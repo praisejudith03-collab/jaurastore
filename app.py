@@ -972,7 +972,7 @@ def create_app():
     @app.errorhandler(413)
     def _too_big(_e):
         return jsonify(ok=False,
-                       error="That upload is too large. Payment proofs can be up to 24 MB, product photos up to 6 MB, and videos up to 50 MB."), 413
+                       error="That request is too large. Product and category photos can be up to 30 MB, payment proofs 24 MB, and videos 50 MB."), 413
 
     @app.errorhandler(404)
     def _404(e):

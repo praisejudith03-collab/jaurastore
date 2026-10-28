@@ -6578,14 +6578,14 @@ def admin_upload_image():
     f = request.files.get("file") or request.files.get("image")
     if not f:
         return jsonify(ok=False, error="No file received."), 400
-    data = _read_upload_buffer(f, storage.MAX_BYTES)
-    ok, msg, _ext = storage.validate_image(data, f.filename or "")
+    data = _read_upload_buffer(f, storage.MAX_CATALOG_IMAGE_BYTES)
+    ok, msg, _ext = storage.validate_image(data, f.filename or "", max_bytes=storage.MAX_CATALOG_IMAGE_BYTES)
     if not ok:
         return jsonify(ok=False, error=msg), 400
     ok, msg, url = storage.save_image(data, "products", f.filename or "")
     data = b""
     if not ok:
-        return jsonify(ok=False, error=msg), 503
+        return jsonify(ok=False, error=msg), (400 if msg.startswith(("That image", "Animated PNG", "That is a HEIC")) else 503)
     return jsonify(ok=True, url=url)
 
 # ------------------------------------------------------ admin: hero video
@@ -6627,13 +6627,13 @@ def admin_upload_category():
     if not f:
         return jsonify(ok=False, error="No file received."), 400
     data = _read_upload_buffer(f, storage.MAX_VIDEO_BYTES)
-    ok, msg, ext = storage.validate_asset(data, f.filename or "")
+    ok, msg, ext = storage.validate_asset(data, f.filename or "", image_max_bytes=storage.MAX_CATALOG_IMAGE_BYTES)
     if not ok:
         return jsonify(ok=False, error=msg), 400
     ok, msg, url = storage.save_asset(data, "categories", f.filename or "")
     data = b""
     if not ok:
-        return jsonify(ok=False, error=msg), 503
+        return jsonify(ok=False, error=msg), (400 if msg.startswith(("That image", "Animated PNG", "That is a HEIC")) else 503)
     audit(authmod.current_admin(), "site.category_asset_upload", url, _ip())
     return jsonify(ok=True, url=url, kind=storage.kind_for(ext))
 
@@ -6661,7 +6661,7 @@ def admin_upload_product():
             return jsonify(ok=False, error=msg), 400
         ok, msg, url = storage.save_video(data, "products", f.filename or "")
     elif kind == "image":
-        ok, msg, _ext = storage.validate_image(data, f.filename or "")
+        ok, msg, _ext = storage.validate_image(data, f.filename or "", max_bytes=storage.MAX_CATALOG_IMAGE_BYTES)
         if not ok:
             return jsonify(ok=False, error=msg), 400
         ok, msg, url = storage.save_image(data, "products", f.filename or "")
@@ -6669,7 +6669,7 @@ def admin_upload_product():
         return jsonify(ok=False, error="Only JPG, PNG, WebP, GIF, AVIF, MP4, WebM or MOV files can be uploaded here."), 400
     data = b""
     if not ok:
-        return jsonify(ok=False, error=msg), 503
+        return jsonify(ok=False, error=msg), (400 if msg.startswith(("That image", "Animated PNG", "That is a HEIC")) else 503)
     audit(authmod.current_admin(), "site.product_media_upload", url, _ip())
     return jsonify(ok=True, url=url, kind=kind)
 
