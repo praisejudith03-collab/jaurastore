@@ -11,7 +11,14 @@ from urllib.parse import unquote, urlparse
 from supabase import create_client
 
 TABLES = ("products", "featured_products", "categories", "hero_banners",
-          "site_settings", "orders", "receipts")
+          "site_settings", "orders", "receipts",
+          # One key/value row per feature: the category details JSON, the
+          # homepage-featured selector, the Trash Bin snapshots (a trashed
+          # product is restorable and keeps its media) and every banner the
+          # owner uploaded. Their URLs are plain text inside the value, so the
+          # generic string harvest below finds them - but only if the table is
+          # scanned at all, which it was not.
+          "growth_settings")
 MEDIA_EXT = {"jpg","jpeg","png","webp","gif","avif","heic","mp4","webm","mov","pdf","doc","docx"}
 VIDEO_EXT = {"mp4","webm","mov"}
 URL_RE = re.compile(r"https?://[^\s\"'<>]+")
