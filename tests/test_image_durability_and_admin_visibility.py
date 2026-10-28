@@ -242,3 +242,53 @@ def test_the_full_boot_statement_list_contains_the_ddl_only_heal():
     products_sql = "\n".join(s for s in statements if "public.products" in s)
     assert products_sql
     assert "update" not in products_sql.lower()
+
+
+# ------------------------------- 4. the catalogue sync must not drop tombstones
+def test_repo_sync_keeps_durable_tombstones_in_the_catalogue_file(tmp_path, monkeypatch):
+    """A sync from an instance that cannot see the durable list must not erase it.
+
+    `data/catalog.json`'s `deleted` list is a suppression ledger: merged() hides
+    any seed row whose id is on it. Writing only the local (ephemeral-disk)
+    list dropped 33 tombstones on 2026-10-28 - the 17 test fixtures plus every
+    deleted id came back in the bundled fallback, and the two catalogue parity
+    tests (`test_catalog_supabase_258`) went red on main.
+    """
+    import repo_sync
+
+    target = tmp_path / "catalog.json"
+    monkeypatch.setattr(repo_sync, "REPO_ROOT", str(tmp_path))
+    (tmp_path / "data").mkdir()
+    (tmp_path / "js").mkdir()
+    monkeypatch.setattr(catalog, "merged", lambda **_k: [])
+    monkeypatch.setattr(catalog, "deleted_product_ids",
+                        lambda: {"jau-stock-a", "jau-mirror-ok", "wix-099"})
+
+    report = repo_sync._write_repo_state({
+        "products": [{"id": "wix-003", "name": "Sandwich maker"}],
+        "deleted": ["jau-stock-a"],
+    })
+    written = json.loads((tmp_path / "data" / "catalog.json").read_text())
+    assert set(written["deleted"]) == {"jau-stock-a", "jau-mirror-ok", "wix-099"}
+    assert report["deleted"] == 3
+
+
+def test_repo_sync_still_allows_a_restore_to_clear_a_tombstone(tmp_path, monkeypatch):
+    """The union must come from the source of truth, not the stale file.
+
+    Restoring a product clears its id from the durable AND local lists, so the
+    whole-list union cannot resurrect a suppression the owner has lifted.
+    """
+    import repo_sync
+
+    monkeypatch.setattr(repo_sync, "REPO_ROOT", str(tmp_path))
+    (tmp_path / "data").mkdir()
+    (tmp_path / "js").mkdir()
+    (tmp_path / "data" / "catalog.json").write_text(
+        json.dumps({"products": [], "deleted": ["wix-003", "jau-stock-a"]}))
+    monkeypatch.setattr(catalog, "merged", lambda **_k: [])
+    monkeypatch.setattr(catalog, "deleted_product_ids", lambda: {"jau-stock-a"})
+
+    repo_sync._write_repo_state({"products": [], "deleted": ["jau-stock-a"]})
+    written = json.loads((tmp_path / "data" / "catalog.json").read_text())
+    assert written["deleted"] == ["jau-stock-a"], "a restored id stays suppressed"

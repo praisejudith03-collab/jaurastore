@@ -224,10 +224,28 @@ def _write_repo_state(overrides):
     if isinstance(overrides, dict) and overrides:
         repo_catalog = os.path.join(REPO_ROOT, "data", "catalog.json")
         os.makedirs(os.path.dirname(repo_catalog), exist_ok=True)
+        # The `deleted` list is a SUPPRESSION LEDGER, not a cache: those ids
+        # are products the owner deleted, and merged() hides a seed row whose
+        # id is on it. Writing only the local (ephemeral-disk) list therefore
+        # DROPPED tombstones from the repository whenever the publishing
+        # instance could not read the durable Supabase list - every fixture and
+        # deleted id came back in the bundled fallback, and the two catalogue
+        # parity tests went red on main. Union in the durable set and never
+        # remove an id this process cannot see the source of.
+        payload = dict(overrides)
+        deleted = [str(x).strip() for x in (payload.get("deleted") or [])
+                   if str(x or "").strip()]
+        try:
+            extra = {str(x).strip() for x in (catalog_mod.deleted_product_ids() or [])
+                     if str(x or "").strip()}
+        except Exception as exc:                  # pragma: no cover - best effort
+            print(f"[repo-sync] durable deleted ids unavailable: {exc}")
+            extra = set()
+        payload["deleted"] = sorted(set(deleted) | extra)
         with open(repo_catalog, "w", encoding="utf-8") as fh:
-            json.dump(overrides, fh, ensure_ascii=False, separators=(",", ":"))
-        report["data/catalog.json"] = len(overrides.get("products") or [])
-        report["deleted"] = len(overrides.get("deleted") or [])
+            json.dump(payload, fh, ensure_ascii=False, separators=(",", ":"))
+        report["data/catalog.json"] = len(payload.get("products") or [])
+        report["deleted"] = len(payload.get("deleted") or [])
 
     # 2) Rebuild the storefront static snapshot from the merged catalogue so
     #    admin-added products appear even on static hosting / offline.
