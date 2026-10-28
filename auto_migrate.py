@@ -96,8 +96,29 @@ POPUP_BANNER_STATEMENT = (
 # The DO block is one statement so a database without a products table (a
 # fresh project, or the test suite's SQLite cache) is a no-op instead of
 # aborting the site_settings heals that follow it.
+# Kept only so older imports/notes still resolve. NEVER executed: a boot pass
+# that sets availability is a data change, and this module is a schema healer.
 PRODUCT_RECOVERY_STATEMENT = "UPDATE products SET is_active = true, is_deleted = false;"
 
+# SCHEMA ONLY - additive, idempotent DDL. No row is ever written here.
+#
+# This statement used to end with
+#     perform set_config('jaura.catalog_admin', 'on', true);
+#     update public.products set is_active = true, is_deleted = false,
+#            online = true, source = 'admin' where ...
+# i.e. EVERY boot (and every redeploy, restart, crash-recovery, or a boot pass
+# retried after an Admin save failure) force-published the whole catalogue and
+# emptied the Trash Bin. Two consequences the owner kept reporting:
+#   * a product they had just hidden came back on the website, and an item in
+#     the Trash reappeared as a live product - the "Restore" button then said
+#     "That product is not in the Trash" because the row had been un-deleted
+#     behind the portal's back;
+#   * hiding/deleting anything looked unreliable, because the next restart
+#     silently undid it.
+# Availability belongs to the owner. The sanctioned recovery path is the
+# explicit Admin action (catalog.recover_unavailable_products ->
+# recover_unavailable_products.sql, which sets the same flag INSIDE its own
+# audited transaction and records every row it touches).
 PRODUCT_SCHEMA_STATEMENT = """do $$ begin
   if to_regclass('public.products') is null then return; end if;
   alter table public.products add column if not exists category_id text;
@@ -113,20 +134,6 @@ PRODUCT_SCHEMA_STATEMENT = """do $$ begin
   alter table public.products add column if not exists dimensions text;
   alter table public.products add column if not exists "bulkQty" integer;
   alter table public.products add column if not exists "bulkPercent" integer;
-  perform set_config('jaura.catalog_admin', 'on', true);
-  if to_regclass('public.deleted_products') is not null then
-    update public.products p
-       set is_active = true,
-           is_deleted = false,
-           online = true,
-           source = case when lower(coalesce(p.source, '')) in ('deleted', 'replaced') then 'admin' else p.source end
-     where not exists (select 1 from public.deleted_products d where d.product_id = p.id)
-       and (coalesce(p.is_active, false) is not true
-            or coalesce(p.is_deleted, true) is not false
-            or lower(coalesce(p.source, '')) in ('deleted', 'replaced'));
-  else
-    UPDATE products SET is_active = true, is_deleted = false;
-  end if;
 end $$;"""
 
 RPC_NAMES = ("exec_sql", "execute_sql", "run_sql", "apply_schema_migration")

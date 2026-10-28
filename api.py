@@ -5465,13 +5465,27 @@ def _product_save_response(payload, stored_row_hint=None):
                 "That is a test product from the test suite, not a shop piece. "
                 "It cannot be added to the storefront. Delete it instead.")), 400
         if action == "error" or mirrored is False:
+            detail = ""
+            try:
+                from supabase_store import last_write_blocker
+                detail = last_write_blocker()
+            except Exception:
+                detail = ""
             try:
                 audit(authmod.current_admin(), "product.save_failed",
-                      f"backend rejected id={pid_probe} name={name_probe}", _ip())
+                      f"backend rejected id={pid_probe} name={name_probe} "
+                      f"reason={detail or 'unknown'}", _ip())
             except Exception:
                 pass
-            return jsonify(ok=False, error=(
-                "The product could not be saved to Supabase. No changes were made.")), 503
+            body = {"ok": False,
+                    "error": ("The product could not be saved to Supabase. "
+                              "No changes were made.")}
+            if detail:
+                # The owner sees the plain sentence; the exact reason (which
+                # column, which cover) rides along so the portal and the audit
+                # log can name it instead of blaming "the database".
+                body["detail"] = detail
+            return jsonify(**body), 503
         return jsonify(ok=False, error="A product needs at least a name."), 400
     if mirrored is False:
         return jsonify(ok=False, error=(
@@ -6165,7 +6179,8 @@ def admin_photos_repair():
                                             actor=authmod.current_admin())
     audit(authmod.current_admin(), "product.photos_repair",
           f"checked={report.get('checked')} missing={len(report.get('missing') or [])} "
-          f"repaired={len(report.get('repaired') or [])}", _ip())
+          f"repaired={len(report.get('repaired') or [])} "
+          f"failed={len(report.get('failed') or [])}", _ip())
     return jsonify(ok=True, **report)
 
 

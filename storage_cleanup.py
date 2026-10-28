@@ -156,9 +156,8 @@ def _referenced_keys():
     except Exception as exc:
         raise RuntimeError(f"could not read site settings: {exc}") from exc
 
-    # 4. categories (artwork columns), best effort but never silent: the
-    # category source is a JSON file / table the owner edits; if it cannot
-    # be read the scan is abandoned like any other reference source.
+    # 4. categories (artwork columns): the live Supabase table plus the
+    # companion details row in production, the JSON file on a local checkout.
     try:
         strings = []
         _harvest_strings(_category_rows(), strings)
@@ -166,20 +165,84 @@ def _referenced_keys():
     except Exception as exc:
         raise RuntimeError(f"could not read categories: {exc}") from exc
 
+    # 5. the Trash Bin. A trashed product is restorable and keeps its media,
+    # so its photos are references even though every catalogue read hides it.
+    try:
+        strings = []
+        _harvest_strings(_trash_rows(), strings)
+        _add("trash", strings)
+    except Exception as exc:
+        raise RuntimeError(f"could not read the Trash Bin: {exc}") from exc
+
     return keys, sources
 
 
 def _category_rows():
-    import catalog
+    """Every category row the shop is showing, from whichever backend is live.
+
+    Delegates to ``storage._live_category_rows()``, which reads the Supabase
+    ``categories`` table *and* the companion details row that production
+    actually serves. This function used to read only ``data/categories.json``
+    - a file that holds the SHIPPED artwork paths and nothing an admin has
+    uploaded - and it also mishandled ``catalog._read_categories_file()``,
+    which returns a ``(data, path)`` tuple rather than the data itself. The
+    result was that no uploaded category cover ever appeared in the reference
+    set, so the nightly sweep treated every one of them as an orphan and
+    deleted it a couple of days after upload. That is the "category images
+    keep disappearing" report.
+
+    Raises when the live list cannot be read, so ``_referenced_keys`` aborts
+    the sweep instead of treating "I could not ask" as "nobody shows it".
+    """
+    import storage
+    rows = storage._live_category_rows()
+    if rows is None:
+        raise RuntimeError("the live category list could not be read")
+    return rows or []
+
+
+def _trash_rows():
+    """The Trash Bin snapshots: products whose media must survive deletion.
+
+    Soft-deleting a product keeps its row and its files so Restore can bring
+    the piece back (see ``supabase_store.delete_products_strict``). But
+    ``catalog.merged()`` - the catalogue read this scan uses for products -
+    deliberately EXCLUDES soft-deleted rows, so every photo belonging to a
+    trashed product looked unreferenced to the sweeper and was purged after
+    the grace window. Restoring the product then produced a card with a dead
+    photo. The trash store is a separate growth_settings row, so it has to be
+    read explicitly.
+
+    Raises when the production trash cannot be read; the local SQLite mirror
+    is only a boot cache and never aborts the scan on its own.
+    """
+    rows = []
     try:
-        rows = catalog._read_categories_file()
-        if isinstance(rows, dict):
-            rows = rows.get("categories") or []
-        return rows or []
+        import supabase_store
+        if supabase_store.enabled():
+            remote = supabase_store.load_product_trash()
+            if remote is None:
+                raise RuntimeError("the Trash Bin could not be read")
+            rows.extend(r for r in remote if isinstance(r, dict))
+    except RuntimeError:
+        raise
+    except Exception as exc:                        # pragma: no cover - network
+        raise RuntimeError(f"could not read the Trash Bin: {exc}") from exc
+    try:
+        from db import query
+        from supabase_store import PRODUCT_TRASH_KEY
+        for row in query("SELECT value FROM growth_settings WHERE key=?",
+                         (PRODUCT_TRASH_KEY,)) or []:
+            raw = row["value"] if "value" in row.keys() else ""
+            if not raw:
+                continue
+            data = json.loads(raw)
+            rows.extend(r for r in data if isinstance(r, dict))
     except Exception:
-        return []
-    # A failed category read falls through to the local mirror; the Supabase
-    # categories table is covered by the settings scan in production mode.
+        # No local mirror yet (fresh disk) is not a read failure: the durable
+        # source above is what production restores from.
+        pass
+    return rows
 
 
 # ------------------------------------------------------------- object lists

@@ -3353,14 +3353,17 @@ def repair_dead_photos(limit=60, actor="photo_repair", dry_run=False):
     otherwise a committed repo photo for the slug - and saves it, so the fix
     reaches every device and survives the next deploy. Products with a working
     cover are never touched, and a product with nothing to fall back to is
-    reported (``unrecoverable``) instead of being changed.
+    reported (``unrecoverable``) instead of being changed. A replacement the
+    backend refuses is reported in ``failed`` with the reason - it is never
+    counted as repaired.
     """
     try:
         import storage as _storage
     except Exception:                                   # pragma: no cover
         return {"checked": 0, "missing": [], "repaired": [], "unrecoverable": [],
                 "skipped": "storage unavailable"}
-    report = {"checked": 0, "missing": [], "repaired": [], "unrecoverable": []}
+    report = {"checked": 0, "missing": [], "repaired": [], "unrecoverable": [],
+              "failed": []}
 
     def _exists(ref):
         return _storage.object_exists(ref) is not False      # True or unknown
@@ -3396,18 +3399,28 @@ def repair_dead_photos(limit=60, actor="photo_repair", dry_run=False):
             report["unrecoverable"].append(str(p.get("id") or ""))
             continue
         entry = {"id": str(p.get("id") or ""), "image": alt}
-        report["repaired"].append(entry)
         if dry_run:
+            report["repaired"].append(entry)
             continue
         row = dict(p)
         row["image"] = alt
         row["image_url"] = alt
         row["images"] = [alt] + [str(g) for g in (p.get("images") or [])
                                  if str(g) and str(g) != alt and not _is_placeholder_path(g)]
+        # Only a CONFIRMED write counts as a repair. The result used to be
+        # discarded, so a write the backend refused (a cover it would not
+        # accept, an unreachable database) still appeared in "repaired" and
+        # the Admin card reported success while the row kept the dead URL.
         try:
-            upsert(row, actor)
-        except Exception:
-            pass
+            saved, action, mirrored = upsert(row, actor)
+        except Exception as exc:
+            saved, action, mirrored = None, f"exception: {exc}", False
+        if saved and action not in ("error", "rejected", "test-fixture",
+                                    "permanently-removed") and mirrored is not False:
+            report["repaired"].append(entry)
+        else:
+            report.setdefault("failed", []).append(
+                {"id": entry["id"], "image": alt, "reason": str(action or "not saved")})
     return report
 
 

@@ -669,18 +669,67 @@ def _public_image_url_error(value):
     return ""
 
 
+# A cover may also be an asset that ships inside the deployed application.
+# catalog.resolve_image() serves these, the storefront renders them and
+# catalog_health() counts them as valid covers, so the writer must accept the
+# same class it publishes - otherwise every bundled-catalogue product becomes
+# unsaveable in production (see the regression notes below).
+_COMMITTED_ASSET_RE = re.compile(
+    r"^(?:images/)(?!.*(?:^|/)\.\.?(?:/|$))[^\\\x00-\x1f]+"
+    r"\.(?:jpe?g|png|webp|gif|avif|heic|svg|mp4|webm|mov|pdf|docx?)$",
+    re.IGNORECASE)
+
+
+def _is_committed_catalog_asset(value):
+    """True for a cover that is a repository asset shipped with the app.
+
+    These are the paths the bundled catalogue uses (``images/products/x.jpg``)
+    and the last-resort fallback photo repair chooses. They are durable: the
+    file is part of the deploy, not an ephemeral Render upload, and no bucket
+    or object key is involved.
+
+    The path must ALSO exist on disk right now. A made-up relative path
+    (``images/categories/temporary.jpg``) is not an asset - it is exactly the
+    kind of dangling reference this validator exists to reject - while a real
+    committed file is served by the app for the life of the deploy.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    if raw.startswith(("/", "\\")) or "\\" in raw:
+        return False
+    if re.match(r"^[a-z][a-z0-9+.-]*:", raw, re.IGNORECASE):
+        return False                    # http:, data:, blob:, file: ...
+    if not _COMMITTED_ASSET_RE.match(raw.split("?", 1)[0]):
+        return False
+    try:
+        import storage
+        return bool(storage._is_repo_asset(raw.split("?", 1)[0]))
+    except Exception:                                # pragma: no cover
+        return False
+
+
 def _canonical_catalog_image_url(value):
     """Return an absolute public URL, migrating a legacy /uploads alias in place.
 
     Relative upload links are accepted only if the object is verified in the
     configured Supabase bucket; they are immediately rewritten to its absolute
     URL so no new database reference depends on the Render filesystem.
+
+    A committed repository asset (``images/products/x.jpg``) is accepted
+    unchanged. It is already durable and same-origin, and refusing it used to
+    make every bundled-catalogue product unsaveable on the live shop: an admin
+    Hide/Show toggle posts the whole product, so the write was refused with
+    "image_url must be an absolute public Supabase Storage URL" and the portal
+    answered 503 ("could not be saved") for a row that was perfectly valid.
     """
     raw = str(value or "").strip()
     if not raw:
         return "", ""
     if "_placeholder" in raw:
         return "", ""       # display fallback, not a catalog object
+    if _is_committed_catalog_asset(raw):
+        return raw, ""
     if not _public_image_url_error(raw):
         return raw, ""
     path = raw.split("?", 1)[0]
@@ -705,10 +754,36 @@ def _canonical_catalog_image_url(value):
     return "", "relative upload path is not verified in Supabase Storage; re-upload the image"
 
 
+# The reason the most recent product/category write was refused. Every refusal
+# used to be a print() and a bare `False` upstream, so the Admin portal could
+# only say "could not be saved" with no trace of WHY - the single most
+# expensive part of diagnosing the disappearing-image reports. The API now
+# returns this alongside the 503 and writes it to the audit log.
+_LAST_WRITE_BLOCKER = ""
+
+
+def _note_write_blocker(reason):
+    global _LAST_WRITE_BLOCKER
+    _LAST_WRITE_BLOCKER = str(reason or "")[:300]
+    return False
+
+
+def last_write_blocker():
+    """Why the last product/category write was refused ("" when none was)."""
+    return _LAST_WRITE_BLOCKER
+
+
+def clear_write_blocker():
+    global _LAST_WRITE_BLOCKER
+    _LAST_WRITE_BLOCKER = ""
+
+
 def _upsert_products_resilient(rows):
     pending = [dict(r) for r in (rows or []) if r]
     if not pending:
         return False
+    global _LAST_WRITE_BLOCKER
+    _LAST_WRITE_BLOCKER = ""
     for row in pending:
         image_url = row.get("image_url") or row.get("image") or ""
         if _enforce_public_catalog_images():
@@ -716,14 +791,19 @@ def _upsert_products_resilient(rows):
             if reason:
                 print(f"[supabase] products upsert refused: image_url {reason}; "
                       "upload the image to Supabase Storage before saving.")
-                return False
+                return _note_write_blocker(
+                    f"product {row.get('id') or '(no id)'}: cover {reason}")
             gallery = []
             for item in row.get("images") or []:
                 canonical, image_error = _canonical_catalog_image_url(item)
                 if image_error:
                     # A stale/missing gallery member is not a durable reference.
                     # Omit it rather than re-saving an ephemeral URL; the
-                    # cover remains independently validated above.
+                    # cover remains independently validated above. Committed
+                    # repo photos and absolute bucket URLs have no error and
+                    # are therefore KEPT - dropping them silently emptied the
+                    # gallery on every save (the "my extra photos vanished"
+                    # report).
                     continue
                 if canonical and canonical not in gallery:
                     gallery.append(canonical)
@@ -732,7 +812,7 @@ def _upsert_products_resilient(rows):
         row["image"] = image_url
     c = client()
     if c is None:
-        return False
+        return _note_write_blocker("the Supabase client is not configured")
     try:
         c.table("products").upsert(pending).execute()
         return True
@@ -744,9 +824,12 @@ def _upsert_products_resilient(rows):
             print("[supabase] products upsert refused: products table is missing "
                   f"column {col!r}; no retry was attempted because that would "
                   "silently discard admin-entered data. Run supabase_schema.sql.")
+            return _note_write_blocker(
+                f"the products table is missing the column {col!r}; "
+                "run supabase_schema.sql")
         else:
             print(f"[supabase] products upsert failed: {exc}")
-        return False
+        return _note_write_blocker(f"database write failed: {str(exc)[:200]}")
 
 
 def upsert_products(products):
@@ -1680,6 +1763,8 @@ def _upsert_categories_resilient(c, rows):
         if _enforce_public_catalog_images():
             image_url, reason = _canonical_catalog_image_url(image_url)
             if reason:
+                _note_write_blocker(
+                    f"category {row.get('id') or '(unknown)'}: cover {reason}")
                 raise RuntimeError(
                     f"category {row.get('id') or '(unknown)'} image_url {reason}; "
                     "upload the image to Supabase Storage before saving.")
