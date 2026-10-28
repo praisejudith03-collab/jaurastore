@@ -23,8 +23,8 @@ const $ = (s, r = document) => r.querySelector(s);
  *
  * The server still runs storage.optimize_image_bytes() on what it receives
  * - this does not replace that, it stops the megabytes from ever leaving
- * the phone. The upload's 6 MB ceiling is therefore checked AFTER the
- * squeeze: a 9 MB camera original is now a 250 KB WebP, not a rejection.
+ * the phone. The upload's 30 MB ceiling is checked AFTER the browser squeeze; the server
+ * also optimizes photos if browser compression is unavailable.
  * ===================================================================== */
 const PHOTO_MAX_DIMENSION = 1200;                 // px kept on the longest side
 const PHOTO_QUALITY = 0.82;                       // WebP / JPEG encoder quality
@@ -58,6 +58,27 @@ function isCompressibleImage(file) {
 function withExtension(name, ext) {
   const base = String(name || "photo").split(/[\\/]/).pop().replace(/\.[^.]+$/, "").trim();
   return (base || "photo").slice(0, 60) + "." + ext;
+}
+
+// Persistent, accessible feedback next to the upload controls (not a transient toast).
+function uploadErrorMessage(error, fallback) {
+  const message = typeof error === "string" ? error : (error && error.message);
+  if ((error && error.status === 413) || message === "HTTP 413") {
+    return "That upload is too large. Photos can be up to 30 MB, videos 50 MB, and category documents 15 MB.";
+  }
+  return message || fallback;
+}
+function showUploadError(anchor, message) {
+  if (!anchor || !anchor.parentNode) return;
+  let banner = anchor.previousElementSibling;
+  if (!banner || !banner.classList.contains("upload-error-banner")) {
+    banner = document.createElement("div");
+    banner.className = "upload-error-banner";
+    banner.setAttribute("role", "alert");
+    anchor.parentNode.insertBefore(banner, anchor);
+  }
+  banner.textContent = message;
+  banner.hidden = !message;
 }
 
 function readableBytes(n) {
@@ -361,7 +382,7 @@ function mediaStripHTML(imgs) {
   const tiles = (imgs || []).map((src, i) => mediaTileHTML(src, i, poster)).join("");
   const plus = (imgs || []).length < 20 ? `<label class="au-tile au-plus">+<input type="file" id="more-media" accept="image/*,video/*" multiple hidden /></label>` : "";
   return `<div class="au-media-row">${tiles}${plus}</div>
-    <p class="admin-note">Drag &amp; drop, or tap + to pick several at once. Big camera photos are resized to 1200px and compressed on your phone before they upload, so they go up fast on mobile data and still look sharp. Videos up to 50 MB — up to 20 items.</p>
+    <p class="admin-note">Drag &amp; drop, or tap + to pick several at once. Photos are resized to 1200px and compressed automatically. Photos up to 30 MB can be uploaded. Videos up to 50 MB — up to 20 items.</p>
     <button type="button" class="au-view-media" id="view-media">Photos: ${(imgs || []).length} of 20 — tap + to add, × to remove</button>`;
 }
 function purgeRemovedMedia(entry) {
@@ -563,13 +584,7 @@ function bindMedia() {
     e.preventDefault(); box.classList.remove("is-drop");
   }));
   box.addEventListener("drop", (e) => {
-    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])].filter((f) => {
-      const t = String(f.type || "");
-      const n = String(f.name || "");
-      if (/^(image|video)\//.test(t)) return true;
-      if (_VIDEO_EXT.test(n) || /\.(jpe?g|png|webp|gif|avif|heic)$/i.test(n)) return true;
-      return !t;
-    });
+    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
     if (!files.length) return;
     if (!window.__editImages) window.__editImages = [];
     for (const file of files) {
@@ -605,16 +620,10 @@ function bindMedia() {
     const isVideo = /^video\//.test(t) || _VIDEO_EXT.test(n);
     const looksImage = /^image\//.test(t) || /\.(jpe?g|png|webp|gif|avif|heic)$/i.test(n);
     const endpoint = (isVideo || !looksImage) ? "api/admin/uploads/product" : "api/admin/uploads/image";
-    const maxVideo = 40 * 1024 * 1024, maxPhoto = 6 * 1024 * 1024;
+    const maxVideo = 50 * 1024 * 1024, maxPhoto = 30 * 1024 * 1024;
+    showUploadError(box, "");
     if (isVideo && file.size > maxVideo) {
-      JA.toast("That video is " + (file.size / 1048576).toFixed(1) + " MB. The limit is 40 MB.");
-      return;
-    }
-    // A camera original is allowed to be huge: it is squeezed below, and the
-    // 6 MB ceiling is checked on what will ACTUALLY be uploaded. Only a file
-    // too big to even decode is turned away here.
-    if (!isVideo && file.size > PHOTO_DECODE_MAX_BYTES) {
-      JA.toast("That photo is " + (file.size / 1048576).toFixed(1) + " MB — too large to open. Please pick a smaller one.");
+      showUploadError(box, "That video is " + (file.size / 1048576).toFixed(1) + " MB. The limit is 50 MB.");
       return;
     }
     if (!window.JA_NET) {
@@ -644,7 +653,7 @@ function bindMedia() {
       const at = entryAt();
       if (at >= 0) window.__editImages.splice(at, 1);
       paintMedia(box);
-      JA.toast("That photo is still " + (payload.size / 1048576).toFixed(1) + " MB after compression. The limit is 6 MB.");
+      showUploadError(box, "That photo is " + (payload.size / 1048576).toFixed(1) + " MB after browser compression. The upload limit is 30 MB. Please choose a smaller file.");
       return;
     }
     // An OFFLINE upload waits in the outbox; when the connection returns and
@@ -694,7 +703,7 @@ function bindMedia() {
     } else {
       const at = entryAt();
       if (at >= 0) window.__editImages[at] = { pending: true, preview, video: isVideo, failed: true };
-      JA.toast((res && res.error) || "That file did not upload. It will retry by itself.");
+      showUploadError(box, uploadErrorMessage(res && res.error, "That file did not upload. Please try again."));
     }
     paintMedia(box);
   }
@@ -5379,7 +5388,8 @@ function bindCategories() {
     if (!input || !input.files || !input.files[0]) return;
     const f = input.files[0];
     const isDoc = /\.(pdf|doc|docx)$/i.test(f.name || "") || /pdf|word|msword|document/.test(f.type || "");
-    if (isDoc && f.size > 8 * 1024 * 1024) { JA.toast("That asset is " + (f.size / 1048576).toFixed(1) + " MB. The limit is 8 MB."); input.value = ""; return; }
+    showUploadError(list, "");
+    if (isDoc && f.size > 15 * 1024 * 1024) { showUploadError(list, "That document is " + (f.size / 1048576).toFixed(1) + " MB. The limit is 15 MB."); input.value = ""; return; }
     const card = input.closest("[data-cat-i]"); const pic = card?.querySelector(".au-cat-pic");
     // Category covers get the same browser-side squeeze as product photos
     // (1200px WebP/JPEG); documents and videos pass through untouched.
@@ -5405,14 +5415,14 @@ function bindCategories() {
         }
         // never claim success when the upload was only queued or failed:
         // the old asset stays, the admin can retry
-        JA.toast((res && res.error) || "Could not upload that asset. No changes are live.");
+        showUploadError(list, uploadErrorMessage(res && res.error, "Could not upload that asset. No changes are live."));
         return;
       }
       // no live server (test/dev static hosting): keep the local preview
       const data = await fileToData(f);
       if (pic) { const upLabel = pic.querySelector(".au-cat-up"); pic.innerHTML = `<img src="${data}" alt="" />`; if (upLabel) pic.appendChild(upLabel); }
       persist("Photo saved.", { redirect: true });
-    } catch (err) { JA.toast((err && err.message) || "Could not read that asset."); }
+    } catch (err) { showUploadError(list, uploadErrorMessage(err, "Could not upload that asset. No changes are live.")); }
     finally { input.value = ""; }
   });
   list.addEventListener("click", async (e) => {

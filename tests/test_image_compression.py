@@ -100,8 +100,8 @@ def test_the_product_upload_compresses_before_it_measures_or_sends():
         "upload, so a camera original is shrunk instead of rejected")
     assert "blob: payload" in upload and "filename," in upload, (
         "the compressed bytes AND the new .webp/.jpg name must be uploaded")
-    assert "PHOTO_DECODE_MAX_BYTES" in upload, (
-        "only a file too large to even decode is turned away up front")
+    assert "maxPhoto = 30 * 1024 * 1024" in upload, (
+        "allow a 30 MB original when browser compression is unavailable")
     assert "readableBytes(squeezed.originalSize)" in upload, (
         "tell the owner how much was saved")
 
@@ -132,7 +132,21 @@ def test_the_legacy_helpers_still_exist_for_their_callers():
 
 def test_the_owner_is_told_what_happens_to_the_photos():
     src = _admin_js()
-    assert "resized to 1200px and compressed on your phone" in src, (
+    assert "resized to 1200px and compressed automatically" in src, (
         "the media hint must describe the new behaviour, not the old "
         '"your photos stay as they are"')
     assert "stay as they are" not in src
+
+
+def test_upload_error_banner_simulation():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    result = subprocess.run([node, "tests/_upload_error_banner_sim.mjs"], cwd=ROOT,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "upload error banner checks passed" in result.stdout
+    src = _admin_js()
+    assert 'showUploadError(box, uploadErrorMessage(res && res.error' in src
+    assert 'showUploadError(list, uploadErrorMessage(err' in src
+    assert '.upload-error-banner:not([hidden])' in open(os.path.join(ROOT, 'css', 'style.css'), encoding='utf-8').read()

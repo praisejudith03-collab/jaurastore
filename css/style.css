@@ -8724,3 +8724,15 @@ body[data-page="accounting"] button:disabled { cursor: not-allowed; opacity: .5;
   .aa-top-actions { gap: 6px; }
   .aa-currency-switch button span { display: none; }
 }
+
+/* Persistent upload errors beside the relevant admin controls. */
+.upload-error-banner:not([hidden]) {
+  display: block;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid #b42318;
+  border-radius: 8px;
+  background: #fef3f2;
+  color: #912018;
+  font-weight: 600;
+}
