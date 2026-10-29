@@ -159,22 +159,21 @@ def test_delivery_seeds_is_idempotent_and_preserves_admin_edits():
             f"delivery_seeds must not contain {bad!r}"
 
 # ---------------------------------------------------------------------------
-# Section 15 storage - exactly one bucket
+# Section 15 storage - public assets and private receipts
 # ---------------------------------------------------------------------------
-def test_storage_uses_exactly_one_bucket_and_keeps_policies_idempotent():
+def test_storage_separates_public_assets_from_private_receipts():
     src = _schema_text()
-    # exactly one storage.buckets insert, for uploads (comments stripped for env var check)
     code_no_comments = re.sub(r"--[^\n]*", "", src).lower()
     inserts = re.findall(r"insert into storage\.buckets.*?;", src, re.S | re.I)
-    assert len(inserts) == 1
-    assert "values ('uploads', 'uploads', true)" in inserts[0].lower()
-    assert "bucket_id = 'receipts'" not in code_no_comments
-    assert "receipts" not in inserts[0].lower() or "uploads" in inserts[0].lower()
-    # bucket insert must be ON CONFLICT DO NOTHING (not changing visibility)
-    assert "on conflict (id) do nothing" in inserts[0].lower()
-    # policies are idempotent via DO exception when duplicate_object
+    assert len(inserts) == 2
+    assert any("values ('uploads', 'uploads', true)" in row.lower() for row in inserts)
+    assert any("values ('receipts', 'receipts', false)" in row.lower() for row in inserts)
+    assert "bucket_id = 'uploads'" in code_no_comments
+    assert "bucket_id = 'receipts'" in code_no_comments
     assert 'create policy "public read uploads"' in src
-    assert 'create policy "service role writes uploads"' in src
+    assert 'create policy "service role manages receipts"' in src
+    assert "to anon, authenticated using (bucket_id = 'receipts')" not in code_no_comments
+    assert all("on conflict (id) do nothing" in row.lower() for row in inserts)
     # no SUPABASE_PRIVATE_BUCKET handling in actual statements (comments may mention it)
     assert "supabase_private_bucket" not in code_no_comments
     # does not delete or modify remote buckets/objects
@@ -266,6 +265,11 @@ def test_all_sections_are_add_only():
     allowed = {("stars","rating"), ("note","body"), ("at","created_at")}
     for r in renames:
         assert tuple(map(str.lower, r)) in {(a.lower(), b.lower()) for a,b in allowed}, f"unexpected rename {r}"
-    # ensure no drop/truncate/delete in statements
+    # Only the specifically named category hard-delete RPC may remove rows.
+    approved = re.search(
+        r"create or replace function public\.hard_delete_categories\(.*?\$\$;",
+        code, re.S)
+    assert approved and "delete from public.categories" in approved.group(0)
+    safe_code = code.replace(approved.group(0), "")
     for bad in (r"\bdrop\b", r"\btruncate\b", r"\bdelete\b"):
-        assert not re.search(bad, code), f"destructive {bad} found in schema"
+        assert not re.search(bad, safe_code), f"unexpected destructive {bad} in schema"

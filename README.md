@@ -45,18 +45,18 @@ the test suite run with no credentials.
 
 On Render's free tier the disk is wiped on every deploy, so uploaded images
 must live in Supabase Storage. Set `UPLOAD_MODE=supabase` (`.env` or the
-dashboard) together with the Supabase pair above. The app writes to exactly
-**one** bucket, `uploads`, which must be **public**. `SUPABASE_BUCKET` is not
-an application override — it is only read by the standalone migration/cleanup
-tools; `supabase_store._bucket()` deliberately ignores it so no environment
-mistake can point an upload at a private or unrelated bucket.
+dashboard) together with the Supabase pair above. Supabase uses two fixed
+buckets: public catalogue/media assets in `uploads` and private payment proofs
+in `receipts`. `SUPABASE_BUCKET` is not an application override — the server
+chooses each bucket by asset type, so an environment mistake cannot route
+sensitive proof uploads into the public bucket.
 
 * product photos, category assets, hero video/banner/logo → public URL
   (`…/storage/v1/object/public/uploads/<key>`), stored permanently in the
   bucket, never on the container's disk
-* payment receipts and proofs → **signed URL** (admin-only, never publicly
-  guessable); the admin receipts view refreshes them on the fly, and the
-  upload still works even after the 7-day Supabase signed-URL cap
+* payment receipts and proofs → **short-lived signed URL** from the private
+  `receipts` bucket. The admin receipts view refreshes them on the fly, and
+  the upload still works after the 7-day Supabase signed-URL cap
 * **production never falls back to the local disk.** If the bucket cannot be
   reached the upload fails with a clear error and nothing is saved, because a
   file written to `/tmp/uploads` would 404 the next time the service deploys.
@@ -66,6 +66,13 @@ mistake can point an upload at a private or unrelated bucket.
   for instance) is converted to JPEG on upload, or refused with the reason —
   so a successful upload can never leave a broken-image icon on a category
   card or a product page
+
+If `uploads` existed as private or contains old `uploads/proofs/` files, apply
+`schema_sections/15_storage.sql`, deploy the matching code, then run
+`python tools/repair_supabase_storage.py` (dry run) and review the target project.
+Only after that review, run it with `--apply`: it migrates old proof files and
+references to the private bucket before enabling public image reads. Do not set
+`uploads.public=true` manually first.
 
 `/sitemap.xml` is generated on every request from the live category table and
 product catalogue (the old committed `sitemap.xml` was deleted — a snapshot

@@ -15,6 +15,7 @@ class DurableClient:
     def __init__(self):
         self.rows = {}
         self.metadata = {}
+        self.deleted_categories = set()
 
     def table(self, name):
         if name == "categories":
@@ -23,6 +24,9 @@ class DurableClient:
                 def select(self, *a):
                     self.reading = True
                     return self
+                def upsert(self, rows, **kw):
+                    self.reading = False
+                    return super().upsert(rows, **kw)
                 def order(self, *a):
                     return self
                 def range(self, start, end):
@@ -35,6 +39,16 @@ class DurableClient:
                         return _FakeResult(rows[a:b+1])
                     return super().execute()
             return Table(self.rows, missing=("name_fr", "image_url", "hidden", "updated_at"))
+        if name == "deleted_categories":
+            parent = self
+            class Tombstones:
+                def select(self, *a): return self
+                def order(self, *a): return self
+                def range(self, *a): return self
+                def execute(self):
+                    return _FakeResult([{"category_id": cid}
+                                        for cid in parent.deleted_categories])
+            return Tombstones()
         assert name == "growth_settings"
         parent = self
         class Metadata:
@@ -56,6 +70,18 @@ class DurableClient:
                 value = parent.metadata.get(self.key)
                 return _FakeResult([{'value': value}] if value else [])
         return Metadata()
+
+    def rpc(self, name, params):
+        assert name == "hard_delete_categories"
+        parent = self
+        class RPC:
+            def execute(self):
+                ids = set(params.get("category_ids") or [])
+                parent.deleted_categories.update(ids)
+                for cid in ids:
+                    parent.rows.pop(cid, None)
+                return _FakeResult(sorted(ids))
+        return RPC()
 
 
 @pytest.fixture()
@@ -113,6 +139,23 @@ def test_metadata_failure_is_not_acknowledged_as_a_saved_order(durable, monkeypa
     with pytest.raises(RuntimeError):
         api._save_categories([{'id':'perfume','name':'Perfume','nameFr':'Parfum','order':0}])
     assert durable.rows == {}, "the categories table is restored after companion failure"
+
+
+def test_category_delete_is_hard_tombstoned_and_cannot_be_reseeded(durable, monkeypatch):
+    monkeypatch.setattr(Config, "ENV", "production")
+    durable.rows["obsolete"] = {"id": "obsolete", "name": "Old category"}
+    durable.metadata[sb.CATEGORIES_KEY] = json.dumps([
+        {"id": "obsolete", "name": "Old category", "nameFr": "Ancienne"}])
+
+    api._save_categories([], actor="test")
+    assert "obsolete" not in durable.rows
+    assert "obsolete" in durable.deleted_categories
+    assert json.loads(durable.metadata[sb.CATEGORIES_KEY]) == []
+
+    with pytest.raises(RuntimeError, match="permanently deleted"):
+        api._save_categories([{"id": "obsolete", "name": "Old category"}], actor="test")
+    assert "obsolete" not in durable.rows
+    assert "obsolete" in durable.deleted_categories
 
 
 def test_owner_adds_category_and_shoppers_see_it_immediately(durable, monkeypatch):

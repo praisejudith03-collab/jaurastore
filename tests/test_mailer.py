@@ -511,6 +511,17 @@ class TestAdminNewOrderEmail:
         assert ("https://example.supabase.co/storage/v1/object/public/proofs/r.png"
                 in html_body)                      # receipt link
 
+    def test_order_email_refreshes_a_stored_signed_receipt_link(self, resend_env, monkeypatch):
+        import storage
+        old = "https://project.supabase.co/storage/v1/object/sign/receipts/proofs/a.png?token=expired"
+        fresh = "https://project.supabase.co/storage/v1/object/sign/receipts/proofs/a.png?token=fresh"
+        monkeypatch.setattr(storage, "signed_url_for", lambda url: fresh)
+        ok, _ = mailer.notify_new_order({"id": "JA-FRESH", "proofUrl": old,
+                                         "customer": {}, "items": []})
+        assert ok
+        html = resend_env[0]["payload"]["html"]
+        assert fresh in html and "token=expired" not in html
+
     def test_relative_receipt_url_becomes_absolute(self, resend_env):
         import config as config_mod
         monkeypatch_target = config_mod
@@ -525,6 +536,21 @@ class TestAdminNewOrderEmail:
                 in resend_env[0]["payload"]["html"]
         finally:
             monkeypatch_target.Config.SITE_ORIGIN = "http://localhost:8080"
+
+    def test_product_thumbnail_is_absolute_https_for_email_clients(self, resend_env):
+        import config as config_mod
+        config_mod.Config.SITE_ORIGIN = "http://localhost:8080"
+        try:
+            ok, _ = mailer.notify_new_order({
+                "id": "JA-IMAGE", "customer": {},
+                "items": [{"name": "Soap", "qty": 1,
+                           "image_url": "/uploads/products/soap.jpg"}]})
+            assert ok
+            html = resend_env[0]["payload"]["html"]
+            assert 'src="https://jaurastore.com.ng/uploads/products/soap.jpg"' in html
+            assert "localhost" not in html
+        finally:
+            config_mod.Config.SITE_ORIGIN = "http://localhost:8080"
 
     def test_item_quantities_use_qty_field(self, resend_env):
         """Checkout items store 'qty' - the email used to read only

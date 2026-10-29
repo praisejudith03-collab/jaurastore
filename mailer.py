@@ -387,7 +387,7 @@ def _items_table(order):
         # strip the style, the attributes stop a 1200px photo rendering at
         # full width in the inbox. No thumbnail (or a broken URL) must never
         # leave a gap - the cell simply carries no image then.
-        thumb_src = _absolute_url(item.get("image") or "")
+        thumb_src = _item_image(item)
         thumb_html = ""
         if thumb_src:
             thumb_html = (
@@ -546,16 +546,70 @@ def _section(title):
             f'text-transform:uppercase;color:#a97e48">{_esc(title)}</h2>')
 
 
+_PUBLIC_EMAIL_ORIGIN = "https://jaurastore.com.ng"
+
+
+def _email_origin():
+    """A real HTTPS shop origin; never emit localhost into customer email."""
+    raw = str(_cfg("SITE_ORIGIN", "") or "").strip()
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        host = (parsed.hostname or "").lower()
+        if (parsed.scheme in ("http", "https") and host
+                and host not in {"localhost", "127.0.0.1", "::1"}):
+            return urllib.parse.urlunsplit(("https", parsed.netloc, "", "", "")).rstrip("/")
+    except (TypeError, ValueError):
+        pass
+    return _PUBLIC_EMAIL_ORIGIN
+
+
 def _absolute_url(url):
-    """Root-relative upload URLs (local/test storage) become absolute using
-    SITE_ORIGIN; Supabase public URLs are already absolute and pass through."""
-    url = str(url or "").strip()
-    if not url or url.startswith(("http://", "https://")):
-        return url
-    origin = str(_cfg("SITE_ORIGIN", "") or "").rstrip("/")
-    if not origin:
-        return url
-    return origin + (url if url.startswith("/") else "/" + url)
+    """Return an absolute HTTPS URL usable by Gmail and other email clients."""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    origin = _email_origin()
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+    except ValueError:
+        return ""
+    if parsed.scheme in ("http", "https") and parsed.hostname:
+        host = (parsed.hostname or "").lower()
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return origin + (parsed.path or "/") + (("?" + parsed.query) if parsed.query else "")
+        return urllib.parse.urlunsplit(("https", parsed.netloc, parsed.path,
+                                        parsed.query, parsed.fragment))
+    if parsed.scheme or parsed.netloc:
+        return ""
+    path = parsed.path
+    if not path:
+        return ""
+    if not path.startswith("/"):
+        path = "/" + path
+    return origin + path + (("?" + parsed.query) if parsed.query else "") + (
+        ("#" + parsed.fragment) if parsed.fragment else "")
+
+
+def _item_image(item):
+    """Read the product photo aliases used by old and current order snapshots."""
+    item = item if isinstance(item, dict) else {}
+    value = (item.get("image") or item.get("image_url") or item.get("imageUrl")
+             or item.get("productImage") or item.get("product_image"))
+    if not value and isinstance(item.get("images"), (list, tuple)):
+        value = next((image for image in item["images"] if image), "")
+    return _absolute_url(value)
+
+
+def _fresh_receipt_url(value):
+    """Refresh our own expiring proof URL without signing foreign URLs."""
+    raw = str(value or "").strip()
+    if "/storage/v1/object/" not in raw:
+        return raw
+    try:
+        import storage
+        return storage.signed_url_for(raw)
+    except Exception:
+        return raw
 
 
 def _order_body(order, include_receipt=True):
@@ -592,7 +646,7 @@ def _order_body(order, include_receipt=True):
     parts.append(_section("Items") + items_html)
 
     if include_receipt:
-        proof = _absolute_url(order.get("proofUrl"))
+        proof = _absolute_url(_fresh_receipt_url(order.get("proofUrl")))
         if proof:
             parts.append(
                 '<p style="margin:12px 0 0">Payment receipt: '
@@ -604,9 +658,9 @@ def _order_body(order, include_receipt=True):
 def order_email_html(order):
     """The shop-inbox copy of a completed checkout."""
     order = dict(order or {})
-    origin = str(_cfg("SITE_ORIGIN", "") or "").rstrip("/")
+    origin = _email_origin()
     admin = (f'<p style="margin:18px 0 0"><a href="{_esc(origin, quote=True)}/admin.html" '
-             'style="color:#a97e48">Open it in Admin &rarr; Orders</a></p>' if origin else "")
+             'style="color:#a97e48">Open it in Admin &rarr; Orders</a></p>')
     return _shell(
         f"New order {_esc(str(order.get('id') or ''))}",
         "A customer has completed checkout. The full summary is below.",
@@ -636,9 +690,9 @@ def order_confirmed_email_html(order):
     """The customer-facing 'your order is confirmed' email."""
     order = dict(order or {})
     name = _customer_name(order)
-    origin = str(_cfg("SITE_ORIGIN", "") or "").rstrip("/")
+    origin = _email_origin()
     account = (f'<p style="margin:18px 0 0"><a href="{_esc(origin, quote=True)}/account.html" '
-               'style="color:#a97e48">See your order details</a></p>' if origin else "")
+               'style="color:#a97e48">See your order details</a></p>')
     greeting = (f'<p style="margin:0 0 12px">Hi {_esc(name)},</p>' if name else "")
     intro = (f'{greeting}<p style="margin:0 0 4px">Good news \u2014 we have confirmed your '
              f'order <b>{_esc(str(order.get("id") or ""))}</b> and it is being prepared '
@@ -711,7 +765,7 @@ def abandoned_cart_email_html(cart):
     items_html, _ = _items_table(order_shape)
     name = str(cart.get("customer_name") or "").strip()
     greeting = f'<p style="margin:0 0 12px">Hi {_esc(name)},</p>' if name else ""
-    origin = str(_cfg("SITE_ORIGIN", "") or "").rstrip("/")
+    origin = _email_origin()
     return _shell(
         "Your Jaura Store cart is waiting",
         "You left a few items in your cart. They are still waiting for you.",
@@ -745,7 +799,7 @@ def campaign_unsubscribe_token(email):
 
 
 def campaign_unsubscribe_url(email):
-    origin = str(_cfg("SITE_ORIGIN", "https://jaurastore.com.ng") or "https://jaurastore.com.ng").rstrip("/")
+    origin = _email_origin()
     return origin + "/api/marketing/unsubscribe?email=" + urllib.parse.quote(str(email or "").strip().lower()) + "&token=" + campaign_unsubscribe_token(email)
 
 
@@ -759,11 +813,11 @@ def campaign_email_html(subject, content, recipient="", products=None):
     """
     text = str(content or "").strip()
     body = '<div style="font-size:15px;line-height:1.7">' + _esc(text).replace(chr(10), "<br>") + "</div>"
-    origin = str(_cfg("SITE_ORIGIN", "https://jaurastore.com.ng") or "https://jaurastore.com.ng").rstrip("/")
+    origin = _email_origin()
     for product in (products or [])[:12]:
         product = dict(product or {})
         name = str(product.get("name") or "Product")
-        image = str(product.get("image_url") or product.get("image") or "")
+        image = _absolute_url(product.get("image_url") or product.get("image") or "")
         price = product.get("priceCfa") or product.get("priceNgn") or 0
         is_cfa = bool(product.get("priceCfa"))
         compare = product.get("compareCfa") or product.get("compareNgn") or 0

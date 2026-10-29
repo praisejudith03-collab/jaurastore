@@ -20,8 +20,9 @@ default that is missing from the table:
     order) is reused instead of the shipped default;
   * a category the owner HID (details with hidden=true) is never forced back;
   * the marker is only set once the write landed, so a failed write retries
-    on the next boot, and once it has run it never runs again - if the owner
-    later deletes the category on purpose, it stays deleted.
+    on the next boot, and once it has run it never runs again;
+  * permanent category IDs live in the SQL tombstone ledger, so even a reset
+    seed marker, stale detail blob, or later boot cannot recreate a deleted ID.
 
 Run with:  python3 -m pytest tests/test_category_seed.py -q
 """
@@ -121,6 +122,11 @@ def seed_missing_default_categories(defaults=None):
     rows = supabase_store.load_categories_table()
     if rows is None:
         return "unavailable", []
+    # A missing/unreadable tombstone ledger is not an empty set: seeding while
+    # it is unavailable could re-create a deliberately deleted default.
+    tombstones = supabase_store.load_hard_deleted_category_ids()
+    if tombstones is None:
+        return "unavailable", []
     details_readable, _details_found, details = supabase_store.load_categories_state()
     if not details_readable:
         return "unavailable", []
@@ -138,6 +144,8 @@ def seed_missing_default_categories(defaults=None):
         cid = str(default.get("id") or "").strip()
         if not cid:
             continue
+        if cid in tombstones:
+            continue                      # permanently deleted: never seed again
         if cid in rows_by_id:
             continue                      # already live in the table
         detail = details_by_id.get(cid)

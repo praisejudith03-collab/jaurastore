@@ -166,7 +166,7 @@ def test_categories_are_read_from_the_database_not_temp_files():
     assert "load_categories_table" in api_src
     assert "save_categories_table" in api_src
     store_src = open(os.path.join(ROOT, "supabase_store.py"), encoding="utf-8").read()
-    start = store_src.index("def save_categories_table(categories):")
+    start = store_src.index("def save_categories_table(categories, prune=True):")
     fn = store_src[start:store_src.index("\ndef ", start + 1)]
     assert '"image_url"' in fn
     sql = open(os.path.join(ROOT, "schema_sections", "08_categories.sql"),

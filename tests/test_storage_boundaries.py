@@ -17,7 +17,6 @@ ORIGIN = 'https://test.supabase.co'
     'http://test.supabase.co/storage/v1/object/public/uploads/proofs/a.png',
     'https://test.supabase.co:999/storage/v1/object/public/uploads/proofs/a.png',
     '//evil.example/storage/v1/object/public/uploads/proofs/a.png',
-    ORIGIN + '/storage/v1/object/public/receipts/proofs/a.png',
     ORIGIN + '/storage/v1/object/public/uploads/proofs/%2e%2e/a.png',
 ])
 def test_foreign_or_unsafe_path_rejected(monkeypatch, suffix):
@@ -34,6 +33,17 @@ def test_own_origin_paths(monkeypatch, kind):
     assert store._bucket_from_url(url) == 'uploads'
     assert store._storage_path_from_url(url) == 'proofs/a.png'
     assert store._storage_path_from_url(url, 'receipts') == ''
+
+
+def test_private_receipt_bucket_is_resolved_for_signing_and_delete(monkeypatch):
+    monkeypatch.setattr(Config, 'SUPABASE_URL', ORIGIN)
+    url = f'{ORIGIN}/storage/v1/object/sign/receipts/proofs/a.png?token=abc'
+    assert store._bucket_from_url(url) == 'receipts'
+    assert store._storage_path_from_url(url) == 'proofs/a.png'
+    assert store._storage_path_from_url(url, 'receipts') == 'proofs/a.png'
+    assert store._storage_path_from_url(url, 'uploads') == ''
+    assert store._storage_path_from_url('/receipts/proofs/a.png') == ''
+    assert store._storage_path_from_url('/receipts/proofs/a.png', 'receipts') == 'proofs/a.png'
 
 
 @pytest.mark.parametrize('url', [ORIGIN + '/storage/v1/object/sign/uploads/proofs/a.png', '/uploads/proofs/a.png'])

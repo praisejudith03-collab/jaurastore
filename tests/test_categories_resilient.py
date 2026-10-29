@@ -58,16 +58,29 @@ class _LegacyCatTable:
         self.attempts = []
         self._pending_upsert = None
         self._keep = None
+        self.deleted_ids = set()
         # postgrest-py exposes the negation operator as an ATTRIBUTE:
         # `.delete().not_.in_(...)` - attribute access, no call.
         self.not_ = self
 
     # -------------------------------------------------------- query chain
+    def select(self, *_args, **_kwargs):
+        self._reading = True
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def range(self, *_args, **_kwargs):
+        return self
+
     def upsert(self, rows, **_kw):
+        self._reading = False
         self._pending_upsert = [dict(r) for r in (rows or []) if r]
         return self
 
     def delete(self, **_kw):
+        self._reading = False
         self._keep = None
         return self
 
@@ -80,6 +93,8 @@ class _LegacyCatTable:
         return self
 
     def execute(self):
+        if getattr(self, "_reading", False):
+            return _FakeResult([dict(row) for row in self._store.values()])
         if self._pending_upsert is not None:
             rows = self._pending_upsert
             self._pending_upsert = None
@@ -107,6 +122,8 @@ class _LegacyCatTable:
                             f"invalid input syntax for type {problem}: "
                             f"{row[col]!r}")
             for row in rows:
+                if row["id"] in self.deleted_ids:
+                    raise RuntimeError("category id was permanently deleted")
                 self._store[row["id"]] = dict(row)
             return _FakeResult([dict(r) for r in rows])
         if self._keep is None:
@@ -120,11 +137,34 @@ class _FakeClient:
     def __init__(self, store, table):
         self._store = store
         self._table = table
+        self.deleted = set()
+        table.deleted_ids = self.deleted
 
     def table(self, name):
         if name == "categories":
             return self._table
+        if name == "deleted_categories":
+            parent = self
+            class Tombstones:
+                def select(self, *_a): return self
+                def order(self, *_a): return self
+                def range(self, *_a): return self
+                def execute(self):
+                    return _FakeResult([{"category_id": x} for x in parent.deleted])
+            return Tombstones()
         raise AssertionError(f"unexpected table {name!r} in fake")
+
+    def rpc(self, name, params):
+        assert name == "hard_delete_categories"
+        parent = self
+        class RPC:
+            def execute(self):
+                ids = set(params.get("category_ids") or [])
+                parent.deleted.update(ids)
+                for cid in ids:
+                    parent._store.pop(cid, None)
+                return _FakeResult(sorted(ids))
+        return RPC()
 
 
 class _FakeCategorySettings:
@@ -205,8 +245,9 @@ def test_admin_category_save_does_not_overwrite_when_snapshot_read_fails(monkeyp
                         lambda: (False, False, None))
     table_writes = []
     detail_writes = []
+    monkeypatch.setattr(supabase_store, "load_hard_deleted_category_ids", lambda: set())
     monkeypatch.setattr(supabase_store, "save_categories_table",
-                        lambda rows: table_writes.append(rows) or True)
+                        lambda rows, **_kw: table_writes.append(rows) or True)
     monkeypatch.setattr(supabase_store, "save_categories",
                         lambda rows: detail_writes.append(rows) or True)
 
@@ -284,13 +325,18 @@ def test_save_prunes_categories_removed_locally(monkeypatch, _blank_cat_shape):
     portal must not come back on the next boot."""
     store = {}
     table = _LegacyCatTable(store)
-    monkeypatch.setattr(supabase_store, "client",
-                        lambda: _FakeClient(store, table))
+    client = _FakeClient(store, table)
+    monkeypatch.setattr(supabase_store, "client", lambda: client)
 
     assert supabase_store.save_categories_table(_cats()) is True
     assert set(store) == {"beauty", "gift-set"}
     assert supabase_store.save_categories_table(_cats()[:1]) is True
     assert set(store) == {"beauty"}, "the prune must remove gift-set"
+    client = supabase_store.client()
+    assert "gift-set" in client.deleted, "physical delete is recorded permanently"
+    # A later replacement cannot put the tombstoned id back.
+    assert supabase_store.save_categories_table(_cats()) is False
+    assert set(store) == {"beauty"}
 
 
 def test_saving_empty_category_list_removes_the_last_category(

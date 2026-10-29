@@ -251,18 +251,17 @@ def test_existing_product_media_replacement_publishes_and_purges_immediately(
     assert _supabase_row("jau-immediate-media")["image"] == new_url
 
 
-def test_admin_editor_autopublishes_existing_product_media_without_full_save():
+def test_admin_editor_stages_media_until_full_product_save():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "js" / "admin.js").read_text()
-    assert '"/media"' in source
-    assert 'method: "PUT", json: { images }, label: "Product photos"' in source
-    assert "persistEditedMedia()" in source
-    assert "Photo update is live; unused replaced files were deleted." in source
-    assert "The previous saved photo is safe." in source
-    assert "const editorStillCurrent = session === Number(window.__editMediaSession || 0)" in source
-    assert "window.__editMediaSave = Promise.resolve();" not in source
-    assert "Keep the file until Save is confirmed" not in source
+    assert '"/media"' not in source
+    assert "persistEditedMedia()" not in source
+    assert "Photo uploaded to storage, not saved to the product yet." in source
+    assert "window.__editMediaNeedsSave = true;" in source
+    assert "Product save failed. Your photo changes and form entries are still here" in source
+    assert "Press Retry Save to try again." in source
+    assert "const res = await JA.upsertProduct({" in source
 
 
 def test_the_old_image_never_returns_after_a_third_save(client, iso_catalog):

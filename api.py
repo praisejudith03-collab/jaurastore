@@ -227,10 +227,14 @@ def _categories_data_uncached():
     if Config.ENV != "testing":
         try:
             from supabase_store import enabled as _sb_enabled
-            from supabase_store import load_categories_state, load_categories_table
+            from supabase_store import (load_categories_state, load_categories_table,
+                                        load_hard_deleted_category_ids)
             if _sb_enabled():
                 rows = load_categories_table()
                 details_ok, details_found, details = load_categories_state()
+                tombstones = load_hard_deleted_category_ids()
+                if tombstones is None:
+                    raise RuntimeError("Supabase category tombstone ledger unavailable")
                 if not details_ok:
                     raise RuntimeError("Supabase category details unavailable")
                 if rows is None and not details_found:
@@ -239,7 +243,9 @@ def _categories_data_uncached():
                 if details_found:
                     for c in details or []:
                         if isinstance(c, dict) and c.get("id"):
-                            details_by_id[str(c["id"]).strip()] = dict(c)
+                            cid = str(c["id"]).strip()
+                            if cid and cid not in tombstones:
+                                details_by_id[cid] = dict(c)
                 if rows is not None:
                     # The categories table owns membership; its empty set is
                     # meaningful. The JSON companion enriches those live rows,
@@ -248,7 +254,7 @@ def _categories_data_uncached():
                     by_id = {}
                     for row in rows:
                         cid = str(row.get("id") or "").strip()
-                        if not cid:
+                        if not cid or cid in tombstones:
                             continue
                         merged = dict(details_by_id.get(cid) or {})
                         for k, v in row.items():
@@ -323,8 +329,9 @@ def _save_categories(categories, actor=None):
             from supabase_store import enabled as _sb_enabled
             if _sb_enabled():
                 from supabase_store import (
-                    load_categories_state, load_categories_table,
-                    save_categories, save_categories_table,
+                    hard_delete_categories, load_categories_state,
+                    load_categories_table, load_hard_deleted_category_ids,
+                    restore_categories_table, save_categories, save_categories_table,
                 )
                 # Both stores are read before either is mutated so a later
                 # companion failure can be compensated. The category table is
@@ -337,18 +344,39 @@ def _save_categories(categories, actor=None):
                 if not details_readable:
                     raise RuntimeError("The current Supabase category details could not be read")
                 previous_details = previous_details or []
-                if not save_categories_table(categories):
-                    # The table upsert may have succeeded while its prune
-                    # failed. Restore the previous full set before returning.
-                    if not save_categories_table(previous_table):
+                new_ids = {str((cat or {}).get("id") or "").strip()
+                           for cat in categories if isinstance(cat, dict)}
+                deleted_ids = {
+                    str((cat or {}).get("id") or "").strip()
+                    for cat in list(previous_table) + list(previous_details)
+                    if isinstance(cat, dict)
+                } - new_ids
+                tombstones = load_hard_deleted_category_ids()
+                if tombstones is None:
+                    raise RuntimeError("The Supabase category tombstone ledger could not be read")
+                if new_ids.intersection(tombstones):
+                    raise RuntimeError("A permanently deleted category ID cannot be reused")
+                if not save_categories_table(categories, prune=False):
+                    # Only the upserts ran; no tombstone has been committed, so
+                    # the prior rows can still be restored safely.
+                    if not restore_categories_table(previous_table):
                         print("[supabase] category table rollback failed after write error")
                     raise RuntimeError("Supabase categories write failed")
                 if not save_categories(categories):
-                    table_restored = save_categories_table(previous_table)
+                    table_restored = restore_categories_table(previous_table)
                     details_restored = save_categories(previous_details)
                     if not table_restored or not details_restored:
                         print("[supabase] category rollback incomplete after companion failure")
                     raise RuntimeError("Category details could not be saved; please retry")
+                if deleted_ids and not hard_delete_categories(sorted(deleted_ids)):
+                    # The delete RPC is atomic: on failure it commits neither
+                    # the row deletion nor a tombstone, so compensation remains
+                    # possible and the owner can retry without data loss.
+                    table_restored = restore_categories_table(previous_table)
+                    details_restored = save_categories(previous_details)
+                    if not table_restored or not details_restored:
+                        print("[supabase] category rollback incomplete after tombstone failure")
+                    raise RuntimeError("Category delete/tombstone could not be confirmed")
                 _invalidate_category_cache()
                 return payload
         except RuntimeError:
@@ -939,6 +967,15 @@ def categories_admin_set():
         payload = _save_categories(clean, authmod.current_admin())
     except Exception as exc:
         print(f"[supabase] categories save failed: {exc}")
+        reason = str(exc or "")
+        if "permanently deleted category ID" in reason:
+            return jsonify(ok=False, error=(
+                "That category ID was permanently deleted and cannot be reused. "
+                "Choose a new category ID.")), 409
+        if "tombstone" in reason.lower() or "hard-delete" in reason.lower():
+            return jsonify(ok=False, error=(
+                "Supabase category deletion is not ready. Apply schema section 21 "
+                "and retry; no category deletion was confirmed.")), 503
         return jsonify(ok=False, error="Could not confirm all category details in Supabase. Please retry the save."), 503
     audit(authmod.current_admin(), "categories.update", f"saved={len(clean)}", _ip())
     return jsonify(ok=True, count=len(clean), **payload)
@@ -1952,6 +1989,9 @@ def create_order():
             "color": sec.clean(it.get("color") or it.get("variant"), 120),
             "note": sec.clean(it.get("note"), 300),
         })
+    # Server-resolve the thumbnail into the durable order snapshot. Checkout
+    # clients intentionally cannot choose an arbitrary email image URL.
+    clean_items = _order_items_with_images(clean_items)
 
     requested_currency_raw = sec.clean(d.get("currency"), 8).upper()
     requested_currency = (accounting_mod.normalize_currency(requested_currency_raw)
@@ -2786,9 +2826,14 @@ def low_stock():
 def admin_needs_attention():
     """The small, actionable dashboard queue: pending orders, products at
     five or fewer units, and pending orders waiting longer than 24 hours."""
-    pending_rows = query("SELECT id, payload, email, customer_name, phone, country, city, zone, address, "
-                         "note, payment, proof_url, items_count, total, currency, source, status, at, updated_at "
-                         "FROM orders WHERE status='pending' ORDER BY at DESC LIMIT 500")
+    try:
+        pending_rows = query("SELECT id, payload, email, customer_name, phone, country, city, zone, address, "
+                             "note, payment, proof_url, items_count, total, currency, source, status, at, updated_at "
+                             "FROM orders WHERE status='pending' ORDER BY at DESC LIMIT 500")
+    except Exception:
+        current_app.logger.exception("Needs-attention order read failed")
+        return jsonify(ok=False,
+                       error="Dashboard data is temporarily unavailable. Order status could not be verified; no all-clear result is available."), 503
     pending = [_order_row(row) for row in pending_rows]
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=24)
 
@@ -2805,11 +2850,14 @@ def admin_needs_attention():
     stale = [row for row in pending if older_than_day(row.get("at"))]
     stock_rows = _stock_rows_for_read()
     if stock_rows is None:
-        stock_rows = []
+        return jsonify(ok=False,
+                       error="Stock data is temporarily unavailable. Inventory could not be verified; no all-clear result is available."), 503
     try:
         products = {str(p.get("id")): p for p in _merged_products_cached()}
     except Exception:
-        products = {}
+        current_app.logger.exception("Needs-attention product read failed")
+        return jsonify(ok=False,
+                       error="Dashboard data is temporarily unavailable. Product and stock status could not be verified; no all-clear result is available."), 503
     low_stock = []
     out_of_stock = []
     supplier_out_of_stock = []

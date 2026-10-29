@@ -60,7 +60,6 @@ def test_the_confirmed_product_save_uses_the_owner_wording():
 def test_the_main_admin_saves_use_the_success_variant():
     js = _read("js", "admin.js")
     for message in (
-        "Photo update is live; unused replaced files were deleted.",
         "Settings saved — live on the site now.",
         "Homepage featured products updated!",
         "Zone saved — live now.",

@@ -612,10 +612,17 @@ const JA = (() => {
     const max = Math.max(1, Math.min(HOME_FEATURED_MAX, Number(limit || HOME_FEATURED_MAX) || HOME_FEATURED_MAX));
     const byId = new Map(all.map((p) => [String(p.id), p]));
     (seed && seed.length ? seed : (window.JA_SEED || [])).forEach((p) => {
-      if (p && p.id && !byId.has(String(p.id))) byId.set(String(p.id), p);
+      // The static bundle can contain intentionally hidden rows. It is an
+      // offline fallback, never authority to publish a curated product.
+      if (p && p.id && p.online !== false && !byId.has(String(p.id))) byId.set(String(p.id), p);
     });
-    const selected = (homepageFeaturedSettings.featured_products || []).map((id) => byId.get(String(id))).filter(Boolean);
-    return (selected.length ? selected : homeSorted(all)).slice(0, max);
+    const ids = homepageFeaturedSettings.featured_products || [];
+    const selected = ids.map((id) => byId.get(String(id))).filter(Boolean);
+    // A configured curated list is authoritative. If its products are hidden,
+    // do not recover them from the bundled seed or silently substitute them
+    // into the curated rail; the homepage's explicit fallback handles an empty
+    // result using only the currently visible product set.
+    return (ids.length ? selected : homeSorted(all)).slice(0, max);
   }
 
   function homeRank(p) {
@@ -3026,8 +3033,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=223";
-        const FLYER = "images/brand/logo-flyer.jpg?v=223";
+        const LOGO = "images/brand/logo.jpg?v=228";
+        const FLYER = "images/brand/logo-flyer.jpg?v=228";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -3242,7 +3249,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=223" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=228" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3541,7 +3548,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=223" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=228" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3677,7 +3684,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=223", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=228", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3711,7 +3718,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=223";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=228";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3770,7 +3777,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=223");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=228");
     document.title = title;
     [
       ["name", "description", description],

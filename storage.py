@@ -12,12 +12,11 @@ Three back ends, chosen with UPLOAD_MODE in .env:
                     Set S3_BUCKET / S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY
                     / S3_PUBLIC_BASE. No code change is needed to switch.
 
-  supabase       - one public `uploads` bucket. Requires SUPABASE_URL and
-                    SUPABASE_SERVICE_ROLE_KEY. Proofs use uploads/proofs/ with
-                    128-bit random path tokens and signed links in admin views.
-                    IMPORTANT: public bucket objects remain accessible to anyone
-                    who knows the path; signed links do not provide privacy.
-                    Legacy local /uploads/ links remain supported.
+  supabase       - public `uploads` for catalogue media plus private
+                    `receipts` for payment evidence. Requires SUPABASE_URL and
+                    SUPABASE_SERVICE_ROLE_KEY. Proof links are short-lived and
+                    refreshed for admin views; legacy uploads/proofs URLs remain
+                    readable while existing orders are migrated.
 
 PRODUCTION NEVER FALLS BACK TO LOCAL DISK. In production (FLASK_ENV !=
 testing) a failed Supabase Storage write returns a clear error and the
@@ -52,8 +51,8 @@ OPTIMIZE_MIN_BYTES = 300 * 1024   # smaller uploads stay byte-identical
 OPTIMIZE_JPEG_QUALITY = 84
 OPTIMIZE_WEBP_QUALITY = 86
 
-# Proofs receive signed links, but the shared uploads bucket is public.
-# Random paths prevent guessing; they are not access control.
+# Payment proof folders are routed to the separate private receipts bucket
+# when using Supabase. Signed URLs are bearer links and expire after one week.
 SENSITIVE_FOLDERS = ("proofs",)
 
 # Supabase Storage caps signed-URL expiry at 7 days. Use the maximum: the URL
@@ -825,10 +824,8 @@ def _save_supabase(data: bytes, key: str, ext: str, content_type: str,
     """Upload to Supabase Storage. Requires SUPABASE_URL + the service-role
     key (the same pair the rest of the app authenticates with).
 
-    Public folders (products, categories, videos, misc) return a public URL
-    so the image loads in the browser with zero server round-trips.
-    Proofs share the public uploads bucket, with unguessable paths and signed
-    URLs. Signed URLs do not make files in a public bucket private.
+    Public folders (products, categories, videos, misc) use the public uploads
+    bucket. Payment proofs use the private receipts bucket and signed URLs.
     """
     if not (Config.SUPABASE_URL and Config.SUPABASE_SERVICE_ROLE_KEY):
         return False, "supabase not configured", ""
@@ -840,7 +837,9 @@ def _save_supabase(data: bytes, key: str, ext: str, content_type: str,
     if c is None:
         return False, "supabase client unavailable", ""
     sensitive = _is_sensitive(folder)
-    bucket = supabase_store._bucket()
+    # Catalogue media remains in the publicly readable uploads bucket. Payment
+    # evidence is private even when its signed URL is copied from an email.
+    bucket = "receipts" if sensitive else supabase_store._bucket()
     # The object's OWN cache lifetime, not just our redirect's. Public photos
     # are referenced BY their bucket URL, so this header is what a phone obeys
     # after following a link once: without it Supabase serves "max-age=3600"
@@ -1210,12 +1209,11 @@ def _live_category_rows():
 def _referenced_by_a_product(key: str) -> bool:
     """True when a live product row OR category cover still shows this object.
 
-    Product photos live in the same bucket as payment proofs, and the deletes
-    that run from the orders/receipts screens take objects out of it by URL.
-    Without this check one wrong URL (or a key reused across features) could
-    delete the only copy of a shop photo, and the card fell back to "PHOTO
-    COMING SOON" for good. Only the public asset folders are guarded (proofs
-    are private and are never product photos).
+    The orders/receipts screens also delete uploaded files by URL. Without
+    this check one wrong URL (or a key reused across features) could delete the
+    only copy of a shop photo, and the card fell back to "PHOTO COMING SOON"
+    for good. Only the public asset folders are guarded; proofs are never
+    product photos.
 
     Category covers are stored in those same folders but are NOT product rows:
     this used to scan products only, so replacing or clearing a category image
