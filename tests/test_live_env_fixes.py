@@ -13,6 +13,7 @@ Groups:
 import io
 import json
 import os
+from pathlib import Path
 import re
 import sys
 
@@ -22,6 +23,7 @@ sys.path.insert(0, ROOT)
 import pytest  # noqa: E402
 
 import app as appmod  # noqa: E402
+import api as api_mod  # noqa: E402
 import catalog as catalog_mod  # noqa: E402
 from db import execute, init_db, one  # noqa: E402
 
@@ -66,6 +68,35 @@ def test_needs_attention_endpoint_does_not_500(client):
     assert body["ok"] is True
     assert "supplierWarnings" in body
     assert isinstance(body["supplierWarnings"], list)
+
+
+def test_needs_attention_does_not_turn_stock_read_failure_into_all_clear(client, monkeypatch):
+    login(client)
+    monkeypatch.setattr(api_mod, "_stock_rows_for_read", lambda: None)
+    response = client.get("/api/admin/needs-attention")
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["ok"] is False
+    assert "no all-clear result" in body["error"]
+
+
+def test_needs_attention_returns_unavailable_when_order_database_read_fails(client, monkeypatch):
+    login(client)
+    def fail_query(*_args, **_kwargs):
+        raise RuntimeError("database offline")
+
+    monkeypatch.setattr(api_mod, "query", fail_query)
+    response = client.get("/api/admin/needs-attention")
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["ok"] is False
+    assert "no all-clear result" in body["error"]
+
+
+def test_dashboard_error_ui_explicitly_says_unavailable_not_all_clear():
+    source = (Path(ROOT) / "js" / "admin.js").read_text(encoding="utf-8")
+    assert "Dashboard data unavailable." in source
+    assert "This is not an all-clear result." in source
 
 
 # ------------------------------------------------- 2. checkout storage resilience

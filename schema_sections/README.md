@@ -1,6 +1,6 @@
 # Apply the schema from a phone
 
-These 20 numbered SQL files are generated from the `-- SECTION:` banners in
+These 21 numbered SQL files are generated from the `-- SECTION:` banners in
 `supabase_schema.sql`. Concatenating **only the numbered `.sql` files**, in
 numeric order, reproduces the source byte-for-byte. Each is a complete SQL
 batch (no split statements or function bodies), under 6 KB, and idempotent.
@@ -18,9 +18,10 @@ rows (including Admin-edited data and null current names) are not backfilled,
 renamed, or overwritten; conflicts on IDs or unique names are skipped.
 
 This repair does not require dropping or replacing `delivery_zones`, or rerunning
-the earlier successful sections. Keep sections **15 and 16 on hold** pending
-separate approval. Do not run the image migration or set `dry_run=false`.
-The general sequence below is not approval to resume the paused deployment.
+the earlier successful sections. Section 15 now provisions separate public catalogue and private receipt storage.
+Section 16 remains outside this storage/category repair. Do not run the image
+migration or set `dry_run=false`; the general sequence below is not approval
+to resume that paused workflow.
 
 ## Legacy zone_name on the live delivery_zones table
 
@@ -86,10 +87,12 @@ order by ordinal_position;
    06 growth_settings → 07 site_settings → 08 categories →
    09 product_compatibility → 10 customer_accounts → 11 delivery_zones →
    12 coupon_redemptions → 13 product_reviews → 14 delivery_seeds →
-   15 storage → 16 stock.
+   15 storage → 16 stock → 17 analytics → 18 brand_assets →
+   19 site_settings_welcome → 20 site_settings_social →
+   21 hard_delete_categories.
 
    Use the filenames in this directory, including their numeric prefixes.
-   There is no need to run the full schema again after all 16 succeed.
+   Apply section 21 before deploying code that requires category tombstones.
 7. In a final **new query**, run these read-only checks:
 
    ```sql
@@ -102,25 +105,36 @@ order by ordinal_position;
    order by table_name;
    ```
 
-   The schema provisions only `uploads`. Existing other buckets are **not
-   deleted**. If `uploads` already exists, its visibility is **not changed**;
-   if it is not public, stop and review rather than changing it blindly.
-   The `receipts` entry in the table check is a **database table**, not a bucket.
+   `uploads` is for public catalogue/media assets; `receipts` is a separate
+   private Storage bucket. The `receipts` entry in the table check is also a
+   database table, not a bucket.
 
-## Important storage limitations
+## Storage repair and privacy
 
-- New receipts use `uploads/proofs/...` with 128-bit random path tokens.
-- `uploads` is public. **Anyone possessing a direct public object URL can
-  access that file. Signed URL expiry does not make a public object private.**
-- The application's receipt listing requires Admin authentication and is marked
-  `private, no-store`. Do not share receipt URLs or put them in public catalog data.
-- Known legacy URLs in `uploads` can be refreshed for the Admin view. Other
-  legacy URLs are preserved unchanged; an expired unsupported signed URL may
-  require separate operator review. No legacy objects are moved or deleted.
-- No live database or Storage changes were applied by generating these files.
-  Applying section 15 yourself provisions uploads if absent and restricts its
-  named write policy to `service_role`; it does not delete existing objects.
-- **Do not run the image migration**, trigger its workflow, or set `dry_run=false`
+- Section 15 preserves the visibility of an existing `uploads` bucket. Its
+  explicit read policy excludes the legacy `proofs/` folder, while all new
+  payment evidence is stored in private `receipts/proofs/` and served with
+  expiring signed URLs.
+- After applying section 15 and deploying the matching application code, run
+  `python tools/repair_supabase_storage.py` with production Supabase environment
+  variables for a read-only dry run. Review that it points to the correct
+  project. Then, during a maintenance window, run
+  `python tools/repair_supabase_storage.py --apply`. It copies every legacy
+  `uploads/proofs/` object to the private bucket, updates `orders.proof_url`
+  and `receipts.file_url`, removes the old copies, and only then makes
+  `uploads` public so product/category images and Gmail thumbnails load.
+  The operation stops before changing bucket visibility if a referenced file
+  or database update cannot be confirmed; rerunning is safe.
+- Do not manually set `uploads.public=true` before the repair script succeeds:
+  that would expose any old payment-proof object still in that bucket.
+- Section 21 creates the immutable category-deletion ledger and atomic hard-
+  delete RPC. If a category ID is tombstoned, it cannot be recreated or seeded
+  again; choose a new ID for a genuinely new category.
+- No live database, Storage objects, or production bucket settings were
+  inspected or changed during this code task. Production completion requires
+  applying the SQL sections, deploying the app, running the repair, and
+  verifying public image URLs plus signed receipt links in the actual project.
+- Do not run the image migration, trigger its workflow, or set `dry_run=false`
   as part of these SQL steps. Do not run the obsolete receipt migration.
 
 ## Developer verification

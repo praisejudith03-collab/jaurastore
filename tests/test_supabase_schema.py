@@ -89,9 +89,16 @@ def test_repair_block_only_adds_columns():
     banned, and each allowed one is pinned below so a fourth cannot slip in.
     """
     sql = _statements_only(_schema_text())
+    # The one allowed destructive statement is the new, explicitly named
+    # category hard-delete RPC; its DELETE and immutable tombstone are atomic.
+    approved = re.search(
+        r"create or replace function public\.hard_delete_categories\(.*?\$\$;",
+        sql, re.IGNORECASE | re.DOTALL)
+    assert approved and re.search(r"delete from public\.categories", approved.group(0), re.I)
+    safe_sql = sql.replace(approved.group(0), "")
     for bad in (r"\bdrop\b", r"\btruncate\b", r"\bdelete\b"):
-        m = re.search(bad, sql, re.IGNORECASE)
-        assert not m, f"the schema file must never {bad.strip(chr(92))}: found {m.group(0)!r}"
+        m = re.search(bad, safe_sql, re.IGNORECASE)
+        assert not m, f"unexpected destructive SQL {bad.strip(chr(92))}: {m.group(0)!r}"
 
 
 def test_the_only_renames_are_the_guarded_review_column_moves():

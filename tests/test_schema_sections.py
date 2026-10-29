@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_sections_round_trip():
     source = (ROOT / 'supabase_schema.sql').read_text()
     generated = split_schema.sections(source)
-    assert len(generated) == 20
+    assert len(generated) == 21
     assert ''.join(generated.values()) == source
     assert split_schema.main(['--check']) == 0
 
@@ -40,13 +40,16 @@ def test_missing_boundary_fails():
         split_schema.sections('select 1;')
 
 
-def test_single_bucket_and_receipts_table():
+def test_public_uploads_private_receipts_buckets_and_receipts_table():
     source = (ROOT / 'supabase_schema.sql').read_text()
     inserts = re.findall(r'insert into storage\.buckets.*?;', source, re.S | re.I)
-    assert len(inserts) == 1
-    assert "values ('uploads', 'uploads', true)" in inserts[0]
+    assert len(inserts) == 2
+    assert any("values ('uploads', 'uploads', true)" in row for row in inserts)
+    assert any("values ('receipts', 'receipts', false)" in row for row in inserts)
     assert 'create table if not exists receipts (' in source
-    assert "bucket_id = 'receipts'" not in source
+    assert 'create policy "public read uploads"' in source
+    assert 'create policy "service role manages receipts"' in source
+    assert "to anon, authenticated using (bucket_id = 'receipts')" not in source
 
 
 def test_generated_bytes_and_mobile_size():
@@ -67,7 +70,13 @@ def test_crlf_bytes_preserved(tmp_path, monkeypatch):
 def test_required_tables_and_no_destructive_statements():
     source = (ROOT / 'supabase_schema.sql').read_text()
     code = re.sub(r'--[^\n]*', '', source).lower()
-    assert not re.search(r'\b(drop|truncate|delete)\b', code)
+    # Only the named hard-delete RPC may physically remove category rows.
+    approved = re.search(
+        r'create or replace function public\.hard_delete_categories\(.*?\$\$;',
+        code, re.S)
+    assert approved and 'delete from public.categories' in approved.group(0)
+    safe_code = code.replace(approved.group(0), '')
+    assert not re.search(r'\b(drop|truncate|delete)\b', safe_code)
     for table in ('products', 'receipts', 'orders', 'product_reviews', 'coupon_uses'):
         assert f'create table if not exists {table} (' in code
     review = code.split('create table if not exists product_reviews (', 1)[1].split(');', 1)[0]

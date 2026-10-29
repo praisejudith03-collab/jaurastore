@@ -1838,19 +1838,96 @@ def _upsert_categories_resilient(c, rows):
                             "too many columns to repair"))
 
 
-def save_categories_table(categories):
-    """Upsert the category table into Supabase (replacing the whole set).
+DELETED_CATEGORIES_TABLE = "deleted_categories"
 
-    The write self-heals against the legacy live table (see
-    _upsert_categories_resilient): columns the table lacks are dropped and
-    legacy NOT NULL columns are filled from the category being saved, so a
-    rename/add never dies with a schema error. Returns True on success.
-    Removes ids that were deleted locally so a removed category never comes
-    back on the next boot.
+
+def load_hard_deleted_category_ids():
+    """Return immutable category tombstones, or None when the ledger is unreadable."""
+    c = client()
+    if c is None:
+        return None
+    try:
+        out, offset = set(), 0
+        while True:
+            res = (c.table(DELETED_CATEGORIES_TABLE).select("category_id")
+                   .order("category_id").range(offset, offset + 499).execute())
+            batch = _res_data(res)
+            for row in batch:
+                cid = str((row or {}).get("category_id") or "").strip()
+                if cid:
+                    out.add(cid)
+            if len(batch) < 500:
+                break
+            offset += len(batch)
+        return out
+    except Exception as exc:
+        print(f"[supabase] deleted category ids load failed: {exc}")
+        return None
+
+
+def hard_delete_categories(ids):
+    """Atomically remove category rows and append permanent ID tombstones."""
+    clean = _clean_deleted_ids(ids)
+    if not clean:
+        return True
+    c = client()
+    if c is None:
+        return False
+    try:
+        result = c.rpc("hard_delete_categories", {"category_ids": clean}).execute()
+        confirmed = _res_data(result)
+        if isinstance(confirmed, str):
+            confirmed = [confirmed]
+        received = {str(item).strip() for item in (confirmed or []) if str(item).strip()}
+        if not set(clean).issubset(received):
+            print("[supabase] category hard delete response did not confirm every requested id")
+            return False
+        return True
+    except Exception as exc:
+        print(f"[supabase] category hard delete failed: {exc}")
+        return False
+
+
+def restore_categories_table(categories):
+    """Compensate a not-yet-committed category save without adding tombstones."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        current = load_categories_table()
+        if current is None:
+            return False
+        rows = [dict(row) for row in (categories or []) if isinstance(row, dict)]
+        if rows:
+            _upsert_categories_resilient(c, rows)
+        keep = [str(row.get("id") or "").strip() for row in rows
+                if str(row.get("id") or "").strip()]
+        if keep:
+            c.table("categories").delete().not_.in_("id", keep).execute()
+        else:
+            c.table("categories").delete().neq("id", "").execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] category rollback failed: {exc}")
+        return False
+
+
+def save_categories_table(categories, prune=True):
+    """Upsert category rows and permanently tombstone ids omitted from a set.
+
+    The schema migration supplies an atomic hard-delete RPC and an insert
+    trigger; if either is missing, a destructive replacement fails closed.
+    ``prune=False`` is used by the API to save companion details first, then
+    commit all removals as the final operation.
     """
     c = client()
     if c is None:
         return False
+    previous = None
+    if prune:
+        previous = load_categories_table()
+        if previous is None:
+            return False
     rows = []
     for cat in (categories or []):
         if not isinstance(cat, dict):
@@ -1869,15 +1946,14 @@ def save_categories_table(categories):
     try:
         if rows:
             _upsert_categories_resilient(c, rows)
-        # An empty list is a valid replacement: deleting the final category
-        # must not be rejected just because there is nothing to upsert.
-        keep = [r["id"] for r in rows]
-        if keep:
-            c.table("categories").delete().not_.in_("id", keep).execute()
-        else:
-            # Category ids are required and sanitized as non-empty strings, so
-            # this predicate safely removes every valid row in the table.
-            c.table("categories").delete().neq("id", "").execute()
+        if prune:
+            keep = {r["id"] for r in rows}
+            removed = [str((row or {}).get("id") or "").strip()
+                       for row in (previous or [])]
+            removed = [pid for pid in removed if pid and pid not in keep]
+            if removed and not hard_delete_categories(removed):
+                raise RuntimeError(
+                    "Category hard-delete/tombstone migration is missing or unavailable")
     except RuntimeError as exc:
         print(f"[supabase] categories save failed: {exc}")
         return False
@@ -2494,17 +2570,15 @@ def _storage_url_parts(url):
 
 
 def _bucket_from_url(url):
-    """Return uploads only for this project's supported Storage URLs."""
+    """Return a supported bucket only for this project's Storage URLs."""
     m = _storage_url_parts(url)
-    return _bucket() if m and m.group(1) == _bucket() else ""
+    return m.group(1) if m and m.group(1) in {_bucket(), "receipts"} else ""
 
 
 def _storage_path_from_url(url, bucket=None):
-    """Resolve our object URL or legacy uploads path; reject foreign origins.
-
-    Missing SUPABASE_URL fails closed, including for relative paths.
-    """
-    if not Config.SUPABASE_URL or bucket not in (None, "", _bucket()):
+    """Resolve a supported project object URL; reject foreign origins."""
+    supported = {_bucket(), "receipts"}
+    if not Config.SUPABASE_URL or bucket not in (None, "", *supported):
         return ""
     raw = (url or "").strip()
     try:
@@ -2513,13 +2587,19 @@ def _storage_path_from_url(url, bucket=None):
         return ""
     if parsed.scheme or parsed.netloc:
         m = _storage_url_parts(raw)
-        if not m or m.group(1) != _bucket():
+        if not m or m.group(1) not in supported or (bucket and m.group(1) != bucket):
             return ""
         path = m.group(2)
     else:
         path = parsed.path.lstrip("/")
         if path.startswith("uploads/"):
+            if bucket not in (None, "", _bucket()):
+                return ""
             path = path[len("uploads/"):]
+        elif path.startswith("receipts/"):
+            if bucket != "receipts":
+                return ""
+            path = path[len("receipts/"):]
         if path.startswith("storage/"):
             return ""
     path = urllib.parse.unquote(path)

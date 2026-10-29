@@ -123,12 +123,22 @@ class _Client:
     def __init__(self, store, table):
         self._store = store
         self._cats = table
+        self.deleted_categories = set()
 
     def table(self, name):
         if name == "categories":
             return self._cats
         if name == "growth_settings":
             return _GrowthSettings(self._store)
+        if name == "deleted_categories":
+            deleted = self.deleted_categories
+            class Tombstones:
+                def select(self, *_a): return self
+                def order(self, *_a): return self
+                def range(self, *_a): return self
+                def execute(self):
+                    return _Result([{"category_id": cid} for cid in deleted])
+            return Tombstones()
         raise AssertionError(f"unexpected table {name!r} in fake")
 
 
@@ -194,6 +204,17 @@ def test_seeds_a_missing_default_and_marks_the_run(shop):
     assert category_seed.MARKER_KEY in store["growth"]
     assert category_seed.seed_missing_default_categories() == ("already-applied", [])
     assert len(table.attempts) == 1                 # exactly one upsert, ever
+
+
+def test_permanently_deleted_default_is_never_seeded_again(shop):
+    store, table = shop
+    client = supabase_store.client()
+    client.deleted_categories.add("perfume")
+    status, ids = category_seed.seed_missing_default_categories()
+    assert (status, ids) == ("nothing-to-do", [])
+    assert "perfume" not in store["categories"]
+    assert table.attempts == []
+    assert category_seed.MARKER_KEY in store["growth"]
 
 
 def test_default_already_live_is_nothing_to_do(shop):

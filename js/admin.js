@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=223" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=228" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -376,13 +376,31 @@ function photoSlot(run) {
     if (_photoBusy < _PHOTO_LANES) start(); else _photoWaiting.push(start);
   });
 }
+function setMediaSaveStatus(message, isError = false) {
+  window.__editMediaStatus = String(message || "");
+  const status = document.getElementById("media-save-status");
+  if (status) {
+    status.textContent = window.__editMediaStatus;
+    status.hidden = !window.__editMediaStatus;
+    status.setAttribute("role", isError ? "alert" : "status");
+  }
+  const save = document.querySelector("#prod-form .au-save");
+  if (save && isError && window.__editMediaNeedsSave) save.textContent = "Retry Save";
+}
+function markMediaNeedsSave(message) {
+  window.__editMediaNeedsSave = true;
+  markEditedMediaFields();
+  setMediaSaveStatus(message || "Photo uploaded to storage, not saved to the product yet. Press Save Product to apply it.");
+}
 function mediaStripHTML(imgs) {
   const firstImg = (imgs || []).find((s) => mediaKind(s) === "image");
   const poster = firstImg ? imgSrc(firstImg) : "";
   const tiles = (imgs || []).map((src, i) => mediaTileHTML(src, i, poster)).join("");
   const plus = (imgs || []).length < 20 ? `<label class="au-tile au-plus">+<input type="file" id="more-media" accept="image/*,video/*" multiple hidden /></label>` : "";
+  const status = window.__editMediaStatus || "";
   return `<div class="au-media-row">${tiles}${plus}</div>
     <p class="admin-note">Drag &amp; drop, or tap + to pick several at once. Photos are resized to 1200px and compressed automatically. Photos up to 30 MB can be uploaded. Videos up to 50 MB — up to 20 items.</p>
+    <p class="admin-note" id="media-save-status" role="status"${status ? "" : " hidden"}>${JA.escape(status)}</p>
     <button type="button" class="au-view-media" id="view-media">Photos: ${(imgs || []).length} of 20 — tap + to add, × to remove</button>`;
 }
 function purgeRemovedMedia(entry) {
@@ -401,74 +419,6 @@ function purgeRemovedMedia(entry) {
 function markEditedMediaFields() {
   if (!(window.__editDirty instanceof Set)) window.__editDirty = new Set();
   ["image", "image_url", "imageUrl", "images"].forEach((field) => window.__editDirty.add(field));
-}
-function persistEditedMedia() {
-  const productId = String(window.__editMediaProductId || "").trim();
-  const session = Number(window.__editMediaSession || 0);
-  if (!productId || productId === "new" || !window.JA_NET) {
-    return Promise.resolve({ ok: false, skipped: true });
-  }
-  markEditedMediaFields();
-  window.__editMediaRevision = Number(window.__editMediaRevision || 0) + 1;
-  const prior = window.__editMediaSave || Promise.resolve();
-  const task = Promise.resolve(prior).catch(() => null).then(async () => {
-    if (session !== Number(window.__editMediaSession || 0)
-        || productId !== String(window.__editMediaProductId || "")) {
-      return { ok: false, staleEditor: true };
-    }
-    const revision = Number(window.__editMediaRevision || 0);
-    if (revision <= Number(window.__editMediaSavedRevision || 0)) {
-      return { ok: true, skipped: true };
-    }
-    const current = window.__editImages || [];
-    if (current.some((entry) => entry && typeof entry === "object" && !entry.failed)) {
-      return { ok: false, deferred: true };
-    }
-    const images = current.filter((entry) => typeof entry === "string" && entry.trim())
-      .slice(0, 20);
-    // An empty editor can be the first half of an intentional replacement.
-    // Keep the saved reference until the replacement itself is uploaded.
-    if (!images.length) return { ok: false, deferred: true };
-    try {
-      const result = await window.JA_NET.api(
-        "api/admin/products/" + encodeURIComponent(productId) + "/media", {
-          method: "PUT", json: { images }, label: "Product photos",
-        });
-      if (!result || result.ok === false || !result.product) {
-        throw new Error((result && result.error) || "The photo change was not confirmed.");
-      }
-      const editorStillCurrent = session === Number(window.__editMediaSession || 0)
-        && productId === String(window.__editMediaProductId || "");
-      if (editorStillCurrent && window.JA
-          && typeof JA.applyServerProduct === "function") {
-        JA.applyServerProduct(result.product);
-      }
-      if (editorStillCurrent) {
-        window.__editMediaSavedRevision = Math.max(
-          Number(window.__editMediaSavedRevision || 0), revision);
-      }
-      if (editorStillCurrent && revision === Number(window.__editMediaRevision || 0)) {
-        const removed = Array.isArray(window.__editRemovedImages)
-          ? window.__editRemovedImages.slice() : [];
-        window.__editRemovedImages = [];
-        // Run only after the confirmed gallery write: a URL-only purge racing
-        // an in-flight save could otherwise delete a file the save is about
-        // to reference. The storage guard also protects shared gallery files.
-        removed.forEach((entry) => { void purgeRemovedMedia(entry); });
-        JA.success("Photo update is live; unused replaced files were deleted.");
-      }
-      return { ok: true, data: result };
-    } catch (error) {
-      if (session === Number(window.__editMediaSession || 0)) {
-        const detail = error && (error.message || (error.data && error.data.error));
-        JA.toast("Photo update could not be saved. The previous saved photo is safe. "
-          + (detail || "Please try again or press Save Product."));
-      }
-      return { ok: false, error: (error && error.message) || "Photo save failed." };
-    }
-  });
-  window.__editMediaSave = task;
-  return task;
 }
 function editorOptions(p) {
   if (p && p.options && p.options.length) return p.options;
@@ -664,7 +614,7 @@ function bindMedia() {
       const at = entryAt();
       if (at < 0) return false;               // the owner deleted the tile meanwhile
       window.__editImages[at] = bustMediaCache(url);
-      markEditedMediaFields();
+      markMediaNeedsSave("Photo uploaded to storage, not saved to the product yet. Press Save Product to apply it.");
       paintMedia(box);
       return true;
     };
@@ -676,12 +626,7 @@ function bindMedia() {
         void purgeRemovedMedia(url);
         return false;
       }
-      if (window.__editMediaProductId) {
-        void persistEditedMedia();
-        if (queued) JA.toast("Queued photo uploaded; saving it to the live product now.");
-      } else if (queued) {
-        JA.toast("Queued photo uploaded — press Save Product to keep it.");
-      }
+      if (queued) JA.toast("Photo uploaded to storage, not saved to the product yet. Press Save Product to apply it.");
       return true;
     };
     const res = await photoSlot(() => window.JA_NET.api(endpoint, {
@@ -693,10 +638,10 @@ function bindMedia() {
     }));
     if (res && res.url) {
       if (acceptUploadedUrl(res.url, false)) {
-        JA.success(isVideo ? "Video uploaded."
-          : (squeezed && squeezed.compressed
-            ? "Photo uploaded — compressed " + readableBytes(squeezed.originalSize) + " → " + readableBytes(squeezed.size) + "."
-            : "Photo uploaded."));
+        const compressionNote = !isVideo && squeezed && squeezed.compressed
+          ? " (" + readableBytes(squeezed.originalSize) + " → " + readableBytes(squeezed.size) + ")"
+          : "";
+        JA.toast((isVideo ? "Video" : "Photo") + " uploaded to storage" + compressionNote + ", not saved to the product yet. Press Save Product to apply it.");
       }
     } else if (res && res.queued) {
       window.__jaPendingPhoto = (window.__jaPendingPhoto || 0) + 1;
@@ -714,17 +659,15 @@ function bindMedia() {
       const i = Number(del.getAttribute("data-del-img"));
       if (!window.__editImages) window.__editImages = [];
       const removed = window.__editImages.splice(i, 1)[0];
-      // The gallery is auto-published below for existing products. Do not
-      // delete a saved file here: persistEditedMedia waits for the replacement
-      // row to be confirmed, after which catalog.upsert hard-purges the old
-      // object. This keeps the only saved copy safe if upload/save fails.
+      // Gallery edits are staged until Save Product confirms the full row.
+      // Keep removed objects intact until that confirmation so a failed save
+      // never deletes the only currently saved copy.
       if (removed) {
-        markEditedMediaFields();
+        markMediaNeedsSave("Photo changes are not saved to the product yet. Press Save Product to apply them.");
         if (!Array.isArray(window.__editRemovedImages)) window.__editRemovedImages = [];
         window.__editRemovedImages.push(removed);
       }
       paintMedia(box);
-      if (removed) void persistEditedMedia();
       return;
     }
     const tile = e.target.closest(".au-tile");
@@ -737,10 +680,9 @@ function bindMedia() {
       if (Number.isFinite(i) && i > 0 && arr[i] != null) {
         const picked = arr.splice(i, 1)[0];
         arr.unshift(picked);
-        markEditedMediaFields();
+        markMediaNeedsSave("Photo changes are not saved to the product yet. Press Save Product to apply them.");
         paintMedia(box);
-        void persistEditedMedia();
-        JA.toast("That photo is now the main one for this product.");
+        JA.toast("Main photo changed in this editor. Press Save Product to apply it.");
       }
       return;
     }
@@ -1153,14 +1095,8 @@ function productForm(p = {}) {
   ).join("");
   window.__editImages = productImages(p);
   window.__editRemovedImages = [];
-  window.__editMediaProductId = String((p && p.id) || "");
-  window.__editMediaSession = Number(window.__editMediaSession || 0) + 1;
-  window.__editMediaRevision = 0;
-  window.__editMediaSavedRevision = 0;
-  // Keep the promise chain itself across editor sessions. If an old media save
-  // is still in flight, a new editor must queue behind it instead of racing it.
-  // The session check in persistEditedMedia prevents the old result from
-  // repainting or changing the new editor's revision counter.
+  window.__editMediaNeedsSave = false;
+  window.__editMediaStatus = "";
   // The row's updated_at as it was when THIS editor was opened. It is NOT a
   // lock and can never block a save: it rides along so the server can tell us
   // afterwards whether we overwrote a newer row (see _product_save_response).
@@ -1260,13 +1196,6 @@ async function handleProductSubmit(e, existing) {
       rawImages = (window.__editImages || []).filter(Boolean);
     }
   }
-  // Existing-product media changes are saved as soon as the upload/delete
-  // settles. Let that confirmation finish before the full form save so two
-  // writes from this same editor cannot race each other.
-  if (window.__editMediaSave && typeof window.__editMediaSave.then === "function") {
-    try { await window.__editMediaSave; } catch (err) {}
-    rawImages = (window.__editImages || []).filter(Boolean);
-  }
   const stillUploading = rawImages.filter((s) => typeof s === "object" && !(s && s.failed));
   let images = rawImages.filter((s) => typeof s === "string" && s).slice(0, 20);
   if (!images.length && existing) {
@@ -1285,9 +1214,8 @@ async function handleProductSubmit(e, existing) {
   if (stillUploading.length) {
     // Never write a pending blob: preview into the row, and never save in
     // silence either: the owner must know this save went ahead WITHOUT the
-    // photo that is still on its way up, and to press Save again once the
-    // "Photo uploaded" toast lands.
-    JA.toast(stillUploading.length + " photo(s) still uploading were NOT saved. Press Save again when the upload toast appears.");
+    // photo that is still on its way up, and to press Save again after upload.
+    JA.toast(stillUploading.length + " photo(s) are still uploading and were NOT saved. Press Save Product again after the upload finishes.");
   }
   const image = images[0] || "";
   if (!image) { JA.toast("Please upload a photo."); return; }
@@ -1438,13 +1366,20 @@ async function handleProductSubmit(e, existing) {
   // row moved on still lands. Concurrent saves are recorded in the admin audit
   // log without a customer-facing or toast warning.
   if (res && res.queued) {
-    // A transient connection timeout is retried by the persistent outbox. Keep
-    // the editor open, but do not show the old alarming "could not reach"
-    // toast; the server may already have completed the fast save.
+    // The outbox will retry, but a queued write is not a confirmed product save.
+    if (window.__editMediaNeedsSave) {
+      setMediaSaveStatus("Product save is queued but not yet confirmed. Your uploaded photo and form entries are still here; wait for confirmation or retry Save Product.", true);
+    } else {
+      JA.toast("Product save is queued but not yet confirmed. Keep this editor open and retry if it does not complete.");
+    }
     return;
   }
   if (res && res.ok === false) {
-    JA.toast((res && res.error) || "Could not save the product. No changes are live.");
+    const message = (res && res.error) || "Could not save the product. No changes are live.";
+    if (window.__editMediaNeedsSave) {
+      setMediaSaveStatus("Product save failed. Your photo changes and form entries are still here and are not live yet. Press Retry Save to try again. " + message, true);
+    }
+    JA.toast(message + (window.__editMediaNeedsSave ? " Your photo and form entries are still here; use Retry Save." : ""));
     return;
   }
   let savedMsg;
@@ -1458,6 +1393,8 @@ async function handleProductSubmit(e, existing) {
       ? `Saved successfully · ${liveState} · ${images.length} photo(s).`
       : `Saved successfully · ${liveState} · Out of stock.`;
   }
+  window.__editMediaNeedsSave = false;
+  window.__editMediaStatus = "";
   // Only now may the UI purge media the owner removed. The product write has
   // succeeded, so a storage reference guard sees the replacement row rather
   // than unlinking a still-saved image. catalog.upsert already purges its old
@@ -2446,7 +2383,8 @@ async function fillNeedsAttention() {
     });
     box.querySelectorAll("[data-attention-tab]").forEach((button) => { button.onclick = () => paintDesk(button.dataset.attentionTab); });
   } catch (err) {
-    box.innerHTML = `<p class="empty">Could not load this queue. Try Refresh.</p>`;
+    const detail = String((err && (err.message || (err.data && err.data.error))) || "").trim();
+    box.innerHTML = `<p class="empty" role="alert"><strong>Dashboard data unavailable.</strong> ${JA.escape(detail || "Stock and order status could not be verified. This is not an all-clear result.")} Try Refresh.</p>`;
   }
 }
 async function fillAnalytics() {
@@ -5071,7 +5009,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=223" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=228" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5478,7 +5416,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=223", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=228", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");

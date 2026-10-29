@@ -2289,17 +2289,15 @@ def homepage_featured(products=None):
 def save_homepage_featured(raw, actor=None):
     """Persist Homepage Featured Products selections. Returns payload or None.
 
-    Accepts the selected product list atomically without failing if an
-    individual item's status flag (``is_active``, ``is_deleted``, ``online``)
-    differs, and restores any selected item's active/online flags so it
-    renders on the storefront immediately.
+    Saves only the merchandising selection. Featured selection must never
+    change a product's publication, availability, or deletion state. Public
+    resolution below uses the public live catalogue, so hidden/offline rows
+    remain excluded until an owner explicitly republishes them elsewhere.
     """
     known = _all_known_products_for_featured()
     clean = _normalize_homepage_featured(raw, known)
     clean["updatedAt"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
     clean["updatedBy"] = actor or ""
-    selected_set = set(clean.get("featured_products") or [])
-
     if _prod_source():
         try:
             from supabase_store import save_homepage_featured as _save_featured
@@ -2307,27 +2305,13 @@ def save_homepage_featured(raw, actor=None):
                 return None
         except Exception:
             return None
-        if selected_set:
-            try:
-                from supabase_store import restore_products
-                restore_products(list(selected_set), reason="homepage featured save")
-            except Exception:
-                pass
 
     def _apply(data, _path):
+        # Persist the curated list only. Do not clear deletion tombstones or
+        # alter any product status as a side effect of merchandising.
         data["homepageFeatured"] = clean
         data["updatedAt"] = clean["updatedAt"]
         data["updatedBy"] = actor or ""
-        if selected_set:
-            data["deleted"] = [pid for pid in (data.get("deleted") or [])
-                               if str(pid or "").strip() not in selected_set]
-            for row in data.get("products") or []:
-                if isinstance(row, dict) and str(row.get("id") or "") in selected_set:
-                    row["is_active"] = True
-                    row["is_deleted"] = False
-                    row["online"] = True
-                    if str(row.get("source") or "").lower() in ("deleted", "replaced"):
-                        row["source"] = "admin"
         return data
 
     try:
@@ -2361,13 +2345,12 @@ def homepage_featured_groups(products=None, limit=HOMEPAGE_FEATURED_MAX):
     settings = homepage_featured(live)
     by_id = {str(p.get("id")): p for p in live if p.get("id")}
     ids = settings.get("featured_products") or []
-    if ids and any(pid not in by_id for pid in ids):
-        for p in _all_known_products_for_featured(live):
-            pid = str(p.get("id") or "")
-            if pid and pid not in by_id:
-                by_id[pid] = p
+    # `live` is the public catalogue at the public endpoint and includes
+    # hidden rows only at the authenticated admin endpoint. Never supplement
+    # it with rows from the broader source union: doing so made a curated
+    # selection an implicit restore/publish path.
     chosen = [by_id[pid] for pid in ids if pid in by_id][:max_total]
-    if not chosen:
+    if not ids:
         chosen = sorted(live, key=_home_rank)[:max_total]
     groups, buckets = [], {}
     for product in chosen:
@@ -2386,13 +2369,10 @@ def homepage_featured_products(products=None, limit=HOMEPAGE_FEATURED_MAX):
     settings = homepage_featured(live)
     by_id = {str(p.get("id")): p for p in live if p.get("id")}
     ids = settings.get("featured_products", [])
-    if ids and any(pid not in by_id for pid in ids):
-        for p in _all_known_products_for_featured(live):
-            pid = str(p.get("id") or "")
-            if pid and pid not in by_id:
-                by_id[pid] = p
     selected = [by_id[pid] for pid in ids if pid in by_id]
-    if selected:
+    if ids:
+        # A saved list may contain a product that an owner later hid. Keep it
+        # out of the public rail; do not resurrect it from seed/override data.
         return selected[:max_total]
     return sorted(live, key=_home_rank)[:max_total]
 

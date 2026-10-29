@@ -18,6 +18,7 @@ import pytest
 pgserver = pytest.importorskip("pgserver")
 
 SQL_PATH = pathlib.Path(__file__).resolve().parent.parent / "hard_delete_products.sql"
+CATEGORY_SQL_PATH = pathlib.Path(__file__).resolve().parent.parent / "hard_delete_categories.sql"
 
 
 @pytest.fixture(scope="module")
@@ -631,3 +632,22 @@ def test_query_4_is_valid_postgres_and_publishes_the_same_text():
     assert pglast.parse_sql(QUERY_4)
     doc = (SQL_PATH.parent / "MIGRATION_COPY_PASTE.md").read_text()
     assert QUERY_4.rstrip("\n") in doc, "the document does not carry Query 4"
+
+
+def test_category_delete_migration_is_atomic_idempotent_and_blocks_resurrection(db):
+    """Real PostgreSQL verifies the category RPC, trigger and immutable ledger."""
+    run(db, """
+        drop table if exists public.categories cascade;
+        create table public.categories (id text primary key, name text not null);
+    """)
+    migration = CATEGORY_SQL_PATH.read_text()
+    run(db, migration)
+    run(db, migration)
+    run(db, "insert into public.categories(id,name) values ('gone','Gone');")
+    deleted = one(db, "select public.hard_delete_categories(array['gone'])")
+    assert deleted == "{gone}"
+    assert one(db, "select count(*) from public.categories where id='gone'") == "0"
+    assert one(db, "select count(*) from public.deleted_categories where category_id='gone'") == "1"
+    with pytest.raises(AssertionError, match="psql exited"):
+        run(db, "insert into public.categories(id,name) values ('gone','Resurrected');")
+    assert one(db, "select count(*) from public.categories where id='gone'") == "0"

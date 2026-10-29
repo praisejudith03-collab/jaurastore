@@ -143,10 +143,8 @@ def test_the_featured_accordion_has_a_styled_toggle_marker():
     assert ".home-featured-admin-cat[open] > summary::before" in css
 
 
-def test_featured_products_endpoint_accepts_list_atomically_across_status_flags(admin, monkeypatch):
+def test_featured_products_endpoint_accepts_flat_list_without_status_side_effects(admin, monkeypatch):
     cat_a, prod_a, cat_b, prod_b = _two_categories()
-    # Simulate an individual product having differing status flags in overrides:
-    # the save handler must still accept the entire list atomically and re-enable it.
     r = admin.post("/api/featured-products",
                    json={"featured_products": [prod_a["id"], prod_b["id"], "jau-inactive-test"]})
     assert r.status_code == 200, r.data
@@ -170,3 +168,35 @@ def test_homepage_currency_dom_updates_featured_and_most_viewed():
     assert proc.returncode == 0, (
         "homepage currency DOM simulation failed:\n" + proc.stdout + proc.stderr)
     assert "all homepage currency DOM checks passed" in proc.stdout
+
+
+def test_featured_save_does_not_republish_or_clear_hidden_product(monkeypatch):
+    pid = "jau-featured-hidden-regression"
+    hidden = {"id": pid, "name": "Hidden featured item", "category": "beauty",
+              "online": False, "is_active": False, "is_deleted": True}
+    state = {"products": [dict(hidden)], "deleted": [pid]}
+    monkeypatch.setattr(catalog_mod, "_prod_source", lambda: False)
+    monkeypatch.setattr(catalog_mod, "_all_known_products_for_featured",
+                        lambda: [dict(hidden)])
+    monkeypatch.setattr(catalog_mod, "overrides", lambda: state)
+    monkeypatch.setattr(catalog_mod, "_mutate",
+                        lambda actor, apply: apply(state, None))
+
+    saved = catalog_mod.save_homepage_featured([pid], actor="regression-test")
+
+    assert saved["featured_products"] == [pid]
+    assert state["deleted"] == [pid]
+    row = state["products"][0]
+    assert row["online"] is False
+    assert row["is_active"] is False
+    assert row["is_deleted"] is True
+
+
+def test_public_featured_resolution_never_supplements_hidden_rows(monkeypatch):
+    pid = "jau-featured-hidden-public"
+    monkeypatch.setattr(catalog_mod, "homepage_featured",
+                        lambda products=None: {"featured_products": [pid]})
+    # The public merged catalogue excludes the hidden item. It must not be
+    # reintroduced from the all-sources override/seed union.
+    assert catalog_mod.homepage_featured_products(products=[]) == []
+    assert catalog_mod.homepage_featured_groups(products=[]) == []

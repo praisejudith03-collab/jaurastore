@@ -405,11 +405,10 @@ console.log("OK");
     assert "OK" in result.stdout
 
 
-def test_every_admin_upload_handler_stamps_and_persists_the_fresh_url():
-    """Audit of js/admin.js: product photos, category assets, hero, logo and
-    banner uploads all (a) stamp the returned URL with the cache-buster and
-    (b) repaint the screen / persist that SAME URL - no handler leaves a
-    stale, local or data: copy behind."""
+def test_every_admin_upload_handler_stamps_and_stages_the_fresh_url():
+    """Uploads stamp and repaint the fresh URL. Product photos are staged in
+    the editor and only attached to the product by the confirmed Save Product
+    request; other asset types keep their own save behavior."""
     src = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
     # the helper itself
     assert "function bustMediaCache(url)" in src
@@ -417,10 +416,13 @@ def test_every_admin_upload_handler_stamps_and_persists_the_fresh_url():
     # carry the stamped URL. The swap is IDENTITY-based (not a captured index)
     # so a tile deleted/reordered mid-upload can never hand the fresh URL to
     # the wrong photo.
-    assert "window.__editImages[at] = bustMediaCache(url);" in src
     assert "if (acceptUploadedUrl(res.url, false)) {" in src
-    assert '"/media"' in src
-    assert "persistEditedMedia()" in src
+    assert "Photo uploaded to storage, not saved to the product yet." in src
+    assert "Press Save Product to apply it." in src
+    assert '"/media"' not in src
+    assert "persistEditedMedia()" not in src
+    assert "window.__editImages[at] = bustMediaCache(url);" in src
+    assert "Retry Save" in src
     # category assets
     assert "input.dataset.catUrl = freshUrl;" in src
     assert "pic.innerHTML = _catAssetHTML(freshUrl);" in src

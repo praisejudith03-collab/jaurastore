@@ -304,6 +304,7 @@ def test_an_empty_categories_table_stays_empty_and_is_not_replaced(monkeypatch):
     monkeypatch.setattr(sb, "load_categories_table", lambda: [], raising=False)
     monkeypatch.setattr(sb, "load_categories_state",
                         lambda: (True, False, []), raising=False)
+    monkeypatch.setattr(sb, "load_hard_deleted_category_ids", lambda: set(), raising=False)
     assert apimod._categories_data()["categories"] == []
 
 def test_empty_categories_table_does_not_resurrect_stale_details(monkeypatch):
@@ -318,6 +319,7 @@ def test_empty_categories_table_does_not_resurrect_stale_details(monkeypatch):
     monkeypatch.setattr(sb, "load_categories_state", lambda: (
         True, True, [{"id": "deleted", "name": "Deleted", "image": "old.jpg"}]),
         raising=False)
+    monkeypatch.setattr(sb, "load_hard_deleted_category_ids", lambda: set(), raising=False)
     assert apimod._categories_data()["categories"] == []
 
 
@@ -333,6 +335,7 @@ def test_a_populated_categories_table_is_served_as_is(monkeypatch):
     monkeypatch.setattr(sb, "load_categories_table", lambda: list(rows), raising=False)
     monkeypatch.setattr(sb, "load_categories_state",
                         lambda: (True, False, []), raising=False)
+    monkeypatch.setattr(sb, "load_hard_deleted_category_ids", lambda: set(), raising=False)
     assert apimod._categories_data()["categories"] == rows
 
 
