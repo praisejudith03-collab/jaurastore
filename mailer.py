@@ -878,6 +878,76 @@ def test_email_html():
 </div>"""
 
 
+# ------------------------------------------------- supplier stock alerts
+def supplier_stock_alert_email_html(alerts):
+    """The owner email for supplier low/out-of-stock transitions.
+
+    The watchdog is alert-only (owner directive): this email is how a
+    supplier running dry reaches the owner so *they* can update shop
+    stock by hand. It says so explicitly, because an owner who believes
+    the shop already adjusted itself would do nothing.
+    """
+    rows = [a for a in (alerts or []) if isinstance(a, dict)]
+    out_count = sum(1 for a in rows if str(a.get("level") or "") == "out")
+    low_count = len(rows) - out_count
+    admin_url = _email_origin() + "/admin.html?tab=supplierAlerts"
+    lines = []
+    for a in rows:
+        level = "OUT OF STOCK" if str(a.get("level") or "") == "out" else "LOW STOCK"
+        color = "#b3261e" if level == "OUT OF STOCK" else "#9a6a00"
+        name = _esc(str(a.get("product_name") or a.get("product_id") or "Product"))
+        sku = _esc(str(a.get("sku") or ""))
+        option = _esc(str(a.get("option") or ""))
+        qty = a.get("supplier_qty")
+        qty_text = "0 left" if qty == 0 else (f"{qty} left" if qty is not None else "")
+        shop = a.get("shop_stock")
+        shop_text = f"your shop stock: {shop}" if shop is not None else ""
+        detail = " · ".join(x for x in (sku, option, qty_text, shop_text) if x)
+        lines.append(
+            f'<tr><td style="padding:8px 10px;border-bottom:1px solid #eee">'
+            f"<b>{name}</b>"
+            + (f'<br><span style="color:#777;font-size:12px">{_esc(detail)}</span>' if detail else "")
+            + f'</td><td style="padding:8px 10px;border-bottom:1px solid #eee;'
+              f'white-space:nowrap;color:{color}"><b>{level}</b></td></tr>')
+    summary = " and ".join(x for x in (
+        f"{out_count} out of stock" if out_count else "",
+        f"{low_count} low" if low_count else "") if x)
+    body = (
+        '<p style="margin:0 0 10px">Your linked supplier(s) reported '
+        f"<b>{_esc(summary or 'low stock')}</b> for:</p>"
+        '<table role="presentation" cellpadding="0" cellspacing="0" '
+        'style="border-collapse:collapse;width:100%;font-size:14px">'
+        + "".join(lines) + "</table>"
+        '<p style="margin:14px 0 0"><b>Your store stock was NOT changed '
+        "automatically.</b> Review each item when you are free and update "
+        "shop stock yourself if needed:</p>"
+        f'<p style="margin:10px 0 0"><a href="{_esc(admin_url, quote=True)}" '
+        'style="color:#a97e48">Open Admin &rarr; Supplier Alerts</a></p>'
+        '<p style="margin:12px 0 0;color:#777;font-size:12px">One email is '
+        "sent when a supplier item first runs low or out (and again only "
+        "if it recovers and later drops, or worsens from low to out).</p>")
+    return _shell("Supplier stock alert", "", body)
+
+
+def send_supplier_stock_alert(alerts):
+    """Email pending supplier stock alerts to the shop inbox.
+
+    Recipient is always the canonical owner inbox (``ADMIN_EMAIL``,
+    jaurastore@gmail.com by default) via :func:`send_mail`.
+    Returns (ok, detail); never raises.
+    """
+    rows = [a for a in (alerts or []) if isinstance(a, dict)]
+    if not rows:
+        return False, "no supplier stock alerts to send"
+    out_count = sum(1 for a in rows if str(a.get("level") or "") == "out")
+    low_count = len(rows) - out_count
+    bits = " and ".join(x for x in (
+        f"{out_count} out of stock" if out_count else "",
+        f"{low_count} low" if low_count else "") if x)
+    subject = f"Supplier stock alert — {bits} at your supplier"
+    return send_mail(subject, supplier_stock_alert_email_html(rows))
+
+
 # ------------------------------------------------------------------ triggers
 def notify_new_order(order):
     """Email the shop about a completed checkout. Returns (ok, detail)."""

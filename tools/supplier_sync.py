@@ -96,6 +96,23 @@ def main(argv=None):
         if not args.no_state:
             supplier_watchdog.save_state()
 
+    # Alert-only notification: email any supplier low/out transitions this
+    # run queued, in one batch to the owner. When no mail transport is
+    # configured in this Actions process the alerts stay durably pending
+    # and the Render scheduler sends them within its five-minute tick —
+    # the claim stamp in supplier_alerts keeps the two from double-sending.
+    try:
+        import supplier_alerts
+        alerts = supplier_alerts.drain_pending_alerts()
+        result = {**result, "alertsEmailed": int(alerts.get("count") or 0),
+                  "alertsPending": int(alerts.get("pending") or 0)}
+        print("supplier stock alerts: emailed={} pending={} ({})".format(
+            result["alertsEmailed"], result["alertsPending"],
+            str(alerts.get("detail") or "")[:120]), file=sys.stderr)
+    except Exception as exc:                       # noqa: BLE001 - never fail the run on mail
+        print(f"supplier stock alerts skipped: {type(exc).__name__}: {str(exc)[:200]}",
+              file=sys.stderr)
+
     line = _summary_line(result)
     print(line)
     if state_used:

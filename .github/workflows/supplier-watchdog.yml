@@ -16,6 +16,9 @@
 #
 # It needs the repository secrets SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
 # (Settings -> Secrets and variables -> Actions). They are never printed.
+# Optional, for emailing supplier low/out alerts straight from this run:
+# RESEND_API_KEY (or BREVO_API_KEY) + MAIL_FROM secrets. Without them the
+# alerts stay queued in Supabase and the Render scheduler emails them.
 name: Supplier watchdog
 
 on:
@@ -55,6 +58,13 @@ jobs:
       SUPPLIER_WATCHDOG_MIN_INTERVAL: "3600"
       SUPPLIER_WATCHDOG_NIGHTLY_MAX: "400"
       SUPPLIER_WATCHDOG_NIGHTLY_LINKS: "200"
+      # Supplier low/out email alerts -> ADMIN_EMAIL (jaurastore@gmail.com
+      # unless the repo secret overrides it). Empty secrets are fine: the
+      # drain is a no-op here and Render sends instead.
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      MAIL_FROM: ${{ secrets.MAIL_FROM }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

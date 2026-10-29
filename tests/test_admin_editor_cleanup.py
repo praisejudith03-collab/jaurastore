@@ -44,12 +44,17 @@ const names = [...html.matchAll(/\bname="([^"]+)"/g)].map(match => match[1]);
 // descriptionFr joined the approved set on 2026-10-19: French shoppers must
 // never receive raw English product copy, and the owner can override the
 // automatic French translation directly in the editor.
-const required = ["id", "name", "sku", "description", "descriptionFr", "category", "priceNgn", "supplierSku",
+// nameFr RE-joined on owner directive (this session): the 2026-10-19
+// assumption "the catalogue already ships nameFr for every product" only
+// held for the original seed — a product created in Admin could never
+// carry a French title, so new items (all perfumes) stayed English in
+// French views and WhatsApp posts. The owner now types it manually.
+const required = ["id", "name", "nameFr", "sku", "description", "descriptionFr", "category", "priceNgn", "supplierSku",
   "stock", "enableCustomNote", "customNotePrompt", "opt-title-0", "opt-vals-0"];
 for (const name of required) {
   if (!names.includes(name)) throw new Error("missing form control " + name);
 }
-for (const removed of ["nameFr", "dimensions", "compareNgn", "bulkQty",
+for (const removed of ["dimensions", "compareNgn", "bulkQty",
   "bulkPercent", "featured", "badge", "online", "stockStatus",
   "Customer Name", "Customer Stars", "Customer Review"]) {
   if (html.includes(removed)) throw new Error("removed control still rendered: " + removed);

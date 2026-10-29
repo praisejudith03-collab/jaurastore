@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=228" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=229" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1033,6 +1033,7 @@ function bindNotePrompt() {
  */
 const EDIT_FIELD_MAP = {
   name: ["name"],
+  nameFr: ["nameFr"],
   sku: ["sku"],
   description: ["description"],
   descriptionFr: ["descriptionFr"],
@@ -1127,6 +1128,9 @@ function productForm(p = {}) {
     <div id="media-box">${mediaStripHTML(window.__editImages)}</div>
     <input type="hidden" name="id" value="${JA.escape(p.id || "")}" />
     <div class="field"><label>Product title</label><input name="name" required maxlength="80" value="${JA.escape(p.name || "")}" /></div>
+    <div class="field"><label>Name (French) / Title (Français)</label><input name="nameFr" maxlength="80" value="${JA.escape(p.nameFr || p.name_fr || "")}" placeholder="e.g. Parfum Élégance 50 ml" />
+      <p class="admin-note">The exact French name YOU choose — shown to French shoppers and in French WhatsApp posts. Type it yourself for every new product (especially perfumes); nothing auto-translates a blank box for a brand-new item.</p>
+    </div>
     <div class="field"><label>SKU (your code for this product)</label>
       <input name="sku" maxlength="40" autocomplete="off" value="${JA.escape(p.sku || "")}" placeholder="e.g. JAU-${JA.escape(String(p.id || "").replace(/^jau-/, "").slice(-6) || "000000")}" />
       <p class="admin-note">Used on your supplier sheets and in order item lines. Leave it blank to keep the saved code; a brand-new product is given one automatically.</p>
@@ -1308,6 +1312,11 @@ async function handleProductSubmit(e, existing) {
       sku,
       slug: existing?.slug || slugify(name) || id,
       name,
+      // Owner-typed French title (Name (French) / Title (Français) box).
+      // Without this line a new product could never carry nameFr: the
+      // form had no input for it and the payload dropped it, so French
+      // shoppers and WhatsApp posts fell back to the English name.
+      nameFr: String(fd.get("nameFr") || "").trim(),
       category: savedCategory,
       priceNgn,
       priceCfa: toCfa(priceNgn),
@@ -5009,7 +5018,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=228" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=229" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5416,7 +5425,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=228", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=229", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");

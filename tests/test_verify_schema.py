@@ -73,7 +73,7 @@ def test_a_fully_applied_schema_passes():
     rep = vs.check_live(FakeClient(_complete_schema()))
     assert rep["ok"] is True
     assert rep["missing_tables"] == []
-    assert len(rep["tables"]) == len(vs.REQUIRED_TABLES) == 16
+    assert len(rep["tables"]) == len(vs.REQUIRED_TABLES) == 17
 
 
 def test_a_missing_table_is_reported_by_name():
@@ -113,7 +113,11 @@ def test_the_required_column_inventory_covers_the_agreed_contract():
     assert vs.REQUIRED_COLUMNS["product_reviews"] == (
         "product_id", "order_id", "email", "name", "rating", "title", "body", "hidden",
         "created_at", "updated_at")
-    assert len(vs.REQUIRED_TABLES) == 16
+    # 16 shop tables + deleted_categories (schema section 21): category
+    # deletion fails closed until the tombstone ledger exists, so the
+    # verifier must probe it like any other required table.
+    assert len(vs.REQUIRED_TABLES) == 17
+    assert vs.REQUIRED_COLUMNS["deleted_categories"] == ("category_id", "deleted_at")
     # 16 original columns + the two per-product bulk-discount columns.
     assert len(vs.REQUIRED_COLUMNS["products"]) == 18
     # The durable-analytics tables: without these the dashboard resets to

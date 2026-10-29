@@ -55,6 +55,13 @@ services:
         value: "2"
       - key: SUPPLIER_WATCHDOG_MIN_INTERVAL
         value: "3600"
+      # Supplier low/out email alerts to ADMIN_EMAIL. The Render scheduler
+      # is the guaranteed sender (it holds the mail keys) even though
+      # supplier polling itself stays in GitHub Actions above.
+      - key: SUPPLIER_STOCK_ALERTS_ENABLED
+        value: "1"
+      - key: SUPPLIER_LOW_STOCK_THRESHOLD
+        value: "9"
       # reCAPTCHA v2 Invisible (public site key + private secret).
       - key: RECAPTCHA_SITE_KEY
         sync: false

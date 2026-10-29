@@ -205,6 +205,15 @@ of stock.*
   supplier page confirms availability without printing a number.
 - `SUPPLIER_WATCHDOG_NIGHTLY_LINKS` (default `200`) — maximum unique supplier
   URLs in one Actions deep audit.
+- `SUPPLIER_STOCK_ALERTS_ENABLED` (default `1`) — owner email alerts for
+  supplier low/out-of-stock transitions (`supplier_alerts.py`). The watchdog
+  is alert-only: it never writes shop stock; entering low/out (or worsening
+  low → out) queues one batched email to `ADMIN_EMAIL`
+  (jaurastore@gmail.com), sent by the watchdog run when mail secrets exist
+  there, otherwise by the Render scheduler's five-minute tick. State lives in
+  `growth_settings.supplier_stock_alert_state_json`; no SQL migration needed.
+- `SUPPLIER_LOW_STOCK_THRESHOLD` (default `9`) — a supplier count of
+  1..threshold is LOW; 0 is OUT. Matches the admin status badge band.
 
 ### Price watch
 

@@ -2839,6 +2839,49 @@ def _warn_missing_product_columns(dropped):
         print(f"[supabase] schema warning record failed: {exc}")
 
 
+SUPPLIER_STOCK_ALERT_STATE_KEY = "supplier_stock_alert_state_json"
+
+
+def load_supplier_stock_alert_state():
+    """The supplier stock-alert ledger (dict), {} when absent, None on failure.
+
+    None is load-bearing: supplier_alerts treats an unreadable ledger as
+    "skip this run", never as "empty" — otherwise every known supplier
+    problem would be emailed again the moment reads recover.
+    """
+    c = client()
+    if c is None:
+        return None
+    try:
+        rows = _res_data(c.table("growth_settings").select("value")
+                         .eq("key", SUPPLIER_STOCK_ALERT_STATE_KEY).limit(1).execute()) or []
+        if not rows:
+            return {}
+        raw = rows[0].get("value")
+        value = json.loads(raw) if isinstance(raw, str) and raw else raw
+        return value if isinstance(value, dict) else {}
+    except Exception as exc:
+        print(f"[supabase] supplier stock alert state read failed: {exc}")
+        return None
+
+
+def save_supplier_stock_alert_state(state):
+    """Strictly persist the supplier stock-alert ledger; True once confirmed."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table("growth_settings").upsert({
+            "key": SUPPLIER_STOCK_ALERT_STATE_KEY,
+            "value": json.dumps(dict(state or {}), ensure_ascii=False,
+                                separators=(",", ":")),
+        }).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] supplier stock alert state save failed: {exc}")
+        return False
+
+
 def load_supplier_sync_warnings():
     """Return the current supplier uncertainty queue; [] if absent/unavailable."""
     c = client()
