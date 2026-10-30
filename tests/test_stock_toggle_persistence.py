@@ -315,21 +315,24 @@ def test_clean_editor_has_only_the_approved_product_controls():
 
     ``descriptionFr`` also joined on 2026-10-19 (owner directive): French
     shoppers must never receive raw English product copy, and the owner can
-    override the automatic French translation in the editor. The French
-    product *name* remains out of the editor (the catalogue already ships
-    nameFr for every product)."""
+    override the automatic French translation in the editor. ``nameFr``
+    re-joined on owner directive (this session): "the catalogue already
+    ships nameFr" only covered the original seed, so Admin-created
+    products (every perfume) could never get a French title. The owner
+    now types the exact French name in the editor."""
     import re
 
     js = _admin_js()
     form = js[js.index("function productForm(p = {})"):js.index("async function handleProductSubmit")]
     names = set(re.findall(r'name="([^"]+)"', form))
     assert names == {
-        "id", "name", "sku", "description", "descriptionFr", "category",
+        "id", "name", "nameFr", "sku", "description", "descriptionFr", "category",
         "priceNgn", "supplierSku", "supplierCost",
         "stock", "enableCustomNote", "customNotePrompt",
     }
     for required in (
-        "Product title", "SKU (your code for this product)", "Description",
+        "Product title", "Name (French) / Title (Français)",
+        "SKU (your code for this product)", "Description",
         "Description (Français)", "Category", "Price (Naira ₦)",
         "Supplier cost (Naira ₦)",
         "Main supplier URL", "Stock quantity", "Enable a note for this product",
@@ -337,7 +340,7 @@ def test_clean_editor_has_only_the_approved_product_controls():
     ):
         assert required in form, required
     for removed in (
-        "nameFr", "dimensions", "compareNgn", "bulkQty",
+        "dimensions", "compareNgn", "bulkQty",
         "bulkPercent", "stock-status", "stockStatus", "featured", "badge",
         "Customer Name", "Customer Stars", "Customer Review",
     ):

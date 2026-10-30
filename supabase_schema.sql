@@ -1112,6 +1112,17 @@ begin
   insert into public.deleted_categories(category_id)
   select unnest(requested)
   on conflict (category_id) do nothing;
+  -- Products keep their free-text category slug, but the
+  -- products_category_id_fkey foreign key would refuse the category delete
+  -- while any product row still points at it (live error 23503, 2026-10-30).
+  -- Detach first, in the same transaction. Guarded: some deployments and
+  -- test schemas have no products.category_id column.
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'products'
+                and column_name = 'category_id') then
+    update public.products set category_id = null
+     where category_id::text = any(requested);
+  end if;
   delete from public.categories where id::text = any(requested);
   return requested;
 end;

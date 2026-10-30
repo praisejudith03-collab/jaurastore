@@ -3,8 +3,15 @@
 The admin can attach one supplier URL to a product that has several Jaura
 variants (Colour, Size, Scent, Flavour, ...). This module fetches that supplier
 page in small batches, extracts whatever variant availability the page exposes
-(JSON-LD/product JSON/data attributes/plain HTML), and mirrors only the
-matching Jaura variant's stock flag.
+(JSON-LD/product JSON/data attributes/plain HTML), and records it as a
+diagnostic ``supplier_status`` only.
+
+Owner rule (this session, superseding every mirroring rule below): the
+watchdog NEVER changes the shop's own inventory. A supplier running low
+or out queues an email alert to the owner (see ``supplier_alerts``), who
+reviews Supplier Alerts in Admin and updates shop stock by hand. The
+buffering helpers remain only as the arithmetic the status derivation
+was built on; no shop ``stock``/``optionStock`` write leaves this module.
 
 Production runs it from .github/workflows/supplier-watchdog.yml (every 20
 minutes, plus a 02:00 deep audit), not from the Render web process.
@@ -1048,7 +1055,7 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog",
 
     current = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else {}
     next_stock: Dict[str, int] = {}
-    changed = False
+    readings: List[Tuple[str, int, bool]] = []
     for key in keys:
         old = (max(0, int(current.get(key, p.get("stock") or 0) or 0))
                if current else max(0, int(p.get("stock") or 0)))
@@ -1062,18 +1069,22 @@ def sync_product(product: Dict[str, Any], actor: str = "supplier-watchdog",
             next_stock[key] = old
             continue
         flagged = bool(row.get("flag"))
+        readings.append((key, int(qty), flagged))
         new_qty = (_apply_option_stock_rule(int(qty), old, flagged=flagged)
                    if key in option_url_keys
                    else _apply_stock_rule(int(qty), old, flagged=flagged))
         next_stock[key] = new_qty
-        if new_qty != old:
-            changed = True
 
-    if not changed:
+    # Alert-only: status + email queue are owed for every confident
+    # reading, even when the buffered figure happens to equal the shop's
+    # current shelf (supplier 5 against shop 5 is still "supplier low").
+    # The old "nothing changed, skip" gate measured a shop-stock write
+    # this module no longer makes, and would have swallowed that alert.
+    if not readings:
         return False, warnings
     total = sum(next_stock.values())
     row = {**p, "optionStock": next_stock, "stock": total, "stock_quantity": total}
-    return _save_synced(p, row, actor, warnings)
+    return _save_synced(p, row, actor, warnings, readings=readings)
 
 
 def safety_buffer_percent() -> int:
@@ -1150,6 +1161,55 @@ def _save_supplier_status(p: Dict[str, Any], status: str,
         return False, warnings
 
 
+def _record_stock_alerts(p: Dict[str, Any], readings) -> None:
+    """Queue owner email alerts for confident low/out readings. Never raises.
+
+    ``readings`` is a list of ``(option, supplier_qty, flagged)`` using the
+    supplier's RAW quantity — never a buffered would-be shop quantity — so
+    "supplier has 3 left" in the email is the number the supplier printed.
+    Shop stock is included for context only; nothing here writes it.
+    """
+    try:
+        import supplier_alerts
+        option_stock = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else {}
+        observations = []
+        for option, qty, flagged in readings or []:
+            if option:
+                shop_stock = option_stock.get(option)
+            else:
+                shop_stock = p.get("stock_quantity", p.get("stock"))
+            try:
+                shop_stock = int(float(shop_stock)) if shop_stock is not None else None
+            except (TypeError, ValueError):
+                shop_stock = None
+            observations.append({
+                "product_id": str(p.get("id") or ""),
+                "product_name": str(p.get("name") or ""),
+                "sku": str(p.get("sku") or ""),
+                "option": str(option or ""),
+                "supplier_qty": qty,
+                "flagged": bool(flagged),
+                "shop_stock": shop_stock,
+            })
+        supplier_alerts.record_observations(observations)
+    except Exception:
+        pass
+
+
+def _supplier_status_for_readings(readings) -> str:
+    """The admin status badge for raw readings (one shared derivation).
+
+    A bare "In stock" flag is healthy. It used to be read as out-of-stock
+    for variant-free products (``flag`` OR qty<=0), which would have
+    emailed false alarms for every supplier that prints no count.
+    """
+    try:
+        import supplier_alerts
+        return supplier_alerts.supplier_status_for(readings)
+    except Exception:
+        return "ok"
+
+
 def _sync_whole_product(p: Dict[str, Any], supplier_rows: List[Dict[str, Any]],
                         actor: str, warnings: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]]]:
     row = _whole_product_row(p, supplier_rows)
@@ -1163,12 +1223,17 @@ def _sync_whole_product(p: Dict[str, Any], supplier_rows: List[Dict[str, Any]],
     if qty is None:
         warnings.append(_warning(p, "supplier_stock_uncertain", "Stock could not be read with confidence; left unchanged."))
         return False, warnings
-    status = "out_of_stock" if row.get("flag") or int(qty) <= 0 else ("low_stock" if int(qty) <= 9 else "ok")
-    return _save_supplier_status(p, status, warnings)
+    readings = [("", int(qty), bool(row.get("flag")))]
+    status = _supplier_status_for_readings(readings)
+    saved, warnings = _save_supplier_status(p, status, warnings)
+    if saved:
+        _record_stock_alerts(p, readings)
+    return saved, warnings
 
 
 def _save_synced(p: Dict[str, Any], row: Dict[str, Any], actor: str,
-                 warnings: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]]]:
+                 warnings: List[Dict[str, Any]],
+                 readings=None) -> Tuple[bool, List[Dict[str, Any]]]:
     # Candidate selection and supplier fetch are minutes apart. Recheck the
     # durable tombstone just before the write, but do not upsert the fetched
     # product snapshot: the owner may have edited its name, price, image or
@@ -1206,10 +1271,16 @@ def _save_synced(p: Dict[str, Any], row: Dict[str, Any], actor: str,
         previous_options = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else {}
         # Supplier observations are deliberately isolated from storefront inventory.
         # A check records status only; the owner controls stock and availability.
-        observed = [max(0, int(v)) for v in (option_changes or {}).values()]
-        if row.get("stock_quantity") is not None or row.get("stock") is not None:
-            observed.append(max(0, int(row.get("stock_quantity") if row.get("stock_quantity") is not None else row.get("stock"))))
-        status = "out_of_stock" if observed and max(observed) == 0 else ("low_stock" if observed and min(observed) <= 9 else "ok")
+        # With raw readings the badge and the email alert share one
+        # derivation (flag-aware, supplier quantities); the buffered
+        # fallback below only serves legacy direct callers/tests.
+        if readings:
+            status = _supplier_status_for_readings(readings)
+        else:
+            observed = [max(0, int(v)) for v in (option_changes or {}).values()]
+            if row.get("stock_quantity") is not None or row.get("stock") is not None:
+                observed.append(max(0, int(row.get("stock_quantity") if row.get("stock_quantity") is not None else row.get("stock"))))
+            status = "out_of_stock" if observed and max(observed) == 0 else ("low_stock" if observed and min(observed) <= 9 else "ok")
         saved = catalog_mod.apply_supplier_status(pid, status, actor=actor)
         action, mirrored = ("updated", True) if saved else ("failed", False)
         # A hard delete won the race after the read above. The atomic helper
@@ -1246,6 +1317,10 @@ def _save_synced(p: Dict[str, Any], row: Dict[str, Any], actor: str,
             _api.invalidate_catalog_cache()
         except Exception:
             pass
+        # Only now — status durably saved, product not deleted mid-check —
+        # queue the owner's low/out email alerts for these readings.
+        if readings:
+            _record_stock_alerts(p, readings)
         return True, warnings
     except Exception as exc:
         warnings.append(_warning(p, "supplier_save_failed", f"Supplier stock was read but saving failed: {exc}"))

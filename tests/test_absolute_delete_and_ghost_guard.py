@@ -124,12 +124,18 @@ def test_a_deleted_id_is_skipped_by_both_the_tick_and_the_nightly_sweep(monkeypa
 class _Recorder:
     """Minimal PostgREST double that records the delete calls it received."""
 
-    def __init__(self, missing=(), rpc_error=None):
+    def __init__(self, missing=(), rpc_error=None, existing_rows=None):
         self.missing = set(missing)
         self.rpc_error = rpc_error
         self.deleted = []
         self.tombstones = []
         self.rpc_calls = []
+        # None preserves the older tests' assumption that every requested ID
+        # had a physical row. Passing a set models the real RPC more closely:
+        # it returns only pre-existing rows while tombstoning every ID.
+        self.existing_rows = (None if existing_rows is None else
+                              {str(pid) for pid in existing_rows})
+        self.deleted_product_ids = set()
 
     def table(self, name):
         rec = self
@@ -142,6 +148,11 @@ class _Recorder:
                             raise RuntimeError(
                                 f'Could not find the table public.{name} (PGRST205)')
                         rec.tombstones.extend(rows)
+                        if name == "deleted_products":
+                            rec.deleted_product_ids.update(
+                                str((row or {}).get("product_id") or "")
+                                for row in rows)
+                            rec.deleted_product_ids.discard("")
                         return type("R", (), {"data": rows})()
                 return _U()
 
@@ -161,9 +172,21 @@ class _Recorder:
             def select(self_inner, cols="*"):
                 class _S:
                     def eq(self_inner2, col, val):
+                        self_inner2._eq = (col, val)
+                        return self_inner2
+
+                    def in_(self_inner2, col, ids):
+                        self_inner2._in = (col, tuple(ids or ()))
                         return self_inner2
 
                     def execute(self_inner2):
+                        if name == "deleted_products":
+                            _col, requested = getattr(
+                                self_inner2, "_in", ("product_id", ()))
+                            rows = [{"product_id": pid}
+                                    for pid in requested
+                                    if pid in rec.deleted_product_ids]
+                            return type("R", (), {"data": rows})()
                         return type("R", (), {"data": []})()
                 return _S()
 
@@ -179,7 +202,15 @@ class _Recorder:
                     raise rec.rpc_error
                 if "deleted_products" in rec.missing:
                     raise RuntimeError("relation public.deleted_products does not exist")
-                return type("Res", (), {"data": list(params["product_ids"])})()
+                requested = [str(pid) for pid in params["product_ids"]]
+                rec.deleted_product_ids.update(requested)
+                if rec.existing_rows is None:
+                    physical = list(requested)
+                else:
+                    physical = [pid for pid in requested
+                                if pid in rec.existing_rows]
+                    rec.existing_rows.difference_update(physical)
+                return type("Res", (), {"data": physical})()
         return _R()
 
 
@@ -226,6 +257,26 @@ def test_a_table_that_does_not_exist_is_skipped_not_failed(monkeypatch):
 
     assert report["deleted"] == ["jau-x-2"]
     assert report["errors"] == []
+
+
+def test_hard_delete_reports_a_rowless_id_as_tombstoned_not_row_deleted(monkeypatch):
+    """A seed-only ID has no products-table row for the RPC to return.
+
+    The RPC still writes its permanent tombstone in the same transaction.
+    The store must expose that distinction instead of forcing callers to
+    choose between a false failure and pretending a row was deleted.
+    """
+    rec = _Recorder(existing_rows={"jau-x-row"})
+    monkeypatch.setattr(sb, "client", lambda: rec)
+    monkeypatch.setattr(sb, "add_deleted_id", lambda pid: True)
+
+    report = sb.hard_delete_products(["jau-x-rowless", "jau-x-row"])
+
+    assert report["deleted"] == ["jau-x-row"]
+    assert report["tombstoned"] == ["jau-x-rowless", "jau-x-row"]
+    assert report["confirmed_gone"] == ["jau-x-rowless", "jau-x-row"]
+    assert report["errors"] == []
+    assert rec.deleted_product_ids == {"jau-x-rowless", "jau-x-row"}
 
 
 def test_a_real_child_table_failure_is_reported_not_swallowed(monkeypatch):
@@ -326,6 +377,23 @@ def test_a_failed_delete_is_never_reported_as_deleted(monkeypatch):
     report = sb.hard_delete_products(["jau-x-6"])
     assert report["deleted"] == []
     assert any("delete" in e for e in report["errors"])
+
+
+def test_the_admin_delete_controls_ask_for_immediate_permanent_deletion():
+    """All owner-facing product Delete controls share one permanent path."""
+    store = open(os.path.join(ROOT, "js", "store.js"), encoding="utf-8").read()
+    admin = open(os.path.join(ROOT, "js", "admin.js"), encoding="utf-8").read()
+
+    assert '"?permanent=1"' in store
+    assert 'label: "Permanently delete"' in store
+    assert 'permanent: true, mode: "permanent"' in store
+    assert "Permanently delete this product" in admin
+    assert "Permanently delete selected" in admin
+    assert "will not go to Trash and cannot be restored" in admin
+    assert "Permanently deleted." in admin
+    assert "Legacy Trash" in admin
+    assert "Moved to the Trash" not in admin
+    assert "moves to the Trash" not in admin
 
 
 # ----------------------------------------------------- the migration itself

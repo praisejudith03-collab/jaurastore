@@ -70,6 +70,30 @@ def _harvest_strings(value, out):
             _harvest_strings(item, out)
 
 
+def _is_referenced(key, referenced):
+    """True when a stored object (or its thumbnail companion) is still used.
+
+    The ``.400w.webp`` companion of a product photo is referenced by NO
+    database row - the storefront derives its URL from the original's.
+    Key equality alone therefore made every companion look orphaned two
+    days after upload, and the nightly sweep deleted the thumbnails of
+    live products. A companion is protected exactly when its parent
+    original (same stem, any image extension) is referenced; a companion
+    whose original is gone stays a candidate, as it should.
+    """
+    for ref in referenced or ():
+        if key == ref or ref.endswith("/" + key) or key.endswith("/" + ref):
+            return True
+    if key.lower().endswith(".400w.webp"):
+        stem = key[: -len(".400w.webp")]
+        for ref in referenced or ():
+            ref_stem, dot, _ext = str(ref).rpartition(".")
+            if dot and (ref_stem == stem or ref_stem.endswith("/" + stem)
+                        or stem.endswith("/" + ref_stem)):
+                return True
+    return False
+
+
 def _age_ok(info, min_age_days):
     """True when an object is old enough to be considered abandoned."""
     if not min_age_days or min_age_days <= 0:
@@ -342,8 +366,7 @@ def build_plan(min_age_days=2, list_objects=None, referenced=None):
         if ext not in MEDIA_EXTS:
             foreign_ext.append(key)          # never touch unknown file types
             continue
-        if any(key == ref or ref.endswith("/" + key) or key.endswith("/" + ref)
-               for ref in referenced):
+        if _is_referenced(key, referenced):
             protected_referenced.append(key)
             continue
         if not _age_ok(info, min_age_days):
@@ -438,8 +461,7 @@ def apply_plan(report=None, min_age_days=2):
     for key in keys:
         if not isinstance(key, str) or ".." in key or key.startswith("/"):
             continue
-        if any(key == ref or ref.endswith("/" + key) or key.endswith("/" + ref)
-               for ref in referenced):
+        if _is_referenced(key, referenced):
             continue                        # it became referenced meanwhile
         try:
             size = _delete_object(key)

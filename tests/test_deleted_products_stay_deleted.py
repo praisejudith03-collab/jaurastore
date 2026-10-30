@@ -287,6 +287,29 @@ def test_remove_prod_source_fails_closed_when_the_rpc_removes_nothing(monkeypatc
     assert soft_calls == [], "no non-atomic REST fallback in the Supabase path"
 
 
+def test_remove_prod_source_accepts_a_verified_tombstone_without_a_row(monkeypatch):
+    """Seed-only products are gone once their no-return tombstone is proved."""
+    pid = "jau-del-rowless"
+    monkeypatch.setattr(catmod, "_prod_source", lambda: True)
+    monkeypatch.setattr(catmod, "_sync_repo_async", lambda: None)
+    mem = _MemGrowth()
+    _wire(monkeypatch, mem)
+    monkeypatch.setattr(
+        supabase_store, "hard_delete_products",
+        lambda ids: {"deleted": [], "tombstoned": list(ids),
+                     "confirmed_gone": list(ids), "files": 0,
+                     "errors": []})
+
+    report = catmod.remove(pid, actor="test")
+
+    assert report["mode"] == "hard"
+    assert report["deleted"] is True
+    assert report["row_deleted"] is False
+    assert report["tombstoned"] is True
+    assert report["errors"] == []
+    assert pid in mem.ids
+
+
 def test_remove_prod_source_reports_cleanup_errors_after_a_real_delete(monkeypatch):
     """The row IS gone: the delete stands, the cleanup failure is surfaced."""
     pid = "jau-del-test-4"

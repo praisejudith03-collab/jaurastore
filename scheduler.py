@@ -127,6 +127,9 @@ _health = {
     "stockGuardrailDisagreements": 0,
     "remindersLastRun": "",
     "supplierLastRun": "",
+    "supplierAlertsLastRun": "",
+    "supplierAlertsSent": 0,
+    "supplierAlertsPending": 0,
     "nightlyLastRun": "",
     "nightlySchedule": "",
     "lastError": "",
@@ -306,6 +309,28 @@ def _supplier_watchdog(logger=None):
     return result
 
 
+def _supplier_stock_alerts(logger=None):
+    """Email queued supplier low/out alerts to the owner (one batch).
+
+    The watchdog itself runs in GitHub Actions and only *queues* alerts
+    in Supabase; this tick is the guaranteed sender because Render holds
+    the live mail credentials. It runs even with
+    SUPPLIER_WATCHDOG_ENABLED=0 — that flag stops supplier *polling* on
+    the web CPU, never owner notification. One small state read per
+    tick, and nothing at all when the queue is empty.
+    """
+    import supplier_alerts
+    result = supplier_alerts.drain_pending_alerts()
+    _health["supplierAlertsLastRun"] = _utc_now()
+    _health["supplierAlertsPending"] = int(result.get("pending") or 0)
+    if result.get("sent"):
+        _health["supplierAlertsSent"] = int(_health.get("supplierAlertsSent") or 0) \
+            + int(result.get("count") or 0)
+        if logger:
+            logger.info("supplier stock alerts emailed: %s item(s)", result.get("count"))
+    return result
+
+
 def _stock_guardrail(logger=None):
     """Keep every stored row's quantities consistent with what the shop serves.
 
@@ -360,6 +385,10 @@ def _maintenance_tick(logger=None):
         _step("scheduler.nightly", lambda: _nightly_run(logger), logger)
     else:
         _step("supplier.watchdog", lambda: _supplier_watchdog(logger), logger)
+    # Owner email for supplier low/out transitions queued by the watchdog
+    # (GitHub Actions or the batch above). Independent of the polling
+    # flag: notification must work while polling stays off Render.
+    _step("supplier.stock_alerts", lambda: _supplier_stock_alerts(logger), logger)
     # After the supplier batch, so a supplier-side quantity that landed this
     # tick is reconciled in the same pass instead of the next one.
     _step("stock.guardrail", lambda: _stock_guardrail(logger), logger)

@@ -42,6 +42,10 @@ REQUIRED_TABLES = (
     "search_queries",
     "analytics_counters",
     "job_failures",
+    # Schema section 21: category deletion fails closed (503 in Admin)
+    # until this tombstone ledger exists, so it is verified like any
+    # other required table instead of surprising the owner at delete time.
+    "deleted_categories",
 )
 
 # The columns each table must answer for. Requesting them is the check: if one
@@ -71,6 +75,7 @@ REQUIRED_COLUMNS = {
     "analytics_counters": ("name", "value", "updated_at"),
     "job_failures": ("job", "worker", "payload_id", "error_type", "message",
                      "traceback", "rss_mb", "attempt", "host", "at"),
+    "deleted_categories": ("category_id", "deleted_at"),
 }
 
 # Constraints that a column probe cannot see. Verified against the SQL file,

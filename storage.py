@@ -1013,7 +1013,21 @@ def signed_url_for(value: str) -> str:
         if c is None:
             return value
         if not _object_in_bucket(c, bucket, path):
-            return value
+            # The stored URL names the bucket the object was uploaded to,
+            # but the storage repair (tools/repair_supabase_storage.py)
+            # moves legacy proofs from uploads/proofs/ into the private
+            # receipts bucket. A row whose file_url rewrite was missed
+            # would otherwise hand the admin its expired token forever -
+            # a permanent file wearing a dead link. The object key is
+            # identical in both buckets, so check the other one before
+            # giving up and sign from wherever the file actually lives.
+            other = "receipts" if bucket != "receipts" else supabase_store._bucket()
+            if other == bucket or not _object_in_bucket(c, other, path):
+                return value
+            bucket = other
+            cached = _signed_cache_get(bucket, path)
+            if cached:
+                return cached
         res = c.storage.from_(bucket).create_signed_url(path, SIGNED_URL_TTL_SECONDS)
         url = res.get("signedUrl") if isinstance(res, dict) else getattr(res, "signedUrl", "")
         if not url:

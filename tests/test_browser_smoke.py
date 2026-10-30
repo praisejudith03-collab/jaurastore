@@ -695,9 +695,11 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     mobile.locator('[data-tab="products"]:visible').first.click()
     mobile.locator('#add-product').click()
     mobile.locator('#prod-form [name="name"]').fill('Perfume browser sample')
-    # The create/edit form intentionally has one product title field; legacy
-    # per-language product metadata was removed from the simplified editor.
-    expect(mobile.locator('#prod-form [name="nameFr"]')).to_have_count(0)
+    # Owner directive (this session, reversing 2026-10-19): the editor has a
+    # dedicated manual French title box so Admin-created products - every
+    # perfume - can carry the owner's exact French name.
+    expect(mobile.locator('#prod-form [name="nameFr"]')).to_have_count(1)
+    mobile.locator('#prod-form [name="nameFr"]').fill('Échantillon de parfum')
     mobile.locator('#prod-form [name="priceNgn"]').fill('4000')
     mobile.locator('#prod-form [name="category"]').select_option('perfume')
     from pathlib import Path
@@ -716,9 +718,10 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
     # carries a language onto the rest of that browsing session.
     mobile.evaluate("I18N.setLang('fr')")
     mobile.wait_for_timeout(500)
-    # A product created through the streamlined editor has one canonical title;
-    # French storefronts use that title when no optional legacy translation exists.
-    expect(mobile.locator('[data-shop-grid]')).to_contain_text('Perfume browser sample')
+    # The owner-typed French title is what a French storefront shows for a
+    # product created through the editor (English remains the fallback only
+    # when the French box is left blank).
+    expect(mobile.locator('[data-shop-grid]')).to_contain_text('Échantillon de parfum')
     expect(mobile.locator('[data-shop-title]').last).to_have_text('Parfum')
     mobile.goto(live_shop + '/categories.html?lang=fr')
     expect(mobile.locator('[data-cat-list] a').first).to_have_attribute('href', 'shop.html?cat=perfume')
@@ -728,6 +731,7 @@ def test_owner_category_creation_product_and_reordering(mobile, live_shop):
         assert fresh.get('/api/categories').json['categories'][0]['id'] == 'perfume'
         products = fresh.get('/api/catalog').json['products']
     assert any(p['category'] == 'perfume' and p['name'] == 'Perfume browser sample'
+               and p.get('nameFr') == 'Échantillon de parfum'
                for p in products)
 
 

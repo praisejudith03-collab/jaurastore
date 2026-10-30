@@ -1441,9 +1441,18 @@ def hard_delete_products(ids):
     untouched. The follow-up child sweep clears historical orphan rows that
     could not be attached to a foreign key during migration.
 
-    Returns {"deleted": [ids], "files": n, "errors": [str]}. Never raises.
+    Returns {"deleted": [ids], "tombstoned": [ids],
+    "confirmed_gone": [ids], "files": n, "errors": [str]}. Never raises.
+
+    ``deleted`` remains deliberately narrow: it contains only IDs whose
+    physical products-table rows were removed by the RPC. A seed-only or
+    otherwise rowless ID can still be permanently gone because the same RPC
+    writes its no-return tombstone; those IDs are verified below and reported
+    in ``tombstoned``/``confirmed_gone`` instead of being misreported as rows
+    that never existed.
     """
-    report = {"deleted": [], "files": 0, "errors": []}
+    report = {"deleted": [], "tombstoned": [], "confirmed_gone": [],
+              "files": 0, "errors": []}
     ids = [str(i or "").strip() for i in (ids or []) if str(i or "").strip()]
     if not ids:
         return report
@@ -1497,6 +1506,46 @@ def hard_delete_products(ids):
                 report["errors"].append(f"tombstone mirror {pid}: write was not confirmed")
         except Exception as exc:
             report["errors"].append(f"tombstone mirror {pid}: {exc}")
+
+    # The RPC returns only IDs that had a physical row, but it tombstones
+    # every requested ID in the same transaction. Verify that distinction
+    # explicitly for rowless IDs: callers may treat a verified ledger row as
+    # proof that the product is permanently gone, but must never have to
+    # pretend a physical row was deleted.
+    physically_deleted = set(deleted_ids)
+    verified_tombstones = set(physically_deleted)
+    rowless_ids = []
+    seen_rowless = set()
+    for pid in ids:
+        if pid not in physically_deleted and pid not in seen_rowless:
+            seen_rowless.add(pid)
+            rowless_ids.append(pid)
+    if rowless_ids:
+        try:
+            res = (c.table(HARD_DELETED_PRODUCTS_TABLE)
+                   .select("product_id")
+                   .in_("product_id", rowless_ids)
+                   .execute())
+            verified_rows = {
+                str((row or {}).get("product_id") or "").strip()
+                for row in _res_data(res)
+            }
+            verified_rows.discard("")
+            verified_tombstones.update(verified_rows & set(rowless_ids))
+            for pid in rowless_ids:
+                if pid not in verified_rows:
+                    report["errors"].append(
+                        f"tombstone verify {pid}: ledger row was not returned")
+        except Exception as exc:
+            report["errors"].append(f"tombstone verify: {exc}")
+    confirmed_gone = []
+    seen_confirmed = set()
+    for pid in ids:
+        if pid in verified_tombstones and pid not in seen_confirmed:
+            seen_confirmed.add(pid)
+            confirmed_gone.append(pid)
+    report["tombstoned"] = list(confirmed_gone)
+    report["confirmed_gone"] = list(confirmed_gone)
 
     # 4. Clear historical orphans as well as the rows cascaded by the RPC.
     report["errors"].extend(_purge_product_children(c, ids))
@@ -2837,6 +2886,49 @@ def _warn_missing_product_columns(dropped):
         save_supplier_sync_warnings(warnings)
     except Exception as exc:                        # pragma: no cover - defensive
         print(f"[supabase] schema warning record failed: {exc}")
+
+
+SUPPLIER_STOCK_ALERT_STATE_KEY = "supplier_stock_alert_state_json"
+
+
+def load_supplier_stock_alert_state():
+    """The supplier stock-alert ledger (dict), {} when absent, None on failure.
+
+    None is load-bearing: supplier_alerts treats an unreadable ledger as
+    "skip this run", never as "empty" — otherwise every known supplier
+    problem would be emailed again the moment reads recover.
+    """
+    c = client()
+    if c is None:
+        return None
+    try:
+        rows = _res_data(c.table("growth_settings").select("value")
+                         .eq("key", SUPPLIER_STOCK_ALERT_STATE_KEY).limit(1).execute()) or []
+        if not rows:
+            return {}
+        raw = rows[0].get("value")
+        value = json.loads(raw) if isinstance(raw, str) and raw else raw
+        return value if isinstance(value, dict) else {}
+    except Exception as exc:
+        print(f"[supabase] supplier stock alert state read failed: {exc}")
+        return None
+
+
+def save_supplier_stock_alert_state(state):
+    """Strictly persist the supplier stock-alert ledger; True once confirmed."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table("growth_settings").upsert({
+            "key": SUPPLIER_STOCK_ALERT_STATE_KEY,
+            "value": json.dumps(dict(state or {}), ensure_ascii=False,
+                                separators=(",", ":")),
+        }).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] supplier stock alert state save failed: {exc}")
+        return False
 
 
 def load_supplier_sync_warnings():
