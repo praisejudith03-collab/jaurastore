@@ -59,7 +59,7 @@ def low_stock_threshold():
     return max(0, min(10 ** 6, value))
 
 
-def level_for(qty, flagged=False):
+def level_for(qty, flagged=False, shop_stock=None):
     """Classify one supplier reading: ``"ok"`` / ``"low"`` / ``"out"`` / None.
 
     A bare availability flag (the supplier page only says "In stock") is
@@ -77,12 +77,17 @@ def level_for(qty, flagged=False):
         return None
     if units <= 0:
         return "out"
+    if shop_stock is not None:
+        try:
+            return "low" if units < int(float(shop_stock)) else "ok"
+        except (TypeError, ValueError, OverflowError):
+            return None
     if units <= low_stock_threshold():
         return "low"
     return "ok"
 
 
-def supplier_status_for(readings):
+def supplier_status_for(readings, shop_stock=None, option_stock=None):
     """The admin ``supplier_status`` badge for a set of readings.
 
     ``readings`` is an iterable of ``(option, qty, flagged)``. All
@@ -91,7 +96,8 @@ def supplier_status_for(readings):
     watchdog uses for both the badge and the email alert, so the two can
     never disagree about what "low" means.
     """
-    levels = [level_for(qty, flagged) for _option, qty, flagged in (readings or [])]
+    levels = [level_for(qty, flagged, (option_stock or {}).get(option) if option else shop_stock)
+              for option, qty, flagged in (readings or [])]
     levels = [level for level in levels if level]
     if not levels:
         return "ok"
@@ -176,7 +182,7 @@ def apply_observations(state, observations, now=None):
         pid = str(obs.get("product_id") or "").strip()
         if not pid:
             continue
-        level = level_for(obs.get("supplier_qty"), bool(obs.get("flagged")))
+        level = level_for(obs.get("supplier_qty"), bool(obs.get("flagged")), obs.get("shop_stock"))
         if level is None:
             continue
         key = _entry_key(pid, obs.get("option"))

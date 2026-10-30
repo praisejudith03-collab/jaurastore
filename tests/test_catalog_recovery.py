@@ -328,7 +328,7 @@ def test_supplier_alerts_carry_everything_the_tab_renders(client, monkeypatch):
     assert set(alerts) == {"p-out", "p-low"}          # 'ok' rows are not alerts
     assert alerts["p-out"]["priceNgn"] == 12000
     assert alerts["p-out"]["supplierUrl"].startswith("https://supplier.example/")
-    assert alerts["p-low"]["storeOutOfStock"] is True
+    assert alerts["p-low"]["storeOutOfStock"] is False
     assert body["counts"] == {"total": 2, "outOfStock": 1, "lowStock": 1, "hidden": 1}
 
 
@@ -584,7 +584,7 @@ def test_admin_pages_always_fall_back_to_the_branded_placeholder():
 
 def test_supplier_alerts_tab_and_walkin_modal_render_the_required_controls():
     admin = (ROOT / "js" / "admin.js").read_text()
-    assert "Supplier Alerts" in admin
+    assert "Supplier Stock Alerts" in admin
     assert "Toggle Out of Stock" in admin
     assert "Open supplier listing" in admin
     # Walk-in sale: the five required fields, no email/phone requirement.
@@ -621,3 +621,18 @@ def test_google_refresh_refuses_cleanly_without_credentials(monkeypatch):
     report = google_sheets.refresh_connection()
     assert report["ok"] is False
     assert "GOOGLE_CLIENT_ID" in report["error"]
+
+
+def test_supplier_alert_action_sets_absolute_zero_and_invalidates(client, monkeypatch):
+    import api
+    _login(client)
+    calls = []
+    monkeypatch.setattr(catalog, 'set_variant_stock',
+                        lambda pid, qty, actor=None: calls.append((pid, qty)) or {'stock': 0})
+    monkeypatch.setattr(api, '_invalidate_all_catalog_caches', lambda: calls.append('invalidate'))
+    token = client.get('/api/admin/session').get_json()['csrf']
+    result = client.post('/api/admin/supplier-alerts/p1/toggle-out-of-stock', json={},
+                         headers={'X-CSRF-Token': token})
+    assert result.status_code == 200
+    assert result.get_json()['stock'] == 0
+    assert calls == [('p1', 0), 'invalidate']
