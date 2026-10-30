@@ -166,20 +166,18 @@ def test_option_compare_at_is_an_allowed_field():
     assert "optionCompareAt" in catalog_mod.BASE_FIELDS
 
 
-def test_whatsapp_copy_details_caption_is_three_lines_no_url_no_stock_label():
-    """The one-tap "Copy Details" caption carries EXACTLY: bilingual name,
-    both prices, and colours/options (when present) - never a website URL
-    and never an 'In stock'/'Out of stock' label."""
+def test_whatsapp_copy_details_caption_includes_url_no_stock_label():
+    """The one-tap caption includes the link without a stock label."""
     admin_js = (ROOT and open(os.path.join(ROOT, "js", "admin.js"),
                               encoding="utf-8").read())
-    # broadcastFullText assembles name, ₦/CFA prices, and options only.
+    # broadcastFullText assembles name, prices, options and product link.
     match = re.search(r"function broadcastFullText\(p\)\s*\{", admin_js)
     assert match
     body = admin_js[match.start():admin_js.index("\n}\n", match.start())]
     assert "broadcastDisplayName(p)" in body
     assert "broadcastPriceLine(p)" in body
     assert "broadcastOptionsLine(p)" in body
-    assert "broadcastProductUrl(p)" not in body
+    assert "broadcastProductUrl(p)" in body
     # Availability is a share-time gate, never a caption label.
     assert "In stock" not in body and "Out of stock" not in body
     assert "broadcastStockLine" not in admin_js

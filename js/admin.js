@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=230" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=234" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -629,13 +629,22 @@ function bindMedia() {
       if (queued) JA.toast("Photo uploaded to storage, not saved to the product yet. Press Save Product to apply it.");
       return true;
     };
-    const res = await photoSlot(() => window.JA_NET.api(endpoint, {
-      method: "POST", blob: payload, field: "file", filename,
-      queue: true, timeout: isVideo ? 300000 : 45000, label: isVideo ? "Video" : "Photo",
-      onDone: (data) => {
-        if (data && data.url) acceptUploadedUrl(data.url, true);
-      },
-    }));
+    let res;
+    try {
+      res = await photoSlot(() => window.JA_NET.api(endpoint, {
+        method: "POST", blob: payload, field: "file", filename,
+        queue: true, timeout: isVideo ? 300000 : 45000, label: isVideo ? "Video" : "Photo",
+        onDone: (data) => {
+          if (data && data.url) acceptUploadedUrl(data.url, true);
+        },
+      }));
+    } catch (error) {
+      const at = entryAt();
+      if (at >= 0) window.__editImages[at] = { pending: true, preview, video: isVideo, failed: true };
+      showUploadError(box, uploadErrorMessage(error, "That file did not upload. Please try again."));
+      paintMedia(box);
+      return;
+    }
     if (res && res.url) {
       if (acceptUploadedUrl(res.url, false)) {
         const compressionNote = !isVideo && squeezed && squeezed.compressed
@@ -2488,13 +2497,13 @@ function orderCardHTML(o) {
 }
 let orderFilter = "all";
 function supplierAlertsPanel() {
-  return `<div class="admin-card"><div class="an-top" style="margin-bottom:6px"><div><h2 class="admin-h" style="margin:0">Supplier Alerts</h2><p class="admin-note" style="margin:6px 0 0">Background supplier checks are diagnostic only. They write a status badge into an isolated field and can never hide, delete or unpublish a product — the storefront changes only when you press the toggle.</p></div><button type="button" class="btn btn-line" id="supplier-alerts-refresh">Refresh</button></div><div class="stats" id="supplier-alerts-summary"></div><div id="supplier-alerts-list"><p class="empty">Loading supplier alerts…</p></div></div>`;
+  return `<div class="admin-card"><div class="an-top" style="margin-bottom:6px"><div><h2 class="admin-h" style="margin:0">Supplier Stock Alerts</h2><p class="admin-note" style="margin:6px 0 0">Background supplier checks are diagnostic only. They write a status badge into an isolated field and can never hide, delete or unpublish a product — the storefront changes only when you press the toggle.</p></div><button type="button" class="btn btn-line" id="supplier-alerts-refresh">Refresh</button></div><div class="stats" id="supplier-alerts-summary"></div><div id="supplier-alerts-list"><p class="empty">Loading supplier alerts…</p></div></div>`;
 }
 
 /** One flagged product: card details, supplier badge, direct link, 1-click toggle. */
 function supplierAlertCardHTML(p) {
   const out = p.status === "out_of_stock";
-  const badge = out ? "Supplier out of stock" : "Supplier low stock";
+  const badge = out ? "Supplier Out of Stock" : "Supplier Stock Low";
   const price = [Number(p.priceNgn) > 0 ? JA.money(Number(p.priceNgn), "NGN") : "",
                  Number(p.priceCfa) > 0 ? JA.money(Number(p.priceCfa), "CFA") : ""]
     .filter(Boolean).join(" · ");
@@ -2507,8 +2516,8 @@ function supplierAlertCardHTML(p) {
     + `<div style="flex:1;min-width:180px"><strong>${esc(p.name || p.id)}</strong>`
     + `<div class="admin-note">${esc([price, stockLine].filter(Boolean).join(" · "))}</div>`
     + `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><span class="adx-badge ${out ? "is-out" : "is-low"}">${esc(badge)}</span>`
-    + `<span class="adx-badge ${p.storeOutOfStock ? "is-out" : "is-ok"}">${p.storeOutOfStock ? "Hidden from shop" : "On sale"}</span>${link}</div></div>`
-    + `<button type="button" class="btn ${p.storeOutOfStock ? "btn-line" : ""}" data-supplier-toggle="${esc(p.id)}">${p.storeOutOfStock ? "Put Back in Stock" : "Toggle Out of Stock"}</button>`
+    + `<span class="adx-badge ${p.storeOutOfStock ? "is-out" : "is-ok"}">${p.storeOutOfStock ? "Out of stock" : "Stock available"}</span>${link}</div></div>`
+    + `<button type="button" class="btn ${p.storeOutOfStock ? "btn-line" : ""}" data-supplier-toggle="${esc(p.id)}"${p.storeOutOfStock ? " disabled" : ""}>${p.storeOutOfStock ? "Stock is zero — edit product to restock" : "Toggle Out of Stock"}</button>`
     + `</article>`;
 }
 
@@ -2528,7 +2537,7 @@ async function fillSupplierAlerts() {
       ["Supplier alerts", rows.length, "flagged links"],
       ["Out of stock", outCount, "supplier says none"],
       ["Low stock", lowCount, "supplier says few"],
-      ["Hidden from shop", hidden, "by your manual toggle"],
+      ["Out of stock in shop", hidden, "shop inventory is zero"],
     ].map(([k, v, s]) => `<div class="stat"><span class="kicker">${esc(k)}</span><b>${esc(String(v))}</b>${s ? `<i>${esc(s)}</i>` : ""}</div>`).join("");
     box.innerHTML = rows.length
       ? rows.map(supplierAlertCardHTML).join("")
@@ -4050,8 +4059,15 @@ function broadcastOptionsLine(p) {
     }
   });
   const bits = [];
-  if (names.length) bits.push(`Colours: ${names.slice(0, 6).join(", ")}`);
-  if (sizes.length) bits.push(`Sizes: ${sizes.slice(0, 8).join(", ")}`);
+  if (names.length) {
+    const translations = window.I18N_OPTION_VALUES || {};
+    const bilingual = names.slice(0, 6).map((name) => {
+      const fr = translations[name] || translations[name.toLowerCase()] || "";
+      return fr && fr.toLowerCase() !== name.toLowerCase() ? `${name} / ${fr}` : name;
+    });
+    bits.push(`Colours / Couleurs: ${bilingual.join(", ")}`);
+  }
+  if (sizes.length) bits.push(`Sizes / Tailles: ${sizes.slice(0, 8).join(", ")}`);
   return bits.join(" · ");
 }
 function broadcastFullText(p) {
@@ -4062,6 +4078,7 @@ function broadcastFullText(p) {
   const lines = [broadcastDisplayName(p), broadcastPriceLine(p)];
   const options = broadcastOptionsLine(p);
   if (options) lines.push(options);
+  lines.push(broadcastProductUrl(p));
   return lines.join("\n");
 }
 
@@ -4930,7 +4947,7 @@ async function fillSalesInsights() {
     };
   });
 }
-const TAB_TITLES = { analytics: "Dashboard", products: "Products", orders: "Orders", sales: "Sales", marketing: "Marketing", supplierAlerts: "Supplier Alerts", categories: "Categories", delivery: "Delivery", settings: "Settings", account: "Account", };
+const TAB_TITLES = { analytics: "Dashboard", products: "Products", orders: "Orders", sales: "Sales", marketing: "Marketing", supplierAlerts: "Supplier Stock Alerts", categories: "Categories", delivery: "Delivery", settings: "Settings", account: "Account", };
 // The pinned bottom dock carries the five primary sections (owner directive
 // 2026-09-12: Dashboard, Products, Orders, Sales, Marketing — the storefront
 // dock shape). Every other section stays one tap away behind the "More"
@@ -5017,7 +5034,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=230" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=234" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5339,8 +5356,8 @@ function bindCategories() {
     const card = input.closest("[data-cat-i]"); const pic = card?.querySelector(".au-cat-pic");
     // Category covers get the same browser-side squeeze as product photos
     // (1200px WebP/JPEG); documents and videos pass through untouched.
-    const squeezed = await compressImageFile(f);
     try {
+      const squeezed = await compressImageFile(f);
       if (window.JA_NET) {
         const res = await window.JA_NET.api("api/admin/uploads/category", { method: "POST", blob: squeezed.blob || f, field: "file", filename: squeezed.filename || f.name || "category.jpg", timeout: 300000, label: "Category asset", });
         if (res && res.url) {
@@ -5424,7 +5441,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=230", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=234", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");

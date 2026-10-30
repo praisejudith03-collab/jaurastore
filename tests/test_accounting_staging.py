@@ -373,3 +373,35 @@ def test_push_orders_upsert_by_order_id_never_duplicates(monkeypatch):
     put_calls = [c for c in seen["calls"] if c[0] == "PUT" and "/values/" in c[1]
                  and ":append" not in c[1]]
     assert put_calls, "an existing order id must be updated in place"
+
+
+def test_mixed_push_5000_transport_sends_numeric_rows_and_archives(client, monkeypatch):
+    csrf = csrf_of(client)
+    add_pending(ORDER_IDS[0], 'NGN', 10000, 'Ada', '2026-10-01T09:00:00Z')
+    add_pending(ORDER_IDS[2], 'CFA', 20000, 'Koffi', '2026-10-02T09:00:00Z')
+    captured = []
+    def push(orders, **kwargs):
+        for order in orders:
+            row = google_sheets._order_row(order, include_net=True)
+            json.dumps(row, allow_nan=False)
+            assert isinstance(row[7], int)
+            captured.append((accounting_mod.order_currency(order), row))
+        return {cur: {'count': 1, 'tab': cur, 'spreadsheetId': 'sb'} for cur in ('NGN', 'CFA')}
+    monkeypatch.setattr(google_sheets, 'push_orders', push)
+    response = client.post('/api/admin/accounting/push', headers={'X-CSRF-Token': csrf},
+        json={'orderIds': [ORDER_IDS[0], ORDER_IDS[2]], 'batchTransportFeeNgn': '5,000'})
+    assert response.status_code == 200, response.data
+    assert len(captured) == 2
+    assert {b['currency'] for b in response.get_json()['batches']} == {'NGN', 'CFA'}
+    assert client.get('/api/admin/accounting').get_json()['entries'] == []
+
+
+def test_partial_sheet_report_never_archives(client, monkeypatch):
+    csrf = csrf_of(client)
+    add_pending(ORDER_IDS[0], 'NGN', 10000, 'Ada', '2026-10-01T09:00:00Z')
+    add_pending(ORDER_IDS[2], 'CFA', 20000, 'Koffi', '2026-10-02T09:00:00Z')
+    monkeypatch.setattr(google_sheets, 'push_orders', lambda *args, **kwargs: {'NGN': {'count': 1}})
+    response = client.post('/api/admin/accounting/push', headers={'X-CSRF-Token': csrf},
+        json={'orderIds': [ORDER_IDS[0], ORDER_IDS[2]], 'batchTransportFeeNgn': 5000})
+    assert response.status_code == 502
+    assert len(client.get('/api/admin/accounting').get_json()['entries']) == 2

@@ -229,7 +229,7 @@
     "badge": "",
     "featured": true,
     "colors": [],
-    "nameFr": "24 k nicotinamide toner 300 ml",
+    "nameFr": "Lotion tonique à la nicotinamide 24 K, 300 ml",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
     "descriptionFr": "Vise à lutter contre le vieillissement, à nourrir et à raffermir la peau."
@@ -980,7 +980,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Ashake gown",
+    "nameFr": "Robe Ashake",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg",
     "descriptionFr": "Confectionnée dans de beaux tissus imprimés de haute qualité. Haut et pantalon fumés. Tailles pour toutes les morphologies.\nRemarque : l'imprimé exact peut différer de la photo ; nous sélectionnons les meilleures options et vous les partageons toujours avant la livraison."
@@ -1252,7 +1252,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Bioaqua vitamin c brightening essence water",
+    "nameFr": "Eau essence éclat à la vitamine C Bioaqua",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -1272,7 +1272,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Bioaqua vitamin c moisturizing cleanser",
+    "nameFr": "Nettoyant hydratant à la vitamine C Bioaqua",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -1651,7 +1651,7 @@
     "badge": "sale",
     "featured": false,
     "colors": [],
-    "nameFr": "Déodorant à l'huile de coco",
+    "nameFr": "Déodorant à l’huile de coco",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -1709,7 +1709,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Collagen snail serum 30ml",
+    "nameFr": "Sérum au collagène et à la bave d’escargot, 30 ml",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -4424,7 +4424,7 @@
     "badge": "",
     "featured": false,
     "colors": [],
-    "nameFr": "Matturi wristwatch",
+    "nameFr": "Montre-bracelet Matturi",
     "options": [],
     "placeholderImage": "images/products/_placeholder.jpg"
   },
@@ -4885,7 +4885,7 @@
     "badge": "sale",
     "featured": false,
     "colors": [],
-    "nameFr": "Neckpiece",
+    "nameFr": "Collier",
     "options": [
       {
         "title": "Type",

@@ -404,7 +404,7 @@ def _json_request(url, *, method="GET", body=None, headers=None, timeout=HTTP_TI
     request_headers = {"Accept": "application/json", "User-Agent": "JauraStore-Accounting/1.0"}
     request_headers.update(headers or {})
     if body is not None:
-        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        data = json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json; charset=utf-8")
     req = urllib.request.Request(url, data=data, headers=request_headers, method=method)
     try:
@@ -1027,7 +1027,10 @@ def _number(value):
     if isinstance(value, bool) or value is None or str(value).strip() == "":
         return 0
     if isinstance(value, (int, float)):
-        return max(0, int(round(value)))
+        try:
+            return max(0, int(round(value)))
+        except (ValueError, OverflowError):
+            return 0
     text = str(value).strip().replace(",", "")
     match = re.search(r"-?\d+(?:\.\d+)?", text)
     if not match:
@@ -1043,7 +1046,10 @@ def _signed_number(value):
     if isinstance(value, bool) or value is None or str(value).strip() == "":
         return 0
     if isinstance(value, (int, float)):
-        return int(round(value))
+        try:
+            return int(round(value))
+        except (ValueError, OverflowError):
+            return 0
     text = str(value).strip().replace(",", "")
     match = re.search(r"-?\d+(?:\.\d+)?", text)
     if not match:

@@ -4004,6 +4004,19 @@ def admin_accounting_push():
                 "The push did not complete, so nothing was archived. "
                 "Check the Google Sheets connection and retry.")), 502
 
+        # Never archive a mixed batch when a ledger was omitted or only
+        # partially written. Upserts are keyed by order ID, so retry is safe.
+        expected = {currency: sum(1 for entry in entries if entry["currency"] == currency)
+                    for currency in {entry["currency"] for entry in entries}}
+        if not isinstance(report, dict) or set(report) != set(expected) or any(
+            not isinstance(report.get(currency), dict)
+            or report[currency].get("count") != count
+            for currency, count in expected.items()
+        ):
+            return jsonify(ok=False, error=(
+                "Google Sheets did not confirm every order; nothing was archived. "
+                "Retry the push.")), 502
+
         now = _utcnow()
         actor = authmod.current_admin()
         currencies_pushed = {entry["currency"] for entry in entries}
@@ -6347,7 +6360,7 @@ def admin_supplier_alerts():
                        "stock": catalog_mod.stock_of(row),
                        "status": status,
                        "online": row.get("online") is not False,
-                       "storeOutOfStock": catalog_mod.is_stock_locked(row.get("id"))})
+                       "storeOutOfStock": catalog_mod.stock_of(row) == 0})
     alerts.sort(key=lambda a: (a["status"] != "out_of_stock", str(a["name"]).lower()))
     return jsonify(ok=True, alerts=alerts,
                    counts={"total": len(alerts),
@@ -6363,17 +6376,16 @@ def admin_supplier_alert_toggle(pid):
     pid = sec.clean(pid, 64).strip()
     if not pid:
         return jsonify(ok=False, error="Product id required."), 400
-    if catalog_mod.is_stock_locked(pid):
-        ok = catalog_mod.forget_manual_stock_lock(pid, actor=authmod.current_admin())
-        state = False
-    else:
-        ok = catalog_mod.remember_manual_stock_lock(pid, actor=authmod.current_admin(),
-                                                     why="Supplier Alerts manual toggle")
-        state = True
-    if not ok:
-        return jsonify(ok=False, error="Store availability could not be saved."), 503
+    # This is an absolute stock action, not a reversible visibility switch.
+    # Restocking requires an explicit quantity in the product editor.
+    saved = catalog_mod.set_variant_stock(pid, 0, actor=authmod.current_admin())
+    if saved is None:
+        return jsonify(ok=False, error="Product not found."), 404
+    if not saved:
+        return jsonify(ok=False, error="Store stock could not be saved."), 503
     _invalidate_all_catalog_caches()
-    return jsonify(ok=True, outOfStock=state)
+    return jsonify(ok=True, outOfStock=True, stock=0)
+
 
 
 @api.get("/admin/catalog/health")

@@ -1196,7 +1196,7 @@ def _record_stock_alerts(p: Dict[str, Any], readings) -> None:
         pass
 
 
-def _supplier_status_for_readings(readings) -> str:
+def _supplier_status_for_readings(readings, product=None) -> str:
     """The admin status badge for raw readings (one shared derivation).
 
     A bare "In stock" flag is healthy. It used to be read as out-of-stock
@@ -1205,7 +1205,9 @@ def _supplier_status_for_readings(readings) -> str:
     """
     try:
         import supplier_alerts
-        return supplier_alerts.supplier_status_for(readings)
+        return supplier_alerts.supplier_status_for(readings,
+            shop_stock=(product or {}).get("stock_quantity", (product or {}).get("stock")),
+            option_stock=(product or {}).get("optionStock"))
     except Exception:
         return "ok"
 
@@ -1224,7 +1226,7 @@ def _sync_whole_product(p: Dict[str, Any], supplier_rows: List[Dict[str, Any]],
         warnings.append(_warning(p, "supplier_stock_uncertain", "Stock could not be read with confidence; left unchanged."))
         return False, warnings
     readings = [("", int(qty), bool(row.get("flag")))]
-    status = _supplier_status_for_readings(readings)
+    status = _supplier_status_for_readings(readings, p)
     saved, warnings = _save_supplier_status(p, status, warnings)
     if saved:
         _record_stock_alerts(p, readings)
@@ -1275,7 +1277,7 @@ def _save_synced(p: Dict[str, Any], row: Dict[str, Any], actor: str,
         # derivation (flag-aware, supplier quantities); the buffered
         # fallback below only serves legacy direct callers/tests.
         if readings:
-            status = _supplier_status_for_readings(readings)
+            status = _supplier_status_for_readings(readings, p)
         else:
             observed = [max(0, int(v)) for v in (option_changes or {}).values()]
             if row.get("stock_quantity") is not None or row.get("stock") is not None:
