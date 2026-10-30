@@ -651,3 +651,27 @@ def test_category_delete_migration_is_atomic_idempotent_and_blocks_resurrection(
     with pytest.raises(AssertionError, match="psql exited"):
         run(db, "insert into public.categories(id,name) values ('gone','Resurrected');")
     assert one(db, "select count(*) from public.categories where id='gone'") == "0"
+
+
+def test_category_hard_delete_detaches_products_holding_the_fk(db):
+    """Live error 23503 (2026-10-30): products_category_id_fkey refused to
+    delete 'clothing' while product rows referenced it. The RPC now nulls
+    products.category_id in the same transaction: the category dies, the
+    products survive detached (they keep their free-text slug upstream)."""
+    run(db, """
+        drop table if exists public.products cascade;
+        drop table if exists public.categories cascade;
+        create table public.categories (id text primary key, name text not null);
+        create table public.products (
+          id text primary key,
+          category_id text references public.categories(id)
+        );
+    """)
+    run(db, CATEGORY_SQL_PATH.read_text())
+    run(db, "insert into public.categories(id,name) values ('clothing','Clothing');")
+    run(db, "insert into public.products(id,category_id) values ('wix-108','clothing');")
+    deleted = one(db, "select public.hard_delete_categories(array['clothing'])")
+    assert deleted == "{clothing}"
+    assert one(db, "select count(*) from public.categories where id='clothing'") == "0"
+    assert one(db, "select count(*) from public.deleted_categories where category_id='clothing'") == "1"
+    assert one(db, "select coalesce(category_id,'NULL') from public.products where id='wix-108'") == "NULL"
