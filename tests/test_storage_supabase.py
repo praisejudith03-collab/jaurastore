@@ -515,6 +515,21 @@ def test_signed_url_for_legacy_uploads_proof_is_signed_from_its_real_bucket(fake
     assert "receipts" not in refreshed
 
 
+def test_signed_url_for_heals_a_proof_moved_to_the_receipts_bucket(fake):
+    """Post-repair shape: the storage repair moved the object from
+    uploads/proofs/ into the private receipts bucket, but this row's
+    stored URL still names uploads. The FILE is permanent; only the
+    stored link points at the wrong bucket. Refresh must find the object
+    under the same key in receipts and sign from there instead of handing
+    the admin the expired uploads token forever."""
+    key = "proofs/2025/08/moved-receipt.png"
+    fake.objects.setdefault("receipts", {})[key] = (_png(), "image/png")
+    stale = f"{FAKE_ORIGIN}/storage/v1/object/sign/uploads/{key}?token=old-token"
+    refreshed = storage.signed_url_for(stale)
+    assert refreshed != stale
+    assert f"/storage/v1/object/sign/receipts/{key}" in refreshed
+
+
 def test_signed_url_for_missing_legacy_object_returns_original(fake):
     # object is in neither bucket: never invent a working URL
     legacy = (f"{FAKE_ORIGIN}/storage/v1/object/sign/uploads/"

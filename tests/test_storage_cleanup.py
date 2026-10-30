@@ -108,6 +108,23 @@ def test_referenced_files_are_never_candidates(client, admin, env):
     assert report["delete_candidates"] == ["products/2026/10/dead.jpg"]
 
 
+def test_thumbnail_companion_of_a_live_photo_is_never_a_candidate(client, admin, env):
+    """No DB row references a .400w.webp companion - the storefront derives
+    it from the original - so key equality alone swept live thumbnails
+    two days after upload. The companion is protected exactly while its
+    parent original is referenced; an orphan's companion still goes."""
+    url = _put_file(env, "products/2026/10/live.jpg")
+    _put_file(env, "products/2026/10/live.400w.webp", data=b"thumb")
+    admin({"product": {"id": "jau-clean-thumb", "name": "Thumb Photo Purse",
+                       "sku": "CLN-T", "category": "accessories",
+                       "priceNgn": 9000, "stock": 2, "online": True,
+                       "images": [url]}})
+    _put_file(env, "products/2026/10/dead.400w.webp", data=b"orphan-thumb")
+    report = storage_cleanup.build_plan(min_age_days=2)
+    assert "products/2026/10/live.400w.webp" not in report["delete_candidates"]
+    assert report["delete_candidates"] == ["products/2026/10/dead.400w.webp"]
+
+
 def test_recent_uploads_are_protected_by_the_grace_window(client, admin, env):
     _put_file(env, "products/2026/10/inflight.jpg", age_days=0)   # just landed
     report = storage_cleanup.build_plan(min_age_days=2)
