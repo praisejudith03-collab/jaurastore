@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=229" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=230" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1172,7 +1172,7 @@ function productForm(p = {}) {
       </div>
     </section>
     <button class="btn au-save" type="submit">Save Product</button>
-    ${p.id ? `<button type="button" class="au-del-prod" data-del="${JA.escape(p.id)}">Delete this product</button>` : ""}
+    ${p.id ? `<button type="button" class="au-del-prod" data-del="${JA.escape(p.id)}">Permanently delete this product</button>` : ""}
   </form>`;
 }
 async function handleProductSubmit(e, existing) {
@@ -1671,7 +1671,7 @@ function renderProdGrid() {
       <div class="adx-card-pic"><img src="${JA.asset(p.image || "images/products/_placeholder.jpg")}" alt="${JA.escape(p.name || "")}" loading="lazy" decoding="async" data-ph="${JA.escape(p.placeholderImage || "images/products/_placeholder.jpg")}" onerror="fallbackImg(event)" />${p.badge ? `<span class="adx-ribbon">${JA.escape(p.badge)}</span>` : ""}${p.online === false ? `<span class="adx-hidden-tag">Hidden</span>` : ""}</div>
       <div class="adx-card-body"><div class="adx-card-title"><strong>${JA.escape(p.name)}</strong></div><span class="adx-card-cat">${JA.escape(catName(p.category))}</span><span class="adx-card-price${rangeText ? " adx-price-range" : ""}">${ngnStrike ? `<s>${ngnStrike}</s> ` : ""}${ngn || cfaNow}</span><span class="adx-card-cfa">${ngn && !rangeText ? cfaNow : ""}</span>${pill}${p.online === false ? `<button type="button" class="adx-unhide" data-unhide="${JA.escape(p.id)}">Unhide</button>` : ""}</div>
       <button type="button" class="adx-card-vis${p.online === false ? " is-off" : ""}" data-vis="${JA.escape(p.id)}" aria-label="${(p.online === false ? "Show " : "Hide ") + JA.escape(p.name)}" title="${p.online === false ? "Show on website" : "Hide from website"}"><svg viewBox="0 0 24 24">${p.online === false ? '<path d="M3 3l18 18M10.5 10.7a2.5 2.5 0 003.4 3.4M7 12a7.5 7.5 0 0113.2-2.4M4.5 8.6A10.5 10.5 0 0012 17.5c1.2 0 2.4-.2 3.4-.6M9.9 5.2A10.5 10.5 0 0112 5c2.9 0 5.6 1.4 7.5 3.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>' : '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="#fff" stroke-width="1.6"/>'}</svg></button>
-      <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+      <button type="button" class="adx-card-del" data-del="${JA.escape(p.id)}" aria-label="Permanently delete ${JA.escape(p.name)}" title="Permanently delete"><svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     </article>`;
   }).join("");
   const grid = document.getElementById("prod-grid");
@@ -1769,13 +1769,13 @@ function bindProductBulk() {
     const products = [...selectedProductIds].map((id) => JA.product(id)).filter(Boolean);
     if (!products.length) return;
     if (action === "delete") {
-      if (!confirm(`Delete ${products.length} selected product${products.length === 1 ? "" : "s"}? Customers will no longer see them.`)) return;
+      if (!confirm(`Permanently delete ${products.length} selected product${products.length === 1 ? "" : "s"}? Their records and any unshared photos will be destroyed for good. They will not go to Trash and cannot be restored. Use Hide selected if you only want to remove them from view temporarily.`)) return;
       button.disabled = true;
       const results = await Promise.all(products.map((p) => JA.removeProduct(p.id)));
       button.disabled = false;
       const ok = results.filter((r) => r && r.ok !== false).length;
-      const queued = results.filter((r) => r && r.queued).length;
-      selectedProductIds.clear(); (ok === products.length ? JA.success : JA.toast)(`${ok} product${ok === 1 ? "" : "s"} deleted${queued ? " (files purging in the background)" : ""}${ok < products.length ? ` · ${products.length - ok} failed` : ""}.`);
+      const queued = results.filter((r) => r && r.ok !== false && r.queued).length;
+      selectedProductIds.clear(); (ok === products.length ? JA.success : JA.toast)(`${ok} product${ok === 1 ? "" : "s"} permanently deleted${queued ? " (files purging in the background)" : ""}${ok < products.length ? ` · ${products.length - ok} failed` : ""}.`);
       renderProdGrid(); bindProdGridEvents(); return;
     }
     const online = action === "show";
@@ -1852,18 +1852,16 @@ function bindProdGridEvents() {
   document.querySelectorAll("#prod-grid [data-del]").forEach((b) => {
     b.onclick = async (e) => {
       e.stopPropagation();
-      if (confirm("Delete this product from the website? It moves to the Trash — you can restore it or permanently delete it from there.")) {
+      if (confirm("Permanently delete this product? Its record and any unshared photos will be destroyed for good. It will not go to Trash and cannot be restored. Use Hide if you only want it off the website temporarily.")) {
         const res = await JA.removeProduct(b.dataset.del);
         if (!res || res.ok === false) {
-          JA.toast((res && res.error) || "Could not delete the product. No changes were made.");
+          JA.toast((res && res.error) || "Could not permanently delete the product. No changes were made.");
           renderProdGrid(); bindProdGridEvents();   // the server list is still the truth
           return;
         }
-        JA.success(res.mode === "trash"
-          ? "Moved to the Trash — restore it any time from the Trash button."
-          : res.queued
-            ? "Deleted from the website — photos are purging in the background."
-            : "Deleted from the website.");
+        JA.success(res.queued
+          ? "Permanently deleted — photos are purging in the background."
+          : "Permanently deleted.");
         editingId = null;
         renderProdGrid(); bindProdGridEvents();
         refreshTrashCount();
@@ -1881,7 +1879,7 @@ function productsTable() {
   const catOpts = cats.map((c) => `<option value="${JA.escape(c.id)}" ${activeCategory === c.id ? "selected" : ""}>${JA.escape(c.name)}</option>`).join("");
   const backBtn = dashCat ? `<button type="button" class="btn btn-line" id="back-all-products">← All products</button>` : "";
   const exportBtn = `<a class="btn btn-line" href="api/admin/products.csv" download="jaura-products.csv">Export CSV</a>`;
-  const trashBtn = `<button type="button" class="btn btn-line" id="open-trash" aria-controls="trash-drawer">🗑 Trash <span id="trash-count" class="adx-trash-count" hidden>0</span></button>`;
+  const trashBtn = `<button type="button" class="btn btn-line" id="open-trash" aria-controls="trash-drawer">🗑 Legacy Trash <span id="trash-count" class="adx-trash-count" hidden>0</span></button>`;
   const filteredNote = activeCategory ? ` · <strong>${JA.escape(catName(activeCategory))}</strong>` : "";
   const qVal = JA.escape(prodSearchQ);
   const liveCount = all.filter((p) => p.online !== false).length;
@@ -1901,7 +1899,7 @@ function productsTable() {
         <select id="prod-cat" aria-label="Filter by category"><option value="">All categories</option>${catOpts}</select>
         <label class="adx-select-all"><input type="checkbox" id="products-select-visible" /> Select visible</label>
       </div>
-      <div class="adx-bulkbar" id="product-bulk" hidden><strong><span id="products-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-product-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-product-bulk="show">Show selected</button><button type="button" class="btn btn-line" data-product-bulk="hide">Hide selected</button><button type="button" class="btn btn-line btn-danger" data-product-bulk="delete">Delete selected</button><button type="button" class="au-link-btn" data-product-bulk="clear">Clear selection</button></div>
+      <div class="adx-bulkbar" id="product-bulk" hidden><strong><span id="products-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-product-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-product-bulk="show">Show selected</button><button type="button" class="btn btn-line" data-product-bulk="hide">Hide selected</button><button type="button" class="btn btn-line btn-danger" data-product-bulk="delete">Permanently delete selected</button><button type="button" class="au-link-btn" data-product-bulk="clear">Clear selection</button></div>
       <p class="adx-count"><b><span id="prod-count-all">${all.length}</span> Products</b>: <span id="prod-count-live">${liveCount}</span> Active, <button type="button" class="au-cats-link" data-prod-view="hidden"><span id="prod-count-hidden">${hiddenCount}</span> Hidden</button> · <span id="prod-count">${all.length}</span> shown${filteredNote} · <button type="button" class="au-cats-link" data-tab="categories">Manage categories</button></p>
     </div>
     <div class="adx-trash-drawer" id="trash-drawer" hidden></div>
@@ -1911,10 +1909,11 @@ function productsTable() {
 }
 
 /* ------------------------------------------------------------------ *
- * The Trash / Recycler (owner request 2026-10-07). Deleted products move
- * here instead of vanishing: they are excluded from every active listing
- * (so counts never inflate), and each one can be restored intact or
- * permanently purged by hand.
+ * The legacy Trash / Recycler. Products deleted before the owner switched
+ * the main Delete controls to immediate permanent deletion may still be
+ * waiting here. They remain excluded from every active listing (so counts
+ * never inflate), and each one can be restored intact or permanently
+ * purged by hand. New product deletions never arrive here.
  * ------------------------------------------------------------------ */
 async function refreshTrashCount() {
   const badge = $("#trash-count");
@@ -1951,13 +1950,13 @@ async function renderTrashDrawer() {
   }
   const rows = data.items || [];
   if (!rows.length) {
-    drawer.innerHTML = `<p class="empty">The Trash is empty. Deleted products wait here — excluded from the shop and from the inventory counts — until you restore or permanently delete them.</p>`;
+    drawer.innerHTML = `<p class="empty">The Legacy Trash is empty. Only products deleted before immediate permanent deletion was enabled can appear here; new product deletions are permanent and never come to Trash.</p>`;
     return;
   }
   drawer.innerHTML = `
     <div class="adx-trash-head">
-      <strong>Trash / Recycler — ${rows.length} item${rows.length === 1 ? "" : "s"}</strong>
-      <span>Deleted products are excluded from the storefront, search and inventory counts. Restore brings a piece back exactly as it was; Permanently Delete purges it forever.</span>
+      <strong>Legacy Trash / Recycler — ${rows.length} item${rows.length === 1 ? "" : "s"}</strong>
+      <span>These older deleted products are excluded from the storefront, search and inventory counts. Restore brings one back exactly as it was; Permanently Delete purges it forever. New deletions from the product list are permanent immediately and do not come here.</span>
     </div>
     <div class="adx-trash-grid">${rows.map((row) => `
       <article class="adx-trash-card">
@@ -5018,7 +5017,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=229" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=230" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5108,19 +5107,19 @@ function paintDesk(tab = "analytics") {
     // rows and gallery strip, which are re-rendered as the admin types.
     form.addEventListener("input", (e) => trackEditedField(e.target), true);
     form.addEventListener("change", (e) => trackEditedField(e.target), true);
-    // "Delete this product" inside the editor: clear the Tombstone FIRST so
-    // a failed delete is never reported as done.
+    // "Permanently delete this product" inside the editor: clear the
+    // Tombstone FIRST so a failed delete is never reported as done.
     $(".au-del-prod", form)?.addEventListener("click", async () => {
       const pid = String(editingId || "");
-      if (!pid || pid === "new" || !confirm("Delete this product from the website? Customers will not see it.")) return;
+      if (!pid || pid === "new" || !confirm("Permanently delete this product? Its record and any unshared photos will be destroyed for good. It will not go to Trash and cannot be restored. Use Hide/Show if you only want to change its visibility temporarily.")) return;
       const res = await JA.removeProduct(pid);
       if (!res || res.ok === false) {
-        JA.toast((res && res.error) || "Could not delete the product. No changes were made.");
+        JA.toast((res && res.error) || "Could not permanently delete the product. No changes were made.");
         return;
       }
       JA.toast(res.queued
-        ? "Deleted from the website — photos are purged in the background."
-        : "Deleted from the website.");
+        ? "Permanently deleted — photos are purged in the background."
+        : "Permanently deleted.");
       restoreProductsReturn();
     });
   }
@@ -5425,7 +5424,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=229", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=230", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");

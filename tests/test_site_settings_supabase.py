@@ -520,6 +520,46 @@ def test_admin_product_delete_sync_escape_hatch_keeps_the_strict_contract(
     assert body["filesRemoved"] == 2
 
 
+def test_admin_product_permanent_delete_accepts_tombstone_only_confirmation(
+        client, monkeypatch):
+    """``?permanent=1`` succeeds for a rowless product with a proved tombstone."""
+    monkeypatch.setattr(Config, "ENV", "production")
+    monkeypatch.setattr(Config, "SUPABASE_URL", FAKE_ORIGIN)
+    monkeypatch.setattr(Config, "SUPABASE_SERVICE_ROLE_KEY", "fake-service-role")
+    import supabase_store
+
+    monkeypatch.setattr(
+        supabase_store, "hard_delete_products",
+        lambda ids: {"deleted": [], "tombstoned": list(ids),
+                     "confirmed_gone": list(ids), "files": 0,
+                     "errors": ["storage: bucket unreachable"]})
+    tok = _login(client)
+    r = client.delete("/api/admin/products/jau-rowless-cleanup",
+                      headers={"X-CSRF-Token": tok},
+                      query_string={"permanent": "1"})
+    assert r.status_code == 503, r.data
+    body = r.get_json()
+    assert body["ok"] is False
+    assert "permanently tombstoned" in body["error"]
+    assert "product row was removed" not in body["error"].lower()
+
+    monkeypatch.setattr(
+        supabase_store, "hard_delete_products",
+        lambda ids: {"deleted": [], "tombstoned": list(ids),
+                     "confirmed_gone": list(ids), "files": 0,
+                     "errors": []})
+    r = client.delete("/api/admin/products/jau-rowless",
+                      headers={"X-CSRF-Token": tok},
+                      query_string={"permanent": "1"})
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["deleteMode"] == "supabase-hard"
+    assert body["permanent"] is True
+    assert body["rowDeleted"] is False
+    assert body["tombstoned"] is True
+
+
 def test_admin_product_delete_local_mode_is_labelled(client, monkeypatch):
     """Without Supabase as the source of truth the delete says so.
 

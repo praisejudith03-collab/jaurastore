@@ -548,6 +548,8 @@ def test_the_real_rpc_reports_only_ids_that_were_there(migrated, live):
     report = supabase_store.hard_delete_products([real, ghost])
 
     assert report["deleted"] == [real], report
+    assert report["tombstoned"] == [real, ghost], report
+    assert report["confirmed_gone"] == [real, ghost], report
     assert report["errors"] == [], report
     assert migrated.count("products", f"id = '{real}'") == 0
     # both are tombstoned: an id that never existed must not be creatable later

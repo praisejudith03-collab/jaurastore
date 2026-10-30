@@ -5204,6 +5204,9 @@ def _task_product_delete(payload):
     except Exception:
         pass
     return {"id": pid, "deleted": bool(report.get("deleted")),
+            "permanent": bool(report.get("deleted")),
+            "rowDeleted": bool(report.get("row_deleted")),
+            "tombstoned": bool(report.get("tombstoned")),
             "alreadyGone": not report.get("deleted"),
             "filesRemoved": int(report.get("files") or 0),
             "abandonedCartsRemoved": abandoned,
@@ -5826,9 +5829,11 @@ def admin_product_delete(pid):
     until it is restored or permanently deleted.
 
     ``?permanent=1`` (or the legacy ``?sync=1``) skips the trash and runs the
-    original hard delete inline; ``?queued=1`` keeps the old queued hard
-    delete. The runbook behaviour — 200 only when the RPC confirmed the row
-    removed, 503 with the RPC report otherwise — is unchanged for those.
+    original hard delete inline; the Admin UI now uses this mode for every
+    product Delete action. ``?queued=1`` keeps the old queued hard delete.
+    The runbook behaviour remains fail-closed — 200 only when the RPC either
+    confirmed the physical row removed or verified the permanent tombstone
+    for a rowless/seed-only ID, 503 with the RPC report otherwise.
 
     Deleting the products-table row alone is not enough for a seed product:
     catalog.merged() unions the bundled seed rows on every read, so the durable
@@ -6122,13 +6127,15 @@ def _queue_product_delete(pid):
 def _sync_product_delete(pid):
     """The original inline delete: blocks, and never claims work it did not do.
 
-    A Supabase delete that removed nothing, or removed the row but failed a
-    media/tombstone cleanup step, is a 503 with the RPC report - it is never
-    reported as a successful Supabase delete. ``deleteMode`` says which backend
-    did the work: ``"supabase-hard"`` (the atomic RPC removed the row, purged
+    A Supabase delete that neither removed a physical row nor verified the
+    permanent tombstone for a rowless/seed-only ID, or one that did confirm
+    the product gone but failed a media/tombstone cleanup step, is a 503 with
+    the RPC report - it is never reported as a successful Supabase delete.
+    ``deleteMode`` says which backend did the work: ``"supabase-hard"`` (the
+    atomic RPC removed the row or verified its no-return tombstone, purged
     the media and wrote the durable tombstone) or ``"local-only"`` (this
     deployment is not Supabase-authoritative and only the local catalogue
-    changed).
+    changed). ``rowDeleted`` and ``tombstoned`` keep those proofs distinct.
     """
     files_removed = 0
     try:
@@ -6139,19 +6146,31 @@ def _sync_product_delete(pid):
     abandoned_removed = 0
     delete_mode = "local-only"
     notes = []
+    row_deleted = False
+    tombstoned = False
     if catalog_mod._prod_source():
         delete_mode = "supabase-hard"
         from supabase_store import hard_delete_products
         report = hard_delete_products([pid])
         files_removed = int(report.get("files") or 0)
-        if pid not in set(report.get("deleted") or []):
+        row_deleted = pid in {
+            str(x) for x in (report.get("deleted") or [])}
+        tombstoned = pid in {
+            str(x) for x in (report.get("tombstoned") or [])}
+        confirmed_gone = set()
+        for key in ("deleted", "tombstoned", "confirmed_gone"):
+            confirmed_gone.update(
+                str(x) for x in (report.get(key) or []))
+        if pid not in confirmed_gone:
             return jsonify(ok=False, error=(
                 "The product and its media could not be permanently deleted "
                 "from Supabase. No changes were made."), report=report), 503
         if report.get("errors"):
+            outcome = ("The product row was removed" if row_deleted
+                       else "The product was permanently tombstoned")
             return jsonify(ok=False, error=(
-                "The product row was removed, but one or more media/tombstone "
-                "cleanup steps failed. Retry so no media or tombstones are left behind."),
+                f"{outcome}, but one or more media/tombstone cleanup steps "
+                "failed. Retry so no media or tombstones are left behind."),
                 report=report), 503
         catalog_mod.hide_now(pid, authmod.current_admin())
         abandoned_removed = _purge_local_abandoned_carts_for_product(pid, product_name_for_purge)
@@ -6164,6 +6183,8 @@ def _sync_product_delete(pid):
             return jsonify(ok=False, error=(
                 "The product could not be removed from the local catalogue. "
                 "No changes were made."), report=report), 503
+        row_deleted = bool(report.get("row_deleted", report.get("deleted")))
+        tombstoned = bool(report.get("tombstoned"))
         # catalog.remove() already purges; this count is informational.
         before_keys = {storage._key_from_url(u) for p in before if str((p or {}).get("id") or "") == pid for u in getattr(catalog_mod, "_media_refs")(p)}
         after_keys = {storage._key_from_url(u) for p in after for u in getattr(catalog_mod, "_media_refs")(p)}
@@ -6177,7 +6198,8 @@ def _sync_product_delete(pid):
     # purge every representation so the storefront grid AND the category
     # menu reflect the removal on the next request.
     _invalidate_all_catalog_caches()
-    body = dict(ok=True, id=pid, filesRemoved=files_removed,
+    body = dict(ok=True, id=pid, permanent=True, rowDeleted=row_deleted,
+                tombstoned=tombstoned, filesRemoved=files_removed,
                 abandonedCartsRemoved=abandoned_removed,
                 deleteMode=delete_mode, meta=catalog_mod.meta())
     if notes:

@@ -3188,7 +3188,8 @@ def purge_permanently_removed(actor="purge_guard"):
     deletion" survive deploys, restarts and re-imports.
     """
     report = {"ids": sorted(PERMANENTLY_REMOVED_IDS), "deleted": [],
-              "files": 0, "errors": []}
+              "tombstoned": [], "confirmed_gone": [], "files": 0,
+              "errors": []}
     ids = set(PERMANENTLY_REMOVED_IDS)
     # Pick up re-created copies that carry a new id but the same slug/name.
     for row in (_supabase_products() or []):
@@ -3206,6 +3207,8 @@ def purge_permanently_removed(actor="purge_guard"):
             import supabase_store
             result = supabase_store.hard_delete_products(sorted(ids))
             report["deleted"] = result.get("deleted") or []
+            report["tombstoned"] = result.get("tombstoned") or []
+            report["confirmed_gone"] = result.get("confirmed_gone") or []
             report["files"] = result.get("files") or 0
             report["errors"] = result.get("errors") or []
         except Exception as exc:                        # pragma: no cover
@@ -3672,14 +3675,16 @@ def remove(pid, actor=None):
 
     In production (Supabase is the source of truth) the delete is the atomic
     ``hard_delete_products(text[])`` RPC, and the RPC's OWN report decides the
-    outcome. A row that was not confirmed removed - a missing migration, a
-    failed call, a concurrent writer that got there first - comes back with
-    ``deleted: False`` and the durable tombstone is deliberately NOT written,
-    so a caller can never mistake a local catalogue edit for a real Supabase
-    delete. There is no row-by-row REST fallback: it cannot share the
-    transaction lock with a supplier upsert already in flight and could report
-    success while a stale write recreates the row (see
-    supabase_store.hard_delete_products).
+    outcome. A product is confirmed gone when the RPC either removed its
+    physical row or proved that a rowless/seed-only ID received the permanent
+    no-return tombstone. Those outcomes stay distinguishable through
+    ``row_deleted`` and ``tombstoned``. Without either proof - a missing
+    migration, a failed call, or a concurrent writer that got there first -
+    the result is ``deleted: False``, so a caller can never mistake a local
+    catalogue edit for a real Supabase delete. There is no row-by-row REST
+    fallback: it cannot share the transaction lock with a supplier upsert
+    already in flight and could report success while a stale write recreates
+    the row (see supabase_store.hard_delete_products).
 
     The local/development path keeps its own semantics - the override file is
     the source of truth there - and reports ``mode: "local"``, so the
@@ -3690,7 +3695,8 @@ def remove(pid, actor=None):
     Returns ``None`` for an empty id, otherwise::
 
         {"id": str, "mode": "hard"|"local", "deleted": bool,
-         "files": int, "errors": [str]}
+         "row_deleted": bool, "tombstoned": bool, "files": int,
+         "errors": [str]}
     """
     pid = str(pid or "").strip()
     if not pid:
@@ -3702,14 +3708,24 @@ def remove(pid, actor=None):
     except Exception:
         existing_product = None
 
-    report = {"id": pid, "mode": "local", "deleted": False, "files": 0,
+    report = {"id": pid, "mode": "local", "deleted": False,
+              "row_deleted": False, "tombstoned": False, "files": 0,
               "errors": []}
+
+    def _confirmed_gone(result):
+        """IDs proved gone by either a physical delete or its tombstone."""
+        gone = set()
+        for key in ("deleted", "tombstoned", "confirmed_gone"):
+            gone.update(str(x) for x in ((result or {}).get(key) or []))
+        return gone
 
     def _tombstone():
         """Record the durable deleted-ids entry; never hide a failed write."""
         try:
             from supabase_store import add_deleted_id
-            if not add_deleted_id(pid):
+            if add_deleted_id(pid):
+                report["tombstoned"] = True
+            else:
                 report["errors"].append(
                     "durable tombstone write was not confirmed")
         except Exception as exc:
@@ -3725,13 +3741,18 @@ def remove(pid, actor=None):
             # and no tombstone is written for a row that may still be live.
             report["errors"].append(f"hard delete RPC raised: {exc}")
             return report
-        report["deleted"] = pid in {str(x) for x in (result.get("deleted") or [])}
+        report["row_deleted"] = pid in {
+            str(x) for x in (result.get("deleted") or [])}
+        report["tombstoned"] = pid in {
+            str(x) for x in (result.get("tombstoned") or [])}
+        report["deleted"] = pid in _confirmed_gone(result)
         report["files"] = int(result.get("files") or 0)
         for err in (result.get("errors") or []):
             report["errors"].append(str(err))
         if not report["deleted"]:
-            # The atomic RPC removed nothing. Never answer "deleted" for a row
-            # that survived; the caller retries.
+            # Neither a physical row removal nor a verified permanent
+            # tombstone was confirmed. Never answer "deleted" on hope alone;
+            # the caller retries.
             return report
         _tombstone()
         _sync_repo_async()
@@ -3749,6 +3770,7 @@ def remove(pid, actor=None):
 
     _mutate(actor, _apply)
     report["deleted"] = True
+    report["row_deleted"] = True
     report["files"] = int(_purge_removed_media(existing_product, None) or 0)
     _purge_local_product_rows(pid)
     # When a Supabase mirror is active, bring it in step with the local
@@ -3767,8 +3789,10 @@ def remove(pid, actor=None):
                                   int(result.get("files") or 0))
             for err in (result.get("errors") or []):
                 report["errors"].append(str(err))
-            if pid not in {str(x) for x in (result.get("deleted") or [])}:
-                raise RuntimeError("the mirror row was not removed")
+            report["tombstoned"] = report["tombstoned"] or pid in {
+                str(x) for x in (result.get("tombstoned") or [])}
+            if pid not in _confirmed_gone(result):
+                raise RuntimeError("the mirror deletion was not confirmed")
         except Exception as exc:
             report["errors"].append(f"supabase mirror hard delete: {exc}")
             # Best-effort legacy soft tombstone so older readers still hide a
