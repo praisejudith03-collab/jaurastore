@@ -297,6 +297,22 @@ def category_label(product):
     return text or CATEGORY_FALLBACK
 
 
+OPTION_FR = {
+    "black": "Noir", "white": "Blanc", "blue": "Bleu", "pink": "Rose",
+    "red": "Rouge", "green": "Vert", "yellow": "Jaune", "brown": "Marron",
+    "dark brown": "Marron foncé", "light blue": "Bleu clair", "light pink": "Rose clair",
+    "purple": "Violet", "grey": "Gris", "gray": "Gris", "gold": "Doré",
+    "silver": "Argenté", "peach": "Pêche", "orange": "Orange",
+    "burgundy": "Bordeaux", "wine": "Lie-de-vin", "mint green": "Vert menthe",
+    "vanilla": "Vanille", "strawberry": "Fraise",
+}
+
+
+def _bilingual_option(label):
+    fr = OPTION_FR.get(option_key(label), "")
+    return f"{label} / {fr}" if fr and fr.casefold() != str(label).casefold() else str(label)
+
+
 def _line_view(product, *, oos=None, rate=None, base=""):
     """One product rendered for the post, or ``None`` when it is not sellable."""
     options = available_options(product, oos=oos)
@@ -305,15 +321,26 @@ def _line_view(product, *, oos=None, rate=None, base=""):
     pid = product.get("id")
     labels = [label for label, _ in options if label]
     price = option_price_ngn(product, labels[0]) if labels else base_price_ngn(product)
+    stored_cfa = _int(product.get("priceCfa") or product.get("price_cfa"))
+    if price > 0:
+        price_cfa = cfa_for(price, rate) or currency.round_cfa(stored_cfa)
+    else:
+        price_cfa = currency.round_cfa(stored_cfa)
+        price = currency.to_ngn(price_cfa, rate) if price_cfa else 0
+    price_text = f"₦{price:,} · {price_cfa:,} FCFA" if price and price_cfa else ""
+    # Use the same slug policy as the storefront, including legacy IDs.
+    import catalog
+    slug = catalog.public_slug(product)
     return {
         "id": pid,
         "name": str(product.get("name") or product.get("nameFr") or "Item").strip(),
+        "nameFr": str(product.get("nameFr") or product.get("name_fr") or "").strip(),
         "category": category_label(product),
-        "slug": str(product.get("slug") or "").strip(),
-        "url": product_url(product.get("slug"), base),
+        "slug": slug,
+        "url": product_url(slug, base),
         "priceNgn": price,
-        "priceCfa": cfa_for(price, rate),
-        "priceText": money(price, rate),
+        "priceCfa": price_cfa,
+        "priceText": price_text,
         "options": [{"label": label, "qty": qty} for label, qty in options],
         "quantity": sum(qty for _, qty in options),
     }
@@ -323,9 +350,9 @@ def _option_text(view):
     options = [o for o in view["options"] if o["label"]]
     if not options:
         return ""
-    parts = [f"{o['label']} ({o['qty']})" if o["qty"] > 0 else o["label"]
+    parts = [f"{_bilingual_option(o['label'])} ({o['qty']})" if o["qty"] > 0 else _bilingual_option(o["label"])
              for o in options]
-    return "Colours: " + ", ".join(parts)
+    return "Colours / Couleurs: " + ", ".join(parts)
 
 
 def build_post(products, *, oos=None, rate=None, title=DEFAULT_TITLE,
@@ -396,8 +423,12 @@ def build_post(products, *, oos=None, rate=None, title=DEFAULT_TITLE,
         plain_lines.append(category)
         for view in grouped[category]:
             number += 1
-            lines.append(f"{number}. *{view['name']}*")
-            plain_lines.append(f"{number}. {view['name']}")
+            name = view["name"]
+            fr = view["nameFr"]
+            if fr and fr.casefold() != name.casefold():
+                name += " / " + fr
+            lines.append(f"{number}. *{name}*")
+            plain_lines.append(f"{number}. {name}")
             options = _option_text(view)
             if options:
                 lines.append(f"   {options}")

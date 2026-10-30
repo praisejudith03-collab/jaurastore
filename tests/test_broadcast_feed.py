@@ -190,23 +190,12 @@ def test_the_store_link_uses_a_clean_public_product_slug():
     assert "location.origin" in body
 
 
-def test_the_copied_caption_is_exactly_three_lines_name_price_options_no_url():
-    """Owner request 2026-09-30: Copy Details produces EXACTLY: line 1 the
-    bilingual product name, line 2 the NGN/CFA prices, line 3 the
-    colours/options (only when the product has any) - and never a website
-    URL."""
+def test_the_copied_caption_includes_product_link():
     body = _func(ADMIN_JS, "broadcastFullText")
-    code_lines = [ln for ln in body.splitlines() if not ln.strip().startswith("//")]
-    code = "\n".join(code_lines)
-    assert "broadcastDisplayName(p)" in code
-    assert "broadcastPriceLine(p)" in code
-    assert "broadcastOptionsLine(p)" in code
-    assert "broadcastProductUrl(p)" not in code
-    assert "location.origin" not in code
-    assert "http" not in code.lower()
-    assert "compare" not in code.lower()
-    assert "stock" not in code.lower()
-    assert "Shop now" not in code
+    assert "broadcastDisplayName(p)" in body
+    assert "broadcastPriceLine(p)" in body
+    assert "broadcastOptionsLine(p)" in body
+    assert "broadcastProductUrl(p)" in body
 
 
 def test_copy_details_extracts_the_caption_and_the_photo():
@@ -554,3 +543,29 @@ def test_the_picker_search_ranking_and_pagination_behaviour_runs():
     assert result.returncode == 0, (
         "picker VM run failed:\n" + result.stdout + "\n" + result.stderr)
     assert "ALL FUNCTIONAL CHECKS PASSED" in result.stdout
+
+
+def test_bilingual_caption_executes_with_link_and_colour_dictionary():
+    import json
+    import subprocess
+    funcs = '\n'.join(_func(ADMIN_JS, n) for n in ('broadcastProductUrl', 'broadcastPriceLine', 'broadcastDisplayName', 'broadcastOptionsLine', 'broadcastFullText'))
+    script = '''
+const window = {I18N_OPTION_VALUES: {blue: 'Bleu', pink: 'Rose'}};
+const location = {origin:'https://jaurastore.com.ng'};
+const JA = {productUrl:p=>'/products/'+p.slug, toCfa:n=>n/2, money:(n,c)=>c+':'+n};
+''' + funcs + '''
+const out = broadcastFullText({name:'Bag', nameFr:'Sac', slug:'bag', priceNgn:1000, colors:['Blue','pink'], options:[]});
+console.log(JSON.stringify(out));
+'''
+    result = subprocess.run(['node', '-e', script], text=True, capture_output=True, check=True)
+    text = json.loads(result.stdout)
+    assert 'Bag / Sac' in text and 'Blue / Bleu' in text and 'pink / Rose' in text
+    assert 'NGN:1000' in text and 'CFA:500' in text
+    assert 'https://jaurastore.com.ng/products/bag' in text
+
+
+def test_admin_nested_routes_resolve_assets_and_uploads_from_root():
+    from urllib.parse import urljoin
+    html = open(os.path.join(ROOT, 'admin.html'), encoding='utf-8').read()
+    assert '<base href="/" />' in html
+    assert urljoin(urljoin('https://jaurastore.com.ng/admin/categories', '/'), 'api/admin/uploads/category') == 'https://jaurastore.com.ng/api/admin/uploads/category'

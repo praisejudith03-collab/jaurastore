@@ -133,7 +133,7 @@ def test_a_live_rate_is_used_when_none_is_supplied():
 # ---------------------------------------------------------------------- links
 def test_every_line_carries_a_real_storefront_deep_link():
     post = bp.build_post([_product(slug="ankara tote")], rate=RATE)
-    assert "https://jaurastore.com.ng/products/ankara%20tote" in post["text"]
+    assert "https://jaurastore.com.ng/products/ankara-tote" in post["text"]
 
 
 def test_the_product_route_is_plural_because_that_is_what_app_serves():
@@ -144,9 +144,9 @@ def test_the_product_route_is_plural_because_that_is_what_app_serves():
     assert '@app.route("/products/<slug>")' in source
 
 
-def test_a_product_without_a_slug_gets_no_link():
+def test_a_product_without_a_slug_uses_its_public_name_slug():
     post = bp.build_post([_product(slug="")], rate=RATE)
-    assert "https://" not in post["text"]
+    assert "https://jaurastore.com.ng/products/tote" in post["text"]
 
 
 # ----------------------------------------------------------------- the copy
@@ -239,3 +239,25 @@ def test_junk_stock_quantities_read_as_zero():
                "optionStock": {"Red": "abc", "Blue": None}}
     assert bp.option_stock(product) == {"Red": 0, "Blue": 0}
     assert bp.is_postable(product) is False
+
+
+def test_evening_post_bilingual_names_colours_and_link():
+    product = _product(name="Bag", slug="", options={"Blue": 3, "Pink": 1})
+    product["nameFr"] = "Sac"
+    text = bp.build_post([product], rate=RATE)["text"]
+    assert "Bag / Sac" in text
+    assert "Blue / Bleu (3)" in text and "Pink / Rose (1)" in text
+    assert "https://jaurastore.com.ng/products/bag" in text
+
+
+def test_evening_post_cfa_only_price_is_not_dropped():
+    product = _product(price=0)
+    product['priceCfa'] = 5000
+    text = bp.build_post([product], rate=RATE)['text']
+    assert '5,000 FCFA' in text and '₦' in text
+
+
+def test_seed_french_title_corrections_preserve_owner_override():
+    import catalog
+    assert catalog._with_french_description({'id': 'wix-053', 'name': 'Bioaqua Vitamin C Brightening Essence Water'})['nameFr'] == 'Eau essence éclat à la vitamine C Bioaqua'
+    assert catalog._with_french_description({'id': 'wix-053', 'nameFr': 'Mon titre'})['nameFr'] == 'Mon titre'

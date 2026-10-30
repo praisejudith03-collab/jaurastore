@@ -111,10 +111,12 @@ def allow_all_pushes(monkeypatch):
             currency = google_sheets._currency(
                 accounting_mod.account_block(order).get("currency")
                 or order.get("currency"))
-            grouped[currency] = {"spreadsheetId": reference_id or "sb",
+            item = grouped.setdefault(currency, {"spreadsheetId": reference_id or "sb",
                                  "tab": google_sheets.REFERENCE_TABS[currency],
                                  "url": "https://sheets.example/" + currency,
-                                 "count": 1, "appended": 1, "updated": 0}
+                                 "count": 0, "appended": 0, "updated": 0})
+            item["count"] += 1
+            item["appended"] += 1
         return grouped
 
     monkeypatch.setattr(google_sheets, "push_orders", fake)

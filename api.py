@@ -4004,6 +4004,19 @@ def admin_accounting_push():
                 "The push did not complete, so nothing was archived. "
                 "Check the Google Sheets connection and retry.")), 502
 
+        # Never archive a mixed batch when a ledger was omitted or only
+        # partially written. Upserts are keyed by order ID, so retry is safe.
+        expected = {currency: sum(1 for entry in entries if entry["currency"] == currency)
+                    for currency in {entry["currency"] for entry in entries}}
+        if not isinstance(report, dict) or set(report) != set(expected) or any(
+            not isinstance(report.get(currency), dict)
+            or report[currency].get("count") != count
+            for currency, count in expected.items()
+        ):
+            return jsonify(ok=False, error=(
+                "Google Sheets did not confirm every order; nothing was archived. "
+                "Retry the push.")), 502
+
         now = _utcnow()
         actor = authmod.current_admin()
         currencies_pushed = {entry["currency"] for entry in entries}

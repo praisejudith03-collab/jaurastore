@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=232" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=234" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -629,13 +629,22 @@ function bindMedia() {
       if (queued) JA.toast("Photo uploaded to storage, not saved to the product yet. Press Save Product to apply it.");
       return true;
     };
-    const res = await photoSlot(() => window.JA_NET.api(endpoint, {
-      method: "POST", blob: payload, field: "file", filename,
-      queue: true, timeout: isVideo ? 300000 : 45000, label: isVideo ? "Video" : "Photo",
-      onDone: (data) => {
-        if (data && data.url) acceptUploadedUrl(data.url, true);
-      },
-    }));
+    let res;
+    try {
+      res = await photoSlot(() => window.JA_NET.api(endpoint, {
+        method: "POST", blob: payload, field: "file", filename,
+        queue: true, timeout: isVideo ? 300000 : 45000, label: isVideo ? "Video" : "Photo",
+        onDone: (data) => {
+          if (data && data.url) acceptUploadedUrl(data.url, true);
+        },
+      }));
+    } catch (error) {
+      const at = entryAt();
+      if (at >= 0) window.__editImages[at] = { pending: true, preview, video: isVideo, failed: true };
+      showUploadError(box, uploadErrorMessage(error, "That file did not upload. Please try again."));
+      paintMedia(box);
+      return;
+    }
     if (res && res.url) {
       if (acceptUploadedUrl(res.url, false)) {
         const compressionNote = !isVideo && squeezed && squeezed.compressed
@@ -4050,8 +4059,15 @@ function broadcastOptionsLine(p) {
     }
   });
   const bits = [];
-  if (names.length) bits.push(`Colours: ${names.slice(0, 6).join(", ")}`);
-  if (sizes.length) bits.push(`Sizes: ${sizes.slice(0, 8).join(", ")}`);
+  if (names.length) {
+    const translations = window.I18N_OPTION_VALUES || {};
+    const bilingual = names.slice(0, 6).map((name) => {
+      const fr = translations[name] || translations[name.toLowerCase()] || "";
+      return fr && fr.toLowerCase() !== name.toLowerCase() ? `${name} / ${fr}` : name;
+    });
+    bits.push(`Colours / Couleurs: ${bilingual.join(", ")}`);
+  }
+  if (sizes.length) bits.push(`Sizes / Tailles: ${sizes.slice(0, 8).join(", ")}`);
   return bits.join(" · ");
 }
 function broadcastFullText(p) {
@@ -4062,6 +4078,7 @@ function broadcastFullText(p) {
   const lines = [broadcastDisplayName(p), broadcastPriceLine(p)];
   const options = broadcastOptionsLine(p);
   if (options) lines.push(options);
+  lines.push(broadcastProductUrl(p));
   return lines.join("\n");
 }
 
@@ -5017,7 +5034,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=232" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=234" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5424,7 +5441,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=232", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=234", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");

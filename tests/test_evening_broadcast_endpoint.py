@@ -99,7 +99,7 @@ def test_evening_post_lists_only_verified_in_stock_lines(client, products):
     assert body["productCount"] == 1
     text = body["text"]
     assert "Ankara Tote" in text
-    assert "Red (3)" in text                       # in stock
+    assert "Red / Rouge (3)" in text                       # in stock
     assert "Green" not in text                     # sold out, never posted
     assert "Sold Out Bag" not in text
     assert "Hidden Bag" not in text
