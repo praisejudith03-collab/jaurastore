@@ -287,7 +287,8 @@ def test_the_list_shows_only_live_in_stock_items_and_counts_the_rest(
     body = admin_client.get("/api/admin/supplier-alerts").get_json()
     assert body["ok"] is True
     assert {a["id"] for a in body["alerts"]} == {"keep-out", "keep-low"}
-    assert body["counts"] == {"total": 2, "outOfStock": 1, "lowStock": 1, "excluded": 4}
+    assert body["counts"] == {"total": 2, "outOfStock": 1, "lowStock": 1, "excluded": 4,
+                              "unseen": 2, "seen": 0}   # no ledger here: all new
     assert all(a["stock"] > 0 for a in body["alerts"])
 
 
@@ -465,3 +466,134 @@ def test_dashboard_supplier_queues_match_the_alerts_page_scope(admin_client, mon
     assert out == [("c", "Blue")]          # the zeroed Red variant is excluded
     assert body["counts"]["supplierLowStock"] == 1
     assert body["counts"]["supplierOutOfStock"] == 1
+
+
+# ======================================= 3. mark as seen, sorting, new vs seen
+def _seen_state(monkeypatch):
+    """An in-memory ledger that stands in for the Supabase-backed one."""
+    box = {"state": None}
+    monkeypatch.setattr(supplier_alerts, "enabled", lambda: True)
+    monkeypatch.setattr(supplier_alerts, "_default_load", lambda: box["state"])
+    monkeypatch.setattr(supplier_alerts, "_default_save",
+                        lambda state: box.__setitem__("state", state) or True)
+    return box
+
+
+def _dt(*parts):
+    import datetime
+    return datetime.datetime(*parts)
+
+
+def _flag(pid, qty, option="", shop_stock=None):
+    return {"product_id": pid, "option": option, "supplier_qty": qty,
+            "flagged": False, "shop_stock": shop_stock}
+
+
+def _live_product(pid):
+    return {"id": pid, "name": pid.title(), "online": True, "stock_quantity": 5}
+
+
+def test_a_new_drop_is_unseen_until_marked_then_seen(monkeypatch):
+    box = _seen_state(monkeypatch)
+    product = _live_product("m1")
+    sellable = lambda p, option="": True  # noqa: E731
+    box["state"] = supplier_alerts.apply_observations(None, [_flag("m1", 0)])
+    assert supplier_alerts.alert_status(box["state"], product, sellable)["seen"] is False
+    result = supplier_alerts.mark_seen("m1")
+    assert result == {"marked": 1}
+    assert supplier_alerts.alert_status(box["state"], product, sellable)["seen"] is True
+
+
+def test_easing_is_still_seen_but_an_escalation_is_new_again(monkeypatch):
+    box = _seen_state(monkeypatch)
+    product = _live_product("m2")
+    sellable = lambda p, option="": True  # noqa: E731
+    box["state"] = supplier_alerts.apply_observations(None, [_flag("m2", 0)])
+    supplier_alerts.mark_seen("m2")
+    box["state"] = supplier_alerts.apply_observations(box["state"], [_flag("m2", 3)])
+    assert supplier_alerts.alert_status(box["state"], product, sellable)["seen"] is True
+    # Dropping back to out after easing is a worse level than the one seen.
+    box["state"] = supplier_alerts.apply_observations(box["state"], [_flag("m2", 0)])
+    assert supplier_alerts.alert_status(box["state"], product, sellable)["seen"] is False
+
+
+def test_entries_from_before_the_feature_count_as_seen(monkeypatch):
+    raw = {"version": supplier_alerts.STATE_VERSION, "entries": {
+        "old::": {"product_id": "old", "option": "", "level": "out", "emailedLevel": "out"}}}
+    state = supplier_alerts._normalise_state(raw)
+    assert state["entries"]["old::"]["seenAt"] == "legacy"
+    assert supplier_alerts.alert_status(state, _live_product("old"),
+                                        lambda p, o="": True)["seen"] is True
+
+
+def test_an_unreadable_ledger_shows_everything_as_new(monkeypatch):
+    monkeypatch.setattr(supplier_alerts, "_default_load", lambda: None)
+    assert supplier_alerts.read_ledger() is None
+    assert supplier_alerts.unseen_for(None, "anything", "") is True
+    assert supplier_alerts.alert_status(None, _live_product("x"),
+                                        lambda p, o="": True)["seen"] is False
+
+
+def test_mark_seen_refuses_when_the_ledger_cannot_be_read(monkeypatch):
+    monkeypatch.setattr(supplier_alerts, "enabled", lambda: True)
+    monkeypatch.setattr(supplier_alerts, "_default_load", lambda: None)
+    result = supplier_alerts.mark_seen("m3")
+    assert result["marked"] == 0 and result.get("skipped")
+
+
+def test_alerts_endpoint_sorts_and_splits_new_from_seen(admin_client, monkeypatch):
+    import api as api_mod
+    _admin_login(admin_client)
+    box = _seen_state(monkeypatch)
+    rows = [
+        {"id": "z", "name": "Zebra", "supplier_status": "low_stock", "stock_quantity": 2,
+         "online": True, "priceNgn": 100},
+        {"id": "a", "name": "Apple", "supplier_status": "out_of_stock", "stock_quantity": 4,
+         "online": True, "priceNgn": 100},
+        {"id": "m", "name": "Mango", "supplier_status": "out_of_stock", "stock_quantity": 1,
+         "online": True, "priceNgn": 100},
+    ]
+    monkeypatch.setattr(supabase_store, "products_table_rows", lambda: rows)
+    monkeypatch.setattr(catalog, "is_stock_locked", lambda pid: False)
+    # Zebra and Apple have drops; Mango was seen already.
+    state = supplier_alerts.apply_observations(None, [_flag("z", 2), _flag("a", 0), _flag("m", 0)],
+                                               now=_dt(2026, 10, 30, 8))
+    state = supplier_alerts.apply_observations(state, [_flag("a", 0)], now=_dt(2026, 10, 30, 8))
+    state["entries"]["m::"]["seenAt"] = "2026-10-31T09:00:00Z"
+    state["entries"]["m::"]["seenLevel"] = "out"
+    box["state"] = state
+
+    urgent = admin_client.get("/api/admin/supplier-alerts?sort=urgent").get_json()
+    assert [a["id"] for a in urgent["alerts"]] == ["a", "m", "z"]   # out first, then by name
+    assert {a["id"]: a["seen"] for a in urgent["alerts"]} == {"a": False, "m": True, "z": False}
+    assert urgent["counts"]["unseen"] == 2 and urgent["counts"]["seen"] == 1
+    assert urgent["ledgerReady"] is True
+
+    by_name = admin_client.get("/api/admin/supplier-alerts?sort=name").get_json()
+    assert [a["id"] for a in by_name["alerts"]] == ["a", "m", "z"]
+
+    newest = admin_client.get("/api/admin/supplier-alerts?sort=newest").get_json()
+    assert newest["alerts"][0]["id"] in {"z", "a"}
+    assert newest["sort"] == "newest"
+
+    unknown = admin_client.get("/api/admin/supplier-alerts?sort=bogus").get_json()
+    assert unknown["sort"] == "urgent"
+
+
+def test_mark_seen_endpoint_needs_csrf_and_moves_the_item(admin_client, monkeypatch):
+    _admin_login(admin_client)
+    box = _seen_state(monkeypatch)
+    box["state"] = supplier_alerts.apply_observations(None, [_flag("ms", 0)])
+    monkeypatch.setattr(api_mod_ref(), "_invalidate_all_catalog_caches", lambda: None)
+    token = admin_client.get("/api/admin/session").get_json()["csrf"]
+    refused = admin_client.post("/api/admin/supplier-alerts/ms/mark-seen", json={})
+    assert refused.status_code in (400, 403)
+    ok = admin_client.post("/api/admin/supplier-alerts/ms/mark-seen", json={},
+                           headers={"X-CSRF-Token": token}).get_json()
+    assert ok == {"ok": True, "marked": 1}
+    assert box["state"]["entries"]["ms::"]["seenAt"]
+
+
+def api_mod_ref():
+    import api as api_mod
+    return api_mod

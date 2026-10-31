@@ -53,6 +53,7 @@ EXPECTED_ADMIN_ROUTES = {
     ("POST", "/api/admin/catalog/repair-image-urls"),
     ("GET", "/api/admin/supplier-alerts"),
     ("POST", "/api/admin/supplier-alerts/<pid>/toggle-out-of-stock"),
+    ("POST", "/api/admin/supplier-alerts/<pid>/mark-seen"),
     ("GET", "/api/admin/walk-in/products"),
     ("POST", "/api/admin/walk-in-sales"),
     ("GET", "/api/admin/accounting/google/ledger/<currency>"),

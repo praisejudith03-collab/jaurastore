@@ -143,7 +143,14 @@ def _normalise_state(raw):
     clean = {}
     for key, entry in entries.items():
         if isinstance(entry, dict) and str(entry.get("level") or "") in ("low", "out"):
-            clean[str(key)] = dict(entry)
+            item = dict(entry)
+            if "seenAt" not in item:
+                # Written before "Mark as seen" existed. These are already part
+                # of the owner's history, so they are seen, never shown as new.
+                item["seenAt"] = "legacy"
+                item["seenLevel"] = str(item.get("level") or "")
+            item.setdefault("seenLevel", "")
+            clean[str(key)] = item
     return {"version": STATE_VERSION, "entries": clean}
 
 
@@ -206,6 +213,16 @@ def apply_observations(state, observations, now=None):
         emailed_level = str((previous or {}).get("emailedLevel") or "")
         pending = bool((previous or {}).get("pending")) or (
             _SEVERITY[level] > _SEVERITY.get(emailed_level, 0))
+        # Seen stays seen while the level does not get worse than what the
+        # owner acknowledged. An escalation (or a brand-new drop) is unseen.
+        # Easing also lowers the level the owner has acknowledged, so a later
+        # rise back to out (after out -> low) is a fresh drop and shows as new.
+        seen_at, seen_level = "", ""
+        if (previous and previous.get("seenAt")
+                and _SEVERITY[level] <= _SEVERITY.get(str(previous.get("seenLevel") or ""), -1)):
+            seen_at = str(previous.get("seenAt"))
+            seen_level = level
+        level_changed = previous is None or str(previous.get("level") or "") != level
         entries[key] = {
             "product_id": pid,
             "product_name": str(obs.get("product_name") or (previous or {}).get("product_name") or "")[:240],
@@ -215,7 +232,10 @@ def apply_observations(state, observations, now=None):
             "supplier_qty": supplier_qty,
             "shop_stock": obs.get("shop_stock"),
             "firstAt": str((previous or {}).get("firstAt") or stamp),
+            "changedAt": stamp if level_changed else str((previous or {}).get("changedAt") or stamp),
             "lastAt": stamp,
+            "seenAt": seen_at,
+            "seenLevel": seen_level,
             "pending": pending,
             "emailedAt": str((previous or {}).get("emailedAt") or ""),
             "emailedLevel": emailed_level,
@@ -390,3 +410,88 @@ def drain_pending_alerts(send=None, load=None, save=None, now=None, is_live=None
     except Exception as exc:                          # pragma: no cover - defensive
         return {"sent": False, "count": 0, "pending": 0,
                 "detail": f"{type(exc).__name__}: {exc}"[:300]}
+
+
+# ------------------------------------------------------------- mark as seen
+
+def read_ledger(load=None):
+    """The alert ledger for reading, or None when it cannot be read.
+
+    None is passed through rather than turned into an empty ledger, so a
+    failed read shows items as new (never hides them as seen).
+    """
+    load = load or _default_load
+    try:
+        state = load()
+    except Exception:
+        return None
+    return None if state is None else _normalise_state(state)
+
+
+def alert_status(state, product, is_sellable):
+    """``{"seen": bool, "since": str}`` for one flagged product.
+
+    Only the product's live episodes count: an entry for a variant the owner
+    has since zeroed, or for a hidden product, is handled and ignored. A
+    product with no live entry on record has nothing new to show, so it is
+    treated as seen. An unreadable ledger (``state is None``) is never seen.
+    """
+    if state is None:
+        return {"seen": False, "since": ""}
+    pid = str((product or {}).get("id") or "").strip()
+    relevant = [entry for entry in state["entries"].values()
+                if str(entry.get("product_id") or "") == pid
+                and str(entry.get("level") or "") in ("low", "out")
+                and is_sellable(product, str(entry.get("option") or ""))]
+    if not relevant:
+        return {"seen": True, "since": ""}
+    seen = all(bool(entry.get("seenAt")) for entry in relevant)
+    since = max(str(entry.get("changedAt") or entry.get("firstAt") or "")
+                for entry in relevant)
+    return {"seen": seen, "since": since}
+
+
+def unseen_for(state, product_id, option=""):
+    """True when one stock row (product + option) has an unseen low/out drop.
+
+    An unreadable ledger (``state is None``) counts as unseen, so the
+    dashboard never hides a drop it could not check.
+    """
+    if state is None:
+        return True
+    entry = state["entries"].get(_entry_key(product_id, option))
+    if not entry or str(entry.get("level") or "") not in ("low", "out"):
+        return False
+    return not entry.get("seenAt")
+
+
+def mark_seen(product_id, load=None, save=None, now=None):
+    """Acknowledge every current low/out episode of one product. Never raises.
+
+    Marking seen changes only the owner's view. Emails are unaffected, and a
+    later, worse supplier change makes the product new again.
+    """
+    if not enabled():
+        return {"marked": 0, "skipped": "disabled"}
+    pid = str(product_id or "").strip()
+    if not pid:
+        return {"marked": 0, "skipped": "no-product"}
+    load = load or _default_load
+    save = save or _default_save
+    try:
+        state = load()
+        if state is None:
+            return {"marked": 0, "skipped": "state-unavailable"}
+        state = _normalise_state(state)
+        stamp = _now(now)
+        marked = 0
+        for entry in state["entries"].values():
+            if str(entry.get("product_id") or "") == pid:
+                entry["seenAt"] = stamp
+                entry["seenLevel"] = str(entry.get("level") or "")
+                marked += 1
+        if marked and not save(state):
+            return {"marked": 0, "skipped": "state-save-failed"}
+        return {"marked": marked}
+    except Exception as exc:                          # pragma: no cover - defensive
+        return {"marked": 0, "skipped": f"{type(exc).__name__}: {exc}"[:200]}

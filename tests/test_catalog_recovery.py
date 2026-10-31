@@ -329,7 +329,10 @@ def test_supplier_alerts_carry_everything_the_tab_renders(client, monkeypatch):
     # owner has handled it: it is left out of the list and counted as excluded.
     assert set(alerts) == {"p-low"}
     assert alerts["p-low"]["stock"] == 2 and "storeOutOfStock" not in alerts["p-low"]
-    assert body["counts"] == {"total": 1, "outOfStock": 0, "lowStock": 1, "excluded": 1}
+    # No readable ledger here, so the item is shown as new (never hidden as seen).
+    assert body["ledgerReady"] is False
+    assert body["counts"] == {"total": 1, "outOfStock": 0, "lowStock": 1, "excluded": 1,
+                              "unseen": 1, "seen": 0}
 
 
 def test_walkin_sale_returns_revenue_and_net_profit(client, monkeypatch):

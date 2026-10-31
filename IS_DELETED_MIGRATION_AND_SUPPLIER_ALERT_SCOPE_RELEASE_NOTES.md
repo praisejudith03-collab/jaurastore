@@ -58,3 +58,25 @@ manual action.
 2. Deploy. Check Admin → Supplier Stock Alerts: the list should contain only live,
    in-stock items, and "Left out" should count the rest.
 3. No env var changes.
+
+## Mark as seen, and sorting (follow-up)
+
+- **Mark as seen.** Each supplier alert has a "Mark as seen" button, on the
+  Supplier Alerts page and in the dashboard's supplier drawers. It only changes
+  the owner's view. It never changes the shop and never sends an email.
+  Endpoint: `POST /api/admin/supplier-alerts/<product id>/mark-seen` (CSRF).
+- **New vs seen.** The Supplier Alerts page shows "New / Unseen Alerts" at the
+  top and a collapsible "Previously Seen" section at the bottom. The dashboard's
+  supplier queues show only unseen drops.
+- **When an alert counts as new again.** A new drop, or an escalation (low to
+  out), is unseen. Easing (out to low) stays seen. Going back up after easing
+  is a new drop. Recovering to ok clears the alert.
+- **Existing alerts.** Ledger entries written before this release are treated
+  as already seen, so the first deploy does not flood the New list.
+- **Sorting.** `?sort=urgent` (default: out first, then by name), `newest`
+  (most recent change first), or `name`.
+- **Unreadable ledger.** If the alert record cannot be read, every alert is
+  shown as new, with a note. "Mark as seen" is refused with an error, so nothing
+  is hidden without being recorded.
+- Ledger entries gain `seenAt`, `seenLevel` and `changedAt`. No product rows
+  are written by any of this.

@@ -2887,6 +2887,8 @@ def admin_needs_attention():
         current_app.logger.exception("Needs-attention product read failed")
         return jsonify(ok=False,
                        error="Dashboard data is temporarily unavailable. Product and stock status could not be verified; no all-clear result is available."), 503
+    import supplier_alerts
+    alert_ledger = supplier_alerts.read_ledger()
     low_stock = []
     out_of_stock = []
     supplier_out_of_stock = []
@@ -2905,14 +2907,15 @@ def admin_needs_attention():
             # separate from the supplier-linked queue: a sold-out product
             # without a supplier link still has to be visible somewhere.
             out_of_stock.append(item)
-        # Supplier queues: only a supplier low/out that is still NEW for an
-        # item the shop is selling (active on the website and in stock). A
-        # variant the owner already zeroed, or a hidden/trashed product, is
-        # handled and is left out, so the dashboard matches Supplier Alerts.
+        # Supplier queues: only a supplier low/out that is still NEW (unseen)
+        # for an item the shop is selling (active on the website and in stock).
+        # Seen drops, variants the owner already zeroed, and hidden/trashed
+        # products are left out, so the dashboard matches Supplier Alerts.
         supplier_status = str(product.get("supplier_status") or "ok")
         if supplier_status in ("out_of_stock", "low_stock"):
             variant = "" if row.get("variant_key") in (None, "", "__default__") else str(row.get("variant_key"))
-            if catalog_mod.supplier_alert_sellable(product, variant):
+            if (catalog_mod.supplier_alert_sellable(product, variant)
+                    and supplier_alerts.unseen_for(alert_ledger, row.get("product_id"), variant)):
                 if supplier_status == "out_of_stock":
                     supplier_out_of_stock.append(item)
                 else:
@@ -6421,15 +6424,25 @@ def admin_sync_status():
                    syncBlockedReason=blocked_reason)
 
 
+ALERT_SORTS = ("urgent", "newest", "name")
+
+
 @api.get("/admin/supplier-alerts")
 @authmod.require_admin
 def admin_supplier_alerts():
     """Supplier low/out items that the shop is still selling.
 
-    The list is limited to items ACTIVE on the website and IN STOCK there. A
-    supplier low/out on something the owner already hid, trashed or set to
-    zero is left out (counted as ``excluded``), so the list stays clean.
+    Only items ACTIVE on the website and IN STOCK are listed. A supplier
+    low/out on something already hidden, trashed or zeroed is left out (counted
+    as ``excluded``). Each listed item carries ``seen``: False means a new drop
+    the owner has not acknowledged yet. ``sort`` is urgent (default), newest or
+    name.
     """
+    sort = str(request.args.get("sort") or "urgent").strip().lower()
+    if sort not in ALERT_SORTS:
+        sort = "urgent"
+    import supplier_alerts
+    ledger = supplier_alerts.read_ledger()
     alerts = []
     excluded = 0
     for row in catalog_mod.supplier_alert_rows():
@@ -6439,19 +6452,49 @@ def admin_supplier_alerts():
         if not catalog_mod.supplier_alert_sellable(row):
             excluded += 1
             continue
+        view = supplier_alerts.alert_status(ledger, row, catalog_mod.supplier_alert_sellable)
         alerts.append({"id": str(row.get("id") or ""), "name": row.get("name") or "",
                        "image": row.get("image_url") or row.get("image") or "",
                        "supplierUrl": row.get("supplierSku") or row.get("supplierUrl") or "",
                        "priceNgn": row.get("priceNgn"), "priceCfa": row.get("priceCfa"),
                        "stock": catalog_mod.stock_of(row),
                        "status": status,
-                       "online": True})
-    alerts.sort(key=lambda a: (a["status"] != "out_of_stock", str(a["name"]).lower()))
-    return jsonify(ok=True, alerts=alerts,
+                       "online": True,
+                       "seen": bool(view["seen"]),
+                       "since": view["since"]})
+    name_key = lambda a: str(a["name"]).lower()  # noqa: E731
+    if sort == "name":
+        alerts.sort(key=name_key)
+    elif sort == "newest":
+        alerts.sort(key=name_key)
+        alerts.sort(key=lambda a: a["since"] or "", reverse=True)
+    else:
+        alerts.sort(key=name_key)
+        alerts.sort(key=lambda a: a["status"] != "out_of_stock")
+    return jsonify(ok=True, alerts=alerts, sort=sort, ledgerReady=ledger is not None,
                    counts={"total": len(alerts),
                            "outOfStock": sum(1 for a in alerts if a["status"] == "out_of_stock"),
                            "lowStock": sum(1 for a in alerts if a["status"] == "low_stock"),
+                           "unseen": sum(1 for a in alerts if not a["seen"]),
+                           "seen": sum(1 for a in alerts if a["seen"]),
                            "excluded": excluded})
+
+
+@api.post("/admin/supplier-alerts/<pid>/mark-seen")
+@authmod.require_admin
+@sec.require_csrf
+def admin_supplier_alert_mark_seen(pid):
+    """Acknowledge a supplier alert: it moves to Previously Seen everywhere."""
+    pid = sec.clean(pid, 64).strip()
+    if not pid:
+        return jsonify(ok=False, error="Product id required."), 400
+    import supplier_alerts
+    result = supplier_alerts.mark_seen(pid)
+    if result.get("skipped"):
+        return jsonify(ok=False, error="The seen status could not be saved. Please try again.",
+                       detail=str(result.get("skipped"))[:120]), 503
+    _invalidate_all_catalog_caches()
+    return jsonify(ok=True, marked=int(result.get("marked") or 0))
 
 
 @api.post("/admin/supplier-alerts/<pid>/toggle-out-of-stock")

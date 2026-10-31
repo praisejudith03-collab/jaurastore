@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=238" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=239" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -2243,16 +2243,16 @@ const ATTENTION_QUEUES = {
     title: "Supplier-linked · low stock",
     icon: "🔗",
     noun: "Supplier-linked Low Stock Item",
-    note: "Supplier-linked products running low. Tap a row to edit or reorder.",
-    emptyText: "No supplier-linked products are low.",
+    note: "New supplier drops only, for products you are still selling. Tap a row to edit or reorder, or mark it as seen once handled.",
+    emptyText: "No new supplier drops to review.",
     alert: false,
   },
   supplierOut: {
     title: "Supplier-linked · out of stock",
     icon: "🔗",
     noun: "Supplier-linked Out of Stock Item",
-    note: "Supplier-linked products with nothing left. Tap a row to reorder.",
-    emptyText: "No supplier-linked products are out of stock.",
+    note: "New supplier drops only, for products you are still selling. Tap a row to reorder, or mark it as seen once handled.",
+    emptyText: "No new supplier drops to review.",
     alert: true,
   },
 };
@@ -2296,15 +2296,20 @@ function attentionProductHref(productId) {
   return onAdminPath ? `/admin/products?${query}` : `admin.html?desk=products&${query}`;
 }
 
-function attentionStockRowHTML(row) {
+function attentionStockRowHTML(row, withSeen) {
   const id = String((row && (row.product_id || row.productId || row.id)) || "");
   const name = String((row && (row.name || row.variant_label)) || id || "Product");
   const variant = String((row && (row.variant_label || row.variant_key)) || "");
   const qty = Math.max(0, Number((row && row.qty) || 0));
   const qtyLabel = qty <= 0 ? "Out of stock" : `${qty} left`;
+  // The mark-as-seen button sits beside the link, never inside it (a button
+  // inside an anchor is invalid HTML and would fire the link too).
+  const seenBtn = withSeen && id
+    ? `<button type="button" class="au-link-btn attention-seen-btn" data-supplier-seen="${esc(id)}">Mark as seen</button>`
+    : "";
   return `<li><a class="attention-drawer-row" href="${esc(attentionProductHref(id))}" data-attention-product="${esc(id)}">`
     + `<span><strong>${esc(name)}</strong>${variant && variant !== name ? `<small>${esc(variant)}</small>` : ""}</span>`
-    + `<b class="${qty <= 0 ? "is-out" : "is-low"}">${esc(qtyLabel)}</b><em>Edit →</em></a></li>`;
+    + `<b class="${qty <= 0 ? "is-out" : "is-low"}">${esc(qtyLabel)}</b><em>Edit →</em></a>${seenBtn}</li>`;
 }
 
 function attentionDrawerBodyHTML(key, shown) {
@@ -2312,7 +2317,8 @@ function attentionDrawerBodyHTML(key, shown) {
   const rows = queue.rows || [];
   if (!rows.length) return `<li class="attention-drawer-empty"><p class="empty">${esc(queue.emptyText || "Nothing to show.")}</p></li>`;
   const page = Math.max(1, Math.min(rows.length, Number(shown) || ATTENTION_DRAWER_PAGE));
-  return rows.slice(0, page).map(attentionStockRowHTML).join("");
+  const withSeen = key === "supplierLow" || key === "supplierOut";
+  return rows.slice(0, page).map((row) => attentionStockRowHTML(row, withSeen)).join("");
 }
 
 function openAttentionDrawer(key) {
@@ -2376,6 +2382,36 @@ function attentionSummaryBar(key, count) {
     + `<em>Tap to view</em></button>`;
 }
 
+/**
+ * Mark one supplier alert as seen. It leaves the New list and moves to
+ * Previously Seen on the Supplier Alerts page and the dashboard drawer.
+ * The shop itself is never changed by this.
+ */
+async function markSupplierSeen(pid, button) {
+  if (!pid) return;
+  if (button) button.disabled = true;
+  try {
+    const csrf = await window.JA_NET.csrf();
+    const response = await timedFetch(`api/admin/supplier-alerts/${encodeURIComponent(pid)}/mark-seen`, { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf }, body: "{}" });
+    const result = await response.json();
+    if (!response.ok || result.ok === false) throw new Error(result.error || "Could not mark as seen");
+    JA.success("Marked as seen.");
+    // Refresh the dashboard queues first, then repaint the open drawer from
+    // the fresh queues so the row disappears straight away.
+    await fillNeedsAttention();
+    if (attentionDrawerKey) {
+      const list = document.getElementById("attention-drawer-list");
+      if (list) list.innerHTML = attentionDrawerBodyHTML(attentionDrawerKey, attentionDrawerShown);
+      paintAttentionDrawerMore();
+      paintAttentionBarState();
+    }
+    if ($("#supplier-alerts-list")) fillSupplierAlerts();
+  } catch (error) {
+    if (button) button.disabled = false;
+    JA.toast(error.message || "Could not mark as seen.");
+  }
+}
+
 function bindAttentionDrawer() {
   const drawer = document.getElementById("attention-drawer");
   if (!drawer || drawer.dataset.bound === "1") return;
@@ -2383,7 +2419,11 @@ function bindAttentionDrawer() {
   const close = document.getElementById("attention-drawer-close");
   if (close) close.onclick = () => closeAttentionDrawer();
   // A tap on the dimmed backdrop (but not inside the panel) closes it.
-  drawer.onclick = (event) => { if (event.target === drawer) closeAttentionDrawer(); };
+  drawer.onclick = (event) => {
+    const seenBtn = event.target && event.target.closest ? event.target.closest("[data-supplier-seen]") : null;
+    if (seenBtn) { event.preventDefault(); markSupplierSeen(seenBtn.dataset.supplierSeen, seenBtn); return; }
+    if (event.target === drawer) closeAttentionDrawer();
+  };
   drawer.addEventListener("keydown", (event) => { if (event.key === "Escape") closeAttentionDrawer(); });
   const more = document.getElementById("attention-drawer-more");
   if (more) more.onclick = () => {
@@ -2537,7 +2577,7 @@ function orderCardHTML(o) {
 }
 let orderFilter = "all";
 function supplierAlertsPanel() {
-  return `<div class="admin-card"><div class="an-top" style="margin-bottom:6px"><div><h2 class="admin-h" style="margin:0">Supplier Stock Alerts</h2><p class="admin-note" style="margin:6px 0 0">Only products that are live and in stock on your website are listed here, and only those are emailed to you. Anything you have already hidden, trashed or set to zero is left out. Background supplier checks are diagnostic only and never change your shop — the storefront changes only when you press the toggle.</p></div><button type="button" class="btn btn-line" id="supplier-alerts-refresh">Refresh</button></div><div class="stats" id="supplier-alerts-summary"></div><div id="supplier-alerts-list"><p class="empty">Loading supplier alerts…</p></div></div>`;
+  return `<div class="admin-card"><div class="an-top" style="margin-bottom:6px"><div><h2 class="admin-h" style="margin:0">Supplier Stock Alerts</h2><p class="admin-note" style="margin:6px 0 0">Only products that are live and in stock on your website are listed here, and only those are emailed to you. Anything you have already hidden, trashed or set to zero is left out. Background supplier checks are diagnostic only and never change your shop — the storefront changes only when you press the toggle.</p></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label class="admin-note" style="display:flex;gap:6px;align-items:center">Sort <select id="supplier-alerts-sort" class="btn btn-line" style="padding:6px 10px"><option value="urgent">Most urgent first</option><option value="newest">Newest first</option><option value="name">Name A–Z</option></select></label><button type="button" class="btn btn-line" id="supplier-alerts-refresh">Refresh</button></div></div><div class="stats" id="supplier-alerts-summary"></div><div id="supplier-alerts-list"><p class="empty">Loading supplier alerts…</p></div></div>`;
 }
 
 /** One flagged product: card details, supplier badge, direct link, 1-click toggle. */
@@ -2557,31 +2597,50 @@ function supplierAlertCardHTML(p) {
     + `<div class="admin-note">${esc([price, stockLine].filter(Boolean).join(" · "))}</div>`
     + `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><span class="adx-badge ${out ? "is-out" : "is-low"}">${esc(badge)}</span>`
     + `<span class="adx-badge is-ok">Live &amp; in stock</span>${link}</div></div>`
-    + `<button type="button" class="btn" data-supplier-toggle="${esc(p.id)}">Toggle Out of Stock</button>`
+    + `<div style="display:flex;gap:8px;flex-wrap:wrap">${p.seen ? "" : `<button type="button" class="btn btn-line" data-supplier-seen="${esc(p.id)}">Mark as seen</button>`}<button type="button" class="btn" data-supplier-toggle="${esc(p.id)}">Toggle Out of Stock</button></div>`
     + `</article>`;
 }
+
+let supplierAlertsSort = "urgent";
 
 async function fillSupplierAlerts() {
   const box = $("#supplier-alerts-list"); if (!box) return;
   const summary = $("#supplier-alerts-summary");
   const refresh = $("#supplier-alerts-refresh");
+  const sortSel = $("#supplier-alerts-sort");
   if (refresh && !refresh.dataset.bound) { refresh.dataset.bound = "1"; refresh.onclick = () => fillSupplierAlerts(); }
+  if (sortSel) { sortSel.value = supplierAlertsSort; if (!sortSel.dataset.bound) { sortSel.dataset.bound = "1"; sortSel.onchange = () => { supplierAlertsSort = sortSel.value; fillSupplierAlerts(); }; } }
   try {
-    const res = await timedFetch("api/admin/supplier-alerts", { cache: "no-store" });
+    const res = await timedFetch(`api/admin/supplier-alerts?sort=${encodeURIComponent(supplierAlertsSort)}`, { cache: "no-store" });
     const data = await res.json(); if (!res.ok || data.ok === false) throw new Error(data.error || "Supplier alerts unavailable");
     const rows = data.alerts || [];
+    const fresh = rows.filter((p) => !p.seen);
+    const seen = rows.filter((p) => p.seen);
     const outCount = rows.filter((p) => p.status === "out_of_stock").length;
     const lowCount = rows.filter((p) => p.status === "low_stock").length;
     const excluded = Number((data.counts || {}).excluded) || 0;
     if (summary) summary.innerHTML = [
-      ["Supplier alerts", rows.length, "live & in stock in your shop"],
+      ["New / unseen", fresh.length, "need your attention"],
+      ["Previously seen", seen.length, "already acknowledged"],
       ["Out of stock", outCount, "supplier says none"],
       ["Low stock", lowCount, "supplier says few"],
       ["Left out", excluded, "already hidden or zero in your shop"],
     ].map(([k, v, s]) => `<div class="stat"><span class="kicker">${esc(k)}</span><b>${esc(String(v))}</b>${s ? `<i>${esc(s)}</i>` : ""}</div>`).join("");
-    box.innerHTML = rows.length
-      ? rows.map(supplierAlertCardHTML).join("")
-      : `<p class="empty">No supplier alerts right now. Every live, in-stock product with a checked supplier link reported stock — and nothing here can change your shop on its own.</p>`;
+    const ledgerNote = data.ledgerReady === false
+      ? `<p class="admin-note">The record of which alerts you have already seen could not be read, so every alert is shown as new for now.</p>`
+      : "";
+    const freshHTML = fresh.length
+      ? fresh.map(supplierAlertCardHTML).join("")
+      : (rows.length
+        ? `<p class="empty">No new supplier alerts. Everything flagged has been seen.</p>`
+        : `<p class="empty">No supplier alerts right now. Every live, in-stock product with a checked supplier link reported stock — and nothing here can change your shop on its own.</p>`);
+    const seenHTML = seen.length
+      ? `<details class="supplier-seen-section" style="margin-top:14px"><summary style="cursor:pointer;font-weight:600">Previously Seen (${seen.length})</summary>${seen.map(supplierAlertCardHTML).join("")}</details>`
+      : "";
+    box.innerHTML = `${ledgerNote}<h3 class="admin-h" style="margin:14px 0 4px;font-size:1.05rem">New / Unseen Alerts</h3>${freshHTML}${seenHTML}`;
+    box.querySelectorAll("[data-supplier-seen]").forEach((button) => {
+      button.onclick = () => markSupplierSeen(button.dataset.supplierSeen, button);
+    });
     box.querySelectorAll("[data-supplier-toggle]").forEach((button) => {
       button.onclick = async () => {
         button.disabled = true;
@@ -5074,7 +5133,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=238" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=239" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5482,7 +5541,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=238", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=239", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");
