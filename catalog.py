@@ -1646,8 +1646,25 @@ def _dedupe_products(primary, secondary):
     def _key(v):
         return str(v or "").strip().lower()
 
+    def _stamp(p):
+        """The row's own last-write time, or -1 when it carries none."""
+        for field in ("updated_at", "updatedAt", "created_at", "createdAt"):
+            raw = str((p or {}).get(field) or "").strip()
+            if not raw:
+                continue
+            try:
+                parsed = datetime.datetime.fromisoformat(
+                    raw.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+            return parsed.timestamp()
+        return -1.0
+
     by_id, by_slug, by_sku = {}, {}, {}
     out = []
+    _pos = {}          # id -> index in `out`, so a replacement is exact
 
     def _place(p):
         pid = str((p or {}).get("id") or "").strip()
@@ -1658,15 +1675,43 @@ def _dedupe_products(primary, secondary):
         sku = _key(p.get("sku"))
         if pid in by_id:
             return False
-        # a slug/sku clash only collapses when the names agree too - a
-        # different product must never be hidden by a shared slug or sku
-        if (slug and (slug, name) in by_slug) or (sku and (sku, name) in by_sku):
-            return False
+        # A slug/sku clash only collapses when the names agree too - a
+        # different product must never be hidden by a shared slug or sku.
+        #
+        # WHICH copy survives matters: the owner adds a product, does not see
+        # it (for any reason), and adds it again - or re-creates a piece that
+        # was deleted. The NEW row used to lose to the older one, so the save
+        # confirmed ("created") and the shop kept rendering the stale copy:
+        # the exact "I saved it, it is not on the shop" report. The freshest
+        # row now wins, and a row carrying a real timestamp always beats one
+        # that carries none (the bundled seed and plain local overrides).
+        clash = None
+        if slug:
+            clash = by_slug.get((slug, name))
+        if clash is None and sku:
+            clash = by_sku.get((sku, name))
+        if clash is not None:
+            if _stamp(p) <= _stamp(clash):
+                return False
+            old_pid = str((clash or {}).get("id") or "")
+            at = _pos.get(old_pid)
+            if at is None:
+                return False
+            out[at] = p
+            _pos.pop(old_pid, None)
+            _pos[pid] = at
+            by_id.pop(old_pid, None)
+            by_id[pid] = p
+            for table, key in ((by_slug, slug), (by_sku, sku)):
+                if key:
+                    table[(key, name)] = p
+            return True
         by_id[pid] = p
         if slug:
             by_slug[(slug, name)] = p
         if sku:
             by_sku[(sku, name)] = p
+        _pos[pid] = len(out)
         out.append(p)
         return True
 
@@ -3467,6 +3512,100 @@ def _read_back_product(pid):
         return None
 
 
+def publication_status(pid):
+    """Is one saved product actually on the public storefront - and if not, why?
+
+    The owner's recurring report is "I saved it, the portal shows it, the shop
+    does not". A save can be fully confirmed (the row is in PostgreSQL, with a
+    fresh ``updated_at``) and still be invisible to a shopper: a durable
+    tombstone left by an earlier delete, a soft-delete flag another writer set,
+    a dead ``source``, the test-fixture guard, ``online = false``, or a
+    name-confirmed slug/sku clash that ``_dedupe_products`` folds away.
+
+    This walks the SAME pipeline the public answer reads - ``merged()`` and the
+    public ``online`` predicate - and names the first stage that drops the id,
+    so the admin portal can say "saved, but the shop is not showing it: …"
+    instead of "Saved successfully" followed by silence.
+
+    Returns ``{"live": bool, "stage": str, "reason": str}``. Never raises: a
+    failed diagnosis must not turn a confirmed save into an error.
+    """
+    pid = str(pid or "").strip()
+    if not pid:
+        return {"live": False, "stage": "no-id",
+                "reason": "the save did not carry a product id"}
+    # 1. The durable tombstones are consulted BEFORE the merge: a product the
+    #    owner deleted earlier is dropped while merging, so it can never be
+    #    found there even though its row is present.
+    try:
+        from supabase_store import load_deleted_ids, load_hard_deleted_ids
+        hard = {str(x).strip() for x in (load_hard_deleted_ids() or [])}
+        legacy = {str(x).strip() for x in (load_deleted_ids() or [])}
+    except Exception:
+        hard, legacy = set(), set()
+    if pid in hard:
+        return {"live": False, "stage": "hard-tombstone",
+                "reason": ("this id was permanently deleted from the shop; a "
+                           "permanently deleted product can never return - "
+                           "add it again as a new product")}
+
+    try:
+        rows = merged(include_hidden=True)
+    except Exception as exc:
+        return {"live": False, "stage": "read-failed",
+                "reason": (f"the catalogue could not be read "
+                           f"({exc.__class__.__name__})")}
+    found = next((p for p in rows or []
+                  if str((p or {}).get("id") or "") == pid), None)
+    if found is not None:
+        if found.get("online") is False:
+            return {"live": False, "stage": "hidden",
+                    "reason": "the product is hidden (online = false)"}
+        if is_deleted_product(found):
+            return {"live": False, "stage": "flagged",
+                    "reason": "the row still carries a delete/archive flag"}
+        return {"live": True, "stage": "", "reason": ""}
+
+    if pid in legacy:
+        return {"live": False, "stage": "legacy-tombstone",
+                "reason": ("the id is still on the durable deleted list from "
+                           "an earlier delete")}
+
+    # 2. The row is saved but something between PostgreSQL and the grid drops
+    #    it. Read the raw row to name the exact field.
+    raw = None
+    try:
+        from supabase_store import product_by_id
+        raw = product_by_id(pid)
+    except Exception:
+        raw = None
+    if raw is None:
+        return {"live": False, "stage": "missing-row",
+                "reason": "the product row could not be read back from the "
+                          "database"}
+    if is_test_fixture(raw):
+        return {"live": False, "stage": "fixture",
+                "reason": "the row matches the test-fixture guard"}
+    if is_permanently_removed(raw):
+        return {"live": False, "stage": "permanently-removed",
+                "reason": "the row matches the permanently-removed list"}
+    if is_deleted_product(raw):
+        return {"live": False, "stage": "flagged",
+                "reason": ("the row carries a delete/archive flag "
+                           f"(source={raw.get('source')!r}, "
+                           f"is_deleted={raw.get('is_deleted')!r})")}
+    if raw.get("online") is False:
+        return {"live": False, "stage": "hidden",
+                "reason": "the row is saved with online = false"}
+    # 3. Saved, live and unflagged - but folded away by catalogue dedupe. That
+    #    only happens for a name-confirmed slug/sku clash: the SAME product
+    #    under a second id, where the copy the shop keeps is the other one.
+    return {"live": False, "stage": "dedupe",
+            "reason": ("another saved row carries the same name with this "
+                       "slug or sku, so the shop renders that row instead "
+                       "(the two were folded into one product)")}
+
+
 def remirror_strays(actor=None):
     """Push local-only products to Supabase. Returns how many were sent."""
     from supabase_store import upsert_products, enabled
@@ -3543,6 +3682,18 @@ def upsert(product, actor=None):
 
     live = []
     if not fast_requested:
+        # A create allocates its slug against the LIVE catalogue, and the
+        # read cache behind merged() is a few seconds old by design. Two
+        # products added in the same minute therefore used to be handed the
+        # SAME slug (the second one's `taken` set predated the first save),
+        # and _dedupe_products then folded the second row away: saved, in the
+        # table, and invisible on the shop. Dropping the cache first costs one
+        # query on a path that is about to read anyway.
+        try:
+            from supabase_store import invalidate_read_cache
+            invalidate_read_cache()
+        except Exception:
+            pass
         try:
             live = merged(include_hidden=True)
         except Exception:

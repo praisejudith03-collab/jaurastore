@@ -2057,12 +2057,21 @@ const JA = (() => {
       },
       queue: true,
       label: "Product",
+      // A product save is a photo verification, a database write and a
+      // read-back on a free Render instance: it needs more than the 5 s
+      // default, or every save is aborted mid-flight, queued and re-sent
+      // from scratch (the "saved in the portal, never in the shop" report).
+      // 30 s stays under gunicorn's 45 s worker timeout.
+      timeout: 30000,
       onDone: (data) => { if (data && data.product) applyServerProduct(data.product); },
     }).then((d) => {
       // A queued job is not confirmed yet. Keep the editor open and let the
       // durable outbox retry quietly; transient timeout warnings were noisy
       // and routinely reported a failure for saves the server then completed.
-      if (d && d.queued) return { ok: false, queued: true, silent: true };
+      // A server that ANSWERED and refused is different: its reason rides
+      // along so the editor can print it instead of pretending the save is
+      // merely waiting for signal.
+      if (d && d.queued) return { ok: false, queued: true, silent: !(d && d.error), error: (d && d.error) || "" };
       if (d && d.ok === false) {
         toast((d && d.error) || "Could not save the product. No changes are live.");
         return { ok: false, error: d.error || "Could not save the product." };
@@ -2114,7 +2123,10 @@ const JA = (() => {
     } catch (e) {}
     if (!window.JA_NET) return Promise.resolve({ ok: false });
     return window.JA_NET.api("api/admin/products/" + encodeURIComponent(id) + "?permanent=1", {
-      method: "DELETE", queue: true, label: "Permanently delete",
+      // A permanent delete runs the tombstone RPC plus storage purging; it
+      // must not be cut off at the 5 s default (an aborted delete that the
+      // server then completes is exactly how a "deleted" product came back).
+      method: "DELETE", queue: true, label: "Permanently delete", timeout: 30000,
     }).then((d) => {
       // Two different "queued" answers meet here. The server's own async
       // delete answers {queued: true, deleteMode: "queued", jobId} - it HAS
@@ -3053,8 +3065,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=236";
-        const FLYER = "images/brand/logo-flyer.jpg?v=236";
+        const LOGO = "images/brand/logo.jpg?v=237";
+        const FLYER = "images/brand/logo-flyer.jpg?v=237";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -3269,7 +3281,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=236" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=237" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3568,7 +3580,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=236" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=237" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3704,7 +3716,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=236", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=237", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3738,7 +3750,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=236";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=237";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3797,7 +3809,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=236");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=237");
     document.title = title;
     [
       ["name", "description", description],

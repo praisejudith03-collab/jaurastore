@@ -2790,8 +2790,16 @@ def delete_order(order_id):
 
 # ------------------------------------------------------------------ helpers
 def _now():
+    """ISO-8601 UTC "now", at full precision, for every product write.
+
+    Seconds were not enough: two admin saves inside the same second wrote the
+    SAME updated_at, so "which copy is the newest" (catalogue dedupe, the
+    write-lock's ``p_updated_at > p_previous_updated_at`` test and the audit
+    trail) could not tell the row the owner had just saved from the older one
+    it replaced - and the older copy was the one that kept rendering.
+    """
     import datetime
-    return datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    return datetime.datetime.utcnow().isoformat(timespec="microseconds") + "Z"
 
 
 # ---------------------------------------------------------- growth mirroring

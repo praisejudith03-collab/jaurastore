@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=236" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=237" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1397,10 +1397,15 @@ async function handleProductSubmit(e, existing) {
   // log without a customer-facing or toast warning.
   if (res && res.queued) {
     // The outbox will retry, but a queued write is not a confirmed product save.
+    // When the SERVER answered and refused, its reason ("the products table is
+    // missing the column …", "the cover is not a public Storage URL", …) is
+    // printed here; a silent queue entry made a rejected save look like it had
+    // simply gone through.
+    const why = res.error ? " The server said: " + res.error : "";
     if (window.__editMediaNeedsSave) {
-      setMediaSaveStatus("Product save is queued but not yet confirmed. Your uploaded photo and form entries are still here; wait for confirmation or retry Save Product.", true);
+      setMediaSaveStatus("Product save is queued but not yet confirmed." + why + " Your uploaded photo and form entries are still here; wait for confirmation or retry Save Product.", true);
     } else {
-      JA.toast("Product save is queued but not yet confirmed. Keep this editor open and retry if it does not complete.");
+      JA.toast("Product save is queued but not confirmed — it is NOT on the shop yet." + why);
     }
     return;
   }
@@ -1413,8 +1418,28 @@ async function handleProductSubmit(e, existing) {
     return;
   }
   let savedMsg;
+  const publish = (res && res.data) || null;
+  const hiddenOnPurpose = publish && publish.live === false
+    && String(publish.publishStage || "") === "hidden" && !isOnline;
   if (res && res.mirrored === false) {
     savedMsg = "Saved on the server only — not yet on the cloud copy. Tap Retry now.";
+  } else if (hiddenOnPurpose) {
+    // The owner just switched the product off: "not in the shop" is the point.
+    savedMsg = stock > 0
+      ? `Saved successfully · Hidden from the store · ${images.length} photo(s).`
+      : "Saved successfully · Hidden from the store · Out of stock.";
+  } else if (publish && publish.live === false) {
+    // The write was confirmed but the catalogue build drops the row, so the
+    // shop is NOT showing it. Say exactly that, with the server's reason
+    // ("the id is still on the durable deleted list…", "the row is saved
+    // with online = false", …) instead of the old unconditional "Live on the
+    // store now" - that sentence is why a hidden product looked saved.
+    savedMsg = "Saved, but the shop is NOT showing it yet: "
+      + (publish.publishReason || "the catalogue is filtering this product out")
+      + ".";
+    if (window.__editMediaNeedsSave) {
+      setMediaSaveStatus(savedMsg, true);
+    }
   } else {
     const liveState = isOnline ? "Live on the store now" : "Hidden from the store";
     // The owner's wording: every confirmed save says "Saved successfully", even
@@ -5049,7 +5074,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=236" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=237" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5457,7 +5482,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=236", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=237", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");
