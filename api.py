@@ -2905,18 +2905,18 @@ def admin_needs_attention():
             # separate from the supplier-linked queue: a sold-out product
             # without a supplier link still has to be visible somewhere.
             out_of_stock.append(item)
-        option_links = (product.get("optionSupplierSku")
-                        or product.get("optionSupplierUrls")
-                        or product.get("option_supplier_urls") or {})
-        has_supplier_link = bool(
-            product.get("supplierId") or product.get("supplierSku")
-            or product.get("supplierUrl") or product.get("supplier_url")
-            or (isinstance(option_links, dict) and any(bool(v) for v in option_links.values()))
-        )
-        if has_supplier_link and qty <= 0:
-            supplier_out_of_stock.append(item)
-        elif has_supplier_link and qty <= threshold:
-            supplier_low_stock.append(item)
+        # Supplier queues: only a supplier low/out that is still NEW for an
+        # item the shop is selling (active on the website and in stock). A
+        # variant the owner already zeroed, or a hidden/trashed product, is
+        # handled and is left out, so the dashboard matches Supplier Alerts.
+        supplier_status = str(product.get("supplier_status") or "ok")
+        if supplier_status in ("out_of_stock", "low_stock"):
+            variant = "" if row.get("variant_key") in (None, "", "__default__") else str(row.get("variant_key"))
+            if catalog_mod.supplier_alert_sellable(product, variant):
+                if supplier_status == "out_of_stock":
+                    supplier_out_of_stock.append(item)
+                else:
+                    supplier_low_stock.append(item)
     stock_sort = lambda row: (int(row.get("qty") or 0), str(row.get("name") or ""))
     # Only the FIRST page of each queue is shipped: the dashboard renders the
     # count on a summary line and pages the list on demand, so a 900-row
@@ -6424,14 +6424,20 @@ def admin_sync_status():
 @api.get("/admin/supplier-alerts")
 @authmod.require_admin
 def admin_supplier_alerts():
-    """Return supplier diagnostics without conflating them with shop stock."""
-    rows = supabase_store.products_table_rows()
-    if rows is None:
-        rows = catalog_mod.merged(include_hidden=True)
+    """Supplier low/out items that the shop is still selling.
+
+    The list is limited to items ACTIVE on the website and IN STOCK there. A
+    supplier low/out on something the owner already hid, trashed or set to
+    zero is left out (counted as ``excluded``), so the list stays clean.
+    """
     alerts = []
-    for row in rows or []:
-        status = str((row or {}).get("supplier_status") or "ok")
+    excluded = 0
+    for row in catalog_mod.supplier_alert_rows():
+        status = str(row.get("supplier_status") or "ok")
         if status not in {"out_of_stock", "low_stock"}:
+            continue
+        if not catalog_mod.supplier_alert_sellable(row):
+            excluded += 1
             continue
         alerts.append({"id": str(row.get("id") or ""), "name": row.get("name") or "",
                        "image": row.get("image_url") or row.get("image") or "",
@@ -6439,14 +6445,13 @@ def admin_supplier_alerts():
                        "priceNgn": row.get("priceNgn"), "priceCfa": row.get("priceCfa"),
                        "stock": catalog_mod.stock_of(row),
                        "status": status,
-                       "online": row.get("online") is not False,
-                       "storeOutOfStock": catalog_mod.stock_of(row) == 0})
+                       "online": True})
     alerts.sort(key=lambda a: (a["status"] != "out_of_stock", str(a["name"]).lower()))
     return jsonify(ok=True, alerts=alerts,
                    counts={"total": len(alerts),
                            "outOfStock": sum(1 for a in alerts if a["status"] == "out_of_stock"),
                            "lowStock": sum(1 for a in alerts if a["status"] == "low_stock"),
-                           "hidden": sum(1 for a in alerts if a["storeOutOfStock"])})
+                           "excluded": excluded})
 
 
 @api.post("/admin/supplier-alerts/<pid>/toggle-out-of-stock")

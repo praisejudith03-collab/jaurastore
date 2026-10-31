@@ -1959,6 +1959,67 @@ def is_live_product(product):
     return not is_deleted_product(product) and product.get("online") is not False
 
 
+def supplier_alert_sellable(product, option=""):
+    """True when the shop is selling this product (or this variant) right now.
+
+    The Supplier Alerts list and its owner emails only concern items that are
+    ACTIVE on the website AND IN STOCK there. A product the owner has hidden,
+    trashed, or already set to zero is handled, so a supplier change on it is
+    not news and must neither be listed nor emailed. For a variant, its own
+    optionStock figure must also be above zero.
+    """
+    if not is_live_product(product):
+        return False
+    if stock_of(product) <= 0:
+        return False
+    option = str(option or "").strip()
+    if option:
+        option_stock = product.get("optionStock")
+        if isinstance(option_stock, dict) and option in option_stock:
+            try:
+                return int(float(option_stock.get(option) or 0)) > 0
+            except (TypeError, ValueError):
+                return False
+    return True
+
+
+def supplier_alert_rows():
+    """Every product row the Supplier Alerts screen and its drain judge.
+
+    One source for both, so the list and the email cannot disagree about
+    which items are live. Supabase's products table when reachable, otherwise
+    the merged local catalogue.
+    """
+    rows = None
+    try:
+        import supabase_store
+        rows = supabase_store.products_table_rows()
+    except Exception:
+        rows = None
+    if rows is None:
+        rows = merged(include_hidden=True)
+    return [row for row in (rows or []) if isinstance(row, dict)]
+
+
+def supplier_alert_listing(pid):
+    """The current shop listing for one product id, read fresh. None if gone.
+
+    The supplier watchdog picks its candidates minutes before it reads the
+    supplier page, so the product dict it holds can be stale. Alerts are
+    decided against this fresh read instead.
+    """
+    pid = str(pid or "").strip()
+    if not pid:
+        return None
+    if _prod_source():
+        row = _read_back_product(pid)
+        return dict(row) if isinstance(row, dict) else None
+    for row in merged(include_hidden=True):
+        if isinstance(row, dict) and str(row.get("id") or "").strip() == pid:
+            return dict(row)
+    return None
+
+
 def merged(include_hidden=False):
     """Seed products + every admin edit, minus what was deleted.
 
