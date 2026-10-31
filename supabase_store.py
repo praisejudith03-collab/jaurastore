@@ -634,6 +634,50 @@ _CRITICAL_PRODUCT_COLUMNS = frozenset({
     "supplierCost", "optionSupplierCost",
 })
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
+# The same fact in both spellings: PostgREST's schema-cache message and the raw
+# Postgres 42703 "column ... does not exist" that a direct connection returns.
+_MISSING_COLUMN_ANY_RE = re.compile(
+    r"Could not find the '([^']+)' column"
+    r"|column \"?([A-Za-z_][A-Za-z0-9_]*)\"? (?:of relation \S+ )?does not exist")
+
+
+def _missing_column_name(exc):
+    """The column a write failed on because the table does not have it, or ''."""
+    match = _MISSING_COLUMN_ANY_RE.search(str(exc or ""))
+    if not match:
+        return ""
+    return match.group(1) or match.group(2) or ""
+
+
+def _only_default_flag(rows, key):
+    """True when every row carries ``key`` as not-set (False / NULL) or not at all.
+
+    Dropping such a flag from a write is lossless. A truthy value is a real
+    marker (a tombstone) and must never be silently removed.
+    """
+    return all(row.get(key) in (None, False) for row in rows if isinstance(row, dict))
+
+
+def _without_key(row, key):
+    return {k: v for k, v in dict(row or {}).items() if k != key}
+
+
+def _note_optional_product_column(col):
+    """Log, and once per process record, that an optional column is absent.
+
+    The save itself is not refused: the missing column carried only its
+    default value. The durable warning tells the owner to run the migration.
+    """
+    global _OPTIONAL_COLUMN_NOTED
+    print(f"[supabase] products table has no {col!r} column; saving without it. "
+          f"Run migrations/20261031_products_is_deleted.sql.")
+    if col in _OPTIONAL_COLUMN_NOTED:
+        return
+    _OPTIONAL_COLUMN_NOTED.add(col)
+    _warn_missing_product_columns([col], refused=False)
+
+
+_OPTIONAL_COLUMN_NOTED = set()
 
 
 def _enforce_public_catalog_images():
@@ -832,7 +876,7 @@ def _upsert_products_resilient(rows):
     if c is None:
         return _note_write_blocker("the Supabase client is not configured")
     attempt_rows = [dict(r) for r in pending]
-    for _ in range(3):
+    for _ in range(4):
         try:
             c.table("products").upsert(attempt_rows).execute()
             return True
@@ -842,6 +886,17 @@ def _upsert_products_resilient(rows):
             if col == "is_active" and any("is_active" in r for r in attempt_rows):
                 attempt_rows = [{k: v for k, v in r.items() if k != "is_active"}
                                 for r in attempt_rows]
+                continue
+            if (_missing_column_name(exc) == "is_deleted"
+                    and _only_default_flag(attempt_rows, "is_deleted")):
+                # An older products table without the Trash Bin flag. Every
+                # row here says is_deleted=false (the default), and without the
+                # column no tombstone can exist, so dropping the flag loses
+                # nothing: the save goes through and the owner is told to run
+                # the migration. A row that really carries is_deleted=true is
+                # still refused below, so a trashed piece is never revived.
+                attempt_rows = [_without_key(r, "is_deleted") for r in attempt_rows]
+                _note_optional_product_column("is_deleted")
                 continue
             if _is_category_fk_error(exc) and any(r.get("category_id") for r in attempt_rows):
                 print("[supabase] products upsert: category_id not in categories table; "
@@ -985,7 +1040,7 @@ def update_product_fields(product, dirty_fields):
     elif patch.get("online") is True:
         patch["is_active"] = True
         patch["is_deleted"] = False
-    for _ in range(3):
+    for _ in range(4):
         try:
             result = (c.table("products").update(patch).eq("id", pid)
                       .select("*").execute())
@@ -1008,6 +1063,13 @@ def update_product_fields(product, dirty_fields):
             col = missing_column.group(1) if missing_column else ""
             if col == "is_active" and "is_active" in patch:
                 patch.pop("is_active", None)
+                continue
+            if (_missing_column_name(exc) == "is_deleted" and "is_deleted" in patch
+                    and _only_default_flag([patch], "is_deleted")):
+                # Same rule as the full save: an absent Trash Bin flag that is
+                # only ever false is dropped, and the save still lands.
+                patch.pop("is_deleted", None)
+                _note_optional_product_column("is_deleted")
                 continue
             if _is_category_fk_error(exc) and patch.get("category_id"):
                 patch["category_id"] = None
@@ -2918,22 +2980,37 @@ def save_supplier_sync_warnings(warnings):
 _SCHEMA_WARNING_KEY = "products_schema_warning"
 
 
-def _warn_missing_product_columns(dropped):
-    """Record a durable warning when any product column could not persist."""
+def _warn_missing_product_columns(dropped, refused=True):
+    """Record a durable warning when any product column could not persist.
+
+    ``refused=True`` (the default) means the save was refused. ``refused=False``
+    means the save went through without an optional column that only carried
+    its default value (see ``_note_optional_product_column``).
+    """
     cols = sorted({str(col or "").strip() for col in (dropped or []) if str(col or "").strip()})
     if not cols:
         return
+    if refused:
+        reason = ("The Supabase products table is missing column(s) "
+                  + ", ".join(cols) + ". The admin save was refused so "
+                  "entered data cannot be silently dropped. Run the "
+                  "products migration in supabase_schema.sql, then save again.")
+        code = "products_table_missing_columns"
+    else:
+        reason = ("The Supabase products table is missing the optional column(s) "
+                  + ", ".join(cols) + ". Saves continue without it: every product "
+                  "is treated as not deleted until it is added. Run "
+                  "migrations/20261031_products_is_deleted.sql in the Supabase SQL "
+                  "editor to finish the upgrade.")
+        code = "products_table_optional_columns_missing"
     try:
         warnings = [w for w in (load_supplier_sync_warnings() or [])
                     if isinstance(w, dict) and w.get("product_id") != _SCHEMA_WARNING_KEY]
         warnings.append({
             "product_id": _SCHEMA_WARNING_KEY,
             "product_name": "Product table columns",
-            "code": "products_table_missing_columns",
-            "reason": ("The Supabase products table is missing column(s) "
-                       + ", ".join(cols) + ". The admin save was refused so "
-                       "entered data cannot be silently dropped. Run the "
-                       "products migration in supabase_schema.sql, then save again."),
+            "code": code,
+            "reason": reason,
             "at": _now(),
         })
         save_supplier_sync_warnings(warnings)

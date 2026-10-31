@@ -102,8 +102,18 @@ def test_the_collector_is_throttled(client, monkeypatch):
     """A burst of catalogue reads must not spend its time in gc."""
     calls = []
     real = memory_manager.gc.collect
-    monkeypatch.setattr(memory_manager.gc, "collect",
-                        lambda *a, **k: calls.append(a) or real(*a, **k))
+    # ``gc`` is the process-wide module, so the patch also sees background
+    # threads (scheduler, task queue) that sweep at the same time. Only the
+    # sweeps this test makes itself, on its own thread, are counted.
+    import threading
+    me = threading.get_ident()
+
+    def _record(*a, **k):
+        if threading.get_ident() == me:
+            calls.append(a)
+        return real(*a, **k)
+
+    monkeypatch.setattr(memory_manager.gc, "collect", _record)
     memory_manager.reset_for_tests()
     for _ in range(5):
         memory_manager.collect()

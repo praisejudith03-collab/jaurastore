@@ -325,11 +325,14 @@ def test_supplier_alerts_carry_everything_the_tab_renders(client, monkeypatch):
     body = client.get("/api/admin/supplier-alerts").get_json()
     assert body["ok"] is True
     alerts = {a["id"]: a for a in body["alerts"]}
-    assert set(alerts) == {"p-out", "p-low"}          # 'ok' rows are not alerts
-    assert alerts["p-out"]["priceNgn"] == 12000
-    assert alerts["p-out"]["supplierUrl"].startswith("https://supplier.example/")
-    assert alerts["p-low"]["storeOutOfStock"] is False
-    assert body["counts"] == {"total": 2, "outOfStock": 1, "lowStock": 1, "hidden": 1}
+    # 'ok' rows are not alerts. p-out is zero on the website already, so the
+    # owner has handled it: it is left out of the list and counted as excluded.
+    assert set(alerts) == {"p-low"}
+    assert alerts["p-low"]["stock"] == 2 and "storeOutOfStock" not in alerts["p-low"]
+    # No readable ledger here, so the item is shown as new (never hidden as seen).
+    assert body["ledgerReady"] is False
+    assert body["counts"] == {"total": 1, "outOfStock": 0, "lowStock": 1, "excluded": 1,
+                              "unseen": 1, "seen": 0}
 
 
 def test_walkin_sale_returns_revenue_and_net_profit(client, monkeypatch):

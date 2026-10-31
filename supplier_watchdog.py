@@ -1168,22 +1168,34 @@ def _record_stock_alerts(p: Dict[str, Any], readings) -> None:
     supplier's RAW quantity — never a buffered would-be shop quantity — so
     "supplier has 3 left" in the email is the number the supplier printed.
     Shop stock is included for context only; nothing here writes it.
+
+    Only ACTIVE, IN-STOCK items are alerted on. The listing is re-read here,
+    because ``p`` was picked minutes before the supplier page was fetched and
+    the owner may have hidden or zeroed the item in the meantime. A reading
+    for an item (or variant) the shop is not selling is already handled, so
+    it is never queued for email.
     """
     try:
         import supplier_alerts
-        option_stock = p.get("optionStock") if isinstance(p.get("optionStock"), dict) else {}
+        pid = str(p.get("id") or "")
+        listing = catalog_mod.supplier_alert_listing(pid)
+        if not isinstance(listing, dict):
+            return                      # deleted, or unreadable: nothing to tell
+        option_stock = listing.get("optionStock") if isinstance(listing.get("optionStock"), dict) else {}
         observations = []
         for option, qty, flagged in readings or []:
+            if not catalog_mod.supplier_alert_sellable(listing, option):
+                continue
             if option:
                 shop_stock = option_stock.get(option)
             else:
-                shop_stock = p.get("stock_quantity", p.get("stock"))
+                shop_stock = catalog_mod.stock_of(listing)
             try:
                 shop_stock = int(float(shop_stock)) if shop_stock is not None else None
             except (TypeError, ValueError):
                 shop_stock = None
             observations.append({
-                "product_id": str(p.get("id") or ""),
+                "product_id": pid,
                 "product_name": str(p.get("name") or ""),
                 "sku": str(p.get("sku") or ""),
                 "option": str(option or ""),
@@ -1191,7 +1203,8 @@ def _record_stock_alerts(p: Dict[str, Any], readings) -> None:
                 "flagged": bool(flagged),
                 "shop_stock": shop_stock,
             })
-        supplier_alerts.record_observations(observations)
+        if observations:
+            supplier_alerts.record_observations(observations)
     except Exception:
         pass
 

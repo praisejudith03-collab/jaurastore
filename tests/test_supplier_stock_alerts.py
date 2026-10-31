@@ -19,6 +19,12 @@ import supplier_alerts  # noqa: E402
 import supplier_watchdog  # noqa: E402
 
 
+def _live(product_id, option=""):
+    """The drain's live check, stubbed as "still selling". These tests cover the
+    mail/claim mechanics; the live-only rule has its own tests elsewhere."""
+    return True
+
+
 def _obs(qty, option="", flagged=False, pid="jau-perf-1"):
     return {"product_id": pid, "product_name": "Parfum Élégance",
             "sku": "JAU-P1", "option": option, "supplier_qty": qty,
@@ -75,7 +81,7 @@ def test_escalation_low_to_out_queues_a_fresh_alert_after_the_first_was_sent():
     sent = []
     out = supplier_alerts.drain_pending_alerts(
         send=lambda alerts: (sent.extend(alerts), (True, "ok"))[1],
-        load=store.load, save=store.save)
+        load=store.load, save=store.save, is_live=_live)
     assert out["sent"] is True and len(sent) == 1
     # Same low level after mailing: silence.
     assert supplier_alerts.record_observations([_obs(2)], store.load, store.save)["pending"] == 0
@@ -87,7 +93,8 @@ def test_recovery_clears_the_entry_so_the_next_drop_alerts_again():
     store = _Store({})
     supplier_alerts.record_observations([_obs(0)], store.load, store.save)
     supplier_alerts.drain_pending_alerts(send=lambda a: (True, "ok"),
-                                         load=store.load, save=store.save)
+                                         load=store.load, save=store.save,
+                                         is_live=_live)
     supplier_alerts.record_observations([_obs(40)], store.load, store.save)
     assert supplier_alerts.pending_alerts(store.state) == []
     assert supplier_alerts.record_observations([_obs(5)], store.load, store.save)["pending"] == 1
@@ -114,10 +121,12 @@ def test_failed_send_leaves_alerts_pending_for_the_next_drain():
     store = _Store({})
     supplier_alerts.record_observations([_obs(0)], store.load, store.save)
     out = supplier_alerts.drain_pending_alerts(send=lambda a: (False, "not configured"),
-                                               load=store.load, save=store.save)
+                                               load=store.load, save=store.save,
+                                               is_live=_live)
     assert out["sent"] is False and out["pending"] == 1
     out = supplier_alerts.drain_pending_alerts(send=lambda a: (True, "ok"),
-                                               load=store.load, save=store.save)
+                                               load=store.load, save=store.save,
+                                               is_live=_live)
     assert out["sent"] is True and out["pending"] == 0
 
 
