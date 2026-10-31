@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=235" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=236" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -269,6 +269,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
       // desk renders fake stock and an editor SAVE would commit it.
       try { await JA.reloadCatalog(); } catch (e) {}
       paintDesk();
+      void autoSyncAdminPending(true);
     }
     else if (/email/i.test(res.error || "")) {
       loginNeedsEmail = true;
@@ -1335,6 +1336,9 @@ async function handleProductSubmit(e, existing) {
       nameFr: String(fd.get("nameFr") || "").trim(),
       category: savedCategory,
       category_id: categoryId,
+      online: isOnline,
+      is_active: isOnline,
+      is_deleted: false,
       priceNgn,
       priceCfa: toCfa(priceNgn),
       image,
@@ -1901,6 +1905,8 @@ function productsTable() {
   const qVal = JA.escape(prodSearchQ);
   const liveCount = all.filter((p) => p.online !== false).length;
   const hiddenCount = all.length - liveCount;
+  const pendingSync = JA.syncPending ? JA.syncPending() : 0;
+  const syncBanner = `<div class="admin-card" id="products-sync-banner" ${pendingSync ? "" : "hidden"} style="margin:10px 0;padding:12px 14px"><p class="admin-note" id="products-sync-note" style="margin:0 0 8px">${pendingSync} product change(s) saved on this device are waiting to sync to the live website.</p><button type="button" class="btn btn-line" id="sync-products-now">Sync to live store</button></div>`;
   const viewTab = (id, label, count) =>
     `<button type="button" role="tab" data-prod-view="${id}" class="${prodView === id ? "is-on" : ""}" aria-selected="${prodView === id ? "true" : "false"}">${label} <b id="prod-tab-${id}">${count}</b></button>`;
   return `<div class="adx-list-head">
@@ -1908,6 +1914,7 @@ function productsTable() {
       ${backBtn}
       ${trashBtn}
       ${exportBtn}
+      ${syncBanner}
       <div class="adx-viewtabs" role="tablist" aria-label="Product visibility">
         ${viewTab("all", "All", all.length)}${viewTab("live", "Live", liveCount)}${viewTab("hidden", "Hidden / Drafts", hiddenCount)}
       </div>
@@ -5042,7 +5049,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=235" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=236" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5151,6 +5158,7 @@ function paintDesk(tab = "analytics") {
   $("#cancel-edit")?.addEventListener("click", () => { restoreProductsReturn(); });
   $("#add-product")?.addEventListener("click", () => { rememberProductsReturn(); editingId = "new"; paintDesk("products"); });
   $("#open-trash")?.addEventListener("click", () => { toggleTrashDrawer(); });
+  $("#sync-products-now")?.addEventListener("click", () => { void autoSyncAdminPending(false); });
   bindMedia(); bindOptions(); bindCategories(); bindCfaPreview(); bindNotePrompt();
 
   if (tab === "products" && !editingId) {
@@ -5449,7 +5457,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=235", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=236", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -6717,6 +6725,65 @@ function applyAdminDeepLink() {
   return desk;
 }
 
+let __adminAutoSyncBusy = false;
+function updateProductsSyncBanner() {
+  const banner = document.getElementById("products-sync-banner");
+  const note = document.getElementById("products-sync-note");
+  const pending = JA.syncPending ? JA.syncPending() : 0;
+  if (note) {
+    note.textContent = `${pending} product change(s) saved on this device are waiting to sync to the live website.`;
+  }
+  if (banner) banner.hidden = !pending;
+}
+
+async function autoSyncAdminPending(quiet = true) {
+  if (__adminAutoSyncBusy) return false;
+  const before = JA.syncPending ? JA.syncPending() : 0;
+  if (!before) {
+    updateProductsSyncBanner();
+    return false;
+  }
+  __adminAutoSyncBusy = true;
+  const btn = document.getElementById("sync-products-now");
+  if (btn) { btn.disabled = true; btn.textContent = "Syncing…"; }
+  try {
+    if (window.JA_NET && typeof window.JA_NET.flush === "function") {
+      await window.JA_NET.flush(true);
+    }
+    const netPending = window.JA_NET && typeof window.JA_NET.pending === "function"
+      ? window.JA_NET.pending() : 0;
+    const totalPending = JA.syncPending ? JA.syncPending() : 0;
+    if (totalPending > netPending && typeof JA.retryStrandedProducts === "function") {
+      await JA.retryStrandedProducts();
+    }
+    const after = JA.syncPending ? JA.syncPending() : 0;
+    if (after === 0) {
+      if (typeof JA.reloadCatalog === "function") {
+        try { await JA.reloadCatalog(); } catch (e) {}
+      }
+      if (!editingId && document.getElementById("prod-grid")) {
+        renderProdGrid();
+        bindProdGridEvents();
+      }
+      JA.success("Synced pending product(s) to the live store.");
+      return true;
+    }
+    if (!quiet) {
+      JA.toast(`${after} change(s) still waiting to sync. Check your connection and try again.`);
+    }
+    return false;
+  } catch (err) {
+    if (!quiet) {
+      JA.toast((err && err.message) || "Could not sync pending changes yet. Try again.");
+    }
+    return false;
+  } finally {
+    __adminAutoSyncBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = "Sync to live store"; }
+    updateProductsSyncBanner();
+  }
+}
+
 async function bootAdmin() {
   const root = document.getElementById("admin-root");
   if (root) root.innerHTML = `<div class="admin-live-loading" role="status" aria-live="polite"><div class="catalog-skeleton-head"></div><div class="catalog-skeleton-grid">${"<i></i>".repeat(6)}</div><strong>Loading live catalogue and stock…</strong></div>`;
@@ -6738,9 +6805,16 @@ async function bootAdmin() {
       const sel = document.getElementById("prod-cat");
       if (sel && (dashCat || prodCatSel)) sel.value = dashCat || prodCatSel;
     }
+    void autoSyncAdminPending(true);
   } else paintLogin();
 }
 document.addEventListener("DOMContentLoaded", bootAdmin);
+window.addEventListener("online", () => {
+  if (!editingId && !document.getElementById("login-form")) void autoSyncAdminPending(true);
+});
+if (window.JA_NET && typeof window.JA_NET.onStatus === "function") {
+  window.JA_NET.onStatus(() => { updateProductsSyncBanner(); });
+}
 
 /* ================================================== fresh data on refocus
  *
