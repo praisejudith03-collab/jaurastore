@@ -59,7 +59,7 @@ MERGEABLE_FIELDS = frozenset((
     # money
     "priceNgn", "compareNgn", "priceCfa", "compareCfa",
     # shelving
-    "category", "online", "featured", "sku",
+    "category", "category_id", "online", "featured", "sku",
     # media
     "image", "image_url", "imageUrl", "images", "video", "video_url",
     # stock

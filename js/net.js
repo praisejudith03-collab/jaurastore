@@ -65,10 +65,18 @@ window.JA_NET = (function () {
     try { localStorage.setItem(LS_KEY, JSON.stringify(rows)); return true; }
     catch (e) { return false; }
   }
+  function serializableJob(rec) {
+    if (!rec || typeof rec !== "object") return rec;
+    var copy = {};
+    Object.keys(rec).forEach(function (k) {
+      if (typeof rec[k] !== "function") copy[k] = rec[k];
+    });
+    return copy;
+  }
   function lsPut(rec) {
     if (rec.blob) return false;                     // files do not fit
     var rows = lsAll().filter(function (r) { return r.id !== rec.id; });
-    rows.push(rec);
+    rows.push(serializableJob(rec));
     return lsSave(rows);
   }
   function lsDelete(id) { lsSave(lsAll().filter(function (r) { return r.id !== id; })); }
@@ -79,7 +87,7 @@ window.JA_NET = (function () {
       return new Promise(function (resolve) {
         try {
           var tx = db.transaction(STORE, "readwrite");
-          tx.objectStore(STORE).put(job);
+          tx.objectStore(STORE).put(serializableJob(job));
           tx.oncomplete = function () { resolve(true); };
           tx.onerror = function () { resolve(false); };
         } catch (e) { resolve(false); }
@@ -385,6 +393,7 @@ window.JA_NET = (function () {
       recaptcha: job.recaptcha || "",
       label: job.label || "", timeout: job.timeout || 0,
       keepalive: !!job.keepalive,
+      onDone: job.onDone || null,
       tries: 0, nextAt: 0, createdAt: Date.now(),
       badgeHidden: !!quietIndicator, notifiedFailure: false,
     };
@@ -441,7 +450,11 @@ window.JA_NET = (function () {
         return send(rec).then(function (data) {
           drop(rec);
           if (rec.label && window.JA && JA.toast) JA.toast(rec.label + " saved.");
-          if (rec.onDone) { try { rec.onDone(data); } catch (e) {} }
+          if (rec.onDone) {
+            try { rec.onDone(data); } catch (e) {}
+          } else if (data && data.product && window.JA && typeof JA.applyServerProduct === "function") {
+            try { JA.applyServerProduct(data.product); } catch (e) {}
+          }
           return data;
         }, function (err) {
           rec.tries = (rec.tries || 0) + 1;

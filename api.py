@@ -5475,7 +5475,9 @@ def _product_save_response(payload, stored_row_hint=None):
 
     # A direct primary-key/legacy-id lookup preserves baseUpdatedAt receipts
     # and the existing per-field merge semantics without scanning the catalog.
-    if pid and stored_row is None:
+    # Brand-new product creates carry neither baseUpdatedAt nor mergeBase, so
+    # skip the lookup there to keep saves well inside the mobile deadline.
+    if pid and stored_row is None and (base_updated_at or (isinstance(merge_base, dict) and merge_base)):
         try:
             stored_row = catalog_mod.product_for_save(pid)
         except Exception:
