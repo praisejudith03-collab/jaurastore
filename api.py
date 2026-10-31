@@ -812,9 +812,38 @@ def admin_catalog_audit():
             no_price.append(pid)
         if "placeholder" in str(p.get("image") or "").lower():
             no_photo.append(pid)
+    # Rows the products table HAS but the published answer does not carry,
+    # each with the reason. "It saved, it is not in the shop" needs a name,
+    # not a count: this is that list.
+    try:
+        from supabase_store import load_deleted_ids, load_hard_deleted_ids
+        legacy_deleted = {str(x).strip() for x in (load_deleted_ids() or [])}
+        hard_deleted = {str(x).strip() for x in (load_hard_deleted_ids() or [])}
+    except Exception:
+        legacy_deleted, hard_deleted = set(), set()
+    dropped = []
+    for raw in (table_rows or []):
+        pid = str((raw or {}).get("id") or "").strip()
+        if not pid or pid in merged_ids:
+            continue
+        if pid in hard_deleted:
+            reason = "permanently deleted (deleted_products ledger)"
+        elif pid in legacy_deleted:
+            reason = "still on the durable deleted list"
+        elif catalog_mod.is_test_fixture(raw):
+            reason = "test fixture"
+        elif catalog_mod.is_permanently_removed(raw):
+            reason = "permanently removed"
+        elif catalog_mod.is_deleted_product(raw):
+            reason = "delete/archive flag on the row"
+        else:
+            reason = "folded into another row by dedupe (same name + slug/sku)"
+        dropped.append({"id": pid, "reason": reason})
+
     limit = sec.clean_int(request.args.get("limit"), 50, 1, 500)
     body = {
         "ok": True,
+        "notPublished": dropped[:limit],
         "counts": {
             "tableRows": len(table_rows) if table_rows is not None else None,
             "mergedRows": len(merged_rows),
@@ -5431,6 +5460,40 @@ def _product_save_meta(product):
     }
 
 
+def _publication_check(pid):
+    """Where one saved row does or does not reach the public storefront.
+
+    A save is only useful if the shop can show it. The write path used to
+    answer "Saved successfully - live on the store now" for every confirmed
+    row, even when the catalogue build drops it afterwards (a durable
+    tombstone from an earlier delete, a soft-delete flag set by another
+    writer, a dead ``source``, the fixture guard, or a name-confirmed dedupe
+    fold). That silence is the owner's "I saved it, it is not in the shop"
+    report, so every confirmed save now runs the storefront's own predicate
+    and reports the result.
+
+    The one case a save may legitimately undo - the id still sitting on the
+    legacy durable delete list from an earlier delete - is cleared here and
+    re-checked, so re-creating a product heals its own tombstone.
+    """
+    try:
+        import catalog as _catalog_mod
+        status = _catalog_mod.publication_status(pid)
+        if (not status.get("live")
+                and str(status.get("stage") or "") == "legacy-tombstone"):
+            try:
+                from supabase_store import clear_deleted_id
+                clear_deleted_id(pid)
+            except Exception:
+                pass
+            _invalidate_all_catalog_caches()
+            status = _catalog_mod.publication_status(pid)
+        return status
+    except Exception as exc:      # a broken check never fails a real save
+        return {"live": None, "stage": "check-failed",
+                "reason": f"{exc.__class__.__name__}"}
+
+
 def _product_save_response(payload, stored_row_hint=None):
     """Save a product without losing untouched concurrent fields.
 
@@ -5585,8 +5648,23 @@ def _product_save_response(payload, stored_row_hint=None):
     # so the storefront and the /admin dashboard both read fresh database
     # rows on the next request.
     _invalidate_all_catalog_caches()
+    publication = _publication_check(product.get("id"))
     body = dict(ok=True, product=product, action=action, mirrored=mirrored,
                 meta=_product_save_meta(product))
+    if publication.get("live") is not None:
+        # The admin portal must never print "Live on the store now" for a row
+        # the catalogue build drops. ``live`` is the storefront's own answer,
+        # measured after the write, and ``publishReason`` names the filter.
+        body["live"] = bool(publication.get("live"))
+        if not publication.get("live"):
+            body["publishStage"] = str(publication.get("stage") or "")
+            body["publishReason"] = str(publication.get("reason") or "")
+            try:
+                audit(authmod.current_admin(), "product.not_live",
+                      f"{product.get('id')} stage={body['publishStage']} "
+                      f"reason={body['publishReason']}", _ip())
+            except Exception:
+                pass
     if overwrote_updated_at:
         # Retained only for API diagnostics; the save remains successful and
         # audit logging above is the operator-facing history.

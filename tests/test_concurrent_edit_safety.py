@@ -404,7 +404,11 @@ def test_the_offline_queue_never_retries_a_permanent_failure():
     call must reject the promise, never sit in the outbox to be resent."""
     js = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
     assert "r.status >= 500 || r.status === 429 || r.status === 0" in js
-    assert "if (err.retryable) return enqueue(job, true);" in js
+    # A retryable failure is queued, and the caller now gets the server's own
+    # reason back (a 5xx that ANSWERED is not a flaky connection).
+    assert "if (!err.retryable) throw err;" in js
+    assert "return enqueue(job, true).then(function (queued) {" in js
+    assert "error: served ? String(err.data.detail || err.data.error) : \"\"," in js
 
 
 def test_a_permanently_failed_job_is_dropped_so_the_pill_closes():
@@ -450,13 +454,13 @@ def test_the_sync_pill_slides_away_and_caps_its_lifetime():
 def test_regular_network_requests_have_a_five_second_end_to_end_deadline():
     """The timeout includes CSRF, reCAPTCHA, headers and response-body reads."""
     js = open(os.path.join(ROOT, "js", "net.js"), encoding="utf-8").read()
-    assert "Number(opts.timeout) || 5000" in js
+    assert "Number(opts.timeout) || 5000" in js          # the default stays 5 s
     assert "var abortMs = job.timeout || (job.bodyKind === \"blob\" ? 300000 : 5000);" in js
     assert "Promise.race([attempt, timedOut])" in js
     # Failed/slow requests keep their durable outbox job but cannot recreate
     # the floating badge; the caller/background retry uses a temporary toast.
     api = js[js.index("function api(path, opts)"):js.index("function pending()")]
-    assert "return enqueue(job, true);" in api
+    assert "return enqueue(job, true).then(function (queued) {" in api
     flush = js[js.index("function flush(force)"):js.index("function api(path, opts)")]
     assert "is taking too long" in flush
     assert "rec.badgeHidden = true;" in flush

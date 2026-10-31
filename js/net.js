@@ -9,6 +9,15 @@ window.JA_NET = (function () {
   var STORE = "jobs";
   var MAX_ATTEMPTS = 8;
   var MAX_QUEUE = 300;
+  // How long a JSON request may take. 5 s stays the default (a shopper's
+  // catalogue read, an order), but a caller may ASK for more: an admin
+  // product save performs a photo check, a database write and a read-back on
+  // a free Render instance behind a mobile connection. The old
+  // Math.min(5000, ...) silently capped every request at five seconds, so a
+  // save that legitimately needed eight was aborted, reported as "taking too
+  // long" and pushed into the outbox - which is how a product could look
+  // saved in the portal while never reaching the shop.
+  var MAX_JSON_TIMEOUT_MS = 120000;
   // The floating sync pill is feedback, not a permanent queue monitor. Keep
   // it transient: it slides away 1.4s after it appears and has a hard 5s cap.
   // Durable offline jobs remain in IndexedDB/localStorage and the admin's
@@ -499,7 +508,9 @@ window.JA_NET = (function () {
       label: opts.label || "",
       timeout: opts.blob
         ? (opts.timeout || 300000)
-        : Math.min(5000, Math.max(1, Number(opts.timeout) || 5000)),
+        // 5000 stays the default end-to-end deadline; a caller that asks for
+        // more (an admin product save) gets it, up to the hard ceiling.
+        : Math.min(MAX_JSON_TIMEOUT_MS, Math.max(1, Number(opts.timeout) || 5000)),
       keepalive: !!opts.keepalive,
       onDone: opts.onDone || null,
     };
@@ -516,8 +527,26 @@ window.JA_NET = (function () {
       // A failed foreground request is queued for data safety, but it is no
       // longer an active sync. Hide its floating pill and let the calling
       // action show the ordinary temporary toast (Product/Delete/etc.).
-      if (err.retryable) return enqueue(job, true);
-      throw err;
+      if (!err.retryable) throw err;
+      return enqueue(job, true).then(function (queued) {
+        /* A server that ANSWERED and refused (5xx / 429) is not a flaky
+           connection: it has a reason, and the caller must be able to show
+           it. Swallowing it here is how "the product could not be saved to
+           Supabase: <exact column / cover / constraint>" used to arrive as a
+           silent queue entry, so the owner believed a rejected save had
+           simply gone through. A timeout or a dropped connection carries no
+           server message, so those stay quiet - the durable outbox retries
+           them and a toast would be noise. */
+        var served = err && err.data && (err.data.detail || err.data.error);
+        return {
+          queued: true,
+          id: queued.id,
+          persisted: queued.persisted,
+          status: (err && err.status) || 0,
+          error: served ? String(err.data.detail || err.data.error) : "",
+          timeout: !!(err && err.timeout),
+        };
+      });
     });
   }
 
