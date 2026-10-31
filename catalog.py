@@ -770,6 +770,11 @@ def normalize(product):
         if option_stock:
             option_stock = {k: 0 for k in option_stock}
 
+    category_val = _folded_category(
+        sec.clean(product.get("category") or product.get("category_id"), 40))
+    raw_category_id = sec.clean(product.get("category_id"), 64)
+    category_id_val = (_folded_category(raw_category_id) if raw_category_id
+                       else (category_val or None))
     out = {
         "id": pid,
         # SKU generation is server-authoritative. A blank/invalid code is
@@ -780,8 +785,8 @@ def normalize(product):
                              "name": name, "id": pid}),
         "name": name,
         "nameFr": sec.clean(product.get("nameFr") or product.get("name_fr"), 200),
-        "category": sec.clean(product.get("category"), 40),
-        "category_id": sec.clean(product.get("category_id"), 64) or None,
+        "category": category_val,
+        "category_id": category_id_val,
         "priceCfa": cfa if cfa is not None else 0,
         "compareCfa": compare_cfa,
         "priceNgn": ngn if ngn is not None else 0,
@@ -2128,7 +2133,9 @@ def _with_french_description(product):
 def _fold_p(product):
     """Return a copy of ``product`` with any merged/legacy category remapped."""
     p = dict(product or {})
-    p["category"] = _folded_category(p.get("category"))
+    p["category"] = _folded_category(p.get("category") or p.get("category_id"))
+    if p.get("category_id"):
+        p["category_id"] = _folded_category(p.get("category_id"))
     return p
 
 

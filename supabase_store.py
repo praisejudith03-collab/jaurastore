@@ -82,6 +82,7 @@ SUPABASE_HTTP_TIMEOUT_SECONDS = 20.0
 _READ_TTL_SECONDS = 10.0
 _read_cache_lock = _threading.Lock()
 _read_cache = {}
+_read_cache_generation = 0
 
 
 def _read_cache_enabled():
@@ -109,18 +110,25 @@ def cached_read(key, fetch):
     now = _time.monotonic()
     with _read_cache_lock:
         hit = _read_cache.get(key)
+        generation = _read_cache_generation
     if hit and (now - hit[0]) < _READ_TTL_SECONDS:
         return _copy.deepcopy(hit[1])
     value = fetch()
     if value is not None:
         with _read_cache_lock:
-            _read_cache[key] = (_time.monotonic(), _copy.deepcopy(value))
+            # An in-flight pre-write read must not refill the cache after
+            # a writer invalidates it. The caller may finish with its old
+            # snapshot, but the next read must go back to the database.
+            if generation == _read_cache_generation:
+                _read_cache[key] = (_time.monotonic(), _copy.deepcopy(value))
     return value
 
 
 def invalidate_read_cache(*keys):
     """Drop cached reads. Called by every write path in this module."""
+    global _read_cache_generation
     with _read_cache_lock:
+        _read_cache_generation += 1
         if keys:
             for key in keys:
                 _read_cache.pop(key, None)
@@ -543,6 +551,10 @@ def _canonicalize_product(row, _c=None):
         p["image_url"] = p["image"]
     if p.get("image") is None and p.get("image_url") is not None:
         p["image"] = p["image_url"]
+    if not str(p.get("category") or "").strip() and str(p.get("category_id") or "").strip():
+        p["category"] = str(p.get("category_id")).strip()
+    if p.get("online") is None:
+        p["online"] = p.get("is_active") is not False
     # The canonical column wins by presence, not by truthiness. A NULL/blank
     # stock_quantity is zero stock; reading the legacy `stock` alias in that
     # case could silently resurrect inventory after a bad import.
@@ -778,6 +790,12 @@ def clear_write_blocker():
     _LAST_WRITE_BLOCKER = ""
 
 
+def _is_category_fk_error(exc):
+    msg = str(exc or "").lower()
+    return ("products_category_id_fkey" in msg
+            or ("category_id" in msg and "foreign key" in msg))
+
+
 def _upsert_products_resilient(rows):
     pending = [dict(r) for r in (rows or []) if r]
     if not pending:
@@ -813,23 +831,34 @@ def _upsert_products_resilient(rows):
     c = client()
     if c is None:
         return _note_write_blocker("the Supabase client is not configured")
-    try:
-        c.table("products").upsert(pending).execute()
-        return True
-    except Exception as exc:
-        match = _MISSING_COLUMN_RE.search(str(exc))
-        col = match.group(1) if match else ""
-        if col:
-            _warn_missing_product_columns([col])
-            print("[supabase] products upsert refused: products table is missing "
-                  f"column {col!r}; no retry was attempted because that would "
-                  "silently discard admin-entered data. Run supabase_schema.sql.")
-            return _note_write_blocker(
-                f"the products table is missing the column {col!r}; "
-                "run supabase_schema.sql")
-        else:
+    attempt_rows = [dict(r) for r in pending]
+    for _ in range(3):
+        try:
+            c.table("products").upsert(attempt_rows).execute()
+            return True
+        except Exception as exc:
+            match = _MISSING_COLUMN_RE.search(str(exc))
+            col = match.group(1) if match else ""
+            if col == "is_active" and any("is_active" in r for r in attempt_rows):
+                attempt_rows = [{k: v for k, v in r.items() if k != "is_active"}
+                                for r in attempt_rows]
+                continue
+            if _is_category_fk_error(exc) and any(r.get("category_id") for r in attempt_rows):
+                print("[supabase] products upsert: category_id not in categories table; "
+                      "retrying with category_id=None while preserving category.")
+                attempt_rows = [dict(r, category_id=None) for r in attempt_rows]
+                continue
+            if col:
+                _warn_missing_product_columns([col])
+                print("[supabase] products upsert refused: products table is missing "
+                      f"column {col!r}; no retry was attempted because that would "
+                      "silently discard admin-entered data. Run supabase_schema.sql.")
+                return _note_write_blocker(
+                    f"the products table is missing the column {col!r}; "
+                    "run supabase_schema.sql")
             print(f"[supabase] products upsert failed: {exc}")
-        return _note_write_blocker(f"database write failed: {str(exc)[:200]}")
+            return _note_write_blocker(f"database write failed: {str(exc)[:200]}")
+    return _note_write_blocker("database write failed after fallback retries")
 
 
 def upsert_products(products):
@@ -864,7 +893,9 @@ def upsert_products(products):
         # permanently-removed ids before this point, so clearing the SOFT
         # markers can never resurrect a hard delete.
         r["is_deleted"] = False
-        if str(r.get("source") or "").strip().lower() in ("deleted", "replaced"):
+        r["is_active"] = bool(r.get("online", True) is not False)
+        if (not str(r.get("source") or "").strip()
+                or str(r.get("source") or "").strip().lower() in ("deleted", "replaced", "draft")):
             r["source"] = "admin"
         rows.append(r)
     if not rows:
@@ -872,8 +903,9 @@ def upsert_products(products):
     ok = _upsert_products_resilient(rows)
     # A confirmed (or ambiguous) write must never leave the read cache serving
     # the pre-save row: the very next /api/catalog has to carry the new photo,
-    # price and stock the admin just saved.
-    invalidate_read_cache()
+    # price and stock the admin just saved. Keep unrelated growth_settings
+    # caches (deleted_ids, manual_stock_locks) intact so post-save checks stay fast.
+    invalidate_read_cache("products_rows", "dead_product_ids")
     return ok
 
 
@@ -882,7 +914,7 @@ def upsert_products(products):
 # touched columns, preserving every concurrent value without a catalogue read.
 _PRODUCT_PATCH_COLUMNS = {
     "name": {"name"}, "nameFr": {"nameFr"}, "description": {"description"},
-    "descriptionFr": {"descriptionFr"}, "sku": {"sku"}, "category": {"category"}, "category_id": {"category_id"},
+    "descriptionFr": {"descriptionFr"}, "sku": {"sku"}, "category": {"category", "category_id"}, "category_id": {"category_id"},
     "online": {"online"}, "featured": {"featured"}, "badge": {"badge"},
     "dimensions": {"dimensions"}, "enableCustomNote": {"enableCustomNote"},
     "customNotePrompt": {"customNotePrompt"}, "priceNgn": {"priceNgn", "priceCfa"},
@@ -950,30 +982,43 @@ def update_product_fields(product, dirty_fields):
                 return "error", None
             row = product_by_id(pid)
             return ("updated", row) if row else ("missing", None)
-    try:
-        result = (c.table("products").update(patch).eq("id", pid)
-                  .select("*").execute())
-        rows = _res_data(result)
-        if not rows:
-            return "missing", None
-        if hide:
-            if not set_product_online([pid], False):
-                return "error", None
-            # The update above was read back before the flag moved; report the
-            # row the way it now exists so the portal's "Hidden" tag is true.
-            rows[0] = dict(rows[0] or {}, online=False, is_active=False)
-        invalidate_read_cache()
-        return "updated", _canonicalize_product(rows[0], c)
-    except Exception as exc:
-        message = str(exc)
-        if "permanently deleted" in message.lower():
-            return "permanently-removed", None
-        missing_column = _MISSING_COLUMN_RE.search(message)
-        if missing_column:
-            _warn_missing_product_columns([missing_column.group(1)])
-        print(f"[supabase] product field update failed for {pid!r}: {exc}")
-        invalidate_read_cache()
-        return "error", None
+    elif patch.get("online") is True:
+        patch["is_active"] = True
+        patch["is_deleted"] = False
+    for _ in range(3):
+        try:
+            result = (c.table("products").update(patch).eq("id", pid)
+                      .select("*").execute())
+            rows = _res_data(result)
+            if not rows:
+                return "missing", None
+            if hide:
+                if not set_product_online([pid], False):
+                    return "error", None
+                # The update above was read back before the flag moved; report the
+                # row the way it now exists so the portal's "Hidden" tag is true.
+                rows[0] = dict(rows[0] or {}, online=False, is_active=False)
+            invalidate_read_cache("products_rows", "dead_product_ids")
+            return "updated", _canonicalize_product(rows[0], c)
+        except Exception as exc:
+            message = str(exc)
+            if "permanently deleted" in message.lower():
+                return "permanently-removed", None
+            missing_column = _MISSING_COLUMN_RE.search(message)
+            col = missing_column.group(1) if missing_column else ""
+            if col == "is_active" and "is_active" in patch:
+                patch.pop("is_active", None)
+                continue
+            if _is_category_fk_error(exc) and patch.get("category_id"):
+                patch["category_id"] = None
+                continue
+            if missing_column:
+                _warn_missing_product_columns([col])
+            print(f"[supabase] product field update failed for {pid!r}: {exc}")
+            invalidate_read_cache("products_rows", "dead_product_ids")
+            return "error", None
+    invalidate_read_cache("products_rows", "dead_product_ids")
+    return "error", None
 
 
 def delete_products(ids):

@@ -282,8 +282,14 @@ def _run_backup(logger=None):
 def _remirror(logger=None):
     import catalog as catalog_mod
     n = catalog_mod.remirror_strays()
-    if logger and n:
-        logger.info("remirrored %d local-only product(s) to Supabase", n)
+    if n:
+        try:
+            import api as _api
+            _api._invalidate_all_catalog_caches()
+        except Exception:
+            pass
+        if logger:
+            logger.info("remirrored %d local-only product(s) to Supabase", n)
 
 
 def _persist_counters(logger=None):

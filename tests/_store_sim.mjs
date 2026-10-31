@@ -50,6 +50,7 @@ function makeSandbox(servedProducts, opts = {}) {
     clear: () => storage.clear(),
   };
   const fetched = [];
+  const events = [];
   const sandbox = {
     console,
     setTimeout, clearTimeout, setInterval, clearInterval, AbortSignal,
@@ -63,7 +64,8 @@ function makeSandbox(servedProducts, opts = {}) {
     },
     localStorage,
     sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-    document: { body: { dataset: { page: opts.adminPage ? "admin" : "" } }, addEventListener: () => {}, removeEventListener: () => {}, createElement: () => ({ style: {}, setAttribute: () => {}, appendChild: () => {} }) },
+    CustomEvent: class { constructor(type) { this.type = type; } },
+    document: { dispatchEvent: (event) => { events.push(event.type); return true; }, body: { dataset: { page: opts.adminPage ? "admin" : "" } }, addEventListener: () => {}, removeEventListener: () => {}, createElement: () => ({ style: {}, setAttribute: () => {}, appendChild: () => {} }) },
     // The simulated window (sandbox is aliased to window below) must expose the
     // same event API a real browser does, since js/store.js registers listeners
     // (ja:store-status, focus, pageshow, scroll, pagehide) at load time.
@@ -85,7 +87,7 @@ function makeSandbox(servedProducts, opts = {}) {
       sandbox, { filename: "js/i18n-phrases.js" });
   }
   const JA = vm.runInContext("JA", sandbox);
-  return { JA, storage, fetched, sandbox };
+  return { JA, storage, fetched, sandbox, events };
 }
 
 const online = (p) => ({ ...p, online: true });
@@ -122,6 +124,25 @@ const offlineFixture = (id, name) => ({
     ids.size === expected.size && [...expected].every((id) => ids.has(id)));
   check("offline rows stay hidden on the storefront",
     !ids.has("jau-stock-a") && !ids.has("jau-mtot3318"));
+}
+
+// An open page must repaint for field-only updates and an empty live result.
+{
+  const served = [{ id: "live-one", name: "Live item", category: "beauty",
+    online: true, stock_available: 5, priceNgn: 1000 }];
+  const { JA, events } = makeSandbox(served);
+  await JA.ready;
+  events.length = 0;
+  served[0] = { ...served[0], stock_available: 2, category: "bags" };
+  await JA.refreshCatalog();
+  check("field-only catalogue changes trigger a repaint", events.includes("ja:catalog"));
+  check("new stock and category reach the storefront", JA.products()[0].stock_available === 2 && JA.products()[0].category === "bags");
+  events.length = 0;
+  await JA.refreshCatalog();
+  check("unchanged rows do not repaint", !events.includes("ja:catalog"));
+  served.length = 0;
+  await JA.refreshCatalog();
+  check("an empty live catalogue replaces stale rows", JA.products().length === 0 && events.includes("ja:catalog"));
 }
 
 // ------------------------------------- 2. slug / sku clashes hide no distinct product
