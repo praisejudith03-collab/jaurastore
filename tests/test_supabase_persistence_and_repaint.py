@@ -618,3 +618,31 @@ def test_storefront_count_equals_online_supabase_rows(client, iso_catalog,
     # offline rows stay visible to the owner (that is how they get re-listed)
     assert "jau-count-off" in admin_ids
     assert "jau-count-off" not in ids
+
+
+def test_new_product_and_category_edit_sync_to_public_catalog(client, iso_catalog, monkeypatch):
+    """A create and a dirty-field category/stock edit reach DB and public API."""
+    fake = _live_supabase(monkeypatch)
+    token = login(client)
+    headers = {"X-CSRF-Token": token}
+    row = {"id": "jau-sync-recent", "name": "Recent handbag", "category": "beauty",
+           "category_id": "beauty", "priceNgn": 12000, "stock": 4,
+           "stock_quantity": 4, "online": True}
+    response = client.post("/api/admin/products", json={"product": row}, headers=headers)
+    assert response.status_code == 200, response.data
+    base = response.get_json()["product"]
+    stored = _row_in(fake.tables["products"], row["id"])
+    assert stored["category_id"] == "beauty" and stored["stock_quantity"] == 4
+    assert stored["online"] is True and stored["is_deleted"] is False
+    public = next(p for p in client.get("/api/catalog").get_json()["products"] if p["id"] == row["id"])
+    assert public["category"] == "beauty" and public["stock_available"] == 4
+
+    edit = dict(base, category="bags", category_id="bags", stock=2, stock_quantity=2,
+                mergeBase=base, mergeFields=["category", "category_id", "stock", "stock_quantity"])
+    response = client.post("/api/admin/products", json={"product": edit}, headers=headers)
+    assert response.status_code == 200, response.data
+    stored = _row_in(fake.tables["products"], row["id"])
+    assert stored["category"] == stored["category_id"] == "bags"
+    assert stored["stock_quantity"] == 2
+    public = next(p for p in client.get("/api/products").get_json()["products"] if p["id"] == row["id"])
+    assert public["category"] == "bags" and public["stock_available"] == 2

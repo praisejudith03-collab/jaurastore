@@ -1048,7 +1048,7 @@ const EDIT_FIELD_MAP = {
   descriptionFr: ["descriptionFr"],
   enableCustomNote: ["enableCustomNote"],
   customNotePrompt: ["customNotePrompt"],
-  category: ["category"],
+  category: ["category", "category_id"],
   supplierSku: ["supplierSku", "supplierUrl", "supplier_url"],
   supplierCost: ["supplierCost"],
   // CFA is derived from the entered Naira price.
@@ -1303,6 +1303,13 @@ async function handleProductSubmit(e, existing) {
   // filters away. An absent selection means "leave it as it is".
   const formCategory = String(fd.get("category") || "").trim();
   const savedCategory = formCategory || String((existing && existing.category) || "").trim();
+  // The select uses category IDs. Preserve an existing mapping when its
+  // category list is unavailable; never invent a foreign key for a legacy
+  // free-text category that is not present in the loaded category list.
+  const selectedCategory = ((JA.categories ? JA.categories() : JA.CATEGORIES) || [])
+    .find((c) => String(c.id) === savedCategory);
+  const categoryId = selectedCategory ? String(selectedCategory.id)
+    : (existing && savedCategory === existing.category ? existing.category_id || null : null);
   const res = await JA.upsertProduct({
       ...(existing || {}),
       // Non-blocking opened-at receipt (see productForm); stripped from the
@@ -1327,6 +1334,7 @@ async function handleProductSubmit(e, existing) {
       // shoppers and WhatsApp posts fell back to the English name.
       nameFr: String(fd.get("nameFr") || "").trim(),
       category: savedCategory,
+      category_id: categoryId,
       priceNgn,
       priceCfa: toCfa(priceNgn),
       image,

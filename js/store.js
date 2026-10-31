@@ -847,7 +847,7 @@ const JA = (() => {
       }
       if (res.ok) {
         const d = await res.json();
-        if (d && Array.isArray(d.products) && (strict || d.products.length)) {
+        if (d && d.ok !== false && Array.isArray(d.products)) {
           const prevHomepageFeatured = JSON.stringify(homepageFeaturedSettings);
           catalogMeta = Object.assign({ server: true }, d.meta || {});
           const incomingHomepageFeatured = d.homepageFeatured || catalogMeta.homepageFeatured || {};
@@ -883,8 +883,9 @@ const JA = (() => {
           // that merge (same product under two ids) is dropped here so the
           // shop can never render the same piece twice.
           const next = dedupeProducts(d.products.map(normalizeServerProduct));
-          const changed = next.length !== seed.length
-            || JSON.stringify(next.map((x) => x.id)) !== JSON.stringify(seed.map((x) => x.id));
+          // IDs alone miss stock, category, price and media updates. The
+          // page needs a repaint whenever any rendered product data changes.
+          const changed = JSON.stringify(next) !== JSON.stringify(seed);
           seed = next;
           window.JA_SEED = seed;
           writeCatalogCache(d.products, catalogMeta);

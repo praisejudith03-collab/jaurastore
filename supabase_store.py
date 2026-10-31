@@ -82,6 +82,7 @@ SUPABASE_HTTP_TIMEOUT_SECONDS = 20.0
 _READ_TTL_SECONDS = 10.0
 _read_cache_lock = _threading.Lock()
 _read_cache = {}
+_read_cache_generation = 0
 
 
 def _read_cache_enabled():
@@ -109,18 +110,25 @@ def cached_read(key, fetch):
     now = _time.monotonic()
     with _read_cache_lock:
         hit = _read_cache.get(key)
+        generation = _read_cache_generation
     if hit and (now - hit[0]) < _READ_TTL_SECONDS:
         return _copy.deepcopy(hit[1])
     value = fetch()
     if value is not None:
         with _read_cache_lock:
-            _read_cache[key] = (_time.monotonic(), _copy.deepcopy(value))
+            # An in-flight pre-write read must not refill the cache after
+            # a writer invalidates it. The caller may finish with its old
+            # snapshot, but the next read must go back to the database.
+            if generation == _read_cache_generation:
+                _read_cache[key] = (_time.monotonic(), _copy.deepcopy(value))
     return value
 
 
 def invalidate_read_cache(*keys):
     """Drop cached reads. Called by every write path in this module."""
+    global _read_cache_generation
     with _read_cache_lock:
+        _read_cache_generation += 1
         if keys:
             for key in keys:
                 _read_cache.pop(key, None)
