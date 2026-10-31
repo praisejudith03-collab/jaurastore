@@ -421,3 +421,47 @@ def test_watchdog_queues_nothing_for_a_deleted_product(monkeypatch):
     supplier_watchdog._record_stock_alerts({"id": "jau-gone", "name": "Gone"},
                                            [("", 0, False)])
     assert seen == []
+
+
+# ======================================= 2e. dashboard supplier queues
+def test_dashboard_supplier_queues_match_the_alerts_page_scope(admin_client, monkeypatch):
+    """The dashboard's supplier queues use the same rule as Supplier Alerts:
+    a supplier low/out only counts for a variant or product the shop is still
+    selling. Handled (zeroed) variants and items are left out."""
+    import api as api_mod
+    _admin_login(admin_client)
+    products = {
+        "a": {"id": "a", "name": "Live low", "supplier_status": "low_stock",
+              "stock_quantity": 3, "online": True},
+        "b": {"id": "b", "name": "Zeroed out", "supplier_status": "out_of_stock",
+              "stock_quantity": 0, "online": True},
+        "c": {"id": "c", "name": "Colour split", "supplier_status": "out_of_stock",
+              "stock_quantity": 6, "online": True,
+              "optionStock": {"Red": 0, "Blue": 6}},
+        "d": {"id": "d", "name": "Fine", "supplier_status": "ok",
+              "stock_quantity": 2, "online": True},
+    }
+    stock_rows = [
+        {"product_id": "a", "variant_key": "__default__", "variant_label": "Default",
+         "qty": 3, "low_threshold": 5, "manual_out": False},
+        {"product_id": "b", "variant_key": "__default__", "variant_label": "Default",
+         "qty": 0, "low_threshold": 5, "manual_out": True},
+        {"product_id": "c", "variant_key": "Red", "variant_label": "Red",
+         "qty": 0, "low_threshold": 5, "manual_out": True},
+        {"product_id": "c", "variant_key": "Blue", "variant_label": "Blue",
+         "qty": 6, "low_threshold": 5, "manual_out": False},
+        {"product_id": "d", "variant_key": "__default__", "variant_label": "Default",
+         "qty": 2, "low_threshold": 5, "manual_out": False},
+    ]
+    monkeypatch.setattr(api_mod, "_stock_rows_for_read", lambda: stock_rows)
+    monkeypatch.setattr(api_mod, "_merged_products_cached", lambda: list(products.values()))
+    monkeypatch.setattr(api_mod, "query", lambda *a, **k: [])
+    monkeypatch.setattr(supabase_store, "load_supplier_sync_warnings", lambda: [])
+    body = admin_client.get("/api/admin/needs-attention").get_json()
+    assert body["ok"] is True
+    low = [(r["product_id"], r["variant_key"]) for r in body["supplierLowStock"]]
+    out = [(r["product_id"], r["variant_key"]) for r in body["supplierOutOfStock"]]
+    assert low == [("a", "__default__")]
+    assert out == [("c", "Blue")]          # the zeroed Red variant is excluded
+    assert body["counts"]["supplierLowStock"] == 1
+    assert body["counts"]["supplierOutOfStock"] == 1

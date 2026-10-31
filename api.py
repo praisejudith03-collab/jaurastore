@@ -2905,18 +2905,18 @@ def admin_needs_attention():
             # separate from the supplier-linked queue: a sold-out product
             # without a supplier link still has to be visible somewhere.
             out_of_stock.append(item)
-        option_links = (product.get("optionSupplierSku")
-                        or product.get("optionSupplierUrls")
-                        or product.get("option_supplier_urls") or {})
-        has_supplier_link = bool(
-            product.get("supplierId") or product.get("supplierSku")
-            or product.get("supplierUrl") or product.get("supplier_url")
-            or (isinstance(option_links, dict) and any(bool(v) for v in option_links.values()))
-        )
-        if has_supplier_link and qty <= 0:
-            supplier_out_of_stock.append(item)
-        elif has_supplier_link and qty <= threshold:
-            supplier_low_stock.append(item)
+        # Supplier queues: only a supplier low/out that is still NEW for an
+        # item the shop is selling (active on the website and in stock). A
+        # variant the owner already zeroed, or a hidden/trashed product, is
+        # handled and is left out, so the dashboard matches Supplier Alerts.
+        supplier_status = str(product.get("supplier_status") or "ok")
+        if supplier_status in ("out_of_stock", "low_stock"):
+            variant = "" if row.get("variant_key") in (None, "", "__default__") else str(row.get("variant_key"))
+            if catalog_mod.supplier_alert_sellable(product, variant):
+                if supplier_status == "out_of_stock":
+                    supplier_out_of_stock.append(item)
+                else:
+                    supplier_low_stock.append(item)
     stock_sort = lambda row: (int(row.get("qty") or 0), str(row.get("name") or ""))
     # Only the FIRST page of each queue is shipped: the dashboard renders the
     # count on a summary line and pages the list on demand, so a 900-row
