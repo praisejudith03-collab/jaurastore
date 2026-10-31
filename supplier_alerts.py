@@ -16,10 +16,15 @@ This module is the missing notification half of that rule:
   that stays empty for a week emails once, not every 20 minutes;
 * recovering to ``ok`` clears the entry (after any queued email has gone
   out), so the *next* drop alerts again;
+* only ACTIVE, IN-STOCK items are alerted on. The watchdog reads the live
+  listing before queueing anything, and a reading for an item the shop has
+  hidden, trashed or set to zero is never queued (see
+  ``catalog.supplier_alert_sellable``);
 * :func:`drain_pending_alerts` sends one batched email for everything
   pending to the shop inbox (``ADMIN_EMAIL``, default
   jaurastore@gmail.com) and only marks entries emailed after the mail
-  provider accepts the message. It runs from the supplier watchdog CLI
+  provider accepts the message. A pending entry whose item has since
+  become inactive or sold out is closed without an email. It runs from the supplier watchdog CLI
   (GitHub Actions, when mail secrets are present there) and from the
   Render scheduler's five-minute tick — whichever gets there first;
   a short-lived claim stamp stops the two racing each other.
@@ -273,8 +278,33 @@ def record_observations(observations, load=None, save=None, now=None):
         return {"recorded": 0, "pending": 0, "skipped": f"{type(exc).__name__}: {exc}"[:200]}
 
 
-def drain_pending_alerts(send=None, load=None, save=None, now=None):
+def _catalogue_is_live():
+    """A checker ``(product_id, option) -> bool`` over the live catalogue.
+
+    Built once per drain. Raises when the catalogue cannot be read: the
+    drain then sends nothing, because an unreadable catalogue must look
+    like "not now", never like "every item is still live".
+    """
+    import catalog as catalog_mod
+    by_id = {}
+    for row in catalog_mod.supplier_alert_rows():
+        pid = str(row.get("id") or "").strip()
+        if pid:
+            by_id[pid] = row
+
+    def check(product_id, option=""):
+        row = by_id.get(str(product_id or "").strip())
+        return bool(catalog_mod.supplier_alert_sellable(row, option))
+    return check
+
+
+def drain_pending_alerts(send=None, load=None, save=None, now=None, is_live=None):
     """Email every pending alert in one batch. Never raises.
+
+    Only alerts for items the shop is still selling (live on the website and
+    in stock) are emailed. A pending alert whose item has since been hidden,
+    trashed or set to zero is already handled: it is closed without an email,
+    so the owner is not told about old news.
 
     Claims the batch in durable state before sending, so the GitHub
     Actions watchdog and the Render scheduler cannot both mail the same
@@ -295,6 +325,36 @@ def drain_pending_alerts(send=None, load=None, save=None, now=None):
         alerts = pending_alerts(state, now=moment)
         if not alerts:
             return {"sent": False, "count": 0, "pending": 0, "detail": "nothing pending"}
+
+        check = is_live or _catalogue_is_live()
+        live, handled = [], []
+        for alert in alerts:
+            if check(alert.get("product_id"), alert.get("option")):
+                live.append(alert)
+            else:
+                handled.append(alert)
+        if handled:
+            stamp = _now(moment)
+            for alert in handled:
+                entry = state["entries"].get(alert["key"])
+                if entry is None:
+                    continue
+                entry["pending"] = False
+                entry["claimedAt"] = ""
+                entry["claimId"] = ""
+                # Remember the level so the same situation is never mailed
+                # again; only a worse change (or a fresh drop) is news.
+                entry["emailedLevel"] = str(entry.get("level") or "")
+                entry["handledAt"] = stamp
+            if not save(state):
+                return {"sent": False, "count": 0, "pending": len(alerts),
+                        "detail": "state-save-failed"}
+        if not live:
+            return {"sent": False, "count": 0,
+                    "pending": len(pending_alerts(state, now=moment)),
+                    "detail": f"{len(handled)} already handled on the website; no email sent"}
+        alerts = live
+
         claim_id = secrets.token_hex(6)
         stamp = _now(moment)
         for alert in alerts:

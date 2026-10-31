@@ -6424,14 +6424,20 @@ def admin_sync_status():
 @api.get("/admin/supplier-alerts")
 @authmod.require_admin
 def admin_supplier_alerts():
-    """Return supplier diagnostics without conflating them with shop stock."""
-    rows = supabase_store.products_table_rows()
-    if rows is None:
-        rows = catalog_mod.merged(include_hidden=True)
+    """Supplier low/out items that the shop is still selling.
+
+    The list is limited to items ACTIVE on the website and IN STOCK there. A
+    supplier low/out on something the owner already hid, trashed or set to
+    zero is left out (counted as ``excluded``), so the list stays clean.
+    """
     alerts = []
-    for row in rows or []:
-        status = str((row or {}).get("supplier_status") or "ok")
+    excluded = 0
+    for row in catalog_mod.supplier_alert_rows():
+        status = str(row.get("supplier_status") or "ok")
         if status not in {"out_of_stock", "low_stock"}:
+            continue
+        if not catalog_mod.supplier_alert_sellable(row):
+            excluded += 1
             continue
         alerts.append({"id": str(row.get("id") or ""), "name": row.get("name") or "",
                        "image": row.get("image_url") or row.get("image") or "",
@@ -6439,14 +6445,13 @@ def admin_supplier_alerts():
                        "priceNgn": row.get("priceNgn"), "priceCfa": row.get("priceCfa"),
                        "stock": catalog_mod.stock_of(row),
                        "status": status,
-                       "online": row.get("online") is not False,
-                       "storeOutOfStock": catalog_mod.stock_of(row) == 0})
+                       "online": True})
     alerts.sort(key=lambda a: (a["status"] != "out_of_stock", str(a["name"]).lower()))
     return jsonify(ok=True, alerts=alerts,
                    counts={"total": len(alerts),
                            "outOfStock": sum(1 for a in alerts if a["status"] == "out_of_stock"),
                            "lowStock": sum(1 for a in alerts if a["status"] == "low_stock"),
-                           "hidden": sum(1 for a in alerts if a["storeOutOfStock"])})
+                           "excluded": excluded})
 
 
 @api.post("/admin/supplier-alerts/<pid>/toggle-out-of-stock")
