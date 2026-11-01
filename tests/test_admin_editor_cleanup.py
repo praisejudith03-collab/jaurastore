@@ -49,12 +49,15 @@ const names = [...html.matchAll(/\bname="([^"]+)"/g)].map(match => match[1]);
 // held for the original seed — a product created in Admin could never
 // carry a French title, so new items (all perfumes) stayed English in
 // French views and WhatsApp posts. The owner now types it manually.
-const required = ["id", "name", "nameFr", "sku", "description", "descriptionFr", "category", "priceNgn", "supplierSku",
+const required = ["id", "name", "nameFr", "sku", "description", "descriptionFr", "category", "priceNgn", "compareNgn", "supplierSku",
   "stock", "enableCustomNote", "customNotePrompt", "opt-title-0", "opt-vals-0"];
 for (const name of required) {
   if (!names.includes(name)) throw new Error("missing form control " + name);
 }
-for (const removed of ["dimensions", "compareNgn", "bulkQty",
+// Compare-at Price re-joined the editor on owner directive: the crossed-out
+// "was" price is a shop essential again (single product + per-variant), so it
+// is no longer in the removed set.
+for (const removed of ["dimensions", "bulkQty",
   "bulkPercent", "featured", "badge", "online", "stockStatus",
   "Customer Name", "Customer Stars", "Customer Review"]) {
   if (html.includes(removed)) throw new Error("removed control still rendered: " + removed);

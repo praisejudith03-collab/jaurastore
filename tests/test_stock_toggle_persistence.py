@@ -327,7 +327,7 @@ def test_clean_editor_has_only_the_approved_product_controls():
     names = set(re.findall(r'name="([^"]+)"', form))
     assert names == {
         "id", "name", "nameFr", "sku", "description", "descriptionFr", "category",
-        "priceNgn", "supplierSku", "supplierCost",
+        "priceNgn", "compareNgn", "supplierSku", "supplierCost",
         "stock", "enableCustomNote", "customNotePrompt",
     }
     for required in (
@@ -340,7 +340,7 @@ def test_clean_editor_has_only_the_approved_product_controls():
     ):
         assert required in form, required
     for removed in (
-        "dimensions", "compareNgn", "bulkQty",
+        "dimensions", "bulkQty",
         "bulkPercent", "stock-status", "stockStatus", "featured", "badge",
         "Customer Name", "Customer Stars", "Customer Review",
     ):
