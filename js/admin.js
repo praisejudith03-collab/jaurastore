@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=240" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=241" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -850,12 +850,15 @@ function optionPricesHTML(p) {
   // the storefront shows the price RANGE instead of the base figure.
   const options = p.options || [];
   const prices = p.optionPrices || {};
+  const compares = p.optionCompareAt || {};
   const rows = options.flatMap((opt) => (opt.values || []).map((value) => {
     const key = `${opt.title}: ${value}`;
     const raw = prices[key] != null ? prices[key] : (prices[value] != null ? prices[value] : "");
+    const wasRaw = compares[key] != null ? compares[key] : (compares[value] != null ? compares[value] : "");
     return `<label class="adx-var" data-optprice-row>
       <span class="adx-var-name"><strong>${JA.escape(key)}</strong></span>
       <span class="adx-var-qty au-price"><input type="number" min="0" inputmode="numeric" aria-label="Selling price for ${JA.escape(key)}" data-opt-price="${JA.escape(key)}" placeholder="Base price" value="${JA.escape(String(raw || ""))}" /><i>₦</i></span>
+      <span class="adx-var-qty au-price"><input type="number" min="0" inputmode="numeric" aria-label="Compare-at price for ${JA.escape(key)}" data-opt-compareat="${JA.escape(key)}" placeholder="Was price" value="${JA.escape(String(wasRaw || ""))}" /><i>₦</i></span>
     </label>`;
   })).join("");
   return rows ? `<div class="variant-stock-section"><h4>Selling price per option</h4>
@@ -866,6 +869,16 @@ function currentOptionPrices() {
   const map = {};
   document.querySelectorAll("[data-opt-price]").forEach((inp) => {
     const key = inp.getAttribute("data-opt-price");
+    const value = String(inp.value || "").trim();
+    const n = parseInt(value, 10);
+    if (key && Number.isFinite(n) && n >= 0) map[key] = n;
+  });
+  return map;
+}
+function currentOptionCompareAt() {
+  const map = {};
+  document.querySelectorAll("[data-opt-compareat]").forEach((inp) => {
+    const key = inp.getAttribute("data-opt-compareat");
     const value = String(inp.value || "").trim();
     const n = parseInt(value, 10);
     if (key && Number.isFinite(n) && n >= 0) map[key] = n;
@@ -1054,6 +1067,7 @@ const EDIT_FIELD_MAP = {
   supplierCost: ["supplierCost"],
   // CFA is derived from the entered Naira price.
   priceNgn: ["priceNgn", "priceCfa"],
+  compareNgn: ["compareNgn", "compareCfa"],
   stock: ["stock", "stock_quantity", "stockStatus"],
 };
 // Media, variant stock and per-option supplier controls use data attributes.
@@ -1154,6 +1168,9 @@ function productForm(p = {}) {
       <p class="admin-note" id="cfa-preview">${JA.escape(cfaProof(p.priceNgn))}</p>
       <p class="admin-note" id="price-optional-note" hidden>Optional for this product: every option below has its own selling price, so the shop shows the price range. Fill this only if one option should sell at it.</p>
     </div>
+    <div class="field"><label>Compare-at Price (Naira ₦)</label><div class="au-price"><input name="compareNgn" type="number" min="0" inputmode="numeric" value="${p.compareNgn || p.compare_at_price || p.compareAtPrice || ""}" /><i>₦</i></div>
+      <p class="admin-note" id="compare-preview">The original "was" price, shown crossed out above the selling price whenever it is higher. Leave blank to show only the selling price.</p>
+    </div>
     <div class="field"><label>Supplier cost (Naira ₦)</label><div class="au-price"><input name="supplierCost" type="number" min="0" inputmode="numeric" value="${p.supplierCost || ""}" /><i>₦</i></div>
       <p class="admin-note">What YOU pay your supplier for one piece, before your profit. Internal only - shoppers never see this figure.</p>
     </div>
@@ -1252,7 +1269,13 @@ async function handleProductSubmit(e, existing) {
     ...keepActiveOptionMap(existing?.optionPrices, options),
     ...keepActiveOptionMap(currentOptionPrices(), options),
   };
-  const optionCompareAt = keepActiveOptionMap(existing?.optionCompareAt, options);
+  // Typed variant compare-at prices win over the saved map row for row, just
+  // like optionPrices: an untouched row keeps the stored figure, a touched
+  // blank row clears it, and a newly typed figure is saved.
+  const optionCompareAt = {
+    ...keepActiveOptionMap(existing?.optionCompareAt, options),
+    ...keepActiveOptionMap(currentOptionCompareAt(), options),
+  };
   const optionSupplierCost = {
     ...keepActiveOptionMap(existing?.optionSupplierCost || existing?.optionSupplierCosts, options),
     ...keepActiveOptionMap(currentOptionSupplierCosts(), options),
@@ -1270,6 +1293,7 @@ async function handleProductSubmit(e, existing) {
   // still needs the base figure - a product with no price anywhere can never
   // be sold, checked out or broadcast.
   const priceTyped = num("priceNgn");
+  const compareNgnTyped = num("compareNgn");
   const variantsAllPriced = (() => {
     const values = (options[0] && options[0].values) || [];
     if (!values.length) return false;
@@ -1341,6 +1365,11 @@ async function handleProductSubmit(e, existing) {
       is_deleted: false,
       priceNgn,
       priceCfa: toCfa(priceNgn),
+      // Compare-at ("was") price: crossed out on the storefront when higher
+      // than the selling price. CFA mirrors the Naira figure exactly like
+      // priceCfa does.
+      compareNgn: compareNgnTyped > 0 ? compareNgnTyped : (existing?.compareNgn ?? null),
+      compareCfa: compareNgnTyped > 0 ? toCfa(compareNgnTyped) : (existing?.compareCfa ?? null),
       image,
       images,
       // image/image_url/imageUrl are ONE logical field. Keep all aliases in
@@ -5137,7 +5166,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=240" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=241" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5545,7 +5574,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=240", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=241", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");
