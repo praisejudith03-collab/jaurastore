@@ -2042,6 +2042,20 @@ const JA = (() => {
     write(KEYS.custom, custom);
     markPending(next.id);
     if (!window.JA_NET) return Promise.resolve({ ok: false, offline: true });
+    // Replace any older queued save for this same product id so clicking
+    // Retry Save never stacks duplicate/stale payloads in the outbox.
+    try {
+      if (window.JA_NET.discard) {
+        window.JA_NET.discard((job) => {
+          if (!job || job.method !== "POST") return false;
+          if (!/^api\/admin\/products\/?$/.test(String(job.url || ""))) return false;
+          try {
+            const body = typeof job.body === "string" ? JSON.parse(job.body) : null;
+            return !!(body && body.product && String(body.product.id || "") === String(next.id));
+          } catch (e) { return false; }
+        });
+      }
+    } catch (e) {}
     return window.JA_NET.api("api/admin/products", {
       method: "POST",
       json: {
@@ -3065,8 +3079,8 @@ const JA = (() => {
         // just cleared it): drop the stored override and put the brand file
         // back everywhere, so the shop can never show a blank box or a
         // stale upload. The footer keeps its own flyer mark.
-        const LOGO = "images/brand/logo.jpg?v=239";
-        const FLYER = "images/brand/logo-flyer.jpg?v=239";
+        const LOGO = "images/brand/logo.jpg?v=240";
+        const FLYER = "images/brand/logo-flyer.jpg?v=240";
         const cur = settings();
         if (cur.logoUrl) saveSettings({ logoUrl: "" });
         document.querySelectorAll(".logo img, .foot-logo img, [data-site-logo]").forEach((img) => {
@@ -3281,7 +3295,7 @@ const JA = (() => {
           </button>
         </div>
         <a class="logo" href="index.html">
-          <img src="images/brand/logo.jpg?v=239" alt="Jaura" />
+          <img src="images/brand/logo.jpg?v=240" alt="Jaura" />
         </a>
         <div class="header-slot nav-right">
           <button type="button" class="icon-btn" data-open-search aria-label="${tx("nav.search")}">
@@ -3580,7 +3594,7 @@ const JA = (() => {
     return `<footer class="footer au-footer">
       <div class="wrap foot-grid">
         <div class="foot-brand">
-          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=239" alt="Jaura" /></a>
+          <a class="logo foot-logo" href="index.html"><img src="images/brand/logo-flyer.jpg?v=240" alt="Jaura" /></a>
           <p class="foot-tag">${tx("promo.kicker")}</p>
           <p>${tx("footer.blurb")}</p>
         </div>
@@ -3716,7 +3730,7 @@ const JA = (() => {
     const body = welcomeField("welcome_body", "welcome_body_fr");
     const cta = welcomeField("welcome_cta_label", "welcome_cta_label_fr") || tx("promo.shop");
     const href = welcomeUrl(_siteConfig.welcome_cta_href, "shop.html", true);
-    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=239", false);
+    const img = welcomeUrl(_siteConfig.welcome_image_url, "images/brand/logo.jpg?v=240", false);
     const el = document.createElement("div");
     el.className = "welcome-pop";
     el.setAttribute("data-welcome", "");
@@ -3750,7 +3764,7 @@ const JA = (() => {
 
   const SITE = "https://jaurastore.com.ng";
   function absUrl(path) {
-    if (!path) return SITE + "/images/brand/og-cover.jpg?v=239";
+    if (!path) return SITE + "/images/brand/og-cover.jpg?v=240";
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     if (path.startsWith("/")) return SITE + path;
     return SITE + "/" + String(path).replace(/^\.\//, "");
@@ -3809,7 +3823,7 @@ const JA = (() => {
     const title = opts.title || document.title || "Jaura Store";
     const description = opts.description || "Shop Jaura Store for trendy ready-to-wear clothing, shoes, bags, ankara, household goods, beauty products, and lifestyle essentials with fast delivery across Nigeria and West Africa.";
     const url = opts.url || (SITE + "/" + (file === "index.html" || file === "" ? "" : file) + (opts.keepSearch ? location.search : ""));
-    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=239");
+    const image = absUrl(opts.image || "images/brand/og-cover.jpg?v=240");
     document.title = title;
     [
       ["name", "description", description],

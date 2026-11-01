@@ -878,7 +878,8 @@ def normalize(product):
         # publicly; the admin desk and the single-run backfill script write
         # and read them. Blank/zero entries are dropped like optionPrices.
         "optionSupplierCost": _clean_option_prices(
-            product.get("optionSupplierCost") or product.get("option_supplier_cost")
+            product.get("optionSupplierCost") or product.get("optionsSupplierCost")
+            or product.get("option_supplier_cost") or product.get("options_supplier_cost")
             or product.get("optionSupplierCosts") or product.get("option_supplier_costs")
             or product.get("variantSupplierCosts") or product.get("variant_supplier_costs")
             or product.get("optionCosts") or product.get("option_costs")),

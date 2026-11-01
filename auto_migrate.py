@@ -119,6 +119,33 @@ PRODUCT_RECOVERY_STATEMENT = "UPDATE products SET is_active = true, is_deleted =
 # explicit Admin action (catalog.recover_unavailable_products ->
 # recover_unavailable_products.sql, which sets the same flag INSIDE its own
 # audited transaction and records every row it touches).
+PRODUCT_COLUMNS = {
+    "category_id": "text",
+    "supplier_status": "text not null default 'ok'",
+    "is_active": "boolean not null default true",
+    "is_deleted": "boolean not null default false",
+    "supplierCost": "numeric",
+    "optionSupplierCost": "jsonb",
+    "enableCustomNote": "boolean not null default false",
+    "customNotePrompt": "text not null default ''",
+    "placeholderImage": "text",
+    "usesPlaceholder": "boolean default false",
+    "dimensions": "text",
+    "bulkQty": "integer",
+    "bulkPercent": "integer",
+    "optionPrices": "jsonb",
+    "optionCompareAt": "jsonb",
+    "optionSupplierSku": "jsonb",
+    "optionSku": "jsonb",
+    "optionStock": "jsonb",
+    "legacyId": "text",
+    "supplierId": "text not null default ''",
+    "supplierSku": "text not null default ''",
+    "nameFr": "text",
+    "descriptionFr": "text",
+    "reviews": "jsonb",
+}
+
 PRODUCT_SCHEMA_STATEMENT = """do $$ begin
   if to_regclass('public.products') is null then return; end if;
   alter table public.products add column if not exists category_id text;
@@ -134,6 +161,18 @@ PRODUCT_SCHEMA_STATEMENT = """do $$ begin
   alter table public.products add column if not exists dimensions text;
   alter table public.products add column if not exists "bulkQty" integer;
   alter table public.products add column if not exists "bulkPercent" integer;
+  alter table public.products add column if not exists "optionPrices" jsonb;
+  alter table public.products add column if not exists "optionCompareAt" jsonb;
+  alter table public.products add column if not exists "optionSupplierSku" jsonb;
+  alter table public.products add column if not exists "optionSku" jsonb;
+  alter table public.products add column if not exists "optionStock" jsonb;
+  alter table public.products add column if not exists "legacyId" text;
+  alter table public.products add column if not exists "supplierId" text not null default '';
+  alter table public.products add column if not exists "supplierSku" text not null default '';
+  alter table public.products add column if not exists "nameFr" text;
+  alter table public.products add column if not exists "descriptionFr" text;
+  alter table public.products add column if not exists reviews jsonb;
+  notify pgrst, 'reload schema';
 end $$;"""
 
 RPC_NAMES = ("exec_sql", "execute_sql", "run_sql", "apply_schema_migration")
@@ -143,11 +182,37 @@ _ran = False
 _backend = ""
 _last_error = ""
 _last_attempt = 0.0
+_product_last_error = ""
+_product_last_attempt = 0.0
 # A failed attempt (no connection configured, transient network error) is not
 # retried on every single call: a save-triggered heal gets one attempt, then
 # the next one waits this long so a broken DSN cannot turn into a request
 # storm.
 RETRY_SECONDS = 300.0
+
+
+def _quote_pg_ident(column):
+    col = str(column or "").strip().strip('"')
+    if any(ch.isupper() for ch in col):
+        return f'"{col}"'
+    return col
+
+
+def product_statements(columns=None):
+    """Additive ALTER TABLE statements for managed products columns."""
+    if columns is None:
+        return [PRODUCT_SCHEMA_STATEMENT]
+    names = [columns] if isinstance(columns, str) else list(columns)
+    out = []
+    for column in names:
+        ddl = PRODUCT_COLUMNS.get(column)
+        if ddl:
+            ident = _quote_pg_ident(column)
+            out.append(
+                f"alter table public.products add column if not exists {ident} {ddl}")
+    if out:
+        out.append("notify pgrst, 'reload schema'")
+    return out
 
 
 def statements(columns=None):
@@ -293,6 +358,57 @@ def _apply_with_rpc(sql_list):
     return False, f"no exec_sql RPC ({last[:160]})"
 
 
+def _apply_with_management_api(sql_list):
+    """Use the Supabase Management API when SUPABASE_ACCESS_TOKEN is set."""
+    token = (os.environ.get("SUPABASE_ACCESS_TOKEN") or "").strip()
+    if not token:
+        return False, "SUPABASE_ACCESS_TOKEN is not set"
+    try:
+        import json as _json
+        from urllib.parse import urlsplit
+        import security
+        host = (urlsplit((Config.SUPABASE_URL or "").strip()).hostname or "").lower()
+    except Exception as exc:
+        return False, f"management api unavailable: {exc}"
+    if not host.endswith(".supabase.co"):
+        return False, "SUPABASE_URL has no project ref"
+    ref = host[:-len(".supabase.co")]
+    if not ref:
+        return False, "SUPABASE_URL has no project ref"
+    endpoint = f"https://api.supabase.com/v1/projects/{ref}/database/query"
+    try:
+        combined = ";\n".join(s.rstrip().rstrip(";") for s in sql_list if s and s.strip()) + ";"
+        security.safe_fetch(
+            endpoint,
+            data=_json.dumps({"query": combined}).encode("utf-8"),
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json"},
+            method="POST",
+            timeout=20,
+        )
+        return True, ""
+    except Exception as exc:
+        return False, f"management api failed: {exc}"
+
+
+def _run_sql_backends(sql_list, logger=None):
+    dsn = _dsn()
+    attempts = []
+    if dsn:
+        attempts.append(("psycopg", _apply_with_psycopg(dsn, sql_list)))
+        if dsn.startswith(("postgres://", "postgresql://")):
+            attempts.append(("psql", _apply_with_psql(dsn, sql_list)))
+    if (os.environ.get("SUPABASE_ACCESS_TOKEN") or "").strip():
+        attempts.append(("management_api", _apply_with_management_api(sql_list)))
+    attempts.append(("rpc", _apply_with_rpc(sql_list)))
+    for name, (ok, error) in attempts:
+        if ok:
+            return True, name, ""
+        _log(logger, "info", "auto-migration backend %s unavailable: %s"
+             % (name, error))
+    return False, "", (attempts[-1][1] if attempts else "no backend")
+
+
 def run(logger=None, columns=None, force=False):
     """Apply the schema statements once per process. Never raises.
 
@@ -319,24 +435,15 @@ def run(logger=None, columns=None, force=False):
             result["error"] = _last_error
             return result
         _last_attempt = now
-        dsn = _dsn()
-        attempts = []
-        if dsn:
-            attempts.append(("psycopg", _apply_with_psycopg(dsn, sql_list)))
-            if dsn.startswith(("postgres://", "postgresql://")):
-                attempts.append(("psql", _apply_with_psql(dsn, sql_list)))
-        attempts.append(("rpc", _apply_with_rpc(sql_list)))
-        for name, (ok, error) in attempts:
-            if ok:
-                _ran, _backend, _last_error = True, name, ""
-                _log(logger, "info",
-                     "site_settings schema is up to date (%s): %s"
-                     % (name, sql_list[0]))
-                return {"applied": True, "backend": name, "error": "",
-                        "statements": sql_list}
-            _log(logger, "info", "auto-migration backend %s unavailable: %s"
-                 % (name, error))
-        _last_error = attempts[-1][1] if attempts else "no backend"
+        ok, name, error = _run_sql_backends(sql_list, logger=logger)
+        if ok:
+            _ran, _backend, _last_error = True, name, ""
+            _log(logger, "info",
+                 "site_settings schema is up to date (%s): %s"
+                 % (name, sql_list[0]))
+            return {"applied": True, "backend": name, "error": "",
+                    "statements": sql_list}
+        _last_error = error
         _log(logger, "warning",
              "site_settings auto-migration could not run (%s). Run this once "
              "in the Supabase SQL editor: %s" % (_last_error, sql_list[0]))
@@ -354,8 +461,39 @@ def ensure_site_settings_columns(columns=None, logger=None):
     return bool(outcome.get("applied"))
 
 
+def ensure_product_columns(columns=None, logger=None):
+    """Targeted heal used when a product save hits a missing column.
+
+    Returns True only when a DDL backend actually executed the additive
+    ALTER TABLE statement(s). When no DDL backend is configured (PostgREST
+    only), returns False immediately inside the cooldown window so the caller
+    can fall back to its schema-safe query builder without stalling.
+    """
+    global _product_last_error, _product_last_attempt
+    sql_list = product_statements(columns)
+    if not sql_list or not enabled():
+        return False
+    with _lock:
+        now = time.monotonic()
+        if (_product_last_error and _product_last_attempt
+                and now - _product_last_attempt < RETRY_SECONDS):
+            return False
+        _product_last_attempt = now
+        ok, name, error = _run_sql_backends(sql_list, logger=logger)
+        if ok:
+            _product_last_error = ""
+            _log(logger, "info",
+                 "products schema healed automatically (%s): %s"
+                 % (name, sql_list[0]))
+            return True
+        _product_last_error = error
+        return False
+
+
 def reset_for_tests():
     """Clear the once-per-process guard (tests only)."""
     global _ran, _backend, _last_error, _last_attempt
+    global _product_last_error, _product_last_attempt
     with _lock:
         _ran, _backend, _last_error, _last_attempt = False, "", "", 0.0
+        _product_last_error, _product_last_attempt = "", 0.0
