@@ -414,6 +414,7 @@ def products_table_rows():
         if c is None:
             return None
         try:
+            sidecar_map = _load_product_optional_fields(c)
             seen_ids = set()
             rows = []
             for r in _fetch_product_pages(c):
@@ -421,7 +422,7 @@ def products_table_rows():
                 if not pid or pid in seen_ids:
                     continue
                 seen_ids.add(pid)
-                rows.append(_canonicalize_product(r, c))
+                rows.append(_canonicalize_product(r, c, _sidecar=sidecar_map))
             # Reconcile each row's image to a path the browser can display (a
             # committed repo file when present, else the branded placeholder).
             # No third-party / Wix photo is ever referenced.
@@ -545,8 +546,17 @@ def _fold_french_aliases(p):
     return p
 
 
-def _canonicalize_product(row, _c=None):
-    p = _fold_french_aliases(dict(row or {}))
+def _canonicalize_product(row, _c=None, _sidecar=None):
+    raw_row = dict(row or {})
+    pid = str(raw_row.get("id") or "").strip()
+    if pid and (_sidecar is not None or _c is not None or enabled()):
+        sidecar_all = _sidecar if isinstance(_sidecar, dict) else _load_product_optional_fields(_c)
+        extra = sidecar_all.get(pid) if isinstance(sidecar_all, dict) else None
+        if isinstance(extra, dict):
+            for col, val in extra.items():
+                if col not in raw_row or (raw_row.get(col) is None and val is not None):
+                    raw_row[col] = _copy.deepcopy(val)
+    p = _fold_french_aliases(raw_row)
     if p.get("image_url") is None and p.get("image") is not None:
         p["image_url"] = p["image"]
     if p.get("image") is None and p.get("image_url") is not None:
@@ -593,7 +603,8 @@ def _canonicalize_product(row, _c=None):
                          else p.get("supplier_cost") if p.get("supplier_cost") is not None
                          else p.get("supplierPrice") if p.get("supplierPrice") is not None
                          else p.get("supplier_price"))
-    p["optionSupplierCost"] = (p.get("optionSupplierCost") or p.get("option_supplier_cost") or
+    p["optionSupplierCost"] = (p.get("optionSupplierCost") or p.get("optionsSupplierCost") or
+                                p.get("option_supplier_cost") or p.get("options_supplier_cost") or
                                 p.get("optionSupplierCosts") or p.get("option_supplier_costs") or
                                 p.get("variantSupplierCosts") or p.get("variant_supplier_costs") or
                                 p.get("optionCosts") or p.get("option_costs") or {})
@@ -613,12 +624,7 @@ def _canonicalize_product(row, _c=None):
     return p
 
 
-# Every field the admin editor can collect must either reach PostgreSQL or the
-# save must fail loudly. A retry that drops a "non-critical" column is data
-# loss: after reload the owner sees blanks/defaults even though the portal said
-# "saved". Keep this list broad and explicit so schema drift blocks the save
-# instead of silently discarding supplier URLs, variant prices/SKUs, reviews,
-# bulk tiers, media, availability or publication flags.
+# Canonical product schema inventory verified against supabase_schema.sql.
 _CRITICAL_PRODUCT_COLUMNS = frozenset({
     "id", "legacyId", "sku", "slug", "name", "nameFr", "descriptionFr",
     "category", "category_id", "supplier_status", "priceCfa", "compareCfa", "priceNgn", "compareNgn",
@@ -628,17 +634,112 @@ _CRITICAL_PRODUCT_COLUMNS = frozenset({
     "optionSku", "reviews", "dimensions", "bulkQty", "bulkPercent",
     "placeholderImage", "usesPlaceholder", "source", "supplierId",
     "supplierSku", "updated_at", "enableCustomNote", "customNotePrompt",
-    # Variant-level supplier costs: the owner's per-unit sourcing figures.
-    # Losing them on a save would silently blank the costing desk, so a
-    # missing column blocks the save exactly like a lost price.
     "supplierCost", "optionSupplierCost",
 })
+
+# Additive / optional columns that may not exist on a live products table when
+# PostgREST runs without a direct DDL connection. Missing optional columns never
+# block a product save: they are stripped from the PostgREST query with clean
+# defaults, and any non-default values are durably preserved in growth_settings
+# (PRODUCT_OPTIONAL_FIELDS_KEY) and merged back on every read.
+_OPTIONAL_PRODUCT_COLUMN_DEFAULTS = {
+    "optionSupplierCost": {},
+    "supplierCost": None,
+    "is_deleted": False,
+    "is_active": True,
+    "supplier_status": "ok",
+    "category_id": None,
+    "enableCustomNote": False,
+    "customNotePrompt": "",
+    "placeholderImage": "",
+    "usesPlaceholder": False,
+    "dimensions": "",
+    "bulkQty": None,
+    "bulkPercent": None,
+    "legacyId": None,
+    "supplierId": "",
+    "supplierSku": "",
+    "optionCompareAt": {},
+    "optionSupplierSku": {},
+    "optionSku": {},
+    "nameFr": "",
+    "descriptionFr": "",
+    "reviews": [],
+}
+
+_SIDECAR_PRODUCT_COLUMNS = frozenset({
+    "optionSupplierCost", "supplierCost", "supplier_status",
+    "enableCustomNote", "customNotePrompt", "dimensions",
+    "bulkQty", "bulkPercent", "legacyId", "supplierId", "supplierSku",
+    "optionCompareAt", "optionSupplierSku", "optionSku",
+    "nameFr", "descriptionFr", "reviews",
+})
+
+PRODUCT_OPTIONAL_FIELDS_KEY = "product_optional_fields_json"
+PRODUCT_DROP_RETRY_SECONDS = 300.0
+_MISSING_PRODUCT_COLUMNS = {}
+_PRODUCT_HEAL_ATTEMPTED = set()
+
+# Non-canonical / typo / legacy input aliases mapped to their canonical
+# products-table column before building a PostgREST write payload.
+_PRODUCT_WRITE_ALIASES = {
+    "optionsSupplierCost": "optionSupplierCost",
+    "options_supplier_cost": "optionSupplierCost",
+    "optionSupplierCosts": "optionSupplierCost",
+    "option_supplier_cost": "optionSupplierCost",
+    "option_supplier_costs": "optionSupplierCost",
+    "variantSupplierCosts": "optionSupplierCost",
+    "variant_supplier_costs": "optionSupplierCost",
+    "optionCosts": "optionSupplierCost",
+    "option_costs": "optionSupplierCost",
+    "supplier_cost": "supplierCost",
+    "supplierPrice": "supplierCost",
+    "supplier_price": "supplierCost",
+    "supplierUrl": "supplierSku",
+    "supplier_url": "supplierSku",
+    "supplier_sku": "supplierSku",
+    "supplier_id": "supplierId",
+    "option_prices": "optionPrices",
+    "variantPrices": "optionPrices",
+    "variant_prices": "optionPrices",
+    "option_compare_at": "optionCompareAt",
+    "variantCompareAt": "optionCompareAt",
+    "variant_compare_at": "optionCompareAt",
+    "option_supplier_sku": "optionSupplierSku",
+    "optionSupplierUrls": "optionSupplierSku",
+    "option_supplier_urls": "optionSupplierSku",
+    "option_sku": "optionSku",
+    "optionSkus": "optionSku",
+    "option_skus": "optionSku",
+    "variantSku": "optionSku",
+    "variant_sku": "optionSku",
+    "variantSkus": "optionSku",
+    "variant_skus": "optionSku",
+    "option_stock": "optionStock",
+    "variantStock": "optionStock",
+    "variant_stock": "optionStock",
+    "customNoteEnabled": "enableCustomNote",
+    "allowCustomNote": "enableCustomNote",
+    "custom_note_prompt": "customNotePrompt",
+    "bulk_qty": "bulkQty",
+    "bulkQuantity": "bulkQty",
+    "bulk_quantity": "bulkQty",
+    "bulkDiscountQty": "bulkQty",
+    "bulk_discount_qty": "bulkQty",
+    "bulk_percent": "bulkPercent",
+    "bulkDiscountPercent": "bulkPercent",
+    "bulk_discount_percent": "bulkPercent",
+    "customerReviews": "reviews",
+    "customer_reviews": "reviews",
+    "imageUrl": "image_url",
+}
+
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
 # The same fact in both spellings: PostgREST's schema-cache message and the raw
 # Postgres 42703 "column ... does not exist" that a direct connection returns.
 _MISSING_COLUMN_ANY_RE = re.compile(
     r"Could not find the '([^']+)' column"
-    r"|column \"?([A-Za-z_][A-Za-z0-9_]*)\"? (?:of relation \S+ )?does not exist")
+    r"|column (?:\"?[A-Za-z_][A-Za-z0-9_]*\"?\.)?\"?([A-Za-z_][A-Za-z0-9_]*)\"? (?:of relation \S+ )?does not exist")
 
 
 def _missing_column_name(exc):
@@ -647,6 +748,205 @@ def _missing_column_name(exc):
     if not match:
         return ""
     return match.group(1) or match.group(2) or ""
+
+
+def _fold_product_write_aliases(row):
+    """Normalize alias/typo keys onto canonical products columns before write."""
+    out = dict(row or {})
+    for alias, target in _PRODUCT_WRITE_ALIASES.items():
+        if alias not in out:
+            continue
+        val = out.pop(alias)
+        if target not in out or out.get(target) in (None, "", {}, []):
+            out[target] = val
+    return out
+
+
+def _is_optional_default(col, value):
+    if value is None:
+        return True
+    default = _OPTIONAL_PRODUCT_COLUMN_DEFAULTS.get(col)
+    if isinstance(default, bool):
+        return bool(value) is default
+    if isinstance(default, dict):
+        return not isinstance(value, dict) or len(value) == 0
+    if isinstance(default, list):
+        return not isinstance(value, list) or len(value) == 0
+    if isinstance(default, str):
+        return str(value).strip() == default
+    return value == default
+
+
+def _product_shape_cache_enabled():
+    return _read_cache_enabled()
+
+
+def _product_drop_active(column):
+    if not _product_shape_cache_enabled():
+        return False
+    at = _MISSING_PRODUCT_COLUMNS.get(column)
+    if at is None:
+        return False
+    if _time.monotonic() - at >= PRODUCT_DROP_RETRY_SECONDS:
+        _MISSING_PRODUCT_COLUMNS.pop(column, None)
+        return False
+    return True
+
+
+def _remember_missing_product_column(column):
+    if column and _product_shape_cache_enabled():
+        _MISSING_PRODUCT_COLUMNS[column] = _time.monotonic()
+
+
+def _heal_product_column(column):
+    """Attempt to auto-provision a missing products column once per process."""
+    if not column or column in _PRODUCT_HEAL_ATTEMPTED:
+        return False
+    _PRODUCT_HEAL_ATTEMPTED.add(column)
+    try:
+        import auto_migrate
+    except Exception:
+        return False
+    if column not in getattr(auto_migrate, "PRODUCT_COLUMNS", {}):
+        return False
+    try:
+        healed = bool(auto_migrate.ensure_product_columns([column]))
+    except Exception as exc:
+        print(f"[supabase] auto-migration for products.{column!r} failed: {exc}")
+        return False
+    if healed:
+        _MISSING_PRODUCT_COLUMNS.pop(column, None)
+        print(f"[supabase] products column {column!r} created automatically")
+    return healed
+
+
+def _load_product_optional_fields(c=None):
+    """Per-product sidecar values for optional columns absent from products."""
+    if c is None:
+        if not enabled():
+            return {}
+        try:
+            c = client()
+        except Exception:
+            return {}
+    if c is None:
+        return {}
+
+    def _fetch():
+        try:
+            res = (c.table("growth_settings").select("value")
+                   .eq("key", PRODUCT_OPTIONAL_FIELDS_KEY).limit(1).execute())
+            rows = _res_data(res)
+            if not rows:
+                return {}
+            raw = (rows[0] or {}).get("value")
+            data = json.loads(raw) if isinstance(raw, str) and raw else raw
+            if not isinstance(data, dict):
+                return {}
+            return {str(k): dict(v) for k, v in data.items()
+                    if str(k or "").strip() and isinstance(v, dict)}
+        except Exception:
+            return {}
+
+    return cached_read("product_optional_fields", _fetch) or {}
+
+
+def _sync_optional_product_sidecar(stripped_by_pid, persisted_by_pid=None, c=None):
+    """Persist non-default values of stripped optional columns in growth_settings."""
+    relevant_stripped = {}
+    has_non_default = False
+    for pid, fields in (stripped_by_pid or {}).items():
+        pid = str(pid or "").strip()
+        if not pid or not isinstance(fields, dict):
+            continue
+        filtered = {k: v for k, v in fields.items() if k in _SIDECAR_PRODUCT_COLUMNS}
+        if not filtered:
+            continue
+        relevant_stripped[pid] = filtered
+        if any(not _is_optional_default(k, v) for k, v in filtered.items()):
+            has_non_default = True
+    relevant_persisted = {
+        str(pid).strip(): {k for k in cols if k in _SIDECAR_PRODUCT_COLUMNS}
+        for pid, cols in (persisted_by_pid or {}).items()
+        if str(pid or "").strip() and cols
+    }
+    relevant_persisted = {pid: cols for pid, cols in relevant_persisted.items() if cols}
+    if not relevant_stripped and not relevant_persisted:
+        return
+    if c is None:
+        try:
+            c = client() if enabled() else None
+        except Exception:
+            c = None
+    if c is None:
+        return
+    current = _load_product_optional_fields(c)
+    if not has_non_default and not any(
+        pid in current for pid in (set(relevant_stripped) | set(relevant_persisted))
+    ):
+        return
+    updated = {k: dict(v) for k, v in current.items()}
+    changed = False
+    for pid, cols in relevant_persisted.items():
+        entry = updated.get(pid)
+        if not entry:
+            continue
+        for col in cols:
+            if col in entry:
+                entry.pop(col, None)
+                changed = True
+        if not entry:
+            updated.pop(pid, None)
+    for pid, fields in relevant_stripped.items():
+        entry = dict(updated.get(pid) or {})
+        before = dict(entry)
+        for col, val in fields.items():
+            if _is_optional_default(col, val):
+                entry.pop(col, None)
+            else:
+                entry[col] = _copy.deepcopy(val)
+        if entry != before:
+            changed = True
+        if entry:
+            updated[pid] = entry
+        elif pid in updated:
+            updated.pop(pid, None)
+    if not changed:
+        return
+    try:
+        c.table("growth_settings").upsert({
+            "key": PRODUCT_OPTIONAL_FIELDS_KEY,
+            "value": json.dumps(updated, ensure_ascii=False, separators=(",", ":")),
+        }).execute()
+        invalidate_read_cache("product_optional_fields")
+    except Exception as exc:
+        print(f"[supabase] optional product fields sidecar save failed: {exc}")
+
+
+def _prune_optional_product_sidecar(ids, c=None):
+    """Remove permanently deleted product ids from the optional-fields sidecar."""
+    clean_ids = {str(i or "").strip() for i in (ids or []) if str(i or "").strip()}
+    if not clean_ids:
+        return
+    if c is None:
+        try:
+            c = client() if enabled() else None
+        except Exception:
+            c = None
+    if c is None:
+        return
+    current = _load_product_optional_fields(c)
+    if not any(pid in current for pid in clean_ids):
+        return
+    updated = {k: v for k, v in current.items() if k not in clean_ids}
+    try:
+        c.table("growth_settings").upsert({
+            "key": PRODUCT_OPTIONAL_FIELDS_KEY,
+            "value": json.dumps(updated, ensure_ascii=False, separators=(",", ":")),
+        }).execute()
+        invalidate_read_cache("product_optional_fields")
+    except Exception:
+        pass
 
 
 def _only_default_flag(rows, key):
@@ -665,12 +965,12 @@ def _without_key(row, key):
 def _note_optional_product_column(col):
     """Log, and once per process record, that an optional column is absent.
 
-    The save itself is not refused: the missing column carried only its
-    default value. The durable warning tells the owner to run the migration.
+    The save itself is not refused: missing optional columns default safely
+    and non-default values ride in the durable growth_settings sidecar.
     """
     global _OPTIONAL_COLUMN_NOTED
-    print(f"[supabase] products table has no {col!r} column; saving without it. "
-          f"Run migrations/20261031_products_is_deleted.sql.")
+    print(f"[supabase] products table has no {col!r} column; saving without it "
+          "(optional column defaulted / mapped safely).")
     if col in _OPTIONAL_COLUMN_NOTED:
         return
     _OPTIONAL_COLUMN_NOTED.add(col)
@@ -841,7 +1141,7 @@ def _is_category_fk_error(exc):
 
 
 def _upsert_products_resilient(rows):
-    pending = [dict(r) for r in (rows or []) if r]
+    pending = [_fold_product_write_aliases(r) for r in (rows or []) if r]
     if not pending:
         return False
     global _LAST_WRITE_BLOCKER
@@ -876,33 +1176,53 @@ def _upsert_products_resilient(rows):
     if c is None:
         return _note_write_blocker("the Supabase client is not configured")
     attempt_rows = [dict(r) for r in pending]
-    for _ in range(4):
+    stripped_by_pid = {}
+    for col in list(_OPTIONAL_PRODUCT_COLUMN_DEFAULTS):
+        if not _product_drop_active(col):
+            continue
+        if col == "is_deleted" and not _only_default_flag(attempt_rows, "is_deleted"):
+            continue
+        for r in attempt_rows:
+            if col in r:
+                val = r.pop(col)
+                pid = str(r.get("id") or "").strip()
+                if pid:
+                    stripped_by_pid.setdefault(pid, {})[col] = val
+    max_attempts = max(4, 2 * max((len(r) for r in attempt_rows), default=1) + 8)
+    for _ in range(max_attempts):
         try:
             c.table("products").upsert(attempt_rows).execute()
+            persisted_by_pid = {
+                str(r.get("id") or "").strip(): set(r.keys()) & _SIDECAR_PRODUCT_COLUMNS
+                for r in attempt_rows if str(r.get("id") or "").strip()
+            }
+            _sync_optional_product_sidecar(
+                stripped_by_pid, persisted_by_pid=persisted_by_pid, c=c)
             return True
         except Exception as exc:
-            match = _MISSING_COLUMN_RE.search(str(exc))
-            col = match.group(1) if match else ""
-            if col == "is_active" and any("is_active" in r for r in attempt_rows):
-                attempt_rows = [{k: v for k, v in r.items() if k != "is_active"}
-                                for r in attempt_rows]
-                continue
-            if (_missing_column_name(exc) == "is_deleted"
-                    and _only_default_flag(attempt_rows, "is_deleted")):
-                # An older products table without the Trash Bin flag. Every
-                # row here says is_deleted=false (the default), and without the
-                # column no tombstone can exist, so dropping the flag loses
-                # nothing: the save goes through and the owner is told to run
-                # the migration. A row that really carries is_deleted=true is
-                # still refused below, so a trashed piece is never revived.
-                attempt_rows = [_without_key(r, "is_deleted") for r in attempt_rows]
-                _note_optional_product_column("is_deleted")
-                continue
             if _is_category_fk_error(exc) and any(r.get("category_id") for r in attempt_rows):
                 print("[supabase] products upsert: category_id not in categories table; "
                       "retrying with category_id=None while preserving category.")
                 attempt_rows = [dict(r, category_id=None) for r in attempt_rows]
                 continue
+            col = _missing_column_name(exc)
+            if col and any(col in r for r in attempt_rows):
+                if _heal_product_column(col):
+                    continue
+                if col == "is_deleted" and not _only_default_flag(attempt_rows, "is_deleted"):
+                    pass
+                elif col in _OPTIONAL_PRODUCT_COLUMN_DEFAULTS or col in _PRODUCT_WRITE_ALIASES:
+                    target_col = _PRODUCT_WRITE_ALIASES.get(col, col)
+                    for r in attempt_rows:
+                        if col in r:
+                            val = r.pop(col)
+                            pid = str(r.get("id") or "").strip()
+                            if pid:
+                                stripped_by_pid.setdefault(pid, {})[target_col] = val
+                    _remember_missing_product_column(col)
+                    if col != "is_active":
+                        _note_optional_product_column(col)
+                    continue
             if col:
                 _warn_missing_product_columns([col])
                 print("[supabase] products upsert refused: products table is missing "
@@ -992,7 +1312,9 @@ _PRODUCT_PATCH_COLUMNS = {
     "supplierCost": {"supplierCost"}, "supplier_cost": {"supplierCost"},
     "supplierPrice": {"supplierCost"}, "supplier_price": {"supplierCost"},
     "optionSupplierCost": {"optionSupplierCost"},
+    "optionsSupplierCost": {"optionSupplierCost"},
     "option_supplier_cost": {"optionSupplierCost"},
+    "options_supplier_cost": {"optionSupplierCost"},
     "optionSupplierCosts": {"optionSupplierCost"},
     "option_supplier_costs": {"optionSupplierCost"},
     "variantSupplierCosts": {"optionSupplierCost"},
@@ -1010,7 +1332,9 @@ def update_product_fields(product, dirty_fields):
     real persistence/schema failure. Callers may full-upsert only the missing
     seed-row case; other failures must remain visible to the Admin.
     """
-    row = dict(product or {})
+    global _LAST_WRITE_BLOCKER
+    _LAST_WRITE_BLOCKER = ""
+    row = _fold_product_write_aliases(product)
     pid = str(row.get("id") or "").strip()
     c = client()
     if not pid or c is None:
@@ -1040,7 +1364,15 @@ def update_product_fields(product, dirty_fields):
     elif patch.get("online") is True:
         patch["is_active"] = True
         patch["is_deleted"] = False
-    for _ in range(4):
+    stripped_fields = {}
+    for col in list(_OPTIONAL_PRODUCT_COLUMN_DEFAULTS):
+        if col not in patch or not _product_drop_active(col):
+            continue
+        if col == "is_deleted" and not _only_default_flag([patch], "is_deleted"):
+            continue
+        stripped_fields[col] = patch.pop(col)
+    max_attempts = max(4, 2 * len(patch) + 8)
+    for _ in range(max_attempts):
         try:
             result = (c.table("products").update(patch).eq("id", pid)
                       .select("*").execute())
@@ -1053,32 +1385,44 @@ def update_product_fields(product, dirty_fields):
                 # The update above was read back before the flag moved; report the
                 # row the way it now exists so the portal's "Hidden" tag is true.
                 rows[0] = dict(rows[0] or {}, online=False, is_active=False)
+            _sync_optional_product_sidecar(
+                {pid: stripped_fields} if stripped_fields else {},
+                persisted_by_pid={pid: set(patch.keys()) & _SIDECAR_PRODUCT_COLUMNS},
+                c=c,
+            )
             invalidate_read_cache("products_rows", "dead_product_ids")
             return "updated", _canonicalize_product(rows[0], c)
         except Exception as exc:
             message = str(exc)
             if "permanently deleted" in message.lower():
                 return "permanently-removed", None
-            missing_column = _MISSING_COLUMN_RE.search(message)
-            col = missing_column.group(1) if missing_column else ""
-            if col == "is_active" and "is_active" in patch:
-                patch.pop("is_active", None)
-                continue
-            if (_missing_column_name(exc) == "is_deleted" and "is_deleted" in patch
-                    and _only_default_flag([patch], "is_deleted")):
-                # Same rule as the full save: an absent Trash Bin flag that is
-                # only ever false is dropped, and the save still lands.
-                patch.pop("is_deleted", None)
-                _note_optional_product_column("is_deleted")
-                continue
             if _is_category_fk_error(exc) and patch.get("category_id"):
                 patch["category_id"] = None
                 continue
-            if missing_column:
+            col = _missing_column_name(exc)
+            if col and col in patch:
+                if _heal_product_column(col):
+                    continue
+                if col == "is_deleted" and not _only_default_flag([patch], "is_deleted"):
+                    pass
+                elif col in _OPTIONAL_PRODUCT_COLUMN_DEFAULTS or col in _PRODUCT_WRITE_ALIASES:
+                    target_col = _PRODUCT_WRITE_ALIASES.get(col, col)
+                    stripped_fields[target_col] = patch.pop(col)
+                    _remember_missing_product_column(col)
+                    if col != "is_active":
+                        _note_optional_product_column(col)
+                    continue
+            if col:
                 _warn_missing_product_columns([col])
+                _note_write_blocker(
+                    f"the products table is missing the column {col!r}; "
+                    "run supabase_schema.sql")
+            else:
+                _note_write_blocker(f"database write failed: {message[:200]}")
             print(f"[supabase] product field update failed for {pid!r}: {exc}")
             invalidate_read_cache("products_rows", "dead_product_ids")
             return "error", None
+    _note_write_blocker("database write failed after fallback retries")
     invalidate_read_cache("products_rows", "dead_product_ids")
     return "error", None
 
@@ -1140,8 +1484,8 @@ def delete_products_strict(ids):
         # A legacy products table may not have the is_deleted / is_active
         # columns yet. The source='deleted' marker alone still hides the row
         # from every reader, so the trash must not fail.
-        match = _MISSING_COLUMN_RE.search(str(exc))
-        if match and match.group(1) in ("is_deleted", "is_active"):
+        col = _missing_column_name(exc)
+        if col in ("is_deleted", "is_active"):
             try:
                 c.table("products").update({"source": "deleted"}).in_(
                     "id", ids).execute()
@@ -1195,15 +1539,21 @@ def set_product_online(ids, online):
         if not _function_missing(exc):
             print(f"[supabase] admin_set_product_online failed: {exc}")
             return False
-    try:
-        c.table("products").update({"online": bool(online),
-                                    "is_active": bool(online),
-                                    "updated_at": _now()}).in_("id", ids).execute()
-        invalidate_read_cache()
-        return True
-    except Exception as exc:
-        print(f"[supabase] product availability update failed: {exc}")
-        return False
+    patch = {"online": bool(online), "is_active": bool(online),
+             "updated_at": _now()}
+    for _ in range(3):
+        try:
+            c.table("products").update(patch).in_("id", ids).execute()
+            invalidate_read_cache()
+            return True
+        except Exception as exc:
+            col = _missing_column_name(exc)
+            if col == "is_active" and "is_active" in patch:
+                patch.pop("is_active", None)
+                continue
+            print(f"[supabase] product availability update failed: {exc}")
+            return False
+    return False
 
 
 def restore_products(ids, reason="owner recovery"):
@@ -1220,15 +1570,21 @@ def restore_products(ids, reason="owner recovery"):
         if not _function_missing(exc):
             print(f"[supabase] admin_restore_products failed: {exc}")
             return False
-    try:
-        c.table("products").update({"source": "admin", "is_deleted": False,
-                                    "is_active": True, "online": True,
-                                    "updated_at": _now()}).in_("id", ids).execute()
-        invalidate_read_cache()
-        return True
-    except Exception as exc:
-        print(f"[supabase] product restore failed: {exc}")
-        return False
+    patch = {"source": "admin", "is_deleted": False,
+             "is_active": True, "online": True, "updated_at": _now()}
+    for _ in range(4):
+        try:
+            c.table("products").update(patch).in_("id", ids).execute()
+            invalidate_read_cache()
+            return True
+        except Exception as exc:
+            col = _missing_column_name(exc)
+            if col in ("is_deleted", "is_active") and col in patch:
+                patch.pop(col, None)
+                continue
+            print(f"[supabase] product restore failed: {exc}")
+            return False
+    return False
 
 
 def _unavailable_rows():
@@ -1339,21 +1695,21 @@ def recover_unavailable_products(ids=None, reason="owner recovery"):
                 patch["image_url"] = cover
                 patch["image"] = cover
                 report["repairedImages"] += 1
-        try:
-            c.table("products").update(patch).eq("id", pid).execute()
-        except Exception as exc:
-            # A legacy table may lack is_active. Retry without the new column
-            # instead of leaving the row unavailable.
-            if "is_active" in str(exc):
-                patch.pop("is_active", None)
-                try:
-                    c.table("products").update(patch).eq("id", pid).execute()
-                except Exception as exc2:
-                    print(f"[supabase] recovery failed for {pid!r}: {exc2}")
+        updated_ok = False
+        for _ in range(4):
+            try:
+                c.table("products").update(patch).eq("id", pid).execute()
+                updated_ok = True
+                break
+            except Exception as exc:
+                col = _missing_column_name(exc)
+                if col in ("is_active", "is_deleted") and col in patch:
+                    patch.pop(col, None)
                     continue
-            else:
                 print(f"[supabase] recovery failed for {pid!r}: {exc}")
-                continue
+                break
+        if not updated_ok:
+            continue
         restored.append(pid)
         try:
             clear_deleted_id(pid)
@@ -1602,6 +1958,7 @@ def hard_delete_products(ids):
         return report
 
     report["deleted"] = deleted_ids
+    _prune_optional_product_sidecar(ids, c=c)
     invalidate_read_cache()
 
     # 3. Mirror the durable SQL tombstone into the legacy list only after the
