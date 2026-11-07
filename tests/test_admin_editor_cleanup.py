@@ -50,18 +50,43 @@ const names = [...html.matchAll(/\bname="([^"]+)"/g)].map(match => match[1]);
 // carry a French title, so new items (all perfumes) stayed English in
 // French views and WhatsApp posts. The owner now types it manually.
 const required = ["id", "name", "nameFr", "sku", "description", "descriptionFr", "category", "priceNgn", "compareNgn", "supplierSku",
-  "stock", "enableCustomNote", "customNotePrompt", "opt-title-0", "opt-vals-0"];
+  "stock", "enableCustomNote", "customNotePrompt", "opt-title-0", "opt-vals-0",
+  // Per-product bulk discount RE-JOINED the editor on owner directive
+  // (2026-11-07): the threshold and percentage boxes sit in the
+  // Inventory / Pricing section. They were cut on 2026-10-05 as "shop-wide
+  // tiers are a Growth setting" - but a shop-wide tier cannot express "this
+  // one product gets 15% off above 10 units", so the owner had no way to set
+  // it and catalog.bulk_discount_for / store.bulkPercentFor kept reading a
+  // per-product discount nothing could write any more.
+  "bulkQty", "bulkPercent"];
 for (const name of required) {
   if (!names.includes(name)) throw new Error("missing form control " + name);
 }
 // Compare-at Price re-joined the editor on owner directive: the crossed-out
 // "was" price is a shop essential again (single product + per-variant), so it
 // is no longer in the removed set.
-for (const removed of ["dimensions", "bulkQty",
-  "bulkPercent", "featured", "badge", "online", "stockStatus",
+for (const removed of ["dimensions",
+  "featured", "badge", "online", "stockStatus",
   "Customer Name", "Customer Stars", "Customer Review"]) {
   if (html.includes(removed)) throw new Error("removed control still rendered: " + removed);
 }
+// An UNSET bulk offer must render as an empty box, not "0"/"undefined"/"NaN":
+// a literal 0 reads as a real threshold and never fires (0 is not > 0).
+const tag = (n) => (html.match(new RegExp('<input[^>]*name="' + n + '"[^>]*>')) || [""])[0];
+if (!/value=""/.test(tag("bulkQty")) || !/value=""/.test(tag("bulkPercent")))
+  throw new Error("unset bulk boxes must render empty: " + tag("bulkQty") + " / " + tag("bulkPercent"));
+// ...and a SAVED offer must come back into the boxes, or opening the editor
+// and pressing Save would silently clear a discount the owner is still
+// running (exactly the "my bulk settings vanish" report).
+const withBulk = { ...product, bulkQty: 10, bulkPercent: 15 };
+const bulkHtml = sandbox.productForm(withBulk);
+const bTag = (n) => (bulkHtml.match(new RegExp('<input[^>]*name="' + n + '"[^>]*>')) || [""])[0];
+if (!/value="10"/.test(bTag("bulkQty")) || !/value="15"/.test(bTag("bulkPercent")))
+  throw new Error("saved bulk offer did not render: " + bTag("bulkQty") + " / " + bTag("bulkPercent"));
+// The threshold is EXCLUSIVE ("more than bulkQty"), so the sentence must name
+// 11 - naming 10 is how an owner ends up wondering why 10 units got no discount.
+if (!bulkHtml.includes("from 11 units of this product upwards") || !bulkHtml.includes("15% less"))
+  throw new Error("the bulk read-back sentence must name the FIRST qualifying quantity");
 if (!html.includes('data-opt-stock="Red"') || !html.includes('value="3"'))
   throw new Error("saved option stock did not render");
 if (!html.includes('data-opt-stock="Blue"') || !html.includes('value="0"'))

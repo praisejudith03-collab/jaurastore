@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=242";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=242";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=243";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=243";
 }
 
 function renderCategories() {
@@ -858,6 +858,43 @@ function reviewCardsHTML(list) {
     <p>${JA.escape(r.body != null ? r.body : (r.note || ""))}</p>
   </article>`).join("");
 }
+/* The product page's tiered-savings prompt.
+ *
+ * Restored 2026-11-07 (it was purged on 2026-10-05 with the rest of the PDP
+ * information boxes). It is one line, not a box, and it counts the shopper UP
+ * to the next threshold as they change the quantity: the server's rule is
+ * "MORE than bulkQty", so a buyer who types 10 against a threshold of 10 gets
+ * no discount and deserves to be told before checkout, not after.
+ *
+ * A product with its own bulkQty/bulkPercent quotes that; anything else quotes
+ * the shop-wide tier it has not reached yet. When promotions are switched off
+ * JA.bulkDiscountTiers() answers [] and the line stays hidden. */
+function pdpBulkText(p, qty) {
+  const row = p || {};
+  const n = Math.max(0, Math.round(Number(qty) || 0));
+  const clean = (v) => Math.max(1, Math.min(90, Math.round(Number(v) || 0)));
+  const ownQty = Math.round(Number(row.bulkQty) || 0);
+  const ownPct = Math.round(Number(row.bulkPercent) || 0);
+  // Per-product offer: exclusive ("more than"), so the first qualifying
+  // quantity is bulkQty + 1.
+  if (ownQty > 0 && ownPct > 0) {
+    const min = ownQty + 1;
+    return n >= min
+      ? { text: t("pdp.bulkReady", { p: clean(ownPct) }), on: true }
+      : { text: t("pdp.bulkNext", { n: min - n, p: clean(ownPct) }), on: false };
+  }
+  // Shop-wide tiers: inclusive, and the shopper is quoted the NEXT one.
+  const tiers = (JA.bulkDiscountTiers && JA.bulkDiscountTiers()) || [];
+  if (!tiers.length) return null;
+  const next = tiers.find((tier) => Math.max(2, Math.round(Number(tier.minQuantity) || 0)) > n);
+  if (next) {
+    const min = Math.max(2, Math.round(Number(next.minQuantity) || 0));
+    return { text: t("pdp.bulkNext", { n: min - n, p: clean(next.percent) }), on: false };
+  }
+  const best = tiers[tiers.length - 1];
+  return { text: t("pdp.bulkReady", { p: clean(best.percent) }), on: true };
+}
+
 function renderProduct() {
   const root = document.querySelector("[data-pdp]");
   if (!root) return;
@@ -1058,6 +1095,7 @@ function paintProduct(root, p) {
         <button type="button" data-q="+">+</button>
       </div>
       <p class="stock-line is-low" data-qty-stock-error role="alert" aria-live="assertive" hidden></p>
+      <p class="pdp-bulk" data-bulk-hint role="status" aria-live="polite" hidden></p>
       <div class="pdp-actions">
         <button class="btn" data-buy ${p.stock <= 0 ? "disabled" : ""}>${p.stock <= 0 ? t("pdp.oos") : t("pdp.add")}</button>
         <a class="btn btn-line" href="checkout.html">${t("pdp.payIn", { cur: JA.currency() === "NGN" ? "₦" : "CFA" })}</a>
@@ -1198,6 +1236,16 @@ function paintProduct(root, p) {
     if (qtyStockError) {
       qtyStockError.textContent = stockCopy(qtyStockMessage);
       qtyStockError.hidden = !qtyStockMessage;
+    }
+    // The savings prompt follows the quantity, so it is repainted from the
+    // same place the stock line is: every qty keystroke, +/- press and
+    // stock-limit event already lands here.
+    const bulkHint = root.querySelector("[data-bulk-hint]");
+    if (bulkHint) {
+      const offer = pdpBulkText(p, qty ? qty.value : 1);
+      bulkHint.textContent = offer ? offer.text : "";
+      bulkHint.hidden = !offer;
+      bulkHint.classList.toggle("is-on", !!(offer && offer.on));
     }
     if (buyBtn) {
       const inStock = avail > 0 && left > 0;

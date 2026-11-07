@@ -264,9 +264,15 @@ def test_pdp_source_has_no_supplier_notice_or_extra_boxes():
     i18n = _read("js", "i18n.js")
     css = _read("css", "style.css")
     for gone in ("supplierAvailabilityHTML", "pdp-supplier-availability",
-                 "pdp-bulk", "pdp-info", "pdp-dims", "pdp.hint",
+                 "pdp-info", "pdp-dims", "pdp.hint",
                  "additionalInfo", "Supplier-linked"):
         assert gone not in app, f"PDP still carries {gone!r}"
+    # The tiered savings PROMPT came back on owner request 2026-11-07, having
+    # been purged with the rest of the PDP boxes on 2026-10-05. It is ONE <p>
+    # line under the quantity stepper - not an informational box - so the
+    # boxes stay banned while that single line is allowed back.
+    assert '<p class="pdp-bulk" data-bulk-hint' in app, \
+        "the savings prompt must be a single <p> line, not a box"
     assert "Supplier-linked availability" not in i18n
     assert "disponibilité auprès du fournisseur" not in i18n
     assert ".pdp-supplier-availability" not in css
@@ -296,14 +302,72 @@ emit({ html: root.innerHTML });
     assert "supplier" not in lowered, html
     assert "download" not in lowered, html
     assert "https://supplier.example" not in html
-    # No extra informational boxes (the additionalInfo block, the bulk advert,
-    # the SKU hint, the dimensions line).
-    for gone in ("pdp-info", "pdp-bulk", "pdp-dims", "bulk.label", "How to use"):
+    # No extra informational boxes (the additionalInfo block, the SKU hint,
+    # the dimensions line). The bulk advert BOX stays gone; what replaced it on
+    # 2026-11-07 is a one-line prompt, checked just below.
+    for gone in ("pdp-info", "pdp-dims", "bulk.label", "How to use"):
         assert gone not in html, f"{gone!r} survived in the PDP: {html}"
+    # The restored tiered-savings prompt, and the arithmetic that makes it
+    # worth showing: bulkQty 3 is EXCLUSIVE, so the first qualifying quantity
+    # is 4 - a shopper holding 1 must be told "3 more", never "2 more".
+    # (The prompt's TEXT is filled in on the first updateStockUI pass, which
+    # this stub-DOM harness cannot run - querySelector is a no-op here. The
+    # arithmetic itself is pinned by test_pdp_bulk_prompt_counting below.)
+    assert "pdp-bulk" in html, f"the savings prompt is missing: {html}"
     # The core commerce blocks are all still there.
     for kept in ("<h1>", 'class="price"', "pdp-gallery", "pdp-thumbs",
                  "data-qty", "data-buy", "qty"):
         assert kept in html, f"{kept!r} missing from the PDP: {html}"
+
+
+def test_pdp_bulk_prompt_counts_to_the_right_threshold():
+    """The restored savings prompt must flip at exactly the quantity the
+    server charges for - and the two rules are NOT the same comparison.
+
+      * a product's own offer fires at MORE than bulkQty (exclusive);
+      * a shop-wide tier fires at minQuantity or more (inclusive).
+
+    Getting this wrong is the whole reason the prompt exists: a buyer who
+    reads "10+" as "10" reaches checkout and finds no discount.
+    """
+    out = _node(r"""
+loadApp();
+const at = (p, qty) => JSON.parse(runInCtx(
+  "JSON.stringify(pdpBulkText(" + JSON.stringify(p) + ", " + qty + "))"));
+const OWN = { bulkQty: 10, bulkPercent: 15 };
+const tiers = JSON.parse(runInCtx("JSON.stringify(JA.bulkDiscountTiers())"));
+const min = tiers.length ? Math.max(2, Number(tiers[0].minQuantity) || 0) : 0;
+emit({
+  hadTiers: tiers.length > 0,
+  // Per-product: MORE than bulkQty, so 10 units against a threshold of 10
+  // earns nothing and 11 earns the discount.
+  ownBelow: at(OWN, 9).on,
+  ownAtThreshold: at(OWN, 10).on,
+  ownJustOver: at(OWN, 11).on,
+  // Half a pair is no per-product offer: the product falls back to the
+  // shop-wide tiers (same answer as a product with no offer at all) rather
+  // than quoting a percentage that can never fire.
+  halfPairQty: at({ bulkQty: 0, bulkPercent: 15 }, 1).on,
+  halfPairPct: at({ bulkQty: 10, bulkPercent: 0 }, 1).on,
+  noOfferAt1: at({}, 1).on,
+  // Shop-wide tiers are INCLUSIVE: minQuantity exactly is enough.
+  tierBelow: min ? at({}, min - 1).on : null,
+  tierAt: min ? at({}, min).on : null,
+});
+""")
+    # The per-product threshold is exclusive.
+    assert out["ownBelow"] is False
+    assert out["ownAtThreshold"] is False, \
+        "10 units against bulkQty 10 earns no discount - the prompt must say so"
+    assert out["ownJustOver"] is True
+    # Half a pair falls back to the shop-wide tiers, exactly like no offer.
+    assert out["noOfferAt1"] is False
+    assert out["halfPairQty"] == out["noOfferAt1"]
+    assert out["halfPairPct"] == out["noOfferAt1"]
+    # A shop-wide tier is inclusive.
+    assert out["hadTiers"], "the harness must expose the default shop-wide tier"
+    assert out["tierBelow"] is False
+    assert out["tierAt"] is True
 
 
 # ===========================================================================

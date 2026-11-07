@@ -43,18 +43,28 @@ def test_abandoned_cart_threshold_is_twenty_minutes():
 
 
 def test_product_editor_excludes_redundant_discount_and_merchandising_fields():
-    """Discount, merchandising and translation controls stay out of the
-    product editor. Per-option SELLING PRICE and SUPPLIER COST inputs
+    """Merchandising, rating and translation controls stay out of the product
+    editor. Per-option SELLING PRICE and SUPPLIER COST inputs
     (data-opt-price / data-opt-cost) are approved editor controls since the
     variant-pricing spec (2026-10): they are pricing essentials, not
     merchandising extras — the old "Option price overrides" panel they
-    replaced is still banned."""
+    replaced is still banned.
+
+    The per-product BULK DISCOUNT inputs are back in the editor as of
+    2026-11-07 (owner directive), having been cut in this same "redundant
+    discount fields" sweep: the shop-wide tiers they were removed in favour
+    of are a Growth setting and cannot express "this one product gets 15% off
+    above 10 units". Both levels now exist and do not conflict - a product
+    with its own figures overrides the tiers for that product.
+    """
     source = (ROOT / "js/admin.js").read_text(encoding="utf-8")
     form = source[source.index("function productForm(p = {})"):source.index("async function handleProductSubmit")]
     for removed in ("Option price overrides", "Promo Discount", "Best Seller",
-                    "New Product Arrival", "Price reduction / strikethrough",
-                    "bulkQty", "bulkPercent"):
+                    "New Product Arrival", "Price reduction / strikethrough"):
         assert removed not in form, removed
+    # ...and the per-product pair is genuinely rendered, not just mentioned.
+    assert 'name="bulkQty"' in form
+    assert 'name="bulkPercent"' in form
     # Shop-wide volume tiers remain available outside the product editor.
     assert "bulkDiscountTiers" in source
     # The approved per-option pricing inputs exist (spec 2026-10) and the
