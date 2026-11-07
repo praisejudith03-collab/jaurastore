@@ -72,8 +72,8 @@ function t(key, vars) {
 function catCover(c) {
   const img = (c && c.image) || "";
   // A document can never render in an <img>, so fall back to the cover art.
-  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=241";
-  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=241";
+  if (img && JA.mediaKind && JA.mediaKind(img) !== "image") return "images/brand/logo.jpg?v=242";
+  return img ? (JA.asset ? JA.asset(img) : img) : "images/brand/logo.jpg?v=242";
 }
 
 function renderCategories() {
@@ -922,6 +922,15 @@ function renderProduct() {
 
 function paintProduct(root, p) {
   try { JA.track("view", { id: p.id, name: p.name, page: "product" }); } catch (e) {}
+  // Meta ViewContent: the pixel fires here and the server sends the matching
+  // Conversions API copy with the SAME event id (deduplicated by Meta).
+  try {
+    if (window.JA_META) {
+      const cur = JA.currency ? JA.currency() : "NGN";
+      const price = JA.priceOf ? JA.priceOf(p, cur, "") : 0;
+      window.JA_META.viewContent(p, { price, currency: cur });
+    }
+  } catch (e) {}
   try {
     const name = JA.displayName(p);
     const desc = String(JA.displayDescription(p) || "").trim() || (name + " at Jaura Store. Pay in ₦ or CFA.");
@@ -1544,6 +1553,12 @@ function payConfigured(d) {
 function showOrderDone(order) {
   const root = document.querySelector("[data-checkout-root]") || document.querySelector("[data-checkout]");
   if (!root) return;
+  // Meta Purchase — the browser half only. The authoritative server copy was
+  // already sent from the order row with event id "ja-purchase-<ORDER>"; this
+  // pixel call carries the SAME id, so Meta counts the sale ONCE. It runs on
+  // both paths (fresh submit and a reloaded confirmation), guarded per session
+  // inside js/meta-pixel.js.
+  try { if (window.JA_META) window.JA_META.purchase(order); } catch (e) {}
   const customerCountry = String(order.customer?.country || "");
   const method = ["naira", "benin_cfa", "togo_cfa"].includes(order.paymentMethod)
     ? order.paymentMethod
@@ -2493,6 +2508,17 @@ function renderCheckout() {
   try { paintMinOrderNotices(); } catch (e) {}
   document.addEventListener("ja:lang", () => { try { paintMinOrderNotices(); } catch (e) {} });
   try { JA.track("checkout_start", { page: "checkout" }); } catch (e) {}
+  // Meta InitiateCheckout: server-side + pixel, one shared event id.
+  try {
+    if (window.JA_META && JA.cartDetailed) {
+      const method = checkoutPaymentMethod(form);
+      const cur = method === "naira" ? "NGN" : "CFA";
+      const lines = JA.cartDetailed(cur).map((i) => ({
+        id: i.product.id, qty: i.qty, price: i.payUnit,
+      }));
+      window.JA_META.initiateCheckout(lines, { currency: cur });
+    }
+  } catch (e) {}
 
   // ---- Shipping note dynamic from Admin Settings ----
   try {

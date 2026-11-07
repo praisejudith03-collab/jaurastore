@@ -139,6 +139,56 @@ CREATE TABLE IF NOT EXISTS marketing_campaign_sends (
 );
 CREATE INDEX IF NOT EXISTS idx_campaign_sends_campaign ON marketing_campaign_sends(campaign_id);
 
+-- Durable outbox for server-side Meta (Conversions API) events.
+-- The request path only ever INSERTs a row here and hands the HTTP call to the
+-- task queue, so neither a shopper's checkout nor an owner's admin action can
+-- wait on graph.facebook.com. `event_id` is the deduplication key Meta uses to
+-- collapse a browser-pixel event and its server twin; UNIQUE(event_name,
+-- event_id) makes our own retries idempotent too (the analytics batch is
+-- re-sent from localStorage after a timeout, and that must not double-count).
+CREATE TABLE IF NOT EXISTS meta_events (
+  id          TEXT PRIMARY KEY,
+  event_name  TEXT NOT NULL,
+  event_id    TEXT NOT NULL,
+  event_time  INTEGER NOT NULL,
+  payload     TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'queued',
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  detail      TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  sent_at     TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meta_events_dedupe ON meta_events(event_name, event_id);
+CREATE INDEX IF NOT EXISTS idx_meta_events_status ON meta_events(status, attempts);
+
+-- Variant-level shop inventory alert ledger. One row per product+variant
+-- episode that is low or out, so a colour that stays sold out for a week
+-- emails the owner once, and a restock closes the episode (the next drop is
+-- news again). Never a product write: this module is alert-only.
+CREATE TABLE IF NOT EXISTS inventory_alerts (
+  key           TEXT PRIMARY KEY,
+  product_id    TEXT NOT NULL,
+  product_name  TEXT,
+  sku           TEXT,
+  option        TEXT,
+  option_label  TEXT,
+  level         TEXT NOT NULL,
+  qty           INTEGER NOT NULL DEFAULT 0,
+  product_total INTEGER NOT NULL DEFAULT 0,
+  first_at      TEXT,
+  changed_at    TEXT,
+  last_at       TEXT,
+  pending       INTEGER NOT NULL DEFAULT 0,
+  claimed_at    TEXT,
+  claim_id      TEXT,
+  emailed_at    TEXT,
+  emailed_level TEXT,
+  seen_at       TEXT,
+  seen_level    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_alerts_product ON inventory_alerts(product_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_alerts_pending ON inventory_alerts(pending, level);
+
 CREATE TABLE IF NOT EXISTS marketing_suppressions (
   email       TEXT PRIMARY KEY COLLATE NOCASE,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))

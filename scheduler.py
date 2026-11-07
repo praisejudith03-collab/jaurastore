@@ -373,6 +373,27 @@ def _stock_guardrail(logger=None):
     return result
 
 
+def _inventory_alerts(logger=None):
+    """Variant-level shop inventory sweep (owner email on a new stockout).
+
+    Runs every tick so a colour that hits zero through a path with no woken
+    worker (a supplier sync, an admin bulk edit, a deploy that dropped the
+    in-process queue) is still caught within five minutes. A sale itself wakes
+    the queue immediately, so the common case is seconds, not minutes.
+    """
+    import inventory_alerts
+    result = inventory_alerts.sweep()
+    if result.get("sent") and logger:
+        logger.info("inventory alerts emailed: %s item(s)", result.get("count"))
+    return result
+
+
+def _meta_flush(logger=None):
+    """Retry outstanding Meta (Conversions API) events, oldest first."""
+    import meta_capi
+    return meta_capi.sweep(logger=logger)
+
+
 def _maintenance_tick(logger=None):
     _step("scheduler.keep_alive", lambda: _keep_alive(logger), logger)
     _step("scheduler.daily_backup", lambda: _run_backup(logger), logger)
@@ -385,6 +406,16 @@ def _maintenance_tick(logger=None):
     # picked up on the next five-minute tick instead of waiting for the admin
     # to notice a stuck panel.
     _step("tasks.sweep", lambda: task_queue.drain(logger=logger), logger)
+    # Meta Conversions API outbox sweep. The task queue sends an event within
+    # a second of it being recorded; this is the net under it for the events
+    # that were parked by a Meta outage (bounded attempts, oldest first) or
+    # written while the worker thread was being respawned. A no-op when the
+    # pixel/token are not configured.
+    _step("meta.capi.flush", lambda: _meta_flush(logger), logger)
+    # Shop-side inventory watchdog: every variant of every live product, so a
+    # single colour running out reaches the owner even while the parent
+    # product still has stock (see inventory_alerts.py).
+    _step("inventory.alerts", lambda: _inventory_alerts(logger), logger)
     # Nightly maintenance replaces (rather than adds to) the regular supplier
     # batch, so the same five-minute cycle never doubles the two-link ceiling.
     if _nightly_due():

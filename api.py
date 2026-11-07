@@ -1,6 +1,6 @@
 """All JSON endpoints. Every mutating route is CSRF-protected."""
 import csv, io, itertools, json, math, os, datetime, secrets, hashlib, hmac, \
-       re, threading, time, gc, tempfile, uuid
+       re, threading, time, gc, tempfile, uuid, urllib.parse
 from functools import wraps
 from flask import (Blueprint, request, jsonify, session, current_app, make_response,
                    redirect, g, has_request_context)
@@ -26,6 +26,13 @@ import delivery
 # from api, so this is import-cycle safe.
 import supabase_store
 import task_queue
+# Meta Conversions API. Imported at module scope so its task-queue handler is
+# registered on every worker that can serve a checkout (see meta_capi.py).
+import meta_capi
+# Shop-side inventory alerts (variant level). Imported at module scope for the
+# same reason: a checkout wakes its task, and the handler must be registered on
+# the worker that will run it (see inventory_alerts.py).
+import inventory_alerts
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
@@ -408,7 +415,11 @@ def csrf():
 def public_config():
     return jsonify(ok=True, csrf=sec.issue_csrf(), env=Config.ENV,
                    lowStockThreshold=Config.LOW_STOCK_THRESHOLD,
-                   recaptchaSiteKey=Config.RECAPTCHA_SITE_KEY)
+                   recaptchaSiteKey=Config.RECAPTCHA_SITE_KEY,
+                   # The Meta pixel id is public by design (it is in every
+                   # page's HTML anyway); the Conversions API token never is.
+                   # An empty value means the storefront loads no pixel at all.
+                   metaPixelId=meta_capi.pixel_id())
 
 @api.get("/products")
 def products():
@@ -1031,6 +1042,131 @@ def track():
     stored = analytics_mod.record(items, vid, is_new)
     resp = make_response(jsonify(ok=True, recorded=stored))
     return analytics_mod.stamp_cookie(resp, vid)
+
+
+META_EVENT_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{8,120}$")
+
+
+def _meta_source_url(raw):
+    """The page a browsing event happened on, restricted to this shop.
+
+    Meta stores the URL as-is, so an arbitrary third-party value (or a
+    ``javascript:`` string from a hand-crafted POST) must never be forwarded.
+    An origin-relative path is resolved against the shop's own origin.
+    """
+    text = sec.clean(raw, 800, allow_newlines=False)
+    if not text:
+        return ""
+    base = str(Config.SITE_ORIGIN or "").rstrip("/")
+    if text.startswith("/") and not text.startswith("//"):
+        return (base + text) if base else ""
+    try:
+        host = urllib.parse.urlsplit(text).hostname or ""
+    except Exception:
+        return ""
+    allowed = {"jaurastore.com.ng", "www.jaurastore.com.ng"}
+    try:
+        from flask import has_request_context
+        if has_request_context():
+            allowed.add((request.host or "").split(":")[0].lower())
+    except Exception:
+        pass
+    if base:
+        try:
+            allowed.add(urllib.parse.urlsplit(base).hostname or "")
+        except Exception:
+            pass
+    return text if host.lower() in {a for a in allowed if a} else ""
+
+
+def _meta_contents(raw):
+    """Validated ``contents`` for a browsing event (max 12 lines)."""
+    lines = raw if isinstance(raw, list) else []
+    contents, ids, total, num = [], [], 0.0, 0
+    for line in lines[:12]:
+        if not isinstance(line, dict):
+            continue
+        pid = sec.clean(line.get("id"), 80, allow_newlines=False)
+        if not pid:
+            continue
+        try:
+            qty = int(line.get("quantity") or line.get("qty") or 1)
+        except (TypeError, ValueError):
+            qty = 1
+        qty = max(1, min(1000, qty))
+        price = meta_capi.normalize_number(line.get("item_price") or line.get("price"))
+        if price > 10 ** 9:
+            price = 0.0
+        contents.append({"id": pid, "quantity": qty, "item_price": price})
+        ids.append(pid)
+        total += price * qty
+        num += qty
+    return contents, ids, round(total, 2), num
+
+
+@api.post("/meta/event")
+@sec.require_csrf
+def meta_event():
+    """Browser-originated Meta standard events, delivered from the server.
+
+    The storefront fires the pixel AND posts the same ``eventId`` here, so the
+    server-side copy reaches Meta even when the pixel is blocked, and Meta
+    deduplicates the pair. Only browsing events are accepted: ``Purchase`` is
+    written exclusively by ``create_order`` from the order the server itself
+    stored, so a scripted POST can never invent a sale.
+
+    Always answers 200 within milliseconds: the event is written to the
+    durable outbox and sent by the task-queue worker, never in this request.
+    """
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        d = {}
+    name = sec.clean(d.get("name") or d.get("eventName"), 40, allow_newlines=False)
+    if name not in meta_capi.CLIENT_EVENTS:
+        return jsonify(ok=False, error="Unsupported event."), 400
+    vid, is_new = analytics_mod.visitor_id()
+    limited = sec.guard("meta-event", limit=300, window=300, key_extra=vid)
+    if limited:
+        return limited
+    event_id = sec.clean(d.get("eventId"), 120, allow_newlines=False)
+    if not META_EVENT_ID_RE.match(event_id or ""):
+        event_id = meta_capi.event_id("px")
+    params = d.get("params") if isinstance(d.get("params"), dict) else {}
+    contents, content_ids, value, num_items = _meta_contents(params.get("contents"))
+    if not value:
+        value = min(10 ** 9, meta_capi.normalize_number(params.get("value")))
+    currency = meta_capi.currency_code(params.get("currency"))
+    custom = {
+        "content_type": "product",
+        "content_ids": content_ids,
+        "contents": contents,
+        # An empty value/currency pair is invalid metadata for Meta; the key is
+        # only sent when there is a real number behind it.
+        "num_items": num_items,
+    }
+    if value:
+        custom["value"] = value
+        custom["currency"] = currency
+    content_name = sec.clean(params.get("contentName") or params.get("name"), 200,
+                             allow_newlines=False)
+    if content_name:
+        custom["content_name"] = content_name
+    user = meta_capi.build_user_data(
+        customer=meta_capi.current_customer(),
+        request_meta={"email": sec.clean_email(d.get("email")),
+                      "phone": sec.clean(d.get("phone"), 40, allow_newlines=False)},
+        external_id=vid)
+    result = meta_capi.track(name, custom, user,
+                             _meta_source_url(d.get("eventSourceUrl")
+                                              or request.headers.get("Referer")),
+                             dedupe_id=event_id)
+    resp = make_response(jsonify(ok=True, eventId=event_id,
+                                 queued=bool(result.get("queued")),
+                                 duplicate=bool(result.get("duplicate"))))
+    # The visitor cookie is the external_id used above; stamp it so the NEXT
+    # event matches the same person even on a first visit.
+    return analytics_mod.stamp_cookie(resp, vid)
+
 
 @api.post("/search-log")
 @sec.require_csrf
@@ -2368,6 +2504,28 @@ def create_order():
         "value": total, "currency": currency, "sid": sec.clean(d.get("sid"), 48),
     }], vid, False)
 
+    # ------------------------------------------------ Meta Conversions API
+    # The order is now durably written, so this is the authoritative sale: the
+    # event's value, currency and lines are the server's own numbers. It is
+    # written to the outbox and sent by a background worker (never in this
+    # request), and its event_id is the same "ja-purchase-<ORDER>" the pixel
+    # fires on the confirmation screen - that pair is what Meta deduplicates.
+    meta_purchase_id = meta_capi.purchase_event_id(oid)
+    try:
+        meta_capi.purchase(
+            dict(order, id=oid, total=total, currency=currency, items=clean_items),
+            user_data=meta_capi.build_user_data(
+                customer=dict(customer, name=sec.clean(
+                    customer.get("name")
+                    or ((customer.get("firstName") or "") + " "
+                        + (customer.get("lastName") or "")), 200)),
+                request_meta={"externalId": vid},
+                external_id=vid),
+            source_url=(Config.SITE_ORIGIN or "").rstrip("/") + "/checkout.html",
+        )
+    except Exception as exc:                       # never blocks a sale
+        print(f"[meta] purchase event skipped: {exc}")
+
     # WhatsApp notification to the owner (fire-and-forget; never blocks the sale)
     import threading as _threading
     def _notify_whatsapp(order_copy):
@@ -2438,6 +2596,10 @@ def create_order():
                                  # confirmation page can restate it instead of
                                  # re-deriving it client-side.
                                  delivery=fare,
+                                 # The dedupe id the confirmation screen must
+                                 # hand to the pixel, so the browser and the
+                                 # server copies collapse into ONE purchase.
+                                 metaEventId=meta_purchase_id,
                                  items=clean_items))
     return analytics_mod.stamp_cookie(resp, vid)
 
@@ -2706,6 +2868,10 @@ def public_order(oid):
                     for i in _order_items_with_images(payload.get("items") or [])]
     out["paymentMethod"] = payload.get("paymentMethod") or ""
     out["payment"] = payload.get("payment") or ""
+    # Computed, never stored: the pixel needs the SAME dedupe id the server
+    # used for this order's Purchase event, even when the confirmation screen
+    # is recovered by a reload (see meta_capi.purchase_event_id).
+    out["metaEventId"] = meta_capi.purchase_event_id(out.get("id"))
     out["customer_notice"] = payload.get("customer_notice") or None
     out["payment_review"] = payload.get("payment_review") or None
     return jsonify(ok=True, order=out)
@@ -6484,6 +6650,48 @@ def admin_supplier_alerts():
                            "excluded": excluded})
 
 
+@api.get("/admin/inventory-alerts")
+@authmod.require_admin
+def admin_inventory_alerts():
+    """Variant-level shop stockouts the owner has not been told about yet.
+
+    Separate from Supplier Alerts on purpose: this is the SHOP's own quantity
+    (the colour the shopper cannot buy any more), not what the supplier has.
+    """
+    import inventory_alerts
+    return jsonify(ok=True, inventory=inventory_alerts.status())
+
+
+@api.post("/admin/inventory-alerts/check")
+@authmod.require_admin
+@sec.require_csrf
+def admin_inventory_alerts_check():
+    """Run the variant sweep now (Admin "Check stock now")."""
+    import inventory_alerts
+    result = inventory_alerts.sweep()
+    audit(authmod.current_admin(), "inventory.check",
+          f"scanned={result.get('scanned')} changed={result.get('changed')} "
+          f"sent={result.get('sent')}", _ip())
+    return jsonify(ok=True, result=result, inventory=inventory_alerts.status())
+
+
+@api.post("/admin/inventory-alerts/mark-seen")
+@authmod.require_admin
+@sec.require_csrf
+def admin_inventory_alerts_mark_seen():
+    """Acknowledge one variant's stockout so the card stops flagging it."""
+    import inventory_alerts
+    d = request.get_json(silent=True) or {}
+    pid = sec.clean(d.get("productId"), 80, allow_newlines=False)
+    option = sec.clean(d.get("option"), 160, allow_newlines=False)
+    if not pid:
+        return jsonify(ok=False, error="Product id required."), 400
+    result = inventory_alerts.mark_seen(pid, option)
+    if not result.get("ok"):
+        return jsonify(ok=False, error="That stockout could not be acknowledged."), 404
+    return jsonify(ok=True, inventory=inventory_alerts.status())
+
+
 @api.post("/admin/supplier-alerts/<pid>/mark-seen")
 @authmod.require_admin
 @sec.require_csrf
@@ -8709,6 +8917,31 @@ def marketing_campaigns():
 @authmod.require_admin
 @sec.require_csrf
 def marketing_campaign_send():
+    """Queue the "Send campaign" composer and answer immediately.
+
+    WHY THIS IS NO LONGER A SYNCHRONOUS SEND
+    ----------------------------------------
+    It used to walk the whole contact book and hand every address to the mail
+    provider *inside the request*. On mobile data that is tens of seconds, and
+    the browser's own deadline (js/net.js: 5 s) always fired first, so the
+    owner was shown "Request timed out after 5 seconds." while the server was
+    still happily sending - and the obvious retry then mailed the same
+    promotion twice.
+
+    The request now does three small, fast things:
+
+      1. validate the campaign (type, subject, body, featured products);
+      2. write ONE campaign row (status ``queued``) and hand the work to the
+         task queue (``campaign.dispatch`` - the same chunked sender the
+         Broadcast Hub uses, with a per-address send log so a resume never
+         double-sends);
+      3. answer, so the admin page never blocks and never drops the
+         connection.
+
+    The worker sends in bounded chunks and re-queues itself while addresses
+    remain; the portal follows progress through
+    ``GET /admin/marketing/broadcast/<id>``.
+    """
     d = request.get_json(silent=True) or {}
     # campaign_type is the canonical schema discriminator. Legacy browser
     # aliases are normalized only at this boundary.
@@ -8725,26 +8958,32 @@ def marketing_campaign_send():
     if not isinstance(selected_ids, list) or len(selected_ids) > 12:
         return jsonify(ok=False, error="Choose no more than 12 products."), 400
     selected_ids = {sec.clean(pid, 80) for pid in selected_ids if sec.clean(pid, 80)}
-    products = [p for p in catalog_mod.merged() if str(p.get("id") or "") in selected_ids]
+    # Only LIVE products may be featured: a retired piece must never be
+    # re-advertised by a stale admin tab (same rule as the Broadcast Hub).
+    products = [p for p in catalog_mod.merged()
+                if str((p or {}).get("id") or "") in selected_ids
+                and catalog_mod.is_live_product(p)]
     if len(products) != len(selected_ids):
         return jsonify(ok=False, error="One or more selected products are unavailable."), 400
-    # Peek at the first recipient without materialising the whole list, then
-    # chain it back on so the broadcast streams page by page.
-    recipient_stream = _iter_marketing_recipients()
-    first = next(recipient_stream, None)
-    if first is None:
-        return jsonify(ok=False, error="There are no customer emails on file yet."), 400
-    recipient_stream = itertools.chain([first], recipient_stream)
     import mailer
     if not mailer.configured():
         return jsonify(ok=False, error=(
             "Resend is not configured. Set MAIL_FROM and RESEND_API_KEY before sending.")), 400
+    # Count, never materialise: the same streamed walk the sender will use, so
+    # the number on the button and the number of inboxes cannot drift apart.
+    recipient_count = _marketing_recipient_count()
+    if not recipient_count:
+        return jsonify(ok=False, error="There are no customer emails on file yet."), 400
+    if recipient_count > MARKETING_MAX_RECIPIENTS:
+        return jsonify(ok=False, error=(
+            f"That is {recipient_count} addresses, above the "
+            f"{MARKETING_MAX_RECIPIENTS} ceiling for one campaign. Split it.")), 400
     now = _utcnow()
     campaign_id = "CMP-" + secrets.token_hex(6).upper()
     row = serialize_campaign({
         "id": campaign_id, "campaign_type": campaign_type, "subject": subject,
-        "content": content, "recipient_count": 0,
-        "sent_count": 0, "failed_count": 0, "status": "sending",
+        "content": content, "recipient_count": recipient_count,
+        "sent_count": 0, "failed_count": 0, "status": "queued",
         "sent_at": now, "created_at": now,
     })
     execute(
@@ -8754,33 +8993,48 @@ def marketing_campaign_send():
          row["recipient_count"], row["sent_count"], row["failed_count"],
          row["status"], row["sent_at"], row["created_at"]),
     )
-    # Send immediately, one recipient at a time. A single failing address is
-    # logged and counted; it can never abort the broadcast.
-    sent = failed = total = 0
-    for email in recipient_stream:
-        total += 1
-        try:
-            ok, detail = mailer.send_campaign_email(email, subject, content, products)
-        except Exception as exc:
-            ok, detail = False, str(exc)
-        if ok:
-            sent += 1
-        else:
-            failed += 1
-            print(f"[marketing] campaign recipient failed: {email}: {detail}")
-    status = "sent" if not failed else ("partial" if sent else "failed")
-    execute("UPDATE marketing_campaigns SET recipient_count=?, sent_count=?, "
-            "failed_count=?, status=? WHERE id=?",
-            (total, sent, failed, status, campaign_id))
-    row.update({"recipient_count": total, "sent_count": sent,
-                "failed_count": failed, "status": status})
+    payload = {"campaign": campaign_id, "kind": "campaign",
+               "campaignType": campaign_type,
+               "actor": authmod.current_admin(),
+               "productIds": [str(p.get("id")) for p in products]}
+    job = task_queue.enqueue("campaign.dispatch", payload)
     try:
         from supabase_store import mirror_marketing_campaign
         mirror_marketing_campaign(row)
     except Exception as exc:
         print(f"[marketing] campaign mirror skipped: {exc}")
-    audit(authmod.current_admin(), "marketing.campaign", f"{campaign_id} {status} {sent}/{total}", _ip())
-    return jsonify(ok=True, campaign=row, recipientCount=total, sent=sent, failed=failed)
+    audit(authmod.current_admin(), "marketing.campaign",
+          f"{campaign_id} {campaign_type} queued job={job['id']} "
+          f"recipients={recipient_count}", _ip())
+    return jsonify(ok=True, queued=True, campaign=row, campaignId=campaign_id,
+                   recipientCount=recipient_count, sent=0, failed=0,
+                   jobId=job["id"])
+
+
+# ============================================ admin: Meta Conversions API
+@api.get("/admin/meta/status")
+@authmod.require_admin
+def admin_meta_status():
+    """Is the server-side Meta pipeline live, and what happened recently?
+
+    Answers without touching Facebook: it reports whether a pixel id + token
+    are configured, how many events sit in each state and the last few with
+    Meta's own reply. That is what makes a December campaign diagnosable
+    without log access.
+    """
+    limit = sec.clean_int(request.args.get("limit"), 20, 1, 100)
+    return jsonify(ok=True, meta=meta_capi.status(limit=limit))
+
+
+@api.post("/admin/meta/flush")
+@authmod.require_admin
+@sec.require_csrf
+def admin_meta_flush():
+    """Send whatever is still outstanding now (after fixing a token, say)."""
+    stats = meta_capi.flush(retry_failed=True)
+    audit(authmod.current_admin(), "meta.flush",
+          f"sent={stats.get('sent')} failed={stats.get('failed')}", _ip())
+    return jsonify(ok=True, **stats)
 
 
 # =============================================== admin: growth & marketing

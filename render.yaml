@@ -19,7 +19,7 @@ services:
     region: frankfurt
     plan: free
     buildCommand: pip install -r requirements.txt
-    # Gunicorn replaces a silent worker after 45s; Render separately removes
+    # Gunicorn replaces a silent worker after 60s; Render separately removes
     # an unhealthy instance from traffic and restarts it after its health-check
     # failure window. /healthz is a cached liveness probe (<50 ms, no network,
     # no allocation) so the 15-minute UptimeRobot ping and Render's own checks
@@ -27,7 +27,7 @@ services:
     # failed background database probes (~30 s), so a genuinely wedged process
     # is recycled without anyone pressing "Restart Service"; /health keeps the
     # full synchronous report for humans and the catalogue watchdog.
-    startCommand: gunicorn "app:create_app()" --workers 1 --threads 8 --worker-class gthread --timeout 45 --graceful-timeout 30 --keep-alive 5
+    startCommand: gunicorn "app:create_app()" --workers 1 --threads 8 --worker-class gthread --timeout 60 --graceful-timeout 30 --keep-alive 5
     healthCheckPath: /healthz
     envVars:
       - key: FLASK_ENV
@@ -119,6 +119,17 @@ services:
       - key: WHATSAPP_PHONE_ID
         sync: false
       - key: WHATSAPP_CALLMEBOT_KEY
+        sync: false
+      # Meta Conversions API (server-side standard events). The pixel id is
+      # public (it ships to the browser through /api/config); the access token
+      # is a secret and must only ever be set in the dashboard. Leave both
+      # empty to keep the server silent - the storefront pixel still works.
+      # See ENVIRONMENT_VARIABLES.md ("Meta Conversions API").
+      - key: META_PIXEL_ID
+        sync: false
+      - key: META_CAPI_ACCESS_TOKEN
+        sync: false
+      - key: META_CAPI_TEST_EVENT_CODE
         sync: false
       # Shop email over HTTPS providers first (Render blocks SMTP on many plans).
       - key: MAIL_FROM

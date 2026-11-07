@@ -133,6 +133,11 @@ window.JA_NET = (function () {
   // ------------------------------------------------------------ CSRF token
   var recaptchaKey = "";
   var recaptchaLoad = null;
+  // The Meta pixel id is PUBLIC (it is in every page's HTML anyway) and comes
+  // from the same /api/config answer that carries the CSRF token, so the
+  // storefront never needs a second boot request to learn it. Empty means no
+  // pixel is loaded at all (see js/meta-pixel.js).
+  var metaPixelId = "";
   function csrf(force) {
     if (token && !force && Date.now() - tokenAt < 20 * 60 * 1000) return Promise.resolve(token);
     if (inflight && !force) return inflight;
@@ -152,6 +157,7 @@ window.JA_NET = (function () {
         token = (d && d.csrf) || "";
         tokenAt = Date.now();
         if (d && d.recaptchaSiteKey) recaptchaKey = String(d.recaptchaSiteKey);
+        if (d && d.metaPixelId) metaPixelId = String(d.metaPixelId);
         try { sessionStorage.setItem(CSRF_KEY, token); } catch (e) {}
         return token;
       })
@@ -683,8 +689,19 @@ window.JA_NET = (function () {
   });
   setInterval(function () { if (jobs.length && navigator.onLine !== false) flush(); }, 45000);
 
+  // Public config the storefront modules need (the pixel id). Resolves from
+  // the same boot answer as csrf(); never blocks page rendering.
+  function publicConfig() {
+    return csrf().then(function () {
+      return { csrf: token, metaPixelId: metaPixelId, recaptchaSiteKey: recaptchaKey };
+    }).catch(function () {
+      return { csrf: token, metaPixelId: metaPixelId, recaptchaSiteKey: recaptchaKey };
+    });
+  }
+
   return {
-    api: api, csrf: csrf, flush: flush, boot: boot, recaptcha: recaptcha,
+    api: api, csrf: csrf, config: publicConfig,
+    flush: flush, boot: boot, recaptcha: recaptcha,
     mountRecaptcha: mountRecaptcha, resetRecaptcha: resetRecaptcha,
     pending: pending, onStatus: onStatus, isOnline: isOnline, discard: discard,
     _jobs: function () { return jobs.slice(); },

@@ -257,6 +257,105 @@ re-created by a sync.
   supplier sweep but skip the automatic media purge (the admin card and the
   CLI tool keep working either way).
 
+## Meta Conversions API — server-side purchase / cart / view events
+
+The storefront pixel is only half the story: an ad blocker, an Instagram or
+Facebook in-app browser, or a dropped 3G connection deletes it before Meta ever
+sees it. Every standard event is therefore also sent **from the server**:
+
+| Event | Triggered by | Value used |
+| --- | --- | --- |
+| `ViewContent` | opening a product page | the price the page shows |
+| `AddToCart` | a line added to the cart | unit price × quantity |
+| `InitiateCheckout` | opening the checkout | the live cart total |
+| `Purchase` | the order row the server itself wrote | the **server-computed** order total |
+
+**Deduplication.** Every event carries an `event_id`. The browser pixel is
+fired with the same id in `fbq('track', name, params, {eventID})`, so Meta
+counts the pair as ONE conversion. For `Purchase` the id is derived from the
+order id (`ja-purchase-JA-1A2B3C`) on both sides, which keeps the pair matched
+even when the checkout answer never reached the phone. On the server,
+`meta_events` has a `UNIQUE(event_name, event_id)` index, so a retried
+analytics batch or a double submit cannot store — or send — the same event
+twice.
+
+**Delivery.** The request path only INSERTs one row into `meta_events` and wakes
+the task queue; the POST to `graph.facebook.com` happens on the background
+worker (batches of 40, 8 s timeout), and the five-minute scheduler tick
+(`meta.capi.flush`) retries anything still outstanding, up to five attempts.
+A Meta outage therefore never slows a checkout, and nothing is lost silently.
+
+Variables (Render dashboard → Environment; `sync: false` in `render.yaml`):
+
+- `META_PIXEL_ID` — the dataset/pixel id from Events Manager. **Public**: it is
+  served to the browser through `/api/config`. Empty ⇒ no pixel is loaded.
+- `META_CAPI_ACCESS_TOKEN` — events Manager → Settings → Conversions API →
+  *Generate access token*. **Secret**, server only.
+- `META_CAPI_TEST_EVENT_CODE` — optional; sends copies to the Events Manager
+  *Test events* tab. Leave empty in production so a live campaign is not
+  counted twice while testing.
+- `META_CAPI_API_VERSION` (default `v21.0`) and `META_CAPI_ENABLED`
+  (`0` silences the server half only; the pixel keeps working).
+
+**Verify after deploying:** open the shop in a browser, visit a product page
+and add something to the cart, then `GET /api/admin/meta/status` (signed in as
+admin). It reports whether the pipeline is configured, how many events sit in
+each state and Meta's own reply for the last few. `POST /api/admin/meta/flush`
+re-sends anything parked — useful right after pasting a corrected token.
+In Events Manager, each event appears **once** with both sources listed
+("Browser" *and* "Server") on the same row: that is the deduplication working.
+The CSP in `security.py` / `_headers` allows `connect.facebook.net` and
+`www.facebook.com`; if the pixel is blocked by something else, the server copy
+still arrives, so reporting never drops to zero.
+
+## Shop inventory alerts — every variant, not just the product
+
+The Supplier Alerts pipeline watches the **supplier's** page and deliberately
+skips anything the shop has already run to zero, so it can never report that
+*the shop itself* sold out. That gap is what let a single colour run out
+silently: "Black" on the big channel bag sold its last unit, `optionStock`
+fell to 0, the storefront greyed the colour out, and no email was sent because
+the parent product still had the other colours.
+
+`inventory_alerts.py` is the alert-only watchdog for the shop's own numbers:
+
+- it expands every live product into its **variant grid** (`optionStock`),
+  so each colour / size is judged on its own quantity; a product without a
+  grid is judged on its total;
+- a variant at **0** is `out`; at **1..`INVENTORY_LOW_STOCK_THRESHOLD`**
+  (default 5, the same band as the admin low-stock screen) it is `low`;
+- a transition into `out` (or into `low`) queues one pending alert per
+  product+variant and emails the owner inbox (`ADMIN_EMAIL`,
+  jaurastore@gmail.com) **immediately**: a sale wakes the task queue the
+  moment the reservation writes the new quantity, and the worker re-reads the
+  row so the email quotes what the shop is really serving;
+- the five-minute scheduler tick sweeps the whole catalogue as the net under
+  a missed wake (a supplier sync, a bulk admin edit, a deploy that dropped the
+  in-process queue);
+- staying out never re-emails; a restock closes the episode so the next drop
+  alerts again; low → out escalates;
+- hidden / trashed / owner-locked-out products are not news and are never
+  emailed.
+
+State lives in the `inventory_alerts` table and is mirrored best-effort into
+`growth_settings.inventory_alert_state_json`, so a redeploy on Render's
+ephemeral disk does not email the same sold-out colour again.
+
+Optional variables:
+
+- `INVENTORY_STOCK_ALERTS_ENABLED` (default `1`) — `0`/`off` silences these
+  emails (the ledger and the admin list keep working).
+- `INVENTORY_LOW_STOCK_THRESHOLD` (default `Config.LOW_STOCK_THRESHOLD`, 5) —
+  units at or below this (and above zero) count as LOW.
+
+**Verify:** Admin → Products shows stock per variant. `GET
+/api/admin/inventory-alerts` lists every variant currently low/out (worst
+first, with the parent total so you can see when only one colour is gone),
+`POST /api/admin/inventory-alerts/check` runs the sweep on demand, and
+`POST /api/admin/inventory-alerts/mark-seen` acknowledges one. In the inbox,
+the subject reads `Inventory alert — N variants out of stock`, and each row
+names the product, the colour/size and the remaining product total.
+
 ## Analytics geolocation, bot filtering and crash reporting
 
 Visitor locations come from the CDN edge headers (`CF-IPCity` /

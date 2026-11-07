@@ -2622,6 +2622,23 @@ def _option_stock_key_for(product, variant):
     return None
 
 
+def _wake_inventory_alerts(pid, option_key=None):
+    """Wake the shop-side stock-alert worker after a stock write.
+
+    A colour that just sold its last unit must reach the owner's inbox in
+    seconds — but the email must never be sent inside the reservation, so the
+    write path only wakes the task queue. The worker re-reads the row (so the
+    alert quotes the quantity the shop is really serving) and mails once per
+    transition (see inventory_alerts.py).
+    """
+    try:
+        import inventory_alerts
+        return inventory_alerts.notify_after_stock_change(pid, option_key)
+    except Exception as exc:                        # never break a stock write
+        print(f"[catalog] inventory alert wake skipped: {exc}")
+        return False
+
+
 def reserve_stock(pid, qty, option_key=None, actor=None):
     """Atomically reserve ``qty`` units of one product (local backend).
 
@@ -2651,7 +2668,11 @@ def reserve_stock(pid, qty, option_key=None, actor=None):
         if option_key and matched is None:
             return None
         from supabase_store import reserve_product_stock
-        return reserve_product_stock(pid, qty, option=matched)
+        reserved = reserve_product_stock(pid, qty, option=matched)
+        if reserved:
+            # The variant (or whole product) may have just hit zero.
+            _wake_inventory_alerts(pid, matched or option_key)
+        return reserved
 
     path = _norm_filename(CATALOG_FILE)
     with _catalog_lock(path):
@@ -2699,6 +2720,8 @@ def reserve_stock(pid, qty, option_key=None, actor=None):
         except Exception as exc:                   # pragma: no cover - disk
             print(f"[catalog] local stock reserve failed: {exc}")
             return False
+    # Outside the lock: the alert worker must never wait on a stock write.
+    _wake_inventory_alerts(pid, matched or option_key)
     return rec
 
 
@@ -2757,6 +2780,8 @@ def release_stock(pid, qty, option_key=None, actor=None):
         except Exception as exc:
             print(f"[catalog] local stock release failed for {pid}: {exc}")
             return False
+    # A restock closes the alert episode, so the NEXT drop is news again.
+    _wake_inventory_alerts(pid, matched or option_key)
     return clean
 
 
@@ -3019,6 +3044,7 @@ def set_variant_stock(pid, qty, option_key=None, actor=None):
         except Exception as exc:                   # pragma: no cover - network
             print(f"[catalog] product stock set failed: {exc}")
             return False
+        _wake_inventory_alerts(pid, matched or option_key)
         return clean
 
     path = _norm_filename(CATALOG_FILE)
@@ -3054,6 +3080,7 @@ def set_variant_stock(pid, qty, option_key=None, actor=None):
         except Exception as exc:                   # pragma: no cover - disk
             print(f"[catalog] local stock set failed: {exc}")
             return False
+    _wake_inventory_alerts(pid, matched or option_key)
     return rec
 
 

@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=241" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=242" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -4672,6 +4672,34 @@ async function fillMarketing() {
     try { const d = await api("api/admin/marketing/campaigns" + (params.toString() ? "?" + params : "")); paintCampaignLog(d.campaigns || []); }
     catch (e) { const box = $("#mk-campaign-log"); if (box) box.innerHTML = `<p class="empty">Campaign history is unavailable right now.</p>`; }
   };
+  // "Send campaign" is QUEUED now, not sent inside the request, so the status
+  // line follows the campaign row the worker is filling in. Polling stops on
+  // its own at a terminal state, so a forgotten admin tab leaves nothing
+  // running.
+  const trackCampaign = (campaignId, statusEl) => {
+    let tries = 0;
+    const tick = async () => {
+      tries += 1;
+      try {
+        const d = await api("api/admin/marketing/broadcast/" + encodeURIComponent(campaignId));
+        const c = (d && d.campaign) || {};
+        const done = Number(c.sentCount || 0), failed = Number(c.failedCount || 0);
+        const total = Number(c.recipientCount || 0);
+        if (statusEl && c.id) {
+          statusEl.textContent = `${c.id} · ${c.status} · ${done.toLocaleString()} sent`
+            + (failed ? ` · ${failed.toLocaleString()} failed` : "")
+            + ` of ${total.toLocaleString()}`
+            + (/sent|partial|failed|cancelled/.test(String(c.status)) ? "" : " — sending in the background");
+        }
+        if (/sent|partial|failed|cancelled/.test(String(c.status))) {
+          await loadCampaignLog();
+          return;
+        }
+      } catch (err) { /* a blip must not stop the tracker */ }
+      if (tries < 150) setTimeout(tick, 4000);
+    };
+    tick();
+  };
   const bindCampaignFilters = () => {
     const search = $("#marketing-search"); const from = $("#marketing-from"); const to = $("#marketing-to");
     const apply = () => { marketingSearch = String(search?.value || "").trim(); marketingFrom = String(from?.value || ""); marketingTo = String(to?.value || ""); loadCampaignLog(); };
@@ -4740,17 +4768,37 @@ async function fillMarketing() {
       }
       if (!confirm(`Send this ${campaignTypeLabel(type?.value)} campaign to ${recipientCount.toLocaleString()} customer${recipientCount === 1 ? "" : "s"}?`)) return;
       const btn = $("#mk-send-campaign"); const status = $("#mk-campaign-status");
-      if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
-      if (status) status.textContent = "Sending — please keep this tab open.";
+      if (btn) { btn.disabled = true; btn.textContent = "Queueing…"; }
+      if (status) status.textContent = "Queueing the campaign…";
       try {
-        const sent = await api("api/admin/marketing/campaigns", { method: "POST", json: { type: type?.value, subject: subject?.value, content: content?.value, productIds: [...selectedProducts] } });
-        const failed = Number(sent.failed || 0);
-        if (status) status.textContent = failed ? `Campaign sent to ${sent.sent || 0} of ${sent.recipientCount || recipientCount}; ${failed} failed.` : `Campaign sent to ${sent.sent || recipientCount} customer${Number(sent.sent || recipientCount) === 1 ? "" : "s"}.`;
-        (failed ? JA.toast : JA.success)(failed ? "Campaign partially sent." : "Campaign sent.");
+        const queued = await api("api/admin/marketing/campaigns", {
+          method: "POST",
+          json: { type: type?.value, subject: subject?.value, content: content?.value, productIds: [...selectedProducts] },
+          // The server now answers as soon as the broadcast is QUEUED, not when
+          // the last inbox is done. The deadline is raised from the 5-second
+          // default anyway: on mobile data even this small request can crawl,
+          // and a false "Request timed out after 5 seconds" used to make the
+          // owner retry a campaign that had already started.
+          timeout: 60000,
+          // Deliberately NOT queued for an offline retry: a retried POST
+          // would create a SECOND campaign and mail everyone twice. A lost
+          // connection shows the message below and Past campaigns tells the
+          // owner whether the first attempt landed.
+          label: "Send campaign",
+        });
+        if (queued && queued.queued === false) throw new Error(queued.error || "Could not queue the campaign.");
+        const recipients = Number(queued.recipientCount || recipientCount);
+        const label = String(queued.campaignId || "campaign");
+        if (status) status.textContent = `Queued ${recipients.toLocaleString()} recipient${recipients === 1 ? "" : "s"} as ${label}. It sends in the background — you can leave this page.`;
+        JA.success("Campaign queued.");
         await loadCampaignLog();
+        if (queued.campaignId) trackCampaign(queued.campaignId, status);
       } catch (err) {
-        if (status) status.textContent = err.message || "Could not send the campaign.";
-        JA.toast(err.message || "Could not send the campaign.");
+        const msg = (err && err.timeout)
+          ? "The connection dropped before the campaign was queued. Nothing was sent — check Past campaigns before trying again."
+          : ((err && err.message) || "Could not send the campaign.");
+        if (status) status.textContent = msg;
+        JA.toast(msg);
       } finally {
         if (btn) { btn.disabled = false; btn.textContent = "Send campaign"; }
       }
@@ -5166,7 +5214,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=241" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=242" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5574,7 +5622,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=241", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=242", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");

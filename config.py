@@ -170,6 +170,38 @@ class Config:
     SMTP_USER = os.environ.get("SMTP_USER", "")
     SMTP_PASS = os.environ.get("SMTP_PASS", "")
 
+    # ---------------------------------------- Meta Conversions API (CAPI)
+    # Server-side standard events (ViewContent, AddToCart, InitiateCheckout,
+    # Purchase) are posted to Meta from the server, in the background, so an
+    # ad blocker, an in-app browser or a dropped mobile connection can no
+    # longer delete a December campaign's attribution. The browser pixel and
+    # the server payload carry the SAME `event_id`; that pair is what Meta
+    # deduplicates, so one sale is counted once, not twice.
+    #
+    # META_PIXEL_ID is the dataset/pixel id (public: the browser needs it).
+    # META_CAPI_ACCESS_TOKEN is the Conversions API token from Events Manager
+    # -> Settings -> Conversions API -> "Generate access token". It is a
+    # secret and must only ever live in the host's environment.
+    # META_CAPI_TEST_EVENT_CODE sends copies to the Events Manager "Test
+    # events" tab; leave it empty in production so test events are not
+    # counted twice during a live campaign.
+    META_PIXEL_ID = (os.environ.get("META_PIXEL_ID", "")
+                     or os.environ.get("META_DATASET_ID", "")).strip()
+    META_CAPI_ACCESS_TOKEN = (os.environ.get("META_CAPI_ACCESS_TOKEN", "")
+                              or os.environ.get("META_ACCESS_TOKEN", "")).strip()
+    META_CAPI_TEST_EVENT_CODE = os.environ.get("META_CAPI_TEST_EVENT_CODE", "").strip()
+    META_CAPI_API_VERSION = os.environ.get("META_CAPI_API_VERSION", "v21.0").strip() or "v21.0"
+    # A hard kill switch: "0" stops every outbound Meta call without touching
+    # the storefront (the pixel keeps working, the server stays silent).
+    META_CAPI_ENABLED = (os.environ.get("META_CAPI_ENABLED", "1").strip().lower()
+                         not in ("0", "false", "no", "off"))
+
+    @classmethod
+    def meta_configured(cls):
+        """True when a server-side event can actually be delivered."""
+        return bool(cls.META_CAPI_ENABLED and cls.META_PIXEL_ID
+                    and cls.META_CAPI_ACCESS_TOKEN)
+
     # --------------------------------------------------------- analytics
     ANALYTICS_RETENTION_DAYS = int(os.environ.get("ANALYTICS_RETENTION_DAYS", "400") or 400)
     LIVE_WINDOW_SECONDS = 120      # a visitor counts as "on the site" this long

@@ -948,6 +948,87 @@ def send_supplier_stock_alert(alerts):
     return send_mail(subject, supplier_stock_alert_email_html(rows))
 
 
+# ------------------------------------------------- shop inventory alerts
+def inventory_stock_alert_email_html(alerts):
+    """The owner email for a VARIANT running out in the shop's own stock.
+
+    Deliberately distinct from the supplier email: this one is about what the
+    storefront is serving right now, names the colour/size, and says whether
+    the rest of the product is still sellable (the case that used to slip
+    through every parent-product-only check).
+    """
+    rows = [a for a in (alerts or []) if isinstance(a, dict)]
+    out_rows = [a for a in rows if str(a.get("level") or "") == "out"]
+    low_rows = [a for a in rows if str(a.get("level") or "") == "low"]
+    admin_url = _email_origin() + "/admin.html?tab=products"
+    lines = []
+    for a in rows:
+        level = "OUT OF STOCK" if str(a.get("level") or "") == "out" else "LOW STOCK"
+        color = "#b3261e" if level == "OUT OF STOCK" else "#9a6a00"
+        name = _esc(str(a.get("product_name") or a.get("product_id") or "Product"))
+        sku = _esc(str(a.get("sku") or ""))
+        option = _esc(str(a.get("option_label") or a.get("option") or ""))
+        qty = a.get("qty")
+        qty_text = ("0 left" if qty == 0 else (f"{qty} left" if qty is not None else ""))
+        total = a.get("product_total")
+        total_text = ""
+        if total is not None and option:
+            try:
+                total_text = ("product total: " + str(int(total)))
+                if int(total) > 0:
+                    total_text += " (other variants still on sale)"
+            except (TypeError, ValueError):
+                total_text = ""
+        detail = " · ".join(x for x in (sku, option or "whole product", qty_text, total_text) if x)
+        lines.append(
+            f'<tr><td style="padding:8px 10px;border-bottom:1px solid #eee">'
+            f"<b>{name}</b>"
+            + (f'<br><span style="color:#777;font-size:12px">{_esc(detail)}</span>' if detail else "")
+            + f'</td><td style="padding:8px 10px;border-bottom:1px solid #eee;'
+              f'white-space:nowrap;color:{color}"><b>{level}</b></td></tr>')
+    summary = " and ".join(x for x in (
+        f"{len(out_rows)} variant{'s' if len(out_rows) != 1 else ''} out of stock"
+        if out_rows else "",
+        f"{len(low_rows)} low" if low_rows else "") if x) or "low stock"
+    body = (
+        '<p style="margin:0 0 10px">Your own shop stock just changed for:</p>'
+        '<p style="margin:0 0 12px"><b>' + _esc(summary) + "</b></p>"
+        '<table role="presentation" cellpadding="0" cellspacing="0" '
+        'style="border-collapse:collapse;width:100%;font-size:14px">'
+        + "".join(lines) + "</table>"
+        '<p style="margin:14px 0 0">A sold-out colour or size is hidden from '
+        "shoppers automatically, so nothing is oversold — but a customer who "
+        "wanted that exact option cannot buy it until you restock it.</p>"
+        f'<p style="margin:10px 0 0"><a href="{_esc(admin_url, quote=True)}" '
+        'style="color:#a97e48">Open Admin &rarr; Products to restock</a></p>'
+        '<p style="margin:12px 0 0;color:#777;font-size:12px">One email is sent '
+        "when a variant (or a whole product) first runs out or low, and again "
+        "only if it is restocked and later drops, or worsens from low to out."
+        "</p>")
+    return _shell("Inventory stock alert", "", body)
+
+
+def send_inventory_stock_alert(alerts):
+    """Email the owner inbox (ADMIN_EMAIL) about a variant running out.
+
+    Returns (ok, detail); never raises.
+    """
+    rows = [a for a in (alerts or []) if isinstance(a, dict)]
+    if not rows:
+        return False, "no inventory alerts to send"
+    out_count = sum(1 for a in rows if str(a.get("level") or "") == "out")
+    low_count = len(rows) - out_count
+    if out_count and low_count:
+        subject = (f"Inventory alert — {out_count} variant"
+                   f"{'s' if out_count != 1 else ''} out of stock, {low_count} low")
+    elif out_count:
+        subject = (f"Inventory alert — {out_count} variant"
+                   f"{'s' if out_count != 1 else ''} out of stock")
+    else:
+        subject = f"Inventory alert — {low_count} variant{'s' if low_count != 1 else ''} low"
+    return send_mail(subject, inventory_stock_alert_email_html(rows))
+
+
 # ------------------------------------------------------------------ triggers
 def notify_new_order(order):
     """Email the shop about a completed checkout. Returns (ok, detail)."""
