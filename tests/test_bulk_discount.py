@@ -245,32 +245,91 @@ def test_store_js_prices_per_product_bulk_first():
     assert "bulkPercentFor(p, totalQty)" in src
 
 
-def test_simplified_product_editor_hides_legacy_per_product_discount_fields():
+def test_product_editor_exposes_per_product_bulk_discount_fields():
+    """The Admin Product Editor carries both halves of the per-product offer.
+
+    These boxes were cut on 2026-10-05 ("shop-wide tiers are a Growth
+    setting, not product metadata") and restored on 2026-11-07: a shop-wide
+    tier cannot express "this one product gets 15% off above 10 units", so
+    with the boxes gone nothing in the app could WRITE a per-product discount
+    any more - while catalog.bulk_discount_for and store.bulkPercentFor both
+    still READ one. The backend was never removed; only the inputs were.
+
+    The shop-wide tiers stay a separate Growth setting - a product with its
+    own percentage simply overrides them (see
+    test_per_product_discount_overrides_the_shop_wide_tiers).
+    """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = open(os.path.join(root, "js", "admin.js"), encoding="utf-8").read()
     start = src.index("function productForm(p = {})")
     end = src.index("async function handleProductSubmit", start)
     product_form = src[start:end]
-    assert 'name="bulkQty"' not in product_form
-    assert 'name="bulkPercent"' not in product_form
-    # Shop-wide bulk tiers remain a separate Growth setting, not a product
-    # metadata field that makes the create/edit form harder to maintain.
+    assert 'name="bulkQty"' in product_form
+    assert 'name="bulkPercent"' in product_form
+    # ...and what is typed must actually be SHIPPED, not just rendered. The
+    # payload keys are read off the form on every save and sent as an
+    # explicit null when a box is empty, so clearing an offer clears it.
+    submit = src[end:src.index("if (saveBtn) { saveBtn.disabled = false;", end)]
+    assert "bulkQty," in submit and "bulkPercent," in submit
+    assert 'num("bulkQty")' in submit and 'num("bulkPercent")' in submit
+    # Shop-wide bulk tiers remain a separate Growth setting.
     assert 'name="bulkMin"' in src and 'name="bulkPercent"' in src
 
 
-def test_customer_screens_show_the_applied_discount():
-    """Cart, checkout summary and the order-complete table label the discount
-    when it applies - the customer must never wonder why the price dropped.
+def test_typed_bulk_values_survive_an_ordinary_edit_elsewhere(client):
+    """Regression: a save that only renames a product must not drop the
+    bulk offer, and clearing the boxes must switch it off for good."""
+    make_product("jau-blk-keep", price=1000, bulk_qty=10, bulk_percent=15)
+    tok = login(client)
 
-    The PDP no longer advertises the offer in an informational box (owner
-    request 2026-10-05: the PDP carries title/price/gallery/qty/actions only),
-    but the discount itself is untouched: it still lands on the cart line and
-    on every money screen that shows the reduced price.
+    def _save(pid, **fields):
+        row = next(p for p in catalog_mod.merged(include_hidden=True)
+                   if p["id"] == pid)
+        payload = {**row, **fields}
+        r = client.post(f"/api/admin/products", json=payload,
+                        headers={"X-CSRF-Token": tok})
+        assert r.status_code == 200, r.data
+        return r
+
+    # An unrelated edit keeps the offer.
+    _save("jau-blk-keep", name="Renamed but still bulk")
+    row = next(p for p in catalog_mod.merged(include_hidden=True)
+               if p["id"] == "jau-blk-keep")
+    assert (row["bulkQty"], row["bulkPercent"]) == (10, 15)
+
+    # Changing the threshold keeps it too (and the new figure lands).
+    _save("jau-blk-keep", bulkQty=20, bulkPercent=25)
+    row = next(p for p in catalog_mod.merged(include_hidden=True)
+               if p["id"] == "jau-blk-keep")
+    assert (row["bulkQty"], row["bulkPercent"]) == (20, 25)
+
+    # Clearing BOTH boxes switches it off.
+    _save("jau-blk-keep", bulkQty=None, bulkPercent=None)
+    row = next(p for p in catalog_mod.merged(include_hidden=True)
+               if p["id"] == "jau-blk-keep")
+    assert not row.get("bulkQty") and not row.get("bulkPercent")
+
+
+def test_customer_screens_show_the_applied_discount():
+    """Cart, checkout summary, the order-complete table AND the product page
+    label the discount when it applies - the customer must never wonder why
+    the price dropped, and must be told what to add before checkout, not after.
+
+    The PDP advert BOX stayed purged (owner request 2026-10-05: the PDP carries
+    title/price/gallery/qty/actions only). What came back on 2026-11-07 is a
+    single line under the quantity stepper that counts the shopper up to the
+    threshold - not a box, and not a second block of copy to maintain.
     """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     app = open(os.path.join(root, "js", "app.js"), encoding="utf-8").read()
     assert "bulk-tag" in app                                    # cart + checkout + receipt
     assert "bulkPercent" in app
-    assert "pdp-bulk" not in app, "the PDP bulk advert box must stay purged"
+    # The one-line prompt, and the helper that decides what it says.
+    assert '<p class="pdp-bulk" data-bulk-hint' in app
+    assert "function pdpBulkText(p, qty)" in app
+    assert "pdp.bulkNext" in app and "pdp.bulkReady" in app
+    i18n = open(os.path.join(root, "js", "i18n.js"), encoding="utf-8").read()
+    # Both dictionaries, or a French shopper reads raw English.
+    assert i18n.count('"pdp.bulkNext"') == 2 and i18n.count('"pdp.bulkReady"') == 2
     store = open(os.path.join(root, "js", "store.js"), encoding="utf-8").read()
     assert "bulkDiscountTiers" in store                          # tiers still read live

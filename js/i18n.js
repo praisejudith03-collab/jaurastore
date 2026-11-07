@@ -173,6 +173,11 @@ window.I18N = (() => {
     // label is generic and the numbers travel with it.
     "bulk.label": "Bulk discount",
     "cart.bulkApplied": "Bulk discount applied — {p}% off this item.",
+    // Product-page savings prompt. It counts the shopper UP to the next
+    // threshold as they change the quantity, because "more than 10" is the
+    // rule the server applies and buyers routinely read "10+" as "10".
+    "pdp.bulkNext": "Add {n} more to save {p}% at checkout",
+    "pdp.bulkReady": "Bulk discount unlocked — {p}% off at checkout",
     "pdp.more": "More from this aisle",
     "pdp.also": "You may also like",
     "pdp.missing": "This piece is no longer listed.",
@@ -699,6 +704,8 @@ window.I18N = (() => {
     "pdp.hint": "Touchez CFA ou ₦ dans le menu pour changer les prix · SKU {sku}",
     "bulk.label": "Remise quantité",
     "cart.bulkApplied": "Remise quantité appliquée — −{p} % sur cet article.",
+    "pdp.bulkNext": "Ajoutez-en {n} de plus pour économiser {p} % au paiement",
+    "pdp.bulkReady": "Remise quantité débloquée — −{p} % au paiement",
     "pdp.more": "Dans le même rayon",
     "pdp.also": "Vous aimerez aussi",
     "pdp.missing": "Cette pièce n’est plus listée.",

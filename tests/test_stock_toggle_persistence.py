@@ -319,7 +319,13 @@ def test_clean_editor_has_only_the_approved_product_controls():
     re-joined on owner directive (this session): "the catalogue already
     ships nameFr" only covered the original seed, so Admin-created
     products (every perfume) could never get a French title. The owner
-    now types the exact French name in the editor."""
+    now types the exact French name in the editor.
+
+    ``bulkQty`` / ``bulkPercent`` re-joined on 2026-11-07 (owner
+    directive): they are the per-product volume discount, and with the boxes
+    gone nothing in the app could write one any more while
+    ``catalog.bulk_discount_for`` and ``store.bulkPercentFor`` both still
+    read one."""
     import re
 
     js = _admin_js()
@@ -329,6 +335,7 @@ def test_clean_editor_has_only_the_approved_product_controls():
         "id", "name", "nameFr", "sku", "description", "descriptionFr", "category",
         "priceNgn", "compareNgn", "supplierSku", "supplierCost",
         "stock", "enableCustomNote", "customNotePrompt",
+        "bulkQty", "bulkPercent",
     }
     for required in (
         "Product title", "Name (French) / Title (Français)",
@@ -337,11 +344,12 @@ def test_clean_editor_has_only_the_approved_product_controls():
         "Supplier cost (Naira ₦)",
         "Main supplier URL", "Stock quantity", "Enable a note for this product",
         "Customer prompt", "id=\"media-box\"", "id=\"add-opt\"",
+        # Per-product bulk discount (restored 2026-11-07).
+        "Bulk Quantity Threshold (units)", "Bulk Discount Percentage (%)",
     ):
         assert required in form, required
     for removed in (
-        "dimensions", "bulkQty",
-        "bulkPercent", "stock-status", "stockStatus", "featured", "badge",
+        "dimensions", "stock-status", "stockStatus", "featured", "badge",
         "Customer Name", "Customer Stars", "Customer Review",
     ):
         assert removed not in form, removed

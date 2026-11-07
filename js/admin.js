@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=242" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=243" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1020,6 +1020,18 @@ function notePromptPreview(prompt) {
   if (!text) return "The customer is not asked anything until you write a prompt.";
   return `The customer sees: "${text}"`;
 }
+/* One sentence describing the per-product bulk offer as it stands, so the
+ * owner can read back what the two boxes mean before saving. Both values or
+ * neither: a half-filled pair never fires (catalog.normalize drops it). */
+function bulkPreview(p) {
+  const row = p || {};
+  const qty = Math.round(Number(row.bulkQty) || 0);
+  const pct = Math.round(Number(row.bulkPercent) || 0);
+  if (!(qty > 0) || !(pct > 0)) {
+    return "No bulk discount on this product — the shop-wide volume tiers apply.";
+  }
+  return `Buyers pay ${pct}% less per unit from ${qty + 1} units of this product upwards.`;
+}
 function bindCfaPreview() {
   const form = document.getElementById("prod-form");
   const el = document.getElementById("cfa-preview");
@@ -1042,6 +1054,21 @@ function bindNotePrompt() {
     if (count) count.textContent = `${String(textarea.value || "").length}/160`;
   };
   textarea.addEventListener("input", paint);
+  paint();
+}
+/* Live read-back of the two bulk boxes: the sentence under them follows what
+ * is typed, so the owner sees "from 11 units upwards" change as they type
+ * rather than discovering the threshold is exclusive only at checkout. */
+function bindBulkPreview() {
+  const form = document.getElementById("prod-form");
+  const out = document.getElementById("bulk-preview");
+  if (!form || !out) return;
+  const read = () => ({
+    bulkQty: form.bulkQty ? form.bulkQty.value : "",
+    bulkPercent: form.bulkPercent ? form.bulkPercent.value : "",
+  });
+  const paint = () => { out.textContent = bulkPreview(read()); };
+  form.addEventListener("input", paint);
   paint();
 }
 /* ------------------------------------------------ which fields did we edit?
@@ -1069,6 +1096,12 @@ const EDIT_FIELD_MAP = {
   priceNgn: ["priceNgn", "priceCfa"],
   compareNgn: ["compareNgn", "compareCfa"],
   stock: ["stock", "stock_quantity", "stockStatus"],
+  // Per-product bulk discount. Tracked so a save that changed only the
+  // threshold is reported as an edit of it (the pair is not in
+  // product_merge.MERGEABLE_FIELDS, so the admin's value wins either way -
+  // this is the audit trail, not the merge decision).
+  bulkQty: ["bulkQty"],
+  bulkPercent: ["bulkPercent"],
 };
 // Media, variant stock and per-option supplier controls use data attributes.
 const EDIT_DATA_PREFIXES = [
@@ -1146,6 +1179,13 @@ function productForm(p = {}) {
     ? Object.values(optionStockValues(opts, savedOptionStock)).reduce((n, value) => n + value, 0)
     : (p.id ? Math.max(0, Number(p.stock) || 0) : 0);
   const quantityReadonly = opts.length ? "readonly" : "";
+  // Per-product bulk discount. Rendered as empty strings rather than 0/NaN
+  // when unset: a literal "0" reads as a real threshold and the form-wide
+  // undefined/NaN guard rejects a stray NaN in the markup.
+  const bulkQtyValue = Math.round(Number(p.bulkQty) || 0) > 0
+    ? String(Math.round(Number(p.bulkQty))) : "";
+  const bulkPercentValue = Math.round(Number(p.bulkPercent) || 0) > 0
+    ? String(Math.round(Number(p.bulkPercent))) : "";
   return `<form id="prod-form" class="au-edit">
     <button type="button" class="au-back" id="cancel-edit">← Store Products</button>
     <h2>${p.id ? "Edit product" : "New product"}${preCat ? ` · ${JA.escape(allCats.find(c=>c.id===preCat)?.name||preCat)}` : ""}</h2>
@@ -1187,6 +1227,19 @@ function productForm(p = {}) {
       <input name="stock" id="stock-qty" type="number" min="0" inputmode="numeric" value="${initialStock}" ${quantityReadonly} />
       <p class="admin-note">Zero or blank means out of stock. For products with options, enter each variant quantity above; this total is calculated automatically.</p>
     </div>
+    <section class="product-bulk" aria-labelledby="product-bulk-title">
+      <h3 id="product-bulk-title">Bulk volume discount <small>optional</small></h3>
+      <div class="field"><label>Bulk Quantity Threshold (units)</label>
+        <input name="bulkQty" type="number" min="2" step="1" inputmode="numeric" value="${bulkQtyValue}" placeholder="e.g. 10" />
+        <p class="admin-note">Order <strong>more</strong> than this many units of this product — every variant combined — and the discount below is taken off each unit automatically at checkout.</p>
+      </div>
+      <div class="field"><label>Bulk Discount Percentage (%)</label>
+        <input name="bulkPercent" type="number" min="1" max="90" step="1" inputmode="numeric" value="${bulkPercentValue}" placeholder="e.g. 15" />
+        <p class="admin-note">1–90. Applies on top of nothing else: when a product has its own percentage it replaces the shop-wide volume tiers for that product.</p>
+      </div>
+      <p class="admin-note" id="bulk-preview">${JA.escape(bulkPreview(p))}</p>
+      <p class="admin-note">Both boxes are needed — a threshold with no percentage (or the other way round) is discarded on save, and the product then falls back to the shop-wide tiers in <strong>Growth → bulk tiers</strong>.</p>
+    </section>
     <section class="product-custom-note" aria-labelledby="custom-note-title">
       <h3 id="custom-note-title">Custom order note</h3>
       <label class="au-tog"><span>Enable a note for this product</span>
@@ -1286,6 +1339,16 @@ async function handleProductSubmit(e, existing) {
   const sku = productSku(fd.get("sku"), existing);
   const supplierRef = String(fd.get("supplierSku") || "").trim();
   const supplierCostTyped = num("supplierCost");
+  // Per-product bulk discount. Read straight off the form (never from
+  // `existing`) so a cleared box really clears the offer: an empty string is
+  // sent as null, and catalog.normalize keeps the pair only when BOTH halves
+  // are present. Without these two lines the boxes rendered above were
+  // decorative - the save shipped the row's old numbers back unchanged, and a
+  // threshold the owner deleted came straight back on the next edit.
+  const bulkQtyTyped = Number.isFinite(num("bulkQty")) ? Math.round(num("bulkQty")) : null;
+  const bulkPercentTyped = Number.isFinite(num("bulkPercent")) ? Math.round(num("bulkPercent")) : null;
+  const bulkQty = bulkQtyTyped && bulkQtyTyped > 0 ? bulkQtyTyped : null;
+  const bulkPercent = bulkPercentTyped && bulkPercentTyped > 0 ? bulkPercentTyped : null;
   const colorOpt = options.find((o) => /colou?r/i.test(o.title || ""));
   // The base PRICE (NAIRA ₦) is optional for a fully variant-priced product
   // ("Small pink ₦2,500 / Big pink ₦3,200"): the storefront then shows the
@@ -1414,6 +1477,14 @@ async function handleProductSubmit(e, existing) {
       // ("Colour: Red"), so the server's alias handling stores them together.
       optionSku,
       optionSkus: optionSku,
+      // Per-product bulk discount, typed in the Inventory / Pricing section.
+      // Sent on EVERY save - as an explicit null when a box is empty - so an
+      // offer the owner removed stays removed. These keys are deliberately
+      // NOT in product_merge.MERGEABLE_FIELDS, so the value this admin
+      // submitted is the value that lands (last write wins); the form always
+      // renders the row's current figures, so an open-and-save keeps them.
+      bulkQty,
+      bulkPercent,
   });
   if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save Product"; }
   // Only a server-confirmed save leaves this editor. A queued retry or a
@@ -5214,7 +5285,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=242" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=243" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5324,7 +5395,7 @@ function paintDesk(tab = "analytics") {
   $("#add-product")?.addEventListener("click", () => { rememberProductsReturn(); editingId = "new"; paintDesk("products"); });
   $("#open-trash")?.addEventListener("click", () => { toggleTrashDrawer(); });
   $("#sync-products-now")?.addEventListener("click", () => { void autoSyncAdminPending(false); });
-  bindMedia(); bindOptions(); bindCategories(); bindCfaPreview(); bindNotePrompt();
+  bindMedia(); bindOptions(); bindCategories(); bindCfaPreview(); bindNotePrompt(); bindBulkPreview();
 
   if (tab === "products" && !editingId) {
     renderProdGrid(); bindProdGridEvents();
@@ -5622,7 +5693,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=242", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=243", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");

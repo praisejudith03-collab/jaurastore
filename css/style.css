@@ -627,6 +627,12 @@ ul { list-style: none; }
 }
 .stock-line { font-size: 13px; color: var(--taupe, #887562); margin: 8px 0 0; }
 .stock-line.is-low { color: #a82e22; font-weight: 600; }
+/* Product-page tiered-savings prompt: ONE line under the quantity stepper,
+   not an information box. Muted while the shopper is short of the threshold,
+   green once it is met - the same colour language as the stock line above. */
+.pdp-bulk { font-size: 13px; color: var(--taupe, #887562); margin: 6px 0 0; }
+.pdp-bulk.is-on { color: #24733a; font-weight: 700; }
+.pdp-bulk[hidden] { display: none !important; }
 .stock-warn {
   margin: 10px 0;
   padding: 10px 12px;
