@@ -155,8 +155,13 @@ def test_render_health_path_and_worker_watchdog_are_configured():
     render = (ROOT / "render.yaml").read_text(encoding="utf-8")
     procfile = (ROOT / "Procfile").read_text(encoding="utf-8")
     assert "healthCheckPath: /healthz" in render
-    assert "--timeout 45" in render
-    assert "--timeout 45" in procfile
+    # 60s, not 45s: the marketing "Send campaign" request is answered as soon
+    # as the broadcast is QUEUED, and the raised worker deadline is the belt to
+    # the mobile-data braces (see tests/test_marketing_broadcast.py). Anything
+    # below the old 45s would put a slow-but-healthy worker back in front of an
+    # operator as a dropped connection.
+    assert "--timeout 60" in render
+    assert "--timeout 60" in procfile
 
 
 # --- the stuck-probe regression: /healthz must never be poisoned for good ---
@@ -270,9 +275,9 @@ def test_postgrest_requests_are_bounded_below_the_health_deadline():
         shop = supabase_store.client()
         assert shop is not None
         shop_timeout = float(shop.postgrest.session.timeout.read)
-        assert shop_timeout < 45.0, (
+        assert shop_timeout < 60.0, (
             f"shop PostgREST read timeout {shop_timeout}s outlives the "
-            f"gunicorn --timeout 45 worker")
+            f"gunicorn --timeout 60 worker")
         assert shop_timeout > probe_timeout, \
             "the shop's reads must not inherit the health check's tight budget"
     finally:

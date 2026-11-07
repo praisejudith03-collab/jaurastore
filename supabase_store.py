@@ -3418,6 +3418,48 @@ def save_supplier_stock_alert_state(state):
         return False
 
 
+INVENTORY_ALERT_STATE_KEY = "inventory_alert_state_json"
+
+
+def load_inventory_alert_state():
+    """The shop-side inventory alert ledger (dict), None on failure.
+
+    None means "could not read" (not "empty"): inventory_alerts already keeps
+    a SQLite copy and must not treat a Supabase hiccup as an empty ledger.
+    """
+    c = client()
+    if c is None:
+        return None
+    try:
+        rows = _res_data(c.table("growth_settings").select("value")
+                         .eq("key", INVENTORY_ALERT_STATE_KEY).limit(1).execute()) or []
+        if not rows:
+            return {}
+        raw = rows[0].get("value")
+        value = json.loads(raw) if isinstance(raw, str) and raw else raw
+        return value if isinstance(value, dict) else {}
+    except Exception as exc:
+        print(f"[supabase] inventory alert state read failed: {exc}")
+        return None
+
+
+def save_inventory_alert_state(state):
+    """Persist the inventory alert ledger; True once confirmed."""
+    c = client()
+    if c is None:
+        return False
+    try:
+        c.table("growth_settings").upsert({
+            "key": INVENTORY_ALERT_STATE_KEY,
+            "value": json.dumps(dict(state or {}), ensure_ascii=False,
+                                separators=(",", ":")),
+        }).execute()
+        return True
+    except Exception as exc:
+        print(f"[supabase] inventory alert state save failed: {exc}")
+        return False
+
+
 def load_supplier_sync_warnings():
     """Return the current supplier uncertainty queue; [] if absent/unavailable."""
     c = client()

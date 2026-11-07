@@ -109,6 +109,15 @@ EXPECTED_ADMIN_ROUTES = {
     ("POST", "/api/admin/broadcast/evening-post"),
     ("GET", "/api/admin/marketing/broadcast/<cid>"),
     ("POST", "/api/admin/marketing/broadcast/<cid>/cancel"),
+    # Meta Conversions API pipeline: what is configured, what happened lately,
+    # and a manual flush of anything still waiting (after fixing a token).
+    # Shop-side inventory watchdog (variant level): what is low/out right now,
+    # a manual sweep, and acknowledging one variant's stockout.
+    ("GET", "/api/admin/inventory-alerts"),
+    ("POST", "/api/admin/inventory-alerts/check"),
+    ("POST", "/api/admin/inventory-alerts/mark-seen"),
+    ("GET", "/api/admin/meta/status"),
+    ("POST", "/api/admin/meta/flush"),
     # The background task queue (async deletions + broadcasts): list, poll one
     # job, and put a parked job back on the queue.
     ("GET", "/api/admin/tasks/jobs"),

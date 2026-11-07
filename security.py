@@ -521,15 +521,23 @@ def recaptcha_gate(action=""):
     return None
 
 # ------------------------------------------------------------------- headers
+# The Meta pixel is a first-party-adjacent script (connect.facebook.net) that
+# beacons to facebook.com; without its two hosts in script-src / connect-src
+# the browser blocks it and every client-side view of a December campaign
+# disappears. The server-side Conversions API does not need any of this (it
+# runs on the server), so a blocked pixel now degrades to server-only tracking
+# instead of no tracking at all - but the pixel must still be allowed to load.
 CSP = (
     "default-src 'self'; "
-    "img-src 'self' data: blob: https:; "
+    "img-src 'self' data: blob: https: https://www.facebook.com; "
     "media-src 'self' https:; "
     "style-src 'self' 'unsafe-inline'; "
     "font-src 'self' data:; "
-    "script-src 'self' https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/; "
+    "script-src 'self' https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ "
+    "https://connect.facebook.net; "
     "frame-src 'self' https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/; "
-    "connect-src 'self' https://open.er-api.com https://www.google.com; "
+    "connect-src 'self' https://open.er-api.com https://www.google.com "
+    "https://www.facebook.com https://connect.facebook.net; "
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 )
 
