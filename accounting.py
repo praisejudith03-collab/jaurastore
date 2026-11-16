@@ -1149,6 +1149,205 @@ def batch_totals(entries, currency, batch_transport_fee=None, custom_cost=None):
     return totals
 
 
+# ------------------------------------------- sourcing / pre-order batches
+# Owner request 2026-11-16: the accounting desk is organised around the buying
+# trips themselves ("Cotonou Batch 1", "Nov Pre-Orders"). A sourcing batch is a
+# mutable worksheet, unlike the immutable pushed-to-Google-Sheets archive
+# above: it holds the itemised goods bought, the sourcing expenses and the
+# transport / waybill fees for one trip, plus the confirmed orders those goods
+# were sold on. Total Spent (everything logged in the batch) is compared with
+# Total Revenue (the assigned orders' own selling amounts minus discounts), and
+# the difference is the batch's Net Profit.
+SOURCING_KINDS = ("goods", "sourcing", "transport")
+SOURCING_KIND_LABELS = {
+    "goods": "Goods bought",
+    "sourcing": "Sourcing expense",
+    "transport": "Transport / waybill",
+}
+SOURCING_BATCHES_MAX = 200
+SOURCING_COSTS_MAX = 300
+SOURCING_LABEL_MAX = 160
+SOURCING_NAME_MAX = 100
+
+
+def normalize_sourcing_kind(value):
+    text = str(value or "").strip().lower()
+    aliases = {
+        "goods": "goods", "good": "goods", "item": "goods", "items": "goods",
+        "stock": "goods", "purchase": "goods", "supplier": "goods",
+        "sourcing": "sourcing", "expense": "sourcing", "fee": "sourcing",
+        "other": "sourcing", "customs": "sourcing", "packaging": "sourcing",
+        "transport": "transport", "waybill": "transport", "delivery": "transport",
+        "shipping": "transport", "logistics": "transport", "trip": "transport",
+    }
+    return aliases.get(re.sub(r"[\s_/-]+", "", text), "")
+
+
+def sourcing_kind_label(kind):
+    return SOURCING_KIND_LABELS.get(normalize_sourcing_kind(kind), "Cost")
+
+
+def new_sourcing_cost(kind, label, value, *, qty=1, at="", cost_id=""):
+    """Build one validated batch cost line, or ``None`` when it is invalid.
+
+    ``amount`` is the whole money spent on that line (unit cost × quantity is
+    already multiplied by the owner). ``qty`` is kept so the desk can show the
+    per-unit price of a goods line; it never changes the amount.
+    """
+    kind = normalize_sourcing_kind(kind)
+    if not kind:
+        return None
+    total = validated_amount(value)
+    if total is None:
+        return None
+    quantity_value = quantity(qty, 1)
+    import secrets as _secrets
+    return {
+        "id": str(cost_id or ("SRCC-" + _secrets.token_hex(4).upper())),
+        "kind": kind,
+        "label": str(label or "")[:SOURCING_LABEL_MAX],
+        "qty": quantity_value,
+        "amount": total,
+        "at": str(at or "")[:32],
+    }
+
+
+def clean_sourcing_costs(rows, limit=SOURCING_COSTS_MAX):
+    """Keep only well-formed batch cost lines, in the order they were logged."""
+    out = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        record = new_sourcing_cost(
+            row.get("kind"), row.get("label"), row.get("amount"),
+            qty=row.get("qty"), at=row.get("at"), cost_id=row.get("id"))
+        if record:
+            out.append(record)
+    return out[:max(1, min(int(limit or SOURCING_COSTS_MAX), SOURCING_COSTS_MAX))]
+
+
+def new_sourcing_batch(name, currency, *, batch_id="", at="", actor="",
+                       notes="", order_ids=None, costs=None):
+    """Build one validated sourcing batch document, or ``None``."""
+    currency = normalize_currency(currency)
+    if not currency:
+        return None
+    import secrets as _secrets
+    ids = []
+    for value in order_ids or []:
+        text = str(value or "").strip().upper()[:24]
+        if text and text not in ids:
+            ids.append(text)
+    return {
+        "id": str(batch_id or ("SRC-" + _secrets.token_hex(5).upper())),
+        "name": (str(name or "").strip() or "Sourcing batch")[:SOURCING_NAME_MAX],
+        "currency": currency,
+        "notes": str(notes or "")[:500],
+        "createdAt": str(at or "")[:32],
+        "createdBy": str(actor or "")[:120],
+        "orderIds": ids,
+        "costs": clean_sourcing_costs(costs),
+    }
+
+
+def clean_sourcing_batches(rows, limit=SOURCING_BATCHES_MAX):
+    """Sanitise the stored sourcing-batch list (never raises)."""
+    out = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        batch = new_sourcing_batch(
+            row.get("name"), row.get("currency"), batch_id=row.get("id"),
+            at=row.get("createdAt"), actor=row.get("createdBy"),
+            notes=row.get("notes"), order_ids=row.get("orderIds"),
+            costs=row.get("costs"))
+        if not batch:
+            continue
+        for key in ("updatedAt", "updatedBy"):
+            if row.get(key):
+                batch[key] = str(row.get(key))[:64]
+        out.append(batch)
+    return out[:max(1, min(int(limit or SOURCING_BATCHES_MAX),
+                          SOURCING_BATCHES_MAX))]
+
+
+def sourcing_batch_totals(batch, entries):
+    """Total Spent vs Total Revenue vs Net Profit for one sourcing batch.
+
+    ``entries`` is the list of accounting entries (as returned by
+    :func:`entry_from_order`) the desk already has. Only the orders assigned to
+    this batch AND matching its ledger currency count, so a stray id can never
+    move another currency's money into the batch.
+
+    * Total Spent   — every itemised goods / sourcing / transport line logged.
+    * Total Revenue — the assigned orders' selling amounts minus their
+      discounts (what the batch actually earned).
+    * Net Profit    — Total Revenue − Total Spent.
+    """
+    batch = batch if isinstance(batch, dict) else {}
+    currency = normalize_currency(batch.get("currency")) or "NGN"
+    order_ids = {str(value) for value in (batch.get("orderIds") or []) if value}
+    costs = clean_sourcing_costs(batch.get("costs"))
+    total_spent = sum(amount(row.get("amount")) for row in costs)
+    goods = sum(amount(row.get("amount")) for row in costs
+                if row.get("kind") == "goods")
+    sourcing_costs = sum(amount(row.get("amount")) for row in costs
+                         if row.get("kind") == "sourcing")
+    transport = sum(amount(row.get("amount")) for row in costs
+                    if row.get("kind") == "transport")
+    rows = [entry for entry in (entries or [])
+            if isinstance(entry, dict)
+            and str(entry.get("id")) in order_ids
+            and (normalize_currency(entry.get("currency")) or "NGN") == currency]
+    revenue = 0
+    discounts = 0
+    supplier = 0
+    order_transport = 0
+    missing_cost = 0
+    for entry in rows:
+        sale = amount(entry.get("saleAmount"))
+        discount = amount(entry.get("discount"))
+        revenue += sale - discount
+        discounts += discount
+        supplier += amount(entry.get("supplierCostInCurrency"))
+        order_transport += amount(entry.get("deliveryExpense"))
+        if not entry.get("profitOverrideActive") and not amount(
+                entry.get("supplierCostInCurrency")):
+            missing_cost += 1
+    return {
+        "currency": currency,
+        "orderCount": len(rows),
+        "costCount": len(costs),
+        "totalSpent": total_spent,
+        "goodsSpent": goods,
+        "sourcingSpent": sourcing_costs,
+        "transportSpent": transport,
+        "revenue": revenue,
+        "discounts": discounts,
+        "supplierCosts": supplier,
+        "orderTransport": order_transport,
+        "netProfit": revenue - total_spent,
+        "missingCostOrders": missing_cost,
+    }
+
+
+def sourcing_summary(batches, entries):
+    """Per-currency roll-up of every sourcing batch (spent / revenue / profit)."""
+    totals = {}
+    for batch in clean_sourcing_batches(batches):
+        currency = normalize_currency(batch.get("currency")) or "NGN"
+        bucket = totals.setdefault(currency, {
+            "currency": currency, "batchCount": 0, "totalSpent": 0,
+            "revenue": 0, "netProfit": 0,
+        })
+        row = sourcing_batch_totals(batch, entries)
+        bucket["batchCount"] += 1
+        bucket["totalSpent"] += row["totalSpent"]
+        bucket["revenue"] += row["revenue"]
+        bucket["netProfit"] += row["netProfit"]
+    return [totals[key] for key in sorted(totals)]
+
+
 # ------------------------------------------------------- manual expense logger
 # The owner records bulk stock purchases (Ankara / perfumes bought ahead of
 # sales), personal payouts and bank transfer / withdrawal charges here. Every

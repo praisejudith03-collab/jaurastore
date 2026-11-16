@@ -4146,6 +4146,10 @@ def save_accounting_batches(batches):
 # the batch archive: one JSON row, mirrored by the local SQLite cache.
 ACCOUNTING_EXPENSES_KEY = "accounting_manual_expenses_json"
 ACCOUNTING_SETTINGS_KEY = "accounting_settings_json"
+# Sourcing / pre-order batches ("Cotonou Batch 1", "Nov Pre-Orders"): mutable
+# worksheets holding the goods bought, sourcing expenses, transport / waybill
+# fees and the confirmed orders assigned to that buying trip.
+ACCOUNTING_SOURCING_KEY = "accounting_sourcing_batches_json"
 # The Trash / Recycler: full snapshots of products the owner deleted, kept out
 # of every active listing until restored or permanently purged.
 PRODUCT_TRASH_KEY = "product_trash_json"
@@ -4192,6 +4196,15 @@ def load_accounting_expenses():
 
 def save_accounting_expenses(expenses):
     return _save_growth_json(ACCOUNTING_EXPENSES_KEY, list(expenses or []))
+
+
+def load_accounting_sourcing_batches():
+    """Sourcing / pre-order batches, or None when the production read fails."""
+    return _load_growth_json(ACCOUNTING_SOURCING_KEY)
+
+
+def save_accounting_sourcing_batches(batches):
+    return _save_growth_json(ACCOUNTING_SOURCING_KEY, list(batches or []))
 
 
 def load_accounting_settings():

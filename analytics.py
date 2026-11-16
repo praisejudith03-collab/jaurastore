@@ -647,12 +647,49 @@ def _sales_cutoffs(days=30):
     return _days_ago(n - 1), _iso(_now() - datetime.timedelta(days=n - 1)), n, False
 
 
-def _sales_bounds(days=30, date_from=None, date_to=None):
+# The Sales tab's own timeframe switch (owner request 2026-11-16). Calendar
+# windows — not rolling day counts — so "This week" always starts on Monday and
+# "This month" on the 1st, whatever day the owner opens the desk.
+SALES_PERIODS = ("today", "week", "month", "year")
+SALES_PERIOD_LABELS = {
+    "today": "Today",
+    "week": "This week",
+    "month": "This month",
+    "year": "This year",
+}
+
+
+def period_day_bounds(period, today=None):
+    """Return ``(from_day, to_day)`` ISO dates for a Sales timeframe.
+
+    Both ends are inclusive calendar days: today is "today", a week starts on
+    Monday, a month on the 1st and a year on January 1st. An unknown/blank
+    period returns ``None`` so callers keep their existing days/custom-date
+    behaviour.
+    """
+    key = str(period or "").strip().lower()
+    if key not in SALES_PERIODS:
+        return None
+    today = today or _now().date()
+    if key == "today":
+        start = today
+    elif key == "week":
+        start = today - datetime.timedelta(days=today.weekday())
+    elif key == "month":
+        start = today.replace(day=1)
+    else:
+        start = today.replace(month=1, day=1)
+    return start.isoformat(), today.isoformat()
+
+
+def _sales_bounds(days=30, date_from=None, date_to=None, period=None):
     """Return (start day, start timestamp, range label, all time, end ts, end day).
 
     Custom dates are inclusive at the day level and exclusive at midnight on
     the following day. Invalid custom values are ignored individually, which
-    keeps the report useful when an admin clears one side of the range.
+    keeps the report useful when an admin clears one side of the range. A
+    ``period`` (today / week / month / year) wins over ``days`` but never over
+    explicit custom dates.
     """
     def day_value(value):
         try:
@@ -667,12 +704,24 @@ def _sales_bounds(days=30, date_from=None, date_to=None):
         end_day = (datetime.date.fromisoformat(to_day) + datetime.timedelta(days=1)).isoformat() if to_day else ""
         return (from_day, from_day + "T00:00:00" if from_day else "", "custom", False,
                 end_day + "T00:00:00" if end_day else "", to_day or _day())
+    if str(period or "").strip().lower() == "all":
+        # ?period=all is the every-order window (the Sales tab's "All time").
+        return None, None, "all", True, "", _day()
+    window = period_day_bounds(period)
+    if window:
+        start_day, last_day = window
+        end_day = (datetime.date.fromisoformat(last_day)
+                   + datetime.timedelta(days=1)).isoformat()
+        return (start_day, start_day + "T00:00:00", str(period).strip().lower(),
+                False, end_day + "T00:00:00", last_day)
     since_day, since_iso, days_out, is_all = _sales_cutoffs(days)
     return since_day, since_iso, days_out, is_all, "", _day()
 
 
-def _sales_where(days=30, date_from=None, date_to=None, search=None, status=CONFIRMED):
-    since_day, since_iso, days_out, is_all, end_iso, to_day = _sales_bounds(days, date_from, date_to)
+def _sales_where(days=30, date_from=None, date_to=None, search=None, status=CONFIRMED,
+                 period=None):
+    since_day, since_iso, days_out, is_all, end_iso, to_day = _sales_bounds(
+        days, date_from, date_to, period)
     where = ["status=?"]
     params = [status]
     if since_iso:
@@ -689,15 +738,108 @@ def _sales_where(days=30, date_from=None, date_to=None, search=None, status=CONF
     return " AND ".join(where), tuple(params), since_day, days_out, to_day
 
 
-def sales_report(days=30, date_from=None, date_to=None, search=None):
+# A quick-fix list is a working queue, not an archive: cap it so one very old
+# month with hundreds of costless imports cannot bloat the Sales response.
+_MISSING_COST_DETAIL_MAX = 60
+
+
+def _missing_cost_detail(row, payload):
+    """One editable row for the Sales tab's "missing cost price" quick fix.
+
+    Returns the order id/customer/date plus its product lines with the LINE IDS
+    the accounting editor already validates against, so the owner can type a
+    supplier cost right there and the PATCH that follows is the same one the
+    accounting desk uses. Costs come from the order's own stored snapshot (never
+    from catalogue defaults) - otherwise a default-filled estimate would be
+    mistaken for a recorded cost.
+    """
+    import accounting as _accounting
+    snapshot = payload.get("accounting") if isinstance(
+        payload.get("accounting"), dict) else {}
+    currency = str(snapshot.get("currency") or payload.get("currency")
+                   or (row["currency"] if "currency" in row.keys() else "")
+                   or "NGN").upper()
+    currency = "CFA" if currency in ("CFA", "FCFA", "XOF") else "NGN"
+    try:
+        lines = _accounting.line_items_for_order(row, snapshot)
+    except Exception:
+        lines = []
+    stored = [line for line in (snapshot.get("lineItems") or [])
+              if isinstance(line, dict)]
+    stored_by_id = {str(line.get("lineId") or ""): line for line in stored
+                    if line.get("lineId")}
+    out_lines = []
+    for index, line in enumerate(lines[: _accounting.LINE_ITEMS_MAX]):
+        stored_line = stored_by_id.get(line.get("lineId")) or (
+            stored[index] if index < len(stored) else {}) or {}
+        out_lines.append({
+            "lineId": str(line.get("lineId") or ""),
+            "name": str(line.get("name") or "Item")[:200],
+            "variant": str(line.get("variant") or "")[:120],
+            "qty": int(_accounting.quantity(line.get("qty"), 1)),
+            "saleAmount": int(_accounting.amount(line.get("saleAmount"))),
+            "supplierCostNgn": int(_accounting.amount(
+                stored_line.get("supplierCostNgn"))),
+        })
+    if not out_lines:
+        out_lines = [{
+            "lineId": "line-01",
+            "name": "Order items",
+            "variant": "",
+            "qty": int(_accounting.quantity(
+                payload.get("items_count") or 1, 1)),
+            "saleAmount": int(_accounting.amount(
+                snapshot.get("saleAmount") or payload.get("total"))),
+            "supplierCostNgn": 0,
+        }]
+    customer = payload.get("customer") if isinstance(
+        payload.get("customer"), dict) else {}
+    summary = ", ".join(
+        f"{line['qty']}× {line['name']}" for line in out_lines[:12])
+    try:
+        delivery = int(_accounting.amount(snapshot.get("deliveryExpenseNgn")))
+        if "deliveryExpenseNgn" not in snapshot:
+            delivery = int(_accounting.amount(snapshot.get("deliveryExpense")))
+    except Exception:
+        delivery = 0
+    return {
+        "id": str(row["id"] if "id" in row.keys() else ""),
+        "date": str((row["at"] if "at" in row.keys() else "") or "")[:10],
+        "customer": str(customer.get("name")
+                        or (row["customer_name"] if "customer_name" in row.keys() else "")
+                        or "Customer")[:160],
+        "currency": currency,
+        "saleAmount": int(_accounting.amount(
+            snapshot.get("saleAmount") or payload.get("total")
+            or (row["total"] if "total" in row.keys() else 0))),
+        "discount": int(_accounting.amount(snapshot.get("discount"))),
+        "supplierCostNgn": int(_accounting.amount(snapshot.get("supplierCostNgn"))),
+        "deliveryExpenseNgn": delivery,
+        "itemsSummary": summary or "Order items",
+        "lineItems": out_lines,
+    }
+
+
+def sales_report(days=30, date_from=None, date_to=None, search=None, period=None):
     """Confirmed-only sales totals. Pending orders never touch revenue/units.
 
-    ``date_from`` and ``date_to`` are inclusive HTML date values. ``search``
-    searches order/customer/product text before aggregation, so the cards and
+    ``date_from`` and ``date_to`` are inclusive HTML date values. ``period`` is
+    the Sales tab's timeframe switch (today / week / month / year) and is
+    ignored when explicit dates are supplied. ``search`` searches
+    order/customer/product text before aggregation, so the cards and
     top-products list describe the same filtered set.
+
+    Orders with no recorded cost price are counted, flagged by name and
+    returned with their editable product lines, so the warning on the Sales tab
+    can be opened and fixed in place.
     """
-    where, params, since_day, days_out, to_day = _sales_where(days, date_from, date_to, search, CONFIRMED)
-    pend_where, pend_params, _pday, _pout, _pto = _sales_where(days, date_from, date_to, search, "pending")
+    where, params, since_day, days_out, to_day = _sales_where(
+        days, date_from, date_to, search, CONFIRMED, period)
+    pend_where, pend_params, _pday, _pout, _pto = _sales_where(
+        days, date_from, date_to, search, "pending", period)
+    period_key = "" if (date_from or date_to) else str(period or "").strip().lower()
+    if period_key not in SALES_PERIODS:
+        period_key = ""
 
     o = dict(one(
         f"SELECT COUNT(*) n, COALESCE(SUM(total),0) value, "
@@ -727,7 +869,10 @@ def sales_report(days=30, date_from=None, date_to=None, search=None):
     # cost price recorded is still counted, and flagged, instead of silently
     # looking like 100% margin.
     agg = {}
-    rows = query(f"SELECT id, payload FROM orders WHERE {where}", params) or []
+    rows = query(
+        "SELECT id, at, customer_name, total, currency, payload "
+        f"FROM orders WHERE {where} ORDER BY at DESC", params) or []
+    missing_details = []
     import accounting as _accounting
     try:
         fx_rate = _accounting.current_exchange_rate()
@@ -779,6 +924,11 @@ def sales_report(days=30, date_from=None, date_to=None, search=None):
                 # never made, so the order still counts as revenue, is flagged
                 # by name, and only its profit is left out.
                 bucket["missingCost"] += 1
+                if len(missing_details) < _MISSING_COST_DETAIL_MAX:
+                    try:
+                        missing_details.append(_missing_cost_detail(r, payload))
+                    except Exception:
+                        pass
             else:
                 bucket["netProfit"] += int(figures.get("netProfit") or 0)
         except Exception:
@@ -846,13 +996,20 @@ def sales_report(days=30, date_from=None, date_to=None, search=None):
         "exchangeRate": fx_rate,
         "ordersMissingCost": missing_cost_orders,
         "costComplete": missing_cost_orders == 0,
+        # The clickable warning on the Sales tab: the same orders, already
+        # broken into editable product lines, so a supplier cost can be typed
+        # in place instead of hunting through the catalogue.
+        "missingCostOrders": missing_details,
+        "missingCostOrdersTruncated": missing_cost_orders > len(missing_details),
+        "period": period_key,
+        "periodLabel": SALES_PERIOD_LABELS.get(period_key, ""),
     }
 
 
-def sales_csv(days=30, date_from=None, date_to=None, search=None):
+def sales_csv(days=30, date_from=None, date_to=None, search=None, period=None):
     """One row per confirmed order. No BOM here — the HTTP layer adds it."""
     where, params, _since_day, _days_out, _to_day = _sales_where(
-        days, date_from, date_to, search, CONFIRMED)
+        days, date_from, date_to, search, CONFIRMED, period)
     rows = query(
         "SELECT id, at, customer_name, email, phone, city, zone, payment, "
         "total, currency, items_count, payload FROM orders "

@@ -8742,3 +8742,93 @@ body[data-page="accounting"] button:disabled { cursor: not-allowed; opacity: .5;
   color: #912018;
   font-weight: 600;
 }
+
+/* ============================================================ 2026-11-16
+   Sales tab timeframe quick-fix + Accounting sourcing batches.
+
+   Sales: the missing-cost warning is a control, and the editor it opens is a
+   compact card per order (product lines first, then delivery), so a cost can be
+   typed on a phone without sideways scrolling.
+   Accounting: a sourcing batch is a worksheet card with its three totals
+   (spent / revenue / profit) pinned in the header. */
+.sales-cost-note .sales-cost-toggle { margin-left: 4px; padding: 0; color: #7d47bd; font-size: 12px; font-weight: 650; text-decoration: underline; }
+.sales-cost-fix { margin: 4px 0 18px; padding: 14px; border: 1px solid #e4d9f2; border-radius: 14px; background: #faf7fe; }
+.sales-cost-head { margin-bottom: 10px; }
+.sales-cost-head strong { display: block; font-size: 13px; }
+.sales-cost-head span { display: block; margin-top: 3px; color: #6d6579; font-size: 11px; line-height: 1.5; }
+.sales-cost-order { padding: 11px 12px; margin-top: 10px; border: 1px solid #ece5f6; border-radius: 11px; background: #fff; }
+.sales-cost-order header span { display: block; font-size: 12px; }
+.sales-cost-order header small { display: block; margin-top: 3px; color: #77707f; font-size: 10.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.sales-cost-lines { display: grid; gap: 8px; margin-top: 10px; }
+.sales-cost-line { display: grid; grid-template-columns: minmax(0,1fr) 120px 66px; align-items: center; gap: 8px; font-size: 11.5px; }
+.sales-cost-line span { overflow-wrap: anywhere; }
+.sales-cost-line input { width: 100%; min-height: 38px; padding: 7px 9px; border: 1px solid #ddd6e6; border-radius: 8px; font-size: 16px; text-align: right; }
+.sales-cost-line small { color: #7a7287; font-size: 9.5px; }
+.sales-cost-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.sales-cost-feedback { color: #912018; font-size: 11px; }
+.adx-list-more { display: inline-block; margin-top: 8px; font-size: 11px; font-weight: 650; }
+.adx-orders-moved { margin-top: 16px; padding: 10px 12px; border: 1px dashed #ded8ea; border-radius: 10px; }
+@media (max-width: 560px) {
+  .sales-cost-line { grid-template-columns: minmax(0,1fr) 96px; }
+  .sales-cost-line small { display: none; }
+}
+
+.aa-sourcing { margin-top: 30px; }
+.aa-sourcing-create { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--aa-line); border-radius: 13px; background: var(--aa-paper); }
+.aa-sourcing-create label { display: flex; flex-direction: column; gap: 4px; color: var(--aa-muted); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.aa-sourcing-create input, .aa-sourcing-create select { min-height: 38px; padding: 7px 9px; border: 1px solid var(--aa-line); border-radius: 8px; background: #fff; color: var(--aa-ink); font-size: 12px; letter-spacing: 0; text-transform: none; }
+.aa-sourcing-create label:first-child { flex: 1 1 220px; }
+.aa-sourcing-batch { margin-bottom: 14px; border: 1px solid var(--aa-line); border-radius: 15px; background: #fff; overflow: hidden; }
+.aa-sourcing-batch.is-open { border-color: #cfd8c4; box-shadow: 0 10px 26px rgba(37,45,30,.06); }
+.aa-sourcing-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 15px 16px; background: #fbfbf8; }
+.aa-sourcing-title h3 { margin-top: 4px; font: 500 19px/1.2 var(--serif,Georgia,serif); }
+.aa-sourcing-title small { display: block; margin-top: 4px; color: var(--aa-muted); font-size: 10px; }
+.aa-sourcing-totals { display: flex; gap: 18px; flex-wrap: wrap; }
+.aa-sourcing-totals div { min-width: 96px; }
+.aa-sourcing-totals span { display: block; color: var(--aa-muted); font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.aa-sourcing-totals b { display: block; margin-top: 3px; font-size: 15px; }
+.aa-sourcing-totals .is-profit b { color: #2f6b3f; }
+.aa-sourcing-totals .is-negative b { color: #a4262c; }
+.aa-sourcing-head-actions { display: flex; align-items: center; gap: 10px; }
+.aa-sourcing-body { display: grid; gap: 18px; padding: 16px; border-top: 1px solid var(--aa-line); }
+.aa-sourcing-name-form { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.aa-sourcing-name-form label { display: flex; flex: 1 1 240px; flex-direction: column; gap: 4px; color: var(--aa-muted); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.aa-sourcing-name-form input { min-height: 38px; padding: 7px 9px; border: 1px solid var(--aa-line); border-radius: 8px; font-size: 12px; letter-spacing: 0; text-transform: none; }
+.aa-sourcing-body h4 { margin-bottom: 8px; font: 600 13px/1.3 var(--sans,Arial,sans-serif); }
+.aa-sourcing-picker { border: 1px solid var(--aa-line); border-radius: 11px; background: #fbfbf8; }
+.aa-sourcing-picker summary { padding: 11px 12px; color: var(--aa-ink); font-size: 11.5px; font-weight: 650; cursor: pointer; }
+.aa-sourcing-checklist { display: grid; gap: 2px; max-height: 320px; overflow-y: auto; padding: 4px 8px 10px; }
+.aa-sourcing-check { display: flex; align-items: flex-start; gap: 9px; padding: 7px 6px; border-radius: 8px; font-size: 11.5px; }
+.aa-sourcing-check:hover { background: #f3f4ee; }
+.aa-sourcing-check input { width: 17px; height: 17px; margin-top: 1px; accent-color: var(--aa-accent); }
+.aa-sourcing-check small { display: block; margin-top: 2px; color: var(--aa-muted); font-size: 9.5px; }
+.aa-sourcing-assigned { display: grid; gap: 10px; margin-top: 12px; }
+.aa-sourcing-order { padding: 11px 12px; border: 1px solid var(--aa-line); border-radius: 11px; background: #fff; }
+.aa-sourcing-order header span { display: block; font-size: 12px; font-weight: 600; }
+.aa-sourcing-order header small { display: block; margin-top: 2px; color: var(--aa-muted); font-size: 10px; }
+.aa-sourcing-lines { display: grid; gap: 8px; margin-top: 9px; }
+.aa-sourcing-lines label { display: grid; grid-template-columns: minmax(0,1fr) 120px 78px; align-items: center; gap: 8px; font-size: 11.5px; }
+.aa-sourcing-lines label span { overflow-wrap: anywhere; }
+.aa-sourcing-lines input { width: 100%; min-height: 38px; padding: 7px 9px; border: 1px solid var(--aa-line); border-radius: 8px; font-size: 16px; text-align: right; }
+.aa-sourcing-lines small { color: var(--aa-muted); font-size: 9.5px; }
+.aa-sourcing-order-actions { display: flex; align-items: center; gap: 10px; margin-top: 9px; flex-wrap: wrap; }
+.aa-sourcing-cost-note { color: #2f6b3f; font-size: 10px; }
+.aa-sourcing-cost-note.is-warning { color: #a4262c; font-weight: 650; }
+.aa-sourcing-warning { margin-top: 10px; }
+.aa-sourcing-cost-form { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.aa-sourcing-cost-form label { display: flex; flex-direction: column; gap: 4px; color: var(--aa-muted); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.aa-sourcing-cost-form input, .aa-sourcing-cost-form select { min-height: 38px; padding: 7px 9px; border: 1px solid var(--aa-line); border-radius: 8px; background: #fff; color: var(--aa-ink); font-size: 12px; letter-spacing: 0; text-transform: none; }
+.aa-sourcing-cost-form .aa-sourcing-cost-label { flex: 1 1 200px; }
+.aa-sourcing-cost-form .aa-sourcing-cost-label input { width: 100%; }
+.aa-sourcing-cost-summary { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; }
+.aa-sourcing-cost-summary div { min-width: 110px; }
+.aa-sourcing-cost-summary dt { color: var(--aa-muted); font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.aa-sourcing-cost-summary dd { margin: 3px 0 0; font-size: 13px; font-weight: 650; }
+.aa-sourcing-cost-summary .is-total dd { font-size: 15px; }
+@media (max-width: 620px) {
+  .aa-sourcing-lines label { grid-template-columns: minmax(0,1fr) 104px; }
+  .aa-sourcing-lines small { display: none; }
+  .aa-sourcing-totals { gap: 12px; }
+  .aa-sourcing-totals div { min-width: 82px; }
+}
+.sales-cost-locked { color: #6d6579; font-size: 10.5px; line-height: 1.5; }

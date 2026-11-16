@@ -76,8 +76,31 @@ const entries = [
       supplierCostNgn: 8000, supplierLink: "" }],
     notes: "", legacySnapshot: false, deleted: false, archived: false },
 ];
+// One sourcing / pre-order batch shape exactly as /api/admin/accounting
+// returns it (owner request 2026-11-16).
+const sourcingBatches = [
+  { id: "SRC-AAAA1111", name: "Cotonou Batch 1", currency: "NGN",
+    notes: "", createdAt: "2026-11-01T08:00:00Z", createdBy: "owner@example.com",
+    orderIds: ["ORD-1", "ORD-2"],
+    costs: [
+      { id: "SRCC-0001", kind: "goods", label: "12 Ankara wrappers", qty: 12, amount: 12000, at: "2026-11-01T08:10:00Z" },
+      { id: "SRCC-0002", kind: "transport", label: "Cotonou waybill", qty: 1, amount: 3000, at: "2026-11-01T08:20:00Z" },
+    ],
+    orders: [
+      { id: "ORD-1", currency: "NGN", saleAmount: 50000, discount: 0,
+        supplierCostInCurrency: 0, deliveryExpense: 0,
+        profitOverrideActive: false, archived: false },
+      { id: "ORD-2", currency: "NGN", saleAmount: 40000, discount: 4000,
+        supplierCostInCurrency: 12000, deliveryExpense: 500,
+        profitOverrideActive: false, archived: false },
+    ],
+    totals: { currency: "NGN", orderCount: 2, totalSpent: 15000, revenue: 86000, netProfit: 71000 } },
+];
+
 const payload = {
   ok: true, entries, batches: [], archivedOrderIds: [], expenses: [],
+  sourcingBatches, sourcingSummary: [{ currency: "NGN", batchCount: 1,
+    totalSpent: 15000, revenue: 86000, netProfit: 71000 }],
   settings, balances: {
     NGN: { currency: "NGN", startingBalance: 250000, startingProfit: 250000, salesNetProfit: 0,
            manualExpenses: 0, bankCharges: 0, balance: 250000 },
@@ -187,5 +210,68 @@ ok(put.body.startingBalanceNgn === 250000, "PUT carries the opening figure: " + 
 root.querySelector('[data-action="verify-google"]').dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 await new Promise((r) => setTimeout(r, 40));
 ok(calls.some((c) => c.path.includes("/api/admin/accounting/google/verify")), "verify route called");
+
+// ------------------------------------------ sourcing / pre-order batches
+const sourcingText = root.innerHTML;
+ok(sourcingText.includes("SOURCING / PRE-ORDER BATCHES"), "sourcing batches section is on the desk");
+ok(sourcingText.includes("Cotonou Batch 1"), "the batch is listed by name");
+ok(sourcingText.includes("Total spent") && sourcingText.includes("Total revenue") && sourcingText.includes("Net profit"),
+   "the three batch totals are labelled");
+ok(/Total spent<\/span><b>₦15,000<\/b>/.test(sourcingText), "total spent sums the logged goods + waybill");
+ok(/Total revenue<\/span><b>₦86,000<\/b>/.test(sourcingText), "total revenue comes from the assigned orders");
+ok(/Net profit<\/span><b>₦71,000<\/b>/.test(sourcingText), "net profit = revenue - total spent");
+
+const toggle = root.querySelector("[data-sourcing-toggle]");
+ok(!!toggle, "the batch has an open/close control");
+toggle.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+await new Promise((r) => setTimeout(r, 40));
+const openText = root.innerHTML;
+ok(openText.includes('data-sourcing-cost-form="SRC-AAAA1111"'), "an open batch exposes the itemised cost form");
+ok(openText.includes("12 Ankara wrappers") && openText.includes("Cotonou waybill"), "logged cost lines are listed");
+ok(openText.includes("Goods bought") && openText.includes("Transport / waybill"), "cost types are labelled");
+ok(openText.includes('data-sourcing-order="ORD-1"') && openText.includes('data-sourcing-order="ORD-2"'),
+   "the multi-select checklist lists the confirmed orders");
+ok(root.querySelectorAll('[data-sourcing-order][checked]').length === 2,
+   "the orders already in the batch are ticked");
+ok(openText.includes('data-sourcing-line="ORD-1"'), "supplier cost can be typed per item inside the batch");
+
+// Ticking the checklist assigns the order to the batch.
+const cfaBox = root.querySelector('[data-sourcing-order="ORD-3"]');
+const untick = root.querySelector('[data-sourcing-order="ORD-2"]');
+if (untick) {
+  untick.checked = false;
+  untick.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 40));
+  const patchCall = calls.filter((c) => c.method === "PATCH" && c.path.includes("/sourcing/")).at(-1);
+  ok(!!patchCall, "the checklist saves its selection");
+  ok(JSON.stringify(patchCall.body.orderIds) === JSON.stringify(["ORD-1"]),
+     "only the ticked orders are sent: " + JSON.stringify(patchCall && patchCall.body));
+}
+
+// Logging a cost line posts to the batch's cost route.
+const costForm = root.querySelector('[data-sourcing-cost-form="SRC-AAAA1111"]');
+ok(!!costForm, "the cost form is bound");
+if (costForm) {
+  costForm.querySelector('[name="kind"]').value = "transport";
+  costForm.querySelector('[name="label"]').value = "Second waybill";
+  costForm.querySelector('[name="qty"]').value = "1";
+  costForm.querySelector('[name="amount"]').value = "2500";
+  costForm.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+  await new Promise((r) => setTimeout(r, 40));
+  const post = calls.filter((c) => c.method === "POST" && c.path.includes("/sourcing/") && c.path.endsWith("/costs")).at(-1);
+  ok(!!post, "adding a cost line calls the cost route");
+  ok(post.body.kind === "transport" && post.body.amount === 2500,
+     "the cost type and amount are sent: " + JSON.stringify(post && post.body));
+}
+
+// Deleting a batch asks first, then deletes only that batch.
+const del = root.querySelector("[data-sourcing-delete]");
+ok(!!del, "an old batch can be deleted");
+if (del) {
+  del.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 40));
+  ok(calls.some((c) => c.method === "DELETE" && c.path.includes("/sourcing/SRC-AAAA1111")),
+     "deleting a batch calls its DELETE route");
+}
 
 console.log("ACCOUNTING DESK DOM CHECKS PASSED");
