@@ -3261,9 +3261,25 @@ def admin_sales():
     """
     raw = (request.args.get("days") or "30").strip().lower()
     days = "all" if raw == "all" else sec.clean_int(raw, 30, 1, 3650)
-    return jsonify(analytics_mod.sales_report(
+    # The Sales tab's timeframe switch: today / week / month / year. Explicit
+    # from/to dates still win, and an unknown value falls back to `days`.
+    period = sec.clean(request.args.get("period"), 16).lower()
+    report = analytics_mod.sales_report(
         days, date_from=request.args.get("from"), date_to=request.args.get("to"),
-        search=request.args.get("q")))
+        search=request.args.get("q"), period=period)
+    # Mark the costless orders that already sit in a pushed (immutable) batch,
+    # so the Sales tab's inline editor can say "locked" instead of letting the
+    # owner type a figure that could never be saved.
+    missing = report.get("missingCostOrders") or []
+    if missing:
+        try:
+            batches = _accounting_batches() or []
+            archived = _accounting_archived_ids(batches)
+        except Exception:
+            archived = set()
+        for row in missing:
+            row["archived"] = str(row.get("id") or "") in archived
+    return jsonify(report)
 
 @api.get("/admin/sales.csv")
 @authmod.require_admin
@@ -3272,7 +3288,8 @@ def admin_sales_csv():
     days = "all" if raw == "all" else sec.clean_int(raw, 30, 1, 3650)
     body = analytics_mod.sales_csv(
         days, date_from=request.args.get("from"), date_to=request.args.get("to"),
-        search=request.args.get("q"))
+        search=request.args.get("q"),
+        period=sec.clean(request.args.get("period"), 16).lower())
     resp = make_response("\ufeff" + body)
     resp.headers["Content-Type"] = "text/csv; charset=utf-8"
     resp.headers["Content-Disposition"] = "attachment; filename=jaura-sales.csv"
@@ -3399,6 +3416,80 @@ def _accounting_save_expenses(expenses):
             print(f"[accounting] local expense write failed: {exc}")
             return False
     return True
+
+
+def _accounting_sourcing_batches():
+    """Sourcing / pre-order batches (mutable buying-trip worksheets)."""
+    if _accounting_uses_supabase():
+        return supabase_store.load_accounting_sourcing_batches()
+    row = one("SELECT value FROM growth_settings WHERE key=?",
+              (supabase_store.ACCOUNTING_SOURCING_KEY,))
+    if not row or not row["value"]:
+        return []
+    try:
+        value = json.loads(row["value"])
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _accounting_save_sourcing_batches(batches):
+    serialized = json.dumps(list(batches or []), ensure_ascii=False,
+                            separators=(",", ":"))
+    if _accounting_uses_supabase():
+        if not supabase_store.save_accounting_sourcing_batches(batches):
+            return False
+    try:
+        execute(
+            "INSERT INTO growth_settings (key,value) VALUES (?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (supabase_store.ACCOUNTING_SOURCING_KEY, serialized))
+    except Exception as exc:
+        if not _accounting_uses_supabase():
+            print(f"[accounting] local sourcing batch write failed: {exc}")
+            return False
+    return True
+
+
+def _accounting_sourcing_order_row(entry):
+    """The few order figures a sourcing batch needs to show its own revenue.
+
+    Sent alongside the batch so the browser never has to guess at an order the
+    staging queue has already cleared (a pushed order still sold its goods and
+    must keep counting toward the trip's profit).
+    """
+    return {
+        "id": str(entry.get("id") or ""),
+        "currency": accounting_mod.normalize_currency(entry.get("currency")) or "NGN",
+        "customer": str(entry.get("customer") or ""),
+        "date": str(entry.get("date") or "")[:10],
+        "saleAmount": accounting_mod.amount(entry.get("saleAmount")),
+        "discount": accounting_mod.amount(entry.get("discount")),
+        "supplierCostInCurrency": accounting_mod.amount(
+            entry.get("supplierCostInCurrency")),
+        "deliveryExpense": accounting_mod.amount(entry.get("deliveryExpense")),
+        "profitOverrideActive": bool(entry.get("profitOverrideActive")),
+        "archived": bool(entry.get("archived")),
+    }
+
+
+def _accounting_sourcing_payload(batches, entries):
+    """Batches with their computed Total Spent / Revenue / Net Profit."""
+    by_id = {str(entry.get("id")): entry for entry in (entries or [])
+             if isinstance(entry, dict)}
+    cleaned = accounting_mod.clean_sourcing_batches(batches or [])
+    out = []
+    for batch in cleaned:
+        currency = accounting_mod.normalize_currency(batch.get("currency")) or "NGN"
+        rows = [by_id[str(oid)] for oid in batch.get("orderIds") or []
+                if str(oid) in by_id
+                and (accounting_mod.normalize_currency(
+                    by_id[str(oid)].get("currency")) or "NGN") == currency]
+        out.append(dict(
+            batch,
+            orders=[_accounting_sourcing_order_row(entry) for entry in rows],
+            totals=accounting_mod.sourcing_batch_totals(batch, rows)))
+    return out
 
 
 def _accounting_settings_defaults():
@@ -3605,6 +3696,10 @@ def admin_accounting():
     # archived rows back for auditing.
     include_archived = request.args.get("includeArchived") == "true"
     entries = []
+    # Every confirmed order's entry, archived or not. Sourcing batches keep
+    # counting an order after it has been pushed to Google Sheets, so their
+    # revenue must not vanish the moment the staging queue clears.
+    all_entries = {}
     invalid_currency_orders = []
     for order in orders:
         if not isinstance(order, dict) and not hasattr(order, "keys"):
@@ -3614,6 +3709,8 @@ def admin_accounting():
                 accounting_mod.order_value(order, "id") or "(unknown order)"))
             continue
         entry = _accounting_order_entry(order, archived_ids)
+        if not entry["deleted"]:
+            all_entries[str(entry["id"])] = entry
         if entry["archived"] and not include_archived:
             continue
         if include_deleted or not entry["deleted"]:
@@ -3626,10 +3723,22 @@ def admin_accounting():
     if settings is None:
         return jsonify(ok=False, error="Accounting settings could not be read from Supabase."), 503
     balances = accounting_mod.bank_balances(batches, expenses, settings)
+    sourcing_raw = _accounting_sourcing_batches()
+    if sourcing_raw is None:
+        return jsonify(ok=False, error="Sourcing batches could not be read from Supabase."), 503
+    # Sourcing batches are mutable buying-trip worksheets, separate from the
+    # immutable pushed-batch archive. Their revenue is read from the same
+    # staged-order entries the desk already has, so the numbers on screen and
+    # the numbers in the JSON can never disagree.
+    sourcing_batches = _accounting_sourcing_payload(
+        sourcing_raw, list(all_entries.values()))
     import google_sheets
     response = jsonify(
         ok=True,
         entries=entries,
+        sourcingBatches=sourcing_batches,
+        sourcingSummary=accounting_mod.sourcing_summary(
+            sourcing_raw, list(all_entries.values())),
         invalidCurrencyOrders=invalid_currency_orders,
         batches=[batch for batch in batches if isinstance(batch, dict)],
         archivedOrderIds=sorted(archived_ids),
@@ -4395,6 +4504,252 @@ def admin_accounting_batch_update(bid):
     settings = _accounting_settings() or {}
     return jsonify(ok=True, batch=batch,
                    balances=accounting_mod.bank_balances(updated, expenses, settings))
+
+
+# ---------------------------------------- admin: accounting sourcing batches
+def _sourcing_mutation_error(message, status=400):
+    return jsonify(ok=False, error=message), status
+
+
+def _sourcing_read_batches():
+    """(cleaned batches, error response) for every sourcing mutation."""
+    batches = _accounting_sourcing_batches()
+    if batches is None:
+        return None, (jsonify(ok=False, error=(
+            "Sourcing batches could not be read from Supabase.")), 503)
+    return accounting_mod.clean_sourcing_batches(batches), None
+
+
+def _sourcing_validated_order_ids(raw_ids, currency):
+    """Validate the multi-select checklist's order ids for one batch.
+
+    Every id must still be a confirmed order in the batch's own ledger
+    currency, so a checklist that went stale (an order was deleted or its
+    currency was corrected in another tab) is rejected honestly instead of
+    quietly moving another ledger's money into the batch.
+    """
+    if raw_ids is None:
+        return None, ""
+    if not isinstance(raw_ids, list):
+        return None, "orderIds must be a list of order ids."
+    ids = []
+    for value in raw_ids:
+        text = sec.clean(value, 24).upper()
+        if text and text not in ids:
+            ids.append(text)
+    if len(ids) > _ACCOUNTING_MAX_BATCH_ORDERS:
+        return None, (f"A sourcing batch can hold at most "
+                      f"{_ACCOUNTING_MAX_BATCH_ORDERS} orders.")
+    if not ids:
+        return [], ""
+    orders = _accounting_orders()
+    if orders is None:
+        return None, "Confirmed orders could not be read."
+    by_id = {str(accounting_mod.order_value(order, "id") or ""): order
+             for order in orders}
+    unknown = [oid for oid in ids if oid not in by_id]
+    if unknown:
+        return None, ("Some selected orders are no longer confirmed: "
+                      + ", ".join(unknown[:10]))
+    wrong = [oid for oid in ids
+             if (accounting_mod.order_currency(by_id[oid]) or "NGN") != currency]
+    if wrong:
+        return None, ("A sourcing batch only holds orders from its own ledger "
+                      f"currency ({currency}): " + ", ".join(wrong[:10]))
+    return ids, ""
+
+
+def _sourcing_after_save(batches):
+    """Shared success payload: the raw saved list (the desk recomputes totals)."""
+    return jsonify(ok=True, sourcingBatches=batches,
+                   total=len(batches))
+
+
+@api.post("/admin/accounting/sourcing")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_sourcing_create():
+    """Create one named sourcing / pre-order batch ("Cotonou Batch 1")."""
+    d = request.get_json(silent=True) or {}
+    raw_currency = sec.clean(d.get("currency"), 8).upper()
+    currency = (accounting_mod.normalize_currency(raw_currency)
+                if raw_currency else "NGN")
+    if not currency:
+        return _sourcing_mutation_error("Choose NGN or CFA / XOF currency.")
+    name = sec.clean(d.get("name"), accounting_mod.SOURCING_NAME_MAX)
+    with _ACCOUNTING_BATCH_LOCK:
+        batches, error = _sourcing_read_batches()
+        if error:
+            return error
+        if len(batches) >= accounting_mod.SOURCING_BATCHES_MAX:
+            return _sourcing_mutation_error(
+                f"Delete an old batch first — {accounting_mod.SOURCING_BATCHES_MAX} "
+                "is the maximum the desk keeps.")
+        now = _utcnow()
+        batch = accounting_mod.new_sourcing_batch(
+            name or f"Sourcing batch · {now[:10]}", currency, at=now,
+            actor=authmod.current_admin(), notes=sec.clean(d.get("notes"), 500))
+        updated = list(batches) + [batch]
+        if not _accounting_save_sourcing_batches(updated):
+            return jsonify(ok=False, error=(
+                "The sourcing batch could not be saved to the accounting "
+                "database.")), 503
+    audit(authmod.current_admin(), "accounting.sourcing.create",
+          f"{batch['id']} {batch['name']} {currency}", _ip())
+    response = _sourcing_after_save(updated)
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
+    return response
+
+
+@api.patch("/admin/accounting/sourcing/<bid>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_sourcing_update(bid):
+    """Rename a sourcing batch or set the confirmed orders assigned to it."""
+    bid = sec.clean(bid, 40).upper()
+    d = request.get_json(silent=True) or {}
+    if not {"name", "orderIds", "notes"}.intersection(d):
+        return _sourcing_mutation_error(
+            "Provide a name, notes or the selected orders to update.")
+    with _ACCOUNTING_BATCH_LOCK:
+        batches, error = _sourcing_read_batches()
+        if error:
+            return error
+        index = next((i for i, row in enumerate(batches)
+                      if str(row.get("id")) == bid), None)
+        if index is None:
+            return _sourcing_mutation_error("That sourcing batch was not found.", 404)
+        batch = dict(batches[index])
+        currency = accounting_mod.normalize_currency(batch.get("currency")) or "NGN"
+        if "name" in d:
+            name = sec.clean(d.get("name"), accounting_mod.SOURCING_NAME_MAX)
+            if not name:
+                return _sourcing_mutation_error("The batch needs a name.")
+            batch["name"] = name
+        if "notes" in d:
+            batch["notes"] = sec.clean(d.get("notes"), 500)
+        if "orderIds" in d:
+            order_ids, order_error = _sourcing_validated_order_ids(
+                d.get("orderIds"), currency)
+            if order_error:
+                return _sourcing_mutation_error(order_error, 409)
+            batch["orderIds"] = order_ids
+        batch["updatedAt"] = _utcnow()
+        batch["updatedBy"] = authmod.current_admin()
+        updated = list(batches)
+        updated[index] = batch
+        if not _accounting_save_sourcing_batches(updated):
+            return jsonify(ok=False, error=(
+                "The sourcing batch could not be saved to the accounting "
+                "database.")), 503
+    audit(authmod.current_admin(), "accounting.sourcing.update", bid, _ip())
+    response = _sourcing_after_save(updated)
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
+    return response
+
+
+@api.post("/admin/accounting/sourcing/<bid>/costs")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_sourcing_cost_add(bid):
+    """Log one itemised goods / sourcing / transport line inside a batch."""
+    bid = sec.clean(bid, 40).upper()
+    d = request.get_json(silent=True) or {}
+    amount_value = accounting_mod.validated_amount(d.get("amount"))
+    if amount_value is None:
+        return _sourcing_mutation_error(
+            "The cost must be a non-negative whole amount.")
+    with _ACCOUNTING_BATCH_LOCK:
+        batches, error = _sourcing_read_batches()
+        if error:
+            return error
+        index = next((i for i, row in enumerate(batches)
+                      if str(row.get("id")) == bid), None)
+        if index is None:
+            return _sourcing_mutation_error("That sourcing batch was not found.", 404)
+        batch = dict(batches[index])
+        costs = accounting_mod.clean_sourcing_costs(batch.get("costs"))
+        if len(costs) >= accounting_mod.SOURCING_COSTS_MAX:
+            return _sourcing_mutation_error(
+                f"This batch already has {accounting_mod.SOURCING_COSTS_MAX} "
+                "cost lines — delete one before adding another.")
+        cost = accounting_mod.new_sourcing_cost(
+            d.get("kind"), d.get("label"), amount_value,
+            qty=d.get("qty"), at=_utcnow())
+        if not cost:
+            return _sourcing_mutation_error(
+                "Choose goods, sourcing expense or transport / waybill.")
+        batch["costs"] = costs + [cost]
+        batch["updatedAt"] = _utcnow()
+        batch["updatedBy"] = authmod.current_admin()
+        updated = list(batches)
+        updated[index] = batch
+        if not _accounting_save_sourcing_batches(updated):
+            return jsonify(ok=False, error=(
+                "The batch cost could not be saved to the accounting "
+                "database.")), 503
+    audit(authmod.current_admin(), "accounting.sourcing.cost",
+          f"{bid} {cost['kind']} {cost['amount']}", _ip())
+    response = _sourcing_after_save(updated)
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
+    return response
+
+
+@api.delete("/admin/accounting/sourcing/<bid>/costs/<cid>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_sourcing_cost_delete(bid, cid):
+    """Remove one wrongly logged cost line from a sourcing batch."""
+    bid = sec.clean(bid, 40).upper()
+    cid = sec.clean(cid, 40).upper()
+    with _ACCOUNTING_BATCH_LOCK:
+        batches, error = _sourcing_read_batches()
+        if error:
+            return error
+        index = next((i for i, row in enumerate(batches)
+                      if str(row.get("id")) == bid), None)
+        if index is None:
+            return _sourcing_mutation_error("That sourcing batch was not found.", 404)
+        batch = dict(batches[index])
+        costs = accounting_mod.clean_sourcing_costs(batch.get("costs"))
+        remaining = [row for row in costs if str(row.get("id")) != cid]
+        if len(remaining) == len(costs):
+            return _sourcing_mutation_error("That cost line was not found.", 404)
+        batch["costs"] = remaining
+        batch["updatedAt"] = _utcnow()
+        batch["updatedBy"] = authmod.current_admin()
+        updated = list(batches)
+        updated[index] = batch
+        if not _accounting_save_sourcing_batches(updated):
+            return jsonify(ok=False, error=(
+                "The cost line could not be deleted.")), 503
+    audit(authmod.current_admin(), "accounting.sourcing.cost_delete",
+          f"{bid} {cid}", _ip())
+    response = _sourcing_after_save(updated)
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
+    return response
+
+
+@api.delete("/admin/accounting/sourcing/<bid>")
+@authmod.require_admin
+@sec.require_csrf
+def admin_accounting_sourcing_delete(bid):
+    """Delete an old sourcing batch (its orders stay safely on the desk)."""
+    bid = sec.clean(bid, 40).upper()
+    with _ACCOUNTING_BATCH_LOCK:
+        batches, error = _sourcing_read_batches()
+        if error:
+            return error
+        remaining = [row for row in batches if str(row.get("id")) != bid]
+        if len(remaining) == len(batches):
+            return _sourcing_mutation_error("That sourcing batch was not found.", 404)
+        if not _accounting_save_sourcing_batches(remaining):
+            return jsonify(ok=False, error=(
+                "The sourcing batch could not be deleted.")), 503
+    audit(authmod.current_admin(), "accounting.sourcing.delete", bid, _ip())
+    response = _sourcing_after_save(remaining)
+    response.headers["Cache-Control"] = sec.NO_STORE_PRIVATE
+    return response
 
 
 @api.get("/admin/accounting/expenses")

@@ -68,6 +68,13 @@ EXPECTED_ADMIN_ROUTES = {
     ("POST", "/api/admin/accounting/expenses"),
     ("DELETE", "/api/admin/accounting/expenses/<eid>"),
     ("PUT", "/api/admin/accounting/settings"),
+    # Sourcing / pre-order batches: create, rename or assign orders, log a
+    # cost line, delete a cost line, delete the batch.
+    ("POST", "/api/admin/accounting/sourcing"),
+    ("PATCH", "/api/admin/accounting/sourcing/<bid>"),
+    ("DELETE", "/api/admin/accounting/sourcing/<bid>"),
+    ("POST", "/api/admin/accounting/sourcing/<bid>/costs"),
+    ("DELETE", "/api/admin/accounting/sourcing/<bid>/costs/<cid>"),
     ("GET", "/api/admin/sales/insights"),
     ("GET", "/api/admin/products/trash"),
     ("POST", "/api/admin/products/trash/<pid>/restore"),

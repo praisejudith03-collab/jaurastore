@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=243" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=245" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1592,7 +1592,19 @@ let prodCatSel = "";
 let orderPage = 1;
 const ORDER_PAGE = 10;   // ADMIN_PAGE_SIZE - ten records per page, everywhere
 let dashRange = 30;
-let salesRange = "30";
+// The Dashboard's long lists are truncated by default (owner request
+// 2026-11-16): top viewed products and visitor locations show five rows each,
+// with a one-tap toggle for the rest so neither can bury the mobile page.
+let dashShowAll = { products: false, locations: false };
+// The Sales tab's timeframe switch. "today" / "week" / "month" / "year" are
+// calendar windows resolved on the server; "all" is the legacy every-order
+// range, and explicit From / To dates still win over all of them.
+let salesRange = "month";
+// The inline "missing cost price" quick fix on the Sales tab, and the orders
+// the server says need a supplier cost in the current timeframe.
+let salesCostFixOpen = false;
+let salesMissingCosts = [];
+let salesMissingCostsTruncated = false;
 let salesProfitCurrency = "NGN";
 let salesProfitPeriod = "month";
 // The active NGN -> FCFA exchange rate shown in Store Settings (null = still
@@ -2213,6 +2225,17 @@ function orderItemThumb(item) {
   return `<img class="order-item-thumb" src="${esc(JA.asset(raw))}" alt="" ` +
     `width="40" height="40" loading="lazy" decoding="async" onerror="fallbackImg(event)" />`;
 }
+// How many rows the Dashboard's long lists show before the "show all" toggle
+// (owner request 2026-11-16 — three to five keeps them short on a phone).
+const DASH_LIST_LIMIT = 5;
+
+/** The one-tap "show all / show less" control under a truncated list. */
+function dashListToggle(key, total) {
+  if (!total || (!dashShowAll[key] && total <= DASH_LIST_LIMIT)) return "";
+  const label = dashShowAll[key] ? `Show top ${DASH_LIST_LIMIT}` : `Show all ${total} →`;
+  return `<button type="button" class="au-link-btn adx-list-more" data-dash-more="${esc(key)}" aria-expanded="${Boolean(dashShowAll[key])}">${esc(label)}</button>`;
+}
+
 function analyticsPanel() {
   return `
     <section class="needs-attention" id="needs-attention">
@@ -2242,7 +2265,7 @@ function analyticsPanel() {
     <div class="adx-2col"><div><h3 class="admin-h">Top viewed products</h3><div id="an-products" class="empty">Loading…</div></div><div><h3 class="admin-h">Top selling products</h3><div id="an-sellers" class="empty">Loading…</div></div></div>
     <h3 class="admin-h">Conversion</h3><div class="stats" id="an-conv"></div><div id="an-revenue"></div>
     <h3 class="admin-h">Visitor locations</h3><p class="admin-note">Resolved from the visitor's own IP address at the CDN edge (never the server's), with crawlers and datacentre traffic filtered out — so this is where real customers are.</p><div id="an-loc" class="empty">Loading…</div>
-    <h3 class="admin-h">Latest orders</h3><div id="an-orders" class="empty">Loading…</div>`;
+    <p class="admin-note adx-orders-moved">Orders live on the <a href="/admin/orders">Orders</a> page — this dashboard stays focused on traffic, sales and stock.</p>`;
 }
 function dayLabel(day) { const d = new Date(day + "T00:00:00Z"); return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
 function svgBarChart(series, bars) {
@@ -2601,16 +2624,36 @@ async function fillAnalytics() {
   $("#an-sales").innerHTML = salesChart(data.sales || []);
   $("#an-chart").innerHTML = trafficChart(data.series || []);
   const prods = data.topProducts || [];
-  $("#an-products").innerHTML = prods.length ? tableHTML(["Product", "Views", "In carts"], prods.slice().sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 8).map((p) => `<tr><td>${esc(p.name || p.productId)}</td><td>${p.views || 0}</td><td>${p.carts || 0}</td></tr>`).join("")) : `<p class="empty">No product activity yet.</p>`;
+  // Owner request 2026-11-16: these two lists used to run the length of the
+  // page on a phone. Five rows show by default and the rest sit behind a
+  // toggle, so traffic and sales stay above the fold.
+  const prodsByViews = prods.slice().sort((a, b) => (b.views || 0) - (a.views || 0));
+  const viewed = dashShowAll.products ? prodsByViews : prodsByViews.slice(0, DASH_LIST_LIMIT);
+  $("#an-products").innerHTML = viewed.length
+    ? tableHTML(["Product", "Views", "In carts"], viewed.map((p) => `<tr><td>${esc(p.name || p.productId)}</td><td>${p.views || 0}</td><td>${p.carts || 0}</td></tr>`).join(""))
+      + dashListToggle("products", prodsByViews.length)
+    : `<p class="empty">No product activity yet.</p>`;
   const sellers = prods.filter((p) => (p.purchases || 0) > 0 || (p.carts || 0) > 0).sort((a, b) => (b.purchases || 0) - (a.purchases || 0) || (b.carts || 0) - (a.carts || 0)).slice(0, 8);
   $("#an-sellers").innerHTML = sellers.length ? tableHTML(["Product", "Sold", "In carts"], sellers.map((p) => `<tr><td>${esc(p.name || p.productId)}</td><td>${p.purchases || 0}</td><td>${p.carts || 0}</td></tr>`).join("")) : `<p class="empty">No sales recorded yet.</p>`;
   $("#an-conv").innerHTML = [["Total sales", (c.revenueByCurrency || []).map((r) => JA.money(r.value, r.currency)).join(" · ") || "—", `${c.orders || 0} orders`], ["Average order value", c.averageOrderValue ? JA.money(c.averageOrderValue, (c.revenueByCurrency || [{}])[0].currency) : "—", ""], ["Checkout attempts", c.checkoutAttempts || 0, `${c.checkoutCompletionRate || 0}% completed`], ["Added to cart", c.cartAdds || 0, `${c.productViews || 0} product views`], ["Visit → order", `${c.visitToOrderRate || 0}%`, "conversion rate"]].map(([k, v, s]) => `<div class="stat"><span class="kicker">${k}</span><b>${v}</b>${s ? `<i>${esc(s)}</i>` : ""}</div>`).join("");
   const status = c.statusBreakdown || [];
   $("#an-revenue").innerHTML = status.length ? `<p class="admin-note">${status.map((s) => `${esc(s.status)}: ${s.n}`).join(" · ")}</p>` : "";
   const locs = data.locations || [];
-  $("#an-loc").innerHTML = locs.length ? tableHTML(["Location", "Sessions"], locs.map((l) => `<tr><td><span class="an-flag">${countryFlag(l.country)}</span>${esc([l.city, l.country].filter(Boolean).join(", "))}</td><td>${l.sessions || l.visitors}</td></tr>`).join("")) : `<p class="empty">No locations recorded yet.</p>`;
-  const orders = data.recentOrders || [];
-  $("#an-orders").innerHTML = orders.length ? tableHTML(["Order", "Customer", "Total", "Status"], orders.map((o) => `<tr><td>${esc(o.id)}</td><td>${esc(o.customer_name || "")}</td><td>${esc(JA.money(o.total, o.currency))}</td><td><span class="status-pill ${esc(o.status || "pending")}">${esc(orderStatusLabel(o.status))}</span></td></tr>`).join("")) : `<p class="empty">No orders yet.</p>`;
+  const visibleLocs = dashShowAll.locations ? locs : locs.slice(0, DASH_LIST_LIMIT);
+  $("#an-loc").innerHTML = visibleLocs.length
+    ? tableHTML(["Location", "Sessions"], visibleLocs.map((l) => `<tr><td><span class="an-flag">${countryFlag(l.country)}</span>${esc([l.city, l.country].filter(Boolean).join(", "))}</td><td>${l.sessions || l.visitors}</td></tr>`).join(""))
+      + dashListToggle("locations", locs.length)
+    : `<p class="empty">No locations recorded yet.</p>`;
+  // Orders deliberately stay on the Orders page: the dashboard no longer
+  // renders a "Latest orders" table (owner request 2026-11-16).
+  document.querySelectorAll("[data-dash-more]").forEach((button) => {
+    button.onclick = () => {
+      const key = button.dataset.dashMore;
+      if (key !== "products" && key !== "locations") return;
+      dashShowAll[key] = !dashShowAll[key];
+      fillAnalytics();
+    };
+  });
   document.querySelectorAll("[data-range]").forEach((b) => { b.onclick = () => { dashRange = Number(b.dataset.range); paintDesk("analytics"); }; });
   const custom = $("#an-custom"); const customLabel = document.querySelector(".an-rng-custom");
   if (customLabel) customLabel.addEventListener("click", () => { if (custom) { custom.hidden = false; custom.focus(); custom.select(); } });
@@ -4948,7 +4991,11 @@ async function fillMarketing() {
   }
 }
 function salesPanel() {
-  const opts = [["7", "7 days"], ["30", "30 days"], ["90", "90 days"], ["all", "All"]];
+  // Owner request 2026-11-16: Today / This week / This month / This year are
+  // the primary timeframe buttons. "All time" stays for the full history, and
+  // the From / To boxes still narrow any of them to exact dates.
+  const opts = [["today", "Today"], ["week", "This week"], ["month", "This month"],
+                ["year", "This year"], ["all", "All time"]];
   const periods = [["week", "Weekly"], ["month", "Monthly"], ["year", "Yearly"]];
   return `
     <div class="an-top">
@@ -4971,14 +5018,15 @@ function salesPanel() {
     <div class="an-top">
       <h3 class="admin-h" style="margin:0">Confirmed sales</h3>
       <div class="an-range">
-        ${opts.map(([v, label]) => `<button type="button" class="an-rng${String(salesRange) === v ? " is-on" : ""}" data-sales-range="${v}">${label}</button>`).join("")}
-        <a class="an-rng" id="sales-csv" href="api/admin/sales.csv?days=${encodeURIComponent(salesRange)}">Export CSV</a>
+        ${opts.map(([v, label]) => `<button type="button" class="an-rng${String(salesRange) === v ? " is-on" : ""}" data-sales-range="${v}" aria-pressed="${String(salesRange) === v}">${label}</button>`).join("")}
+        <a class="an-rng" id="sales-csv" href="api/admin/sales.csv?days=30">Export CSV</a>
       </div>
     </div>
     <div class="adx-filter-bar sales-filters" aria-label="Filter sales"><input id="sales-search" type="search" placeholder="Search customer, order, product…" autocomplete="off" value="${esc(salesSearch)}" /><label>From <input id="sales-from" type="date" value="${esc(salesFrom)}" /></label><label>To <input id="sales-to" type="date" value="${esc(salesTo)}" /></label><button type="button" class="btn btn-line" id="sales-filter-clear">Clear</button></div>
-    <p class="admin-note">Only confirmed orders count as sales. Pending orders are listed separately below. Date and search filters apply to the totals and top products.</p>
+    <p class="admin-note">Only confirmed orders count as sales. Pending orders are listed separately below. Today, This week, This month and This year are calendar windows (a week starts Monday, a month on the 1st); All time covers the full history, and the From / To boxes narrow any of them. Every card, the top products and the CSV export follow the window you pick.</p>
     <div class="stats" id="sales-kpis"><div class="stat"><span class="kicker">Loading</span><b>…</b></div></div>
-    <p class="admin-note" id="sales-cost-note" role="status" aria-live="polite"></p>
+    <p class="admin-note sales-cost-note" id="sales-cost-note" role="status" aria-live="polite"></p>
+    <div class="sales-cost-fix" id="sales-cost-fix" hidden></div>
     <p class="admin-note" id="sales-pending">Loading…</p>
     <h3 class="admin-h">Top products</h3><div id="sales-top" class="empty">Loading…</div>`;
 }
@@ -4987,7 +5035,12 @@ async function fillSales() {
   const box = $("#sales-kpis");
   if (!box) return;
   let d = null;
-  const params = new URLSearchParams({ days: salesRange });
+  const params = new URLSearchParams();
+  // Calendar windows go to the server as ?period=…; "all" and any legacy day
+  // count keep the original ?days=… contract, so CSV links and bookmarks from
+  // before this release still work unchanged.
+  if (SALES_TIMEFRAMES.indexOf(String(salesRange)) >= 0) params.set("period", salesRange);
+  else params.set("days", salesRange);
   if (salesSearch) params.set("q", salesSearch);
   if (salesFrom) params.set("from", salesFrom);
   if (salesTo) params.set("to", salesTo);
@@ -4997,13 +5050,18 @@ async function fillSales() {
   } catch (e) { d = null; }
   if (!d || d.ok === false) {
     box.innerHTML = `<p class="empty">Could not load sales.</p>`;
+    const staleFix = $("#sales-cost-fix");
+    if (staleFix) { staleFix.hidden = true; staleFix.innerHTML = ""; }
+    salesMissingCosts = [];
     return;
   }
   const rev = (d.revenueByCurrency || []).map((r) => JA.money(r.value, r.currency)).join(" · ") || "—";
   const avg = (d.averageByCurrency || []).length > 1
     ? (d.averageByCurrency || []).map((r) => JA.money(r.average, r.currency)).join(" · ")
     : ((d.averageByCurrency || [])[0] ? JA.money((d.averageByCurrency || [])[0].average, (d.averageByCurrency || [])[0].currency) : (d.averageOrderValue ? JA.money(d.averageOrderValue, ((d.revenueByCurrency || [])[0] || {}).currency || "NGN") : "—"));
-  const rangeLab = (salesFrom || salesTo) ? "selected dates" : String(salesRange) === "all" ? "all time" : `last ${salesRange} days`;
+  const rangeLab = (salesFrom || salesTo) ? "selected dates"
+    : (d.periodLabel || (String(salesRange) === "all" ? "all time"
+      : (d.period === "custom" ? "selected dates" : `last ${salesRange} days`)));
   // Net profit = selling price - cost price - delivery fee, per ledger
   // currency. Wallet-share rows (walk-in sales included) carry the same
   // accounting snapshot the ledger gets, so this figure matches the sheet.
@@ -5016,15 +5074,22 @@ async function fillSales() {
     ["Average order value", avg, "confirmed"],
     ["Units", d.units || 0, "items sold"],
   ].map(([k, v, s]) => `<div class="stat"><span class="kicker">${esc(k)}</span><b>${esc(String(v))}</b>${s ? `<i>${esc(s)}</i>` : ""}</div>`).join("");
+  // The missing-cost warning is a button, not a dead end: it opens the exact
+  // orders right here with their product lines, so a supplier cost and the
+  // delivery expense can be typed in without hunting through the catalogue.
+  salesMissingCosts = Array.isArray(d.missingCostOrders) ? d.missingCostOrders : [];
+  salesMissingCostsTruncated = Boolean(d.missingCostOrdersTruncated);
   const costNote = $("#sales-cost-note");
   if (costNote) {
     const missing = Number(d.ordersMissingCost) || 0;
     if (missing > 0) {
-      costNote.innerHTML = `⚠ <strong>${missing} order${missing === 1 ? "" : "s"}</strong> in this period ${missing === 1 ? "has" : "have"} no cost price recorded, so ${missing === 1 ? "it is" : "they are"} counted in revenue but left out of net profit. Open the product (or the accounting desk) and add the supplier cost.`;
+      costNote.innerHTML = `⚠ <strong>${missing} order${missing === 1 ? "" : "s"}</strong> in this period ${missing === 1 ? "has" : "have"} no cost price recorded, so ${missing === 1 ? "it is" : "they are"} counted in revenue but left out of net profit. `
+        + `<button type="button" class="au-link-btn sales-cost-toggle" id="sales-cost-fix-toggle" aria-expanded="${salesCostFixOpen}" aria-controls="sales-cost-fix">${salesCostFixOpen ? "Hide the cost editor" : "Add their supplier cost here →"}</button>`;
     } else {
       costNote.textContent = "Every order in this period has a cost price, so net profit is complete.";
     }
   }
+  renderSalesCostFix();
   const pend = $("#sales-pending");
   if (pend) {
     const n = d.pendingCount != null ? d.pendingCount : (d.pendingOrders || 0);
@@ -5051,8 +5116,125 @@ async function fillSales() {
   if (from) from.onchange = apply; if (to) to.onchange = apply;
   const salesFilterClear = $("#sales-filter-clear");
   if (salesFilterClear) salesFilterClear.onclick = () => { salesSearch = ""; salesFrom = ""; salesTo = ""; fillSales(); };
+  bindSalesCostFix();
   updateSalesCsv();
 }
+
+/* --------------------------------------------------------- Sales quick fix
+ * Owner request 2026-11-16: an order flagged as missing a cost price can be
+ * opened and costed on the Sales tab itself. Each product line gets its own
+ * supplier-cost box (the same line ids the accounting desk validates) plus the
+ * delivery expense, saved through the accounting order PATCH, so the net
+ * profit card updates the moment it lands. */
+const SALES_TIMEFRAMES = ["today", "week", "month", "year"];
+
+function renderSalesCostFix() {
+  const box = $("#sales-cost-fix");
+  if (!box) return;
+  if (!salesCostFixOpen || !salesMissingCosts.length) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = `
+    <div class="sales-cost-head">
+      <strong>Add the missing cost price</strong>
+      <span>Type the supplier cost for each product line and the delivery expense. The order's net profit updates as soon as you save.</span>
+    </div>
+    ${salesMissingCosts.map((order) => {
+      const ccy = order.currency === "CFA" ? "FCFA" : "NGN";
+      const locked = Boolean(order.archived);
+      const lines = (order.lineItems || []).map((line, index) => `
+        <label class="sales-cost-line">
+          <span>${esc(String(line.qty || 1))}× ${esc(line.name || "Item")}${line.variant ? ` · ${esc(line.variant)}` : ""}</span>
+          <input type="number" min="0" step="1" inputmode="numeric"
+                 data-cost-line="${index}" data-line-id="${esc(line.lineId || "")}"
+                 value="${Number(line.supplierCostNgn || 0)}"${locked ? " disabled" : ""}
+                 aria-label="Supplier cost in Naira for ${esc(line.name || "item")}" />
+          <small>₦ line total</small>
+        </label>`).join("");
+      return `
+        <article class="sales-cost-order" data-cost-order="${esc(order.id)}">
+          <header>
+            <span><strong>${esc(order.id)}</strong> · ${esc(order.customer || "Customer")}</span>
+            <small>${esc(order.date || "")} · ${esc(order.itemsSummary || "")} · sale ${esc(JA.money(Number(order.saleAmount || 0), order.currency))} ${order.currency === "CFA" ? "(cost entered in ₦, converted at the locked rate)" : ""}</small>
+          </header>
+          <div class="sales-cost-lines">
+            ${lines}
+            <label class="sales-cost-line">
+              <span>Delivery expense</span>
+              <input type="number" min="0" step="1" inputmode="numeric"
+                     data-cost-delivery value="${Number(order.deliveryExpenseNgn || 0)}"${locked ? " disabled" : ""}
+                     aria-label="Delivery expense in Naira for ${esc(order.customer || "customer")}" />
+              <small>₦ transport</small>
+            </label>
+          </div>
+          <div class="sales-cost-actions">
+            ${locked
+              ? `<small class="sales-cost-locked">This order is already inside a pushed Google Sheets batch, so its cost is locked. Cost it on the batch before pushing next time.</small>`
+              : `<button type="button" class="btn" data-cost-save="${esc(order.id)}">Save cost</button>`}
+            <span class="sales-cost-feedback" data-cost-feedback="${esc(order.id)}" role="status" aria-live="polite"></span>
+          </div>
+        </article>`;
+    }).join("")}
+    ${salesMissingCostsTruncated
+      ? `<p class="admin-note">Showing the ${salesMissingCosts.length} most recent orders still missing a cost. Older ones can be costed on the <a href="/admin/accounting">accounting desk</a>.</p>`
+      : ""}`;
+}
+
+function bindSalesCostFix() {
+  const toggle = $("#sales-cost-fix-toggle");
+  if (toggle) {
+    toggle.onclick = () => {
+      salesCostFixOpen = !salesCostFixOpen;
+      fillSales();
+    };
+  }
+  const box = $("#sales-cost-fix");
+  if (!box) return;
+  box.querySelectorAll("[data-cost-save]").forEach((button) => {
+    button.onclick = () => saveSalesOrderCost(button.dataset.costSave);
+  });
+}
+
+/** Save one flagged order's supplier costs + delivery expense, then refresh. */
+async function saveSalesOrderCost(orderId) {
+  const card = [...document.querySelectorAll("[data-cost-order]")]
+    .find((node) => String(node.dataset.costOrder) === String(orderId));
+  if (!card) return;
+  const order = salesMissingCosts.find((row) => String(row.id) === String(orderId));
+  if (!order) return;
+  const lines = [...card.querySelectorAll("[data-cost-line]")].map((input) => {
+    const index = Number(input.dataset.costLine || 0);
+    const base = (order.lineItems || [])[index] || {};
+    const raw = String(input.value || "").trim();
+    return {
+      lineId: input.dataset.lineId || base.lineId,
+      supplierCostNgn: raw === "" ? Number(base.supplierCostNgn || 0) : Math.max(0, Math.round(Number(raw) || 0)),
+    };
+  });
+  const delivery = card.querySelector("[data-cost-delivery]");
+  const body = { lineItems: lines };
+  if (delivery) body.deliveryExpense = Math.max(0, Math.round(Number(delivery.value || 0)));
+  const feedback = [...card.querySelectorAll("[data-cost-feedback]")]
+    .find((node) => String(node.dataset.costFeedback) === String(orderId));
+  const button = card.querySelector("[data-cost-save]");
+  if (button) { button.disabled = true; button.textContent = "Saving…"; }
+  try {
+    const result = await window.JA_NET.api(
+      "api/admin/accounting/orders/" + encodeURIComponent(orderId),
+      { method: "PATCH", json: body });
+    if (result && result.ok === false) throw new Error(result.error || "Could not save the cost.");
+    JA.success(`Supplier cost saved for ${orderId}. Net profit updated.`);
+    fillSales();
+  } catch (err) {
+    if (feedback) feedback.textContent = err.message || "Could not save the cost.";
+    if (button) { button.disabled = false; button.textContent = "Save cost"; }
+    JA.toast(err.message || "Could not save the cost.");
+  }
+}
+
 /** Save one batch's Batch Transportation Fee from the Sales table.
  *  Blank clears it and the batch falls back to its per-order transport fees. */
 async function saveBatchTransportFee(batchId, rawValue) {
@@ -5091,7 +5273,9 @@ async function saveBatchLedgerField(batchId, field, rawValue, okMessage) {
 
 function updateSalesCsv() {
   const link = $("#sales-csv"); if (!link) return;
-  const p = new URLSearchParams({ days: salesRange });
+  const p = new URLSearchParams();
+  if (SALES_TIMEFRAMES.indexOf(String(salesRange)) >= 0) p.set("period", salesRange);
+  else p.set("days", salesRange);
   if (salesSearch) p.set("q", salesSearch);
   if (salesFrom) p.set("from", salesFrom);
   if (salesTo) p.set("to", salesTo);
@@ -5285,7 +5469,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=243" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=245" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5693,7 +5877,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=243", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=245", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");

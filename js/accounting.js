@@ -31,6 +31,10 @@
     entries: [],
     invalidCurrencyOrders: [],
     expenses: [],
+    // Sourcing / pre-order batches ("Cotonou Batch 1") and which cards are
+    // expanded; totals are recomputed from these plus the staged orders.
+    sourcing: [],
+    sourcingOpen: new Set(),
     settings: { startingBalanceNgn: 0, startingBalanceCfa: 0,
                 referenceSpreadsheetId: "1qT_YYqPt4pfTL7URxbePZnmFLLVljaRbBhh0qt_5AzE" },
     balances: { NGN: null, CFA: null },
@@ -560,6 +564,323 @@
       </section>`;
   }
 
+  /* ----------------------------------------- sourcing / pre-order batches */
+  /* Owner request 2026-11-16: the desk is organised around the buying trips
+   * themselves. A sourcing batch is a mutable worksheet — "Cotonou Batch 1",
+   * "Nov Pre-Orders" — holding the itemised goods bought, the sourcing
+   * expenses and the transport / waybill fees, plus the confirmed orders those
+   * goods were sold on. Total Spent vs Total Revenue vs Net Profit is
+   * recalculated on every edit. These are separate from the immutable batches
+   * that have already been pushed to Google Sheets (Sales page history). */
+
+  function sourcingBatches() {
+    return Array.isArray(state.sourcing) ? state.sourcing : [];
+  }
+
+  function entryLookup() {
+    const map = new Map();
+    (state.entries || []).forEach((entry) => map.set(String(entry.id), entry));
+    return map;
+  }
+
+  /** The order figures a batch's revenue is built from.
+   *
+   *  The server sends one row per assigned order (`batch.orders`) — archived
+   *  orders included, because a pushed order still sold the trip's goods. The
+   *  staged entries are only a fallback for a just-created batch. */
+  function sourcingOrderRows(batch) {
+    if (Array.isArray(batch.orders)) {
+      return batch.orders.map((row) => ({
+        currency: row.currency || batch.currency,
+        sale: Number(row.saleAmount || 0),
+        discount: Number(row.discount || 0),
+        supplier: Number(row.supplierCostInCurrency || 0),
+        override: Boolean(row.profitOverrideActive),
+        archived: Boolean(row.archived),
+        staged: entryLookup().has(String(row.id)),
+      }));
+    }
+    const lookup = entryLookup();
+    return (batch.orderIds || []).map((rawId) => {
+      const entry = lookup.get(String(rawId));
+      if (!entry) return null;
+      const figures = entryFigures(entry);
+      return {
+        currency: entry.currency,
+        sale: figures.sale,
+        discount: figures.discount,
+        supplier: figures.supplier,
+        override: figures.profitOverrideActive,
+        archived: false,
+        staged: true,
+      };
+    }).filter(Boolean);
+  }
+
+  /** Total Spent vs Total Revenue vs Net Profit for one sourcing batch. */
+  function sourcingTotals(batch) {
+    const currency = batch.currency || state.currency;
+    const costs = Array.isArray(batch.costs) ? batch.costs : [];
+    const sumKind = (kind) => costs.filter((row) => row.kind === kind)
+      .reduce((total, row) => total + Number(row.amount || 0), 0);
+    const totalSpent = costs.reduce((total, row) => total + Number(row.amount || 0), 0);
+    let revenue = 0;
+    let supplier = 0;
+    let orderCount = 0;
+    let missingCostOrders = 0;
+    let lockedOrders = 0;
+    sourcingOrderRows(batch).forEach((row) => {
+      if (!row || row.currency !== currency) return;
+      orderCount += 1;
+      revenue += row.sale - row.discount;
+      supplier += row.supplier;
+      if (row.archived && !row.staged) lockedOrders += 1;
+      if (!row.override && !row.supplier) missingCostOrders += 1;
+    });
+    return {
+      currency, totalSpent, revenue, supplier, orderCount, missingCostOrders,
+      lockedOrders,
+      goodsSpent: sumKind("goods"),
+      sourcingSpent: sumKind("sourcing"),
+      transportSpent: sumKind("transport"),
+      netProfit: revenue - totalSpent,
+    };
+  }
+
+  function sourcingCandidateOrders(batch) {
+    return (state.entries || [])
+      .filter((entry) => entry.currency === (batch.currency || state.currency))
+      .slice(0, 400);
+  }
+
+  function sourcingOrderCard(entry) {
+    const id = String(entry.id);
+    const lines = Array.isArray(entry.lineItems) && entry.lineItems.length
+      ? entry.lineItems
+      : [{ lineId: "line-01", name: entry.itemsSummary || "Order item",
+        qty: entry.itemQuantity || 1, supplierCostNgn: entry.supplierCostNgn || 0 }];
+    const figures = entryFigures(entry);
+    const hasCost = lines.some((line) => Number(line.supplierCostNgn || 0) > 0)
+      || Number(entry.supplierCostNgn || 0) > 0;
+    return `
+      <article class="aa-sourcing-order" data-sourcing-assigned="${html(id)}">
+        <header>
+          <span><strong>${html(id)}</strong> · ${html(entry.customer || "Customer")}</span>
+          <small>${html(String(entry.date || "").slice(0, 10))} · sale ${html(money(figures.sale, entry.currency))} · net ${html(money(figures.netProfit, entry.currency))}</small>
+        </header>
+        <div class="aa-sourcing-lines">
+          ${lines.map((line, index) => `
+            <label>
+              <span>${html(Number(line.qty || 1))}× ${html(line.name || "Item")}</span>
+              <input type="number" min="0" step="1" inputmode="numeric"
+                     value="${Number(line.supplierCostNgn || 0)}"
+                     data-sourcing-line="${html(id)}" data-line-index="${index}"
+                     aria-label="Supplier cost in Naira for ${html(line.name || "item")}" />
+              <small>₦ line total</small>
+            </label>`).join("")}
+          <label>
+            <span>Transport</span>
+            <input type="number" min="0" step="1" inputmode="numeric"
+                   value="${Number(entry.deliveryExpenseNgn || 0)}"
+                   data-sourcing-delivery="${html(id)}"
+                   aria-label="Transport cost in Naira for order ${html(id)}" />
+            <small>₦ delivery expense</small>
+          </label>
+        </div>
+        <div class="aa-sourcing-order-actions">
+          <button type="button" class="aa-button aa-button-line" data-sourcing-save-order="${html(id)}">Save item costs</button>
+          <small class="aa-sourcing-cost-note${hasCost ? "" : " is-warning"}">${hasCost
+            ? `supplier cost ${html(money(figures.supplier, entry.currency))}`
+            : "no cost price yet"}</small>
+        </div>
+      </article>`;
+  }
+
+  function sourcingBatchCard(batch) {
+    const open = state.sourcingOpen.has(String(batch.id));
+    const totals = sourcingTotals(batch);
+    const assigned = (batch.orderIds || [])
+      .map((rawId) => entryLookup().get(String(rawId)))
+      .filter(Boolean);
+    const candidates = sourcingCandidateOrders(batch);
+    const selected = new Set((batch.orderIds || []).map(String));
+    const costs = Array.isArray(batch.costs) ? batch.costs : [];
+    return `
+      <article class="aa-sourcing-batch${open ? " is-open" : ""}" data-sourcing-batch="${html(batch.id)}">
+        <header class="aa-sourcing-head">
+          <div class="aa-sourcing-title">
+            <span class="aa-eyebrow">SOURCING / PRE-ORDER BATCH · ${html(batch.currency)}</span>
+            <h3>${html(batch.name || batch.id)}</h3>
+            <small>${totals.orderCount} order${totals.orderCount === 1 ? "" : "s"} · ${costs.length} cost line${costs.length === 1 ? "" : "s"}${batch.createdAt ? ` · started ${html(String(batch.createdAt).slice(0, 10))}` : ""}</small>
+          </div>
+          <div class="aa-sourcing-totals">
+            <div><span>Total spent</span><b>${html(money(totals.totalSpent, totals.currency))}</b></div>
+            <div><span>Total revenue</span><b>${html(money(totals.revenue, totals.currency))}</b></div>
+            <div class="${totals.netProfit < 0 ? "is-negative" : "is-profit"}"><span>Net profit</span><b>${html(money(totals.netProfit, totals.currency))}</b></div>
+          </div>
+          <div class="aa-sourcing-head-actions">
+            <button type="button" class="aa-button" data-sourcing-toggle="${html(batch.id)}" aria-expanded="${open}">${open ? "Close" : "Open batch"}</button>
+            <button type="button" class="aa-link-button aa-danger" data-sourcing-delete="${html(batch.id)}" title="Delete this batch">Delete</button>
+          </div>
+        </header>
+        ${open ? `
+        <div class="aa-sourcing-body">
+          <form class="aa-sourcing-name-form" data-sourcing-name-form="${html(batch.id)}">
+            <label>Batch name
+              <input name="name" maxlength="100" value="${html(batch.name || "")}" required />
+            </label>
+            <button type="submit" class="aa-button aa-button-line">Rename</button>
+          </form>
+
+          <section class="aa-sourcing-picker-wrap" aria-label="Orders in this batch">
+            <h4>Confirmed orders in this batch</h4>
+            ${totals.lockedOrders ? `<p class="aa-sheet-hint">${totals.lockedOrders} order${totals.lockedOrders === 1 ? "" : "s"} already pushed to Google Sheets still count${totals.lockedOrders === 1 ? "s" : ""} toward this batch's revenue.</p>` : ""}
+            <details class="aa-sourcing-picker">
+              <summary>Pick confirmed orders · ${selected.size} selected of ${candidates.length} available</summary>
+              <div class="aa-sourcing-checklist">
+                ${candidates.length ? candidates.map((entry) => `
+                  <label class="aa-sourcing-check">
+                    <input type="checkbox" data-sourcing-order="${html(entry.id)}" data-batch="${html(batch.id)}"${selected.has(String(entry.id)) ? " checked" : ""} />
+                    <span><strong>${html(entry.id)}</strong> · ${html(entry.customer || "Customer")}
+                      <small>${html(String(entry.date || "").slice(0, 10))} · ${html(entry.itemsSummary || "")} · ${html(money(entry.saleAmount, entry.currency))}</small>
+                    </span>
+                  </label>`).join("")
+                  : `<p class="aa-stage-empty">No confirmed ${html(batch.currency)} orders are waiting on the desk.</p>`}
+              </div>
+            </details>
+            ${assigned.length ? `
+            <div class="aa-sourcing-assigned">
+              <p class="aa-sheet-hint">Type the supplier cost for each item and the delivery expense — it saves straight onto the order, so both this batch and the Sales page use the same figure.</p>
+              ${assigned.map(sourcingOrderCard).join("")}
+            </div>` : `<p class="aa-stage-empty">Tick confirmed orders above to bring their items and supplier costs into this batch.</p>`}
+            ${totals.missingCostOrders ? `<p class="aa-error aa-sourcing-warning" role="status">${totals.missingCostOrders} order${totals.missingCostOrders === 1 ? " has" : "s have"} no supplier cost yet — add their item costs below.</p>` : ""}
+          </section>
+
+          <section class="aa-sourcing-costs" aria-label="Goods and expenses logged for this batch">
+            <h4>Goods bought, sourcing expenses &amp; transport</h4>
+            <form class="aa-sourcing-cost-form" data-sourcing-cost-form="${html(batch.id)}">
+              <label>Type
+                <select name="kind">
+                  <option value="goods">Goods bought</option>
+                  <option value="sourcing">Sourcing expense</option>
+                  <option value="transport">Transport / waybill</option>
+                </select>
+              </label>
+              <label class="aa-sourcing-cost-label">What was it for
+                <input name="label" maxlength="160" placeholder="e.g. 12 Ankara wrappers" />
+              </label>
+              <label>Qty
+                <input name="qty" type="number" min="1" step="1" value="1" />
+              </label>
+              <label>Amount (${html(batch.currency)})
+                <input name="amount" type="number" min="0" step="1" inputmode="numeric" required placeholder="0" />
+              </label>
+              <button type="submit" class="aa-button aa-button-primary">+ Add cost</button>
+            </form>
+            ${costs.length ? `
+            <div class="aa-table-wrap">
+              <table class="aa-stage-table aa-sourcing-cost-table">
+                <thead><tr><th>Type</th><th>What it was for</th><th>Qty</th><th>Amount</th><th></th></tr></thead>
+                <tbody>${costs.map((row) => `
+                  <tr>
+                    <td><span class="aa-expense-kind is-${html(row.kind)}">${html(sourcingKindLabel(row.kind))}</span></td>
+                    <td>${html(row.label || "—")}</td>
+                    <td>${html(Number(row.qty || 1))}</td>
+                    <td><strong>${html(money(row.amount, batch.currency))}</strong></td>
+                    <td><button type="button" class="aa-link-button aa-danger" data-sourcing-cost-del="${html(row.id)}" data-batch="${html(batch.id)}" title="Delete this cost line">✕</button></td>
+                  </tr>`).join("")}
+                </tbody>
+              </table>
+            </div>` : `<p class="aa-stage-empty">Nothing logged yet. Add the goods, the sourcing expenses and the waybill above.</p>`}
+            <dl class="aa-sourcing-cost-summary">
+              <div><dt>Goods</dt><dd>${html(money(totals.goodsSpent, batch.currency))}</dd></div>
+              <div><dt>Sourcing expenses</dt><dd>${html(money(totals.sourcingSpent, batch.currency))}</dd></div>
+              <div><dt>Transport / waybill</dt><dd>${html(money(totals.transportSpent, batch.currency))}</dd></div>
+              <div class="is-total"><dt>Total spent</dt><dd>${html(money(totals.totalSpent, batch.currency))}</dd></div>
+            </dl>
+          </section>
+        </div>` : ""}
+      </article>`;
+  }
+
+  function sourcingSection() {
+    const batches = sourcingBatches();
+    return `
+      <section class="aa-sourcing" aria-label="Sourcing and pre-order batches">
+        <header class="aa-stage-head">
+          <div>
+            <span class="aa-eyebrow">SOURCING / PRE-ORDER BATCHES</span>
+            <h2>Buying trips</h2>
+            <p>Organise each sourcing trip — “Cotonou Batch 1”, “Nov Pre-Orders” — around what you actually spent. Log the goods, sourcing expenses and waybill fees, tick the confirmed orders that trip sold, and type any item's supplier cost right inside the batch. Total Spent, Total Revenue and Net Profit follow automatically. Pushed Google Sheets history stays untouched on the <a href="/admin.html?tab=sales">Sales page</a>.</p>
+          </div>
+        </header>
+        <form class="aa-sourcing-create" data-sourcing-create>
+          <label>Batch name
+            <input name="name" maxlength="100" required placeholder="e.g. Cotonou Batch 1" />
+          </label>
+          <label>Ledger
+            <select name="currency">
+              <option value="NGN"${state.currency === "NGN" ? " selected" : ""}>₦ NGN</option>
+              <option value="CFA"${state.currency === "CFA" ? " selected" : ""}>FCFA</option>
+            </select>
+          </label>
+          <button type="submit" class="aa-button aa-button-primary">+ New sourcing batch</button>
+        </form>
+        ${batches.length
+          ? batches.map(sourcingBatchCard).join("")
+          : `<p class="aa-stage-empty">No sourcing batches yet. Name your first trip above — for example “Cotonou Batch 1” — then log its goods and tick the orders it sold.</p>`}
+      </section>`;
+  }
+
+  function sourcingKindLabel(kind) {
+    return { goods: "Goods bought", sourcing: "Sourcing expense", transport: "Transport / waybill" }[kind] || "Cost";
+  }
+
+  async function sourcingMutate(path, options, message) {
+    try {
+      const data = await request(path, options);
+      if (Array.isArray(data.sourcingBatches)) {
+        const ids = new Set(data.sourcingBatches.map((batch) => String(batch.id)));
+        [...state.sourcingOpen].forEach((id) => { if (!ids.has(id)) state.sourcingOpen.delete(id); });
+      }
+      toast(message || "Sourcing batch saved.");
+      // Reload the desk: the server recomputes each batch's totals (and knows
+      // about orders that have already been pushed off the queue), so the
+      // figures on screen are always the authoritative ones.
+      await loadAll();
+      return data;
+    } catch (error) {
+      toast(error.message || "Could not save that sourcing change.", "error");
+      return null;
+    }
+  }
+
+  async function saveSourcingOrderCosts(orderId) {
+    const entry = state.entries.find((row) => String(row.id) === String(orderId));
+    if (!entry) return;
+    const lines = [];
+    root.querySelectorAll("[data-sourcing-line]").forEach((input) => {
+      if (String(input.dataset.sourcingLine) !== String(orderId)) return;
+      const index = Number(input.dataset.lineIndex || 0);
+      const base = (entry.lineItems || [])[index] || {};
+      lines.push({
+        lineId: base.lineId || `line-${String(index + 1).padStart(2, "0")}`,
+        supplierCostNgn: Math.max(0, Math.round(Number(input.value || 0))),
+      });
+    });
+    const patch = {};
+    if (lines.length) patch.lineItems = lines;
+    const delivery = [...root.querySelectorAll("[data-sourcing-delivery]")]
+      .find((input) => String(input.dataset.sourcingDelivery) === String(orderId));
+    if (delivery) patch.deliveryExpense = Math.max(0, Math.round(Number(delivery.value || 0)));
+    if (!Object.keys(patch).length) return;
+    const saved = await saveEntryFields(orderId, patch);
+    if (saved) {
+      toast("Item costs saved to the order.");
+      await loadAll();
+    }
+  }
+
   /* ------------------------------------------------------ expense logger */
 
   function expenseSection() {
@@ -929,6 +1250,7 @@
           ${readError}
           ${currencyWarning}
 
+          ${sourcingSection()}
           ${stageSection()}
           ${expenseSection()}
           ${settingsSection()}
@@ -978,6 +1300,7 @@
       state.invalidCurrencyOrders = Array.isArray(data.invalidCurrencyOrders)
         ? data.invalidCurrencyOrders : [];
       state.expenses = Array.isArray(data.expenses) ? data.expenses : [];
+      state.sourcing = Array.isArray(data.sourcingBatches) ? data.sourcingBatches : [];
       state.settings = data.settings || state.settings;
       state.balances = data.balances || { NGN: null, CFA: null };
       state.google = data.google || state.google;
@@ -1374,6 +1697,33 @@
   });
 
   root.addEventListener("click", (event) => {
+    const sourcingToggle = event.target.closest("[data-sourcing-toggle]");
+    if (sourcingToggle) {
+      const id = String(sourcingToggle.dataset.sourcingToggle);
+      if (state.sourcingOpen.has(id)) state.sourcingOpen.delete(id);
+      else state.sourcingOpen.add(id);
+      render();
+      return;
+    }
+    const sourcingDelete = event.target.closest("[data-sourcing-delete]");
+    if (sourcingDelete) {
+      const id = String(sourcingDelete.dataset.sourcingDelete);
+      const batch = sourcingBatches().find((row) => String(row.id) === id);
+      if (!window.confirm(`Delete the sourcing batch “${(batch && batch.name) || id}”? Its orders stay on the desk; only the batch and its logged costs are removed.`)) return;
+      sourcingMutate(`/api/admin/accounting/sourcing/${encodeURIComponent(id)}`,
+        { method: "DELETE" }, "Sourcing batch deleted.");
+      return;
+    }
+    const sourcingCostDel = event.target.closest("[data-sourcing-cost-del]");
+    if (sourcingCostDel) {
+      const batchId = String(sourcingCostDel.dataset.batch);
+      const costId = String(sourcingCostDel.dataset.sourcingCostDel);
+      sourcingMutate(`/api/admin/accounting/sourcing/${encodeURIComponent(batchId)}/costs/${encodeURIComponent(costId)}`,
+        { method: "DELETE" }, "Cost line deleted.");
+      return;
+    }
+    const sourcingSaveOrder = event.target.closest("[data-sourcing-save-order]");
+    if (sourcingSaveOrder) { saveSourcingOrderCosts(sourcingSaveOrder.dataset.sourcingSaveOrder); return; }
     const currency = event.target.closest("[data-currency]");
     if (currency) {
       const next = currency.dataset.currency;
@@ -1546,6 +1896,79 @@
           input.dispatchEvent(new Event("change", { bubbles: true }));
         }
       }
+    }
+  });
+
+  // The multi-select checklist: ticking an order assigns it to the batch.
+  root.addEventListener("change", (event) => {
+    const pick = event.target.closest("[data-sourcing-order]");
+    if (pick) {
+      const batchId = String(pick.dataset.batch);
+      const orderIds = [...root.querySelectorAll("[data-sourcing-order]")]
+        .filter((input) => input.checked && String(input.dataset.batch) === batchId)
+        .map((input) => String(input.dataset.sourcingOrder));
+      sourcingMutate(`/api/admin/accounting/sourcing/${encodeURIComponent(batchId)}`,
+        { method: "PATCH", body: JSON.stringify({ orderIds }) },
+        `${orderIds.length} order${orderIds.length === 1 ? "" : "s"} in this batch.`);
+      return;
+    }
+  });
+
+  // Sourcing batch forms: create, rename, and log a cost line.
+  root.addEventListener("submit", (event) => {
+    const create = event.target.closest("[data-sourcing-create]");
+    if (create) {
+      event.preventDefault();
+      const values = new FormData(create);
+      const name = String(values.get("name") || "").trim();
+      if (!name) return;
+      const button = create.querySelector("button[type=submit]");
+      if (button) button.disabled = true;
+      sourcingMutate("/api/admin/accounting/sourcing", {
+        method: "POST",
+        body: JSON.stringify({ name, currency: String(values.get("currency") || state.currency) }),
+      }, `Sourcing batch “${name}” created.`).then((data) => {
+        const created = data && Array.isArray(data.sourcingBatches)
+          ? data.sourcingBatches[data.sourcingBatches.length - 1] : null;
+        if (created && created.id) {
+          state.sourcingOpen.add(String(created.id));
+          render();
+        }
+      }).finally(() => {
+        const again = root.querySelector("[data-sourcing-create] button[type=submit]");
+        if (again) again.disabled = false;
+      });
+      return;
+    }
+    const rename = event.target.closest("[data-sourcing-name-form]");
+    if (rename) {
+      event.preventDefault();
+      const values = new FormData(rename);
+      const name = String(values.get("name") || "").trim();
+      if (!name) return;
+      sourcingMutate(`/api/admin/accounting/sourcing/${encodeURIComponent(rename.dataset.sourcingNameForm)}`,
+        { method: "PATCH", body: JSON.stringify({ name }) }, "Batch renamed.");
+      return;
+    }
+    const costForm = event.target.closest("[data-sourcing-cost-form]");
+    if (costForm) {
+      event.preventDefault();
+      const values = new FormData(costForm);
+      const amount = Math.round(Number(values.get("amount") || 0));
+      if (!Number.isFinite(amount) || amount < 0) {
+        toast("Enter a whole amount for this cost.", "error");
+        return;
+      }
+      sourcingMutate(`/api/admin/accounting/sourcing/${encodeURIComponent(costForm.dataset.sourcingCostForm)}/costs`, {
+        method: "POST",
+        body: JSON.stringify({
+          kind: String(values.get("kind") || "goods"),
+          label: String(values.get("label") || ""),
+          qty: Number(values.get("qty") || 1),
+          amount,
+        }),
+      }, "Cost added to the batch.");
+      return;
     }
   });
 
