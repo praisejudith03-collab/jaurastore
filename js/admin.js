@@ -235,7 +235,7 @@ function paintLogin(msg, needsEmail = loginNeedsEmail) {
   $("#admin-root").innerHTML = `
     <div class="adx-login">
       <div class="adx-login-card">
-        <img class="adx-login-logo" src="images/brand/logo.jpg?v=245" alt="Jaura Store" />
+        <img class="adx-login-logo" src="images/brand/logo.jpg?v=247" alt="Jaura Store" />
         <h1 class="serif-title">Jaura Store</h1>
         <p class="adx-login-sub" data-no-i18n>Sign in to manage your store</p>
         ${msg ? `<p class="admin-err">${JA.escape(msg)}</p>` : ""}
@@ -1629,6 +1629,18 @@ let dashCat = "";
 // save from that tab comes back to the same tab.
 let prodView = "all";
 const PRODUCT_VIEWS = ["all", "live", "hidden"];
+// "all" | "out". The out-of-stock quick filter (owner request 2026-11-23)
+// collects every piece that cannot be sold right now - single items at zero
+// and products whose EVERY variant has run out - so a restock run never means
+// scrolling the whole catalogue. It is a FILTER, not a fourth tab: it composes
+// with the visibility tabs, the category box and the search field, so
+// "hidden and sold out" or "bags and sold out" are each one tap away.
+let prodStock = "all";
+const PRODUCT_STOCK_FILTERS = ["all", "out"];
+// "newest" | "oldest". Newest first is the default so a freshly added piece
+// appears at the top of the list instead of on page six.
+let prodSort = "newest";
+const PRODUCT_SORTS = ["newest", "oldest"];
 
 /* ================================================== isolated return navigation
  *
@@ -1656,10 +1668,14 @@ function productsReturnUrl() {
   // the admin is actually looking at.
   const catEl = document.getElementById("prod-cat");
   const searchEl = document.getElementById("prod-search");
+  const sortEl = document.getElementById("prod-sort");
   const category = dashCat || String((catEl && catEl.value) || prodCatSel || "");
   const query = String((searchEl && searchEl.value) || prodSearchQ || "").trim();
+  const sort = String((sortEl && sortEl.value) || prodSort || "newest").toLowerCase();
   if (category) params.set("category", category);
   if (prodView && prodView !== "all") params.set("view", prodView);
+  if (prodStock && prodStock !== "all") params.set("stock", prodStock);
+  if (sort && sort !== "newest") params.set("sort", sort);
   if (prodPage > 1) params.set("page", String(prodPage));
   if (query) params.set("q", query);
   const qs = params.toString();
@@ -1688,10 +1704,15 @@ function rememberProductsReturn() {
   // paintDesk() removes them to open the editor.
   if (!dashCat) prodCatSel = category;
   prodSearchQ = query;
+  const sortEl = document.getElementById("prod-sort");
+  const sort = String((sortEl && sortEl.value) || prodSort || "newest").toLowerCase();
+  if (PRODUCT_SORTS.indexOf(sort) >= 0) prodSort = sort;
   const box = {
     url: productsReturnUrl(),
     category,
     view: prodView || "all",
+    stock: prodStock || "all",
+    sort: prodSort,
     q: query,
     page: Math.max(1, prodPage || 1),
     scrollTop: Math.max(0, window.scrollY || 0),
@@ -1720,8 +1741,16 @@ function productsStateFromUrl(raw) {
   const q = (params.get("q") || params.get("search") || "").trim();
   const id = (params.get("id") || params.get("product") || params.get("edit") || "").trim();
   const view = (params.get("view") || "").trim().toLowerCase();
+  const stock = (params.get("stock") || "").trim().toLowerCase();
+  const sort = (params.get("sort") || "").trim().toLowerCase();
+  // The stock/sort vocabularies are read defensively: functions extracted on
+  // their own (the editor/list test harnesses) may not carry these globals.
+  const stockFilters = typeof PRODUCT_STOCK_FILTERS === "undefined" ? ["all", "out"] : PRODUCT_STOCK_FILTERS;
+  const sorts = typeof PRODUCT_SORTS === "undefined" ? ["newest", "oldest"] : PRODUCT_SORTS;
   if (cat) state.category = cat;
   if (PRODUCT_VIEWS.indexOf(view) > 0) state.view = view;
+  if (stockFilters.indexOf(stock) > 0) state.stock = stock;
+  if (sorts.indexOf(sort) >= 0) state.sort = sort;
   if (Number.isFinite(page) && page >= 1) state.page = page;
   if (q) state.q = q;
   if (id) state.id = id;
@@ -1744,6 +1773,12 @@ function applyProductsState(state) {
     prodCatSel = "";
   }
   prodView = PRODUCT_VIEWS.indexOf(String(s.view || "")) > 0 ? String(s.view) : "all";
+  // A link without a stock/sort choice is the plain "everything, newest
+  // first" desk - never a filter inherited from whatever was on screen before.
+  const stockFilters = typeof PRODUCT_STOCK_FILTERS === "undefined" ? ["all", "out"] : PRODUCT_STOCK_FILTERS;
+  const sorts = typeof PRODUCT_SORTS === "undefined" ? ["newest", "oldest"] : PRODUCT_SORTS;
+  prodStock = stockFilters.indexOf(String(s.stock || "")) > 0 ? String(s.stock) : "all";
+  prodSort = sorts.indexOf(String(s.sort || "")) >= 0 ? String(s.sort) : "newest";
   if (typeof s.q === "string") prodSearchQ = s.q;
   if (Number.isFinite(s.page) && s.page >= 1) prodPage = s.page; else prodPage = 1;
 }
@@ -1756,6 +1791,7 @@ function restoreProductsReturn(scrollToSaved) {
   if (box) applyProductsState(productsStateFromUrl(box.url));
   else {
     dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1; prodView = "all";
+    prodStock = "all"; prodSort = "newest";
   }
   paintDesk("products");
   // paintDesk() rebuilds the filters from HTML but does not set their current
@@ -1767,6 +1803,8 @@ function restoreProductsReturn(scrollToSaved) {
   if (sel) sel.value = dashCat || prodCatSel || "";
   const qEl = document.getElementById("prod-search");
   if (qEl) qEl.value = prodSearchQ || "";
+  const sortEl = document.getElementById("prod-sort");
+  if (sortEl) sortEl.value = prodSort || "newest";
   // Clean the address bar: refreshing the restored list must not replay an
   // editor return_url forever.
   try { history.replaceState(null, "", "admin.html"); } catch (e) {}
@@ -1781,6 +1819,80 @@ function restoreProductsReturn(scrollToSaved) {
   return box;
 }
 
+/* ----------------------------------------------------------- stock state
+ *
+ * "Out of stock" is not just `stock === 0`. A product that sells options is
+ * sold out once EVERY option has run to zero, even while its cached total or
+ * an old product-level count still looks sellable, and the storefront's Buy
+ * button is already disabled for it. The desk has to read inventory the same
+ * way, or the owner's restock list would disagree with what customers see.
+ */
+function productStockUnits(p) {
+  if (!p) return [0];
+  const map = (p.optionStock && typeof p.optionStock === "object" && !Array.isArray(p.optionStock))
+    ? p.optionStock : null;
+  const hasVariants = (Array.isArray(p.options) && p.options.length > 0)
+    || (Array.isArray(p.colors) && p.colors.length > 0);
+  // The variant map is the truth only for a product that actually sells
+  // options: a leftover map on a simple item must not outvote its quantity.
+  if (map && hasVariants) {
+    const keys = Object.keys(map);
+    if (keys.length) {
+      return keys.map((key) => Math.max(0, Math.round(Number(map[key]) || 0)));
+    }
+  }
+  return [Math.max(0, Math.round(Number(p.stock) || 0))];
+}
+function productIsOutOfStock(p) {
+  if (!p) return false;
+  const units = productStockUnits(p);
+  return units.length > 0 && units.every((quantity) => quantity <= 0);
+}
+function totalOutOfStock(products) {
+  return (products || []).filter(productIsOutOfStock).length;
+}
+
+/* -------------------------------------------------------- newest / oldest
+ *
+ * Products carry `created_at` when the database has it; the shipped catalogue
+ * and older rows predate that column, so the last update is the best stamp
+ * they have, and a row with neither falls back to the order its id encodes
+ * (the shipped legacy wix-NNN sequence, and jau-<base36> for pieces added in
+ * the desk, which IS a timestamp). Never returns NaN, so a malformed date can
+ * never scramble the whole list.
+ */
+function productAddedTime(p) {
+  if (!p) return 0;
+  const stamps = [p.created_at, p.createdAt, p.added_at, p.addedAt,
+                  p.updated_at, p.updatedAt];
+  for (let i = 0; i < stamps.length; i += 1) {
+    const raw = stamps[i];
+    if (raw == null || String(raw).trim() === "") continue;
+    const parsed = Date.parse(String(raw));
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const id = String(p.id || "");
+  const legacy = /^wix-(\d+)$/i.exec(id);
+  if (legacy) return Number(legacy[1]) || 0;
+  const added = /^jau-([0-9a-z]+)$/i.exec(id);
+  if (added) {
+    const stamp = parseInt(added[1], 36);
+    if (Number.isFinite(stamp) && stamp > 1e12) return stamp;
+  }
+  return 0;
+}
+function sortProductsByDate(products, sort) {
+  const newestFirst = String(sort || "newest").toLowerCase() !== "oldest";
+  // Array.prototype.sort is stable, so equal stamps keep the order the
+  // catalogue arrived in rather than shuffling on every repaint.
+  return products.slice().sort((a, b) => {
+    const left = productAddedTime(a);
+    const right = productAddedTime(b);
+    if (left === right) return 0;
+    return (left < right ? -1 : 1) * (newestFirst ? -1 : 1);
+  });
+}
+
 function getFilteredProducts() {
   const all = JA.products();
   const qEl = document.getElementById("prod-search");
@@ -1788,12 +1900,19 @@ function getFilteredProducts() {
   const q = String(prodSearchQ || qEl?.value || "").toLowerCase().trim();
   const catSel = String(prodCatSel || cEl?.value || "");
   const catFilter = dashCat || catSel;
-  return all.filter((p) => {
+  // Read the module state defensively: these helpers are also loaded on their
+  // own by the list/editor test harnesses.
+  const stockFilter = typeof prodStock === "string" && prodStock ? prodStock : "all";
+  const sort = typeof prodSort === "string" && prodSort ? prodSort : "newest";
+  const filtered = all.filter((p) => {
     // The Hidden / Drafts tab is its own listing. "Live" is the complement,
     // so the two tabs always add up to the full catalogue even if an older
     // row has no explicit `online` flag (absence means published).
     if (prodView === "hidden" && p.online !== false) return false;
     if (prodView === "live" && p.online === false) return false;
+    // The out-of-stock quick filter composes with everything else: the tab,
+    // the category and the search box all keep narrowing the same list.
+    if (stockFilter === "out" && !productIsOutOfStock(p)) return false;
     if (catFilter && p.category !== catFilter) return false;
     if (q) {
       const blob = (p.name + " " + (p.nameFr || "") + " " + (p.sku || "") + " " + p.category).toLowerCase();
@@ -1801,6 +1920,7 @@ function getFilteredProducts() {
     }
     return true;
   });
+  return sortProductsByDate(filtered, sort);
 }
 function renderProdGrid() {
   const all = JA.products();
@@ -1825,7 +1945,17 @@ function renderProdGrid() {
     const cfaNowN = ngnNow > 0 ? (JA.toCfa ? JA.toCfa(ngnNow) : toCfaLive(ngnNow)) : (Number(p.priceCfa) || 0);
     const cfaNow = JA.money(cfaNowN, "CFA");
     const stockN = Number(p.stock) || 0;
-    const pill = stockN <= 0 ? `<span class="adx-pill out">Out of stock</span>` : stockN<= 5 ? `<span class="adx-pill low">${stockN} left</span>` : `<span class="adx-pill in">${stockN} in stock</span>`;
+    // A variant product can read "0 in stock" from its own total even while
+    // one option still sells; the pill follows the same rule as the filter so
+    // the card and the Out of Stock list can never contradict each other. The
+    // "{n} in stock" label keeps speaking about the whole piece.
+    const outOfStock = productIsOutOfStock(p);
+    const inStock = productStockUnits(p).reduce((n, quantity) => n + quantity, 0) || stockN;
+    const pill = outOfStock
+      ? `<span class="adx-pill out">Out of stock</span>`
+      : inStock <= 5
+        ? `<span class="adx-pill low">${inStock} left</span>`
+        : `<span class="adx-pill in">${inStock} in stock</span>`;
     const rowq = JA.escape((p.name + " " + (p.nameFr || "") + " " + (p.sku || "") + " " + p.category).toLowerCase());
     const productSelected = selectedProductIds.has(String(p.id)) ? " checked" : "";
     return `<article class="adx-card" data-row="${rowq}" data-cat="${JA.escape(p.category || "")}" data-edit="${JA.escape(p.id)}" role="button" tabindex="0" aria-label="Edit ${JA.escape(p.name)}">
@@ -1837,17 +1967,22 @@ function renderProdGrid() {
     </article>`;
   }).join("");
   const grid = document.getElementById("prod-grid");
-  const emptyCopy = prodView === "hidden"
-    ? "No hidden products — every piece in the catalogue is live."
-    : (prodView === "live"
-      ? "No live products in this view yet."
-      : "No products match that search.");
+  const emptyCopy = (typeof prodStock === "string" && prodStock === "out")
+    ? "No out-of-stock products here — every piece in this view has stock."
+    : (prodView === "hidden"
+      ? "No hidden products — every piece in the catalogue is live."
+      : (prodView === "live"
+        ? "No live products in this view yet."
+        : "No products match that search."));
   if (grid) grid.innerHTML = cards || `<p class="empty">${emptyCopy}</p>`;
   // The catalogue counters ALWAYS speak about the whole catalogue, never only
   // the filtered slice: a hidden product must never look missing. The tab
   // badges and the header line share the same numbers.
   const liveCount = all.filter((p) => p.online !== false).length;
   const hiddenCount = all.length - liveCount;
+  // The out-of-stock count is catalogue-wide, never page-wide: it is the
+  // owner's restock to-do list, and it has to be the same number on every tab.
+  const outCount = totalOutOfStock(all);
   const setText = (id, value) => {
     const el = document.getElementById(id);
     if (el) el.textContent = String(value);
@@ -1856,13 +1991,24 @@ function renderProdGrid() {
   setText("prod-count-all", all.length);
   setText("prod-count-live", liveCount);
   setText("prod-count-hidden", hiddenCount);
+  setText("prod-count-out", outCount);
   setText("prod-tab-all", all.length);
   setText("prod-tab-live", liveCount);
   setText("prod-tab-hidden", hiddenCount);
+  setText("prod-stock-out", outCount);
+  const stockFilter = typeof prodStock === "string" ? prodStock : "all";
   document.querySelectorAll("[data-prod-view]").forEach((b) => {
     const active = String(b.getAttribute("data-prod-view")) === prodView;
     b.classList.toggle("is-on", active);
     if (b.getAttribute("role") === "tab") b.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  // The Out of Stock quick filter is a toggle, not a tab: it lights up red
+  // while it is filtering and reads muted when the catalogue is fully stocked.
+  document.querySelectorAll("[data-prod-stock]").forEach((b) => {
+    const on = String(b.getAttribute("data-prod-stock") || "") === "out" && stockFilter === "out";
+    b.classList.toggle("is-on", on);
+    b.classList.toggle("is-clear", outCount === 0 && !on);
+    if (b.hasAttribute("aria-pressed")) b.setAttribute("aria-pressed", on ? "true" : "false");
   });
   const none = document.getElementById("prod-none");
   if (none) none.hidden = total > 0;
@@ -2011,6 +2157,26 @@ function bindProdGridEvents() {
       window.scrollTo({ top: 0, behavior: "smooth" });
     };
   });
+  // The Out of Stock quick filter. The chip toggles; the link in the counter
+  // line only ever turns the filter ON (it is the number the owner taps when a
+  // restock is due). Ticking products is cleared with the page, because a
+  // selection made on a filtered list must not survive into a list where those
+  // rows are no longer visible.
+  document.querySelectorAll("[data-prod-stock]").forEach((b) => {
+    b.onclick = (e) => {
+      e.preventDefault();
+      const wanted = String(b.getAttribute("data-prod-stock") || "all");
+      const toggles = b.getAttribute("data-toggle-stock") === "1";
+      const next = (toggles && wanted === prodStock) ? "all" : wanted;
+      const value = PRODUCT_STOCK_FILTERS.indexOf(next) >= 0 ? next : "all";
+      if (value === prodStock) return;
+      prodStock = value;
+      prodPage = 1;
+      selectedProductIds.clear();
+      paintDesk("products");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+  });
   document.querySelectorAll("#prod-grid [data-del]").forEach((b) => {
     b.onclick = async (e) => {
       e.stopPropagation();
@@ -2042,10 +2208,15 @@ function productsTable() {
   const backBtn = dashCat ? `<button type="button" class="btn btn-line" id="back-all-products">← All products</button>` : "";
   const exportBtn = `<a class="btn btn-line" href="api/admin/products.csv" download="jaura-products.csv">Export CSV</a>`;
   const trashBtn = `<button type="button" class="btn btn-line" id="open-trash" aria-controls="trash-drawer">🗑 Legacy Trash <span id="trash-count" class="adx-trash-count" hidden>0</span></button>`;
-  const filteredNote = activeCategory ? ` · <strong>${JA.escape(catName(activeCategory))}</strong>` : "";
-  const qVal = JA.escape(prodSearchQ);
   const liveCount = all.filter((p) => p.online !== false).length;
   const hiddenCount = all.length - liveCount;
+  // Catalogue-wide restock counter: every sold-out piece, hidden ones included,
+  // so the same number is stated on the chip, the counter line and every tab.
+  const outCount = totalOutOfStock(all);
+  const stockOn = String(prodStock || "all") === "out";
+  const filteredNote = (activeCategory ? ` · <strong>${JA.escape(catName(activeCategory))}</strong>` : "")
+    + (stockOn ? " · <strong>Out of stock</strong>" : "");
+  const qVal = JA.escape(prodSearchQ);
   const pendingSync = JA.syncPending ? JA.syncPending() : 0;
   const syncBanner = `<div class="admin-card" id="products-sync-banner" ${pendingSync ? "" : "hidden"} style="margin:10px 0;padding:12px 14px"><p class="admin-note" id="products-sync-note" style="margin:0 0 8px">${pendingSync} product change(s) saved on this device are waiting to sync to the live website.</p><button type="button" class="btn btn-line" id="sync-products-now">Sync to live store</button></div>`;
   const viewTab = (id, label, count) =>
@@ -2056,16 +2227,27 @@ function productsTable() {
       ${trashBtn}
       ${exportBtn}
       ${syncBanner}
-      <div class="adx-viewtabs" role="tablist" aria-label="Product visibility">
-        ${viewTab("all", "All", all.length)}${viewTab("live", "Live", liveCount)}${viewTab("hidden", "Hidden / Drafts", hiddenCount)}
+      <div class="adx-filterbar">
+        <div class="adx-viewtabs" role="tablist" aria-label="Product visibility">
+          ${viewTab("all", "All", all.length)}${viewTab("live", "Live", liveCount)}${viewTab("hidden", "Hidden / Drafts", hiddenCount)}
+        </div>
+        <!-- One-tap restock list. Stays visible (and countable) on every tab,
+             and composes with the search box, the category and the tab so
+             "sold out", "sold out in bags" and "sold out and hidden" are all
+             reachable without leaving this screen. -->
+        <button type="button" class="adx-oos-chip${stockOn ? " is-on" : ""}${outCount === 0 && !stockOn ? " is-clear" : ""}" data-prod-stock="out" data-toggle-stock="1" aria-pressed="${stockOn ? "true" : "false"}" aria-controls="prod-grid">Out of Stock <b id="prod-stock-out">${outCount}</b></button>
       </div>
       <div class="adx-filters">
         <input id="prod-search" type="search" placeholder="Search products…" autocomplete="off" value="${qVal}" />
         <select id="prod-cat" aria-label="Filter by category"><option value="">All categories</option>${catOpts}</select>
+        <select id="prod-sort" class="adx-sort" aria-label="Sort products by date added">
+          <option value="newest"${prodSort === "oldest" ? "" : " selected"}>Newest to Oldest</option>
+          <option value="oldest"${prodSort === "oldest" ? " selected" : ""}>Oldest to Newest</option>
+        </select>
         <label class="adx-select-all"><input type="checkbox" id="products-select-visible" /> Select visible</label>
       </div>
       <div class="adx-bulkbar" id="product-bulk" hidden><strong><span id="products-selected-count">0</span> selected</strong><button type="button" class="btn btn-line" data-product-bulk="select-visible">Select visible</button><button type="button" class="btn btn-line" data-product-bulk="show">Show selected</button><button type="button" class="btn btn-line" data-product-bulk="hide">Hide selected</button><button type="button" class="btn btn-line btn-danger" data-product-bulk="delete">Permanently delete selected</button><button type="button" class="au-link-btn" data-product-bulk="clear">Clear selection</button></div>
-      <p class="adx-count"><b><span id="prod-count-all">${all.length}</span> Products</b>: <span id="prod-count-live">${liveCount}</span> Active, <button type="button" class="au-cats-link" data-prod-view="hidden"><span id="prod-count-hidden">${hiddenCount}</span> Hidden</button> · <span id="prod-count">${all.length}</span> shown${filteredNote} · <button type="button" class="au-cats-link" data-tab="categories">Manage categories</button></p>
+      <p class="adx-count"><b><span id="prod-count-all">${all.length}</span> Products</b>: <span id="prod-count-live">${liveCount}</span> Active, <button type="button" class="au-cats-link" data-prod-view="hidden"><span id="prod-count-hidden">${hiddenCount}</span> Hidden</button>, <button type="button" class="au-cats-link adx-oos-link" data-prod-stock="out"><span id="prod-count-out">${outCount}</span> Out of stock</button> · <span id="prod-count">${all.length}</span> shown${filteredNote} · <button type="button" class="au-cats-link" data-tab="categories">Manage categories</button></p>
     </div>
     <div class="adx-trash-drawer" id="trash-drawer" hidden></div>
     <div class="adx-grid" id="prod-grid"></div>
@@ -2172,7 +2354,22 @@ async function renderTrashDrawer() {
 function applyProductFilter(e) {
   const qEl = document.getElementById("prod-search");
   const cEl = document.getElementById("prod-cat");
+  const sEl = document.getElementById("prod-sort");
   const categoryChanged = !!(e && e.target && e.target.id === "prod-cat");
+  const sortChanged = !!(e && e.target && e.target.id === "prod-sort");
+  // A sort change only reorders the rows already on the desk: the search box,
+  // the category, the visibility tab and the stock filter all stay exactly as
+  // the owner left them. Ticked products stay ticked - they are still visible,
+  // just in a different place - and the list returns to page one so the newest
+  // piece cannot sit on a page that the old order had put off screen.
+  if (sortChanged) {
+    const wanted = String((sEl && sEl.value) || "").toLowerCase();
+    const sorts = typeof PRODUCT_SORTS === "undefined" ? ["newest", "oldest"] : PRODUCT_SORTS;
+    prodSort = sorts.indexOf(wanted) >= 0 ? wanted : "newest";
+    prodPage = 1;
+    renderProdGrid(); bindProdGridEvents();
+    return;
+  }
   // A category opened from /admin/categories or a deep link pins dashCat.
   // The select is the new explicit choice when it changes, including the
   // empty "All categories" value; the old pin must not keep winning.
@@ -5469,7 +5666,7 @@ function paintDesk(tab = "analytics") {
   $("#admin-root").innerHTML = `
     <div class="adx">
       <aside class="adx-side">
-        <div class="adx-brand"><img src="images/brand/logo.jpg?v=245" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
+        <div class="adx-brand"><img src="images/brand/logo.jpg?v=247" alt="" /><div><strong>Jaura Store</strong><span>Store manager</span></div></div>
         <nav class="adx-nav">${navBtn("analytics")}${navBtn("products")}${navBtn("orders", pending || "")}${navBtn("sales")}${navBtn("marketing")}${navBtn("supplierAlerts")}${navBtn("categories")}${navBtn("delivery")}${navBtn("settings")}${navBtn("account")}<a class="adx-nav-btn" href="/admin/accounting">${ADX_ICONS.accounting}<span>Accounting</span></a></nav>
         <div class="adx-side-foot"><a class="adx-nav-btn" href="index.html"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M9 5H5v14h14v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>View store</span></a><button type="button" class="adx-nav-btn" id="logout"><svg viewBox="0 0 24 24"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Sign out</span></button></div>
       </aside>
@@ -5588,11 +5785,14 @@ function paintDesk(tab = "analytics") {
 
   $("#prod-search")?.addEventListener("input", applyProductFilter);
   $("#prod-cat")?.addEventListener("change", applyProductFilter);
+  // Newest / Oldest. A re-sort never repaints the whole desk: the filters, the
+  // tab and the ticked products all have to survive it.
+  $("#prod-sort")?.addEventListener("change", applyProductFilter);
   if (dashCat && tab === "products" && !editingId) {
     const sel = document.getElementById("prod-cat");
     if (sel) sel.value = dashCat;
   }
-  $("#back-all-products")?.addEventListener("click", () => { dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1; paintDesk("products"); });
+  $("#back-all-products")?.addEventListener("click", () => { dashCat = ""; prodCatSel = ""; prodSearchQ = ""; prodPage = 1; prodStock = "all"; paintDesk("products"); });
 
   $("#set-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -5877,7 +6077,7 @@ function bindCategories() {
     if (!name) { JA.toast("Type a category name."); return; }
     const id = slugify(name) || ("cat-" + Date.now().toString(36));
     if (collectCats().some((c) => c.id === id) || JA.categories().some((c) => c.id === id)) { JA.toast("That category already exists."); return; }
-    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=245", hidden: false, order: collectCats().length }]);
+    const next = collectCats().concat([{ id, name, nameFr, image: "images/brand/logo.jpg?v=247", hidden: false, order: collectCats().length }]);
     const res = await JA.saveCategories(next);
     if (!res || res.ok === false) { JA.toast((res && res.error) || "Could not add the category. No changes are live."); return; }
     JA.success("Category added — now you can add products in " + name + ". It shows on website instantly.");
@@ -7119,6 +7319,14 @@ function applyAdminDeepLink() {
     if (target && !target.includes("view=") && search.get("view")) {
       target += "&view=" + search.get("view");
     }
+    // ...and the two controls added 2026-11-23 (stock filter, date sort), so a
+    // send-to-myself link still opens the exact restock list it was copied from.
+    if (target && !target.includes("stock=") && search.get("stock")) {
+      target += "&stock=" + search.get("stock");
+    }
+    if (target && !target.includes("sort=") && search.get("sort")) {
+      target += "&sort=" + search.get("sort");
+    }
     // /admin/products?id=<ID> (the link the low-stock drawer uses) opens that
     // product's editor directly. It may arrive on its own or inside a
     // return_url, so both spellings are read.
@@ -7224,6 +7432,8 @@ async function bootAdmin() {
     if (desk === "products" && !editingId) {
       const sel = document.getElementById("prod-cat");
       if (sel && (dashCat || prodCatSel)) sel.value = dashCat || prodCatSel;
+      const sortSel = document.getElementById("prod-sort");
+      if (sortSel) sortSel.value = prodSort || "newest";
     }
     void autoSyncAdminPending(true);
   } else paintLogin();
