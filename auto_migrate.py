@@ -144,6 +144,11 @@ PRODUCT_COLUMNS = {
     "nameFr": "text",
     "descriptionFr": "text",
     "reviews": "jsonb",
+    # The Products desk's Newest / Oldest sort. Added WITHOUT a default so an
+    # existing table's rows stay NULL (the desk falls back to updated_at for
+    # them); the SET DEFAULT step in PRODUCT_SCHEMA_STATEMENT then stamps every
+    # row inserted from now on.
+    "created_at": "timestamptz",
 }
 
 PRODUCT_SCHEMA_STATEMENT = """do $$ begin
@@ -172,6 +177,11 @@ PRODUCT_SCHEMA_STATEMENT = """do $$ begin
   alter table public.products add column if not exists "nameFr" text;
   alter table public.products add column if not exists "descriptionFr" text;
   alter table public.products add column if not exists reviews jsonb;
+  -- created_at: the Products desk's Newest / Oldest sort key. Nullable on
+  -- purpose (older rows fall back to their last-save stamp), defaulted so
+  -- every piece added from now on carries one.
+  alter table public.products add column if not exists created_at timestamptz;
+  alter table public.products alter column created_at set default now();
   notify pgrst, 'reload schema';
 end $$;"""
 

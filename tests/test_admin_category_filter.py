@@ -39,7 +39,11 @@ const sandbox = {
   renderProdGrid: () => {}, bindProdGridEvents: () => {},
 };
 vm.createContext(sandbox);
-vm.runInContext(["getFilteredProducts", "applyProductFilter", "applyProductsState"]
+vm.runInContext(["getFilteredProducts", "applyProductFilter", "applyProductsState",
+                 // the out-of-stock quick filter and the date sort the list
+                 // now applies on top of the category filter
+                 "productStockUnits", "productIsOutOfStock", "productAddedTime",
+                 "sortProductsByDate"]
   .map(grab).join("\n"), sandbox);
 function ids() { return Array.from(vm.runInContext("getFilteredProducts().map(p => p.id)", sandbox)); }
 function check(condition, message) { if (!condition) throw new Error(message); }

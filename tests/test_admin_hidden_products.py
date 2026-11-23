@@ -53,7 +53,11 @@ const sandbox = {
   URLSearchParams,
 };
 vm.createContext(sandbox);
-vm.runInContext(["getFilteredProducts", "productsStateFromUrl", "applyProductsState"]
+vm.runInContext(["getFilteredProducts", "productsStateFromUrl", "applyProductsState",
+                 // the out-of-stock quick filter and the date sort the list
+                 // now applies on top of the visibility tabs
+                 "productStockUnits", "productIsOutOfStock", "productAddedTime",
+                 "sortProductsByDate"]
   .map(grab).join("\n"), sandbox);
 function ids() { return Array.from(vm.runInContext("getFilteredProducts().map(p => p.id)", sandbox)); }
 function check(c, m) { if (!c) throw new Error(m); }

@@ -1144,6 +1144,17 @@ def _upsert_products_resilient(rows):
     pending = [_fold_product_write_aliases(r) for r in (rows or []) if r]
     if not pending:
         return False
+    # `created_at` is OWNED BY THE DATABASE. It is the Admin Products desk's
+    # "Newest to Oldest" key, and it has to survive every later edit: a save
+    # echoes the whole product object back (restock, price change, hide), so
+    # writing it would at best be a no-op and at worst let a stale browser copy
+    # reset the date. Dropping it here - the single choke point for product
+    # writes - means the column's `default now()` stamps new rows, an insert
+    # conflict leaves the stored value alone, and a database that has not run
+    # the migration yet never sees an unknown column that would refuse a save.
+    for row in pending:
+        row.pop("created_at", None)
+        row.pop("createdAt", None)
     global _LAST_WRITE_BLOCKER
     _LAST_WRITE_BLOCKER = ""
     for row in pending:

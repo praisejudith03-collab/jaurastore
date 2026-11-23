@@ -53,7 +53,7 @@ select table_name
 
 Creates `public.products` (canonical `id text` primary key) and repairs any older hand-built table add-only.
 
-Copy the **whole block** into one new query (97 lines). Raw link once this is merged: https://github.com/praisejudith03-collab/jaurastore/raw/main/schema_sections/01_products.sql
+Copy the **whole block** into one new query (106 lines). Raw link once this is merged: https://github.com/praisejudith03-collab/jaurastore/raw/main/schema_sections/01_products.sql
 
 ```sql
 -- Jaura Store Supabase schema (run once in the SQL editor; idempotent).
@@ -108,6 +108,10 @@ create table if not exists products (
   "optionSupplierCost" jsonb,
   supplier_status text not null default 'ok' check (supplier_status in ('out_of_stock','low_stock','ok')),
   is_deleted boolean not null default false,
+  -- When the piece was ADDED to the catalogue. The admin Products desk's
+  -- Newest / Oldest sort reads this first; updated_at moves every time the
+  -- owner edits a row, so it can never answer "what did I add last?".
+  created_at       timestamptz default now(),
   updated_at       timestamptz default now(),
   constraint products_price_positive check ("priceCfa" >= 0 and "priceNgn" >= 0
     and "compareCfa" is null or "compareCfa" >= 0
@@ -148,6 +152,11 @@ alter table products add column if not exists online             boolean default
 alter table products add column if not exists colors             jsonb;
 alter table products add column if not exists options            jsonb;
 alter table products add column if not exists source             text default 'admin';
+-- Added WITHOUT a default on purpose: an older table's rows keep NULL (the
+-- desk then falls back to updated_at) while every row inserted from now on
+-- gets the timestamp. SET DEFAULT below makes it automatic for new pieces.
+alter table products add column if not exists created_at         timestamptz;
+alter table products alter column created_at set default now();
 alter table products add column if not exists updated_at         timestamptz default now();
 
 -- Dead leftovers (price_cfa, price_ngn, name_fr, compare_cfa, compare_ngn,
