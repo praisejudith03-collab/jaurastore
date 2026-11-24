@@ -870,6 +870,7 @@ function reviewCardsHTML(list) {
  * the shop-wide tier it has not reached yet. When promotions are switched off
  * JA.bulkDiscountTiers() answers [] and the line stays hidden. */
 function pdpBulkText(p, qty) {
+  if (typeof JA !== "undefined" && JA.promosEnabled && !JA.promosEnabled()) return null;
   const row = p || {};
   const n = Math.max(0, Math.round(Number(qty) || 0));
   const clean = (v) => Math.max(1, Math.min(90, Math.round(Number(v) || 0)));
@@ -883,16 +884,7 @@ function pdpBulkText(p, qty) {
       ? { text: t("pdp.bulkReady", { p: clean(ownPct) }), on: true }
       : { text: t("pdp.bulkNext", { n: min - n, p: clean(ownPct) }), on: false };
   }
-  // Shop-wide tiers: inclusive, and the shopper is quoted the NEXT one.
-  const tiers = (JA.bulkDiscountTiers && JA.bulkDiscountTiers()) || [];
-  if (!tiers.length) return null;
-  const next = tiers.find((tier) => Math.max(2, Math.round(Number(tier.minQuantity) || 0)) > n);
-  if (next) {
-    const min = Math.max(2, Math.round(Number(next.minQuantity) || 0));
-    return { text: t("pdp.bulkNext", { n: min - n, p: clean(next.percent) }), on: false };
-  }
-  const best = tiers[tiers.length - 1];
-  return { text: t("pdp.bulkReady", { p: clean(best.percent) }), on: true };
+  return null;
 }
 
 function renderProduct() {

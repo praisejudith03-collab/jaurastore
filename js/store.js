@@ -1663,7 +1663,7 @@ const JA = (() => {
     if (threshold > 0 && percent > 0) {
       return Number(qty) > threshold ? Math.min(90, Math.max(1, percent)) : 0;
     }
-    return bulkPercent(qty);
+    return 0;
   }
   function stockFold(s) {
     return String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -1716,7 +1716,7 @@ const JA = (() => {
       && String(variant || "").trim() !== "__default__";
     const os = p.optionStock;
     if (!os || typeof os !== "object" || !Object.keys(os).length) {
-      return selectedVariant ? 0 : base;
+      return base;
     }
     const vals = stockVariantValues(variant);
     if (!vals.length) return selectedVariant ? 0 : base;
