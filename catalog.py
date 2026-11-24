@@ -1469,11 +1469,7 @@ def bulk_discount_for(product, quantity):
                                   p.get("bulkDiscountPercent"), p.get("bulk_discount_percent"))
     if threshold and percent:
         return percent if qty > int(threshold) else 0
-    try:
-        import growth
-        return growth.bulk_discount_percent(qty)
-    except Exception:
-        return 0
+    return 0
 
 
 
